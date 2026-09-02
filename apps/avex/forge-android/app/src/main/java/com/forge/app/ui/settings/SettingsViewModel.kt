@@ -634,7 +634,11 @@ class SettingsViewModel @Inject constructor(
 
     /** Persist the folder the user just granted, then scan it. */
     fun grantImportFolder(uri: android.net.Uri) = viewModelScope.launch {
-        importRepo.rememberFolder(uri)
+        if (!importRepo.rememberFolder(uri)) {
+            // Stored regardless, the empty scan that followed was the only symptom (M-18).
+            _statusMessage.value = "Avex could not keep access to that folder. Pick it again, or choose another."
+            return@launch
+        }
         scanImportFolder()
     }
 
@@ -788,13 +792,26 @@ class SettingsViewModel @Inject constructor(
      *  other preference edit here (M-22); the seeding backup that follows stays an ordinary,
      *  cancellable job, since a long copy must never become unstoppable just to make the pref durable. */
     fun setBackupFolder(uri: android.net.Uri) = viewModelScope.launch {
-        withContext(NonCancellable) { backupRepo.rememberBackupFolder(uri) }
+        val connected = withContext(NonCancellable) { backupRepo.rememberBackupFolder(uri) }
+        // Only seed a folder Avex can actually keep writing to (M-18). The grant failure used to be
+        // swallowed and the backup run anyway — which succeeded on the picker's own transient
+        // permission, so the first sign of trouble was a weekly job silently writing nowhere.
+        if (!connected) {
+            _statusMessage.value = "Avex could not keep access to that folder. Pick it again, or choose another."
+            return@launch
+        }
         backupNow()
     }
     /** Durable for the same reason (M-22): a folder removed just before leaving Settings used to be
      *  able to survive the pop, and the weekly job would keep writing backups to a target the user
      *  had watched disappear. */
-    fun clearBackupFolder() = write { backupRepo.forgetBackupFolder() }
+    fun clearBackupFolder() = write {
+        if (!backupRepo.forgetBackupFolder()) {
+            // The setting is cleared either way — that is what the user asked for — but access that
+            // outlives every setting naming it is the whole of M-18, so it is said rather than left.
+            _statusMessage.value = "Folder removed, but Avex still has access to it. Revoke it in Android settings."
+        }
+    }
 
     /** Run a backup right now — to internal storage and the picked folder — the "Back up now" action. */
     fun backupNow() = viewModelScope.launch {

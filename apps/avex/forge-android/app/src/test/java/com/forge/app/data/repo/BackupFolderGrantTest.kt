@@ -16,6 +16,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -50,6 +51,7 @@ class BackupFolderGrantTest {
         settingsRepo = settings,
         photoRepo = ProgressPhotoRepository(context, db.bodyweightDao()),
         avatarRepo = AvatarRepository(context, settings),
+        grants = PersistedTreeGrants(context, settings),
         db = db,
         clock = clock
     )
@@ -78,6 +80,45 @@ class BackupFolderGrantTest {
             it.remove(PreferenceKeys.IMPORT_FOLDER_URI)
         }
     }
+
+    private val importRepo = com.forge.app.data.importer.WorkoutImportRepository(
+        context = context,
+        db = db,
+        sessionDao = db.sessionDao(),
+        loggedExerciseDao = db.loggedExerciseDao(),
+        loggedSetDao = db.loggedSetDao(),
+        moodDao = db.moodDao(),
+        cardioDao = db.cardioDao(),
+        coachGoalDao = db.coachGoalDao(),
+        bodyweightDao = db.bodyweightDao(),
+        settingsRepo = settings,
+        grants = PersistedTreeGrants(context, settings)
+    )
+
+    /** A grants layer that can refuse a take, which Robolectric's resolver never does. */
+    private class RefusingGrants(context: Context, settings: SettingsRepository) :
+        PersistedTreeGrants(context, settings) {
+        var refuse = false
+        override suspend fun take(treeUri: Uri, write: Boolean): Boolean =
+            if (refuse) false else super.take(treeUri, write)
+    }
+
+    private val refusingGrants = RefusingGrants(context, settings)
+
+    private val refusingRepo = BackupRepository(
+        context = context,
+        sessionDao = db.sessionDao(),
+        loggedExerciseDao = db.loggedExerciseDao(),
+        loggedSetDao = db.loggedSetDao(),
+        cardioDao = db.cardioDao(),
+        coachGoalDao = db.coachGoalDao(),
+        settingsRepo = settings,
+        photoRepo = ProgressPhotoRepository(context, db.bodyweightDao()),
+        avatarRepo = AvatarRepository(context, settings),
+        grants = refusingGrants,
+        db = db,
+        clock = clock
+    )
 
     @After
     fun tearDown() = db.close()
@@ -158,5 +199,67 @@ class BackupFolderGrantTest {
 
         assertNull(settings.backupFolderUri.first())
         assertTrue(heldTrees().isEmpty())
+    }
+
+    // ── The two ways the first pass still leaked, and the failure it swallowed ──
+
+    /**
+     * The other end of the shared tree. Removing backup correctly left A for import; CHANGING
+     * import to B did not release A, because the import path released nothing at all. No setting
+     * then named A and Avex kept read access to it indefinitely — the same invisible retained grant
+     * "Remove folder" was fixed for, reached by replacing instead of removing.
+     */
+    @Test
+    fun aSharedTreeIsGivenUpOnceTheLastSettingLetsGoOfIt() = runTest {
+        grantFromPicker(folderA)
+        repo.rememberBackupFolder(folderA)
+        importRepo.rememberFolder(folderA)
+
+        repo.forgetBackupFolder()
+        assertEquals("import still points at it", listOf(folderA), heldTrees())
+
+        grantFromPicker(folderB)
+        importRepo.rememberFolder(folderB)
+
+        assertEquals("and now nothing does", listOf(folderB), heldTrees())
+        assertEquals(folderB.toString(), settings.importFolderUri.first())
+    }
+
+    /** And the reverse pairing: import lets go first, backup keeps the tree it still names. */
+    @Test
+    fun changingTheImportFolderLeavesABackupTreeAlone() = runTest {
+        grantFromPicker(folderA)
+        repo.rememberBackupFolder(folderA)
+        importRepo.rememberFolder(folderA)
+
+        grantFromPicker(folderB)
+        importRepo.rememberFolder(folderB)
+
+        assertEquals(
+            "backup still points at A, so A stays",
+            listOf(folderA, folderB), heldTrees().sortedBy { it.toString() }
+        )
+    }
+
+    /**
+     * A grant that could not be taken is not a connected folder.
+     *
+     * The take was best-effort and its failure swallowed: the preference moved to the new folder
+     * and the old grant was released, so once the picker's own transient permission expired Avex
+     * could open NEITHER — and the backup that ran immediately afterwards succeeded on that
+     * transient grant, so the first sign of it was a weekly job silently writing nowhere.
+     *
+     * Robolectric's content resolver accepts every persistable take, so the refusal is injected.
+     */
+    @Test
+    fun aFolderWhoseGrantCannotBeTakenReplacesNothing() = runTest {
+        grantFromPicker(folderA)
+        assertTrue(repo.rememberBackupFolder(folderA))
+
+        refusingGrants.refuse = true
+        assertFalse("not connected", refusingRepo.rememberBackupFolder(folderB))
+
+        assertEquals("the working folder is still the one on file", folderA.toString(), settings.backupFolderUri.first())
+        assertEquals("and Avex still has access to it", listOf(folderA), heldTrees())
     }
 }

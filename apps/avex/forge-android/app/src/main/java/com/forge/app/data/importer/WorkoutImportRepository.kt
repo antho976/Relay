@@ -1,7 +1,6 @@
 package com.forge.app.data.importer
 
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import androidx.room.withTransaction
@@ -47,7 +46,8 @@ class WorkoutImportRepository @Inject constructor(
     private val cardioDao: com.forge.app.data.db.dao.CardioDao,
     private val coachGoalDao: com.forge.app.data.db.dao.CoachGoalDao,
     private val bodyweightDao: com.forge.app.data.db.dao.BodyweightDao,
-    private val settingsRepo: SettingsRepository
+    private val settingsRepo: SettingsRepository,
+    private val grants: com.forge.app.data.repo.PersistedTreeGrants
 ) {
     /** uri → (lastModified, what the scan concluded). Bounded by [MAX_SCAN_FILES] per folder. */
     private val scanCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, FoundImport?>>()
@@ -180,12 +180,28 @@ class WorkoutImportRepository @Inject constructor(
         found
     }
 
-    /** Take a persistable read grant on the picked folder and remember it, so later scans need no re-pick. */
-    suspend fun rememberFolder(treeUri: Uri) = withContext(Dispatchers.IO) {
-        runCatching {
-            context.contentResolver.takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
+    /**
+     * Take a persistable read grant on the picked folder and remember it, so later scans need no
+     * re-pick — and give up the folder this one replaces (M-18).
+     *
+     * Neither half used to happen. The take was best-effort and its failure swallowed, so a folder
+     * that could not be granted was still stored as the connected one and every later scan came
+     * back empty for no stated reason. And the previous tree was never released: point import at a
+     * second folder and Avex kept read access to the first with no setting naming it — the same
+     * invisible retained grant "Remove folder" was fixed for, reached by replacing instead of
+     * removing. Release goes through [PersistedTreeGrants] so a tree the BACKUP folder also names
+     * is left alone; it has another owner.
+     *
+     * @return false when the grant could not be taken; the remembered folder is then unchanged.
+     */
+    suspend fun rememberFolder(treeUri: Uri): Boolean = withContext(Dispatchers.IO) {
+        if (!grants.take(treeUri, write = false)) return@withContext false
+        val previous = settingsRepo.importFolderUri.first()
         settingsRepo.setImportFolderUri(treeUri.toString())
+        if (previous != null && previous != treeUri.toString()) {
+            grants.releaseUnlessSharedWith(previous, com.forge.app.data.repo.PersistedTreeGrants.Owner.IMPORT)
+        }
+        true
     }
 
     private suspend fun insert(

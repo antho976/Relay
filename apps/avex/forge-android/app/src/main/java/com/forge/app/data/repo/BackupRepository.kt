@@ -1,7 +1,6 @@
 package com.forge.app.data.repo
 
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.documentfile.provider.DocumentFile
@@ -48,6 +47,7 @@ class BackupRepository @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val photoRepo: ProgressPhotoRepository,
     private val avatarRepo: AvatarRepository,
+    private val grants: PersistedTreeGrants,
     private val db: ForgeDatabase,
     private val clock: com.forge.app.core.time.Clock
 ) {
@@ -552,16 +552,18 @@ class BackupRepository @Inject constructor(
      * a failure anywhere in between leaves the app with access to the folder it is pointing at
      * rather than to neither.
      */
-    suspend fun rememberBackupFolder(treeUri: Uri) = withContext(Dispatchers.IO) {
+    suspend fun rememberBackupFolder(treeUri: Uri): Boolean = withContext(Dispatchers.IO) {
+        // Taking the new grant is a PRECONDITION, not a best-effort first step (M-18). Its failure
+        // used to be swallowed: the preference moved to the new folder and the old grant was
+        // released, so once the picker's own transient permission expired Avex could open neither —
+        // and the backup it ran immediately afterwards succeeded, hiding it until the weekly job.
+        if (!grants.take(treeUri, write = true)) return@withContext false
         val previous = settingsRepo.backupFolderUri.first()
-        runCatching {
-            context.contentResolver.takePersistableUriPermission(
-                treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            )
-        }
         settingsRepo.setBackupFolderUri(treeUri.toString())
-        if (previous != null && previous != treeUri.toString()) releasePersistedTree(previous)
-        Unit
+        if (previous != null && previous != treeUri.toString()) {
+            grants.releaseUnlessSharedWith(previous, PersistedTreeGrants.Owner.BACKUP)
+        }
+        true
     }
 
     /**
@@ -572,32 +574,13 @@ class BackupRepository @Inject constructor(
      * indefinitely, surviving reboots. The preference is cleared first — that is what the user
      * asked for and it must not depend on the release succeeding.
      */
-    suspend fun forgetBackupFolder() = withContext(Dispatchers.IO) {
+    suspend fun forgetBackupFolder(): Boolean = withContext(Dispatchers.IO) {
         val previous = settingsRepo.backupFolderUri.first()
         settingsRepo.setBackupFolderUri(null)
-        previous?.let { releasePersistedTree(it) }
-    }
-
-    /**
-     * Release the persisted grant on [uriString], with exactly the flags this app is actually
-     * holding on it — releasing flags that were never taken throws, and a tree taken read-only by
-     * an older build would otherwise fail the whole release. Unparseable, already-released and
-     * never-held uris are all no-ops.
-     */
-    private suspend fun releasePersistedTree(uriString: String) {
-        // The import folder is a separate setting that can name the SAME tree (Downloads, most
-        // obviously) under its own read grant. Releasing here would take that folder's scan with it,
-        // so a tree the importer is still pointing at is left alone; it has its own owner.
-        if (settingsRepo.importFolderUri.first() == uriString) return
-        runCatching {
-            val uri = Uri.parse(uriString)
-            val held = context.contentResolver.persistedUriPermissions
-                .firstOrNull { it.uri == uri } ?: return
-            var flags = 0
-            if (held.isReadPermission) flags = flags or Intent.FLAG_GRANT_READ_URI_PERMISSION
-            if (held.isWritePermission) flags = flags or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            if (flags != 0) context.contentResolver.releasePersistableUriPermission(uri, flags)
-        }
+        // Reported rather than swallowed: a release that fails after the preference is cleared
+        // leaves access nothing in Settings names — exactly the invisible retained grant this
+        // finding is about, reached from the other end.
+        previous?.let { grants.releaseUnlessSharedWith(it, PersistedTreeGrants.Owner.BACKUP) } ?: true
     }
 
     /** When the auto-backup slot was last written, or null if none exists yet (#86 restore affordance). */

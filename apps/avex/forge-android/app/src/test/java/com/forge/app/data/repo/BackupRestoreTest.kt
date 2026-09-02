@@ -61,6 +61,7 @@ class BackupRestoreTest {
         settingsRepo = settings,
         photoRepo = ProgressPhotoRepository(context, db.bodyweightDao()),
         avatarRepo = AvatarRepository(context, settings),
+        grants = PersistedTreeGrants(context, settings),
         db = db,
         clock = clock
     )

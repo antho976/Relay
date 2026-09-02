@@ -44,7 +44,10 @@ class ImportSemanticDuplicateTest {
         cardioDao = db.cardioDao(),
         coachGoalDao = db.coachGoalDao(),
         bodyweightDao = db.bodyweightDao(),
-        settingsRepo = SettingsRepository(context, Clock { 1_700_000_000_000L })
+        settingsRepo = SettingsRepository(context, Clock { 1_700_000_000_000L }),
+        grants = com.forge.app.data.repo.PersistedTreeGrants(
+            context, SettingsRepository(context, Clock { 1_700_000_000_000L })
+        )
     )
 
     @After
