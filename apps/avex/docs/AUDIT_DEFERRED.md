@@ -313,8 +313,10 @@ failed `Verify` by printing the compile errors and failing test names — a red 
 downloading an artifact to read.
 
 **Nothing here has been run on a physical device.** Health Connect history availability, Program
-Builder recreation, watch disconnect and process death, timezone rollover, and restore
-validation/revert all still want a real device pass before release.
+Builder recreation, watch disconnect and process death, timezone rollover, restore
+validation/revert, and P-09's oversize-bitmap fallback all still want a real device pass before
+release. The table above marks P-09 "closed in code" for exactly this reason: the decode path is
+right, and no JVM test can prove what a 108-megapixel photo does to a real heap.
 
 ### Merge process
 
