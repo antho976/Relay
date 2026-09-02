@@ -189,14 +189,11 @@ class ProgramBuilderViewModel internal constructor(
         persistDraft()
     }
 
-    /**
-     * Open (or, with [DayDialog.None], close) a dialog/sheet inside the day editor.
-     *
-     * NOT `setDayDialog`: `var dayDialog ... private set` already generates a JVM
-     * `setDayDialog(DayDialog)`, and a second function with the same erased signature is a platform
-     * declaration clash that will not compile.
-     */
-    fun updateDayDialog(dialog: DayDialog) {
+    /** Open (or, with [DayDialog.None], close) a dialog/sheet inside the day editor. */
+    // Not setDayDialog: `var dayDialog` already compiles its (private) setter to
+    // setDayDialog(DayDialog), and two declarations cannot share a JVM signature. Named for
+    // what it does, like openDay/closeDay above.
+    fun showDayDialog(dialog: DayDialog) {
         dayDialog = dialog
         persistDraft()
     }

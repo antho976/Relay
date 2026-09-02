@@ -214,6 +214,15 @@ run:
 - **H-13** — `var dayDialog … private set` already generates `setDayDialog(DayDialog)`; the explicit
   action of the same name is a platform declaration clash, masked until the first error was gone.
 
+Both were also fixed on `main` itself, independently and in parallel, by PR #167 — a branch whose
+subject was Dependabot and which could not go green while `:app` did not compile. So `main` at
+`90b0e03` no longer carries either. This branch merges that work rather than competing with it, and
+takes `main`'s name for the renamed action — `showDayDialog`, not the `updateDayDialog` this branch
+had chosen — because a published name that already compiles wins over an equally good one that
+arrives second. Two sessions independently hitting the same two compile errors is itself the
+argument for the branch protection `docs/CI_MERGE_POLICY.md` asks for: neither would have been
+merged into `main` unverified if `Verify` had been required.
+
 ### Ledger
 
 Closed means the defect the finding describes is gone AND a test fails if it comes back. Partial
