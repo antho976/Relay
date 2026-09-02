@@ -187,11 +187,13 @@ data class AdaptThresholds(
     val insightTimePerfMinBouts: Int = 12,
     val insightTimePerfPct: Int = 4,
     /** Volume response (A1 — MEV/MRV flavour): training weeks a muscle needs, the min weeks in
-     *  EACH volume tier (above/at-or-below its median weekly sets), and the per-week e1RM-gain
-     *  gap (lb) between high- and low-volume weeks worth calling responsive vs near-ceiling. */
+     *  EACH volume tier (above/at-or-below its mean weekly sets), and the per-week WITHIN-LIFT
+     *  e1RM-change gap (percentage points) between high- and low-volume weeks worth calling
+     *  responsive vs near-ceiling. Percent, not pounds: 5 lb on a fly and on a bench are not the
+     *  same event, and the shared [VolumeResponse] model compares each lift only with itself. */
     val insightVolumeMinWeeks: Int = 8,
     val insightVolumeMinPerTier: Int = 3,
-    val insightVolumeDeltaGapLb: Double = 1.0,
+    val insightVolumeDeltaGapPct: Double = 2.0,
     /** Rest-day response (recovery curve): sessions needed with a computable prior gap, the min
      *  per spacing tier, the rest-day split, and the normalized-volume % difference worth surfacing. */
     val insightRestMinSessions: Int = 12,
