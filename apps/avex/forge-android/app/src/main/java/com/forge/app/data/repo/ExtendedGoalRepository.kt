@@ -96,6 +96,25 @@ class ExtendedGoalRepository @Inject constructor(
      *  live progress reads resume exactly, baseline (stretch_value) and all. */
     suspend fun restore(goal: ExtendedGoal) { dao.insert(goal) }
 
+    /**
+     * Adopt a missing BODYWEIGHT baseline from the FIRST weigh-in on or after the goal was created.
+     *
+     * Not the latest one (M-33). Adoption happens on the next progress READ, which can be days of
+     * weigh-ins later, and taking the current weight then meant the "start" was wherever the user
+     * had already got to: log 200 on Monday and 190 on Tuesday, open Goals on Wednesday, and the
+     * journey is recorded as having begun at 190. The 10 lb already lost simply never happened.
+     *
+     * @return the baseline now STORED, which is not always the one this call proposed: the write is
+     *   `WHERE stretch_value IS NULL`, so a concurrent reader can win the race, and rendering our
+     *   own candidate over the top would show two readers two different starts for one goal.
+     */
+    private suspend fun adoptBaseline(g: ExtendedGoal): Double? {
+        val first = bodyweightDao.earliestSince(g.createdAt)?.weightLb?.takeIf { it > 0.0 }
+            ?: return null
+        dao.adoptBaselineIfMissing(g.id, first)
+        return dao.getById(g.id)?.stretchValue ?: first
+    }
+
     /** Every custom goal with its live progress, achieved-first then closest-first. */
     suspend fun goalsWithProgress(): List<Progress> {
         val goals = dao.getAll()
@@ -115,8 +134,7 @@ class ExtendedGoalRepository @Inject constructor(
                 // reached. The first real weigh-in is adopted as the baseline and written back
                 // once (see [ExtendedGoalDao.adoptBaselineIfMissing]), so every later read measures
                 // from the same place. Still nothing to adopt while there are no weigh-ins at all.
-                baseline = g.stretchValue
-                    ?: current.takeIf { it > 0.0 }?.also { dao.adoptBaselineIfMissing(g.id, it) }
+                baseline = g.stretchValue ?: adoptBaseline(g)
                 // With no weigh-in on file there is genuinely no start to report — null, rather
                 // than the zero the meter would otherwise claim as a starting weight.
                 val from = baseline ?: current

@@ -20,6 +20,17 @@ interface BodyweightDao {
     suspend fun latest(): BodyweightEntry?
 
     /**
+     * The FIRST weigh-in recorded at or after [sinceMs] — the start of a journey that began then
+     * (M-33), as opposed to [latest], which is where the user is now.
+     *
+     * A bodyweight goal created before any weigh-in has no baseline, and adopting it from [latest]
+     * meant the start was whatever the scale said the first time the goal happened to be READ. Log
+     * 200 and then 190 before opening the page and 190 was stored as where the journey began.
+     */
+    @Query("SELECT * FROM bodyweight_entry WHERE recorded_at >= :sinceMs ORDER BY recorded_at ASC, date_key ASC LIMIT 1")
+    suspend fun earliestSince(sinceMs: Long): BodyweightEntry?
+
+    /**
      * That day's row, or null. Needed because [upsert] is INSERT OR REPLACE: on a `date_key`
      * conflict SQLite DELETES the existing row and inserts a new one, so any column the caller
      * does not set is lost and the row gets a fresh id. Callers that mean to update rather than
