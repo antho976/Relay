@@ -94,7 +94,6 @@ data class OverviewUiState(
     val weeklyTrainingDays: Int = 4,
     val volumeThisWeekLb: Double = 0.0,
     val cardioMinutesThisWeek: Int = 0,
-    val cardioWeeklyTargetMin: Int = 0,
     val totalFinishedSessions: Int = 0,
     val streakDays: Int = 0,
     /** Highest single-session volume (lb) logged in the current ISO week; null/0 when none. */
@@ -110,8 +109,6 @@ data class OverviewUiState(
     val customDayName: String? = null,
     /** Combined gym + cardio, sorted newest first, capped at 3. */
     val recentItems: List<OverviewRecentItem> = emptyList(),
-    val trophiesUnlocked: Int = 0,
-    val cardioDistanceKm: Double = 0.0,
     /** Day key of an in-progress (unfinished) workout, if any — drives the resume banner + CTA. */
     val activeSessionDayKey: String? = null,
     /**
