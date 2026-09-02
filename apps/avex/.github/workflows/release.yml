@@ -105,7 +105,7 @@ jobs:
           echo "All four signing secrets are present."
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
