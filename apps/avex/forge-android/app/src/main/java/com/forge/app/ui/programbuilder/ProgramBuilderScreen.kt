@@ -85,9 +85,11 @@ fun ProgramBuilderScreen(
     // A blank builder has nothing to view; everywhere else the pen decides when editing starts.
     val viewOrigin = startInView && !blank
     var viewing by rememberSaveable { mutableStateOf(viewOrigin) }
-    var editingDayUid by rememberSaveable { mutableStateOf<String?>(null) }
-    var showDiscard by remember { mutableStateOf(false) }
-    var showFreestyleSwitch by remember { mutableStateOf(false) }
+    // The open day lives in the ViewModel with the draft (H-13): its uid must match the restored
+    // days, and both come back together after a process kill. The two confirms below carry no
+    // typed values, so surviving rotation (rememberSaveable) is enough for them.
+    var showDiscard by rememberSaveable { mutableStateOf(false) }
+    var showFreestyleSwitch by rememberSaveable { mutableStateOf(false) }
     val freestyleMode by viewModel.freestyleMode.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -122,12 +124,14 @@ fun ProgramBuilderScreen(
         }
     }
 
-    val editingDay = if (viewing) null else editingDayUid?.let { viewModel.day(it) }
+    val editingDay = if (viewing) null else viewModel.openDayUid?.let { viewModel.day(it) }
     if (editingDay != null) {
         ProgramBuilderDayDetail(
             day = editingDay,
             snackbarHostState = snackbarHostState,
-            onBack = { editingDayUid = null },
+            dialog = viewModel.dayDialog,
+            onDialog = { viewModel.setDayDialog(it) },
+            onBack = { viewModel.closeDay() },
             onRename = { viewModel.renameDay(editingDay.uid, it) },
             onSetType = { viewModel.setDayType(editingDay.uid, it) },
             onSetAccent = { viewModel.setDayAccent(editingDay.uid, it) },
@@ -139,10 +143,10 @@ fun ProgramBuilderScreen(
             onSwapExercise = { exUid, libId -> viewModel.swapExercise(editingDay.uid, exUid, libId) },
             onMoveExercise = { from, to -> viewModel.moveExercise(editingDay.uid, from, to) },
             onSetExercise = { exUid, sets, reps -> viewModel.setExercise(editingDay.uid, exUid, sets, reps) },
-            onDuplicateDay = { viewModel.duplicateDay(editingDay.uid); editingDayUid = null },
+            onDuplicateDay = { viewModel.duplicateDay(editingDay.uid); viewModel.closeDay() },
             onRemoveDay = {
                 viewModel.removeDay(editingDay.uid)
-                editingDayUid = null
+                viewModel.closeDay()
                 removedWithUndo("Day removed")
             }
         )
@@ -229,7 +233,7 @@ fun ProgramBuilderScreen(
                         day = d,
                         editable = !viewing,
                         dragging = dragging,
-                        onOpen = { editingDayUid = d.uid }
+                        onOpen = { viewModel.openDay(d.uid) }
                     )
                 }
             }

@@ -28,6 +28,20 @@ data class BuilderDay(
     val word: String = ""
 )
 
+/**
+ * Which of the day editor's dialogs/sheets is open. Held by the ViewModel (not `remember`ed in the
+ * screen) and persisted with the draft, so a rotation or a process kill mid-edit brings back the
+ * sheet the user was in, not just the list behind it. An exercise-scoped dialog names its row by
+ * [BuilderExercise.uid]; the screen closes it itself when that uid is no longer in the day.
+ */
+sealed interface DayDialog {
+    data object None : DayDialog
+    data object Rename : DayDialog
+    data object AddExercises : DayDialog
+    data class SetsReps(val exerciseUid: String) : DayDialog
+    data class Swap(val exerciseUid: String) : DayDialog
+}
+
 /** Day types — drive the spine word + the derived subtitle/warmup (via the repository's archetypeMeta). */
 val DAY_TYPES: List<Triple<String, String, String>> = listOf(
     Triple("fb", "Full body", "FULL"),
