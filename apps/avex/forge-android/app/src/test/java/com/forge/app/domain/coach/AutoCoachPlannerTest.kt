@@ -75,14 +75,15 @@ class AutoCoachPlannerTest {
         sessions: List<Session> = baseSessions(),
         slots: List<ProgramSlotSnap> = history.keys.map { slot(it) },
         cardio: List<CardioEntry> = emptyList(),
-        health: HealthSnap = HealthSnap()
+        health: HealthSnap = HealthSnap(),
+        prefs: PrefsSnap = PrefsSnap()
     ) = AdaptationSnapshot(
         nowMs = now,
         program = listOf(ProgramDaySnap("upper-a", "Upper A", slots)),
         sessions = sessions,
         exerciseHistory = history,
         cardio = cardio,
-        prefs = PrefsSnap(),
+        prefs = prefs,
         health = health
     )
 
@@ -293,5 +294,64 @@ class AutoCoachPlannerTest {
             AutoCoachPlanner.evaluate(s, beginner()),
             AutoCoachPlanner.evaluate(s, beginner())
         )
+    }
+
+    // ── Block phases are policy, not copy ─────────────────────────────────────
+
+    private fun inBlock(phase: BlockPhase, target: Int = 1) = beginner(target = target).copy(blockPhase = phase)
+
+    /** Fresh, adherent, progressing: the exact state in which the reactive pass adds a set. */
+    private fun earningMore() = snapshot(mapOf("ua1" to progressingBouts(8)), sessions = sessionsMeetingThisWeeksTarget())
+
+    @Test
+    fun accumulate_stillAddsASet() {
+        val r = AutoCoachPlanner.evaluate(earningMore(), inBlock(BlockPhase.ACCUMULATE))
+        assertEquals("volume_up", r.decisions.single().type)
+    }
+
+    @Test
+    fun intensify_holdsVolume_howeverFreshTheAthleteReads() {
+        val r = AutoCoachPlanner.evaluate(earningMore(), inBlock(BlockPhase.INTENSIFY))
+        assertTrue("Intensify never adds a set: ${r.decisions}", r.decisions.none { it.type == "volume_up" })
+    }
+
+    @Test
+    fun peak_trimsASetFromTheBiggestSlotAndAddsNone() {
+        val r = AutoCoachPlanner.evaluate(earningMore(), inBlock(BlockPhase.PEAK))
+        assertTrue(r.decisions.none { it.type == "volume_up" })
+        val down = r.decisions.single { it.type == "volume_down" }
+        assertEquals("ua1", down.targetKey)
+        assertEquals("2", down.payload)
+        assertTrue(down.reason, "Peak week" in down.reason)
+    }
+
+    @Test
+    fun peak_keepsTheStructureStill_soTheTestWeekMeasuresWhatWasBuilt() {
+        // The same stall that earns a swap in a reactive pass earns nothing structural in Peak:
+        // changing the movement the week it is tested changes what the test measures.
+        val stalled = snapshot(mapOf("ua1" to stalledBouts(8)))
+        assertEquals("swap", AutoCoachPlanner.evaluate(stalled, beginner()).decisions.single().type)
+        val peak = AutoCoachPlanner.evaluate(stalled, inBlock(BlockPhase.PEAK, target = 0))
+        assertTrue(peak.decisions.toString(), peak.decisions.none { it.type == "swap" || it.type == "rep_shift" })
+    }
+
+    @Test
+    fun deloadWeek_withNoDeloadRunning_proposesTheDeloadItself() {
+        // The block advanced into its deload week but nothing regenerated the program: the pass
+        // must serve the week rather than propose more sets during it (the audit's repro).
+        val r = AutoCoachPlanner.evaluate(earningMore(), inBlock(BlockPhase.DELOAD))
+        assertEquals(CoachPassStatus.SHADOW, r.status)
+        assertEquals(listOf("deload"), r.decisions.map { it.type })
+    }
+
+    @Test
+    fun deloadWeek_withTheDeloadAlreadyRunning_holdsWithNoChanges() {
+        val r = AutoCoachPlanner.evaluate(
+            earningMore().copy(prefs = PrefsSnap(lastDeloadAppliedMs = now)),
+            inBlock(BlockPhase.DELOAD)
+        )
+        assertEquals(CoachPassStatus.HOLD, r.status)
+        assertTrue(r.holdReason!!, "Deload week" in r.holdReason!!)
+        assertTrue(r.decisions.isEmpty())
     }
 }

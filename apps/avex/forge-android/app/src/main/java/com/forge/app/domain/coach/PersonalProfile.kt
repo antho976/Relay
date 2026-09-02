@@ -2,6 +2,7 @@ package com.forge.app.domain.coach
 
 import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
+import com.forge.app.domain.adapt.VolumeResponse
 import com.forge.app.domain.adapt.bestE1rm
 import com.forge.app.domain.adapt.countsForProgression
 import com.forge.app.program.MuscleGroup
@@ -33,10 +34,15 @@ object PersonalProfile {
     /** Training weeks a muscle needs before its cap is personalised at all. */
     const val MIN_WEEKS_FOR_CAP = 8
 
-    /** Minimum gap between the two tiers' average lagged e1RM change before a muscle's cap is
-     *  personalised at all. Mirrors `AdaptThresholds.insightVolumeDeltaGapLb`, which gates the
-     *  same computation on the display side. Inside the band, the population default stands. */
-    const val VOLUME_RESPONSE_GAP_LB = 1.0
+    /** Week pairs needed in EACH volume tier (above / at-or-below the muscle's mean weekly sets)
+     *  before the two tiers are compared. */
+    const val MIN_WEEKS_PER_TIER_FOR_CAP = 3
+
+    /** Minimum gap, in percentage points of within-lift e1RM change per week, between the two
+     *  tiers' average lagged response before a muscle's cap is personalised at all. Mirrors
+     *  `AdaptThresholds.insightVolumeDeltaGapPct`, which gates the same shared computation
+     *  ([VolumeResponse]) on the display side. Inside the band, the population default stands. */
+    const val VOLUME_RESPONSE_GAP_PCT = 2.0
 
     /** Bouts needed on a lift before its rep-range sweet spot is trusted. */
     const val MIN_BOUTS_FOR_REPS = 10
@@ -82,48 +88,26 @@ object PersonalProfile {
      * weeks this muscle got MORE than its own average, did strength move more than in the weeks it
      * got less? If yes, this athlete has room above the default. If no, they are already at or past
      * their productive ceiling and the cap comes down.
+     *
+     * The measurement itself is [VolumeResponse], shared with the Stats display so the two cannot
+     * drift apart. It reads strength change WITHIN each lift before aggregating by muscle-week: the
+     * earlier copy here stored one max raw e1RM per muscle-week and subtracted consecutive maxima,
+     * so a flat 300 lb bench present only in the high-volume weeks, over a flat 50 lb fly, read as
+     * ±250 lb weekly swings and moved this cap by the full band with neither lift changing.
      */
     private fun volumeCaps(s: AdaptationSnapshot): Map<MuscleGroup, Int> {
-        val slotMuscle = s.program.flatMap { it.slots }.associate { it.exerciseId to it.muscle }
         // How many slots the current split gives each muscle — the structural floor's input.
         val slotCount = s.program.flatMap { it.slots }.groupingBy { it.muscle }.eachCount()
-        // muscle -> week -> (working sets, best e1rm that week)
-        val byMuscleWeek = HashMap<MuscleGroup, HashMap<Long, Pair<Int, Double>>>()
-        s.exerciseHistory.forEach { (id, bouts) ->
-            val muscle = slotMuscle[id] ?: return@forEach
-            bouts.filter { it.countsForProgression && !it.skipped }.forEach { bout ->
-                // ISO week key, so these buckets line up with every other week in the engine.
-                // Dividing epoch millis by a week put the boundary on a Thursday.
-                val week = com.forge.app.core.time.mondayStartMs(bout.sessionStartedAt, s.zoneId)
-                val e1rm = bout.bestE1rm() ?: return@forEach
-                val sets = bout.sets.count { it.durationSeconds == null && !it.isAssisted }
-                val cell = byMuscleWeek.getOrPut(muscle) { HashMap() }
-                val prev = cell[week]
-                cell[week] = if (prev == null) sets to e1rm
-                else (prev.first + sets) to maxOf(prev.second, e1rm)
-            }
-        }
-
-        return byMuscleWeek.mapNotNull { (muscle, weeks) ->
-            if (weeks.size < MIN_WEEKS_FOR_CAP) return@mapNotNull null
-            val ordered = weeks.entries.sortedBy { it.key }.map { it.value }
-            val avgSets = ordered.map { it.first }.average()
-            // A week's volume against the NEXT week's strength change — the lagged response, so a
-            // light week never gets credit for the previous heavy one's work.
-            val deltas = ordered.zipWithNext { a, b -> a.first to (b.second - a.second) }
-            val high = deltas.filter { it.first > avgSets }.map { it.second }
-            val low = deltas.filter { it.first <= avgSets }.map { it.second }
-            if (high.size < 3 || low.size < 3) return@mapNotNull null
-
+        return VolumeResponse.analyse(s, MIN_WEEKS_FOR_CAP, MIN_WEEKS_PER_TIER_FOR_CAP).mapNotNull { (muscle, response) ->
             // A DEAD BAND, not a coin toss. This was a strict `>` with no minimum gap, so 0.001 lb
             // between the high-volume and low-volume tiers' average lagged e1RM change decided
             // whether the muscle's weekly ceiling was default x 1.35 or default x 0.65 — for chest,
             // 24 sets or 12, a 2x swing recomputed on every regenerate, off inputs noisy enough that
             // one heavy week landing in the other tier flips the sign. InsightEngine.volumeResponse
-            // runs this same computation for DISPLAY and already refuses to speak inside the band;
-            // the generation path, which actually rewrites the user's program, did not.
-            val gap = high.average() - low.average()
-            if (abs(gap) < VOLUME_RESPONSE_GAP_LB) return@mapNotNull null
+            // reads the same shared computation for DISPLAY and refuses to speak inside the band;
+            // the generation path, which actually rewrites the user's program, must too.
+            val gap = response.gapPct
+            if (abs(gap) < VOLUME_RESPONSE_GAP_PCT) return@mapNotNull null
             val default = VolumeModel.weeklyCap[muscle] ?: Profile.DEFAULT_CAP
             val target = if (gap > 0) default * (1 + CAP_BAND) else default * (1 - CAP_BAND)
             // Clamped UP to what the current split can actually produce.

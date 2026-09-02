@@ -64,6 +64,11 @@ interface CardioDao {
     @Query("SELECT EXISTS(SELECT 1 FROM cardio_entry WHERE date = :date AND type = :type AND duration_min = :durationMin)")
     suspend fun existsAt(date: Long, type: String, durationMin: Int): Boolean
 
+    /** Every entry id, captured by the reset BEFORE [deleteAll] so the Health Connect mirrors keyed
+     *  on them can still be addressed once the rows are gone (M-02). */
+    @Query("SELECT id FROM cardio_entry")
+    suspend fun allIds(): List<Long>
+
     @Query("DELETE FROM cardio_entry")
     suspend fun deleteAll()
 }

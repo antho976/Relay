@@ -18,10 +18,13 @@ internal suspend fun DayViewModel.rebuildWarmupProtocol() {
     if (current.isWarmupComplete || current.exercises.isEmpty()) return
 
     val metric = runCatching { settingsRepo.weightUnit.first() }.getOrNull() == WeightUnit.KG
+    // Loads are stored in pounds even on a plate machine; the engine's PLATES scale is a count.
+    val plateLb = runCatching { settingsRepo.plateWeightLb.first() }.getOrNull()
+        ?.takeIf { it > 0.0 } ?: DEFAULT_PLATE_LB
 
     val queued = current.exercises
         .filterNot { it.skipped }
-        .map { it.toWarmupExercise(metric) }
+        .map { it.toWarmupExercise(metric, plateLb) }
     if (queued.isEmpty()) return
 
     val protocol = WarmupEngine.build(
@@ -32,8 +35,9 @@ internal suspend fun DayViewModel.rebuildWarmupProtocol() {
 }
 
 /**
- * The working load, in the exercise's own storage scale (a plate count on
- * [ExerciseUnit.PLATES], pounds otherwise) so the ramp arithmetic and the set row agree.
+ * The working load in stored pounds. [toWarmupExercise] turns it into a plate count on
+ * [ExerciseUnit.PLATES], the engine's scale for that unit, so the ramp arithmetic and the set row
+ * agree.
  *
  * Preference order is what the user is most likely to actually load: the progression engine's
  * target for today, then the heaviest set they did last time, then their all-time best. Falling
@@ -45,7 +49,10 @@ private fun ExerciseUiState.workingLoad(): Double? =
         ?: priorSets.mapNotNull { it.weightLb }.maxOrNull()
         ?: allTimePbLb
 
-private fun ExerciseUiState.toWarmupExercise(metric: Boolean): WarmupExercise {
+/** Fallback when the plate-weight preference cannot be read; matches the settings default. */
+private const val DEFAULT_PLATE_LB = 15.0
+
+private fun ExerciseUiState.toWarmupExercise(metric: Boolean, plateLb: Double): WarmupExercise {
     val unit = effectiveUnit
     return WarmupExercise(
         id = plan.id,
@@ -53,7 +60,7 @@ private fun ExerciseUiState.toWarmupExercise(metric: Boolean): WarmupExercise {
         muscle = plan.muscle,
         unit = unit,
         isCompound = SessionEstimate.isCompound(plan),
-        workingLoad = workingLoad(),
+        workingLoad = workingLoad()?.let { if (unit == ExerciseUnit.PLATES) it / plateLb else it },
         // The LOW end of the planned range is the heaviest set in it, so it sets the intensity the
         // ramp has to reach. Reading the high end would under-build the ladder for "6 to 10".
         targetReps = minRepsOf(plan.reps),

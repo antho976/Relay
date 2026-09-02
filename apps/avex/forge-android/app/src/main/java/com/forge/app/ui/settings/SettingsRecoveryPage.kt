@@ -48,6 +48,11 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
     val weightLauncher = rememberLauncherForActivityResult(
         contract = PermissionController.createRequestPermissionResultContract()
     ) { viewModel.refresh() }
+    // The "import older weight" retry (H-05): re-asks for history access alone, then re-runs the
+    // backfill whatever the latches say, so a declined-then-granted history still comes over.
+    val historyLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { viewModel.importOlderWeight() }
     val bodyFatLauncher = rememberLauncherForActivityResult(
         contract = PermissionController.createRequestPermissionResultContract()
     ) { viewModel.refresh() }
@@ -142,21 +147,40 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             onConnect = { sleepLauncher.launch(viewModel.permissions + viewModel.hrvPermissions) },
             receiving = state.signalFlow?.sleepOrHr
         )
+        // Read and write are separate grants (M-23). With read alone the row says so and offers the
+        // write grant instead of a toggle that would imply weigh-ins mirror while the write path
+        // silently skips. The explainer is the one home for that fact; the link is only the action.
+        val weightReadOnly = state.weightGranted && !state.weightWriteGranted
         RecoveryRow(
             title = "Bodyweight sync",
-            explainer = "Keeps your weight trend current from a smart scale, both ways.",
+            explainer = if (weightReadOnly) "Reads your weight from a smart scale. Weigh-ins stay in Avex until you allow write-back."
+                        else "Keeps your weight trend current from a smart scale, both ways.",
             connected = state.weightGranted,
             connectable = connectable,
-            onConnect = { weightLauncher.launch(viewModel.weightPermissions) },
+            // History access rides the first connect (H-05) so the one-time backfill can reach past
+            // Health Connect's 30-day window; declining it still connects the row.
+            onConnect = { weightLauncher.launch(viewModel.weightPermissions + viewModel.historyPermissions) },
             receiving = state.signalFlow?.weight
         )
         if (state.weightGranted) {
-            RecoveryToggleRow(
-                label = "Write my weigh-ins to Health Connect",
-                checked = state.writeBodyweight,
-                onCheckedChange = { viewModel.setWriteBodyweight(it) }
-            )
+            if (state.weightWriteGranted) {
+                RecoveryToggleRow(
+                    label = "Write my weigh-ins to Health Connect",
+                    checked = state.writeBodyweight,
+                    onCheckedChange = { viewModel.setWriteBodyweight(it) }
+                )
+            } else {
+                SettingsActionLink("Allow write-back →") { weightLauncher.launch(viewModel.weightPermissions) }
+            }
             SettingsActionLink("Import latest weight →") { viewModel.importNow() }
+            if (state.weightHistoryPartial) {
+                Text(
+                    "Only the last 30 days came over. Older weigh-ins need history access.",
+                    style = MaterialTheme.typography.bodySmall, color = muted,
+                    modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
+                )
+                SettingsActionLink("Import older weight →") { historyLauncher.launch(viewModel.historyPermissions) }
+            }
             state.importMessage?.let {
                 Text(
                     it, style = MaterialTheme.typography.bodySmall, color = muted,
@@ -164,19 +188,25 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
                 )
             }
         }
+        val bodyFatReadOnly = state.bodyFatGranted && !state.bodyFatWriteGranted
         RecoveryRow(
             title = "Body fat sync",
-            explainer = "Pulls body fat % from a smart scale, and writes yours back both ways.",
+            explainer = if (bodyFatReadOnly) "Pulls body fat % from a smart scale. Entries stay in Avex until you allow write-back."
+                        else "Pulls body fat % from a smart scale, and writes yours back both ways.",
             connected = state.bodyFatGranted,
             connectable = connectable,
             onConnect = { bodyFatLauncher.launch(viewModel.bodyFatPermissions) }
         )
         if (state.bodyFatGranted) {
-            RecoveryToggleRow(
-                label = "Write my body fat to Health Connect",
-                checked = state.writeBodyFat,
-                onCheckedChange = { viewModel.setWriteBodyFat(it) }
-            )
+            if (state.bodyFatWriteGranted) {
+                RecoveryToggleRow(
+                    label = "Write my body fat to Health Connect",
+                    checked = state.writeBodyFat,
+                    onCheckedChange = { viewModel.setWriteBodyFat(it) }
+                )
+            } else {
+                SettingsActionLink("Allow write-back →") { bodyFatLauncher.launch(viewModel.bodyFatPermissions) }
+            }
             SettingsActionLink("Import latest body fat →") { viewModel.importBodyFatNow() }
             state.bodyFatImportMessage?.let {
                 Text(

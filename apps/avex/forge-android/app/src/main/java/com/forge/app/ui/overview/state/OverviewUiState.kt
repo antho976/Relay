@@ -33,6 +33,13 @@ data class OverviewRecentItem(
     val statusPill: String = "",
     /** Marquee lift — the session's heaviest set, e.g. "Bench Press 185 × 5". Filled in the VM. */
     val topLift: String? = null,
+    /**
+     * The stored `cardio_entry.type` code for a cardio row (null for gym). [title] is built from
+     * the built-in types only; a `custom_` code needs the user's definitions, which live in
+     * composition (LocalCardioTypes), so the row resolves its final title there via
+     * [com.forge.app.ui.overview.displayTitle].
+     */
+    val cardioTypeCode: String? = null,
 )
 
 /**

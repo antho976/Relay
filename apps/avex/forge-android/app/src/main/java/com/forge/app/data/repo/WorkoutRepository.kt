@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import com.forge.app.core.time.Clock
 import com.forge.app.core.time.deloadWeekEndMs
 import com.forge.app.core.time.deloadWeekStartMs
+import com.forge.app.data.db.SessionSwapResult
 import com.forge.app.data.db.dao.BodyweightDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
@@ -26,6 +27,7 @@ import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.coach.LifeEvents
 import com.forge.app.domain.session.SessionType
 import com.forge.app.domain.health.ActiveCalorieEstimator
+import com.forge.app.domain.health.HcRecordKeys
 import com.forge.app.domain.units.MAX_HOLD_SECONDS
 import com.forge.app.domain.pr.PrDetector
 import com.forge.app.domain.volume.VolumeCalculator
@@ -34,6 +36,8 @@ import com.forge.app.program.GenerationParams
 import com.forge.app.program.Program
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -138,12 +142,24 @@ class WorkoutRepository @Inject constructor(
     suspend fun activeSession(): Session? = sessionDao.getActiveSession()
 
     /**
+     * Serialises [startOrResumeSession] within the process. The transaction inside it is what makes
+     * two starts agree on one row; the mutex keeps the zombie resolution and the tagging reads that
+     * precede it from interleaving with another start's, so a second start always observes the
+     * first's outcome rather than racing it.
+     */
+    private val startMutex = Mutex()
+
+    /**
      * Starts a new session, OR resumes the currently-active one if there already
      * is one. App invariant: at most one active session at a time. Returns the full
      * row plus created/has-work flags so the caller doesn't re-query what this
      * method already knows (session-open is the screen's latency-critical path).
+     *
+     * The "is there an active session?" read and the insert used to be separate statements, so two
+     * concurrent starts could both read none and both insert (M-07). They run as one transaction
+     * now ([com.forge.app.data.db.SessionWrites.startOrResume]); the loser resumes the winner's row.
      */
-    suspend fun startOrResumeSession(dayKey: String): StartedSession {
+    suspend fun startOrResumeSession(dayKey: String): StartedSession = startMutex.withLock {
         sessionDao.getActiveSession()?.let { active ->
             // Don't resume a "zombie" session whose day the program no longer has — resuming it would
             // load the wrong day's plan (Program.day() falls back to the first day) and log under a stale
@@ -152,7 +168,7 @@ class WorkoutRepository @Inject constructor(
             // (seed keys only, on a cold start) can't mis-classify a perfectly valid live session.
             val isZombie = Program.isLoaded && active.dayKey !in Program.dayKeys
             if (!isZombie) {
-                return StartedSession(session = active, created = false)
+                return@withLock StartedSession(session = active, created = false)
             }
             resolveOrphanSession(Program.dayKeys.toSet())
         }
@@ -164,13 +180,13 @@ class WorkoutRepository @Inject constructor(
         // since #109 with nothing to write it; this is its writer. The tag keeps the return week out
         // of stall and fatigue reads (A1's filter), so easing back in never reads as a plateau.
         val sessionType = if (isFirstBack()) SessionType.FIRST_BACK.key else SessionType.NORMAL.key
-        val session = Session(
+        val candidate = Session(
             dayKey = dayKey, startedAt = clock.nowMs(), finishedAt = null, deloadMarkedHere = inDeloadWeek,
             sessionType = sessionType
         )
-        val id = sessionDao.insert(session)
-        refreshWidget()
-        return StartedSession(session.copy(id = id), created = true)
+        val (session, created) = com.forge.app.data.db.SessionWrites.startOrResume(database, candidate)
+        if (created) refreshWidget()
+        StartedSession(session = session, created = created)
     }
 
     /**
@@ -456,7 +472,7 @@ class WorkoutRepository @Inject constructor(
             endMs = finishedAtMs,
             // Same key shape as the session and HR mirrors above, so a re-finish updates the
             // record rather than adding another.
-            clientRecordId = "avex-session-kcal-${session.id}",
+            clientRecordId = HcRecordKeys.sessionCalories(session.id),
             clientRecordVersion = finishedAtMs
         )
     }
@@ -470,7 +486,7 @@ class WorkoutRepository @Inject constructor(
         val samples = sessionHrSampleDao.forSession(session.id)
         if (samples.isEmpty()) return
         health.writeHrSeries(
-            clientRecordId = "avex-session-hr-${session.id}",
+            clientRecordId = HcRecordKeys.sessionHeartRate(session.id),
             clientRecordVersion = endMs,
             startMs = session.startedAt,
             endMs = endMs,
@@ -493,7 +509,7 @@ class WorkoutRepository @Inject constructor(
         if (!settingsRepo.hcWriteSessions.first()) return
         if (!health.canWriteExerciseSessions()) return
         health.writeExerciseSession(
-            clientRecordId = "avex-session-${session.id}",
+            clientRecordId = HcRecordKeys.session(session.id),
             clientRecordVersion = endMs,
             exerciseType = com.forge.app.data.health.HcExerciseTypes.STRENGTH,
             title = Program.dayDisplayName(session.dayKey),
@@ -605,6 +621,10 @@ class WorkoutRepository @Inject constructor(
     suspend fun discardSession(sessionId: Long) {
         val session = sessionDao.get(sessionId) ?: return
         sessionDao.delete(session) // CASCADE removes LoggedExercises and their LoggedSets
+        // A FINISHED session may have been mirrored to Health Connect (session + calories + HR
+        // trace); take every copy with it, after the local delete and fail-soft (M-02). An active
+        // session was never mirrored, so it skips the IPC entirely.
+        if (session.finishedAt != null) health.deleteSessionMirrors(listOf(session.id))
         refreshWidget()
     }
 
@@ -751,35 +771,29 @@ class WorkoutRepository @Inject constructor(
      * Re-keys `exercise_id` to the swapped exercise so PRs/stats attribute to the real exercise (#11),
      * stashing the original slot in `slot_id` so the day screen still maps it to its plan slot.
      *
-     * Re-keying happens ONLY while the entry has no logged sets: once any set exists, `exercise_id`
+     * The swap happens ONLY while the entry has no logged sets: once any set exists, `exercise_id`
      * records what was actually performed and must never change — re-keying it would silently
      * re-attribute those sets to the swapped exercise (false PRs on it, lost history on the original).
-     * After sets exist a swap is a name/unit relabel only.
+     * It used to fall back to a name/unit relabel in that case, which was the other half of the same
+     * bug (H-11): the row then NAMED the new movement while every stat stayed keyed to the old one.
+     * Now nothing is written and the caller gets [SessionSwapResult.REFUSED_SETS_LOGGED].
+     *
+     * The set-count read and the write are one transaction (SM-2) — a set the wrist inserts between
+     * them would otherwise be re-keyed under the swapped exercise. Lives in [SessionWrites] so the DAO
+     * suites can drive the real transaction rather than a copy of it.
      */
-    suspend fun setSessionSwap(loggedExerciseId: Long, swappedName: String?, swappedUnit: String?, swapExerciseId: String) {
-        // Atomic check-then-write (SM-2): wrap the set-count read and the re-key in one transaction so a
-        // concurrent logSet can't insert a set between them — which would re-key a row that now has real
-        // sets and silently mis-attribute them to the swapped exercise.
-        database.withTransaction {
-            val ex = loggedExerciseDao.get(loggedExerciseId) ?: return@withTransaction
-            if (loggedSetDao.countForLoggedExercise(loggedExerciseId) > 0) {
-                // Sets exist — a swap is a name/unit relabel only; exercise_id must never change.
-                loggedExerciseDao.update(ex.copy(swappedName = swappedName, swappedUnit = swappedUnit))
-                return@withTransaction
-            }
-            val slot = ex.effectiveSlotId
-            loggedExerciseDao.update(
-                ex.copy(
-                    exerciseId = swapExerciseId,
-                    // Keep the slot link only while this entry actually differs from its slot — swapping
-                    // back to the original exercise clears it (slot == exercise again).
-                    slotId = slot.takeIf { it != swapExerciseId },
-                    swappedName = swappedName,
-                    swappedUnit = swappedUnit
-                )
-            )
-        }
-    }
+    suspend fun setSessionSwap(
+        loggedExerciseId: Long,
+        swappedName: String?,
+        swappedUnit: String?,
+        swapExerciseId: String
+    ): SessionSwapResult = com.forge.app.data.db.SessionWrites.applySessionSwap(
+        db = database,
+        loggedExerciseId = loggedExerciseId,
+        swappedName = swappedName,
+        swappedUnit = swappedUnit,
+        swapExerciseId = swapExerciseId
+    )
 
     /**
      * Revert a swapped entry back to its plan slot — but ONLY while it has no logged sets (#11). A swap

@@ -139,8 +139,15 @@ object PreferenceKeys {
      *  pointers; every Health Connect read stays vendor-neutral. */
     val WEARABLE_BRAND = stringPreferencesKey("wearable_brand")
     /** Set true after the one-time bulk import of Health Connect weight HISTORY on first connect
-     *  (GYMAP-63), so the backfill runs exactly once and never re-scans on later refreshes. */
+     *  (GYMAP-63), so the backfill runs exactly once and never re-scans on later refreshes. Latched
+     *  ONLY when the history permission was live at import time (H-05): an ordinary read reaches
+     *  just the 30 days before the first grant, which is a window, not the history. */
     val HC_WEIGHT_HISTORY_IMPORTED = booleanPreferencesKey("hc_weight_history_imported")
+    /** Set true when the first-connect weight backfill ran WITHOUT the history permission (H-05),
+     *  so it imported only the ordinary 30-day window. Keeps that pass from re-running on every
+     *  refresh while the page still offers "import older weight" (re-request history, re-import);
+     *  cleared when a later pass runs with history access and latches [HC_WEIGHT_HISTORY_IMPORTED]. */
+    val HC_WEIGHT_HISTORY_PARTIAL = booleanPreferencesKey("hc_weight_history_partial")
 
     /** Persisted tree URI of a folder (usually Downloads) the user granted so Import can auto-scan it
      *  for gym-app exports (#GYMAP-17). Empty/absent = no folder access granted yet. */
@@ -333,6 +340,11 @@ object PreferenceKeys {
      *  [com.forge.app.domain.cardio.CustomCardioType]. A small config list, so it lives here rather
      *  than the (schema-locked) Room DB; a logged session references one only by its stable code. */
     val CUSTOM_CARDIO_TYPES = stringPreferencesKey("custom_cardio_types")
+
+    /** User-created freestyle exercises (id, name, target muscle) as one JSON blob, see
+     *  [com.forge.app.program.CustomExerciseDef]. The logged row keeps only the id and name; the
+     *  muscle had nowhere else to live without a schema change, so this registry carries it. */
+    val CUSTOM_EXERCISES = stringPreferencesKey("custom_exercises")
 
     /** The activity code of the last cardio session logged (GYMAP-40) — the log sheet seeds a new
      *  entry to it instead of always defaulting to Run. Absent until the first session; rest days

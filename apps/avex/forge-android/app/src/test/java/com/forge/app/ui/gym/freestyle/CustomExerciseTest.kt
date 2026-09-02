@@ -26,8 +26,44 @@ class CustomExerciseTest {
     @Test
     fun idIsSluggedAndNeverBlank() {
         assertEquals("custom-atlas-stone-over-bar", customExerciseId("Atlas Stone (over bar)"))
-        assertEquals("custom-exercise", customExerciseId("!!!"))
+        assertTrue(customExerciseId("!!!").startsWith("custom-exercise-"))
         assertTrue(customExerciseId("Ski Erg").length <= "custom-".length + 40)
+    }
+
+    @Test
+    fun punctuationOnlyNamesGetDistinctIds() {
+        // Both used to slug to nothing and land on the same `custom-exercise`, so the second move
+        // inherited the first one's last sets and PR frontier. The digest of the full name keeps
+        // them apart while still mapping one name to one id.
+        val bang = customExerciseId("!!!")
+        val at = customExerciseId("@@@")
+        assertTrue(bang != at)
+        assertEquals(bang, customExerciseId(" !!! "))
+        assertTrue(isCustomExerciseId(bang) && isCustomExerciseId(at))
+    }
+
+    @Test
+    fun namesSharingATruncatedSlugGetDistinctIds() {
+        val base = "Single Arm Cable Lateral Raise Behind Back"   // 40+ slug characters
+        val a = customExerciseId("$base Left")
+        val b = customExerciseId("$base Right")
+        assertTrue(a != b)
+        // The slug stays as readable metadata in front of the digest.
+        assertTrue(a.startsWith("custom-single-arm-cable-lateral-raise-behind"))
+        assertEquals(a, customExerciseId("$base   left"))
+    }
+
+    @Test
+    fun ordinaryNamesKeepTheIdTheyAlwaysHad() {
+        // History is grouped by id, so an existing non-colliding id must not move.
+        assertEquals("custom-sled-push", customExerciseId("Sled Push"))
+        assertEquals("custom-ski-erg", customExerciseId("Ski Erg"))
+        assertEquals("custom-atlas-stone-over-bar", customExerciseId("Atlas Stone (over bar)"))
+    }
+
+    @Test
+    fun canonicalNameCollapsesCaseAndWhitespace() {
+        assertEquals("sled push", canonicalCustomExerciseName("  Sled   PUSH "))
     }
 
     @Test

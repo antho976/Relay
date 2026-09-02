@@ -40,6 +40,20 @@ import java.io.File
  * set cannot be completed every one of them goes back. `apply` therefore never returns having left a
  * mixture: either the whole set is live, or none of it is and the whole set is queued to retry.
  *
+ * ## Why a set needs a manifest, and why the snapshots outlive the swap
+ *
+ * Staging writes the components one after another and used to be trusted on sight: if
+ * `pending_restore.db` existed, it was a restore. A process killed part-way through staging left a
+ * truncated database, or a complete one beside another backup's preferences, and this renamed it
+ * live. So staging now publishes a [RestoreManifest] last, and a pending set is applied only when
+ * every file on disk is exactly what that manifest describes; anything else is quarantined.
+ *
+ * And the swap is not the end of the restore. Each component's pre-restore bytes stay beside it as
+ * a `.prerestore` snapshot until the application has opened the restored database through Room
+ * and called [confirm]; if that open fails, [revert] puts every component of the set back. The
+ * snapshots used to be discarded the moment the renames finished, which is exactly when nothing
+ * had yet proven the replacement could be opened.
+ *
  * Lives outside `ForgeApp` so the sequencing is reachable from a test with a temp directory; the
  * Application only supplies the two paths and records the confirmation flag.
  */
@@ -77,6 +91,13 @@ internal object RestoreApply {
     private const val SNAPSHOT_SUFFIX = ".prerestore"
 
     /**
+     * Which components the last landed set replaced, kept until [confirm] or [revert]. A component
+     * that replaced NOTHING has no snapshot, so without this record [revert] could not know that
+     * its restored bytes are part of the set being backed out.
+     */
+    private const val APPLIED = "pending_restore_applied"
+
+    /**
      * What committing one component did.
      *
      * [ALREADY] is the distinction that matters, and conflating it with [FAILED] wedged recovery
@@ -104,6 +125,8 @@ internal object RestoreApply {
         // Before anything else, because these components are already committed-or-not against a
         // database that may already have been swapped.
         val resumed = interrupted.isNotEmpty() && finishSet(filesDir, liveDb, interrupted)
+        // A resumed set is spent: its components have landed, so its READY marker has done its job.
+        if (resumed) RestoreManifest.discard(filesDir)
 
         // [finishSet] leaves no journal either way, so anything still here means the clear itself
         // failed. Staging a new set on top of a record we could not retire would mix two restores.
@@ -117,6 +140,17 @@ internal object RestoreApply {
         // looks for. With no journal nothing is in flight, so this also clears any snapshot left by
         // a crash between the last commit and its cleanup.
         sweepOrphans(filesDir, liveDb)
+
+        // ── The READY marker: pending files are a restore only once their manifest says so. ──
+        //
+        // Staging publishes the manifest after the last component, so a process killed part-way
+        // leaves components with no manifest, or components that no longer match it: a truncated
+        // database, or a whole one beside another backup's preferences. Such a set was never
+        // reported as a success, so it is quarantined here, before staging can rename anything.
+        if (RestoreManifest.anyPending(filesDir) && !RestoreManifest.verify(filesDir)) {
+            quarantine(filesDir)
+            return resumed
+        }
 
         val pendingDb = File(filesDir, "pending_restore.db")
         val pendingPrefs = File(filesDir, "pending_restore_prefs.pb")
@@ -169,14 +203,80 @@ internal object RestoreApply {
         }
 
         if (!finishSet(filesDir, liveDb, toCommit)) return resumed
+        RestoreManifest.discard(filesDir)
 
         if (hadDb && !hadAvatar && hadPrefs) {
             // The restore replaced the prefs but carried no avatar → the restored state has none.
             // Clear any live avatar so a previously-seeded default cover can't outlive the (now
             // blank) avatarDefaultId — otherwise the cover shows but the picker rings nothing.
-            runCatching { liveAvatar.delete() }
+            // Moved aside like every other pre-restore file rather than deleted, so [revert] can
+            // bring it back with the rest and [confirm] discards it with the rest.
+            snapshot(liveAvatar)
         }
         return hadDb
+    }
+
+    /**
+     * The restored database has been opened by the application: the set is proven. Release every
+     * pre-restore snapshot and the record of what the set replaced.
+     */
+    fun confirm(filesDir: File, liveDb: File) {
+        ORDER.forEach { c -> liveFor(c, filesDir, liveDb)?.let { discard(snapshotOf(it)) } }
+        discard(File(filesDir, APPLIED))
+    }
+
+    /**
+     * The restored database could NOT be opened: put every component of the landed set back.
+     *
+     * A component with a snapshot gets its pre-restore bytes back over the restored ones; a
+     * component the set replaced nothing with (no snapshot, but named in the applied record) has
+     * its restored bytes removed, which is the state it was in before. The database's sidecars go
+     * with it, so nothing can replay over the file that returns. The set itself is not requeued: it
+     * was validated through this same configuration when it was staged, so a file that cannot be
+     * opened now has been damaged since, and retrying it would only fail the same way.
+     *
+     * @return true when every component that had a snapshot is back in place.
+     */
+    fun revert(filesDir: File, liveDb: File): Boolean {
+        val applied = readApplied(filesDir)
+        var ok = true
+        for (component in ORDER) {
+            val live = liveFor(component, filesDir, liveDb) ?: continue
+            val snapshot = snapshotOf(live)
+            if (!snapshot.exists() && component !in applied) continue
+            discard(live)
+            if (component == DB) {
+                discard(File(liveDb.path + "-wal"))
+                discard(File(liveDb.path + "-shm"))
+            }
+            if (snapshot.exists() && !move(snapshot, live)) ok = false
+        }
+        discard(File(filesDir, APPLIED))
+        return ok
+    }
+
+    /** Remove a pending set that was never finished, marker first so a crash mid-way leaves no READY. */
+    private fun quarantine(filesDir: File) {
+        RestoreManifest.discard(filesDir)
+        ORDER.forEach { c -> pendingFor(c, filesDir)?.let { discard(it) } }
+    }
+
+    private fun readApplied(filesDir: File): Set<String> = runCatching {
+        val f = File(filesDir, APPLIED)
+        if (!f.isFile) emptySet() else f.readLines().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    }.getOrDefault(emptySet())
+
+    /** Best-effort, like the journal's shortening: without it [revert] still restores every snapshot. */
+    private fun writeApplied(filesDir: File, entries: List<String>) {
+        runCatching {
+            val target = File(filesDir, APPLIED)
+            val scratch = File(filesDir, "$APPLIED.tmp")
+            scratch.writeText(entries.joinToString("\n"))
+            if (!scratch.renameTo(target)) {
+                target.delete()
+                if (!scratch.renameTo(target)) scratch.delete()
+            }
+        }
     }
 
     /**
@@ -190,7 +290,10 @@ internal object RestoreApply {
      */
     private fun finishSet(filesDir: File, liveDb: File, entries: List<String>): Boolean {
         if (runJournal(filesDir, liveDb, entries)) {
-            entries.forEach { c -> liveFor(c, filesDir, liveDb)?.let { discard(snapshotOf(it)) } }
+            // The pre-restore bytes stay beside each live file: the restored database is not proven
+            // until Room has opened it, and until [confirm] says so [revert] must be able to put
+            // every component of this set back.
+            writeApplied(filesDir, entries)
             return true
         }
         rollBack(filesDir, liveDb, entries)
@@ -327,8 +430,10 @@ internal object RestoreApply {
      * Only reached with no journal, which means no restore is in flight. A `.restoring` file here is
      * a crash during STAGING — the pending file had been renamed away and nothing recorded that it
      * existed, so without this the restore is not merely delayed, it is gone. A `.prerestore` file
-     * here is the opposite: finished business whose cleanup did not run, and keeping it would leave
-     * a whole spare database on a device that may be short of room.
+     * here is the opposite: a set that landed on an earlier boot and was never confirmed or
+     * reverted, because the process died between the swap and the open. That boot is over and the
+     * app has run on the restored data since, so the snapshot is finished business, and keeping it
+     * would leave a whole spare database on a device that may be short of room.
      */
     private fun sweepOrphans(filesDir: File, liveDb: File) {
         ORDER.forEach { component ->
@@ -339,6 +444,7 @@ internal object RestoreApply {
             }
             snapshotOf(live).takeIf { it.exists() }?.let { discard(it) }
         }
+        discard(File(filesDir, APPLIED))
     }
 
     private fun journalFile(filesDir: File) = File(filesDir, JOURNAL)

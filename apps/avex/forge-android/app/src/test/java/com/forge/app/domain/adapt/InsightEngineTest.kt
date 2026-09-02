@@ -329,6 +329,31 @@ class InsightEngineTest {
         assertNull(keyStartingWith(InsightEngine.evaluate(snapshot(history = mapOf("ua1" to few))), "volumeresponse"))
     }
 
+    @Test
+    fun volumeResponse_ignoresWhichLiftsWereInTheWeek() {
+        // H-06: a flat 300 lb bench present only in the high-volume weeks, over a flat 50 lb fly
+        // present every week. Neither lift changes, so there is nothing to report — the old
+        // per-muscle max-e1RM subtraction saw ±250 lb weekly swings and called it a volume ceiling.
+        val slots = listOf(slot("ua1", "DB Bench Press", MuscleGroup.CHEST), slot("ua2", "DB Fly", MuscleGroup.CHEST))
+        val bench = (0 until 9 step 2).map { bout(atDay = 30 + it * 7, weight = 300.0, setCount = 4) }
+        val fly = (0 until 9).map { bout(atDay = 30 + it * 7, weight = 50.0, setCount = 3) }
+        val fired = InsightEngine.evaluate(snapshot(slots = slots, history = mapOf("ua1" to bench, "ua2" to fly)))
+        assertNull(keyStartingWith(fired, "volumeresponse"))
+    }
+
+    @Test
+    fun volumeResponse_stillReadsAGenuineGainAcrossMixedLifts() {
+        // Same alternating mix, but now the bench actually climbs after every high-volume week. The
+        // fly (high weeks only, flat) is never compared against the bench — the read is bench vs bench.
+        val slots = listOf(slot("ua1", "DB Bench Press", MuscleGroup.CHEST), slot("ua2", "DB Fly", MuscleGroup.CHEST))
+        val benchPlan = listOf(8 to 300.0, 4 to 330.0, 8 to 330.0, 4 to 360.0, 8 to 360.0, 4 to 390.0, 8 to 390.0, 4 to 420.0, 8 to 420.0)
+        val fly = (0 until 9 step 2).map { bout(atDay = 30 + it * 7, weight = 50.0, setCount = 3) }
+        val fired = InsightEngine.evaluate(snapshot(slots = slots, history = mapOf("ua1" to weeklyHistory(benchPlan), "ua2" to fly)))
+        val insight = keyStartingWith(fired, "volumeresponse")
+        assertNotNull(insight)
+        assertTrue(insight!!.body.contains("responding to more volume"))
+    }
+
     // ── Tier 5 · recovery curve (rest gap vs performance) ──────────────────────
 
     private fun restSessions(days: List<Int>, vols: List<Double>) =

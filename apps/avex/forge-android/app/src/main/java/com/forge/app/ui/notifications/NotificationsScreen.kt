@@ -63,6 +63,10 @@ import com.forge.app.ui.common.forgeItemMotion
  * Dismissal is deliberately not a per-row ×: that would be a tap nested inside the row's own tap
  * target (§2③). Acting on a row clears it, and the top bar's ONE action (§4.6) holds the two things
  * that apply to the whole page: Clear all, and the settings that decide which kinds appear at all.
+ *
+ * [viewModel] is the navigation host's root-scoped instance, the same one feeding every bell. It is
+ * a required parameter rather than a `hiltViewModel()` default so the page can never quietly own a
+ * destination-scoped copy whose writes die when the page is popped (M-27).
  */
 @Composable
 fun NotificationsScreen(
@@ -72,7 +76,7 @@ fun NotificationsScreen(
     onConnectWearable: () -> Unit,
     onOpenNotificationSettings: () -> Unit,
     onOpenLesson: (lessonId: String) -> Unit,
-    viewModel: NotificationsViewModel = hiltViewModel(),
+    viewModel: NotificationsViewModel,
     checkinViewModel: CheckinViewModel = hiltViewModel(),
 ) {
     val notices by viewModel.notices.collectAsStateWithLifecycle()

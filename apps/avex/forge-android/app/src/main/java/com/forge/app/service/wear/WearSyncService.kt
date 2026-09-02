@@ -26,7 +26,7 @@ class WearSyncService : WearableListenerService() {
 
     @Inject lateinit var timerHolder: SessionTimerHolder
     @Inject lateinit var wearConnection: WearConnection
-    @Inject lateinit var deduper: CommandDeduper
+    @Inject lateinit var ledger: WearCommandLedger
     @Inject lateinit var publisher: WearStatePublisher
     @Inject lateinit var commandHandler: WearCommandHandler
     @Inject lateinit var hrIngest: WearHrIngest
@@ -62,17 +62,18 @@ class WearSyncService : WearableListenerService() {
     }
 
     private suspend fun handleTimer(cmd: TimerCommand) {
-        if (!deduper.isNew(cmd.commandId)) return
-        when (cmd.action) {
-            TimerCommand.Action.SKIP -> timerHolder.controller.stop()
-            TimerCommand.Action.ADD_30 -> timerHolder.controller.addSeconds(30)
-            TimerCommand.Action.START -> timerHolder.controller.start()
-        }
-        publisher.publishAck(
+        // Through the ledger like every other mutation: ADD_30 is not idempotent, so a same-id
+        // redelivery must replay the recorded ack rather than add another thirty seconds.
+        ledger.run(cmd.commandId, publish = { publisher.publishAck(it) }) {
+            when (cmd.action) {
+                TimerCommand.Action.SKIP -> timerHolder.controller.stop()
+                TimerCommand.Action.ADD_30 -> timerHolder.controller.addSeconds(30)
+                TimerCommand.Action.START -> timerHolder.controller.start()
+            }
             CmdAckDto(
                 commandId = cmd.commandId, ok = true, atMs = clock.nowMs(),
                 kind = CmdAckDto.KIND_TIMER
             )
-        )
+        }
     }
 }

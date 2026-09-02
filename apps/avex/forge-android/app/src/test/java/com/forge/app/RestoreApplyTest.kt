@@ -33,6 +33,11 @@ class RestoreApplyTest {
 
     private fun write(f: File, text: String) = f.apply { parentFile?.mkdirs() }.writeText(text)
 
+    /** What staging does last: publish the manifest that vouches for the pending files as they are. */
+    private fun publish() = assertTrue("the manifest must publish", RestoreManifest.publish(filesDir))
+
+    private fun manifest() = RestoreManifest.file(filesDir)
+
     private fun livePrefs() = File(filesDir, "datastore/forge_settings.preferences_pb")
     private fun liveAvatar() = File(filesDir, "avatar.jpg")
     private fun livePhotos() = File(filesDir, "progress_photos")
@@ -48,6 +53,7 @@ class RestoreApplyTest {
         write(File(filesDir, "pending_restore_prefs.pb"), "restored-prefs")
         write(File(filesDir, "pending_restore_avatar.jpg"), "restored-avatar")
         write(File(filesDir, "pending_restore_photos/pp_new.jpg"), "restored-photo")
+        publish()
     }
 
     /** As [stageEverything], minus the live preferences file — see [blockThePreferencesPath]. */
@@ -60,6 +66,7 @@ class RestoreApplyTest {
         write(File(filesDir, "pending_restore_prefs.pb"), "restored-prefs")
         write(File(filesDir, "pending_restore_avatar.jpg"), "restored-avatar")
         write(File(filesDir, "pending_restore_photos/pp_new.jpg"), "restored-photo")
+        publish()
     }
 
     /**
@@ -92,6 +99,16 @@ class RestoreApplyTest {
         assertFalse(File(filesDir, "pending_restore_prefs.pb").exists())
         assertFalse(File(filesDir, "pending_restore_avatar.jpg").exists())
         assertFalse(File(filesDir, "pending_restore_photos").exists())
+        assertFalse("the manifest is spent with the set it described", manifest().exists())
+
+        // The pre-restore bytes are still there, because nothing has opened the database yet.
+        assertEquals("live-db", File(liveDb.path + ".prerestore").readText())
+        assertEquals("live-prefs", File(livePrefs().path + ".prerestore").readText())
+        RestoreApply.confirm(filesDir, liveDb)
+        assertFalse("confirm releases them", File(liveDb.path + ".prerestore").exists())
+        assertFalse(File(livePrefs().path + ".prerestore").exists())
+        assertFalse(File(liveAvatar().path + ".prerestore").exists())
+        assertFalse(File(livePhotos().path + ".prerestore").exists())
     }
 
     @Test
@@ -162,9 +179,14 @@ class RestoreApplyTest {
         write(liveAvatar(), "live-avatar")
         write(File(filesDir, "pending_restore.db"), "restored-db")
         write(File(filesDir, "pending_restore_prefs.pb"), "restored-prefs")
+        publish()
 
         assertTrue(RestoreApply.apply(filesDir, liveDb))
         assertFalse("a seeded cover must not outlive a blank avatarDefaultId", liveAvatar().exists())
+        // Moved aside, not deleted, so a revert can bring it back with the rest of the set.
+        assertEquals("live-avatar", File(liveAvatar().path + ".prerestore").readText())
+        RestoreApply.revert(filesDir, liveDb)
+        assertEquals("live-avatar", liveAvatar().readText())
     }
 
     @Test
@@ -174,6 +196,7 @@ class RestoreApplyTest {
         write(File(liveDb.path + "-wal"), "stale-wal")
         write(File(liveDb.path + "-shm"), "stale-shm")
         write(File(filesDir, "pending_restore.db"), "restored-db")
+        publish()
 
         assertTrue(RestoreApply.apply(filesDir, liveDb))
         assertEquals("restored-db", liveDb.readText())
@@ -236,8 +259,11 @@ class RestoreApplyTest {
     fun `a file stranded by a crash during staging is put back and retried`() {
         setUpDirs()
         write(liveDb, "live-db")
-        // Exactly what a crash mid-staging leaves: staged bytes, no pending file, no journal.
-        write(File(liveDb.path + ".restoring"), "restored-db")
+        // Exactly what a crash mid-staging leaves: staged bytes, no pending file, no journal — and
+        // the manifest staging published before the boot began.
+        write(File(filesDir, "pending_restore.db"), "restored-db")
+        publish()
+        assertTrue(File(filesDir, "pending_restore.db").renameTo(File(liveDb.path + ".restoring")))
 
         assertTrue("the stranded restore is recovered, not lost", RestoreApply.apply(filesDir, liveDb))
         assertEquals("restored-db", liveDb.readText())
@@ -308,10 +334,11 @@ class RestoreApplyTest {
 
         assertFalse("the journal must not survive a boot that resolved it", journal().exists())
         assertEquals("and the committed file is left alone", "restored-prefs", livePrefs().readText())
-        assertFalse(
-            "the snapshot is finished business once the set is whole",
-            File(filesDir, "datastore/forge_settings.preferences_pb.prerestore").exists()
-        )
+        // Whole is not yet proven: the snapshot waits for the database to open.
+        val snapshot = File(filesDir, "datastore/forge_settings.preferences_pb.prerestore")
+        assertTrue("the snapshot is kept until the set is confirmed", snapshot.exists())
+        RestoreApply.confirm(filesDir, liveDb)
+        assertFalse("and is finished business once it is", snapshot.exists())
     }
 
     @Test
@@ -410,6 +437,7 @@ class RestoreApplyTest {
         assertFalse("no journal outlives the rollback", journal().exists())
         assertFalse("and no snapshot", File(liveDb.path + ".prerestore").exists())
         assertFalse("and nothing left staged", File(liveDb.path + ".restoring").exists())
+        assertTrue("the manifest still vouches for the requeued set", RestoreManifest.verify(filesDir))
     }
 
     // ── The primitives that carry the guarantee ───────────────────────────────
@@ -438,5 +466,173 @@ class RestoreApplyTest {
 
         assertEquals("restored-db", pending.readText())
         assertFalse(staged.exists())
+    }
+
+    // ── The READY marker: an unfinished set is quarantined, never applied ─────
+
+    /**
+     * The process died during staging, after `pending_restore.db` was created and before the
+     * manifest was published. This boot used to rename that file live: a truncated database, or a
+     * complete one paired with the preferences of another backup, with the snapshot discarded
+     * straight after. The restore screen never reported success, so nothing is lost by refusing.
+     */
+    @Test
+    fun `a pending set without a manifest is quarantined, not applied`() {
+        setUpDirs()
+        write(liveDb, "live-db")
+        write(livePrefs(), "live-prefs")
+        write(File(filesDir, "pending_restore.db"), "half-a-restored-db")
+        write(File(filesDir, "pending_restore_prefs.pb"), "restored-prefs")
+
+        assertFalse("an unfinished set is not a restore", RestoreApply.apply(filesDir, liveDb))
+
+        assertEquals("live-db", liveDb.readText())
+        assertEquals("live-prefs", livePrefs().readText())
+        assertFalse("the unfinished set is gone", File(filesDir, "pending_restore.db").exists())
+        assertFalse(File(filesDir, "pending_restore_prefs.pb").exists())
+        assertFalse("and nothing was moved aside", File(liveDb.path + ".prerestore").exists())
+    }
+
+    @Test
+    fun `a pending database that no longer matches its manifest is quarantined`() {
+        setUpDirs()
+        stageEverything()
+        // The bytes changed after the manifest vouched for them: the copy was cut short.
+        write(File(filesDir, "pending_restore.db"), "restored-")
+
+        assertFalse(RestoreApply.apply(filesDir, liveDb))
+
+        assertEquals("live-db", liveDb.readText())
+        assertEquals("live-prefs", livePrefs().readText())
+        assertEquals("live-photo", File(livePhotos(), "pp_old.jpg").readText())
+        assertFalse(File(filesDir, "pending_restore.db").exists())
+        assertFalse(File(filesDir, "pending_restore_photos").exists())
+        assertFalse("the marker goes with the set", manifest().exists())
+    }
+
+    @Test
+    fun `a manifest naming a component that is not there is quarantined`() {
+        setUpDirs()
+        stageEverything()
+        File(filesDir, "pending_restore_prefs.pb").delete()
+
+        assertFalse(RestoreApply.apply(filesDir, liveDb))
+        assertEquals("live-db", liveDb.readText())
+        assertFalse(File(filesDir, "pending_restore.db").exists())
+    }
+
+    @Test
+    fun `a component the manifest never saw is quarantined with the set`() {
+        setUpDirs()
+        write(liveDb, "live-db")
+        write(liveAvatar(), "live-avatar")
+        write(File(filesDir, "pending_restore.db"), "restored-db")
+        publish()
+        // Staged after the manifest: it belongs to nothing this boot can vouch for.
+        write(File(filesDir, "pending_restore_avatar.jpg"), "restored-avatar")
+
+        assertFalse(RestoreApply.apply(filesDir, liveDb))
+        assertEquals("live-db", liveDb.readText())
+        assertEquals("live-avatar", liveAvatar().readText())
+    }
+
+    @Test
+    fun `a photo folder is vouched for file by file`() {
+        setUpDirs()
+        stageEverything()
+        write(File(filesDir, "pending_restore_photos/pp_new.jpg"), "restored-photo-but-different")
+
+        assertFalse(RestoreApply.apply(filesDir, liveDb))
+        assertEquals("live-photo", File(livePhotos(), "pp_old.jpg").readText())
+    }
+
+    @Test
+    fun `the manifest outlives a deferred set and is spent by the one that lands`() {
+        setUpDirs()
+        stageEverythingExceptLivePrefs()
+        blockThePreferencesPath()
+
+        assertFalse(RestoreApply.apply(filesDir, liveDb))
+        assertTrue("deferred, so still vouched for", RestoreManifest.verify(filesDir))
+
+        File(filesDir, "datastore").delete()
+        assertTrue(RestoreApply.apply(filesDir, liveDb))
+        assertFalse(manifest().exists())
+    }
+
+    // ── The restored database must open before the old one is let go ─────────
+
+    /**
+     * The swap is not the end of a restore. The replacement was validated when it was staged, but
+     * the proof that THIS boot can open it comes from Room, and until then the pre-restore bytes
+     * must be recoverable: a restore that lands and then cannot be opened used to be an app that
+     * could not start, with the previous database already deleted.
+     */
+    @Test
+    fun `revert puts every component of a landed set back`() {
+        setUpDirs()
+        stageEverything()
+        write(File(liveDb.path + "-wal"), "stale-wal")
+        assertTrue(RestoreApply.apply(filesDir, liveDb))
+        assertEquals("restored-db", liveDb.readText())
+        write(File(liveDb.path + "-wal"), "frames-from-the-failed-open")
+
+        assertTrue(RestoreApply.revert(filesDir, liveDb))
+
+        assertEquals("live-db", liveDb.readText())
+        assertEquals("live-prefs", livePrefs().readText())
+        assertEquals("live-avatar", liveAvatar().readText())
+        assertEquals("live-photo", File(livePhotos(), "pp_old.jpg").readText())
+        assertFalse("the restored photos went with the set", File(livePhotos(), "pp_new.jpg").exists())
+        assertFalse("no sidecar can replay over the returned file", File(liveDb.path + "-wal").exists())
+        assertFalse("nothing is left aside", File(liveDb.path + ".prerestore").exists())
+        assertFalse("and the set is not requeued", File(filesDir, "pending_restore.db").exists())
+    }
+
+    @Test
+    fun `revert removes what the set restored over nothing`() {
+        setUpDirs()
+        // A fresh install: no live database, no live preferences, nothing to snapshot.
+        write(File(filesDir, "pending_restore.db"), "restored-db")
+        write(File(filesDir, "pending_restore_prefs.pb"), "restored-prefs")
+        publish()
+        assertTrue(RestoreApply.apply(filesDir, liveDb))
+        assertEquals("restored-db", liveDb.readText())
+
+        assertTrue(RestoreApply.revert(filesDir, liveDb))
+
+        assertFalse("the database that could not open is gone, as it was before", liveDb.exists())
+        assertFalse(livePrefs().exists())
+    }
+
+    @Test
+    fun `confirm leaves the restored set in place and nothing else`() {
+        setUpDirs()
+        stageEverything()
+        assertTrue(RestoreApply.apply(filesDir, liveDb))
+
+        RestoreApply.confirm(filesDir, liveDb)
+
+        assertEquals("restored-db", liveDb.readText())
+        assertEquals("restored-prefs", livePrefs().readText())
+        assertFalse(File(liveDb.path + ".prerestore").exists())
+        assertFalse(File(filesDir, "pending_restore_applied").exists())
+        // A revert after a confirm has nothing to act on.
+        assertTrue(RestoreApply.revert(filesDir, liveDb))
+        assertEquals("restored-db", liveDb.readText())
+    }
+
+    @Test
+    fun `a snapshot a previous boot never confirmed is swept on the next one`() {
+        setUpDirs()
+        stageEverything()
+        assertTrue(RestoreApply.apply(filesDir, liveDb))
+        // The process died between the swap and the open; the app has since run on this data.
+        assertTrue(File(liveDb.path + ".prerestore").exists())
+
+        assertFalse("nothing pending, so nothing to apply", RestoreApply.apply(filesDir, liveDb))
+        assertFalse(File(liveDb.path + ".prerestore").exists())
+        assertFalse(File(filesDir, "pending_restore_applied").exists())
+        assertEquals("restored-db", liveDb.readText())
     }
 }

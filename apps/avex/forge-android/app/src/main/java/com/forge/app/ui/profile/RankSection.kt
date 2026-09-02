@@ -253,7 +253,7 @@ internal fun RankInfoSheet(
                     }
                     val animatedXp by animateIntAsState(
                         targetValue = if (playXp) s.xp.toInt() else 0,
-                        animationSpec = tween(ForgeMotion.scaledDuration(ForgeMotion.DurationEmphasized)),
+                        animationSpec = tween(ForgeMotion.nominalDuration(ForgeMotion.DurationEmphasized)),
                         label = "xp-source"
                     )
                     Text("+$animatedXp", style = MaterialTheme.typography.bodyMedium, color = accent, fontWeight = FontWeight.SemiBold)

@@ -175,3 +175,125 @@ seven fixes that compiled, passed their tests, and did not fully close the findi
 check proves a file parses; it cannot tell you that `startupPreferences()` was the second reader of
 a preference whose flow you fixed, or that the cap you clamped is also printed on a screen. Reading
 every call site is what catches those, and it is worth budgeting for on anything merged from here.
+
+---
+
+## The 2026-09-01 production source audit: what this pass left open
+
+The pass against `docs/AVEX_PRODUCTION_SOURCE_AUDIT_2026-09-01.md` closed the Critical finding and
+all fifteen Highs, plus four Mediums. The same environment constraint applied: no Android SDK, so
+nothing was compiled locally; every change was traced by hand to its call sites and CI is the
+compiler. What follows is the ledger, then what the pass deliberately did not do, so nobody has to
+re-derive it.
+
+### Ledger
+
+"Done" means the fix is committed, reviewed line by line, and covered by a JVM test. A finding is
+counted as **not done** until it meets that bar; partial edits do not count, however far along.
+
+**Done (20 of 86 findings and opportunities):**
+
+| Finding | Commit |
+|---|---|
+| C-01 process death during restore staging | `7815ae8` |
+| H-01 same-version SQLite impostors pass restore validation | `7815ae8` |
+| H-02 block phases presentation-only (deload served, volume policy; see below) | `01108a8` |
+| H-03 Coach mutation and ledger non-atomic | `19f9383` |
+| H-04 body-fat Health Connect permissions undeclared | `078a592` |
+| H-05 weight history import latches on a 30-day window | `078a592` |
+| H-06 volume caps compare raw e1RMs across lifts | `c112389` |
+| H-07 scheduled rest day becomes "train today" | `681bb17` |
+| H-08 Wear command dedup not durable (file ledger; see below) | `701c05d` |
+| H-09 onboarding lost on configuration recreation | `6c67095` |
+| H-10 onboarding unit change reinterprets the value | `6c67095` |
+| H-11 swap sheet relabels a set from the watch | `cb09990` |
+| H-12 freestyle Recent rail duplicate id crash | `681bb17` |
+| H-13 Program Builder draft lost on process recreation | `ae0efd6` |
+| H-14 animator scale applied twice | `ded159b` |
+| H-15 PLATES warm-up treats pounds as a plate count | `681bb17` |
+| M-08 unperformed Coach changes earn trust | `19f9383` |
+| M-09 expired layoff suppresses spacing readiness | `fcbf57f` |
+| M-11 tagged releases omit the Wear AAB and mapping | `6efd6b8` |
+| M-23 read-only weight grant shown as two-way sync | `078a592` |
+
+**Not done (66):**
+
+- Mediums M-01, M-02, M-03, M-04, M-05, M-06, M-07, M-10, M-12, M-13, M-14, M-15, M-16, M-17,
+  M-18, M-19, M-20, M-21, M-22, M-24, M-25, M-26, M-27, M-28, M-29, M-30, M-31, M-32, M-33, M-34,
+  M-35, M-36, M-37.
+- Lows L-01 through L-08.
+- Performance opportunities P-01 through P-17.
+
+Of those, commit `e8e66b4` (marked WIP) holds **unreviewed, uncompiled partial edits** for M-01,
+M-02, M-04, M-05, M-07, M-12, M-13, M-14, M-16, M-17, M-19, M-20, M-21, M-22, M-24, M-25, M-26,
+M-27, M-28, M-29, M-34, M-36, L-02, L-03, L-04, L-05, L-07 and L-08. The agents producing them were
+terminated mid-edit. They are kept so the work is not lost, and they count as not done: each file
+needs to be read against its finding, finished or reverted, and tested before it is trusted. The last
+commit with nothing unreviewed in it is `cc2750a`.
+
+### C-01 / H-01 — restore
+
+Closed: a staged set is vouched for by a manifest (sizes and SHA-256) published last; a set the
+process died in the middle of staging is quarantined; the candidate is opened through the production
+Room builder before it is kept; the pre-restore snapshots stay until the application has opened the
+restored database, and are put back if it cannot.
+
+Open, and worth knowing:
+
+- The manifest is verified by hashing every component again at boot, on the main thread in
+  `Application.onCreate`. A multi-year Avex database is a few megabytes, so this is milliseconds; a
+  device restoring a pathological multi-hundred-megabyte backup will feel it. Size-only verification
+  above a threshold would be the cheap escape if it is ever needed.
+- A landed set whose confirmation never ran (the process died between the swap and the first open)
+  is treated as confirmed on the next boot: its snapshots are swept, as before. The window is the
+  few milliseconds between `RestoreApply.apply` returning and Room opening.
+- Room validation of the candidate copies it under `databases/forge_restore_probe.db` rather than
+  opening the staged file by absolute path; that is one extra copy of the database per restore, in
+  exchange for not depending on the framework accepting a path as a name.
+
+### H-02 — block phases
+
+Closed: the deload week is served through the existing deload regeneration when the block enters
+it, the weekly pass proposes that deload when none is running and never adds volume during it,
+Intensify holds volume, Peak trims a set and keeps the structure still.
+
+Open: `BlockPhase.progressionScale` still has no production consumer. The per-set load suggestion
+(`ProgressionAdvisor.suggestNextLoad`) and the pre-session brief do not scale their target by the
+phase. The value is documented as such in `BlockPlanner.kt`. Threading it through means deciding how
+it composes with the readiness scale on the same axis, which is a product decision, not a patch.
+
+### H-08 — wrist command deduplication
+
+Closed without a schema change: a file-backed ledger records each command's ack after the mutation
+and replays it for any same-id retry; the watch resolves an ack that arrives after its timeout.
+
+Open: the ledger record is written after the Room mutation commits, not inside its transaction. A
+process death in the few milliseconds between the commit and the ledger write still re-runs the
+command on retry. Closing that needs the outcome in a `wear_command` table written in the same
+transaction, which is a migration, which needs the Room compiler (see "The environment constraint"
+above). The transport is also unchanged: commands still travel on `MessageClient`.
+
+### H-04 / H-05 — Health Connect
+
+Closed in the app: the body-fat and history permissions are declared and a test keeps every
+requested permission in the manifest; the weight backfill latches complete only with history
+access, and offers the older import otherwise.
+
+Open, outside the repository: the Play Console health-data declaration must list body fat (read and
+write) and history read before the next release, or Play will reject the bundle. A real-device
+grant, read and write-back of body fat has not been run.
+
+### H-06 — volume response
+
+Closed with a shared per-lift model. Two behaviour changes beyond the finding are recorded here so
+they are not mistaken for regressions: weekly volume now counts sets from bouts with no e1RM
+(bodyweight-only bouts), which the old learner dropped; and the Stats insight now excludes
+test/technique/first-back bouts, as the cap learner always did. The 2 percent dead band is a judgment
+call with no data behind it.
+
+### H-13 — Program Builder draft
+
+Closed via `SavedStateHandle`. The draft is bounded by what a saved state bundle can carry; a program
+with hundreds of exercises would exceed it, and the builder then falls back to the previous
+behaviour (an empty, loaded builder). No cap is enforced because no program in the library approaches
+that size.

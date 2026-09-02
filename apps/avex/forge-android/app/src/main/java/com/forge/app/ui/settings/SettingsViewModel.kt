@@ -185,13 +185,16 @@ class SettingsViewModel @Inject constructor(
 
     fun setScheduleMode(mode: String) = write { settingsRepo.setScheduleMode(mode) }
 
-    /** Assign [dayKey] ("" = rest) to weekday [weekdayIndex] (0=Mon..6=Sun) in the weekly schedule. */
-    fun setScheduleDay(weekdayIndex: Int, dayKey: String) = viewModelScope.launch {
-        val current = settingsRepo.weeklySchedule.first().toMutableList()
-        while (current.size < com.forge.app.domain.schedule.WeeklySchedule.SLOTS) current.add("")
-        current[weekdayIndex] = dayKey
-        settingsRepo.setWeeklySchedule(current)
-    }
+    /**
+     * Assign [dayKey] ("" = rest) to weekday [weekdayIndex] (0=Mon..6=Sun) in the weekly schedule.
+     *
+     * One slot, one repository edit, through the same cancellation shield as every other preference
+     * write. The read-modify-write used to live here as three suspending steps on a bare launch, so
+     * leaving Settings mid-write cancelled the change and two quick weekday picks could overwrite
+     * each other with the same stale list (M-21).
+     */
+    fun setScheduleDay(weekdayIndex: Int, dayKey: String) =
+        write { settingsRepo.setWeeklyScheduleDay(weekdayIndex, dayKey) }
 
     // ─── Holiday / vacation (#135) ────────────────────────────────────────────
     val vacations: StateFlow<List<com.forge.app.data.db.entities.VacationPeriod>> =
@@ -781,12 +784,17 @@ class SettingsViewModel @Inject constructor(
     fun setAutoBackupEnabled(v: Boolean) = write { settingsRepo.setAutoBackupEnabled(v) }
 
     /** Persist + take a write grant on the picked folder, then seed it with a backup right away so it
-     *  isn't empty until the next weekly run. */
+     *  isn't empty until the next weekly run. The grant + preference write is shielded like every
+     *  other preference edit here (M-22); the seeding backup that follows stays an ordinary,
+     *  cancellable job, since a long copy must never become unstoppable just to make the pref durable. */
     fun setBackupFolder(uri: android.net.Uri) = viewModelScope.launch {
-        backupRepo.rememberBackupFolder(uri)
+        withContext(NonCancellable) { backupRepo.rememberBackupFolder(uri) }
         backupNow()
     }
-    fun clearBackupFolder() = viewModelScope.launch { backupRepo.forgetBackupFolder() }
+    /** Durable for the same reason (M-22): a folder removed just before leaving Settings used to be
+     *  able to survive the pop, and the weekly job would keep writing backups to a target the user
+     *  had watched disappear. */
+    fun clearBackupFolder() = write { backupRepo.forgetBackupFolder() }
 
     /** Run a backup right now — to internal storage and the picked folder — the "Back up now" action. */
     fun backupNow() = viewModelScope.launch {

@@ -32,6 +32,7 @@ import com.forge.app.domain.warmup.WarmupExercise
 import com.forge.app.domain.warmup.WarmupRampSet
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.program.MuscleGroup
+import com.forge.app.ui.theme.LocalForgeSettings
 import java.util.Locale
 import kotlin.math.floor
 
@@ -44,6 +45,21 @@ private fun trimWeight(v: Double): String =
     if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(Locale.US, "%.2f", v).trimEnd('0').trimEnd('.')
 
 // ─── Warmup Set Suggester (#10) ───────────────────────────────────────────────
+
+/**
+ * The suggester's seed text for a stored working weight: a plate count on a plate machine (stored
+ * pounds ÷ the configured plate weight, matching [formatPlateCount] in the set row), the
+ * display-unit weight otherwise. A non-positive plate weight cannot be divided by, so it falls
+ * back to the pounds rather than to infinity.
+ */
+internal fun warmupSeedText(
+    workingWeightLb: Double,
+    isPlates: Boolean,
+    plateLb: Double,
+    weightUnit: com.forge.app.domain.units.WeightUnit
+): String =
+    if (isPlates) formatPlateCount(if (plateLb > 0.0) workingWeightLb / plateLb else workingWeightLb)
+    else weightInputValue(workingWeightLb, weightUnit)
 
 /**
  * The ramp for one lift, on demand from its own card.
@@ -67,9 +83,13 @@ fun WarmupSuggesterDialog(
     onDismiss: () -> Unit
 ) {
     val isPlates = unit == ExerciseUnit.PLATES
-    // Plate counts are already the value the user types, so they never go through the unit
-    // conversion; everything else is shown and entered in kg, lb or stones.
-    val seed = workingWeightLb?.let { if (isPlates) trimWeight(it) else weightInputValue(it, weightUnit) }
+    val plateLb = LocalForgeSettings.current.plateWeightLb
+    // The field holds a plate COUNT on a plate machine, but the working weight arrives in stored
+    // pounds like every other load, so it is divided by the configured plate weight here — the same
+    // way the set input row seeds itself. Handing the pounds straight through read a 60 lb
+    // (four-plate) set as sixty plates and built the ramp from that. Everything else is shown and
+    // entered in kg, lb or stones.
+    val seed = workingWeightLb?.let { warmupSeedText(it, isPlates, plateLb, weightUnit) }
     var input by remember { mutableStateOf(seed ?: "") }
     val typed = input.toDoubleOrNull()
     val workingStored = typed?.let { if (isPlates) it else fromDisplayWeight(it, weightUnit) }

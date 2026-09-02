@@ -68,7 +68,7 @@ fun IconLaunchScene(icon: AppIcon, reduceMotion: Boolean, modifier: Modifier = M
     val ignite = remember { Animatable(if (reduceMotion) 1f else 0f) }
     LaunchedEffect(Unit) {
         if (!reduceMotion) {
-            ignite.animateTo(1f, tween(ForgeMotion.scaledDuration(950), easing = ForgeMotion.Decelerate))
+            ignite.animateTo(1f, tween(ForgeMotion.nominalDuration(950), easing = ForgeMotion.Decelerate))
         }
     }
     // Continuous clock in SECONDS (speeds live in the shaders, per-second, tuned to the beat).

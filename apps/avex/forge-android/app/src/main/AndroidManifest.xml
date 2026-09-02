@@ -29,6 +29,15 @@
          BACK. Both opt-in and granted in the Health Connect app; still no internet permission. -->
     <uses-permission android:name="android.permission.health.READ_WEIGHT" />
     <uses-permission android:name="android.permission.health.WRITE_WEIGHT" />
+    <!-- Weight history (H-05): an ordinary weight read only reaches the 30 days before the first
+         grant. This lets the one-time first-connect backfill pull a scale's older weigh-ins too.
+         Read-only, opt-in, granted in the Health Connect app; still no internet permission. -->
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_HISTORY" />
+    <!-- Body-fat sync (GYMAP-62): read a smart-scale body-fat % INTO Forge, write a Forge entry BACK.
+         Both opt-in and granted in the Health Connect app; still no internet permission. Without
+         these the body-fat grant could never be given, so the row was a permanent no-op (H-04). -->
+    <uses-permission android:name="android.permission.health.READ_BODY_FAT" />
+    <uses-permission android:name="android.permission.health.WRITE_BODY_FAT" />
     <!-- Steps: read a watch/ring's daily step counts INTO Forge for the cardio screen's hourly-steps
          graph. Read-only, opt-in, granted in the Health Connect app; still no internet permission. -->
     <uses-permission android:name="android.permission.health.READ_STEPS" />

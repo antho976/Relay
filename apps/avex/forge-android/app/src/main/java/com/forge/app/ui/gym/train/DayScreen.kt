@@ -101,19 +101,21 @@ fun DayScreen(
         onDispose { view.keepScreenOn = false }
     }
 
-    // Fire only on a genuine not-finished → finished transition. Seeding prev with the current value
-    // means re-entering the screen with an already-finished timer doesn't re-buzz / re-announce (A4).
-    var prevRestFinished by remember { mutableStateOf(state.restTimer?.isFinished == true) }
-    LaunchedEffect(state.restTimer?.isFinished) {
-        val finished = state.restTimer?.isFinished == true
-        if (finished && !prevRestFinished) {
-            view.forgeHaptic(ForgeHapticType.PR_OR_FINISH, hapticStrength)
-            view.announceForAccessibility("Rest complete") // A4: spoken even with the phone face-down.
-        }
-        prevRestFinished = finished
+    // The rest timer's two cues (the warning at 0:10, then "rest complete") fire from HERE and
+    // nowhere else: this is the owner that reads the Feedback strength setting, so Off plays
+    // nothing, and one owner means one pulse per threshold. The bubble draws these moments; it does
+    // not buzz them. Seeding the tracker with the current reading means a screen rebuilt mid-rest
+    // (rotation) or opened onto an already-finished timer never re-buzzes / re-announces (A4).
+    val restCues = remember {
+        RestTimerHapticCues(state.restTimer?.secondsRemaining, state.restTimer?.isFinished == true)
     }
-    LaunchedEffect(state.restTimer?.secondsRemaining) {
-        if (state.restTimer?.secondsRemaining == 10) view.forgeHaptic(ForgeHapticType.COUNTDOWN_TICK, hapticStrength)
+    LaunchedEffect(state.restTimer?.secondsRemaining, state.restTimer?.isFinished) {
+        val timer = state.restTimer
+        restCues.advance(timer?.secondsRemaining, timer?.isFinished == true).forEach { cue ->
+            view.forgeHaptic(cue, hapticStrength)
+            // A4: spoken even with the phone face-down.
+            if (cue == ForgeHapticType.PR_OR_FINISH) view.announceForAccessibility("Rest complete")
+        }
     }
 
     LaunchedEffect(state.undoableSetId) {

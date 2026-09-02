@@ -42,7 +42,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,11 +74,17 @@ import com.forge.app.ui.common.rememberDragDropState
  * list — tap a row for its sets × reps sheet (steppers + rep presets + in-place swap), long-press-drag
  * to reorder, × to remove (undone via the shared snackbar). Day-level one-shots (add / duplicate /
  * remove) group at the page end (§3).
+ *
+ * Which dialog/sheet is open is hoisted ([dialog] / [onDialog]) rather than `remember`ed here, so it
+ * is saved with the draft and comes back after rotation or a process kill (H-13). The values typed
+ * inside a dialog are `rememberSaveable`, keyed on the row they belong to.
  */
 @Composable
 fun ProgramBuilderDayDetail(
     day: BuilderDay,
     snackbarHostState: SnackbarHostState,
+    dialog: DayDialog,
+    onDialog: (DayDialog) -> Unit,
     onBack: () -> Unit,
     onRename: (String) -> Unit,
     onSetType: (String) -> Unit,
@@ -91,11 +97,7 @@ fun ProgramBuilderDayDetail(
     onDuplicateDay: () -> Unit,
     onRemoveDay: () -> Unit
 ) {
-    var showRename by remember { mutableStateOf(false) }
-    var showAddPicker by remember { mutableStateOf(false) }
-    // uid, not a snapshot: the sheet re-reads the live exercise so stepper taps render immediately.
-    var sheetExerciseUid by remember { mutableStateOf<String?>(null) }
-    var swapExerciseUid by remember { mutableStateOf<String?>(null) }
+    fun closeDialog() = onDialog(DayDialog.None)
 
     // System back steps out of the day, not out of the whole builder.
     BackHandler { onBack() }
@@ -120,7 +122,7 @@ fun ProgramBuilderDayDetail(
         bottomBar = {
             // §3: this page's one-shots at the END — add (do-it-now) + duplicate / remove sidekicks.
             Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
-                ForgePrimaryCapsule("+ Add exercise", onClick = { showAddPicker = true }, modifier = Modifier.fillMaxWidth())
+                ForgePrimaryCapsule("+ Add exercise", onClick = { onDialog(DayDialog.AddExercises) }, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ForgeOutlineCapsule("Duplicate day", onClick = onDuplicateDay, modifier = Modifier.weight(1f))
@@ -146,7 +148,7 @@ fun ProgramBuilderDayDetail(
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
-                        .bounceCombinedClick(onClickLabel = "Rename day", onClick = { showRename = true })
+                        .bounceCombinedClick(onClickLabel = "Rename day", onClick = { onDialog(DayDialog.Rename) })
                         .padding(vertical = 4.dp)
                 ) {
                     Text(day.name, style = MaterialTheme.typography.headlineSmall, color = onBg,
@@ -228,7 +230,8 @@ fun ProgramBuilderDayDetail(
                     ExerciseRow(
                         exercise = e,
                         dragging = dragging,
-                        onOpen = { sheetExerciseUid = e.uid },
+                        // uid, not a snapshot: the sheet re-reads the live exercise so stepper taps render immediately.
+                        onOpen = { onDialog(DayDialog.SetsReps(e.uid)) },
                         onRemove = { onRemoveExercise(e.uid) }
                     )
                 }
@@ -236,10 +239,11 @@ fun ProgramBuilderDayDetail(
         }
     }
 
-    if (showRename) {
-        var text by remember { mutableStateOf(day.name) }
+    if (dialog is DayDialog.Rename) {
+        // Saveable, keyed on the day: the half-typed name survives a rotation with the dialog.
+        var text by rememberSaveable(day.uid) { mutableStateOf(day.name) }
         AlertDialog(
-            onDismissRequest = { showRename = false },
+            onDismissRequest = { closeDialog() },
             title = { Text("Day name") },
             text = {
                 OutlinedTextField(
@@ -247,39 +251,39 @@ fun ProgramBuilderDayDetail(
                     supportingText = { Text("${text.length}/$MAX_DAY_NAME") }
                 )
             },
-            confirmButton = { TextButton(onClick = { onRename(text.trim().ifBlank { day.name }); showRename = false }) { Text("Save") } },
-            dismissButton = { TextButton(onClick = { showRename = false }) { Text("Cancel") } }
+            confirmButton = { TextButton(onClick = { onRename(text.trim().ifBlank { day.name }); closeDialog() }) { Text("Save") } },
+            dismissButton = { TextButton(onClick = { closeDialog() }) { Text("Cancel") } }
         )
     }
 
     // Re-read the live exercise each composition so stepper/pill edits render as they land; a swap
     // or removal that drops the uid simply closes the sheet.
-    val sheetExercise = sheetExerciseUid?.let { uid -> day.exercises.firstOrNull { it.uid == uid } }
+    val sheetExercise = (dialog as? DayDialog.SetsReps)?.let { d -> day.exercises.firstOrNull { it.uid == d.exerciseUid } }
     if (sheetExercise != null) {
         SetsRepsSheet(
             exercise = sheetExercise,
             onSet = { sets, reps -> onSetExercise(sheetExercise.uid, sets, reps) },
-            onSwap = { swapExerciseUid = sheetExercise.uid; sheetExerciseUid = null },
-            onDismiss = { sheetExerciseUid = null }
+            onSwap = { onDialog(DayDialog.Swap(sheetExercise.uid)) },
+            onDismiss = { closeDialog() }
         )
     }
 
-    if (showAddPicker) {
+    if (dialog is DayDialog.AddExercises) {
         ExerciseLibraryPicker(
             exclude = day.exercises.map { it.libId }.toSet(),
-            onDismiss = { showAddPicker = false },
-            onConfirm = { picked -> onAddExercises(picked); showAddPicker = false }
+            onDismiss = { closeDialog() },
+            onConfirm = { picked -> onAddExercises(picked); closeDialog() }
         )
     }
 
-    val swapExercise = swapExerciseUid?.let { uid -> day.exercises.firstOrNull { it.uid == uid } }
+    val swapExercise = (dialog as? DayDialog.Swap)?.let { d -> day.exercises.firstOrNull { it.uid == d.exerciseUid } }
     if (swapExercise != null) {
         ExerciseLibraryPicker(
             exclude = day.exercises.map { it.libId }.toSet(),
-            onDismiss = { swapExerciseUid = null },
+            onDismiss = { closeDialog() },
             onConfirm = { picked ->
                 picked.firstOrNull()?.let { onSwapExercise(swapExercise.uid, it) }
-                swapExerciseUid = null
+                closeDialog()
             },
             title = "Swap ${swapExercise.name}",
             confirmLabel = "Swap",
@@ -342,8 +346,9 @@ private fun SetsRepsSheet(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
     val sheetState = rememberModalBottomSheetState()
-    var customMode by remember(exercise.uid) { mutableStateOf(exercise.reps !in REP_PRESETS) }
-    var customText by remember(exercise.uid) { mutableStateOf(if (exercise.reps in REP_PRESETS) "" else exercise.reps) }
+    // Saveable, keyed on the row: the Custom toggle and its half-typed reps survive a rotation.
+    var customMode by rememberSaveable(exercise.uid) { mutableStateOf(exercise.reps !in REP_PRESETS) }
+    var customText by rememberSaveable(exercise.uid) { mutableStateOf(if (exercise.reps in REP_PRESETS) "" else exercise.reps) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(

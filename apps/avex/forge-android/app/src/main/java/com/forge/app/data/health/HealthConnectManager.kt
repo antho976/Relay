@@ -20,6 +20,8 @@ import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.records.metadata.Device
 import androidx.health.connect.client.records.metadata.Metadata
+import androidx.health.connect.client.request.AggregateGroupByDurationRequest
+import androidx.health.connect.client.request.AggregateGroupByPeriodRequest
 import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
@@ -33,12 +35,14 @@ import com.forge.app.domain.adapt.RestingHrSample
 import com.forge.app.domain.adapt.SleepNight
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
+import com.forge.app.domain.health.HcRecordKeys
 import com.forge.app.domain.health.HrPoint
 import com.forge.app.domain.health.SessionWindow
-import com.forge.app.domain.health.StepSample
+import com.forge.app.domain.health.StepBucket
 import com.forge.app.domain.health.WatchWorkout
 import com.forge.app.domain.health.bestSessionMatch
-import com.forge.app.domain.health.bucketStepsByHour
+import com.forge.app.domain.health.dailyStepsFromBuckets
+import com.forge.app.domain.health.hourlyStepsFromBuckets
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -46,6 +50,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import java.time.Duration
 import java.time.Instant
+import java.time.Period
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.reflect.KClass
@@ -78,6 +83,19 @@ class HealthConnectManager @Inject constructor(
     val weightPermissions: Set<String> = setOf(
         HealthPermission.getReadPermission(WeightRecord::class),
         HealthPermission.getWritePermission(WeightRecord::class)
+    )
+
+    /**
+     * Health-data HISTORY permission (H-05) — Health Connect limits an ordinary read to the 30 days
+     * before the app's first grant, so without this the first-connect weight backfill can only ever
+     * see a month of a smart scale's history. Requested alongside [weightPermissions] by the
+     * bodyweight row and again by the "import older weight" retry; kept as its own set so the
+     * caller can tell, per request, whether the history grant is part of what it is asking for.
+     * Declined (or unsupported by the provider) is fine: the ordinary window still imports and the
+     * page says so instead of latching the backfill as complete.
+     */
+    val historyPermissions: Set<String> = setOf(
+        HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY
     )
 
     /**
@@ -210,6 +228,14 @@ class HealthConnectManager @Inject constructor(
     suspend fun canWriteWeight(): Boolean =
         grantedPermissions().contains(HealthPermission.getWritePermission(WeightRecord::class))
 
+    /**
+     * True when Avex may read Health Connect data older than the 30-day first-grant window (H-05).
+     * Decides whether a weight-history read is the ENTIRE history or just the ordinary window, so
+     * the first-connect backfill latches "complete" only when this is live at import time.
+     */
+    suspend fun canReadHistory(): Boolean =
+        grantedPermissions().contains(HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY)
+
     /** A bodyweight reading mirrored out of Health Connect as plain Kotlin (lb + when it was taken). */
     data class HcWeight(val weightLb: Double, val timeMs: Long)
 
@@ -234,9 +260,13 @@ class HealthConnectManager @Inject constructor(
     }
 
     /**
-     * The FULL weight history in `[sinceMs, untilMs]`, oldest first, in lb (GYMAP-63 first-connect
+     * The weight history in `[sinceMs, untilMs]`, oldest first, in lb (GYMAP-63 first-connect
      * backfill). Pages through the provider (unlike [latestWeight]'s single row) and caps at
      * [HISTORY_MAX_RECORDS] so a pathological history can't pull unbounded records.
+     *
+     * "History" is only as deep as the grant: without [canReadHistory] Health Connect silently
+     * trims the range to the 30 days before Avex's first grant, however early [sinceMs] is (H-05).
+     * The caller checks that grant itself to decide whether the result is the whole history.
      *
      * Returns **null** when the read couldn't happen (no provider / not granted / a read error) — as
      * opposed to an empty list, which means the read SUCCEEDED and HC simply has no records. The caller
@@ -273,8 +303,18 @@ class HealthConnectManager @Inject constructor(
      * Write a single bodyweight reading to Health Connect, returning whether it landed. Best-effort
      * and fail-soft: no provider / no write permission / a provider error all return false without
      * throwing, so a failed mirror never breaks the local log (the source of truth stays the DB).
+     *
+     * Keyed on [clientRecordId] like every other Avex write (M-02): the record is an UPSERT on
+     * (our package, clientRecordId), so a same-day re-save updates the mirror instead of adding a
+     * second weigh-in to the day, and [deleteWeights] can remove it when the local entry goes.
+     * [clientRecordVersion] must not decrease for an update to land; callers pass the write time.
      */
-    suspend fun writeWeight(weightLb: Double, atMs: Long): Boolean = withContext(Dispatchers.IO) {
+    suspend fun writeWeight(
+        weightLb: Double,
+        atMs: Long,
+        clientRecordId: String,
+        clientRecordVersion: Long
+    ): Boolean = withContext(Dispatchers.IO) {
         val client = clientOrNull() ?: return@withContext false
         if (!canWriteWeight()) return@withContext false
         hcCatching {
@@ -284,13 +324,20 @@ class HealthConnectManager @Inject constructor(
                         time = Instant.ofEpochMilli(atMs),
                         zoneOffset = null,
                         weight = Mass.pounds(weightLb),
-                        metadata = Metadata.manualEntry()
+                        metadata = Metadata.manualEntry(
+                            clientRecordId = clientRecordId,
+                            clientRecordVersion = clientRecordVersion
+                        )
                     )
                 )
             )
             true
         } ?: false
     }
+
+    /** Delete the Avex-authored weigh-ins keyed by [clientRecordIds] (fail-soft; unknown ids are a no-op). */
+    suspend fun deleteWeights(clientRecordIds: List<String>): Boolean =
+        deleteByClientIds(WeightRecord::class, clientRecordIds)
 
     /** True when Avex may READ body fat % from Health Connect (GYMAP-62). */
     suspend fun canReadBodyFat(): Boolean =
@@ -327,8 +374,14 @@ class HealthConnectManager @Inject constructor(
      * Write a single body-fat reading (percentage) to Health Connect, returning whether it landed.
      * Best-effort and fail-soft like [writeWeight]: no provider / no write permission / a provider
      * error all return false without throwing, so a failed mirror never breaks the local log.
+     * Keyed on [clientRecordId] for the same reason as [writeWeight] (M-02).
      */
-    suspend fun writeBodyFat(percent: Double, atMs: Long): Boolean = withContext(Dispatchers.IO) {
+    suspend fun writeBodyFat(
+        percent: Double,
+        atMs: Long,
+        clientRecordId: String,
+        clientRecordVersion: Long
+    ): Boolean = withContext(Dispatchers.IO) {
         val client = clientOrNull() ?: return@withContext false
         if (!canWriteBodyFat()) return@withContext false
         hcCatching {
@@ -338,13 +391,20 @@ class HealthConnectManager @Inject constructor(
                         time = Instant.ofEpochMilli(atMs),
                         zoneOffset = null,
                         percentage = Percentage(percent),
-                        metadata = Metadata.manualEntry()
+                        metadata = Metadata.manualEntry(
+                            clientRecordId = clientRecordId,
+                            clientRecordVersion = clientRecordVersion
+                        )
                     )
                 )
             )
             true
         } ?: false
     }
+
+    /** Delete the Avex-authored body-fat entries keyed by [clientRecordIds] (fail-soft; unknown ids are a no-op). */
+    suspend fun deleteBodyFats(clientRecordIds: List<String>): Boolean =
+        deleteByClientIds(BodyFatRecord::class, clientRecordIds)
 
     /** True when Avex may WRITE active calories to Health Connect (HC-4). */
     suspend fun canWriteActiveCalories(): Boolean =
@@ -444,25 +504,39 @@ class HealthConnectManager @Inject constructor(
     }
 
     /**
-     * Per-day step totals in `[startMs, endMs]`, bucketed on the local calendar day (W6). One read,
-     * grouped client-side; fail-soft to empty. Feeds the coach's daily-movement input and the
-     * Home movement line's typical-day compare.
+     * Per-day step totals from the start of [startMs]'s local calendar day to [endMs] (W6),
+     * fail-soft to empty. Feeds the coach's daily-movement input and the Home movement line's
+     * typical-day compare.
+     *
+     * One `StepsRecord.COUNT_TOTAL` aggregate sliced by local day (M-01), never a sum of raw rows:
+     * the aggregate applies Health Connect's source priority, so a phone and a watch logging the
+     * same walk count it once, and the provider splits a row that straddles midnight between its
+     * days instead of this code crediting all of it to the start day. The window's start is
+     * snapped back to its local midnight so every bucket is a whole day; the last runs to
+     * [endMs] (today so far). A period slice requires a local-time filter, hence LocalDateTime.
      */
     suspend fun readDailyStepTotals(startMs: Long, endMs: Long): List<DailySteps> = withContext(Dispatchers.IO) {
         val client = clientOrNull() ?: return@withContext emptyList()
         if (!canReadSteps()) return@withContext emptyList()
         hcCatching {
             val zone = java.time.ZoneId.systemDefault()
-            val range = TimeRangeFilter.between(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(endMs))
-            client.readAllPages(StepsRecord::class, range)
-                .groupBy { Instant.ofEpochMilli(it.startTime.toEpochMilli()).atZone(zone).toLocalDate() }
-                .map { (day, recs) ->
-                    DailySteps(
-                        dayStartMs = day.atStartOfDay(zone).toInstant().toEpochMilli(),
-                        steps = recs.sumOf { it.count }.toInt()
+            val startLocal = Instant.ofEpochMilli(startMs).atZone(zone).toLocalDate().atStartOfDay()
+            val endLocal = Instant.ofEpochMilli(endMs).atZone(zone).toLocalDateTime()
+            if (!startLocal.isBefore(endLocal)) emptyList<DailySteps>() else {
+                val buckets = client.aggregateGroupByPeriod(
+                    AggregateGroupByPeriodRequest(
+                        metrics = setOf(StepsRecord.COUNT_TOTAL),
+                        timeRangeFilter = TimeRangeFilter.between(startLocal, endLocal),
+                        timeRangeSlicer = Period.ofDays(1)
+                    )
+                ).map {
+                    StepBucket(
+                        startMs = it.startTime.atZone(zone).toInstant().toEpochMilli(),
+                        steps = it.result.get(StepsRecord.COUNT_TOTAL)
                     )
                 }
-                .sortedBy { it.dayStartMs }
+                dailyStepsFromBuckets(buckets, zone)
+            }
         }.orEmpty()
     }
 
@@ -507,19 +581,35 @@ class HealthConnectManager @Inject constructor(
         grantedPermissions().contains(HealthPermission.getReadPermission(StepsRecord::class))
 
     /**
-     * Read every [StepsRecord] in `[dayStartMs, dayEndMs)` and bucket it into an hourly breakdown for
-     * the cardio screen. Fail-soft like the rest: no provider / no read permission / a provider error
-     * all return an empty [CardioWearableDay], which the UI renders as "no wearable data" (the steps
-     * graph simply doesn't appear). Routes stay empty — GPS is a separate, deferred read.
+     * The hourly step breakdown of `[dayStartMs, dayEndMs)` for the cardio screen. Fail-soft like
+     * the rest: no provider / no read permission / a provider error all return an empty
+     * [CardioWearableDay], which the UI renders as "no wearable data" (the steps graph simply
+     * doesn't appear). Routes stay empty — GPS is a separate, deferred read.
+     *
+     * One `StepsRecord.COUNT_TOTAL` aggregate sliced into hours (M-01) rather than a sum of raw
+     * rows, for the same two reasons as [readDailyStepTotals]: overlapping providers count once,
+     * and a row spanning two hours is split between them by the provider instead of landing
+     * wholly in its start hour. Buckets run from [dayStartMs] in one-hour steps, so a caller
+     * passing local midnight gets buckets that ARE the local hours.
      */
     suspend fun readStepsDay(dayStartMs: Long, dayEndMs: Long): CardioWearableDay = withContext(Dispatchers.IO) {
         val client = clientOrNull() ?: return@withContext CardioWearableDay()
         if (!canReadSteps()) return@withContext CardioWearableDay()
         hcCatching {
-            val range = TimeRangeFilter.between(Instant.ofEpochMilli(dayStartMs), Instant.ofEpochMilli(dayEndMs))
-            val samples = client.readAllPages(StepsRecord::class, range)
-                .map { StepSample(startMs = it.startTime.toEpochMilli(), count = it.count) }
-            CardioWearableDay(hourlySteps = bucketStepsByHour(samples, java.time.ZoneId.systemDefault()))
+            val start = Instant.ofEpochMilli(dayStartMs)
+            val end = Instant.ofEpochMilli(dayEndMs)
+            if (!start.isBefore(end)) CardioWearableDay() else {
+                val buckets = client.aggregateGroupByDuration(
+                    AggregateGroupByDurationRequest(
+                        metrics = setOf(StepsRecord.COUNT_TOTAL),
+                        timeRangeFilter = TimeRangeFilter.between(start, end),
+                        timeRangeSlicer = Duration.ofHours(1)
+                    )
+                ).map {
+                    StepBucket(startMs = it.startTime.toEpochMilli(), steps = it.result.get(StepsRecord.COUNT_TOTAL))
+                }
+                CardioWearableDay(hourlySteps = hourlyStepsFromBuckets(buckets, java.time.ZoneId.systemDefault()))
+            }
         } ?: CardioWearableDay()
     }
 
@@ -624,18 +714,83 @@ class HealthConnectManager @Inject constructor(
      * Delete the Health Connect session Avex wrote under [clientRecordId] (a deleted cardio entry
      * takes its mirror with it). Fail-soft; deleting an id that was never written is a no-op.
      */
-    suspend fun deleteExerciseSession(clientRecordId: String): Boolean = withContext(Dispatchers.IO) {
-        val client = clientOrNull() ?: return@withContext false
-        if (!canWriteExerciseSessions()) return@withContext false
-        hcCatching {
-            client.deleteRecords(
-                ExerciseSessionRecord::class,
-                recordIdsList = emptyList(),
-                clientRecordIdsList = listOf(clientRecordId)
-            )
-            true
-        } ?: false
+    suspend fun deleteExerciseSession(clientRecordId: String): Boolean =
+        deleteExerciseSessions(listOf(clientRecordId))
+
+    /** Delete the Avex-authored exercise sessions keyed by [clientRecordIds] (fail-soft; unknown ids are a no-op). */
+    suspend fun deleteExerciseSessions(clientRecordIds: List<String>): Boolean =
+        deleteByClientIds(ExerciseSessionRecord::class, clientRecordIds)
+
+    /** Delete the Avex-authored HR series keyed by [clientRecordIds] (fail-soft; unknown ids are a no-op). */
+    suspend fun deleteHrSeries(clientRecordIds: List<String>): Boolean =
+        deleteByClientIds(HeartRateRecord::class, clientRecordIds)
+
+    /** Delete the Avex-authored active-calorie records keyed by [clientRecordIds] (fail-soft; unknown ids are a no-op). */
+    suspend fun deleteActiveCalories(clientRecordIds: List<String>): Boolean =
+        deleteByClientIds(ActiveCaloriesBurnedRecord::class, clientRecordIds)
+
+    /**
+     * Take every Health Connect mirror of the gym sessions [sessionIds] with them (M-02): the
+     * session record, its active calories and its HR trace, each keyed by [HcRecordKeys]. A
+     * deleted session used to leave all three behind, so Samsung Health kept counting a workout
+     * Avex no longer had. Each type is independently gated on its own write grant and fail-soft;
+     * ids that were never mirrored (an unfinished session, an opt-out at the time) are no-ops.
+     */
+    suspend fun deleteSessionMirrors(sessionIds: Collection<Long>) {
+        if (sessionIds.isEmpty()) return
+        val keys = HcRecordKeys.sessionMirrors(sessionIds)
+        deleteExerciseSessions(keys.sessions)
+        deleteActiveCalories(keys.calories)
+        deleteHrSeries(keys.heartRate)
     }
+
+    /**
+     * Delete EVERY record Avex has ever written to Health Connect, of every type it writes (M-02).
+     * The factory reset's "Deletes ALL data" has to reach the external copies too, and it must do
+     * so without the local rows: a time-range delete is scoped by Health Connect to the calling
+     * app's own records, so it needs no keys and also catches mirrors whose rows are already
+     * gone. Each type is gated on its own write grant (an ungranted delete throws) and fail-soft,
+     * so a missing grant or a provider error never blocks the rest of the reset. The range runs
+     * from the epoch to a year past [nowMs], covering any clock-skewed stamp.
+     */
+    suspend fun deleteAllAvexRecords(nowMs: Long) = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext
+        val granted = grantedPermissions()
+        val range = TimeRangeFilter.between(
+            Instant.EPOCH,
+            Instant.ofEpochMilli(nowMs).plus(Duration.ofDays(WIPE_FUTURE_MARGIN_DAYS))
+        )
+        val types: List<KClass<out Record>> = listOf(
+            ExerciseSessionRecord::class,
+            HeartRateRecord::class,
+            ActiveCaloriesBurnedRecord::class,
+            WeightRecord::class,
+            BodyFatRecord::class
+        )
+        for (type in types) {
+            if (HealthPermission.getWritePermission(type) !in granted) continue
+            hcCatching { client.deleteRecords(type, timeRangeFilter = range) }
+        }
+    }
+
+    /**
+     * Delete the calling app's records of [type] under [clientRecordIds], in bounded batches so a
+     * multi-year reset never hands the provider one enormous IPC. Gated on the type's write grant
+     * (deleting without it throws), fail-soft, and a no-op for an empty list. True when every
+     * batch was accepted.
+     */
+    private suspend fun deleteByClientIds(type: KClass<out Record>, clientRecordIds: List<String>): Boolean =
+        withContext(Dispatchers.IO) {
+            if (clientRecordIds.isEmpty()) return@withContext true
+            val client = clientOrNull() ?: return@withContext false
+            if (HealthPermission.getWritePermission(type) !in grantedPermissions()) return@withContext false
+            hcCatching {
+                clientRecordIds.chunked(DELETE_BATCH_SIZE).forEach { batch ->
+                    client.deleteRecords(type, recordIdsList = emptyList(), clientRecordIdsList = batch)
+                }
+                true
+            } ?: false
+        }
 
     /**
      * The device stamped on Avex's own auto/actively-recorded writes.
@@ -1005,5 +1160,9 @@ class HealthConnectManager @Inject constructor(
         const val HR_SERIES_MAX_SAMPLES = 12_000
         /** RMSSD sanity ceiling (W6) — real overnight values sit ~15–150ms; 500+ is a corrupt row. */
         const val MAX_RMSSD_MS = 500.0
+        /** Client-record ids per delete IPC (M-02): a reset over years of sessions goes in bounded batches. */
+        const val DELETE_BATCH_SIZE = 500
+        /** How far past "now" the factory-reset wipe reaches, so a clock-skewed mirror still falls inside it. */
+        const val WIPE_FUTURE_MARGIN_DAYS = 366L
     }
 }

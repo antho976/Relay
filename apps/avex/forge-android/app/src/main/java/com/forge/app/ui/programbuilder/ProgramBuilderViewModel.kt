@@ -3,14 +3,18 @@ package com.forge.app.ui.programbuilder
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.forge.app.data.db.entities.ProgramDay
+import com.forge.app.data.db.entities.ProgramSlot
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.ProgramRepository
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.ui.common.ProgramChangeGuard
 import com.forge.app.ui.common.moved
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -19,23 +23,79 @@ import java.util.UUID
 import javax.inject.Inject
 
 /**
+ * The slice of the data layer the builder touches. An interface so a test can stand in a fake and
+ * construct the real ViewModel (the repositories are final and need Room, DataStore and Health
+ * Connect behind them); production binds [RepositoryProgramBuilderStore] in the @Inject constructor.
+ */
+internal interface ProgramBuilderStore {
+    val freestyleMode: Flow<Boolean>
+    suspend fun currentDayRows(): List<ProgramDay>
+    suspend fun slotRowsForDay(dayId: String): List<ProgramSlot>
+    suspend fun saveCustomProgram(days: List<ProgramDay>, slots: List<ProgramSlot>)
+    suspend fun setFreestyleMode(v: Boolean)
+    /** Run [action] through the shared program-change guard (confirm first when a workout is active). */
+    suspend fun guardProgramChange(action: suspend () -> Unit)
+}
+
+internal class RepositoryProgramBuilderStore(
+    private val programRepository: ProgramRepository,
+    private val settingsRepo: SettingsRepository,
+    private val programChangeGuard: ProgramChangeGuard
+) : ProgramBuilderStore {
+    override val freestyleMode: Flow<Boolean> get() = settingsRepo.freestyleMode
+    override suspend fun currentDayRows(): List<ProgramDay> = programRepository.currentDayRows()
+    override suspend fun slotRowsForDay(dayId: String): List<ProgramSlot> = programRepository.slotRowsForDay(dayId)
+    override suspend fun saveCustomProgram(days: List<ProgramDay>, slots: List<ProgramSlot>) {
+        programRepository.saveCustomProgram(days, slots)
+    }
+    override suspend fun setFreestyleMode(v: Boolean) {
+        settingsRepo.setFreestyleMode(v)
+    }
+    override suspend fun guardProgramChange(action: suspend () -> Unit) {
+        programChangeGuard.run(action = action)
+    }
+}
+
+/**
  * In-memory routine builder. The user edits days/exercises freely (add, rename, reorder, remove, set
  * sets/reps); nothing persists until [save], which writes the whole plan as the base program
  * ([ProgramRepository.saveCustomProgram]) — no overlay. Launched blank (build-your-own from
  * onboarding) or pre-loaded from the current program (edit existing).
+ *
+ * "In-memory" survives the process: every edit and every editor move (open a day, open its sheet)
+ * writes the whole draft into [SavedStateHandle] as one small JSON string, and a ViewModel recreated
+ * after Android killed the process behind a retained task restores from it in `init`, before
+ * [loadIfNeeded] can reload the saved program over it. Before this, that recreation quietly produced
+ * an empty, non-dirty builder, so every unsaved day and exercise was gone and no discard warning
+ * appeared. The draft is cleared only by [save] and [discardEdits].
  */
 @HiltViewModel
-class ProgramBuilderViewModel @Inject constructor(
-    private val programRepository: ProgramRepository,
-    private val settingsRepo: SettingsRepository,
-    private val programChangeGuard: ProgramChangeGuard
+class ProgramBuilderViewModel internal constructor(
+    private val store: ProgramBuilderStore,
+    private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
+
+    @Inject
+    constructor(
+        programRepository: ProgramRepository,
+        settingsRepo: SettingsRepository,
+        programChangeGuard: ProgramChangeGuard,
+        savedStateHandle: SavedStateHandle
+    ) : this(RepositoryProgramBuilderStore(programRepository, settingsRepo, programChangeGuard), savedStateHandle)
 
     var days by mutableStateOf<List<BuilderDay>>(emptyList())
         private set
     var dirty by mutableStateOf(false)
         private set
     var saving by mutableStateOf(false)
+        private set
+
+    /** The day open in [ProgramBuilderDayDetail], or null on the plan overview. */
+    var openDayUid by mutableStateOf<String?>(null)
+        private set
+
+    /** The dialog/sheet open inside the day editor. */
+    var dayDialog by mutableStateOf<DayDialog>(DayDialog.None)
         private set
 
     /**
@@ -53,9 +113,23 @@ class ProgramBuilderViewModel @Inject constructor(
     /** Currently "go with the flow" — saving a plan switches to follow-a-plan, so the screen confirms
      *  first (see [save], which performs the flip). */
     val freestyleMode: StateFlow<Boolean> =
-        settingsRepo.freestyleMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+        store.freestyleMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private var loaded = false
+
+    init {
+        // Restore BEFORE the screen's loadIfNeeded runs: a restored draft counts as loaded, so the
+        // saved program is never fetched over the top of it. A blob this build cannot read (older
+        // schema, corrupt) is ignored and the builder loads the saved program as it always did.
+        savedStateHandle.get<String>(KEY_DRAFT)?.let { ProgramBuilderDraft.fromJson(it) }?.let { draft ->
+            days = draft.days
+            dirty = draft.dirty
+            openDayUid = draft.openDayUid
+            dayDialog = draft.dialog
+            loaded = true
+            loadComplete = true
+        }
+    }
 
     /** Inverse of the last destructive remove — re-inserts just that item at its original slot, so a
      *  snackbar Undo never rolls back edits made in between (§13: undo over confirm). */
@@ -91,6 +165,9 @@ class ProgramBuilderViewModel @Inject constructor(
     fun discardEdits() {
         dirty = false
         undoRemoval = null
+        openDayUid = null
+        dayDialog = DayDialog.None
+        clearDraft()
         loadComplete = false
         viewModelScope.launch {
             days = loadDays()
@@ -98,9 +175,42 @@ class ProgramBuilderViewModel @Inject constructor(
         }
     }
 
+    /** Open [dayUid] in the day editor (a stale uid simply renders the overview — see [day]). */
+    fun openDay(dayUid: String) {
+        openDayUid = dayUid
+        dayDialog = DayDialog.None
+        persistDraft()
+    }
+
+    /** Back out of the day editor to the plan overview. */
+    fun closeDay() {
+        openDayUid = null
+        dayDialog = DayDialog.None
+        persistDraft()
+    }
+
+    /** Open (or, with [DayDialog.None], close) a dialog/sheet inside the day editor. */
+    fun setDayDialog(dialog: DayDialog) {
+        dayDialog = dialog
+        persistDraft()
+    }
+
+    /**
+     * Snapshot the whole draft into the handle. Only once the initial load has landed: a draft
+     * persisted over the empty pre-load list would restore as an empty, "loaded" plan.
+     */
+    private fun persistDraft() {
+        if (!loadComplete) return
+        savedStateHandle[KEY_DRAFT] = ProgramBuilderDraft(days, dirty, openDayUid, dayDialog).toJson()
+    }
+
+    private fun clearDraft() {
+        savedStateHandle.remove<String>(KEY_DRAFT)
+    }
+
     private suspend fun loadDays(): List<BuilderDay> =
-        programRepository.currentDayRows().map { pd ->
-            val slots = programRepository.slotRowsForDay(pd.id)
+        store.currentDayRows().map { pd ->
+            val slots = store.slotRowsForDay(pd.id)
             BuilderDay(
                 uid = uid(), key = pd.id, name = pd.name, archetype = pd.archetype,
                 accentHex = pd.accentHex, word = pd.word,
@@ -115,6 +225,7 @@ class ProgramBuilderViewModel @Inject constructor(
     private fun mutate(block: (List<BuilderDay>) -> List<BuilderDay>) {
         days = block(days)
         dirty = true
+        persistDraft()
     }
 
     private fun mutateDay(dayUid: String, block: (BuilderDay) -> BuilderDay) =
@@ -223,15 +334,22 @@ class ProgramBuilderViewModel @Inject constructor(
                 // raises the same "discard & continue?" confirm the generate / deload / re-roll paths use
                 // instead of silently wiping logged work; on cancel the staged save is dropped and the
                 // builder stays open (dirty), so nothing is lost.
-                programChangeGuard.run {
-                    programRepository.saveCustomProgram(dayRows, slotRows)
-                    settingsRepo.setFreestyleMode(false)
+                store.guardProgramChange {
+                    store.saveCustomProgram(dayRows, slotRows)
+                    store.setFreestyleMode(false)
                     dirty = false
+                    // The saved program IS the document now; a recreation reloads it from Room.
+                    clearDraft()
                     onSaved()
                 }
             } finally {
                 saving = false
             }
         }
+    }
+
+    companion object {
+        /** SavedStateHandle key for the JSON draft — see [ProgramBuilderDraft]. */
+        internal const val KEY_DRAFT = "programBuilderDraft"
     }
 }

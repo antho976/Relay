@@ -6,6 +6,7 @@ import com.forge.app.data.db.entities.BodyFatEntry
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.health.BodyFatSync
+import com.forge.app.domain.health.HcRecordKeys
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import java.time.Instant
@@ -59,11 +60,25 @@ class BodyFatRepository @Inject constructor(
         // granted — same three-gate rule as bodyweight, so a mirror failure can't break the local
         // save and a backdated value never lands in HC at the wrong instant.
         if (date == today && settings.hcWriteBodyFat.first() && health.canWriteBodyFat()) {
-            health.writeBodyFat(percent, now)
+            // Keyed on the day like the bodyweight mirror (the upsert re-ids a re-saved day), so a
+            // same-day re-save UPDATES the record and [delete] can find it later (M-02).
+            health.writeBodyFat(
+                percent, now,
+                clientRecordId = HcRecordKeys.bodyFat(date.toString()),
+                clientRecordVersion = now
+            )
         }
     }
 
-    suspend fun delete(id: Long) = dao.delete(id)
+    /**
+     * Delete a reading and the Health Connect copy Avex wrote for it (M-02). Local delete first,
+     * mirror delete fail-soft and a no-op for a day that was never mirrored.
+     */
+    suspend fun delete(id: Long) {
+        val entry = dao.byId(id)
+        dao.delete(id)
+        if (entry != null) health.deleteBodyFats(listOf(HcRecordKeys.bodyFat(entry.dateKey)))
+    }
 
     /** Whether an "Import from Health Connect" affordance should be offered (read permission granted). */
     suspend fun canImportFromHealthConnect(): Boolean = health.canReadBodyFat()

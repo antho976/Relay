@@ -5,6 +5,8 @@ import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.data.repo.StatsRepository
+import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CustomCardioType
 import com.forge.app.domain.session.SessionType
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.program.Program
@@ -73,19 +75,21 @@ internal fun buildOverviewUiState(
         ))
     }
     val cardioItems = recentCardio.map { entry ->
-        val typeName = entry.type.replaceFirstChar { it.uppercase() }
         // Distance renders in the row's right column (where gym volume sits), not the subtitle.
         val sub = "${entry.durationMin} min"
         Pair(entry.date, OverviewRecentItem(
             dayLabel = relativeDay(entry.date),
-            title = "Cardio · $typeName",
+            // Built-in names resolve here ("hiit" is HIIT, not "Hiit"); a custom code resolves to
+            // its user-given name at composition through displayTitle, where the definitions are.
+            title = cardioRecentTitle(CardioActivity.resolve(entry.type, emptyList()).displayName),
             subtitle = sub,
             tag = "MOVE",
             id = entry.id,
             timestampMs = entry.date,
             isGym = false,
             durationMin = entry.durationMin,
-            distanceKm = entry.distanceKm
+            distanceKm = entry.distanceKm,
+            cardioTypeCode = entry.type
         ))
     }
     val recentItems = (gymItems + cardioItems)
@@ -116,6 +120,21 @@ internal fun buildOverviewUiState(
         trophiesUnlocked = trophiesUnlocked,
         cardioDistanceKm = distanceKm
     )
+}
+
+/** The Home recent-row title for a cardio session with this activity name. */
+internal fun cardioRecentTitle(activityName: String): String = "Cardio · $activityName"
+
+/**
+ * The row's title with a cardio activity resolved through the user's custom definitions
+ * ([customs], from LocalCardioTypes at composition). A gym row, or a cardio row with no code, keeps
+ * [OverviewRecentItem.title]. A custom code whose definition was since deleted reads as Other, the
+ * same fallback every other cardio surface uses, never the raw `custom_ab12cd34` storage code.
+ */
+internal fun OverviewRecentItem.displayTitle(customs: List<CustomCardioType>): String {
+    val code = cardioTypeCode ?: return title
+    if (isGym) return title
+    return cardioRecentTitle(CardioActivity.resolve(code, customs).displayName)
 }
 
 /**

@@ -1,6 +1,12 @@
 package com.forge.app.ui.checkin
 
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.onboarding.MAX_BODYWEIGHT_LB
+import com.forge.app.ui.onboarding.MIN_BODYWEIGHT_LB
+import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -125,6 +131,12 @@ fun CheckinSheet(viewModel: CheckinViewModel = hiltViewModel()) {
                     // said only "Weight" logged 80 lb.
                     label = { Text("Weight (${unitLabel(state.weightUnit)})") },
                     placeholder = { Text("optional") },
+                    // A typed value outside the plausible range used to vanish on Save while the
+                    // check-in reported success (M-14). Say why, and Save holds until it is fixed.
+                    isError = state.weightInvalid,
+                    supportingText = if (state.weightInvalid) {
+                        { Text(bodyweightRangeText(state.weightUnit)) }
+                    } else null,
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.weight(1f)
@@ -150,6 +162,16 @@ fun CheckinSheet(viewModel: CheckinViewModel = hiltViewModel()) {
         }
     }
 }
+
+/** The plausible range in the field's own unit, the same line the profile's weigh-in sheet shows. */
+private fun bodyweightRangeText(unit: WeightUnit): String =
+    if (unit == WeightUnit.ST) {
+        "Enter ${formatWeight(MIN_BODYWEIGHT_LB, unit)}–${formatWeight(MAX_BODYWEIGHT_LB, unit)}."
+    } else {
+        val minDisp = toDisplayWeight(MIN_BODYWEIGHT_LB, unit).roundToInt()
+        val maxDisp = toDisplayWeight(MAX_BODYWEIGHT_LB, unit).roundToInt()
+        "Enter $minDisp–$maxDisp ${unitLabel(unit)}."
+    }
 
 /** One 1–5 question: its mono label, then five pills. The pills ARE the input (§13). */
 @Composable

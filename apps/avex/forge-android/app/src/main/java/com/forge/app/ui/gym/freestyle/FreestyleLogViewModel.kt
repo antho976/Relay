@@ -41,7 +41,14 @@ data class FreestyleSetInput(
 data class FreestyleExerciseInput(
     val libId: String,
     val sets: List<FreestyleSetInput>,
-    val customName: String? = null
+    val customName: String? = null,
+    /**
+     * [com.forge.app.program.MuscleGroup.code] the user picked for a custom move; null for a library
+     * one. The logged row has no muscle column, so saving used to drop it: muscle stats and the
+     * anatomy figure skipped the move's sets and reusing the workout reset it to Chest. It is
+     * written to the custom-exercise registry on save instead.
+     */
+    val customMuscleCode: String? = null
 )
 
 /**
@@ -76,6 +83,19 @@ class FreestyleLogViewModel @Inject constructor(
      */
     suspend fun pinnedNote(libId: String): String =
         customizationRepo.getSwap(libId)?.pinnedNote?.takeIf { it.isNotBlank() }.orEmpty()
+
+    /**
+     * Remember a custom move's identity the moment it is created, so its name and picked muscle are
+     * known to stats/recap/template reuse even before (or without) a save. NonCancellable for the
+     * same reason [saveDraft] is: the browser closes on the very next line.
+     */
+    fun registerCustomExercise(id: String, name: String, muscle: com.forge.app.program.MuscleGroup) {
+        viewModelScope.launch {
+            withContext(NonCancellable) {
+                settingsRepo.registerCustomExercise(com.forge.app.program.CustomExerciseDef(id, name, muscle.code))
+            }
+        }
+    }
 
     // ─── Draft persistence (autosave + resume) ───────────────────────────────
 
@@ -122,6 +142,14 @@ class FreestyleLogViewModel @Inject constructor(
             // leaving mid-loop left a half-written workout in history — a session with two of five
             // exercises, its totals stamped from what happened to land.
             withContext(NonCancellable) {
+                // A custom move's muscle has no column on the logged row, so it is committed to the
+                // registry here, before the rows land, so every consumer of the finished session
+                // (stats, anatomy, recap, template reuse) can already resolve the id.
+                items.forEach { ex ->
+                    val name = ex.customName?.takeIf { it.isNotBlank() } ?: return@forEach
+                    val muscle = ex.customMuscleCode?.takeIf { it.isNotBlank() } ?: return@forEach
+                    settingsRepo.registerCustomExercise(com.forge.app.program.CustomExerciseDef(ex.libId, name, muscle))
+                }
                 val sessionId = workoutRepo.inTransaction {
                     val sessionId = workoutRepo.createFreestyleSession(startedAtMs)
                     items.forEachIndexed { exIdx, ex ->

@@ -90,7 +90,9 @@ fun RestTimerBubble(
     )
 
     // Final-10s urgency: the ring warms toward the error colour over the last ten seconds, and the
-    // bubble flashes + ticks once exactly at 0:10. Both collapse under reduced motion (ForgeMotion).
+    // bubble flashes once exactly at 0:10. Both collapse under reduced motion (ForgeMotion). The
+    // haptic for that moment, like the one for the finish, is DayScreen's alone: it is the owner
+    // that reads the Feedback strength setting, so Off plays nothing and nothing plays twice.
     val warn = MaterialTheme.colorScheme.error
     val urgency by animateFloatAsState(
         targetValue = if (!state.isFinished && state.secondsRemaining in 1..10) 1f else 0f,
@@ -102,7 +104,7 @@ fun RestTimerBubble(
     val ringColor = lerp(accent, warn, urgency)
     val flash = remember { Animatable(0f) }
     val haptic = LocalHapticFeedback.current
-    // Track the previous tick so the 10s warning fires ONLY on the descending transition into 0:10,
+    // Track the previous tick so the 10s flash fires ONLY on the descending transition into 0:10,
     // never on first composition (a rest that simply starts at ≤10s, or a recompose while at 10).
     var prevSeconds by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(state.secondsRemaining) {
@@ -114,19 +116,9 @@ fun RestTimerBubble(
         if (prev != null && prev > 10 && state.secondsRemaining == 10 &&
             !state.isFinished && ForgeMotion.durationScale > 0f
         ) {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             flash.snapTo(0.55f)
             flash.animateTo(0f, ForgeMotion.standardTween(500))
         }
-    }
-    // "You're ready" haptic: fires ONCE on the false→true edge — track the prior value so a bubble
-    // mounted already-finished (recompose / config change) doesn't buzz on first composition.
-    var prevFinished by remember { mutableStateOf(state.isFinished) }
-    LaunchedEffect(state.isFinished) {
-        if (state.isFinished && !prevFinished) {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        }
-        prevFinished = state.isFinished
     }
 
     // Springy pop-in each time the bubble appears (a rest begins).

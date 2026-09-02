@@ -286,6 +286,11 @@ interface SessionDao {
     @Query("SELECT id, started_at FROM session WHERE started_at >= :fromMs AND started_at < :toMs")
     suspend fun startRefsInRange(fromMs: Long, toMs: Long): List<SessionStartRef>
 
+    /** Every session id. The reset captures these BEFORE [deleteAll] so the Health Connect mirrors
+     *  keyed on them can still be addressed once the rows are gone (M-02). */
+    @Query("SELECT id FROM session")
+    suspend fun allIds(): List<Long>
+
     /** Deletes all sessions (CASCADE removes LoggedExercise, LoggedSet, MoodEntry). For reset (#119). */
     @Query("DELETE FROM session")
     suspend fun deleteAll()

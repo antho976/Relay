@@ -162,6 +162,40 @@ class SessionWritesConcurrencyTest {
         )
     }
 
+    @Test
+    fun `concurrent starts agree on one active session`() = runBlocking {
+        // M-07: every racer reads "no active session" before any of them inserts, unless the read
+        // and the insert are one transaction. Twenty starts, one row, one id handed to all of them.
+        val results = withContext(Dispatchers.Default) {
+            (1..RACERS).map { i ->
+                async {
+                    SessionWrites.startOrResume(db, session(finishedAt = null, startedAt = 1_000_000L + i))
+                }
+            }.awaitAll()
+        }
+
+        assertEquals("exactly one caller created the row", 1, results.count { it.second })
+        assertEquals("and every caller was handed that same row", 1, results.map { it.first.id }.toSet().size)
+        assertEquals("so one session is open", 1, openSessionCount())
+    }
+
+    @Test
+    fun `a start with a session already open resumes it and inserts nothing`() = runBlocking {
+        val existing = db.sessionDao().insert(session(finishedAt = null))
+
+        val (resumed, created) = SessionWrites.startOrResume(db, session(finishedAt = null, startedAt = 2_000_000L))
+
+        assertEquals(existing, resumed.id)
+        assertEquals(false, created)
+        assertEquals(1, openSessionCount())
+    }
+
+    private fun openSessionCount(): Int =
+        db.query("SELECT COUNT(*) FROM session WHERE finished_at IS NULL", null).use { cursor ->
+            cursor.moveToFirst()
+            cursor.getInt(0)
+        }
+
     private fun newSet(loggedExerciseId: Long) = LoggedSet(
         loggedExerciseId = loggedExerciseId,
         setIndex = 0,

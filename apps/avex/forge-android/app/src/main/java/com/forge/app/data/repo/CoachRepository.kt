@@ -1,7 +1,9 @@
 package com.forge.app.data.repo
 
+import androidx.room.withTransaction
 import com.forge.app.domain.adapt.isWorkingStrengthSet
 import com.forge.app.core.time.Clock
+import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.dao.CoachDao
 import com.forge.app.data.db.dao.ExerciseCustomizationDao
 import com.forge.app.data.db.dao.ProgramCustomizationDao
@@ -26,6 +28,7 @@ import com.forge.app.domain.coach.WeeklyReview
 import com.forge.app.domain.coach.WeeklyReviewData
 import com.forge.app.domain.vacation.VacationCalendar
 import com.forge.app.program.ExerciseLibrary
+import com.forge.app.program.ExercisePlan
 import com.forge.app.program.MuscleGroup
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
@@ -146,6 +149,8 @@ class CoachRepository @Inject constructor(
     private val programCustomizationRepo: ProgramCustomizationRepository,
     private val programCustomizationDao: ProgramCustomizationDao,
     private val exerciseCustomizationDao: ExerciseCustomizationDao,
+    /** The apply/undo lifecycle commits its overlay write and ledger stamp as one transaction (H-03). */
+    private val database: ForgeDatabase,
     private val clock: Clock
 ) {
     companion object {
@@ -290,7 +295,12 @@ class CoachRepository @Inject constructor(
         if (earned.isEmpty()) return
         coachDao.decisionsFor(weekId)
             .filter { it.status == STATUS_PROPOSED && it.type in earned }
-            .forEach { runCatching { applyDecision(it.id) } }
+            .forEach { d ->
+                // One bad decision must not stop the rest, but a cancelled scope must unwind — swallowing
+                // CancellationException here would keep auto-applying inside a cancelled coroutine.
+                runCatching { applyDecision(d.id) }
+                    .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+            }
     }
 
     /** Per-type earned-trust readout for the Settings → Coach page. */
@@ -512,28 +522,96 @@ class CoachRepository @Inject constructor(
      */
     private suspend fun retireUnresolvable(id: Long) = coachDao.setStatus(id, STATUS_SKIPPED)
 
+    /**
+     * Retire a swap / rep shift that performed nothing — its slot has left the program, or the slot
+     * already sits at the proposed value (audit M-08). Recorded like a skip so the Brief stops
+     * offering it and the planner's decline memory won't re-mint the identical change, but with a
+     * NOT FOLLOWED outcome so TrustLedger ignores the row entirely: a change that never happened must
+     * neither extend nor break the type's auto-apply streak, and the watcher (which only reads
+     * applied/folded rows) can never later score it as a win.
+     */
+    private suspend fun retireUnperformed(id: Long) {
+        coachDao.setStatus(id, STATUS_SKIPPED)
+        coachDao.setOutcome(id, CoachDecision.OUTCOME_NOT_FOLLOWED)
+    }
+
+    /**
+     * The live program slot a swap / rep shift targets, or null when there is nothing to change: the
+     * slot is no longer in the active program (a regenerate, reroll or deload since the pass ran) or
+     * the user removed it from its day. The planner's own day key is used when it has one; a swap
+     * minted without one is looked up across days (swaps are keyed per slot, not per day).
+     */
+    private suspend fun liveSlot(d: CoachDecision): ExercisePlan? {
+        val day = if (d.dayKey.isBlank()) {
+            Program.days.firstOrNull { day -> day.exercises.any { it.id == d.targetKey } }
+        } else {
+            Program.days.firstOrNull { it.key == d.dayKey }
+        } ?: return null
+        val slot = day.exercises.firstOrNull { it.id == d.targetKey } ?: return null
+        if (programCustomizationRepo.overrideFor(day.key, d.targetKey)?.removed == true) return null
+        return slot
+    }
+
     private suspend fun applyDecisionLocked(id: Long) {
         val d = coachDao.decision(id) ?: return
         if (d.status != STATUS_PROPOSED) return
+        // The one cross-store apply (DataStore marker + program regenerate) can't sit inside a Room
+        // transaction — see applyDeloadLocked for how its retry is kept from applying twice.
+        if (d.type == "deload") return applyDeloadLocked(d)
+        // Revalidate, mutate the overlay and stamp the ledger in ONE Room transaction (audit H-03).
+        // These used to be separate autocommits, so a failure, cancellation or process death between
+        // the overlay write and markApplied left the row proposed with the overlay already moved: a
+        // retry then re-derived against the mutated slot (3 → 4 → 5 sets) and recorded the mutated
+        // value as its undo state. The row is re-read INSIDE the transaction so the status check and
+        // the writes see one consistent snapshot, and any throw — cancellation included — rolls the
+        // overlay back together with the ledger, leaving a clean retry.
+        database.withTransaction {
+            val current = coachDao.decision(id) ?: return@withTransaction
+            if (current.status != STATUS_PROPOSED) return@withTransaction
+            applyOverlayInTransaction(current)
+        }
+    }
+
+    /**
+     * Deload — the only apply that crosses stores, so it cannot be one Room transaction.
+     *
+     * A deload has TWO entry points — this decision and the Overview "deload.suggest" card, which
+     * calls applyDeloadWeek directly — and neither used to know about the other. Apply on Overview
+     * on Tuesday, then Apply in the Brief on Wednesday, and the program was regenerated a second
+     * time from a fresh seed (different exercise picks), the in-progress workout discarded again,
+     * and the deload window pushed out a day. A deload already running means this proposal has been
+     * served; retire it.
+     *
+     * That same check is what makes a RETRY safe: [AdaptationRepository.applyDeloadWeek] persists
+     * the DataStore deload marker BEFORE regenerating (its own Room transaction), and the ledger is
+     * stamped only after both — so a failure or process death at any point past the marker leaves a
+     * running deload, and the retried proposal is retired instead of regenerating a second time.
+     * What stays non-atomic: a crash between the marker and the regenerate leaves a deload marker
+     * over an un-regenerated program (closing that needs a durable pending state reconciled at boot,
+     * out of scope here), and a proposal retried after such a crash reads "skipped", not "applied".
+     */
+    private suspend fun applyDeloadLocked(d: CoachDecision) {
+        if (deloadAlreadyRunning()) { coachDao.setStatus(d.id, STATUS_SKIPPED); return }
+        // Not undoable — regenerating again is the way back; its reconcile also clears overlay rows.
+        adaptationRepository.applyDeloadWeek()
+        // A new week's pass expires stale proposals outside lifecycleMutex, so re-check before stamping.
+        database.withTransaction {
+            if (coachDao.decision(d.id)?.status == STATUS_PROPOSED) markAppliedNow(d.id, null)
+        }
+    }
+
+    /**
+     * The Room-only apply branches. Must run inside `database.withTransaction`: every read and write
+     * here goes to DAOs on the same database (the customization repos are thin wrappers over them),
+     * so the before-state read, the overlay write and [markAppliedNow] commit or roll back as one.
+     */
+    private suspend fun applyOverlayInTransaction(d: CoachDecision) {
+        val id = d.id
         // Re-validate against the CURRENT program (locks were computed at pass time): if the user has
         // customized this slot since the pass ran, applying would silently clobber their edit — skip
-        // it instead (seam fix, finding 7). deload/revert aren't slot-scoped, so they're exempt.
+        // it instead (seam fix, finding 7). revert isn't slot-scoped, so it's exempt.
         if (userOwnsSlot(d)) { coachDao.setStatus(id, STATUS_SKIPPED); return }
         when (d.type) {
-            "deload" -> {
-                // The one non-delta apply: the existing deload regeneration (not undoable —
-                // regenerating again is the way back; its reconcile also clears overlay rows).
-                //
-                // A deload has TWO entry points — this decision and the Overview "deload.suggest"
-                // card, which calls applyDeloadWeek directly — and neither used to know about the
-                // other. Apply on Overview on Tuesday, then Apply in the Brief on Wednesday, and the
-                // program was regenerated a second time from a fresh seed (different exercise picks),
-                // the in-progress workout discarded again, and the deload window pushed out a day.
-                // A deload already running means this proposal has been served; retire it.
-                if (deloadAlreadyRunning()) { coachDao.setStatus(id, STATUS_SKIPPED); return }
-                adaptationRepository.applyDeloadWeek()
-                markAppliedNow(id, null)
-            }
             "swap" -> {
                 val def = d.payload?.let { ExerciseLibrary.byId(it) } ?: return retireUnresolvable(id)
                 // Capture the before-state if the row carries a swap OR a bare unit override — a
@@ -542,6 +620,16 @@ class CoachRepository @Inject constructor(
                 // blank name restores the unit-only override cleanly.
                 val prev = customizationRepo.getSwap(d.targetKey)
                     ?.takeIf { it.swappedName.isNotBlank() || it.swappedUnit.isNotBlank() }
+                // The slot must still be in the live program, and the swap must actually change what
+                // the athlete will train — a slot that left the program, or one already showing this
+                // exercise (a regenerate or an earlier decision put it there), performs nothing and
+                // must not be recorded as applied: it would earn auto-apply trust on nothing (M-08).
+                val slot = liveSlot(d) ?: return retireUnperformed(id)
+                val swapped = prev?.takeIf { it.swappedName.isNotBlank() }
+                val alreadyThere =
+                    if (swapped != null) swapped.swappedExerciseId == def.id || swapped.swappedName == def.name
+                    else slot.id == def.id || slot.name == def.name
+                if (alreadyThere) return retireUnperformed(id)
                 customizationRepo.setSwap(d.targetKey, def.name, def.unit.code, source = OverlaySource.COACH, swappedExerciseId = def.id)
                 // Record name|unit|swapId so undo restores the exact prior swap — including its
                 // re-attribution id (#11). Without the id, undo would strand the coach's id on the
@@ -550,7 +638,11 @@ class CoachRepository @Inject constructor(
             }
             "rep_shift" -> {
                 val to = d.payload ?: return retireUnresolvable(id)
+                val slot = liveSlot(d) ?: return retireUnperformed(id)
                 val prev = programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.repRangeOverride
+                // Already at the proposed range (the program moved to meet the decision): a no-op
+                // performs nothing and must not read as an accepted change (M-08).
+                if ((prev ?: slot.reps) == to) return retireUnperformed(id)
                 programCustomizationRepo.setRepRange(d.dayKey, d.targetKey, to, source = OverlaySource.COACH)
                 markAppliedNow(id, prev ?: NONE)
             }
@@ -629,7 +721,10 @@ class CoachRepository @Inject constructor(
      * baseline/overlay already moved on; folded volume drops out of the bias at the next generate).
      * A restored before-state belongs to the user again, so it's written back as source=user.
      */
-    suspend fun undoDecision(id: Long) = lifecycleMutex.withLock { undoDecisionLocked(id) }
+    suspend fun undoDecision(id: Long) = lifecycleMutex.withLock {
+        // Same contract as apply (H-03): the overlay restore and markReverted land together or not at all.
+        database.withTransaction { undoDecisionLocked(id) }
+    }
 
     /**
      * Stamp a decision applied, with the moment its one-tap undo stops being offered.
@@ -641,6 +736,8 @@ class CoachRepository @Inject constructor(
      * under. Past the window the change is still reversible — the coach proposes a revert when the
      * watcher rules against it, and the program is directly editable — it just isn't one tap on a
      * months-old row any more.
+     *
+     * Only ever called inside the apply transaction, after the overlay write it certifies (H-03).
      */
     private suspend fun markAppliedNow(id: Long, undoData: String?) {
         val now = clock.nowMs()

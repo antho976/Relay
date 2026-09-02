@@ -131,6 +131,28 @@ class TrustLedgerTest {
     }
 
     @Test
+    fun unperformedChanges_areInvisibleToTrust() {
+        // A swap or rep shift the coach could not actually perform (its slot left the program, or it
+        // already sat at the proposed value) is retired as skipped + NOT FOLLOWED (audit M-08). It
+        // must neither break a streak like a real skip nor extend one like an accepted change.
+        val d = listOf(
+            decision("rep_shift", "applied", "ok"),
+            decision("rep_shift", "skipped", CoachDecision.OUTCOME_NOT_FOLLOWED),
+            decision("rep_shift", "applied", "ok")
+        )
+        assertEquals(2, trustFor("rep_shift", d).streak)
+    }
+
+    @Test
+    fun aRunOfAppliedButNeverTrainedChanges_earnsNothing() {
+        // Four swaps applied but never performed close as NOT FOLLOWED — the watcher no longer scores
+        // an empty window as ok — so an aggressive type cannot reach autopilot on them.
+        val d = (1..4).map { decision("swap", "applied", CoachDecision.OUTCOME_NOT_FOLLOWED) }
+        assertEquals(0, trustFor("swap", d).streak)
+        assertTrue(TrustLedger.earnedTypes(d).isEmpty())
+    }
+
+    @Test
     fun foldedOkAndAppliedAcceptancesCompose() {
         val d = (1..2).map { decision("swap", "folded", "ok") } +
             (1..2).map { decision("swap", "applied", "ok") }

@@ -146,12 +146,14 @@ jobs:
           chmod 600 forge-android/keystore.properties
           echo "Upload key ready."
 
-      - name: Build the signed AAB and APKs
-        # bundleRelease is what Play takes; the APKs are what a human can sideload to check a
-        # release candidate on a real device without going through a track.
+      - name: Build the signed AABs and APKs
+        # bundleRelease is what Play takes, for BOTH form factors: Wear OS has its own release
+        # track and takes its own bundle. The APKs are what a human can sideload to check a
+        # release candidate on a real device without going through a track. The Wear bundle used
+        # to be left out, so a tagged release had nothing to upload to the Wear track.
         run: >
           ./forge-android/gradlew -p forge-android
-          :app:bundleRelease :app:assembleRelease :wear:assembleRelease
+          :app:bundleRelease :app:assembleRelease :wear:bundleRelease :wear:assembleRelease
 
       - name: Verify every artifact is actually signed
         # The build signs the release ONLY when all four keystore properties are readable. If any
@@ -174,39 +176,54 @@ jobs:
             esac
             "$apksigner" verify --verbose --print-certs "$apk"
           done
-          aab=$(find forge-android/app/build/outputs/bundle/release -name '*.aab' -print -quit)
-          echo "== $aab"
           # An AAB is a signed jar, so jarsigner is the right verifier; apksigner cannot read one.
           # Deliberately NOT -strict: an upload key is self-signed, and -strict treats an
           # unvalidated certificate chain as a failure — it would reject every correct release.
           # Grepping for the verdict line is what actually distinguishes signed from unsigned.
-          jarsigner -verify "$aab" | tee /dev/stderr | grep -q "jar verified"
+          # Both bundles, because both are uploaded: a Wear AAB that silently went out unsigned
+          # would be refused by Play at the one moment nobody is looking at the build.
+          for module in app wear; do
+            aab=$(find "forge-android/$module/build/outputs/bundle/release" -name '*.aab' -print -quit)
+            if [ -z "$aab" ]; then
+              echo "::error::No release AAB was produced for :$module."
+              exit 1
+            fi
+            echo "== $aab"
+            jarsigner -verify "$aab" | tee /dev/stderr | grep -q "jar verified"
+          done
 
       - name: Collect the artifacts
         run: |
+          set -euo pipefail
           mkdir -p release-artifacts
-          cp forge-android/app/build/outputs/bundle/release/*.aab release-artifacts/
-          for apk in forge-android/app/build/outputs/apk/release/*.apk; do
-            cp "$apk" "release-artifacts/avex-phone-$TAG.apk"
+          # Every artifact is named by form factor and tag, so nothing in the draft is ambiguous:
+          # the phone and Wear bundles are uploaded to different Play tracks, and the two mapping
+          # files deobfuscate different builds.
+          for module in app wear; do
+            case "$module" in app) label=phone ;; *) label=wear ;; esac
+            aab=$(find "forge-android/$module/build/outputs/bundle/release" -name '*.aab' -print -quit)
+            cp "$aab" "release-artifacts/avex-$label-$TAG.aab"
+            for apk in forge-android/$module/build/outputs/apk/release/*.apk; do
+              cp "$apk" "release-artifacts/avex-$label-$TAG.apk"
+            done
+            # The mapping file is the only way to read a stack trace from a minified build: losing
+            # it means every crash report for this version is permanently unreadable, and it cannot
+            # be regenerated later because R8 is not deterministic across toolchain versions.
+            #
+            # This used to end in `2>/dev/null || true`, which says the opposite of the sentence
+            # above it — the one artifact described as irreplaceable was the one artifact whose
+            # absence was swallowed. It then archived only the phone's, so a minified Wear crash
+            # was unreadable by design. A release with a mapping missing is not a release; it
+            # fails here, before the draft exists, where the fix is to look at why R8 produced
+            # nothing.
+            mapping="forge-android/$module/build/outputs/mapping/release/mapping.txt"
+            if [ ! -s "$mapping" ]; then
+              echo "::error::No R8 mapping at $mapping — every $label crash report for $TAG would be unreadable."
+              ls -la "forge-android/$module/build/outputs/mapping/release/" || true
+              exit 1
+            fi
+            cp "$mapping" "release-artifacts/mapping-$label-$TAG.txt"
           done
-          for apk in forge-android/wear/build/outputs/apk/release/*.apk; do
-            cp "$apk" "release-artifacts/avex-wear-$TAG.apk"
-          done
-          # The mapping file is the only way to read a stack trace from a minified build: losing it
-          # means every crash report for this version is permanently unreadable, and it cannot be
-          # regenerated later because R8 is not deterministic across toolchain versions.
-          #
-          # This used to end in `2>/dev/null || true`, which says the opposite of the sentence above
-          # it — the one artifact described as irreplaceable was the one artifact whose absence was
-          # swallowed. A release with no mapping is not a release; it fails here, before the draft
-          # exists, where the fix is to look at why R8 produced nothing.
-          mapping=forge-android/app/build/outputs/mapping/release/mapping.txt
-          if [ ! -s "$mapping" ]; then
-            echo "::error::No R8 mapping at $mapping — every crash report for $TAG would be unreadable."
-            ls -la forge-android/app/build/outputs/mapping/release/ || true
-            exit 1
-          fi
-          cp "$mapping" "release-artifacts/mapping-$TAG.txt"
           ls -la release-artifacts
 
       - name: Upload artifacts to the run
@@ -240,7 +257,7 @@ jobs:
           {
             echo "### Release $TAG"
             echo
-            echo "Draft created with the signed AAB, both APKs and the R8 mapping file."
+            echo "Draft created with the signed phone and Wear AABs, both APKs and both R8 mapping files."
             echo "Review it and press Publish — a tag push deliberately does not announce a version."
           } >> "$GITHUB_STEP_SUMMARY"
 

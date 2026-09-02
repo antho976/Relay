@@ -52,8 +52,9 @@ object InsightEngine {
     fun evaluate(s: AdaptationSnapshot, t: AdaptThresholds = AdaptThresholds()): List<Recommendation.Insight> {
         val slots = s.program.flatMap { it.slots }.associateBy { it.exerciseId }
         val ratios = balanceRatios(s, t)
-        // Per-lift bout e1RM series, computed ONCE — the lagging-lift / time-of-day / volume-response
-        // rules all read it instead of each re-walking exerciseHistory and re-running Epley per set.
+        // Per-lift bout e1RM series, computed ONCE — the lagging-lift / time-of-day rules both read
+        // it instead of each re-walking exerciseHistory and re-running Epley per set. (Volume
+        // response reads the shared [VolumeResponse] model instead, which the cap learner also uses.)
         val boutE1rms: Map<String, List<BoutE1rm>> = s.exerciseHistory.mapValues { (_, bouts) ->
             bouts.filter { !it.skipped }.mapNotNull { b ->
                 val working = b.sets.filter { it.weightLb != null && !it.isAssisted }
@@ -74,7 +75,7 @@ object InsightEngine {
             sweetSpotRepRange(s, slots, t),
             laggingLift(s, slots, boutE1rms, t),
             timeOfDayPerformance(s, boutE1rms, t),
-            volumeResponse(s, slots, boutE1rms, t),
+            volumeResponse(s, t),
             restResponse(s, t)
         )
     }
@@ -430,58 +431,26 @@ object InsightEngine {
 
     // ── Tier 5 · volume tolerance (A1): does more weekly volume grow strength? ──
 
-    /** ISO-week start as an epoch-day key, in the snapshot's zone. */
-    private fun weekKey(ms: Long, zone: java.time.ZoneId): Long {
-        val d = Instant.ofEpochMilli(ms).atZone(zone).toLocalDate()
-        return d.minusDays((d.dayOfWeek.value - 1).toLong()).toEpochDay()
-    }
-
     /**
      * Per-muscle MEV/MRV flavour: for the muscle with the most training weeks, pair each week's
-     * set count with that week's e1RM CHANGE vs the prior trained week, then split weeks at the
-     * muscle's median weekly volume. If higher-volume weeks grew strength materially faster it's
-     * "responding to volume — room to push"; if they grew slower it reads as a volume ceiling.
-     * Heavily gated (weeks of data + weeks per tier) — exactly the rule that needs a real season.
+     * set count with the within-lift e1RM CHANGE (%) over the following trained week, then split
+     * weeks at the muscle's mean weekly volume. If higher-volume weeks grew strength materially
+     * faster it's "responding to volume — room to push"; if they grew slower it reads as a volume
+     * ceiling. Heavily gated (weeks of data + weeks per tier) — exactly the rule that needs a real
+     * season.
+     *
+     * The measurement is [VolumeResponse], the same model `PersonalProfile.volumeCaps` plans with —
+     * this rule used to carry its own copy, which (like the learner's) subtracted per-muscle max
+     * e1RMs across weeks and so reported the exercise mix as a strength swing.
      */
-    private fun volumeResponse(
-        s: AdaptationSnapshot,
-        slots: Map<String, ProgramSlotSnap>,
-        boutE1rms: Map<String, List<BoutE1rm>>,
-        t: AdaptThresholds
-    ): Recommendation.Insight? {
-        // muscle -> week -> (sets, bestE1rm)
-        val byMuscleWeek = HashMap<MuscleGroup, HashMap<Long, Pair<Int, Double>>>()
-        boutE1rms.forEach { (id, series) ->
-            val muscle = slots[id]?.muscle ?: return@forEach
-            series.forEach { b ->
-                val wk = weekKey(b.startedAt, s.zoneId)
-                val cell = byMuscleWeek.getOrPut(muscle) { HashMap() }
-                val prev = cell[wk]
-                cell[wk] = if (prev == null) b.workingSets to b.best
-                else (prev.first + b.workingSets) to maxOf(prev.second, b.best)
-            }
-        }
-        val candidate = byMuscleWeek.entries.mapNotNull { (muscle, weeks) ->
-            if (weeks.size < t.insightVolumeMinWeeks) return@mapNotNull null
-            val ordered = weeks.entries.sortedBy { it.key }.map { it.value }
-            // Split at the MEAN weekly volume, not the median: for the common bimodal pattern (some low
-            // weeks, some high) a strict `> median` puts the median value's entire mode into one tier and
-            // can empty the other; the mean separates the two modes cleanly.
-            val avgSets = ordered.map { it.first }.average()
-            // Attribute each gain to the week that DID THE WORK: a week's volume vs the e1RM change over
-            // the FOLLOWING week (the lagged response). Pairing it with the same week's gain would credit
-            // a low-volume peak week with the work a prior high-volume week actually did.
-            val deltas = ordered.zipWithNext { a, b -> a.first to (b.second - a.second) }
-            val high = deltas.filter { it.first > avgSets }.map { it.second }
-            val low = deltas.filter { it.first <= avgSets }.map { it.second }
-            if (high.size < t.insightVolumeMinPerTier || low.size < t.insightVolumeMinPerTier) return@mapNotNull null
-            Triple(muscle, Triple(high.average(), low.average(), avgSets.roundToInt()), weeks.size)
+    private fun volumeResponse(s: AdaptationSnapshot, t: AdaptThresholds): Recommendation.Insight? {
+        val candidate = VolumeResponse.analyse(s, t.insightVolumeMinWeeks, t.insightVolumeMinPerTier).values
             // Deterministic pick: most weeks of data, ties broken by a stable muscle ordinal.
-        }.maxWithOrNull(compareBy({ it.third }, { -it.first.ordinal })) ?: return null
-        val (muscle, stats, _) = candidate
-        val (highAvg, lowAvg, splitSets) = stats
-        if (abs(highAvg - lowAvg) < t.insightVolumeDeltaGapLb) return null
-        return if (highAvg > lowAvg) insight(
+            .maxWithOrNull(compareBy({ it.trainedWeeks }, { -it.muscle.ordinal })) ?: return null
+        if (abs(candidate.gapPct) < t.insightVolumeDeltaGapPct) return null
+        val muscle = candidate.muscle
+        val splitSets = candidate.splitSets
+        return if (candidate.gapPct > 0) insight(
             "volumeresponse.${muscle.code}", "Responds to volume",
             "${muscle.displayName}: your higher-volume weeks (above ~$splitSets sets) added strength faster — it's responding to more volume, so there's room to push it."
         ) else insight(

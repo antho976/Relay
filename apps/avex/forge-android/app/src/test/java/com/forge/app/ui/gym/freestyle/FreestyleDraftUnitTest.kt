@@ -74,4 +74,15 @@ class FreestyleDraftUnitTest {
         val odd = FreestyleDraft(openedAtMs = 1L, exercises = emptyList(), unitLabel = "stone")
         assertEquals("100", odd.weightTextIn("100", WeightUnit.KG))
     }
+
+    @Test
+    fun `a draft carrying the same move twice restores it once`() {
+        // The logger keys its lazy list on libId, so a doubled row is a crash on every resume.
+        val doubled = """{"schema":3,"openedAtMs":1000,"exercises":[""" +
+            """{"libId":"bench","sets":[{"w":"100","r":"8"}]},""" +
+            """{"libId":"bench","sets":[{"w":"110","r":"5"}]}]}"""
+        val restored = FreestyleDraft.fromJson(doubled)!!
+        assertEquals(listOf("bench"), restored.exercises.map { it.libId })
+        assertEquals("100", restored.exercises.single().sets.single().weight)
+    }
 }

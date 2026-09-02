@@ -90,6 +90,14 @@ object OutcomeWatcher {
                         d.id, "failed",
                         "${d.targetName} has been skipped $skips times since the change — it isn't landing"
                     )
+                    // An "ok" needs evidence: at least one non-skipped bout of the changed slot since
+                    // the apply. An empty window used to fall through to ok, so a swap the athlete never
+                    // actually performed was recorded as a success and counted toward auto-apply trust
+                    // (audit M-08). No exposure is neither a win nor a loss — NOT FOLLOWED.
+                    windowClosed && boutsSince.none { !it.skipped } -> WatchVerdict(
+                        d.id, CoachDecision.OUTCOME_NOT_FOLLOWED,
+                        "${d.targetName} wasn't trained during the watch window, so the change isn't judged"
+                    )
                     windowClosed -> WatchVerdict(d.id, "ok")
                     else -> null
                 }
@@ -109,12 +117,19 @@ object OutcomeWatcher {
                         // tolerance means the shift didn't restart progress, so it owes a revert.
                         val priorBest = all.filter { it.sessionStartedAt < appliedAt && !it.skipped }.bestE1rm()
                         val sinceBest = boutsSince.filter { !it.skipped }.bestE1rm()
-                        if (priorBest != null && sinceBest != null &&
-                            sinceBest < priorBest * t.repShiftRegressFraction
-                        ) WatchVerdict(
-                            d.id, "failed",
-                            "${d.targetName}'s estimated 1RM slipped after the rep-range change — it didn't restart progress"
-                        ) else WatchVerdict(d.id, "ok")
+                        when {
+                            // No post-change e1RM means the shifted range was never actually lifted
+                            // under: nothing to judge, and nothing to earn trust on (audit M-08).
+                            sinceBest == null -> WatchVerdict(
+                                d.id, CoachDecision.OUTCOME_NOT_FOLLOWED,
+                                "${d.targetName} has no logged working sets since the rep-range change, so it isn't judged"
+                            )
+                            priorBest != null && sinceBest < priorBest * t.repShiftRegressFraction -> WatchVerdict(
+                                d.id, "failed",
+                                "${d.targetName}'s estimated 1RM slipped after the rep-range change — it didn't restart progress"
+                            )
+                            else -> WatchVerdict(d.id, "ok")
+                        }
                     }
                     else -> null
                 }

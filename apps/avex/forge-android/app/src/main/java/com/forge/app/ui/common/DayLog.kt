@@ -1,10 +1,13 @@
 package com.forge.app.ui.common
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -92,30 +95,42 @@ fun DayLogSheet(
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = cs.background
     ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 40.dp)) {
-            Text(
-                dayLine,
-                style = MaterialTheme.typography.labelSmall,
-                color = cs.onSurfaceVariant,
-                fontSize = 9.sp,
-                letterSpacing = 1.sp
-            )
-            Spacer(Modifier.height(4.dp))
-            Text("That day", style = MaterialTheme.typography.headlineSmall, color = cs.onBackground)
-            if (summary.isNotEmpty()) {
-                Spacer(Modifier.height(2.dp))
-                Text(summary, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+        // A keyed LazyColumn, not a Column: the sheet is a bounded modal, and a plain Column inside
+        // it neither scrolled nor grew, so a day with more rows than fit (a dozen compact ones, fewer
+        // at 200% font) simply cut off everything past the fold. Now the later rows are reachable.
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 40.dp)
+        ) {
+            item("header") {
+                Column(Modifier.fillMaxWidth()) {
+                    Text(
+                        dayLine,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = cs.onSurfaceVariant,
+                        fontSize = 9.sp,
+                        letterSpacing = 1.sp
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text("That day", style = MaterialTheme.typography.headlineSmall, color = cs.onBackground)
+                    if (summary.isNotEmpty()) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(summary, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    EditorialHairline(outline = cs.outline)
+                }
             }
-            Spacer(Modifier.height(14.dp))
-            EditorialHairline(outline = cs.outline)
             if (log.items.isEmpty()) {
-                InlineEmptyHint(
-                    "Nothing logged on this day.",
-                    color = cs.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 16.dp)
-                )
+                item("empty") {
+                    InlineEmptyHint(
+                        "Nothing logged on this day.",
+                        color = cs.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                }
             } else {
-                log.items.forEach { item ->
+                items(log.items, key = { it.key }) { item ->
                     when (item) {
                         // The rows carry no date of their own any more — the sheet's own day line
                         // above already named the day, and it named it once.

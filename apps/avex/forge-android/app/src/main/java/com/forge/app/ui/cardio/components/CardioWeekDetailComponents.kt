@@ -22,10 +22,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioRestReason
-import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.cardioDetailParts
+import com.forge.app.ui.cardio.LocalCardioTypes
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.clickableLabeled
 import java.time.Instant
@@ -44,7 +45,10 @@ internal fun SessionTimelineRow(
     muted: Color,
     onClick: () -> Unit
 ) {
-    val type = CardioType.fromCode(entry.type)
+    // Resolved through the user's custom activities, as CardioEntryRow and the detail sheet do. The
+    // built-in enum alone maps every `custom_` code to Other, so a custom activity that read "Padel"
+    // in the main list and the detail sheet was renamed Other, with the generic glyph, here.
+    val type = CardioActivity.resolve(entry.type, LocalCardioTypes.current)
     val dayLabel = remember(entry.date) {
         Instant.ofEpochMilli(entry.date).atZone(zone).dayOfWeek
             .getDisplayName(TextStyle.SHORT, Locale.getDefault()).uppercase().take(3)

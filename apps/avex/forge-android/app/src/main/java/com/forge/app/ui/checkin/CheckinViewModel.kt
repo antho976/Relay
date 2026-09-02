@@ -50,6 +50,10 @@ class CheckinViewModel @Inject constructor(
     ) {
         /** The muscle picker only appears once soreness is real; one tap shouldn't open a menu. */
         val askWhichMuscles: Boolean get() = (soreness ?: 0) >= 4
+
+        /** Something is typed in the weight field that is not a plausible bodyweight (M-14). */
+        val weightInvalid: Boolean
+            get() = classifyCheckinWeight(weightText, weightUnit) is CheckinWeightInput.Invalid
     }
 
     private val _state = MutableStateFlow(UiState())
@@ -111,6 +115,13 @@ class CheckinViewModel @Inject constructor(
      */
     fun save() {
         val s = _state.value
+        // Decide what the weight field holds BEFORE any write is launched. A nonblank value the
+        // parser rejected used to be dropped by the safe call below while the check-in itself was
+        // saved, the sheet closed and the day marked answered (M-14): a typo silently removed the
+        // weigh-in. Invalid input now keeps the sheet open under the field's own range error;
+        // blank still means "no weigh-in today", which is fine.
+        val weight = classifyCheckinWeight(s.weightText, s.weightUnit)
+        if (weight is CheckinWeightInput.Invalid) return
         viewModelScope.launch {
             runCatching {
                 checkinRepo.save(
@@ -129,8 +140,7 @@ class CheckinViewModel @Inject constructor(
                 // meant this field was pounds no matter what the rest of the app was set to, and
                 // accepted any number at all — a mis-typed "8" logged an 8 lb bodyweight straight
                 // into the strength-standards denominator.
-                parseSaneBodyweightLb(s.weightText, s.weightUnit)
-                    ?.let { bodyweightRepo.logWeightOnly(it) }
+                if (weight is CheckinWeightInput.Valid) bodyweightRepo.logWeightOnly(weight.lb)
             }.onSuccess {
                 _state.update { it.copy(visible = false, answeredToday = true) }
             }.onFailure { e ->
@@ -145,4 +155,28 @@ class CheckinViewModel @Inject constructor(
     private fun update(block: (UiState) -> UiState) {
         _state.value = block(_state.value)
     }
+}
+
+/**
+ * What the check-in's optional weight field holds, decided before any write is launched (M-14).
+ *
+ * The nullable parser folds "nothing typed" and "typed something implausible" into one null, and
+ * only the first of those may be silently skipped. Pure + testable.
+ */
+internal sealed interface CheckinWeightInput {
+    /** Nothing typed: the weigh-in is optional, so there is nothing to record. */
+    data object Blank : CheckinWeightInput
+
+    /** Something typed that is not a plausible bodyweight; the sheet must say so, not drop it. */
+    data object Invalid : CheckinWeightInput
+
+    /** A plausible weigh-in, already in stored pounds. */
+    data class Valid(val lb: Double) : CheckinWeightInput
+}
+
+/** Classify [text], typed in the field's display [unit], through the app's shared bodyweight parse. */
+internal fun classifyCheckinWeight(text: String, unit: WeightUnit): CheckinWeightInput {
+    if (text.isBlank()) return CheckinWeightInput.Blank
+    val lb = parseSaneBodyweightLb(text, unit) ?: return CheckinWeightInput.Invalid
+    return CheckinWeightInput.Valid(lb)
 }

@@ -24,7 +24,7 @@ internal fun PrivacyPolicyPage(modifier: Modifier = Modifier) {
     ) {
         SettingsSectionHeader("Privacy policy", top = 12.dp)
         SettingsExplainer(
-            "Last updated August 24, 2026",
+            "Last updated September 1, 2026",
             Modifier.padding(horizontal = SETTINGS_GUTTER)
         )
 
@@ -38,8 +38,8 @@ internal fun PrivacyPolicyPage(modifier: Modifier = Modifier) {
         )
         PolicySection(
             "Health Connect",
-            "If you grant access, Avex may read sleep, resting heart rate, weight, steps, exercise sessions, heart rate, distance, total calories, heart-rate variability, and lean body mass. These readings support recovery, cardio, body, and training-history features.",
-            "Avex may write weight, active calories, exercise sessions, and heart rate when you enable the matching feature. Access is optional and granular. You can revoke it in Health Connect at any time, and Avex continues to work without it. Health Connect data is processed only on your device."
+            "If you grant access, Avex may read sleep, resting heart rate, weight, body fat, steps, exercise sessions, heart rate, distance, total calories, heart-rate variability, and lean body mass. If you also allow history access, the one-time weight import can read weight older than 30 days. These readings support recovery, cardio, body, and training-history features.",
+            "Avex may write weight, body fat, active calories, exercise sessions, and heart rate when you enable the matching feature. Access is optional and granular. You can revoke it in Health Connect at any time, and Avex continues to work without it. Health Connect data is processed only on your device."
         )
         PolicySection(
             "Other permissions",

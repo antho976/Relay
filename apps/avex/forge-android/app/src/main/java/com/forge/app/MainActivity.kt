@@ -246,8 +246,13 @@ class MainActivity : FragmentActivity() {
     }
 
     /** True exactly once after a boot-time restore swap (ForgeApp wrote the flag), then cleared. */
-    private fun consumeRestoreFlag(): Boolean {
-        val f = File(filesDir, ForgeApp.RESTORE_DONE_FLAG)
+    private fun consumeRestoreFlag(): Boolean = consumeBootFlag(ForgeApp.RESTORE_DONE_FLAG)
+
+    /** True exactly once after a landed restore was put back because Room could not open it. */
+    private fun consumeRestoreFailedFlag(): Boolean = consumeBootFlag(ForgeApp.RESTORE_FAILED_FLAG)
+
+    private fun consumeBootFlag(name: String): Boolean {
+        val f = File(filesDir, name)
         return if (f.exists()) { f.delete(); true } else false
     }
 
@@ -264,6 +269,15 @@ class MainActivity : FragmentActivity() {
                 settingsRepo.addSystemNotice(
                     NotificationFeed.NOTICE_RESTORE,
                     "Your backup was restored. Everything in it is back on this device."
+                )
+            }
+        } else if (savedInstanceState == null && consumeRestoreFailedFlag()) {
+            // The swap landed but the restored database would not open, so the boot put every
+            // component back. Said plainly: nothing was lost, and the file is the thing to replace.
+            lifecycleScope.launch {
+                settingsRepo.addSystemNotice(
+                    NotificationFeed.NOTICE_RESTORE,
+                    "That backup could not be opened, so your previous data was kept. Try again with a fresh backup file."
                 )
             }
         }
