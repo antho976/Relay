@@ -30,6 +30,7 @@ class DirectiveRepository @Inject constructor(
     private val coachGoalRepository: CoachGoalRepository,
     private val academyRepository: AcademyRepository,
     private val workoutRepository: WorkoutRepository,
+    private val blockRepository: BlockRepository,
     private val clock: Clock
 ) {
 
@@ -133,13 +134,19 @@ class DirectiveRepository @Inject constructor(
             upcomingInDays = if (upcoming != null) resolved?.daysAhead ?: 0 else 0
         )
 
+        // The active block's phase, so the brief the athlete reads before the session describes the
+        // same week the Coach tab does (H-02). Fail-soft: no block, or an unreadable one, is the
+        // no-phase case, which composes to exactly the previous behaviour.
+        val phase = runCatching { blockRepository.active() }.getOrNull()
+            ?.let { com.forge.app.domain.coach.BlockPhase.fromCode(it.phase) }
         val brief = directive.dayKey?.let { key ->
             PreSessionBrief.build(
                 s = snapshot,
                 dayKey = key,
                 readiness = readiness,
                 life = life,
-                weightUnit = protocolUnit(settingsRepository.weightUnit.first())
+                weightUnit = protocolUnit(settingsRepository.weightUnit.first()),
+                phase = phase
             )
         }
         // Below the gates the directive is curriculum-driven; past them the lesson drops away on

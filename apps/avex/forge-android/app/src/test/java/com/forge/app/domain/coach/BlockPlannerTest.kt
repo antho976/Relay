@@ -188,4 +188,45 @@ class BlockPlannerTest {
         assertFalse(ended.isActive)
         assertFalse(BlockPlanner.entersDeload(peak, ended))
     }
+
+    // ── H-02: the phase reaching the weight on the bar ───────────────────────
+
+    /**
+     * `progressionScale` existed and nothing read it, so a phase changed the plan's set counts and
+     * the served deload week and never the load: the same bout got the same target in Accumulate,
+     * Intensify, Peak and Deload. This is the composition both the per-set suggestion and the
+     * pre-session brief now scale by.
+     */
+    @Test
+    fun noBlockLeavesTodaysScaleExactlyAsItWas() {
+        // The majority case, and the one that must not move: most sessions have no block.
+        assertEquals(1.0, BlockPhase.composedLoadScale(null, 1.0), 1e-9)
+        assertEquals(0.94, BlockPhase.composedLoadScale(null, 0.94), 1e-9)
+        assertEquals(1.06, BlockPhase.composedLoadScale(null, 1.06), 1e-9)
+    }
+
+    @Test
+    fun thePhaseMovesTheLoadEvenOnAnOtherwiseNeutralDay() {
+        assertTrue(BlockPhase.composedLoadScale(BlockPhase.DELOAD, 1.0) < 1.0)
+        assertTrue(BlockPhase.composedLoadScale(BlockPhase.PEAK, 1.0) > 1.0)
+        assertEquals(
+            "accumulate is the baseline, not a nudge",
+            1.0, BlockPhase.composedLoadScale(BlockPhase.ACCUMULATE, 1.0), 1e-9
+        )
+    }
+
+    @Test
+    fun theTwoSignalsCannotCompoundIntoACutOrJumpNeitherAskedFor() {
+        // A deload week met by low readiness, and a peak week met by high readiness.
+        assertEquals(
+            BlockPhase.MIN_COMPOSED_SCALE,
+            BlockPhase.composedLoadScale(BlockPhase.DELOAD, 0.90), 1e-9
+        )
+        assertEquals(
+            BlockPhase.MAX_COMPOSED_SCALE,
+            BlockPhase.composedLoadScale(BlockPhase.PEAK, 1.10), 1e-9
+        )
+        // Inside the band both signals still count.
+        assertEquals(0.85 * 1.05, BlockPhase.composedLoadScale(BlockPhase.DELOAD, 1.05), 1e-9)
+    }
 }
