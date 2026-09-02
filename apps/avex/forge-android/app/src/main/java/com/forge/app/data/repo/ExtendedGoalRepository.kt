@@ -108,8 +108,18 @@ class ExtendedGoalRepository @Inject constructor(
             val achieved: Boolean
             var baseline: Double? = null
             if (parsed.metric == GoalMetric.BODYWEIGHT) {
-                val from = g.stretchValue ?: current
-                baseline = from
+                // The baseline is the journey's START, and it must not move (M-33). A goal created
+                // before the first weigh-in stored none, and every read then substituted the LATEST
+                // weight — so the claimed start rewrote itself downward with each weigh-in, the
+                // meter sat at 0% however far the user had come, and then jumped straight to
+                // reached. The first real weigh-in is adopted as the baseline and written back
+                // once (see [ExtendedGoalDao.adoptBaselineIfMissing]), so every later read measures
+                // from the same place. Still nothing to adopt while there are no weigh-ins at all.
+                baseline = g.stretchValue
+                    ?: current.takeIf { it > 0.0 }?.also { dao.adoptBaselineIfMissing(g.id, it) }
+                // With no weigh-in on file there is genuinely no start to report — null, rather
+                // than the zero the meter would otherwise claim as a starting weight.
+                val from = baseline ?: current
                 fraction = GoalProgressMath.bodyweightFraction(from, current, g.targetValue)
                 achieved = GoalProgressMath.bodyweightAchieved(from, current, g.targetValue)
             } else {

@@ -31,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -92,41 +93,59 @@ fun CardioLogSheet(
     // the edited entry's stored code against the custom list; a NEW entry seeds to the last-logged
     // activity (GYMAP-40), falling back to Run on a fresh install.
     val customTypes = com.forge.app.ui.cardio.LocalCardioTypes.current
-    var type by remember(editKey) {
-        val seed = editing?.type ?: lastUsedType?.takeIf { it.isNotBlank() }
-        mutableStateOf(seed?.let { CardioActivity.resolve(it, customTypes) } ?: CardioActivity.RUN)
+    // EVERY field below is rememberSaveable, not remember (M-12). This form is a primary logging
+    // flow whose Activity has no `configChanges`, so rotating or resizing recreates it: a plain
+    // `remember` meant a half-filled new log came back blank and an edit silently reverted to the
+    // stored row. Each is held as a saveable PRIMITIVE (a code, a text field, a flag) and the
+    // domain object is derived from it, because a bundle can carry a String but not a sealed
+    // CardioActivity or a Set<CardioCondition>.
+    //
+    // The activity: seeded from the edited entry's stored code, or for a NEW entry the last-logged
+    // activity (GYMAP-40), falling back to Run on a fresh install.
+    var typeCode by rememberSaveable(editKey) {
+        mutableStateOf(editing?.type ?: lastUsedType?.takeIf { it.isNotBlank() } ?: CardioActivity.RUN.code)
     }
+    // A custom activity created in this sheet is selected the instant it is minted, before the
+    // DataStore write has flowed back into [customTypes] — without this it would resolve to Other
+    // for that moment. Not saveable: by the time a recreation could happen the write has landed.
+    var justCreated by remember(editKey) { mutableStateOf<CustomCardioType?>(null) }
+    val type = justCreated?.takeIf { it.code == typeCode }?.let { CardioActivity.Custom(it) }
+        ?: CardioActivity.resolve(typeCode, customTypes)
     // For a NEW entry, the last-used activity (GYMAP-40) can arrive from DataStore just AFTER the sheet
     // composes (lastUsedType null at first read → seeded to Run). Apply it once it lands — but never
     // after the user has picked, so a late emission can't clobber a manual choice. Editing ignores it.
-    var typePicked by remember(editKey) { mutableStateOf(false) }
+    var typePicked by rememberSaveable(editKey) { mutableStateOf(false) }
     LaunchedEffect(editKey, lastUsedType) {
         if (editing == null && !typePicked && !lastUsedType.isNullOrBlank()) {
-            type = CardioActivity.resolve(lastUsedType, customTypes)
+            typeCode = lastUsedType
         }
     }
-    var showCreateCustom by remember { mutableStateOf(false) }
-    var durationText by remember(editKey) { mutableStateOf(editing?.durationMin?.takeIf { it > 0 }?.toString() ?: "") }
-    var distanceText by remember(editKey) { mutableStateOf(editing?.distanceKm?.let { distanceInputValue(it, useMiles) } ?: "") }
-    var effort by remember(editKey) { mutableStateOf(editing?.let { CardioEffort.fromCode(it.effort) }) }
-    var restReason by remember(editKey) { mutableStateOf(editing?.let { CardioRestReason.fromCode(it.restReason) }) }
-    var note by remember(editKey) { mutableStateOf(editing?.note ?: "") }
-    var intervalText by remember(editKey) { mutableStateOf(editing?.intervalCount?.takeIf { it > 0 }?.toString() ?: "") }
-    var hrZone by remember(editKey) { mutableStateOf(editing?.hrZone) }
+    var showCreateCustom by rememberSaveable { mutableStateOf(false) }
+    var durationText by rememberSaveable(editKey) { mutableStateOf(editing?.durationMin?.takeIf { it > 0 }?.toString() ?: "") }
+    var distanceText by rememberSaveable(editKey) { mutableStateOf(editing?.distanceKm?.let { distanceInputValue(it, useMiles) } ?: "") }
+    var effortCode by rememberSaveable(editKey) { mutableStateOf(editing?.effort) }
+    val effort = CardioEffort.fromCode(effortCode)
+    var restReasonCode by rememberSaveable(editKey) { mutableStateOf(editing?.restReason) }
+    val restReason = CardioRestReason.fromCode(restReasonCode)
+    var note by rememberSaveable(editKey) { mutableStateOf(editing?.note ?: "") }
+    var intervalText by rememberSaveable(editKey) { mutableStateOf(editing?.intervalCount?.takeIf { it > 0 }?.toString() ?: "") }
+    var hrZone by rememberSaveable(editKey) { mutableStateOf(editing?.hrZone) }
     // Per-type optional fields (GYMAP-38): incline % (treadmill/elliptical), laps (swim), elevation
     // gain (outdoor). Elevation seeds in the display unit; the field stores metres regardless.
-    var inclineText by remember(editKey) { mutableStateOf(editing?.inclinePct?.takeIf { it > 0 }?.let { plainDecimalInput(it) } ?: "") }
-    var lapsText by remember(editKey) { mutableStateOf(editing?.laps?.takeIf { it > 0 }?.toString() ?: "") }
-    var elevationText by remember(editKey) { mutableStateOf(editing?.elevationM?.takeIf { it > 0 }?.let { elevationInputValue(it, useMiles) } ?: "") }
-    // Weather / environment tags (GYMAP-39), multi-select — seeded from the edited entry's stored codes.
-    var conditions by remember(editKey) { mutableStateOf(CardioCondition.decode(editing?.conditions)) }
-    var dateMs by remember(editKey) { mutableStateOf(editing?.date ?: System.currentTimeMillis()) }
-    var showDatePicker by remember { mutableStateOf(false) }
+    var inclineText by rememberSaveable(editKey) { mutableStateOf(editing?.inclinePct?.takeIf { it > 0 }?.let { plainDecimalInput(it) } ?: "") }
+    var lapsText by rememberSaveable(editKey) { mutableStateOf(editing?.laps?.takeIf { it > 0 }?.toString() ?: "") }
+    var elevationText by rememberSaveable(editKey) { mutableStateOf(editing?.elevationM?.takeIf { it > 0 }?.let { elevationInputValue(it, useMiles) } ?: "") }
+    // Weather / environment tags (GYMAP-39), multi-select — held in the same comma-joined form the
+    // row stores, so the bundle carries a String and the Set is decoded from it.
+    var conditionsCode by rememberSaveable(editKey) { mutableStateOf(editing?.conditions) }
+    val conditions = CardioCondition.decode(conditionsCode)
+    var dateMs by rememberSaveable(editKey) { mutableStateOf(editing?.date ?: System.currentTimeMillis()) }
+    var showDatePicker by rememberSaveable { mutableStateOf(false) }
     // The entry's start time (GYMAP-33) is the time-of-day of the same [dateMs] — no separate column.
-    var showTimePicker by remember { mutableStateOf(false) }
+    var showTimePicker by rememberSaveable { mutableStateOf(false) }
     // Optional details (effort / HR zone / intervals / per-type fields / conditions) start tucked away —
     // opened by default only when editing an entry that already has one, so they're never silently hidden.
-    var moreOpen by remember(editKey) {
+    var moreOpen by rememberSaveable(editKey) {
         mutableStateOf(
             editing != null && (
                 editing.effort != null || editing.hrZone != null || (editing.intervalCount ?: 0) > 0 ||
@@ -202,7 +221,7 @@ fun CardioLogSheet(
                 FormSection(label = "Activity", optional = false, muted = muted, onBg = onBg, outline = outline) {
                     ActivityDropdown(
                         selected = type,
-                        onSelect = { type = it; typePicked = true },
+                        onSelect = { typeCode = it.code; typePicked = true },
                         onAddCustom = { showCreateCustom = true },
                         onBg = onBg, muted = muted, outline = outline
                     )
@@ -260,7 +279,7 @@ fun CardioLogSheet(
                     moreOpen = moreOpen,
                     onToggleMore = { moreOpen = !moreOpen },
                     activity = type,
-                    effort = effort, onEffort = { effort = it },
+                    effort = effort, onEffort = { effortCode = it?.code },
                     hrZone = hrZone, onHrZone = { hrZone = it },
                     intervalText = intervalText,
                     onIntervalChange = { intervalText = it.filter(Char::isDigit).take(3) },
@@ -271,7 +290,11 @@ fun CardioLogSheet(
                     elevationText = elevationText,
                     onElevationChange = { elevationText = it.filter(Char::isDigit).take(5) },
                     conditions = conditions,
-                    onToggleCondition = { c -> conditions = if (c in conditions) conditions - c else conditions + c },
+                    onToggleCondition = { c ->
+                        conditionsCode = CardioCondition.encode(
+                            if (c in conditions) conditions - c else conditions + c
+                        )
+                    },
                     useMiles = useMiles,
                     onBg = onBg, bg = bg, muted = muted, accent = accent, outline = outline
                 )
@@ -286,7 +309,7 @@ fun CardioLogSheet(
                                 PillChip(
                                     label = r.displayName.uppercase(),
                                     selected = restReason == r,
-                                    onClick = { restReason = r },
+                                    onClick = { restReasonCode = r.code },
                                     onBg = onBg, bg = bg, muted = muted, outline = outline
                                 )
                             }
@@ -371,7 +394,10 @@ fun CardioLogSheet(
             onDismiss = { showCreateCustom = false },
             onConfirm = { created ->
                 onCreateCustom(created)      // persist so it lands in the list for next time
-                type = CardioActivity.Custom(created)  // and select it now
+                // And select it now. The code is what survives a recreation; `justCreated` only
+                // covers the moment before the persisted list flows back with it in.
+                justCreated = created
+                typeCode = created.code
                 showCreateCustom = false
             }
         )

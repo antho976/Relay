@@ -152,8 +152,28 @@ class WorkoutImportRepository @Inject constructor(
             } catch (e: Exception) {
                 0
             }
-            val entry = if (count == 0) null
-            else FoundImport(doc.uri, doc.name ?: "export", importer.source, count, stamp)
+            // The non-workout rows count too (L-01). The scanner asked only how many WORKOUTS a
+            // file held, so a bodyweight CSV — which returns its data through parseExtras by
+            // design — was cached as "nothing here", and so was a cardio- or goals-only Avex JSON.
+            // The same file picked directly imported perfectly, which is what made it a quiet one.
+            val extras = try {
+                importer.parseExtras(text)
+            } catch (e: OutOfMemoryError) {
+                ImportedExtras()
+            } catch (e: Exception) {
+                ImportedExtras()
+            }
+            val entry = if (count == 0 && extras.isEmpty) null
+            else FoundImport(
+                uri = doc.uri,
+                name = doc.name ?: "export",
+                source = importer.source,
+                sessionCount = count,
+                lastModified = stamp,
+                cardioCount = extras.cardio.size,
+                coachGoalCount = extras.coachGoals.size,
+                bodyweightCount = extras.bodyweight.size
+            )
             scanCache[key] = stamp to entry
             entry?.let(found::add)
         }
@@ -227,7 +247,7 @@ class WorkoutImportRepository @Inject constructor(
                 // and every one of them is a candidate against every other. The second of two
                 // legitimately different midnight workouts was reported as a duplicate and dropped,
                 // silently, on an import path whose whole promise is that it does not lose anything.
-                val incomingPrint = fingerprintOf(session, matchCache)
+                val incomingPrint = incomingPrintOf(session, matchCache)
 
                 // EVERY slot this workout could occupy, checked regardless of the order the file
                 // presents its workouts in.
@@ -245,7 +265,7 @@ class WorkoutImportRepository @Inject constructor(
                 val windowEndMs = session.startedAtMs + MAX_START_NUDGES * 1000L
                 val occupied = sessionDao.startRefsInRange(session.startedAtMs, windowEndMs)
                 val alreadyStored = occupied.firstOrNull {
-                    it.id !in claimedStoredIds && storedFingerprint(it.id) == incomingPrint
+                    it.id !in claimedStoredIds && storedPrintOf(it.id) == incomingPrint
                 }
                 if (alreadyStored != null) {
                     claimedStoredIds += alreadyStored.id
@@ -489,45 +509,93 @@ class WorkoutImportRepository @Inject constructor(
             .firstOrNull { it.name.equals(v, ignoreCase = true) || it.code.equals(v, ignoreCase = true) }
     }
 
-    /** A stable id for an unmatched exercise so its sets group together across imported sessions. */
     /**
-     * What one imported session actually contains: each exercise's resolved catalogue id followed by
-     * its sets in order, as reps and weight.
+     * The incoming workout as the duplicate guard sees it (M-03): every field the insert below
+     * writes and a user could change, in the same shape [storedPrintOf] reads back out.
      *
-     * Resolved through the SAME [matchCache] the insert below uses, so the id compared here is the
-     * id that would be written — an unmatched name folds to its synthetic id on both sides. Weights
-     * are rounded to a thousandth of a pound: a re-import carries bit-identical values, and no real
-     * source distinguishes finer than that.
+     * Exercise ids resolve through the SAME [matchCache] the insert uses, so the id compared here is
+     * the id that would be written — an unmatched name folds to its synthetic id on both sides.
      */
-    private fun fingerprintOf(
+    private fun incomingPrintOf(
         session: ImportedSession,
         matchCache: HashMap<String, String?>
-    ): String = session.exercises.joinToString("|") { ex ->
-        val matched = ex.catalogueId ?: matchCache.getOrPut(ex.name) { ExerciseNameMatcher.match(ex.name) }
-        val id = matched ?: syntheticId(ex.name)
-        id + ":" + ex.sets.joinToString(",") { setPrint(it.reps, it.weightLb, it.durationSeconds) }
-    }
+    ): String = fingerprintOf(
+        FingerprintSession(
+            dayKey = session.dayKey ?: Program.FREESTYLE_DAY_KEY,
+            sessionType = session.sessionType ?: "normal",
+            intensity = session.intensity ?: "normal",
+            isUntracked = session.isUntracked,
+            tags = session.tags ?: "",
+            journal = session.note ?: "",
+            exercises = session.exercises.mapIndexed { position, ex ->
+                val matched = ex.catalogueId ?: matchCache.getOrPut(ex.name) { ExerciseNameMatcher.match(ex.name) }
+                FingerprintExercise(
+                    orderIndex = ex.orderIndex ?: position,
+                    exerciseId = matched ?: syntheticId(ex.name),
+                    swappedName = if (matched == null) ex.name else null,
+                    difficulty = effortRating(ex.difficulty)?.name,
+                    skipped = ex.skipped,
+                    note = ex.note,
+                    sets = ex.sets.map { s ->
+                        FingerprintSet(
+                            reps = s.reps,
+                            weightLb = s.weightLb,
+                            weightText = s.weightText ?: weightText(s.weightLb),
+                            durationSeconds = s.durationSeconds,
+                            rpe = s.rpe,
+                            isAssisted = s.isAssisted,
+                            isAmrap = s.isAmrap,
+                            toFailure = s.toFailure,
+                            setType = s.setType ?: if (s.isWarmup) "warmup" else null,
+                            difficultyTag = s.difficultyTag,
+                            dropAnnotation = s.dropAnnotation
+                        )
+                    }
+                )
+            }
+        )
+    )
 
-    /** [fingerprintOf] for a session already in the database. */
-    private suspend fun storedFingerprint(sessionId: Long): String {
+    /** [incomingPrintOf] for a session already in the database. Null when the row has gone. */
+    private suspend fun storedPrintOf(sessionId: Long): String? {
+        val stored = sessionDao.get(sessionId) ?: return null
         val setsByExercise = loggedSetDao.allForSession(sessionId).groupBy { it.loggedExerciseId }
-        return loggedExerciseDao.forSession(sessionId).joinToString("|") { le ->
-            le.exerciseId + ":" + setsByExercise[le.id].orEmpty()
-                .sortedBy { it.setIndex }
-                .joinToString(",") { setPrint(it.reps, it.weightLb, it.durationSeconds) }
-        }
+        return fingerprintOf(
+            FingerprintSession(
+                dayKey = stored.dayKey,
+                sessionType = stored.sessionType,
+                intensity = stored.intensity,
+                isUntracked = stored.isUntracked,
+                tags = stored.tags,
+                journal = stored.journal,
+                exercises = loggedExerciseDao.forSession(sessionId).map { le ->
+                    FingerprintExercise(
+                        orderIndex = le.orderIndex,
+                        exerciseId = le.exerciseId,
+                        swappedName = le.swappedName,
+                        difficulty = le.difficulty?.name,
+                        skipped = le.skipped,
+                        note = le.note,
+                        sets = setsByExercise[le.id].orEmpty().sortedBy { it.setIndex }.map { s ->
+                            FingerprintSet(
+                                reps = s.reps,
+                                weightLb = s.weightLb,
+                                weightText = s.weightText,
+                                durationSeconds = s.durationSeconds,
+                                rpe = s.rpe,
+                                isAssisted = s.isAssisted,
+                                isAmrap = s.isAmrap,
+                                toFailure = s.toFailure,
+                                setType = s.setType,
+                                difficultyTag = s.difficultyTag,
+                                dropAnnotation = s.dropAnnotation
+                            )
+                        }
+                    )
+                }
+            )
+        )
     }
-
-    /**
-     * One set, as the duplicate guard sees it.
-     *
-     * [durationSeconds] is part of the identity: a 60-second weighted hold and a 60-rep set at the
-     * same load are not the same work, and without it a source that records both could have one
-     * silently swallow the other.
-     */
-    private fun setPrint(reps: Int, weightLb: Double?, durationSeconds: Int?): String =
-        "$reps@" + (weightLb?.let { String.format(java.util.Locale.US, "%.3f", it) } ?: "bw") +
-            (durationSeconds?.let { "/${it}s" } ?: "")
 
     private fun syntheticId(name: String): String {
         val slug = name.trim().lowercase()
@@ -634,5 +702,31 @@ data class FoundImport(
     val name: String,
     val source: ImportSource,
     val sessionCount: Int,
-    val lastModified: Long
+    val lastModified: Long,
+    /** Cardio entries the file carries (Avex JSON export). */
+    val cardioCount: Int = 0,
+    /** Coach goals the file carries (Avex JSON export). */
+    val coachGoalCount: Int = 0,
+    /** Weigh-ins the file carries (Avex JSON export, or an Avex bodyweight CSV). */
+    val bodyweightCount: Int = 0
 )
+
+/**
+ * What a found file is, in one line: what it holds, not just how many workouts (L-01).
+ *
+ * A file with no workouts is a real import — a bodyweight CSV has nothing else in it — and the row
+ * used to be unable to say so, because the scanner had only a workout count to describe it with.
+ * Everything the file actually carries is named, in the same order the result summary uses, and a
+ * file with nothing countable still names its source rather than claiming "0 workouts".
+ */
+fun foundImportSummary(found: FoundImport): String {
+    fun plural(n: Int, one: String, many: String) = "$n ${if (n == 1) one else many}"
+    val parts = buildList {
+        if (found.sessionCount > 0) add(plural(found.sessionCount, "workout", "workouts"))
+        if (found.cardioCount > 0) add(plural(found.cardioCount, "cardio entry", "cardio entries"))
+        if (found.bodyweightCount > 0) add(plural(found.bodyweightCount, "weigh-in", "weigh-ins"))
+        if (found.coachGoalCount > 0) add(plural(found.coachGoalCount, "goal", "goals"))
+    }
+    return if (parts.isEmpty()) found.source.displayName
+    else "${found.source.displayName} · ${parts.joinToString(" · ")}"
+}

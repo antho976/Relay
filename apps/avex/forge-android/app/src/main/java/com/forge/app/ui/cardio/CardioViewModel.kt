@@ -84,8 +84,9 @@ class CardioViewModel @Inject constructor(
     // observable, so we poll it at the moments it can change (resume) rather than continuously.
     private val connection = MutableStateFlow(WearableConnection())
     /**
-     * Start of the current ISO week (Monday) — the anchor for the "this week" label, the Mon–Sun
-     * bars and every weekly total on this screen.
+     * Local midnight of TODAY — the anchor for everything on this screen that depends on the
+     * calendar: the "this week" label, the Mon–Sun bars, the streak, the week's totals, and which
+     * cell is today.
      *
      * A StateFlow, not a `val` captured at construction. A ViewModel outlives the screen it belongs
      * to, and a phone left on the Cardio tab over a Sunday night kept a Monday from the week before:
@@ -93,32 +94,52 @@ class CardioViewModel @Inject constructor(
      * new week's dates over the old week's minutes, distance and streak — with no reload in sight,
      * because nothing in the pipeline had changed.
      *
-     * Driven by [TimeSignals.dayStarts] rather than only by ON_RESUME. Refreshing on resume fixes
-     * leaving and coming back, and does nothing at all for the screen that is STILL OPEN when the
-     * date turns over — which is the case the bug was reported for: nothing resumes, so nothing
-     * re-anchors, and the mismatch persists for as long as the phone stays on the tab.
-     * `dayStarts()` emits immediately, at each local midnight, and on any clock or timezone change,
-     * which is the same signal `StatsRepository` already uses for exactly this.
+     * The DAY, not the Monday it belongs to (M-15). The anchor used to be reduced to a week start
+     * before anything downstream saw it, so a Tuesday-to-Sunday boundary was an equal value that a
+     * [MutableStateFlow] drops and nothing re-ran at all.
+     *
+     * Driven by [com.forge.app.core.time.TimeSignals.dayStarts] rather than only by ON_RESUME.
+     * Refreshing on resume fixes leaving and coming back, and does nothing at all for the screen
+     * that is STILL OPEN when the date turns over — which is the case the bug was reported for:
+     * nothing resumes, so nothing re-anchors, and the mismatch persists for as long as the phone
+     * stays on the tab. `dayStarts()` emits immediately, at each local midnight, and on any clock or
+     * timezone change, which is the same signal `StatsRepository` already uses for exactly this.
      */
-    private val weekStart = MutableStateFlow(com.forge.app.core.time.mondayStartMs(clock.nowMs()))
+    private val dayStart = MutableStateFlow(com.forge.app.core.time.dayStartMs(clock.nowMs()))
 
     init {
         refreshConnection()
         viewModelScope.launch {
-            timeSignals.dayStarts().collect { refreshWeekAnchor() }
+            timeSignals.dayStarts().collect { start ->
+                val moved = start != dayStart.value
+                dayStart.value = start
+                // Today's steps are a BOUNDED read of one calendar day, so a new day needs a new
+                // one: it used to be taken on resume only, and a screen left open past midnight
+                // kept yesterday's hourly bars and yesterday's total under the word "today" (M-15).
+                if (moved) refreshTodaySteps()
+            }
         }
     }
 
     /**
-     * Re-anchor the week if the calendar has moved on.
+     * Re-anchor the day (and with it the week) if the calendar has moved on.
+     *
+     * The anchor is the local DAY, not the Monday it belongs to (M-15). Reducing the signal to a
+     * Monday made every day-boundary from Tuesday to Sunday an equal value that a [MutableStateFlow]
+     * drops, so nothing downstream re-ran: the Mon–Sun cells kept styling Monday as today, the
+     * streak kept counting to yesterday, and the week's active-day count went stale — all on a
+     * screen that was still open and had nothing else to change.
      *
      * Still called from ON_RESUME as well as from the day-boundary signal above: a device that
      * dozed through midnight can come back before the tick lands, and re-anchoring twice to the
-     * same Monday costs nothing (a [MutableStateFlow] drops an equal value).
+     * same day costs nothing.
      */
     fun refreshWeekAnchor() {
-        val current = com.forge.app.core.time.mondayStartMs(clock.nowMs())
-        if (current != weekStart.value) weekStart.value = current
+        val current = com.forge.app.core.time.dayStartMs(clock.nowMs())
+        if (current != dayStart.value) {
+            dayStart.value = current
+            refreshTodaySteps()
+        }
     }
 
     /** Re-read whether the steps / exercise grants are held (call on resume — grants change in the HC app).
@@ -137,6 +158,20 @@ class CardioViewModel @Inject constructor(
             val now = clock.nowMs()
             healthConnectManager.recentWatchWorkouts(now - IMPORT_LOOKBACK_MS, now, limit = 6)
         } else emptyList()
+    }
+
+    /**
+     * Re-read TODAY's step total and hourly bars, without re-checking grants (M-15).
+     *
+     * The read is bounded to one calendar day, so it goes stale the moment the day turns over. It
+     * was taken on resume only, which does nothing for the screen that is still open at midnight —
+     * the case the finding is about. Fail-soft to leaving what is there rather than blanking the
+     * section on a read error.
+     */
+    private fun refreshTodaySteps() = viewModelScope.launch {
+        if (!connection.value.steps) return@launch
+        val today = runCatching { loadStepsForDay(clock.nowMs()) }.getOrNull() ?: return@launch
+        connection.update { it.copy(today = today) }
     }
 
     // Raw watch-session candidates from Health Connect, refreshed with the connection (init/resume).
@@ -163,21 +198,33 @@ class CardioViewModel @Inject constructor(
     // here off the DB flow and on Dispatchers.Default — NOT in the combine with `transient` below,
     // so toggling the sheet (a pure UI event) never re-runs the full-history streak/day passes, and
     // none of it runs on the main thread.
-    private val derivedFlow = weekStart.flatMapLatest { weekStartMs ->
-        combine(
-            entriesFlow,
-            cardioRepo.observeMinutesSince(weekStartMs),
-            cardioRepo.observeSince(weekStartMs)
-        ) { all, weekMin, weekEntries -> Triple(all, weekMin, weekEntries) to weekStartMs }
-    }.map { (parts, weekStartMs) ->
-        val (all, weekMin, weekEntries) = parts
+    private val derivedFlow = dayStart.flatMapLatest { todayStartMs ->
+        entriesFlow.map { all -> all to todayStartMs }
+    }.map { (all, todayStartMs) ->
+        val weekStartMs = com.forge.app.core.time.mondayStartMs(todayStartMs)
         val zone = ZoneId.systemDefault()
+        // Today comes from the ANCHOR, not from a fresh LocalDate.now() inside each helper: the
+        // anchor is what the day-boundary tick moves, so deriving from it is what makes "today"
+        // change on the screen that is still open, and what makes the helpers testable at all.
+        val today = Instant.ofEpochMilli(todayStartMs).atZone(zone).toLocalDate()
+        // The week's slice comes from the history ALREADY IN HAND, not from two more observers on
+        // the same table (P-08). Combining `observeAll` with `observeMinutesSince` and
+        // `observeSince` meant one insert invalidated three SQL queries, so a single logged session
+        // could re-run the full-history streak, records and pace passes more than once — and, in
+        // between, mix a new slice with an old whole. The filters below are exactly what those two
+        // queries were: `date >= weekStart`, and the same sum over non-rest rows (a SUM over no
+        // rows is NULL, which the caller read as 0).
+        val weekEntries = all.filter { it.date >= weekStartMs }
+        val weekMinutes = weekEntries
+            .filter { it.type != CardioType.REST.code }
+            .sumOf { it.durationMin }
         CardioDerived(
             all = all,
-            weekMinutes = weekMin ?: 0,
+            todayStartMs = todayStartMs,
+            weekMinutes = weekMinutes,
             cardioDaysThisWeek = countActiveDays(weekEntries, zone),
-            cardioStreakDays = computeCardioStreak(all, zone),
-            weekDays = buildWeekDays(weekEntries),
+            cardioStreakDays = computeCardioStreak(all, zone, today),
+            weekDays = buildWeekDays(weekEntries, zone, today),
             weekDistanceKm = weekEntries
                 .filter { it.type != CardioType.REST.code }
                 .sumOf { it.distanceKm ?: 0.0 },
@@ -208,6 +255,7 @@ class CardioViewModel @Inject constructor(
     ) { d, tr, target, cardioGoals ->
         CardioUiState(
             isLoading = false,
+            todayStartMs = d.todayStartMs,
             weekMinutes = d.weekMinutes,
             cardioDaysThisWeek = d.cardioDaysThisWeek,
             weekTargetMin = target,
@@ -474,6 +522,7 @@ class CardioViewModel @Inject constructor(
 
     /** DB-derived aggregates, computed off the DB flow on a background dispatcher. */
     private data class CardioDerived(
+        val todayStartMs: Long,
         val all: List<CardioEntry>,
         val weekMinutes: Int,
         val cardioDaysThisWeek: Int,
@@ -488,9 +537,11 @@ class CardioViewModel @Inject constructor(
     companion object {
         /** Mon–Sun cells for the current week: active minutes + whether a rest day was logged.
          *  One pass over the entries per day; future days are empty. */
-        fun buildWeekDays(entries: List<CardioEntry>): List<CardioDayCell> {
-            val zone = ZoneId.systemDefault()
-            val today = LocalDate.now(zone)
+        fun buildWeekDays(
+            entries: List<CardioEntry>,
+            zone: ZoneId = ZoneId.systemDefault(),
+            today: LocalDate = LocalDate.now(zone)
+        ): List<CardioDayCell> {
             val monday = today.with(DayOfWeek.MONDAY)
             return (0..6).map { dayOffset ->
                 val day = monday.plusDays(dayOffset.toLong())
@@ -523,12 +574,15 @@ class CardioViewModel @Inject constructor(
                 .size
 
         /** Consecutive calendar days, ending today or yesterday, with an active (non-rest) session. */
-        fun computeCardioStreak(entries: List<CardioEntry>, zone: ZoneId): Int {
+        fun computeCardioStreak(
+            entries: List<CardioEntry>,
+            zone: ZoneId,
+            today: LocalDate = LocalDate.now(zone)
+        ): Int {
             val days = entries
                 .filter { it.type != CardioType.REST.code }
                 .mapTo(sortedSetOf()) { Instant.ofEpochMilli(it.date).atZone(zone).toLocalDate() }
             if (days.isEmpty()) return 0
-            val today = LocalDate.now(zone)
             var cursor = when {
                 today in days -> today
                 today.minusDays(1) in days -> today.minusDays(1)

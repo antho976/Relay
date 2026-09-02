@@ -99,8 +99,7 @@ fun GoalsScreen(
     // Both lenses have to be populated for the pills to mean anything; a toggle where one side is
     // always empty is a control that can't run (§2③).
     val lensVisible = liveCount > 0 && reachedCount > 0
-    val lens = chosenLens
-        ?: if (liveCount == 0 && reachedCount > 0) GoalLens.REACHED else GoalLens.LIVE
+    val lens = effectiveGoalLens(chosenLens, liveCount, reachedCount)
 
     val rows = remember(all, lens, q) {
         all.asSequence()
@@ -203,7 +202,9 @@ fun GoalsScreen(
                             row.g, onBg, muted, accent, outline, forgeItemMotion()
                         ) { onEditLift(row.g.exerciseId) }
                         is GoalRow.Custom -> CustomGoalRow(
-                            row.g, onBg, muted, accent, outline, forgeItemMotion()
+                            row.g, onBg, muted, accent, outline,
+                            todayStartMs = state.todayStartMs,
+                            modifier = forgeItemMotion()
                         ) { onEditCustom(row.g.id) }
                     }
                     Spacer(Modifier.height(24.dp))
@@ -236,7 +237,7 @@ private const val SEARCH_THRESHOLD = 4
  * This is the only place the word "reached" is said on a populated screen; the rows themselves keep
  * their numbers.
  */
-private enum class GoalLens(val label: String) { LIVE("Live"), REACHED("Reached") }
+internal enum class GoalLens(val label: String) { LIVE("Live"), REACHED("Reached") }
 
 /** The tiny hero's count line. Honest at zero (§12) rather than hidden. */
 private fun goalCountLine(live: Int, reached: Int): String = when {
@@ -315,4 +316,20 @@ private fun GoalSearchField(
             unfocusedTextColor = onBg,
         )
     )
+}
+
+/**
+ * Which lens the Goals list actually shows (M-31).
+ *
+ * [chosen] is the user's own pick, and it governs only while BOTH categories have rows — which is
+ * also exactly when the pills that set it are on screen. Delete the last reached goal while
+ * "Reached" is selected and the pills disappear with it, so a saved choice that outlived its own
+ * control rendered "Nothing reached yet" over a screen full of live goals with no way back. The
+ * lens follows whichever category still exists instead; an empty screen reads as live, which is
+ * what "Nothing tracked yet" belongs to.
+ */
+internal fun effectiveGoalLens(chosen: GoalLens?, liveCount: Int, reachedCount: Int): GoalLens = when {
+    liveCount > 0 && reachedCount > 0 -> chosen ?: GoalLens.LIVE
+    reachedCount > 0 -> GoalLens.REACHED
+    else -> GoalLens.LIVE
 }

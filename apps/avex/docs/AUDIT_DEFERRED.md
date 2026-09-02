@@ -4,10 +4,18 @@ Everything from the 99-finding audit and the follow-up re-audit that is **not** 
 work, with the reason and what it would take to finish. Written so nobody has to re-derive it from
 PR descriptions.
 
-A third pass (H1, H5, H6, M3, M5, M7, M8) closed seven findings a re-audit found still open — some
-fixed in the wrong place, some fixed on one path of two. None of them are listed here as open, and
-the two rows they touch are annotated. **H2, H4 and M2 are unchanged**, and for the same reason as
-before: they need a compiler this environment does not have, or a device.
+Two audits are tracked here. The **99-finding audit** and its re-audit come first; the
+**2026-09-01 production source audit** has its own section at the end, and that is the one to read
+for the current state of the work.
+
+For the 99-finding audit: a third pass (H1, H5, H6, M3, M5, M7, M8) closed seven findings a re-audit
+found still open — some fixed in the wrong place, some fixed on one path of two. None of them are
+listed here as open, and the two rows they touch are annotated. **H2, H4 and M2 are unchanged**, and
+for the same reason as before: they need a compiler this environment does not have, or a device.
+
+For the 2026-09-01 audit: every Medium and every Low is now closed, and thirteen of the seventeen
+performance opportunities. P-03, P-05, P-07 and P-17 are not — see that section. **Nothing on the
+branch carrying that work has been compiled or run.**
 
 Three categories, and the distinction matters:
 
@@ -178,58 +186,146 @@ every call site is what catches those, and it is worth budgeting for on anything
 
 ---
 
-## The 2026-09-01 production source audit: what this pass left open
+## The 2026-09-01 production source audit: where it stands now
 
-The pass against `docs/AVEX_PRODUCTION_SOURCE_AUDIT_2026-09-01.md` closed the Critical finding and
-all fifteen Highs, plus four Mediums. The same environment constraint applied: no Android SDK, so
-nothing was compiled locally; every change was traced by hand to its call sites and CI is the
-compiler. What follows is the ledger, then what the pass deliberately did not do, so nobody has to
-re-derive it.
+This is the **second** pass against `docs/AVEX_PRODUCTION_SOURCE_AUDIT_2026-09-01.md`. The first
+closed the Critical finding, all fifteen Highs and four Mediums, and left behind commit `e8e66b4`:
+unreviewed, uncompiled partial edits for twenty-eight findings, written by agents that were
+terminated mid-edit. This pass read every one of those against its finding, finished the ones that
+were not finished, and then worked through everything the first pass had not touched.
+
+**M-01 through M-37 and L-01 through L-08 are now all closed.** Thirteen of the seventeen
+performance opportunities are closed. Four are not — P-03, P-05, P-07 and P-17 — for the reasons
+below.
+
+The same environment constraint applies as everywhere else in this document, and it matters more
+here than anywhere: **no Android SDK, and no pull request, so nothing on this branch has been
+compiled or run.** See "What has not been compiled", at the end of this section, before trusting
+any row of the ledger.
+
+### What reviewing the WIP wave actually found
+
+The previous ledger's warning — "each file needs to be read against its finding, finished or
+reverted, and tested before it is trusted" — was right, and the specific damage was worse than
+"unfinished":
+
+- `ProgressPhotoRepositoryTest`'s fake `BodyweightDao` did not implement the `byId` that M-02's
+  mirror delete had added to the interface. **The JVM test source set did not compile at all** —
+  every test in the app module, not only that one.
+- `TrophiesViewModel` had been rewritten to call a `trophiesStateFor` that was never written.
+  **The main source set did not compile either.**
+- **M-12 was named in the WIP commit message and had not been started.** The cardio log sheet still
+  threw its whole draft away on a rotation.
+- Three of the photo-wave fixes shipped with no test, though each had been extracted into a pure
+  function precisely so that it could have one.
+
+Everything else in that commit held up on a finding-by-finding read, and stands as it was written.
+Those rows are marked *reviewed* below rather than counted as new work, because that is what they
+are.
 
 ### Ledger
 
-"Done" means the fix is committed, reviewed line by line, and covered by a JVM test. A finding is
-counted as **not done** until it meets that bar; partial edits do not count, however far along.
+"Done" means the fix is committed, reviewed line by line against the finding text, and — for
+anything with a pure decision in it — covered by a JVM test. *Reviewed* means the WIP wave's edit
+was read against its finding and found complete; the commit cited is where it landed.
 
-**Done (20 of 86 findings and opportunities):**
+| Finding | Where | |
+|---|---|---|
+| M-01, M-04, M-07, M-13, M-14, M-21, M-22, M-25, M-26, M-27, M-28, M-29, L-03, L-05, L-07 | `e8e66b4` | reviewed, complete as written |
+| M-02, M-05, M-16, M-17, M-19, M-20, M-24 | `e8e66b4`, `37c9d9c` | reviewed; fake DAO fixed, three tests added |
+| M-34, M-36, L-02, L-04 | `e8e66b4`, `ad1566c` | reviewed, complete as written |
+| M-12 cardio log draft lost on recreation | `ad1566c` | not started by the WIP; done here |
+| L-08 Trophies reads a pending snapshot as zero | `ad1566c` | WIP left it uncompilable; done here |
+| M-03 import duplicate print ignores most fields | `3deba74` | |
+| M-06 deload marker and generated program diverge | `4dc4fd5` | |
+| M-10 wrist edit lost when the send fails | `ce6338c` | |
+| M-15 Cardio stale across midnight and time-zone moves | `f4502d4` | |
+| M-18 removed folder keeps its persisted URI grant | `305c89e` | |
+| M-30 widget tap silently does nothing | `b3ce92b` | |
+| M-31, M-32, M-33, L-06 goals lens, window, baseline, orphan pin | `e464a03` | |
+| M-35 motion setting not live; M-37 accent contrast below AA | `79a2357` | |
+| L-01 folder scan hides extras-only exports | `e59e27b` | |
+| P-09, P-10, P-11, P-12 | `4ebda8c` | |
+| P-01, P-02, P-04 | `ce7e3c8` | |
+| P-06, P-14, P-15 | `12d3f22` | |
+| P-08, P-13, P-16 | `48c3067` | |
 
-| Finding | Commit |
-|---|---|
-| C-01 process death during restore staging | `7815ae8` |
-| H-01 same-version SQLite impostors pass restore validation | `7815ae8` |
-| H-02 block phases presentation-only (deload served, volume policy; see below) | `01108a8` |
-| H-03 Coach mutation and ledger non-atomic | `19f9383` |
-| H-04 body-fat Health Connect permissions undeclared | `078a592` |
-| H-05 weight history import latches on a 30-day window | `078a592` |
-| H-06 volume caps compare raw e1RMs across lifts | `c112389` |
-| H-07 scheduled rest day becomes "train today" | `681bb17` |
-| H-08 Wear command dedup not durable (file ledger; see below) | `701c05d` |
-| H-09 onboarding lost on configuration recreation | `6c67095` |
-| H-10 onboarding unit change reinterprets the value | `6c67095` |
-| H-11 swap sheet relabels a set from the watch | `cb09990` |
-| H-12 freestyle Recent rail duplicate id crash | `681bb17` |
-| H-13 Program Builder draft lost on process recreation | `ae0efd6` |
-| H-14 animator scale applied twice | `ded159b` |
-| H-15 PLATES warm-up treats pounds as a plate count | `681bb17` |
-| M-08 unperformed Coach changes earn trust | `19f9383` |
-| M-09 expired layoff suppresses spacing readiness | `fcbf57f` |
-| M-11 tagged releases omit the Wear AAB and mapping | `6efd6b8` |
-| M-23 read-only weight grant shown as two-way sync | `078a592` |
+### Still open, and why
 
-**Not done (66):**
+#### P-03 — missing indices on the hot chronological queries
 
-- Mediums M-01, M-02, M-03, M-04, M-05, M-06, M-07, M-10, M-12, M-13, M-14, M-15, M-16, M-17,
-  M-18, M-19, M-20, M-21, M-22, M-24, M-25, M-26, M-27, M-28, M-29, M-30, M-31, M-32, M-33, M-34,
-  M-35, M-36, M-37.
-- Lows L-01 through L-08.
-- Performance opportunities P-01 through P-17.
+Blocked by the same thing H2 and H4 are blocked by, one section up: it is a v37 schema change, and
+Room's exported `37.json` carries an `identityHash` only the Room compiler can compute.
+`MigrationChainTest` requires that file to exist and match; a hand-written hash breaks
+`MigrationTestHelper`, which is the test that proves the migration works. The audit's evidence —
+`EXPLAIN QUERY PLAN` output and desktop SQLite scaling on the exact v36 schema — is
+platform-independent and stands; the work is one migration away once a machine with the Room
+compiler runs it. Benchmark before adding composites: each index costs writes.
 
-Of those, commit `e8e66b4` (marked WIP) holds **unreviewed, uncompiled partial edits** for M-01,
-M-02, M-04, M-05, M-07, M-12, M-13, M-14, M-16, M-17, M-19, M-20, M-21, M-22, M-24, M-25, M-26,
-M-27, M-28, M-29, M-34, M-36, L-02, L-03, L-04, L-05, L-07 and L-08. The agents producing them were
-terminated mid-edit. They are kept so the work is not lost, and they count as not done: each file
-needs to be read against its finding, finished or reverted, and tested before it is trusted. The last
-commit with nothing unreviewed in it is `cc2750a`.
+#### P-05 — no baseline profile is generated or shipped
+
+This is the same finding as **M2** above, restated by the newer audit with the evidence attached
+(2,737 dependency rules and zero `Lcom/forge` rules in the release merge). It needs the generator
+run on a real device or emulator, the output inspected and committed, and a CI assertion that a
+non-empty Avex profile is actually packaged — otherwise it silently regresses to this state.
+
+#### P-07 — Academy decodes oversized covers on the main thread
+
+Thirty-one of the 35 `drawable-nodpi/cover_*.webp` assets are 1200x1600, roughly 7.3 MiB each as
+ARGB, and `painterResource` decodes on the main thread. The fix is display-sized thumbnails, which
+means **regenerating image assets** and choosing dimensions from a measured cold Academy scroll on a
+physical device. Guessing the sizes here would replace measured assets with unmeasured ones and
+would also cross the screenshot goldens; it is not code this environment can honestly produce.
+
+#### P-17 — startup wordmarks rebuild a RenderEffect every frame
+
+**Decided against, not blocked.** The suggested repair is to build the Compose `RenderEffect` once
+and keep updating the `RuntimeShader`'s uniforms. But `RenderEffect.createRuntimeShaderEffect`
+snapshots the shader when the effect is constructed, and whether a later uniform write reaches an
+already-built effect is exactly the platform behaviour in question. If it does not, the launch
+wordmark freezes on its first frame — a visible, every-launch regression traded for 75-90 native
+allocations spread over a 1.3-second overlay that happens once per cold start. It cannot be checked
+without a device, so it was left alone. Take it the moment someone can run it on hardware.
+
+### Behaviour worth knowing about, not regressions
+
+- **M-06** records a *generation intent* in DataStore carrying the signature of the program it is
+  replacing, and reconciles it at the next boot. That is a deliberate substitute for the column this
+  would otherwise need: no schema change, so no migration, so no Room compiler. A deload always
+  changes the plan's set counts, which is what makes the two outcomes distinguishable.
+- **P-06, P-14 and P-15** move work off first paint without deleting anything: the fields, the
+  mappings and the entry points all stay, and `refreshCoach()` exists for the surface that brings
+  the Coach cards back. This is about *when* the work runs, not about removing a surface the team may
+  restore. The same caution as the dead-code list above, for the same reason.
+- **M-10** keeps the optimistic affordance removal — a wrist row that hesitates reads as broken —
+  and adds the missing half: a failed delivery restores the row and offers a same-id retry, which the
+  phone's deduper drops if the original command did in fact land.
+- **M-37** changes no curated preset and no default. Every accent that already cleared AA keeps
+  exactly the content colour the old luminance threshold gave it; the difference is only in the band
+  where the threshold was picking a side that could not be read.
+- **L-01** changes what a scanned row says: a bodyweight- or cardio-only export names its source
+  instead of describing itself as "0 workouts".
+
+### What has not been compiled
+
+Nothing on this branch. There is no Android SDK in this environment (`dl.google.com` is blocked by
+organisation network policy), and CI runs only on a push to `main` or on a pull request against it.
+No pull request was opened for this work, so **CI has never seen a line of it**. Every change was
+traced by hand to each of its call sites, checked against the constants, DAO projections and
+interface signatures it depends on, and read back adversarially for the compile errors this method
+is known to miss — an unimplemented interface member, a deleted declaration with a surviving
+reference, a `@Composable` call in a non-composable position, an unused import that `DesignDoctrine`
+or a warnings-as-errors build would reject.
+
+That method is exactly what failed on the WIP wave, and this pass found the two places it failed.
+Treat the first CI run on this branch as part of the work, not as a formality.
+
+### Notes carried forward from the first pass
+
+What follows is unchanged from the previous ledger: the residue the first pass left behind on the
+Critical and the Highs it closed. None of it is open work in the sense above — each is a narrower
+case, an out-of-repository step, or a documented behaviour change — but it is the part of those
+findings that a reader would otherwise have to re-derive.
 
 ### C-01 / H-01 — restore
 

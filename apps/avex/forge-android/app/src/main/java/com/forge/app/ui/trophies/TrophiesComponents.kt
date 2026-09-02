@@ -64,12 +64,26 @@ internal fun HeroSection(state: TrophiesUiState, nextLocked: TrophyDisplay?, onB
             .padding(horizontal = 24.dp)
             .padding(top = 8.dp, bottom = 16.dp)
     ) {
-        Text("${state.totalCount} IN ALL · ${state.unlockedCount} EARNED · ${state.cumulativeScore} PTS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+        // Nothing definitive until the account is actually read (L-08). The screen used to render
+        // the placeholder state as fact — "0 EARNED", an empty bar and "nothing earned yet" — on an
+        // account full of trophies, for as long as the first read took. Say it is counting instead.
+        Text(
+            if (state.isLoading) "${state.totalCount} IN ALL · COUNTING YOURS…"
+            else "${state.totalCount} IN ALL · ${state.unlockedCount} EARNED · ${state.cumulativeScore} PTS",
+            style = MaterialTheme.typography.labelSmall,
+            color = muted,
+            fontSize = 9.sp,
+            letterSpacing = 1.sp
+        )
         Spacer(Modifier.height(14.dp))
         Box(modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.2f))) {
-            Box(modifier = Modifier.fillMaxWidth(animFrac).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent))
+            // An unfilled bar is a claim too, so it stays empty of MEANING rather than of progress:
+            // while loading the fraction is not drawn at all.
+            if (!state.isLoading) {
+                Box(modifier = Modifier.fillMaxWidth(animFrac).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent))
+            }
         }
-        if (state.unlockedCount == 0) {
+        if (!state.isLoading && state.unlockedCount == 0) {
             // An empty bar next to "0 EARNED" reads as broken — reassure it's a start line, not a bug.
             Spacer(Modifier.height(12.dp))
             InlineEmptyHint(

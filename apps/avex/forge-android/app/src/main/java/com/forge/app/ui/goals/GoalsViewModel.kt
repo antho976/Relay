@@ -48,10 +48,17 @@ class GoalsViewModel @Inject constructor(
     private val extendedGoalRepo: ExtendedGoalRepository,
     private val settingsRepo: SettingsRepository,
     private val snackbar: SnackbarController,
+    private val timeSignals: com.forge.app.core.time.TimeSignals,
 ) : ViewModel() {
 
     data class UiState(
         val loading: Boolean = true,
+        /**
+         * Local midnight of the day this snapshot describes (0 before the first load). The captions
+         * are date-grained readings ("3 days left"), and memoising them on the goal alone let them
+         * outlive the day they were computed for (M-32).
+         */
+        val todayStartMs: Long = 0L,
         val liftGoals: List<GoalRepository.GoalProgress> = emptyList(),
         val customGoals: List<ExtendedGoalRepository.Progress> = emptyList(),
         /**
@@ -70,8 +77,18 @@ class GoalsViewModel @Inject constructor(
     init {
         // Reactive: reload whenever a goal table changes, so an edit made on the routed editor
         // screen is already reflected here when you come back.
-        combine(goalRepo.observeAll(), extendedGoalRepo.observeAll()) { _, _ -> }
-            .onEach { reload() }
+        // The calendar is an input, not something read on the way past (M-32): a weekly or monthly
+        // goal's window is derived at read time, so leaving this screen open from Sunday into
+        // Monday kept a completed weekly goal reading 4 / 4 in a week where nothing had happened
+        // yet — with its reached state, its ordering and its deadline copy all describing the
+        // period that had ended. `dayStarts()` emits at each local midnight and on any clock or
+        // timezone change, which is exactly when the answer changes with no table having moved.
+        combine(
+            goalRepo.observeAll(),
+            extendedGoalRepo.observeAll(),
+            timeSignals.dayStarts()
+        ) { _, _, todayStartMs -> todayStartMs }
+            .onEach { reload(it) }
             .launchIn(viewModelScope)
         // The hidden-exercises pref only affects the lift-picker exclude set — patch it in place
         // instead of re-running the goal-progress queries on every like/dislike toggle.
@@ -88,7 +105,7 @@ class GoalsViewModel @Inject constructor(
      *  [fetchOr] rethrows cancellation, so a cancelled reload dies before the state write. */
     private var reloadJob: Job? = null
 
-    private fun reload() {
+    private fun reload(todayStartMs: Long = _state.value.todayStartMs) {
         reloadJob?.cancel()
         reloadJob = viewModelScope.launch {
             val (liftGoals, customGoals) = coroutineScope {
@@ -98,6 +115,7 @@ class GoalsViewModel @Inject constructor(
             }
             _state.value = UiState(
                 loading = false,
+                todayStartMs = todayStartMs,
                 liftGoals = liftGoals,
                 customGoals = customGoals,
                 liftPickerExclude = excludeFrom(liftGoals, disliked),
@@ -130,7 +148,12 @@ class GoalsViewModel @Inject constructor(
     }
 
     fun clearLiftGoal(exerciseId: String) = viewModelScope.launch {
-        withContext(NonCancellable) { goalRepo.clearGoal(exerciseId) }
+        withContext(NonCancellable) {
+            goalRepo.clearGoal(exerciseId)
+            // The pin goes with the goal (L-06): a key with no goal behind it is invisible on Home
+            // but still counts against the three-slot cap, so the next pin evicts a live one.
+            settingsRepo.removeGoalPin(liftPinKey(exerciseId))
+        }
     }
 
     // ─── Home pins (2026-08-16) ────────────────────────────────────────────────
@@ -171,7 +194,17 @@ class GoalsViewModel @Inject constructor(
     fun deleteCustomGoal(id: Long) = viewModelScope.launch {
         withContext(NonCancellable) {
             val removed = extendedGoalRepo.delete(id) ?: return@withContext
-            snackbar.showUndo("Goal deleted") { extendedGoalRepo.restore(removed) }
+            // The pin goes with the goal, and comes back with it (L-06). An orphan key is invisible
+            // on Home but still counts against the three-slot cap, so the NEXT pin evicted a live
+            // one to make room and Home showed two goals in three slots — the live goal it dropped
+            // gone with no way to tell. Its position is restored too, so an Undo puts the row back
+            // where the user had it rather than at the end.
+            val pinKey = customPinKey(id)
+            val pinIndex = settingsRepo.removeGoalPin(pinKey)
+            snackbar.showUndo("Goal deleted") {
+                extendedGoalRepo.restore(removed)
+                if (pinIndex >= 0) settingsRepo.restoreGoalPin(pinKey, pinIndex, max = HOME_PIN_SLOTS)
+            }
         }
     }
 }

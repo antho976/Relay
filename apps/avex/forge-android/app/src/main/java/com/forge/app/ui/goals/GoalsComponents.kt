@@ -347,13 +347,18 @@ internal fun LiftGoalRow(
 internal fun CustomGoalRow(
     g: ExtendedGoalRepository.Progress,
     onBg: Color, muted: Color, accent: Color, outline: Color,
+    /** Local midnight of today, from state — see the memo below. */
+    todayStartMs: Long,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     val settings = LocalForgeSettings.current
-    // Recomputed only when the goal itself changes: the caption is a date-grained reading, so it
-    // cannot go stale inside one visit to the screen.
-    val caption = remember(g, settings.weightUnit) {
+    // The caption is a date-grained reading ("3 days left"), and memoising it on the GOAL alone let
+    // it outlive the day it was computed for: a screen left open across midnight kept yesterday's
+    // count, and a goal whose numbers happened not to change across a week boundary kept the
+    // expired window's copy entirely (M-32). The day is part of the key, so the boundary that
+    // changes the answer is the boundary that recomputes it.
+    val caption = remember(g, settings.weightUnit, todayStartMs) {
         goalCaption(
             achieved = g.achieved,
             metric = g.metric,

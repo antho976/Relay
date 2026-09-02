@@ -31,6 +31,7 @@ import androidx.wear.compose.material.Text
 import com.forge.shared.protocol.CmdAckDto
 import com.forge.shared.protocol.SessionLiveDto
 import com.forge.wear.data.WearDataRepository
+import com.forge.wear.data.WristEdit
 import kotlinx.coroutines.delay
 
 /**
@@ -53,6 +54,7 @@ fun SetView(
     val colors = LocalWearColors.current
     val lastAck by repo.lastAck.collectAsStateWithLifecycle()
     val lastLog by repo.lastLog.collectAsStateWithLifecycle()
+    val failedSend by repo.failedSend.collectAsStateWithLifecycle()
 
     // Adjusted values, reseeded whenever the mirror advances to a new set/exercise.
     val seedKey = "${session.exerciseId}:${session.setIndex}:${session.targetWeightText}"
@@ -80,8 +82,13 @@ fun SetView(
     var confirmJump by remember(seedKey) { mutableStateOf(false) }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
+    // 1 Hz on the second boundary, not 4 Hz (P-04). Nothing here needs finer: the elapsed figure
+    // moves by the minute, and the undo/rate window it also drives is twelve seconds wide.
     LaunchedEffect(Unit) {
-        while (true) { nowMs = System.currentTimeMillis(); delay(250) }
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            delay(RestCountdown.TICK_MS - (nowMs % RestCountdown.TICK_MS))
+        }
     }
     // Ack resolution — confirmation is the mirror updating; success feedback fires in WearRoot.
     // Also keyed on timedOutId: the phone replays a recorded ack for a retried id, and a late ack
@@ -278,6 +285,15 @@ fun SetView(
                             .padding(6.dp)
                     )
                 }
+            }
+            // An edit the transport never delivered, and the way back to it (M-10). Shown wherever
+            // the undo/rate row lives, since that row is what came back when the send failed.
+            failedSend?.let { failed ->
+                Spacer(Modifier.height(2.dp))
+                WristRetryRow(
+                    label = if (failed.kind == WristEdit.Kind.RPE) "rating not sent" else "undo not sent",
+                    onRetry = { repo.retryFailedSend() }
+                )
             }
         }
     }

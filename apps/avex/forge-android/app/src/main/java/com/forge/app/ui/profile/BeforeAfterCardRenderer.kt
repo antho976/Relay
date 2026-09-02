@@ -181,8 +181,15 @@ object BeforeAfterCardRenderer {
      * [OrientedBitmaps] decoder the gallery and viewer use, so the exported card can never disagree
      * with what the screen showed; the helper lives in core, so the renderer still has no UI-layer
      * coupling, exactly as RankCardRenderer stays self-contained.
+     *
+     * EXACT fit, not just downsampled (P-09). `inSampleSize` only halves, so a source whose longest
+     * edge lands just under twice the request keeps close to FOUR times the pixels asked for: at
+     * 1200 px that is ~23 MB of ARGB per photo instead of ~5.9 MB, and this renderer holds two at
+     * once while the viewer behind it holds two more. The exact resize costs one bilinear pass and
+     * the oversized bitmap is released as soon as it lands.
      */
-    private fun decodeOriented(file: File, reqPx: Int): Bitmap? = OrientedBitmaps.decode(file, reqPx)
+    private fun decodeOriented(file: File, reqPx: Int): Bitmap? =
+        OrientedBitmaps.decode(file, reqPx, exactFit = true)
 
     fun share(context: Context, uri: Uri) {
         val send = Intent(Intent.ACTION_SEND).apply {

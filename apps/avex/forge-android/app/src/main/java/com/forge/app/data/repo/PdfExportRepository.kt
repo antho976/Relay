@@ -24,7 +24,9 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 
 /**
  * Generates a single-page PDF for a session (#149).
@@ -50,8 +52,13 @@ class PdfExportRepository @Inject constructor(
         return exportSessionPdf(lastSession.id)
     }
 
-    suspend fun exportSessionPdf(sessionId: Long): File? {
-        val session = sessionDao.get(sessionId) ?: return null
+    /**
+     * Canvas rendering, page assembly and the final write, all on IO (P-01). This ran on whatever
+     * dispatcher the caller was on — `viewModelScope`, i.e. Main — so a long session's PDF competed
+     * with UI frames while it drew.
+     */
+    suspend fun exportSessionPdf(sessionId: Long): File? = withContext(Dispatchers.IO) {
+        val session = sessionDao.get(sessionId) ?: return@withContext null
         val weightUnit = settingsRepo.weightUnit.first()
         val useMiles = settingsRepo.useMiles.first()
         val exercises = loggedExerciseDao.forSession(sessionId)
@@ -194,6 +201,6 @@ class PdfExportRepository @Inject constructor(
         val file = exportFile(context, "avex_session.pdf")
         file.outputStream().use { doc.writeTo(it) }
         doc.close()
-        return file
+        file
     }
 }

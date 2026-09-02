@@ -27,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,6 +50,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.forge.app.ui.common.sparklineSeries
 import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.rememberDrawProgress
@@ -365,8 +367,11 @@ fun SurfaceSparkline(
 ) {
     if (values.size < 2) return
     val progress = rememberDrawProgress(key = values, spec = ForgeMotion.drawTween())
-    val min = values.min()
-    val max = values.max()
+    // Reduced to what the chart can actually show, once (P-13) — see [sparklineSeries]. Every frame
+    // of the reveal below rebuilds both paths, so the point count is paid ~54 times per entry.
+    val plotted = remember(values) { sparklineSeries(values) }
+    val min = plotted.min()
+    val max = plotted.max()
     val range = (max - min).takeIf { it > 0.0 } ?: 1.0
     Canvas(modifier.semantics { contentDescription = reading }) {
         val h = size.height
@@ -379,17 +384,17 @@ fun SurfaceSparkline(
         // Only the right edge needs the horizontal inset — the first point is a line end, the last
         // one carries the dot.
         val plotW = (w - inset).coerceAtLeast(1f)
-        val stepX = plotW / (values.size - 1)
+        val stepX = plotW / (plotted.size - 1)
         fun yOf(v: Double) = inset + plotH - ((v - min) / range * plotH).toFloat()
         val line = Path().apply {
-            values.forEachIndexed { i, v ->
+            plotted.forEachIndexed { i, v ->
                 if (i == 0) moveTo(0f, yOf(v)) else lineTo(stepX * i, yOf(v))
             }
         }
         val area = Path().apply {
             moveTo(0f, h)
-            values.forEachIndexed { i, v -> lineTo(stepX * i, yOf(v)) }
-            lineTo(stepX * (values.size - 1), h)
+            plotted.forEachIndexed { i, v -> lineTo(stepX * i, yOf(v)) }
+            lineTo(stepX * (plotted.size - 1), h)
             close()
         }
         clipRect(right = (w * progress).coerceAtLeast(0.01f)) {
@@ -397,10 +402,10 @@ fun SurfaceSparkline(
             drawPath(line, color, style = Stroke(width = stroke, cap = StrokeCap.Round))
         }
         // The end dot rides the reveal frontier, then settles on the last point.
-        val fx = (values.size - 1) * progress
-        val i = fx.toInt().coerceIn(0, values.size - 2)
+        val fx = (plotted.size - 1) * progress
+        val i = fx.toInt().coerceIn(0, plotted.size - 2)
         val t = fx - i
-        val y = yOf(values[i]) + (yOf(values[i + 1]) - yOf(values[i])) * t
+        val y = yOf(plotted[i]) + (yOf(plotted[i + 1]) - yOf(plotted[i])) * t
         drawCircle(color, radius = dot, center = Offset(stepX * fx, y))
     }
 }

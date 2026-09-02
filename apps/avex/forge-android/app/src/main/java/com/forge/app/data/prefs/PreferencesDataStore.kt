@@ -320,6 +320,10 @@ object PreferenceKeys {
      * deload so auto-rotation pauses and DeloadAdvisor suppression fires (auto-coach seam, finding 18).
      */
     val DELOAD_WEEK_START_MS = longPreferencesKey("deload_week_start_ms")
+
+    /** A program regeneration currently in flight, as JSON — see
+     *  [com.forge.app.domain.program.ProgramGenerationIntent]. Absent when none is. */
+    val PROGRAM_GENERATION_INTENT = stringPreferencesKey("program_generation_intent")
     /** ExerciseLibrary ids the user LIKES — weighted up in selection (recurs more). */
     val LIKED_EXERCISES = stringSetPreferencesKey("liked_exercises")
     /** ExerciseLibrary ids the user DISLIKES — excluded from generation + swaps. */

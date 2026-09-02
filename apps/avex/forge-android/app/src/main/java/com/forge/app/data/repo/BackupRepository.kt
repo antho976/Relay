@@ -104,7 +104,7 @@ class BackupRepository @Inject constructor(
     }
 
     /** Export this week's data as JSON for AI analysis (#5). Returns the file path. */
-    suspend fun exportWeeklyJson(): File {
+    suspend fun exportWeeklyJson(): File = withContext(Dispatchers.IO) {
         val nowMs = clock.nowMs()
         // The ISO week the app itself calls "this week" everywhere else, not a rolling 7 x 24 h from
         // whenever Export was tapped — otherwise the file and the Stats screen describe different
@@ -190,7 +190,7 @@ class BackupRepository @Inject constructor(
         // Fixed filename (overwrite) so repeated exports don't accumulate forever (#84).
         val file = exportFile(context, "avex_weekly_export.json")
         file.writeText(root.toString(2))
-        return file
+        file
     }
 
     /**
@@ -199,7 +199,7 @@ class BackupRepository @Inject constructor(
      * back in. The real restore path is the whole-DB backup ([backupToUri] / [restoreFromUri]).
      * Named so it doesn't imply recoverability (#70).
      */
-    suspend fun exportFullDataJson(): File {
+    suspend fun exportFullDataJson(): File = withContext(Dispatchers.IO) {
         val allSessions = sessionDao.allFinished()
         val allCardio = cardioDao.since(0L)
         val allCoachGoals = coachGoalDao.all()
@@ -321,7 +321,7 @@ class BackupRepository @Inject constructor(
         // Fixed filename (overwrite) — see #84; avoids unbounded accumulation in filesDir.
         val file = exportFile(context, "avex_export.json")
         file.writeText(root.toString(2))
-        return file
+        file
     }
 
     /**
@@ -393,7 +393,7 @@ class BackupRepository @Inject constructor(
         else value
 
     /** Export as CSV — sessions summary (#138). */
-    suspend fun exportSessionsCsv(): File {
+    suspend fun exportSessionsCsv(): File = withContext(Dispatchers.IO) {
         val allSessions = sessionDao.allFinished()
         val sb = StringBuilder()
         sb.appendLine("id,dayKey,date,durationMin,volumeLb,prs,sets,intensity,tags")
@@ -407,7 +407,7 @@ class BackupRepository @Inject constructor(
         // Fixed filename (overwrite) — see #84.
         val file = exportFile(context, "avex_sessions.csv")
         file.writeText(sb.toString())
-        return file
+        file
     }
 
     /**
@@ -415,7 +415,7 @@ class BackupRepository @Inject constructor(
      * motivating records to share or keep (#542). One row per exercise: its heaviest tracked set ever.
      * Reuses the same tracked/non-assisted set projection the Stats hall of fame is built from.
      */
-    suspend fun exportPrsCsv(): File {
+    suspend fun exportPrsCsv(): File = withContext(Dispatchers.IO) {
         val sets = loggedSetDao.observeAllFinishedSetsWithSession().first()
         val sb = StringBuilder()
         sb.appendLine("exercise,muscle,bestWeightLb,reps,date")
@@ -427,18 +427,18 @@ class BackupRepository @Inject constructor(
         }
         val file = exportFile(context, "avex_prs.csv")
         file.writeText(sb.toString())
-        return file
+        file
     }
 
     /** Every bodyweight weigh-in as CSV (Cat 11). One row per entry, newest first. */
-    suspend fun exportBodyweightCsv(): File {
+    suspend fun exportBodyweightCsv(): File = withContext(Dispatchers.IO) {
         val entries = db.bodyweightDao().all()
         val sb = StringBuilder()
         sb.appendLine("date,weightLb")
         entries.forEach { e -> sb.appendLine("${e.dateKey},${e.weightLb}") }
         val file = exportFile(context, "avex_bodyweight.csv")
         file.writeText(sb.toString())
-        return file
+        file
     }
 
     /**
@@ -446,7 +446,7 @@ class BackupRepository @Inject constructor(
      * its display name (custom activities included, GYMAP-37) so the sheet reads as words, not raw
      * `custom_…` codes; distance stays canonical km like the other exports' canonical-unit columns.
      */
-    suspend fun exportCardioCsv(): File {
+    suspend fun exportCardioCsv(): File = withContext(Dispatchers.IO) {
         val entries = cardioDao.since(0L)
         val customs = settingsRepo.customCardioTypes.first()
         val sb = StringBuilder()
@@ -466,7 +466,7 @@ class BackupRepository @Inject constructor(
         }
         val file = exportFile(context, "avex_cardio.csv")
         file.writeText(sb.toString())
-        return file
+        file
     }
 
     /** Total on-disk database size (main file + WAL + SHM), in bytes — the Data dialog readout. */
@@ -540,18 +540,65 @@ class BackupRepository @Inject constructor(
         tmp.renameTo(AUTO_BACKUP_NAME)
     }
 
-    /** Take a persistable read+write grant on the picked backup folder and remember it (GYMAP-67). */
+    /**
+     * Take a persistable read+write grant on the picked backup folder and remember it (GYMAP-67).
+     *
+     * A folder being REPLACED has its own grant released afterwards (M-18): a persisted grant lives
+     * until it is revoked or released, so choosing folder B while A was connected used to leave
+     * Avex holding A across reboots — read AND write access to a tree the user could no longer see
+     * anywhere in the app. Replaced destinations accumulated one grant each.
+     *
+     * The new grant is taken FIRST and the old one released only after the preference has moved, so
+     * a failure anywhere in between leaves the app with access to the folder it is pointing at
+     * rather than to neither.
+     */
     suspend fun rememberBackupFolder(treeUri: Uri) = withContext(Dispatchers.IO) {
+        val previous = settingsRepo.backupFolderUri.first()
         runCatching {
             context.contentResolver.takePersistableUriPermission(
                 treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
         }
         settingsRepo.setBackupFolderUri(treeUri.toString())
+        if (previous != null && previous != treeUri.toString()) releasePersistedTree(previous)
+        Unit
     }
 
-    /** Stop mirroring backups to a folder (its persisted grant is dropped by the OS in time). */
-    suspend fun forgetBackupFolder() = settingsRepo.setBackupFolderUri(null)
+    /**
+     * Stop mirroring backups to a folder, and give up the access that went with it (M-18).
+     *
+     * Clearing the preference alone left the persisted grant in place: "Remove folder" reported
+     * that Avex was no longer connected to the tree while it kept read and write access to it
+     * indefinitely, surviving reboots. The preference is cleared first — that is what the user
+     * asked for and it must not depend on the release succeeding.
+     */
+    suspend fun forgetBackupFolder() = withContext(Dispatchers.IO) {
+        val previous = settingsRepo.backupFolderUri.first()
+        settingsRepo.setBackupFolderUri(null)
+        previous?.let { releasePersistedTree(it) }
+    }
+
+    /**
+     * Release the persisted grant on [uriString], with exactly the flags this app is actually
+     * holding on it — releasing flags that were never taken throws, and a tree taken read-only by
+     * an older build would otherwise fail the whole release. Unparseable, already-released and
+     * never-held uris are all no-ops.
+     */
+    private suspend fun releasePersistedTree(uriString: String) {
+        // The import folder is a separate setting that can name the SAME tree (Downloads, most
+        // obviously) under its own read grant. Releasing here would take that folder's scan with it,
+        // so a tree the importer is still pointing at is left alone; it has its own owner.
+        if (settingsRepo.importFolderUri.first() == uriString) return
+        runCatching {
+            val uri = Uri.parse(uriString)
+            val held = context.contentResolver.persistedUriPermissions
+                .firstOrNull { it.uri == uri } ?: return
+            var flags = 0
+            if (held.isReadPermission) flags = flags or Intent.FLAG_GRANT_READ_URI_PERMISSION
+            if (held.isWritePermission) flags = flags or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            if (flags != 0) context.contentResolver.releasePersistableUriPermission(uri, flags)
+        }
+    }
 
     /** When the auto-backup slot was last written, or null if none exists yet (#86 restore affordance). */
     fun autoBackupSavedAtMs(): Long? =

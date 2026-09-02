@@ -25,6 +25,7 @@ import androidx.wear.compose.material.Text
 import com.forge.shared.protocol.TimerCommand
 import com.forge.shared.protocol.TimerStateDto
 import com.forge.wear.data.WearDataRepository
+import com.forge.wear.data.WristEdit
 import kotlinx.coroutines.delay
 
 /**
@@ -43,6 +44,7 @@ fun TimerView(
 ) {
     val colors = LocalWearColors.current
     val lastLog by repo.lastLog.collectAsStateWithLifecycle()
+    val failedSend by repo.failedSend.collectAsStateWithLifecycle()
     val session by repo.session.collectAsStateWithLifecycle()
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     // When THIS watch first saw this timer instance. endAtMs is an absolute instant on the PHONE's
@@ -54,8 +56,14 @@ fun TimerView(
     // One undo per logged set: reset when a new set's ack arrives.
     var undoSent by remember(lastLog?.setId) { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        while (true) { nowMs = System.currentTimeMillis(); delay(200) }
+    // 1 Hz, in phase with the figure it draws (P-04). This polled every 200 ms — 18,000
+    // recompositions an hour — to render a number that moves once a second. Keyed on the payload so
+    // a +30, a pause or a fresh rest re-phases the tick against its new boundary.
+    LaunchedEffect(timer, receivedAtMs) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            delay(RestCountdown.msUntilNextTick(timer, nowMs, receivedAtMs))
+        }
     }
 
     // The arithmetic lives in [RestCountdown] — see its KDoc for the clock-skew rule. Kept out of
@@ -108,6 +116,15 @@ fun TimerView(
                             .padding(6.dp)
                     )
                 }
+            }
+            // An edit the transport never delivered, and the way back to it (M-10). It sits under
+            // the row it belongs to, because the row is what came back when the send failed.
+            failedSend?.let { failed ->
+                Spacer(Modifier.height(2.dp))
+                WristRetryRow(
+                    label = if (failed.kind == WristEdit.Kind.RPE) "rating not sent" else "undo not sent",
+                    onRetry = { repo.retryFailedSend() }
+                )
             }
         }
     }

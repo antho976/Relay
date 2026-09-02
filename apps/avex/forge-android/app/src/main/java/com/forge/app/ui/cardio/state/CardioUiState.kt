@@ -21,6 +21,16 @@ enum class CardioLens(val label: String) { WEEK("Week"), PROGRESS("Progress") }
  */
 data class CardioUiState(
     val isLoading: Boolean = true,
+    /**
+     * Local midnight of the day this state describes (0 before the first load), re-anchored on every
+     * day boundary and on any clock or timezone change (M-15).
+     *
+     * The screen derives "today", the week label and which cell is today from THIS rather than from
+     * its own `LocalDate.now()`: a composition that reads the clock directly has nothing to
+     * recompose it, so a phone left on the Cardio tab from Monday 23:59 into Tuesday kept styling
+     * Monday as today and kept Monday's dates over the week label.
+     */
+    val todayStartMs: Long = 0L,
     val weekMinutes: Int = 0,
     /** Distinct calendar days this ISO week with an active (non-rest) session — the hero headline. */
     val cardioDaysThisWeek: Int = 0,

@@ -133,6 +133,10 @@ internal fun CompareSheet(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var sharing by remember { mutableStateOf(false) }
+    // A render that produced nothing used to be swallowed by `uri?.let` — the icon simply came back
+    // and the user was left guessing (P-09). The sheet is a Dialog, so the root snackbar host would
+    // sit behind it; the line goes here, where the action was taken.
+    var shareFailed by remember { mutableStateOf(false) }
     val accentArgb = accent.toArgb()
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -177,11 +181,21 @@ internal fun CompareSheet(
                             )
                         }
                         sharing = false
+                        shareFailed = uri == null
                         uri?.let { BeforeAfterCardRenderer.share(context, it) }
                     }
                 }) {
                     Icon(Icons.Filled.Share, contentDescription = "Share", tint = if (sharing) muted else Color.White)
                 }
+            }
+
+            if (shareFailed) {
+                Text(
+                    "Couldn't build the card. Try again.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)
+                )
             }
 
             Box(Modifier.fillMaxWidth().weight(1f)) {

@@ -12,7 +12,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 
 @Composable
 fun ForgeTheme(
@@ -99,16 +98,18 @@ private fun pearlColorScheme(accent: Color, amoled: Boolean): ColorScheme {
     // The quiet rung under `outline` — M3 uses it for the rules inside its own components (the
     // date-picker header, menu separators). Data lines still come from EditorialHairline (§1).
     val outlineVar = if (amoled) Color(0xFF1E1E1E)   else Color(0xFF2A241F)
-    // Content ON an accent fill: dark for a light accent, else the near-white default — so a
-    // filled-primary control never renders same-on-same.
+    // Content ON an accent fill, MEASURED rather than guessed at (M-37).
     //
-    // The threshold is 0.18, not 0.55 (2026-08-16). The default Red sits at luminance 0.198 and Ember
-    // at 0.271: near-white on either FAILS AA, while dark-on-them measures 4.53:1 and 5.84:1 and
-    // passes. 0.55 only ever caught a near-white accent; anything genuinely mid-tone — which the warm
-    // presets are — needs dark content. The dim presets (Navy 0.077, Gold 0.135) keep near-white.
-    // Note how close the default now sits to the threshold: an accent darker than 0.18 flips back to
-    // near-white content, so do not nudge the default down without re-checking both sides.
-    val onAccent   = if (accent.luminance() > 0.18f) bg else PearlOnBg
+    // This was a luminance threshold: dark content above 0.18, near-white below. A threshold picks
+    // a side without knowing whether the side it picked actually reads, and the theme's pair is a
+    // warm near-black and a warm near-white rather than the extremes — so a band of accents the
+    // custom picker accepts (around 0.15 to 0.20) failed AA against BOTH. `#777777` measures about
+    // 4.27:1 on the dark one and 3.9:1 on the light one, under the label of a filled capsule.
+    //
+    // [accentForeground] takes the better of the pair by contrast and only reaches past the palette
+    // where neither clears AA. Every preset, and the default Red at 0.198, keeps exactly the
+    // content colour the threshold gave it.
+    val onAccent   = accentForeground(accent, dark = bg, light = PearlOnBg)
     return darkColorScheme(
         background         = bg,
         onBackground       = PearlOnBg,

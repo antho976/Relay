@@ -102,3 +102,32 @@ fun TimerRing(progress: Float, modifier: Modifier = Modifier) {
         strokeWidth = 4.dp
     )
 }
+
+/**
+ * The one row a failed wrist edit gets (M-10): what did not leave the watch, and one tap to send it
+ * again.
+ *
+ * Rating a set and undoing one used to hide their own affordance before the transport was asked and
+ * then ignore its answer, so an edit made out of Bluetooth range disappeared without ever being
+ * queued. The repository puts the affordance back and remembers the attempt; this is where the user
+ * is told, in the same quiet register as the row it sits under. The retry replays the original
+ * command id, so a redelivery that races a command which did land is dropped by the phone's deduper
+ * rather than applied twice.
+ */
+@Composable
+fun WristRetryRow(
+    label: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalWearColors.current
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = WearType.labelSmall, color = colors.muted)
+        Text(
+            " · retry",
+            style = WearType.labelSmall,
+            color = colors.accent,
+            modifier = Modifier.clickable(onClick = onRetry).padding(6.dp)
+        )
+    }
+}

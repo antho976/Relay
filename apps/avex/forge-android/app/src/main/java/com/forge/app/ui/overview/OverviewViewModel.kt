@@ -113,6 +113,14 @@ class OverviewViewModel @Inject constructor(
         return buckets.toList()
     }
 
+    /**
+     * NOT SUBSCRIBED (P-15). `observeAllFinishedSessions()` is an unbounded query and
+     * [weeklyVolumeSeries] is an O(N) pass over its whole result, re-run on every session-table
+     * invalidation — to fill two fields the shipped Home never reads (their own KDoc says so). Kept
+     * with the rest of the surface experiment it belongs to, so restoring that branch is still one
+     * combine line.
+     */
+    @Suppress("unused")
     private val weeklyVolumeFlow = statsRepo.observeAllFinishedSessions()
         .map { weeklyVolumeSeries(it) }
         .flowOn(Dispatchers.Default)
@@ -200,8 +208,13 @@ class OverviewViewModel @Inject constructor(
             extendedGoalRepo.observeAll(),
             sessionDao.observeFinishedCount(),
             cardioRepo.observeMinutesSince(0L),
-            bodyweightRepo.observeRecent(1)
-        ) { _, _, _, _, _ ->
+            bodyweightRepo.observeRecent(1),
+            // The calendar is an input too (M-32). A weekly goal's window is derived at read time,
+            // so its progress only moved when a table did: leave Home open from Sunday into Monday
+            // and a completed weekly goal kept reading 4 / 4 in a week where nothing had happened
+            // yet. Monthly rollover and a timezone change behaved the same way.
+            timeSignals.dayStarts()
+        ) { _, _, _, _, _, _ ->
             // Fall back on real failures only — a swallowed CancellationException would let a
             // cancelled recompute emit empty lists and blank the Home goal lines.
             val lift = runCatching { goalRepo.goalsWithProgress() }
@@ -282,14 +295,10 @@ class OverviewViewModel @Inject constructor(
         s.copy(recentItems = withTopLifts(s.recentItems, weightUnit))
     }.combine(goalsFlow) { s, gc ->
         s.copy(goals = gc.first, customGoals = gc.second)
-    }.combine(weeklyVolumeFlow) { s, series ->
-        // design/surface-experiment: the hero card's figure is THIS week's volume, so its delta
-        // denominator is the previous bucket of the same series — not a separately-queried number
-        // that could disagree with the curve drawn under it.
-        s.copy(
-            weeklyVolumeSeriesLb = series,
-            volumeLastWeekLb = series.getOrElse(series.lastIndex - 1) { 0.0 }
-        )
+    }.combine(timeSignals.dayStarts()) { s, todayStartMs ->
+        // The day the state describes, so the goal captions below can be memoised against it
+        // rather than against a goal object that may not change across a period boundary (M-32).
+        s.copy(todayStartMs = todayStartMs)
     }.flowOn(Dispatchers.Default).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
@@ -297,7 +306,13 @@ class OverviewViewModel @Inject constructor(
     )
 
     init {
-        viewModelScope.launch { reloadCoach() }
+        // reloadCoach() is deliberately NOT run here (P-14). It fills three state flows — coach,
+        // coachLearning, coachFatigue — that no composable on the shipped Home reads, and it is not
+        // a cheap read: the adaptation snapshot behind it walks every finished session, its logged
+        // exercises and its sets, then the sessions again through life events, plus check-ins,
+        // cardio, restrictions, moods, bodyweight, swaps, preferences, cooldowns and a Health
+        // Connect recovery read — on every Home open. The fields, the mapping and [refreshCoach]
+        // stay, so a surface that brings the cards back asks for them.
         refreshDirective()
         refreshMovement()
         refreshIdentity()   // design/surface-experiment — the header row's greeting + avatar
@@ -374,6 +389,12 @@ class OverviewViewModel @Inject constructor(
             }
         } else null
     }
+
+    /**
+     * Recompute the Home coach cards. Not called at init (see there); the entry point exists so the
+     * surface that renders [OverviewUiState.coach] again asks for them explicitly.
+     */
+    fun refreshCoach() = viewModelScope.launch { reloadCoach() }
 
     /**
      * One-tap apply. Only the deload suggestion has one today; the rest apply in-session.

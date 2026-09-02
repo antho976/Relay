@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import com.forge.app.core.time.Clock
 import com.forge.app.security.ProtectionSentinel
+import com.forge.app.domain.program.ProgramGenerationIntent
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -307,11 +308,42 @@ class SettingsRepository @Inject constructor(
     /** Adds or removes [key], preserving pin order. Capped so Home's three slots stay meaningful. */
     suspend fun toggleGoalPin(key: String, max: Int = 3) =
         context.forgePreferences.edit { prefs ->
-            val current = prefs[PreferenceKeys.PINNED_GOALS]
-                ?.split(",")?.filter { it.isNotBlank() }.orEmpty()
+            val current = readGoalPins(prefs)
             val next = if (key in current) current - key else (current + key).takeLast(max)
             prefs[PreferenceKeys.PINNED_GOALS] = next.joinToString(",")
         }
+
+    /**
+     * Drop [key] from the pin list, returning the position it held (or -1 when it was not pinned).
+     *
+     * Called when the goal behind a pin is deleted (L-06). A key whose goal is gone is invisible on
+     * Home, which reads harmless — until the next pin, whose cap counted the orphan as one of the
+     * three and evicted a LIVE pin to make room, leaving Home showing two goals in three slots.
+     * The index comes back so an Undo can put the pin back where it was rather than at the end.
+     */
+    suspend fun removeGoalPin(key: String): Int {
+        var index = -1
+        context.forgePreferences.edit { prefs ->
+            val current = readGoalPins(prefs)
+            index = current.indexOf(key)
+            if (index >= 0) prefs[PreferenceKeys.PINNED_GOALS] = (current - key).joinToString(",")
+        }
+        return index
+    }
+
+    /** Put [key] back at [index] (clamped), for the Undo that restores the goal it belonged to. */
+    suspend fun restoreGoalPin(key: String, index: Int, max: Int = 3) =
+        context.forgePreferences.edit { prefs ->
+            val current = readGoalPins(prefs)
+            if (key !in current) {
+                val at = index.coerceIn(0, current.size)
+                prefs[PreferenceKeys.PINNED_GOALS] =
+                    current.toMutableList().apply { add(at, key) }.takeLast(max).joinToString(",")
+            }
+        }
+
+    private fun readGoalPins(prefs: Preferences): List<String> =
+        prefs[PreferenceKeys.PINNED_GOALS]?.split(",")?.filter { it.isNotBlank() }.orEmpty()
 
     // ─── Custom warmup (#120) ────────────────────────────────────────────────
 
@@ -776,6 +808,20 @@ class SettingsRepository @Inject constructor(
     val deloadWeekStartMs: Flow<Long> = pref { it[PreferenceKeys.DELOAD_WEEK_START_MS] ?: 0L }
     suspend fun setDeloadWeekStartMs(ms: Long) =
         context.forgePreferences.edit { it[PreferenceKeys.DELOAD_WEEK_START_MS] = ms }
+
+    /**
+     * The regeneration currently in flight, or null (M-06). Written before the program transaction
+     * and cleared once the deload marker beside it has been brought into agreement, so a boot that
+     * finds one knows a regeneration was interrupted and can finish deciding what it meant.
+     */
+    val programGenerationIntent: Flow<ProgramGenerationIntent?> =
+        pref { ProgramGenerationIntent.fromJson(it[PreferenceKeys.PROGRAM_GENERATION_INTENT]) }
+
+    suspend fun setProgramGenerationIntent(intent: ProgramGenerationIntent) =
+        context.forgePreferences.edit { it[PreferenceKeys.PROGRAM_GENERATION_INTENT] = intent.toJson() }
+
+    suspend fun clearProgramGenerationIntent() =
+        context.forgePreferences.edit { it.remove(PreferenceKeys.PROGRAM_GENERATION_INTENT) }
 
     // ─── Day-aware scheduling (weekly plan vs legacy sequence) ────────────────
     /** "sequence" (default — day after the last finished) or "weekday" (fixed Mon..Sun plan). */

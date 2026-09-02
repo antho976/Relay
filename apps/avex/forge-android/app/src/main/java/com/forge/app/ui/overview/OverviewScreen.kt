@@ -230,8 +230,10 @@ private fun pinnedGoals(
     pinnedKeys: List<String>
 ): List<GoalLineData> {
     val settings = LocalForgeSettings.current
-    // One timestamp for the whole trim, so three captions on one page can't disagree about the day.
-    val now = remember(state.customGoals) { System.currentTimeMillis() }
+    // One timestamp for the whole trim, so three captions on one page can't disagree about the day
+    // — keyed on the day itself as well as on the goals, because a period boundary changes what the
+    // caption should say without necessarily changing any goal's numbers (M-32).
+    val now = remember(state.customGoals, state.todayStartMs) { System.currentTimeMillis() }
     val lift = state.goals.map { goal ->
         GoalLineData(
             key = liftPinKey(goal.exerciseId),

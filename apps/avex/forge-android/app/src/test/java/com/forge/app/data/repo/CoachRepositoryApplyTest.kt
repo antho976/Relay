@@ -72,6 +72,7 @@ class CoachRepositoryApplyTest {
         coachDao = db.coachDao(),
         settings = settings,
         adaptationRepositoryLazy = dagger.Lazy<AdaptationRepository> { adaptationRepository },
+        clock = clock,
         context = context
     )
     private val repo: CoachRepository

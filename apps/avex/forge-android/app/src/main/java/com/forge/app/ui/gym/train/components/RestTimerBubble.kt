@@ -126,15 +126,11 @@ fun RestTimerBubble(
     LaunchedEffect(Unit) {
         appear.animateTo(1f, animationSpec = ForgeMotion.bouncy<Float>())
     }
-    // When the rest is up, the bubble breathes so the "ready" state pulls the eye.
-    val pulse = rememberInfiniteTransition(label = "rest-finished-pulse")
-    val pulseScale by pulse.animateFloat(
-        initialValue = 1f,
-        targetValue = 1.07f,
-        animationSpec = infiniteRepeatable(tween(650), RepeatMode.Reverse),
-        label = "pulse-scale"
-    )
-    val scale = appear.value * if (state.isFinished) pulseScale else 1f
+    // When the rest is up, the bubble breathes so the "ready" state pulls the eye. Instantiated
+    // INSIDE the finished branch (P-12): the transition ran whatever the timer was doing, so a
+    // running — or indefinitely paused — bubble advanced an animation every frame whose value was
+    // multiplied by nothing. A paused bubble is now quiescent.
+    val scale = appear.value * if (state.isFinished) finishedPulseScale() else 1f
 
     Box(
         modifier = modifier
@@ -364,4 +360,18 @@ fun RestTimerControlsDialog(
 private fun formatTime(totalSeconds: Int): String {
     val s = totalSeconds.coerceAtLeast(0)
     return "%d:%02d".format(s / 60, s % 60)
+}
+
+/** The finished bubble's breathing scale. Its own composable so the transition exists only while
+ *  the rest is actually up (P-12). */
+@Composable
+private fun finishedPulseScale(): Float {
+    val pulse = rememberInfiniteTransition(label = "rest-finished-pulse")
+    val pulseScale by pulse.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.07f,
+        animationSpec = infiniteRepeatable(tween(650), RepeatMode.Reverse),
+        label = "pulse-scale"
+    )
+    return pulseScale
 }

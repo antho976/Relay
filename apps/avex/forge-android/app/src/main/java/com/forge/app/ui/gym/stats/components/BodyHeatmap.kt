@@ -40,6 +40,34 @@ private class CompiledPart(val group: MuscleGroup?, val paths: List<Path>)
 private class CompiledFigure(val parts: List<CompiledPart>, val outline: Path)
 
 /**
+ * One of the two anatomical figures, with its geometry compiled ONCE PER PROCESS (P-10).
+ *
+ * It used to be compiled inside each [FigureColumn]'s own `produceState`, which is
+ * composition-local however stable its keys are — so Stats, the session summary, the session
+ * detail and the enlarged map each reparsed both figures' 155 path strings and the two large
+ * outlines, allocated a fresh set of `Path`s, and drew blank until they landed. The comment above
+ * that call claimed process-wide reuse; this is what actually provides it.
+ *
+ * `by lazy` is synchronized, so two surfaces opening at once compile a side once between them, and
+ * the caller still forces it from a background dispatcher — the first compile must not land on the
+ * main thread, and every one after it is a field read.
+ */
+private enum class AnatomySide(
+    val title: String,
+    private val parts: List<AnatomyPart>,
+    private val outline: String,
+    /** The back view's coords live in x∈[724,1448]; the draw shifts them into view. */
+    val originX: Float
+) {
+    FRONT("FRONT", ANATOMY_FRONT, ANATOMY_FRONT_OUTLINE, 0f),
+    BACK("BACK", ANATOMY_BACK, ANATOMY_BACK_OUTLINE, ANATOMY_BACK_ORIGIN_X);
+
+    val compiled: CompiledFigure by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        CompiledFigure(parts.map { CompiledPart(it.group, it.paths.map(::parse)) }, parse(outline))
+    }
+}
+
+/**
  * Two anatomical figures (front + back), each muscle region tinted by its set count — faint =
  * neglected, bold accent = most-trained. The geometry is real anatomical vector art (adapted from
  * react-native-body-highlighter, MIT — see [AnatomyPart]); the whole body is drawn faint and the
@@ -60,8 +88,8 @@ internal fun BodyHeatmap(
     val maxSets = (setsByMuscle.values.maxOrNull() ?: 0).coerceAtLeast(1)
     Column(modifier) {
         Row(Modifier.fillMaxWidth()) {
-            FigureColumn("FRONT", ANATOMY_FRONT, ANATOMY_FRONT_OUTLINE, 0f, setsByMuscle, maxSets, accent, faint, silhouette, labelColor, figureHeight, showTitles, Modifier.weight(1f))
-            FigureColumn("BACK", ANATOMY_BACK, ANATOMY_BACK_OUTLINE, ANATOMY_BACK_ORIGIN_X, setsByMuscle, maxSets, accent, faint, silhouette, labelColor, figureHeight, showTitles, Modifier.weight(1f))
+            FigureColumn(AnatomySide.FRONT, setsByMuscle, maxSets, accent, faint, silhouette, labelColor, figureHeight, showTitles, Modifier.weight(1f))
+            FigureColumn(AnatomySide.BACK, setsByMuscle, maxSets, accent, faint, silhouette, labelColor, figureHeight, showTitles, Modifier.weight(1f))
         }
         if (showLegend) {
             Spacer(Modifier.height(10.dp))
@@ -72,10 +100,7 @@ internal fun BodyHeatmap(
 
 @Composable
 private fun FigureColumn(
-    title: String,
-    rawParts: List<AnatomyPart>,
-    outlineStr: String,
-    originX: Float,
+    side: AnatomySide,
     setsByMuscle: Map<MuscleGroup, Int>,
     maxSets: Int,
     accent: Color,
@@ -86,20 +111,19 @@ private fun FigureColumn(
     showTitle: Boolean,
     modifier: Modifier = Modifier
 ) {
-    // Compile the SVG path strings to Paths OFF the composition thread — the outline strings are large
-    // (~kilobytes) and parsing them on the main thread janked the first Stats/summary frame. Stable
-    // top-level inputs, so this runs once per figure per process; until it's ready the canvas draws
-    // nothing for a frame rather than blocking.
-    val compiled by produceState<CompiledFigure?>(initialValue = null, rawParts, outlineStr) {
-        value = withContext(Dispatchers.Default) {
-            CompiledFigure(rawParts.map { CompiledPart(it.group, it.paths.map(::parse)) }, parse(outlineStr))
-        }
+    // Force the compile OFF the composition thread — the outline strings are kilobytes and parsing
+    // them on the main thread janked the first Stats/summary frame. The geometry itself is cached
+    // on [AnatomySide], so this is a real compile only the first time either figure is shown in the
+    // process and a field read on every surface after that; until it lands the canvas draws nothing
+    // for a frame rather than blocking.
+    val compiled by produceState<CompiledFigure?>(initialValue = null, side) {
+        value = withContext(Dispatchers.Default) { side.compiled }
     }
     val edge = silhouette.copy(alpha = (silhouette.alpha * 2.5f).coerceAtMost(0.6f))
 
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         if (showTitle) {
-            Text(title, style = MaterialTheme.typography.labelSmall, color = labelColor)
+            Text(side.title, style = MaterialTheme.typography.labelSmall, color = labelColor)
             Spacer(Modifier.height(6.dp))
         }
         Canvas(Modifier.fillMaxWidth().height(figureHeight)) {
@@ -111,7 +135,7 @@ private fun FigureColumn(
             withTransform({
                 translate(dx, dy)
                 scale(s, s, pivot = Offset.Zero)
-                translate(-originX, 0f) // back-view coords live in x∈[724,1448]; shift into view
+                translate(-side.originX, 0f) // back-view coords live in x∈[724,1448]; shift into view
             }) {
                 // Solid faint body behind everything (guarantees no gaps between regions).
                 drawPath(figure.outline, silhouette)

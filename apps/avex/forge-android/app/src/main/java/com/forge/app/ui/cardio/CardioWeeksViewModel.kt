@@ -3,7 +3,6 @@ package com.forge.app.ui.cardio
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.forge.app.core.time.Clock
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CardioRepository
@@ -35,7 +34,15 @@ data class CardioWeeksState(
     val weekTargetMin: Int = 0,
     val useMiles: Boolean = false,
     /** Non-null → the week detail is open for the week starting at this Monday. */
-    val openWeekStartMs: Long? = null
+    val openWeekStartMs: Long? = null,
+    /**
+     * Local midnight of the day this state describes (0 before the first load), re-anchored on
+     * every day boundary and on any clock or timezone change (M-15). The screen and the week
+     * detail derive "which week is the current one" and "which cell is today" from it, rather than
+     * from their own `LocalDate.now()` — a composition that reads the clock has nothing to
+     * recompose it, so a chart left open across Sunday night judged the new week as a finished one.
+     */
+    val todayStartMs: Long = 0L
 )
 
 /**
@@ -51,7 +58,7 @@ class CardioWeeksViewModel @Inject constructor(
     cardioRepo: CardioRepository,
     settingsRepo: SettingsRepository,
     savedState: SavedStateHandle,
-    private val clock: Clock
+    timeSignals: com.forge.app.core.time.TimeSignals
 ) : ViewModel() {
 
     // Arriving with a week argument (the cardio hero's Mon–Sun strip) opens straight into that week;
@@ -72,16 +79,23 @@ class CardioWeeksViewModel @Inject constructor(
         cardioRepo.observeAll(),
         settingsRepo.cardioWeeklyTargetMin,
         settingsRepo.useMiles,
-        openWeek
-    ) { entries, target, useMiles, open ->
+        openWeek,
+        // The calendar is an INPUT here, not something read on the way past (M-15). The series ran
+        // to `clock.nowMs()` inside this combine, which only re-evaluates when one of the other
+        // four emits — so a chart left open across Sunday night kept the old week as the current
+        // one and never grew the new one. This emits at every local midnight and on any clock or
+        // timezone change, which is exactly when the answer changes.
+        timeSignals.dayStarts()
+    ) { entries, target, useMiles, open, todayStartMs ->
         val zone = ZoneId.systemDefault()
         CardioWeeksState(
             loaded = true,
-            weeks = cardioWeekSeries(entries, clock.nowMs(), weeksToCover(entries, zone), zone),
+            weeks = cardioWeekSeries(entries, todayStartMs, weeksToCover(entries, zone, todayStartMs), zone),
             entries = entries,
             weekTargetMin = target,
             useMiles = useMiles,
-            openWeekStartMs = open
+            openWeekStartMs = open,
+            todayStartMs = todayStartMs
         )
     }.flowOn(Dispatchers.Default)
         .stateIn(
@@ -98,11 +112,11 @@ class CardioWeeksViewModel @Inject constructor(
      * doesn't page forever. Always at least one full window, so the arrows have somewhere to go and
      * a fresh install still draws a chart at zero rather than a stub.
      */
-    private fun weeksToCover(entries: List<CardioEntry>, zone: ZoneId): Int {
+    private fun weeksToCover(entries: List<CardioEntry>, zone: ZoneId, nowMs: Long): Int {
         val oldest = entries.minByOrNull { it.date } ?: return WEEKS_PER_PAGE
         val oldestMonday = Instant.ofEpochMilli(oldest.date).atZone(zone).toLocalDate()
             .with(java.time.DayOfWeek.MONDAY)
-        val currentMonday = Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
+        val currentMonday = Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
             .with(java.time.DayOfWeek.MONDAY)
         val span = ChronoUnit.WEEKS.between(oldestMonday, currentMonday).toInt() + 1
         return span.coerceIn(WEEKS_PER_PAGE, MAX_WEEKS)

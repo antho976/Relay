@@ -64,8 +64,17 @@ import com.forge.app.ui.settings.SettingsScreen
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.trophies.TrophiesScreen
 
+/** How long a widget tap waits for the DB-backed program before it judges the day it names (M-30). */
+private const val WIDGET_PROGRAM_WAIT_MS = 4_000L
+
+/** Poll interval for that wait. `Program.isLoaded` is a volatile flag, not a flow. */
+private const val PROGRAM_POLL_MS = 50L
+
 @Composable
-fun ForgeNavHost(initialDayKey: String? = null, privacyPolicyRequest: Int = 0) {
+fun ForgeNavHost(
+    widgetOpen: com.forge.app.widget.WidgetOpenRequest? = null,
+    privacyPolicyRequest: Int = 0
+) {
     val nav = rememberNavController()
     // App-wide "push" navigation (Material shared-axis X): a short directional slide + fade
     // rather than a full-width slide-and-fade — the eye travels less so it reads snappier.
@@ -97,7 +106,7 @@ fun ForgeNavHost(initialDayKey: String? = null, privacyPolicyRequest: Int = 0) {
 
     // The page the hub STARTS on. Only ever read once, when the hub is first composed — which is why
     // it cannot carry a warm launch on its own; see the effect below.
-    val initialHubPage = if (initialDayKey?.startsWith("cardio") == true) BottomTab.CARDIO else BottomTab.HOME
+    val initialHubPage = if (widgetOpen?.dayKey?.startsWith("cardio") == true) BottomTab.CARDIO else BottomTab.HOME
 
     // Widget deep-link: a gym day opens on top of the hub (Back returns home). A cardio day instead
     // selects the hub's Cardio page.
@@ -109,14 +118,32 @@ fun ForgeNavHost(initialDayKey: String? = null, privacyPolicyRequest: Int = 0) {
     // already running the hub is long since composed, so tapping the cardio widget landed the user
     // on whatever page they were already looking at, with nothing to say the tap had been received.
     // Routed through pendingHubPage instead — the same mechanism every in-app "open cardio" uses.
-    LaunchedEffect(initialDayKey) {
-        val key = initialDayKey ?: return@LaunchedEffect
-        when {
-            key in com.forge.app.program.Program.dayKeys -> nav.navigate(Routes.gymDay(key))
-            key.startsWith("cardio") -> {
+    //
+    // Keyed on the REQUEST, not on the day it names (M-30): tapping the same widget twice assigned
+    // the same string, which is no state change, so the second tap ran nothing at all.
+    //
+    // And the program is awaited before the key is judged. `Program` reports the hard-coded seed
+    // split until the database program is loaded into it, so a cold tap for a custom builder day
+    // was validated against a split that had never contained it, rejected, and — the string being
+    // unchanged — never retried. The wait is bounded: a program that never loads leaves the user on
+    // Home rather than on a screen that is still deciding.
+    LaunchedEffect(widgetOpen) {
+        val request = widgetOpen ?: return@LaunchedEffect
+        kotlinx.coroutines.withTimeoutOrNull(WIDGET_PROGRAM_WAIT_MS) {
+            while (!com.forge.app.program.Program.isLoaded) kotlinx.coroutines.delay(PROGRAM_POLL_MS)
+        }
+        when (val destination = com.forge.app.widget.widgetDestinationFor(
+            request.dayKey,
+            com.forge.app.program.Program.dayKeys
+        )) {
+            is com.forge.app.widget.WidgetDestination.GymDay -> nav.navigate(Routes.gymDay(destination.dayKey))
+            com.forge.app.widget.WidgetDestination.CardioTab -> {
                 nav.popBackStack(Routes.OVERVIEW, false)
                 pendingHubPage = BottomTab.CARDIO
             }
+            // A day the loaded program no longer has: the request is spent either way, so the user
+            // stays where they are rather than being re-routed on every recomposition.
+            com.forge.app.widget.WidgetDestination.Unrecognised -> Unit
         }
     }
     LaunchedEffect(privacyPolicyRequest) {

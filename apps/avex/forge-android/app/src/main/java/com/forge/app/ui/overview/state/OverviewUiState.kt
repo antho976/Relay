@@ -68,6 +68,12 @@ data class FatigueHint(val score: Int, val threshold: Int, val topDriver: String
 @Immutable
 data class OverviewUiState(
     /**
+     * Local midnight of the day this state describes (0 before the first read), re-anchored at each
+     * boundary and on any clock or timezone change. Home's goal captions are date-grained readings,
+     * and memoising them on the goal alone let them outlive the day they were computed for (M-32).
+     */
+    val todayStartMs: Long = 0L,
+    /**
      * Today's one answer (Coach v3 B2). The hero renders THIS rather than a bare next-workout
      * name: the directive replaces that lead-in (plan M7) instead of stacking beside it.
      * Null only before the first read lands.

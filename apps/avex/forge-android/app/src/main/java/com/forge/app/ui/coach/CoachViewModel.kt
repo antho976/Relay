@@ -121,19 +121,29 @@ class CoachViewModel @Inject constructor(
             e1rmBySlot = snap?.let(::e1rmSeries).orEmpty(),
             health = snap?.let(::healthSeries) ?: HealthSeries(),
             daysToNextBrief = snap?.let { 7 - todayIndex(it) } ?: 0,
-            goals = runCatching { goalRepo.states() }.getOrDefault(emptyList()),
-            goalConflicts = runCatching { goalRepo.conflicts() }.getOrDefault(emptyList())
-                .also { if (it.isNotEmpty()) runCatching { academyRepo.onGoalConflict() } },
-            newLessons = runCatching { academyRepo.newCount() }.getOrDefault(0),
             block = runCatching { blockRepo.active() }.getOrNull(),
-            project = runCatching { projectRepo.active() }.getOrNull(),
-            projectProposal = runCatching { projectRepo.proposal() }.getOrNull(),
-            projectOptions = runCatching { projectRepo.proposals() }.getOrDefault(emptyList()),
             profile = snap?.let { com.forge.app.domain.coach.PersonalProfile.build(it) }
                 ?: com.forge.app.domain.coach.PersonalProfile.Profile.DEFAULTS
         )
         // Opening the page clears the Overview "new report" banner for this week.
         brief?.let { runCatching { coachRepo.markSeen(it.pass.weekId) } }
+        // Everything the page KEEPS but does not render (see [CoachActions]) lands after the first
+        // non-loading frame rather than holding it (P-06). `goalRepo.states()` and `conflicts()`
+        // each assemble a full adaptation snapshot — session, exercise and set history, related
+        // repositories, Health Connect recovery — and the project fields cost three more queries
+        // plus a scanner pass, for output no composable reads. The loads and their side effects
+        // stay exactly as they were; only their position relative to first paint moves.
+        loadUnrendered()
+    }
+
+    /**
+     * The goal and project state the page holds for whichever surface picks them up next. Loaded
+     * after the visible frame; the goal-conflict Academy unlock rides along with it, so nothing the
+     * engine relies on is lost by moving it.
+     */
+    private suspend fun loadUnrendered() {
+        refreshGoals()
+        refreshProjects()
     }
 
     // ─── Decision lifecycle ────────────────────────────────────────────────────
@@ -183,11 +193,17 @@ class CoachViewModel @Inject constructor(
         }
 
     private suspend fun refreshGoals() {
-        val s = _state.value
-        _state.value = s.copy(
-            goals = runCatching { goalRepo.states() }.getOrDefault(s.goals),
-            goalConflicts = runCatching { goalRepo.conflicts() }.getOrDefault(s.goalConflicts)
-        )
+        // Read first, then update atomically — the same rule [refreshProjects] states: assembling a
+        // copy() around suspending reads reverts whatever landed in between.
+        val goals = runCatching { goalRepo.states() }.getOrNull()
+        val conflicts = runCatching { goalRepo.conflicts() }.getOrNull()
+            ?.also { if (it.isNotEmpty()) runCatching { academyRepo.onGoalConflict() } }
+        _state.update {
+            it.copy(
+                goals = goals ?: it.goals,
+                goalConflicts = conflicts ?: it.goalConflicts
+            )
+        }
     }
 
     // ─── Training block (C) ────────────────────────────────────────────────────

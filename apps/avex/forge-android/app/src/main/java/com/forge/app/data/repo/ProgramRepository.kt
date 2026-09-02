@@ -23,6 +23,12 @@ import com.forge.app.program.ProblemArea
 import com.forge.app.program.Program
 import com.forge.app.program.ProgramGenerator
 import com.forge.app.widget.refreshForgeWidgets
+import com.forge.app.domain.program.resolvePendingGeneration
+import com.forge.app.domain.program.programSignature
+import com.forge.app.domain.program.ProgramSignatureSlot
+import com.forge.app.domain.program.ProgramSignatureDay
+import com.forge.app.domain.program.ProgramGenerationIntent
+import com.forge.app.domain.program.PendingGeneration
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -53,6 +59,7 @@ class ProgramRepository @Inject constructor(
     // Lazy on purpose: AdaptationRepository depends on this repository, so a direct injection would
     // be a construction cycle. The caps read happens long after both exist.
     private val adaptationRepositoryLazy: dagger.Lazy<AdaptationRepository>,
+    private val clock: com.forge.app.core.time.Clock,
     @ApplicationContext private val context: Context
 ) {
     private val _revision = MutableStateFlow(0L)
@@ -179,6 +186,15 @@ class ProgramRepository @Inject constructor(
                 slots += ProgramSlot("${gd.key}-$j", gd.key, j, ge.libId, ge.sets, bias.repBias[ge.libId] ?: ge.reps)
             }
         }
+        // Recorded BEFORE the transaction, carrying the signature of the program it replaces, so a
+        // process death anywhere in the next few lines leaves enough behind to finish the job
+        // (M-06). See [reconcilePendingGeneration].
+        val intent = ProgramGenerationIntent(
+            deload = params.deload,
+            atMs = clock.nowMs(),
+            beforeSignature = currentProgramSignature()
+        )
+        settings.setProgramGenerationIntent(intent)
         // One transaction so a crash can't leave the fresh program bound to stale overlays (seam
         // finding 13): replace the program; drop the now-invalid customization overlay AND the
         // coach-applied swaps (their learning is already folded into the baseline above — see
@@ -194,11 +210,48 @@ class ProgramRepository @Inject constructor(
             coachDao.foldAllAppliedDeltas()
             discardActiveSession()
         }
-        // A non-deload regenerate ends any active deload week (a deload generate keeps its own marker,
-        // set by AdaptationRepository.applyDeloadWeek before this call) — auto-coach seam #18.
-        if (!params.deload) settings.setDeloadWeekStartMs(0L)
+        // The deload marker is settled HERE, after the rows are committed, and by this method alone
+        // (M-06). It used to be written by AdaptationRepository BEFORE calling in, so a generate
+        // that threw left "you are in a deload week" standing over the untouched full-volume plan,
+        // permanently; and Settings' own "Generate deload week" set no marker at all, so its
+        // lighter plan was never recognised as one. The intent recorded above is what closes the
+        // remaining window: a crash between this transaction and this write is finished on the
+        // next boot by [reconcilePendingGeneration].
+        settings.setDeloadWeekStartMs(if (params.deload) intent.atMs else 0L)
+        settings.clearProgramGenerationIntent()
         loadIntoFacade(refreshWidget = true)
     }
+
+    /**
+     * Finish a regeneration that was interrupted between its program transaction and its deload
+     * marker (M-06). Called once at startup, after [ensureLoaded].
+     *
+     * The recorded intent carries the signature of the program it was replacing, so "did the
+     * transaction commit?" is answered by looking rather than guessing: an unchanged program means
+     * it did not, and the attempt is dropped with the marker untouched; a changed one means the
+     * rows landed and the marker is brought into agreement with them now.
+     */
+    suspend fun reconcilePendingGeneration() {
+        val intent = settings.programGenerationIntent.first() ?: return
+        when (val pending = resolvePendingGeneration(intent, currentProgramSignature())) {
+            is PendingGeneration.Apply -> settings.setDeloadWeekStartMs(pending.deloadStartMs)
+            PendingGeneration.Discard, PendingGeneration.None -> Unit
+        }
+        settings.clearProgramGenerationIntent()
+    }
+
+    /** [programSignature] of the program currently on disk. */
+    private suspend fun currentProgramSignature(): String = programSignature(
+        dao.days().map { day ->
+            ProgramSignatureDay(
+                id = day.id,
+                archetype = day.archetype,
+                slots = dao.slotsForDay(day.id).map {
+                    ProgramSignatureSlot(it.exerciseLibId, it.sets, it.reps)
+                }
+            )
+        }
+    )
 
     /** Re-roll the active program's exercise picks, keeping the same split structure (rotation). */
     suspend fun reroll(
