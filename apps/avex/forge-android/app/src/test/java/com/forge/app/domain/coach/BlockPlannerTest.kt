@@ -159,4 +159,33 @@ class BlockPlannerTest {
             BlockPlanner.advance(b, "2026-W02", now)
         )
     }
+
+    // ── Entering the deload week is the moment the deload is served ───────────
+
+    @Test
+    fun steppingIntoTheDeloadWeekEntersDeload() {
+        val peak = walk(start(weeks = 5), 3)
+        assertEquals(BlockPhase.PEAK.code, peak.phase)
+        val deload = BlockPlanner.advance(peak, "2026-W05", now)
+        assertEquals(BlockPhase.DELOAD.code, deload.phase)
+        assertTrue(BlockPlanner.entersDeload(peak, deload))
+    }
+
+    @Test
+    fun aBuildingWeekOrAWeekAlreadyDeloadingEntersNothing() {
+        val b = start(weeks = 5)
+        assertFalse(BlockPlanner.entersDeload(b, BlockPlanner.advance(b, "2026-W02", now)))
+        val deloading = walk(start(weeks = 5), 4)
+        assertFalse(BlockPlanner.entersDeload(deloading, deloading))
+    }
+
+    @Test
+    fun catchingUpPastTheDeloadWeekMissesIt() {
+        // A long absence steps through the deload week and ends the block in one advance: the week
+        // is gone, so generating a deload for it now would be a deload nobody scheduled.
+        val peak = walk(start(weeks = 5), 3)
+        val ended = BlockPlanner.advance(peak, "2026-W09", now)
+        assertFalse(ended.isActive)
+        assertFalse(BlockPlanner.entersDeload(peak, ended))
+    }
 }

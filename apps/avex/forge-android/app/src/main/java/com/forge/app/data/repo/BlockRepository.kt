@@ -1,13 +1,16 @@
 package com.forge.app.data.repo
 
 import com.forge.app.core.time.Clock
+import com.forge.app.core.time.deloadWeekEndMs
 import com.forge.app.data.db.dao.TrainingBlockDao
 import com.forge.app.data.db.entities.TrainingBlock
+import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.adapt.DeloadAdvisor
 import com.forge.app.domain.coach.BlockPhase
 import com.forge.app.domain.coach.BlockPlanner
 import com.forge.app.domain.coach.CoachGoalKind
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -24,6 +27,7 @@ class BlockRepository @Inject constructor(
     private val adaptationRepository: AdaptationRepository,
     private val coachGoalRepository: CoachGoalRepository,
     private val academyRepository: AcademyRepository,
+    private val settingsRepository: SettingsRepository,
     private val clock: Clock
 ) {
 
@@ -74,6 +78,12 @@ class BlockRepository @Inject constructor(
      *
      * The fatigue score is passed through so the tripwire can pull a deload FORWARD — the schedule
      * decides when rest is planned, the body can still decide it's needed sooner.
+     *
+     * Entering the deload week is not a label change: it serves the deload. The scheduled deload
+     * goes through the SAME regeneration the coach's reactive "deload" proposal and the Overview
+     * card use ([AdaptationRepository.applyDeloadWeek]) — one deload generator, three entry points.
+     * The weekly pass advances the block before it snapshots the program, so the pass that follows
+     * plans against the deloaded week rather than the one it replaced.
      */
     suspend fun advanceForWeek(weekId: String): TrainingBlock? {
         val block = active() ?: return null
@@ -89,8 +99,22 @@ class BlockRepository @Inject constructor(
                     runCatching { academyRepository.unlock("programming.deloads_are_earned") }
                 }
             }
+            if (BlockPlanner.entersDeload(block, advanced)) serveScheduledDeload()
         }
         return advanced
+    }
+
+    /**
+     * Generate the block's deload week through the existing deload path, unless a deload applied
+     * through either of the other entry points is still governing today — regenerating on top of
+     * a running deload would reroll the week and push its window out (the same guard the Coach's
+     * apply uses). Failure is swallowed on purpose: the block has already moved, and the weekly
+     * pass falls back to proposing the deload as a decision when none is running.
+     */
+    private suspend fun serveScheduledDeload() {
+        val startedAt = settingsRepository.deloadWeekStartMs.first()
+        if (startedAt > 0L && clock.nowMs() < deloadWeekEndMs(startedAt)) return
+        runCatching { adaptationRepository.applyDeloadWeek() }
     }
 
     /** End the block early — the user's veto, always available. */

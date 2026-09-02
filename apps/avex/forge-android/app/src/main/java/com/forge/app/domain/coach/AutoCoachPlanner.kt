@@ -1,6 +1,7 @@
 package com.forge.app.domain.coach
 
 import com.forge.app.domain.adapt.isWorkingStrengthSet
+import com.forge.app.core.time.deloadWeekEndMs
 import com.forge.app.core.time.mondayStartMs
 import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
@@ -70,8 +71,12 @@ data class CoachPassInputs(
     val declinedStructural: Set<String> = emptySet(),
     /**
      * The live training block's phase (Coach v3 C), or null when the coach is running reactively.
-     * A deload week silences the plateau ladder entirely: the week is meant to ask for less, and a
-     * coach proposing resets during its own deload is arguing with itself.
+     *
+     * The phase is policy, not copy. Its [BlockPhase.volumeDelta] decides whether this pass may add
+     * a set (Accumulate), must hold (Intensify) or trims one (Peak); Peak also keeps the structure
+     * still so the test week measures what was built; and the Deload week makes no change at all
+     * beyond serving the deload itself — the plateau ladder is silenced, since a coach proposing
+     * resets during its own deload is arguing with itself.
      */
     val blockPhase: BlockPhase? = null,
     /**
@@ -134,6 +139,12 @@ object AutoCoachPlanner {
                 "changes resume once there's fresh data."
         )
 
+        // Coach v3 C: the block's scheduled deload week. Nothing structural, no volume either way —
+        // the deload regeneration IS the week's prescription. It is normally already running by the
+        // time this pass reads the snapshot (BlockRepository serves it as the block advances); if
+        // it isn't, the pass proposes the same deload rather than letting the week go by unserved.
+        if (inputs.blockPhase == BlockPhase.DELOAD) return blockDeloadPass(s)
+
         // A deload call supersedes everything else (mirrors the arbiter's suppression rule):
         // restructuring a plan the same week you're told to recover is noise. Pending reverts
         // are deliberately not carried into a deload week — the regeneration resets the slate.
@@ -161,10 +172,13 @@ object AutoCoachPlanner {
         }.toSet()
 
         // Stall-triggered structural candidates, most decisive first. Coach-locked slots are
-        // skipped — a slot the user edited is theirs (hardening 9).
+        // skipped — a slot the user edited is theirs (hardening 9). The block's Peak week keeps
+        // them all back: it is the test week, and a swap or rep shift the week you measure a lift
+        // changes what the test measures. The stall is still counted (it gates volume below) and
+        // the ladder resumes with the next block.
         val slotByExercise = s.program.flatMap { day -> day.slots.map { day.dayKey to it } }
             .associateBy { it.second.exerciseId }
-        val structural = ladder.mapNotNull { rec ->
+        val structural = if (inputs.blockPhase == BlockPhase.PEAK) emptyList() else ladder.mapNotNull { rec ->
             when (rec) {
                 is Recommendation.VariationSwap -> {
                     if (rec.exerciseId in inputs.lockedExerciseIds) return@mapNotNull null
@@ -236,6 +250,11 @@ object AutoCoachPlanner {
      * only when fatigue is quiet, last week's sessions hit the target, the muscle isn't inside
      * a pending outcome window, and its net coach-driven drift stays within ±2 sets. −1 set
      * from an exercise the user keeps skipping (the plan is bigger than their week).
+     *
+     * With a block running, its phase's [BlockPhase.volumeDelta] is the bias: Accumulate (+1) may
+     * add, Intensify (0) holds — nothing is added however fresh the athlete is — and Peak (−1)
+     * trims one set from the biggest slot so the test week is arrived at fresh. The skip-driven
+     * −1 applies in every phase; it is a correction, not a progression.
      */
     private fun volumeDecisions(
         s: AdaptationSnapshot,
@@ -267,8 +286,29 @@ object AutoCoachPlanner {
             )
         }
 
+        // ── Phase −1: the block's Peak week trims a set ───────────────────────
+        // One cut is enough for the week: a skip-driven drop already served it.
+        val phaseDelta = inputs.blockPhase?.volumeDelta
+        if (phaseDelta != null && phaseDelta < 0 && skipped == null) {
+            slots.filter { (_, slot) ->
+                slot.exerciseId !in inputs.lockedExerciseIds && slot.targetSets > 2 &&
+                    slot.muscle !in inputs.volumeLockedMuscles &&
+                    (inputs.volumeNetByMuscle[slot.muscle] ?: 0) > -VOLUME_DRIFT_CAP
+            }.maxByOrNull { it.second.targetSets }?.let { (dayKey, slot) ->
+                out += ShadowDecision(
+                    "volume_down", slot.exerciseId, slot.name,
+                    "Drop a set from ${slot.name} (${slot.targetSets} → ${slot.targetSets - 1})",
+                    "Peak week of your block: one set less so you arrive at the test fresh. " +
+                        "The strength is built; this week measures it.",
+                    dayKey = dayKey, payload = (slot.targetSets - 1).toString()
+                )
+            }
+        }
+
         // ── +1: one muscle that's earning more ────────────────────────────────
-        val fresh = fatigue == null || fatigue.score < t.deloadScoreThreshold - 2
+        // A block phase that isn't accumulating never adds, whatever the freshness read says.
+        val phaseAllowsMore = phaseDelta == null || phaseDelta > 0
+        val fresh = phaseAllowsMore && (fatigue == null || fatigue.score < t.deloadScoreThreshold - 2)
         // The week that ENDED, not the one in progress.
         //
         // Moving this off a rolling 7 x 24 h window onto the ISO week fixed the boundary and left
@@ -349,6 +389,32 @@ object AutoCoachPlanner {
             if (first <= 0.0) null else series.last() / first
         }
         return if (ratios.isEmpty()) 1.0 else ratios.average()
+    }
+
+    /**
+     * The pass for the block's deload week. A deload applied through any entry point and still
+     * governing today (the same window [com.forge.app.core.time.deloadWeekEndMs] gives the Coach's
+     * apply guard) means the week is served: hold, and say why nothing moves. Otherwise the pass
+     * proposes the deload itself — the one decision type whose apply is the deload regeneration —
+     * so a scheduled deload can't be lost to a failed generate.
+     */
+    private fun blockDeloadPass(s: AdaptationSnapshot): CoachPassResult {
+        val running = s.prefs.lastDeloadAppliedMs?.let { s.nowMs < deloadWeekEndMs(it, s.zoneId) } ?: false
+        if (running) return hold(
+            "Deload week of your block. Loads and volume are already down, so run it as written, " +
+                "sleep, and the next block starts from a fresh baseline."
+        )
+        return CoachPassResult(
+            CoachPassStatus.SHADOW, null,
+            listOf(
+                ShadowDecision(
+                    type = "deload", targetKey = "week", targetName = "Whole week",
+                    summary = "Run a deload week: lighter volume across the board",
+                    reason = "Scheduled deload: the block's build weeks are done, and this is the " +
+                        "week that turns them into adaptation."
+                )
+            )
+        )
     }
 
     private fun hold(reason: String) = CoachPassResult(CoachPassStatus.HOLD, reason, emptyList())

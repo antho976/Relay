@@ -160,6 +160,18 @@ object BlockPlanner {
      * that comes out is what the strength goals are tracked against.
      */
     fun isTestWeek(block: TrainingBlock): Boolean = block.phase == BlockPhase.PEAK.code
+
+    /**
+     * True when [advance] has just carried [before] into its deload week and that week is the LIVE
+     * one — the moment the repository serves the scheduled deload through the same regeneration the
+     * reactive coach uses. A block that caught up past its deload (a long absence stepping through
+     * the deload week and ending) has missed the week, so nothing is generated for it; a block that
+     * was already deloading isn't entering anything.
+     */
+    fun entersDeload(before: TrainingBlock, after: TrainingBlock): Boolean =
+        after.isActive &&
+            after.phase == BlockPhase.DELOAD.code &&
+            before.phase != BlockPhase.DELOAD.code
 }
 
 /** The four phases a block moves through, in order. */
@@ -179,6 +191,11 @@ enum class BlockPhase(val code: String, val displayName: String) {
     /**
      * How aggressively progression should behave in this phase, as a multiplier on the coach's
      * usual ambition. Deload holds everything back; peak pushes.
+     *
+     * Not yet threaded into the per-set load suggestion: the phase currently shapes the week
+     * through [volumeDelta] (the weekly pass) and the served deload week (BlockRepository), which
+     * is where the audited "phases changed nothing" gap was closed. Scaling the in-session load
+     * target by this value is the remaining step and is tracked in docs/AUDIT_DEFERRED.md.
      */
     val progressionScale: Double
         get() = when (this) {
@@ -188,7 +205,12 @@ enum class BlockPhase(val code: String, val displayName: String) {
             DELOAD -> 0.85
         }
 
-    /** Weekly set delta this phase asks of the volume model. */
+    /**
+     * Weekly set delta this phase asks of the volume model. The weekly pass ([AutoCoachPlanner])
+     * reads its sign: positive lets the pass add a set, zero holds volume where it is, negative
+     * trims a set. The deload's cut is served by the deload regeneration itself, so the planner
+     * never has to express −2 as decisions.
+     */
     val volumeDelta: Int
         get() = when (this) {
             ACCUMULATE -> 1
