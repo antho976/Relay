@@ -219,9 +219,17 @@ jobs:
         #    MEASUREMENT, never a gate — no threshold is enforced, because a coverage number that
         #    fails a build teaches people to write tests that touch lines rather than tests that
         #    check behaviour.
-        run: >
-          ./forge-android/gradlew -p forge-android --continue
-          testDebugUnitTest :shared:test :app:verifyRoborazziDebug :app:coverageReport
+        #
+        # Tee'd to a file (with pipefail, so the pipe cannot swallow Gradle's exit code) so the
+        # "What failed" step below can read it. A COMPILE error produces no test XML at all, so
+        # without the log there is nothing for a reader to go on but a 900-line raw job log whose
+        # last 250 lines are cache bookkeeping.
+        shell: bash
+        run: |
+          set -o pipefail
+          ./forge-android/gradlew -p forge-android --continue \
+            testDebugUnitTest :shared:test :app:verifyRoborazziDebug :app:coverageReport \
+            2>&1 | tee "$RUNNER_TEMP/verify.log"
 
       - name: Test summary
         # A CI failure should be readable from the run page. Without this, the only record of WHICH
@@ -288,6 +296,25 @@ jobs:
           # the output path moved and the artifact quietly stopped being published.
           if-no-files-found: error
           retention-days: 14
+
+      - name: What failed
+        # The last thing this job prints, deliberately: everything after it is upload and cache
+        # bookkeeping, so the tail of the log is the answer rather than 250 lines of cache keys.
+        #
+        # Compile errors first (a broken build has no test results to summarise), then the failing
+        # test names. Both are already on disk; this only makes them findable without downloading
+        # an artifact.
+        if: failure()
+        shell: bash
+        run: |
+          echo "::group::Compile errors"
+          grep -E "^e: |: error: |Unresolved reference|FAILURE: Build failed" "$RUNNER_TEMP/verify.log" \
+            | head -40 || echo "(none — see the test failures below)"
+          echo "::endgroup::"
+          echo "::group::Failing tests"
+          grep -E "FAILED$|^\s+java\.lang\.AssertionError|tests completed," "$RUNNER_TEMP/verify.log" \
+            | head -60 || echo "(none)"
+          echo "::endgroup::"
 
   instrumented:
     name: Instrumented (emulator)
