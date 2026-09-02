@@ -41,7 +41,16 @@ class DirectiveRepository @Inject constructor(
          * gates: the curriculum carries "what do I do?" until the advisors can, so the card
          * degrades from personalised to principled instead of going quiet.
          */
-        val coldStartLesson: com.forge.app.domain.academy.Lesson? = null
+        val coldStartLesson: com.forge.app.domain.academy.Lesson? = null,
+        /**
+         * The readiness this answer was computed with (P-02).
+         *
+         * Carried rather than left for the caller to ask for again: `readinessScale()` walks every
+         * finished session, its exercises and its sets, and the glance publisher was calling it
+         * beside `today()` — which had just done the same walk to reach the same number. One
+         * assembly, one answer, and the two cannot disagree.
+         */
+        val readiness: com.forge.app.domain.adapt.Recommendation.ReadinessScale? = null
     )
 
     /**
@@ -140,7 +149,7 @@ class DirectiveRepository @Inject constructor(
         ) {
             runCatching { academyRepository.coldStartLesson() }.getOrNull()
         } else null
-        return TodayAnswer(directive, brief, lesson)
+        return TodayAnswer(directive, brief, lesson, readiness)
     }
 
     private fun todayStart(nowMs: Long, zone: ZoneId): Long =

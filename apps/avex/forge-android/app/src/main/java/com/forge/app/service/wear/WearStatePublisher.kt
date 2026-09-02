@@ -3,7 +3,6 @@ package com.forge.app.service.wear
 import android.content.Context
 import com.forge.app.core.time.Clock
 import com.forge.app.data.prefs.SettingsRepository
-import com.forge.app.data.repo.AdaptationRepository
 import com.forge.app.data.repo.StatsRepository
 import com.forge.app.domain.timer.RestTimerState
 import com.forge.app.domain.units.WeightUnit
@@ -42,7 +41,6 @@ class WearStatePublisher @Inject constructor(
     private val mirror: WatchSessionMirror,
     private val timerHolder: SessionTimerHolder,
     private val settingsRepo: SettingsRepository,
-    private val adaptationRepo: AdaptationRepository,
     private val directiveRepo: com.forge.app.data.repo.DirectiveRepository,
     private val statsRepo: StatsRepository,
     private val connection: WearConnection,
@@ -62,13 +60,19 @@ class WearStatePublisher @Inject constructor(
 
     fun start(scope: CoroutineScope) {
         scope.launch {
+            var sawLiveSession = false
             mirror.sessionLive.distinctUntilChanged().collect { dto ->
                 if (dto == null) {
                     deleteItem(WearProtocol.PATH_SESSION_LIVE)
-                    // A session just ended (or none exists) — refresh the idle glance so the wrist's
-                    // week count includes the workout that just finished.
-                    publishGlanceNow()
+                    // Only a session that WAS live and is now gone is a session END (P-02). The
+                    // first emission on a phone with no session in progress is null too, and
+                    // treating that as an ending meant every launch built the glance twice: once
+                    // here and once from the startup publish below, each walking every finished
+                    // session, its exercises and its sets.
+                    if (sawLiveSession) publishGlanceNow()
+                    sawLiveSession = false
                 } else {
+                    sawLiveSession = true
                     putItem(WearProtocol.PATH_SESSION_LIVE, WearCodec.encode(dto))
                 }
             }
@@ -109,8 +113,14 @@ class WearStatePublisher @Inject constructor(
                 ConfigDto(accentHex = hex, accentEnabled = enabled, unit = unit.toProtocol())
             }.distinctUntilChanged().collect { putItem(WearProtocol.PATH_CONFIG, WearCodec.encode(it)) }
         }
-        // App open = a glance surface point.
-        scope.launch { publishGlanceNow() }
+        // App open is a glance surface point — and so is a watch ARRIVING (P-02). The one-shot gate
+        // inside publishGlanceNow closed the common no-watch case and opened a new one: a wear app
+        // installed or re-paired while this process is alive had its startup publish skipped, and
+        // nothing published the tile again until a session ended or the app restarted. This flow is
+        // seeded with the current answer, so it also serves as that startup publish.
+        scope.launch {
+            connection.pairedWearApp().collect { paired -> if (paired) publishGlanceNow() }
+        }
     }
 
     /**
@@ -123,17 +133,22 @@ class WearStatePublisher @Inject constructor(
      */
     suspend fun publishGlanceNow() {
         if (!connection.hasPairedWearApp()) return
-        val readiness = runCatching { adaptationRepo.readinessScale() }.getOrNull()
+        // The wrist shows the SAME answer the phone does (B2) — the tile consumes the directive
+        // verbatim rather than re-deriving "what now?" from next-up, which is how two surfaces
+        // start disagreeing. Null-safe: an unavailable directive falls back to next-planned-day.
+        //
+        // Its readiness comes with it (P-02). `readinessScale()` was called separately here, and it
+        // walks every finished session, its exercises and its sets — the same walk `today()` had
+        // just done to compute the number it was about to be asked for again. One assembly, and the
+        // headline and the percentage beside it cannot come from two different reads.
+        val answer = runCatching { directiveRepo.today() }.getOrNull()
+        val readiness = answer?.readiness
         val week = runCatching { statsRepo.observeWeeklyStats().first() }.getOrNull()
         val freestyle = settingsRepo.freestyleMode.first()
         val unit = settingsRepo.weightUnit.first()
         val nextDayTitle = week?.nextUpDayKey
             ?.takeIf { !freestyle && Program.days.isNotEmpty() }
             ?.let { Program.dayDisplayName(it) }
-        // The wrist shows the SAME answer the phone does (B2) — the tile consumes the directive
-        // verbatim rather than re-deriving "what now?" from next-up, which is how two surfaces
-        // start disagreeing. Null-safe: an unavailable directive falls back to next-planned-day.
-        val answer = runCatching { directiveRepo.today() }.getOrNull()
         val dto = GlanceTodayDto(
             readinessPercent = readiness?.percent,
             nextDayTitle = nextDayTitle,
