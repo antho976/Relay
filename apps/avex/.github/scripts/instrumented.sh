@@ -23,7 +23,46 @@ APP_ID=com.quietsoftware.avex
 LOGCAT=smoke-logcat.txt
 
 echo "::group::Room migration test"
-./forge-android/gradlew -p forge-android :app:connectedDebugAndroidTest
+# Guarded rather than bare so a failure can say WHAT failed. Under `set -e` a bare call aborts the
+# script here, and the only record of which test threw and why is the raw job log — where it sits
+# above ~180 lines of Gradle cache bookkeeping, or inside an artifact you have to download and
+# unzip. The Verify job already ends with a digest for exactly this reason; this is the same debt
+# in the slowest job in the pipeline, where it costs the most.
+if ! ./forge-android/gradlew -p forge-android :app:connectedDebugAndroidTest; then
+  echo "::endgroup::"
+  echo "::group::What failed"
+  # The connected-test XML is the authoritative record. Grouped by exception rather than listed per
+  # test: every migration case calls createDatabase, so one broken schema read fails all ~20 of them
+  # with the same throwable, and twenty copies of it hide the one line that matters.
+  python3 - <<'DIGEST' || echo "(no parseable test XML — see the Gradle output above)"
+import glob, collections, xml.etree.ElementTree as ET
+
+buckets = collections.defaultdict(list)
+for path in glob.glob("forge-android/app/build/outputs/androidTest-results/**/*.xml", recursive=True):
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError:
+        continue
+    for case in root.iter("testcase"):
+        for bad in list(case.findall("failure")) + list(case.findall("error")):
+            raw = bad.get("message") or bad.text or ""
+            lines = [ln.strip() for ln in raw.strip().splitlines() if ln.strip()]
+            head = lines[0][:300] if lines else "unknown failure"
+            buckets[head].append("%s.%s" % (case.get("classname", "?"), case.get("name", "?")))
+
+if not buckets:
+    print("No failing testcase found in the XML. The run may have died before any test reported.")
+for head, tests in sorted(buckets.items(), key=lambda kv: -len(kv[1])):
+    print("%d test(s): %s" % (len(tests), head))
+    for t in sorted(tests)[:5]:
+        print("    %s" % t)
+    if len(tests) > 5:
+        print("    ... and %d more" % (len(tests) - 5))
+    print()
+DIGEST
+  echo "::endgroup::"
+  exit 1
+fi
 echo "::endgroup::"
 
 echo "::group::Install the minified release APK"
