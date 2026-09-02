@@ -23,7 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,8 +55,11 @@ fun CustomActivityDialog(
     onDismiss: () -> Unit,
     onConfirm: (CustomCardioType) -> Unit,
 ) {
-    var name by remember { mutableStateOf(initial?.name ?: "") }
-    var glyphKey by remember { mutableStateOf(initial?.glyphKey ?: CardioGlyphs.DEFAULT_KEY) }
+    // Saveable, not remembered: this dialog is opened from the cardio log sheet, whose Activity is
+    // recreated on rotation, and a half-typed activity name coming back blank is the same lost
+    // draft as the sheet behind it (M-12). Both values are plain strings, so the bundle carries them.
+    var name by rememberSaveable(initial?.code) { mutableStateOf(initial?.name ?: "") }
+    var glyphKey by rememberSaveable(initial?.code) { mutableStateOf(initial?.glyphKey ?: CardioGlyphs.DEFAULT_KEY) }
 
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
