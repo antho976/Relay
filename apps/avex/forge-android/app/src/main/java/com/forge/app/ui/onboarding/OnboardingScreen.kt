@@ -26,7 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -41,6 +41,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.forge.app.domain.units.fromDisplayWeight
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.parseToLb
+import com.forge.app.domain.units.weightInputValue
 import com.forge.app.program.Equipment
 import com.forge.app.program.ProgramGenerator
 import com.forge.app.program.SplitTemplates
@@ -123,6 +124,25 @@ internal fun parseSaneBodyweightLb(input: String, useKg: Boolean): Double? =
     parseSaneBodyweightLb(input, if (useKg) WeightUnit.KG else WeightUnit.LB)
 
 /**
+ * Re-express a typed bodyweight when the unit chip changes, so the NUMBER keeps its meaning and only
+ * its unit moves: "170" under lb becomes "77.1" under kg, "80" under kg becomes "176.4" under lb.
+ * Before this the text stayed put and only the parser's unit changed, so a 170 lb lifter who tapped
+ * kg was logged at 170 kg (≈375 lb) — a factor of 2.2 in the first bodyweight row, feeding the
+ * trend, the strength standards and the coach. Blank stays blank, and text the old unit could not
+ * read stays exactly as typed: it was already flagged as an error under the old unit, and it keeps
+ * that flag under the new one rather than being silently dropped or guessed at. Pure + testable.
+ */
+internal fun convertBodyweightInput(input: String, from: WeightUnit, to: WeightUnit): String {
+    if (from == to || input.isBlank()) return input
+    val lb = parseToLb(input, from) ?: return input
+    return weightInputValue(lb, to)
+}
+
+/** Boolean-unit bridge for the onboarding toggle (true = kg, false = lb). */
+internal fun convertBodyweightInput(input: String, fromKg: Boolean, toKg: Boolean): String =
+    convertBodyweightInput(input, WeightUnit.ofKg(fromKg), WeightUnit.ofKg(toKg))
+
+/**
  * @param onFinished invoked with the chosen plan mode ([PLAN_GENERATED] / [PLAN_CUSTOM] /
  *   [PLAN_FREESTYLE]) so the host can route the first screen (e.g. custom → editor, freestyle → home).
  */
@@ -133,6 +153,11 @@ fun OnboardingScreen(
 ) {
     // Wait for the one-shot resume-draft read before composing — a fully killed app reopens setup
     // exactly where it left off. Until then only the theme gradient shows (a frame or two).
+    //
+    // After that first read the ViewModel keeps this current with every answer (see the SideEffect
+    // below), so the `remember` initialisers that follow — which re-run whenever the Activity is
+    // recreated under a retained ViewModel: rotation, multi-window resize — rehydrate every field,
+    // the step cursor and the preview seed from the answers the user last gave, not from defaults.
     val draftLoad by viewModel.draftLoad.collectAsState()
     val load = draftLoad
     if (load !is DraftLoad.Ready) return
@@ -184,14 +209,16 @@ fun OnboardingScreen(
     val isGenerated = planMode == PLAN_GENERATED
     val coachEnabled = coachChoice ?: isGenerated
 
-    // Persist a resume draft on every answer change (conflated in the ViewModel); completion
-    // removes it atomically, so a finished user never resumes into a stale setup.
+    // Hand every answer change to the ViewModel the moment it is composed, so its state is the
+    // truth a recreated screen rehydrates from; the ViewModel debounces the disk write behind it
+    // (an unchanged snapshot is a no-op there). Completion removes the draft atomically, so a
+    // finished user never resumes into a stale setup.
     val snapshot = OnboardingDraft(
         step, planMode, name, useKg, useMilesChoice, distanceTouched, goal, experience,
         bodyweightInput, sex, daysPerWeek, equipment, frozenIds, plateWeightLb,
         problemAreas, cadence, everyN, previewSeed, appLock, coachChoice
     )
-    LaunchedEffect(snapshot) { viewModel.saveDraft(snapshot) }
+    SideEffect { viewModel.saveDraft(snapshot) }
 
     // The split the day-count implies — known without any gear, which is what lets the ledger draw
     // its empty tracks a step before the exercises exist.
@@ -344,7 +371,14 @@ fun OnboardingScreen(
                         PAGE_WEEK -> StepWeek(archetypes = archetypes, plannedSets = plannedSets, days = previewDays.orEmpty())
                         else -> StepExtras(
                             generated = isGenerated,
-                            useKg = useKg, onWeightUnit = { useKg = it },
+                            // One conversion-aware transition: the typed bodyweight is re-expressed
+                            // in the new unit so it keeps meaning the same weight (H-10).
+                            useKg = useKg, onWeightUnit = { kg ->
+                                if (kg != useKg) {
+                                    bodyweightInput = convertBodyweightInput(bodyweightInput, fromKg = useKg, toKg = kg)
+                                    useKg = kg
+                                }
+                            },
                             useMiles = if (distanceTouched) useMilesChoice else !useKg,
                             onDistanceUnit = { useMilesChoice = it; distanceTouched = true },
                             name = name, onNameChange = { name = it },

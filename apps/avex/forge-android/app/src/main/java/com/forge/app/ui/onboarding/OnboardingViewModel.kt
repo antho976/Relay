@@ -11,11 +11,7 @@ import com.forge.app.program.GenerationParams
 import com.forge.app.program.ProblemArea
 import com.forge.app.program.ProgramGenerator
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -24,12 +20,6 @@ const val PLAN_GENERATED = "generated"
 const val PLAN_CUSTOM = "custom"
 const val PLAN_FREESTYLE = "freestyle"
 
-/** The saved resume draft, tri-state: don't compose the flow until the one-shot read lands. */
-internal sealed interface DraftLoad {
-    data object Loading : DraftLoad
-    data class Ready(val draft: OnboardingDraft?) : DraftLoad
-}
-
 @HiltViewModel
 class OnboardingViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
@@ -37,34 +27,21 @@ class OnboardingViewModel @Inject constructor(
     private val programRepository: ProgramRepository
 ) : ViewModel() {
 
-    private val _draftLoad = MutableStateFlow<DraftLoad>(DraftLoad.Loading)
-    internal val draftLoad: StateFlow<DraftLoad> = _draftLoad
+    // The draft's state of truth lives in the ViewModel, not on disk: a screen recreated by a
+    // configuration change rehydrates from [draftLoad] synchronously, while the DataStore write
+    // trails it by a debounce (see [OnboardingDraftKeeper] for the two rules that make that safe).
+    private val drafts = OnboardingDraftKeeper(
+        scope = viewModelScope,
+        load = { settingsRepo.onboardingDraft()?.let(OnboardingDraft::fromJson) },
+        write = { settingsRepo.saveOnboardingDraft(it.toJson()) }
+    )
 
-    private val pendingDraft = MutableStateFlow<OnboardingDraft?>(null)
+    /** [DraftLoad.Loading] until the one-shot disk read lands, then always the latest answers. */
+    internal val draftLoad: StateFlow<DraftLoad> get() = drafts.state
 
-    /** Flipped off the moment [complete] runs so a conflated save can't resurrect the draft the
-     *  atomic completion write just removed. */
-    @Volatile
-    private var draftWritesEnabled = true
-
-    init {
-        viewModelScope.launch {
-            _draftLoad.value = DraftLoad.Ready(settingsRepo.onboardingDraft()?.let(OnboardingDraft::fromJson))
-        }
-        // Conflated autosave: rapid changes (typing a name) collapse into one write ~250ms after
-        // the last keystroke — collectLatest cancels the stale snapshots.
-        viewModelScope.launch {
-            pendingDraft.filterNotNull().collectLatest { draft ->
-                delay(250)
-                if (draftWritesEnabled) settingsRepo.saveOnboardingDraft(draft.toJson())
-            }
-        }
-    }
-
-    /** Queue the current answers for persistence (see init) — cheap to call on every change. */
-    internal fun saveDraft(draft: OnboardingDraft) {
-        pendingDraft.value = draft
-    }
+    /** Record the current answers — cheap to call on every recomposition (an unchanged snapshot is
+     *  a no-op). The ViewModel state moves immediately; the disk write is debounced behind it. */
+    internal fun saveDraft(draft: OnboardingDraft) = drafts.update(draft)
 
     /** Pure, side-effect-free week for the preview step — the same [seed] is persisted on finish. */
     fun buildPreview(
@@ -112,7 +89,7 @@ class OnboardingViewModel @Inject constructor(
         appLock: Boolean = false
     ) {
         // Stop the resume-draft autosaver before the completion write removes the draft.
-        draftWritesEnabled = false
+        drafts.stopWrites()
         viewModelScope.launch {
             bodyweightLb?.let { bodyweightRepo.logWeightOnly(it) }
             settingsRepo.setPlateWeightLb(plateWeightLb)
