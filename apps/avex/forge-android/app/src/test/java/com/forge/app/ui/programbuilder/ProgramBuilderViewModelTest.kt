@@ -75,7 +75,7 @@ class ProgramBuilderViewModelTest {
         setExercise(dayUid, exUid, 5, "6-8")
         renameDay(dayUid, "Push A")
         openDay(dayUid)
-        setDayDialog(DayDialog.SetsReps(exUid))
+        updateDayDialog(DayDialog.SetsReps(exUid))
         return dayUid to exUid
     }
 
@@ -115,7 +115,7 @@ class ProgramBuilderViewModelTest {
         assertNull("no interaction yet, nothing to restore", savedDraft(handle))
         val dayUid = first.days.single().uid
         first.openDay(dayUid)
-        first.setDayDialog(DayDialog.Rename)
+        first.updateDayDialog(DayDialog.Rename)
 
         val second = ProgramBuilderViewModel(store, handle)
         second.loadIfNeeded(blank = false)
