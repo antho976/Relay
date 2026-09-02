@@ -214,7 +214,10 @@ class OverviewViewModel @Inject constructor(
             // and a completed weekly goal kept reading 4 / 4 in a week where nothing had happened
             // yet. Monthly rollover and a timezone change behaved the same way.
             timeSignals.dayStarts()
-        ) { _, _, _, _, _, _ ->
+            // Six flows selects combine's VARARG overload, whose transform takes a single
+            // Array<Any?> — not six parameters. None of the emitted values is read (each is only a
+            // "something moved, recompute" tick), so the array is discarded wholesale.
+        ) { _ ->
             // Fall back on real failures only — a swallowed CancellationException would let a
             // cancelled recompute emit empty lists and blank the Home goal lines.
             val lift = runCatching { goalRepo.goalsWithProgress() }
