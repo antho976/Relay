@@ -2,6 +2,7 @@ package com.forge.app.data.health
 
 import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.BodyFatRecord
@@ -235,6 +236,29 @@ class HealthConnectManager @Inject constructor(
      */
     suspend fun canReadHistory(): Boolean =
         grantedPermissions().contains(HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY)
+
+    /**
+     * Whether the installed provider implements extended history at all (H-05).
+     *
+     * A permission the provider does not support cannot be granted, and asking for it is not a
+     * no-op: it is a consent screen the user cannot say yes to. Avex asked unconditionally, so on
+     * such a provider Settings offered "Import older weight →" permanently — an action that could
+     * only ever come back having imported nothing, with the same "older weigh-ins need history
+     * access" line beneath it, forever.
+     *
+     * Unsupported and declined are therefore different states and the page renders them
+     * differently: one is a grant the user can still give, the other is a capability that is not
+     * there. An absent provider, or one that throws answering, reads as unsupported — the same
+     * conclusion the fail-soft rest of this file reaches.
+     */
+    suspend fun historySupported(): Boolean = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext false
+        hcCatching {
+            client.features.getFeatureStatus(
+                HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_HISTORY
+            ) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+        } ?: false
+    }
 
     /** A bodyweight reading mirrored out of Health Connect as plain Kotlin (lb + when it was taken). */
     data class HcWeight(val weightLb: Double, val timeMs: Long)
