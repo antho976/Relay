@@ -1,7 +1,10 @@
 package com.forge.app.domain.adapt
 
+import com.forge.app.data.db.entities.LoggedExercise
 import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.data.db.entities.Session
 import com.forge.app.program.ExerciseUnit
+import com.forge.app.program.Program
 import com.forge.app.program.MuscleGroup
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -85,6 +88,79 @@ class VolumeResponseTest {
         val bench = (0 until 12 step 2).map { bout(it, 300.0, 4) }
         val fly = (1 until 12 step 2).map { bout(it, 50.0, 4) }
         assertNull(analyse(mapOf("bench" to bench, "fly" to fly)))
+    }
+
+    // ── Slot-keyed history, joined to the assembler that produces it ──────────
+
+    /**
+     * The half the two suites proved separately and never together.
+     *
+     * [SnapshotAssembler] files history by the program SLOT — deliberately, so Coach can target a
+     * plan row whatever was performed in it — and this used to read that slot key as a lift. Swap a
+     * fly into a bench slot for one week and the "lift" collapses 83% and then recovers 500%,
+     * numbers with no physiology in them at all, and the muscle's volume verdict and the Stats
+     * insight beside it were computed from exactly those.
+     *
+     * So the fixture is a real swapped `LoggedExercise` row through the real assembler: a slot that
+     * holds a dead-flat 300 lb lift for ten weeks, except week 4, where the user swapped in a 50 lb
+     * fly. The true response is zero, because nothing moved.
+     */
+    @Test
+    fun aSwappedWeekIsNotReadAsThatSlotsLiftCollapsingAndRecovering() {
+        val seedDay = Program.seedDays.first()
+        val slot = seedDay.exercises.first()
+        val week = 7 * day
+
+        val sessions = ArrayList<Session>()
+        val les = ArrayList<LoggedExercise>()
+        val setRows = ArrayList<LoggedSet>()
+        for (w in 0 until 10) {
+            val id = (w + 1).toLong()
+            sessions += Session(id = id, dayKey = seedDay.key, startedAt = 30 * day + w * week,
+                finishedAt = 30 * day + w * week + 1)
+            val swapped = w == 4
+            les += LoggedExercise(
+                id = id, sessionId = id, orderIndex = 0,
+                exerciseId = if (swapped) "db-fly" else slot.id,
+                slotId = if (swapped) slot.id else null,
+                swappedName = if (swapped) "DB Fly" else null
+            )
+            // Volume alternates so both tiers fill; the swap week keeps its week's set count so the
+            // only thing that changes across it is WHICH lift was performed.
+            val setCount = if (w % 2 == 0) 8 else 4
+            repeat(setCount) { i ->
+                setRows += LoggedSet(
+                    id = id * 100 + i, loggedExerciseId = id, setIndex = i,
+                    weightText = "x", weightLb = if (swapped) 50.0 else 300.0,
+                    reps = 10, completedAt = 0L
+                )
+            }
+        }
+
+        val snap = SnapshotAssembler.assemble(
+            nowMs = 400 * day,
+            program = listOf(seedDay),
+            swapCandidateIds = { emptyList() },
+            sessions = sessions,
+            loggedExercises = les,
+            loggedSets = setRows,
+            prefs = PrefsSnap(),
+            zoneId = java.time.ZoneId.of("UTC")
+        )
+
+        // The bout is filed under the slot, as every engine consumer needs...
+        assertEquals(10, snap.exerciseHistory.getValue(slot.id).size)
+        // ...and still says which lift was actually performed in it.
+        assertEquals("db-fly", snap.exerciseHistory.getValue(slot.id)[4].performedExerciseId)
+
+        val r = VolumeResponse.analyse(snap, minWeeks = 8, minPerTier = 3)[slot.muscle]
+        assertNotNull("ten trained weeks in both tiers is enough to analyse", r)
+        assertEquals(
+            "nothing moved, so neither tier may show a response",
+            0.0, r!!.gapPct, 1e-9
+        )
+        assertEquals(0.0, r.highAvgPct, 1e-9)
+        assertEquals(0.0, r.lowAvgPct, 1e-9)
     }
 
     // ── A genuine within-lift change is still read ─────────────────────────────

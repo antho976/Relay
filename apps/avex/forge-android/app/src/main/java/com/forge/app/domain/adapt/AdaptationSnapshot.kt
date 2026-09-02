@@ -124,6 +124,20 @@ data class ExerciseBout(
     val swappedName: String?,
     val sets: List<LoggedSet>,
     /**
+     * The library id of the lift ACTUALLY performed, which is not always the slot this bout is
+     * filed under (H-06).
+     *
+     * History is keyed by the program SLOT so Coach can target a plan row whatever was done in it.
+     * That is right for targeting and wrong for comparison: a slot holds a 300 lb bench one week
+     * and a 50 lb fly swapped into it the next, and anything reading consecutive bouts as one lift's
+     * progress sees an 83% collapse followed by a 500% surge. [VolumeResponse] turned exactly that
+     * fiction into a muscle's volume verdict and the Stats insight beside it.
+     *
+     * Null for a bout built without one, which reads as "the slot's own lift" — true for every row
+     * that was never swapped, and the only answer available to a caller that never had the id.
+     */
+    val performedExerciseId: String? = null,
+    /**
      * The parent session's type key ([com.forge.app.domain.session.SessionType]), carried onto the
      * bout in A1 so advisors can exclude sessions that aren't ordinary training. Defaults to
      * "normal" — a bout with no known parent type reads as a normal training bout, which is what
