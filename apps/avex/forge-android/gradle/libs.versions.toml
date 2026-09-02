@@ -34,7 +34,17 @@ biometric = "1.1.0"
 coroutines = "1.9.0"
 
 # Serialization (W1 — the wear Data Layer protocol DTOs in :shared)
-kotlinx-serialization = "1.7.3"
+#
+# Floored at 1.9.0 by ROOM, not by the wear protocol. Room 2.8 parses its exported schema JSON with
+# kotlinx-serialization, and its `$$serializer` classes are compiled against 1.9+, where
+# `GeneratedSerializer.typeParametersSerializers()` has a DEFAULT body and so is not overridden. On
+# 1.7.3 that method is still `abstract`, so the migration test died at runtime with
+# `AbstractMethodError` the moment MigrationTestHelper read a schema — a failure only the emulator
+# job can see, because it is the only one that opens a database.
+#
+# 1.9.0 and not later: it wants Kotlin stdlib 2.2.0 and this project is on 2.2.10, while 1.11.0
+# wants 2.3.20 and would make this a toolchain upgrade instead of a compatibility fix.
+kotlinx-serialization = "1.9.0"
 
 # Wear OS (W1–W4: watch app, tiles, complications, live HR)
 wear-compose = "1.4.1"
