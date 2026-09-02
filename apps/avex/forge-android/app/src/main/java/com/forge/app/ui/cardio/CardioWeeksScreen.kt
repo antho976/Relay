@@ -68,7 +68,12 @@ fun CardioWeeksScreen(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
     val accent = MaterialTheme.colorScheme.primary
-    val zone = remember { ZoneId.systemDefault() }
+    // The zone comes WITH the state, not from an unkeyed `remember` (M-15). A remembered zone
+    // survives recomposition by definition, so after a flight the labels, the current-week test and
+    // the detail's day ranges interpreted a new-zone epoch with the old zone's offset — a
+    // day-boundary error that lands sessions in the wrong week, on a screen that is entirely about
+    // which week something happened in. `CardioScreen` already reads it this way.
+    val zone = state.zone
 
     // A tapped bar opens its own page — the same one back arrow, one level down (§4.6).
     val openWeek = state.openWeekStartMs
@@ -79,8 +84,8 @@ fun CardioWeeksScreen(
     if (openWeek != null) {
         CardioWeekDetail(
             weekStartMs = openWeek,
-            agg = remember(state.entries, openWeek) { cardioWeekAggregate(state.entries, openWeek, zone) },
-            weekEntries = remember(state.entries, openWeek) {
+            agg = remember(state.entries, openWeek, zone) { cardioWeekAggregate(state.entries, openWeek, zone) },
+            weekEntries = remember(state.entries, openWeek, zone) {
                 val end = Instant.ofEpochMilli(openWeek).atZone(zone).toLocalDate()
                     .plusWeeks(1).atStartOfDay(zone).toInstant().toEpochMilli()
                 state.entries.filter { it.date in openWeek until end }.sortedBy { it.date }
@@ -170,7 +175,7 @@ fun CardioWeeksScreen(
             item("nav") {
                 Spacer(Modifier.height(24.dp))
                 WeekRangeNav(
-                    label = rangeLabel(window, zone),
+                    label = rangeLabel(window, zone, today.year),
                     // Page indices grow into the past, so "older" is bounded by maxPagesBack.
                     canGoOlder = page < maxPagesBack,
                     canGoNewer = page > 0,
@@ -249,13 +254,18 @@ private fun WeekRangeNav(
     }
 }
 
-/** "18 Aug – 12 Oct" for the visible window; the year only when it is not this one. */
-private fun rangeLabel(window: List<CardioWeekPoint>, zone: ZoneId): String {
+/**
+ * "18 Aug – 12 Oct" for the visible window; the year only when it is not this one.
+ *
+ * [thisYear] is passed rather than read from the clock here (M-15), for the same reason the zone
+ * is: this runs inside a composition, and a composition that reads the clock has nothing to
+ * recompose it. Over New Year the label kept suppressing a year suffix it now needs.
+ */
+private fun rangeLabel(window: List<CardioWeekPoint>, zone: ZoneId, thisYear: Int): String {
     if (window.isEmpty()) return ""
     val fmt = DateTimeFormatter.ofPattern("d MMM", Locale.getDefault())
     val first = Instant.ofEpochMilli(window.first().weekStartMs).atZone(zone).toLocalDate()
     val last = Instant.ofEpochMilli(window.last().weekStartMs).atZone(zone).toLocalDate().plusDays(6)
-    val thisYear = LocalDate.now(zone).year
     val yearSuffix = if (last.year != thisYear) " ${last.year}" else ""
     return "${first.format(fmt)} – ${last.format(fmt)}$yearSuffix"
 }

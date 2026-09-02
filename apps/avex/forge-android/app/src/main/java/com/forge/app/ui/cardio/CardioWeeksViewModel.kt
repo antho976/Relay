@@ -42,7 +42,17 @@ data class CardioWeeksState(
      * from their own `LocalDate.now()` — a composition that reads the clock has nothing to
      * recompose it, so a chart left open across Sunday night judged the new week as a finished one.
      */
-    val todayStartMs: Long = 0L
+    val todayStartMs: Long = 0L,
+    /**
+     * The zone [todayStartMs] and every week boundary in [weeks] were computed in (M-15).
+     *
+     * Carried WITH the anchor rather than re-read where it is used. The screen held its own
+     * remembered system zone, which survives recomposition by definition, so after a
+     * flight the labels, the current-week test and the detail's day ranges all interpreted a
+     * new-zone epoch with the old zone's offset — a day-boundary error that lands sessions in the
+     * wrong week. One zone per emission means the anchor and the arithmetic done on it always agree.
+     */
+    val zone: ZoneId = ZoneId.systemDefault()
 )
 
 /**
@@ -95,7 +105,8 @@ class CardioWeeksViewModel @Inject constructor(
             weekTargetMin = target,
             useMiles = useMiles,
             openWeekStartMs = open,
-            todayStartMs = todayStartMs
+            todayStartMs = todayStartMs,
+            zone = zone
         )
     }.flowOn(Dispatchers.Default)
         .stateIn(
