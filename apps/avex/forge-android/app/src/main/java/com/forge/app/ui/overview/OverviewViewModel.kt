@@ -200,8 +200,13 @@ class OverviewViewModel @Inject constructor(
             extendedGoalRepo.observeAll(),
             sessionDao.observeFinishedCount(),
             cardioRepo.observeMinutesSince(0L),
-            bodyweightRepo.observeRecent(1)
-        ) { _, _, _, _, _ ->
+            bodyweightRepo.observeRecent(1),
+            // The calendar is an input too (M-32). A weekly goal's window is derived at read time,
+            // so its progress only moved when a table did: leave Home open from Sunday into Monday
+            // and a completed weekly goal kept reading 4 / 4 in a week where nothing had happened
+            // yet. Monthly rollover and a timezone change behaved the same way.
+            timeSignals.dayStarts()
+        ) { _, _, _, _, _, _ ->
             // Fall back on real failures only — a swallowed CancellationException would let a
             // cancelled recompute emit empty lists and blank the Home goal lines.
             val lift = runCatching { goalRepo.goalsWithProgress() }
@@ -282,6 +287,10 @@ class OverviewViewModel @Inject constructor(
         s.copy(recentItems = withTopLifts(s.recentItems, weightUnit))
     }.combine(goalsFlow) { s, gc ->
         s.copy(goals = gc.first, customGoals = gc.second)
+    }.combine(timeSignals.dayStarts()) { s, todayStartMs ->
+        // The day the state describes, so the goal captions below can be memoised against it
+        // rather than against a goal object that may not change across a period boundary (M-32).
+        s.copy(todayStartMs = todayStartMs)
     }.combine(weeklyVolumeFlow) { s, series ->
         // design/surface-experiment: the hero card's figure is THIS week's volume, so its delta
         // denominator is the previous bucket of the same series — not a separately-queried number

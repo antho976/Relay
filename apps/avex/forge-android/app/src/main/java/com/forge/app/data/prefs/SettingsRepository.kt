@@ -308,11 +308,42 @@ class SettingsRepository @Inject constructor(
     /** Adds or removes [key], preserving pin order. Capped so Home's three slots stay meaningful. */
     suspend fun toggleGoalPin(key: String, max: Int = 3) =
         context.forgePreferences.edit { prefs ->
-            val current = prefs[PreferenceKeys.PINNED_GOALS]
-                ?.split(",")?.filter { it.isNotBlank() }.orEmpty()
+            val current = readGoalPins(prefs)
             val next = if (key in current) current - key else (current + key).takeLast(max)
             prefs[PreferenceKeys.PINNED_GOALS] = next.joinToString(",")
         }
+
+    /**
+     * Drop [key] from the pin list, returning the position it held (or -1 when it was not pinned).
+     *
+     * Called when the goal behind a pin is deleted (L-06). A key whose goal is gone is invisible on
+     * Home, which reads harmless — until the next pin, whose cap counted the orphan as one of the
+     * three and evicted a LIVE pin to make room, leaving Home showing two goals in three slots.
+     * The index comes back so an Undo can put the pin back where it was rather than at the end.
+     */
+    suspend fun removeGoalPin(key: String): Int {
+        var index = -1
+        context.forgePreferences.edit { prefs ->
+            val current = readGoalPins(prefs)
+            index = current.indexOf(key)
+            if (index >= 0) prefs[PreferenceKeys.PINNED_GOALS] = (current - key).joinToString(",")
+        }
+        return index
+    }
+
+    /** Put [key] back at [index] (clamped), for the Undo that restores the goal it belonged to. */
+    suspend fun restoreGoalPin(key: String, index: Int, max: Int = 3) =
+        context.forgePreferences.edit { prefs ->
+            val current = readGoalPins(prefs)
+            if (key !in current) {
+                val at = index.coerceIn(0, current.size)
+                prefs[PreferenceKeys.PINNED_GOALS] =
+                    current.toMutableList().apply { add(at, key) }.takeLast(max).joinToString(",")
+            }
+        }
+
+    private fun readGoalPins(prefs: Preferences): List<String> =
+        prefs[PreferenceKeys.PINNED_GOALS]?.split(",")?.filter { it.isNotBlank() }.orEmpty()
 
     // ─── Custom warmup (#120) ────────────────────────────────────────────────
 
