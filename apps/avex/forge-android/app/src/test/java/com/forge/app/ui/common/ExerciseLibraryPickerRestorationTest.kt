@@ -1,7 +1,6 @@
 package com.forge.app.ui.common
 
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
@@ -42,7 +41,12 @@ class ExerciseLibraryPickerRestorationTest {
     private val query = "press"
     private val matches = filterLibrary(query, exclude = emptySet())
 
-    private fun row(name: String) = compose.onNode(hasClickAction() and hasAnyDescendant(hasText(name)))
+    /**
+     * The row, not the label inside it. Compose merges a clickable row's descendant semantics into
+     * the row itself, so on the merged tree the name IS one of the row node's texts — matching it
+     * as a descendant finds nothing there, only in the unmerged tree.
+     */
+    private fun row(name: String) = compose.onNode(hasClickAction() and hasText(name))
 
     @Test
     fun theTypedQueryAndTheTickedRowsSurviveRecreation() {
