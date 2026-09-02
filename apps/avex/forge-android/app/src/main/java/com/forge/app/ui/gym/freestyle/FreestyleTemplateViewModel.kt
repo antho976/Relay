@@ -110,13 +110,16 @@ class FreestyleTemplateViewModel @Inject constructor(
      */
     suspend fun loadTemplate(sessionId: Long): List<FreestyleTemplateExercise> {
         val exercises = loggedExerciseDao.forSession(sessionId).filter { !it.skipped }
+        // ONE query for the session's sets, grouped here (P-11). This used to be a query per
+        // exercise, so reusing a twelve-movement workout cost thirteen round trips to open a sheet.
+        val setsByExercise = loggedSetDao.allForSession(sessionId).groupBy { it.loggedExerciseId }
         val byLib = LinkedHashMap<String, MutableList<FreestyleTemplateSet>>()
         // A custom move stores its name on the row (swappedName), because there is no library entry
         // to look it up in. Carried through so the logger can rebuild it.
         val customNames = LinkedHashMap<String, String>()
         val unitCodes = LinkedHashMap<String, String>()
         exercises.forEach { le ->
-            val sets = loggedSetDao.forLoggedExercise(le.id)
+            val sets = setsByExercise[le.id].orEmpty()
                 .sortedBy { it.setIndex }
                 .map {
                     FreestyleTemplateSet(

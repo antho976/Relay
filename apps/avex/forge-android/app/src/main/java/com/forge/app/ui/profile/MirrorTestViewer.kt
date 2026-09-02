@@ -524,7 +524,12 @@ internal fun GalleryFullImage(
     contentScale: ContentScale = ContentScale.Fit
 ) {
     val bitmap by produceState<ImageBitmap?>(initialValue = null, file.path, reqPx) {
-        value = withContext(Dispatchers.IO) { OrientedBitmaps.decode(file, reqPx)?.asImageBitmap() }
+        // EXACT fit (P-09): `inSampleSize` only halves, so a source landing just under twice the
+        // request keeps close to four times the pixels — about 23 MB of ARGB at 1400 px rather than
+        // 5.9 MB, doubled again by the compare view holding two at once.
+        value = withContext(Dispatchers.IO) {
+            OrientedBitmaps.decode(file, reqPx, exactFit = true)?.asImageBitmap()
+        }
     }
     val bmp = bitmap
     if (bmp != null) {
