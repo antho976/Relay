@@ -1,6 +1,7 @@
 package com.forge.app.ui.gym.train
 
 import androidx.lifecycle.viewModelScope
+import com.forge.app.data.db.SessionSwapResult
 import com.forge.app.program.ExerciseDef
 import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.DislikeSwapPrompt
@@ -8,19 +9,52 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/**
+ * The one message for a swap that meets an already-logged set — whether the picker is refused up
+ * front or a set lands (say, from the wrist) while the sheet is open and the write is refused.
+ * Single literal on purpose: the design doctrine freezes this file's em-dash count.
+ */
+internal const val SWAP_AFTER_SETS_MESSAGE = "Can't swap after logging sets — delete this exercise's sets first."
+
+/**
+ * What the day screen does with a [SessionSwapResult] — pure, unit-tested in DaySessionSwapReactionTest.
+ *
+ * The sheet closes either way: on success it is done; on a refusal it is STALE, because the only way a
+ * refusal happens is that a set arrived under the row after the picker opened (H-11), and leaving the
+ * sheet up would invite a second identical attempt. "Make default" persists the customization only
+ * once the current session actually took the swap — persisting first and then failing the session
+ * write would leave every future session on a movement this one refused.
+ */
+internal data class SwapReaction(
+    val applied: Boolean,
+    val closeSheet: Boolean,
+    val message: String?,
+    val persistDefault: Boolean
+)
+
+internal fun swapReaction(result: SessionSwapResult, makeDefault: Boolean): SwapReaction {
+    val applied = result == SessionSwapResult.APPLIED
+    return SwapReaction(
+        applied = applied,
+        closeSheet = true,
+        message = SWAP_AFTER_SETS_MESSAGE.takeIf { result == SessionSwapResult.REFUSED_SETS_LOGGED },
+        persistDefault = makeDefault && applied
+    )
+}
+
 internal fun DayViewModel.handleSwapEvent(event: DayUiEvent) {
     when (event) {
         is DayUiEvent.OpenSwapPicker -> viewModelScope.launch {
             // Swapping is impossible once sets are logged: re-keying would mis-attribute the performed
             // sets, and a name-only relabel would lie about what they were (#11). Warn instead of opening.
             // Confirm against the DB, not just in-memory state (SM-5): a freshly-resumed VM or an in-flight
-            // refresh can show zero sets for a row that already has them, which would open the picker and
-            // silently downgrade the swap to a relabel.
+            // refresh can show zero sets for a row that already has them, which would open the picker for
+            // a swap the repository is then going to refuse.
             val ui = _state.value.exercises.firstOrNull { it.plan.id == event.exerciseId }
             val hasSets = ui?.loggedSets?.isNotEmpty() == true ||
                 ui?.loggedExerciseId?.let { workoutRepo.setsFor(it).isNotEmpty() } == true
             if (hasSets) {
-                _messages.trySend("Can't swap after logging sets — delete this exercise's sets first.")
+                _messages.trySend(SWAP_AFTER_SETS_MESSAGE)
             } else {
                 _state.update { it.copy(swapPickerForExerciseId = event.exerciseId) }
             }
@@ -52,24 +86,41 @@ private fun DayViewModel.applySessionSwap(exerciseId: String, swap: ExerciseDef)
     if (!swapsInFlight.add(exerciseId)) return
     viewModelScope.launch {
         try {
-            doSessionSwap(exerciseId, swap)
+            doSessionSwap(exerciseId, swap, makeDefault = false)
         } finally {
             swapsInFlight.remove(exerciseId)
         }
     }
 }
 
-/** The shared session-swap body — applied by both "Just today" and "Make default" (the latter after
- *  it has persisted the customization). [suspend] so the persistent path can await it before deciding
- *  whether to raise the dislike prompt. */
-private suspend fun DayViewModel.doSessionSwap(exerciseId: String, swap: ExerciseDef) {
-    val leId = ensureLoggedExercise(exerciseId) ?: return
+/**
+ * The shared session-swap body — applied by both "Just today" and "Make default". [suspend] so the
+ * persistent path can await it before deciding whether to raise the dislike prompt.
+ *
+ * Order matters (H-11): the current session's row is written FIRST, and the future default is persisted
+ * only when that write was applied. The repository refuses the whole swap once a set exists under the
+ * row — a set the wrist logged while this sheet sat open — and on a refusal nothing may change: not the
+ * row, not the customization, and not the sheet's claim that a swap is still possible.
+ *
+ * @return true when the swap was applied to this session.
+ */
+private suspend fun DayViewModel.doSessionSwap(exerciseId: String, swap: ExerciseDef, makeDefault: Boolean): Boolean {
+    val leId = ensureLoggedExercise(exerciseId) ?: return false
     // Update only the swap fields via copy — preserves supersetGroup, hitFullTarget, note,
     // difficulty, orderIndex, etc. (the old positional rebuild silently dropped them). swap.id
     // re-keys exercise_id so PRs/stats follow the swapped exercise (#11).
-    workoutRepo.setSessionSwap(leId, swap.name, swap.unit.code, swap.id)
-    _state.update { it.copy(swapPickerForExerciseId = null) }
+    val reaction = swapReaction(
+        workoutRepo.setSessionSwap(leId, swap.name, swap.unit.code, swap.id),
+        makeDefault = makeDefault
+    )
+    if (reaction.persistDefault) {
+        customizationRepo.setSwap(exerciseId, swap.name, swap.unit.code, swappedExerciseId = swap.id)
+    }
+    if (reaction.closeSheet) _state.update { it.copy(swapPickerForExerciseId = null) }
+    reaction.message?.let { _messages.trySend(it) }
+    // Refresh either way: on success the card re-keys; on a refusal it picks up the set that caused it.
     refreshExercises()
+    return reaction.applied
 }
 
 private fun DayViewModel.applyPersistentSwap(exerciseId: String, swap: ExerciseDef) {
@@ -86,9 +137,11 @@ private fun DayViewModel.applyPersistentSwap(exerciseId: String, swap: ExerciseD
             val originalId = ui?.effectiveExerciseId?.takeIf { it.isNotBlank() } ?: exerciseId
             val originalName = ui?.effectiveName ?: originalId
 
-            customizationRepo.setSwap(exerciseId, swap.name, swap.unit.code, swappedExerciseId = swap.id)
-            doSessionSwap(exerciseId, swap)
-            maybeShowDislikePrompt(originalId, originalName, swap.id)
+            // The customization is persisted INSIDE doSessionSwap, after the session write succeeds
+            // (H-11) — and a refused swap swapped nothing out, so there is nothing to dislike.
+            if (doSessionSwap(exerciseId, swap, makeDefault = true)) {
+                maybeShowDislikePrompt(originalId, originalName, swap.id)
+            }
         } finally {
             swapsInFlight.remove(exerciseId)
         }

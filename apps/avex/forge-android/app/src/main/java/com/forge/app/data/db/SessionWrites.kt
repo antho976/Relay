@@ -69,4 +69,61 @@ internal object SessionWrites {
         val next = (db.loggedSetDao().maxSetIndex(set.loggedExerciseId) ?: -1) + 1
         db.loggedSetDao().insert(set.copy(setIndex = next))
     }
+
+    /**
+     * Apply a session swap to a `logged_exercise` row, preserving every other column (superset
+     * group, note, rating, etc.). Re-keys `exercise_id` to [swapExerciseId] so PRs/stats attribute to
+     * the exercise actually performed (#11), stashing the original slot in `slot_id` so the day
+     * screen still maps the row to its plan slot.
+     *
+     * The count-then-write is one transaction, and it is all or nothing: once any set exists under
+     * the row, `exercise_id` records what was performed and must never change, and neither may the
+     * name or unit. A relabel without a re-key would name one movement while every stat stayed keyed
+     * to another, and later input would be read in the new unit under the old identity (H-11). The
+     * window is real — the wrist writes sets straight into Room while the phone's swap sheet is open
+     * — so the refusal is decided against the row's set count inside the same transaction that would
+     * have written the swap, and the caller is told so it can drop its stale sheet.
+     */
+    suspend fun applySessionSwap(
+        db: ForgeDatabase,
+        loggedExerciseId: Long,
+        swappedName: String?,
+        swappedUnit: String?,
+        swapExerciseId: String
+    ): SessionSwapResult = db.withTransaction {
+        val ex = db.loggedExerciseDao().get(loggedExerciseId)
+            ?: return@withTransaction SessionSwapResult.NOT_FOUND
+        if (db.loggedSetDao().countForLoggedExercise(loggedExerciseId) > 0) {
+            return@withTransaction SessionSwapResult.REFUSED_SETS_LOGGED
+        }
+        val slot = ex.effectiveSlotId
+        db.loggedExerciseDao().update(
+            ex.copy(
+                exerciseId = swapExerciseId,
+                // Keep the slot link only while this entry actually differs from its slot — swapping
+                // back to the original exercise clears it (slot == exercise again).
+                slotId = slot.takeIf { it != swapExerciseId },
+                swappedName = swappedName,
+                swappedUnit = swappedUnit
+            )
+        )
+        SessionSwapResult.APPLIED
+    }
+}
+
+/**
+ * Outcome of [SessionWrites.applySessionSwap]. Anything but [APPLIED] wrote nothing.
+ *
+ * Public, not internal, because it is the return type of the public
+ * [com.forge.app.data.repo.WorkoutRepository.setSessionSwap].
+ */
+enum class SessionSwapResult {
+    /** The row was re-keyed and relabelled. */
+    APPLIED,
+
+    /** A set already existed under the row (possibly one that landed while the sheet was open). */
+    REFUSED_SETS_LOGGED,
+
+    /** No such row — the session was discarded or the entry deleted underneath the caller. */
+    NOT_FOUND
 }

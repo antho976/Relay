@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import com.forge.app.core.time.Clock
 import com.forge.app.core.time.deloadWeekEndMs
 import com.forge.app.core.time.deloadWeekStartMs
+import com.forge.app.data.db.SessionSwapResult
 import com.forge.app.data.db.dao.BodyweightDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
@@ -751,35 +752,29 @@ class WorkoutRepository @Inject constructor(
      * Re-keys `exercise_id` to the swapped exercise so PRs/stats attribute to the real exercise (#11),
      * stashing the original slot in `slot_id` so the day screen still maps it to its plan slot.
      *
-     * Re-keying happens ONLY while the entry has no logged sets: once any set exists, `exercise_id`
+     * The swap happens ONLY while the entry has no logged sets: once any set exists, `exercise_id`
      * records what was actually performed and must never change — re-keying it would silently
      * re-attribute those sets to the swapped exercise (false PRs on it, lost history on the original).
-     * After sets exist a swap is a name/unit relabel only.
+     * It used to fall back to a name/unit relabel in that case, which was the other half of the same
+     * bug (H-11): the row then NAMED the new movement while every stat stayed keyed to the old one.
+     * Now nothing is written and the caller gets [SessionSwapResult.REFUSED_SETS_LOGGED].
+     *
+     * The set-count read and the write are one transaction (SM-2) — a set the wrist inserts between
+     * them would otherwise be re-keyed under the swapped exercise. Lives in [SessionWrites] so the DAO
+     * suites can drive the real transaction rather than a copy of it.
      */
-    suspend fun setSessionSwap(loggedExerciseId: Long, swappedName: String?, swappedUnit: String?, swapExerciseId: String) {
-        // Atomic check-then-write (SM-2): wrap the set-count read and the re-key in one transaction so a
-        // concurrent logSet can't insert a set between them — which would re-key a row that now has real
-        // sets and silently mis-attribute them to the swapped exercise.
-        database.withTransaction {
-            val ex = loggedExerciseDao.get(loggedExerciseId) ?: return@withTransaction
-            if (loggedSetDao.countForLoggedExercise(loggedExerciseId) > 0) {
-                // Sets exist — a swap is a name/unit relabel only; exercise_id must never change.
-                loggedExerciseDao.update(ex.copy(swappedName = swappedName, swappedUnit = swappedUnit))
-                return@withTransaction
-            }
-            val slot = ex.effectiveSlotId
-            loggedExerciseDao.update(
-                ex.copy(
-                    exerciseId = swapExerciseId,
-                    // Keep the slot link only while this entry actually differs from its slot — swapping
-                    // back to the original exercise clears it (slot == exercise again).
-                    slotId = slot.takeIf { it != swapExerciseId },
-                    swappedName = swappedName,
-                    swappedUnit = swappedUnit
-                )
-            )
-        }
-    }
+    suspend fun setSessionSwap(
+        loggedExerciseId: Long,
+        swappedName: String?,
+        swappedUnit: String?,
+        swapExerciseId: String
+    ): SessionSwapResult = com.forge.app.data.db.SessionWrites.applySessionSwap(
+        db = database,
+        loggedExerciseId = loggedExerciseId,
+        swappedName = swappedName,
+        swappedUnit = swappedUnit,
+        swapExerciseId = swapExerciseId
+    )
 
     /**
      * Revert a swapped entry back to its plan slot — but ONLY while it has no logged sets (#11). A swap
