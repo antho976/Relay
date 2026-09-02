@@ -581,9 +581,40 @@ class SettingsViewModel @Inject constructor(
         val file = backupRepo.exportWeeklyJson()
         _exportPath.value = file.absolutePath
     }
-    fun exportFullBackup() = viewModelScope.launch {
-        val file = backupRepo.exportFullDataJson()
-        _exportPath.value = file.absolutePath
+    /**
+     * How far the full JSON export has got, as `done / total` sessions — null when none is running
+     * (P-01). A whole training history is minutes of work on an old phone, and it used to report
+     * nothing at all until the file appeared.
+     */
+    private val _exportProgress = kotlinx.coroutines.flow.MutableStateFlow<Pair<Int, Int>?>(null)
+    val exportProgress: kotlinx.coroutines.flow.StateFlow<Pair<Int, Int>?> = _exportProgress.asStateFlow()
+
+    /**
+     * The running export, so the user can stop one (P-01). An ordinary cancellable job: the
+     * repository checks for cancellation between sessions and publishes by rename, so a cancelled
+     * export leaves the previous file rather than a truncated one.
+     */
+    private var exportJob: kotlinx.coroutines.Job? = null
+
+    fun exportFullBackup() {
+        exportJob?.cancel()
+        exportJob = viewModelScope.launch {
+            _exportProgress.value = 0 to 0
+            try {
+                val file = backupRepo.exportFullDataJson { done, total ->
+                    _exportProgress.value = done to total
+                }
+                _exportPath.value = file.absolutePath
+            } finally {
+                _exportProgress.value = null
+            }
+        }
+    }
+
+    /** Stop a running export. No-op when none is running. */
+    fun cancelExport() {
+        exportJob?.cancel()
+        exportJob = null
     }
     fun exportSessionsCsv() = viewModelScope.launch {
         val file = backupRepo.exportSessionsCsv()

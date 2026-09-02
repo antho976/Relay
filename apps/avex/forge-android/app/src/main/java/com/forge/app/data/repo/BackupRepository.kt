@@ -1,6 +1,7 @@
 package com.forge.app.data.repo
 
 import android.content.Context
+import android.util.JsonWriter
 import android.net.Uri
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.documentfile.provider.DocumentFile
@@ -27,6 +28,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
@@ -83,6 +86,14 @@ class BackupRepository @Inject constructor(
         if (value != null) put(key, value)
     }
 
+    /**
+     * How many ids go into one `WHERE id IN (…)` (P-01).
+     *
+     * SQLite caps bound variables per statement (999 on the versions Android ships); 900 leaves
+     * room for the rest of the statement and keeps the batching invisible to the caller.
+     */
+    private val SQLITE_BIND_CHUNK = 900
+
     // ── Active-time helpers (per-sitting timing) ────────────────────────────────
     /** Real active seconds: the stamped sum of sittings, falling back to wall-clock for old rows. */
     private fun activeSecondsOf(s: com.forge.app.data.db.entities.Session): Int =
@@ -92,9 +103,9 @@ class BackupRepository @Inject constructor(
     private fun activeMinutesOf(s: com.forge.app.data.db.entities.Session): Int = activeSecondsOf(s) / 60
 
     /** Per-sitting breakdown: [{startedAt, durationSec}] so the 13+40 split is preserved in exports. */
-    private suspend fun segmentsJson(sessionId: Long): JSONArray {
+    private fun segmentsJson(segments: List<com.forge.app.data.db.entities.SessionSegment>): JSONArray {
         val arr = JSONArray()
-        db.sessionSegmentDao().forSession(sessionId).forEach { seg ->
+        segments.forEach { seg ->
             arr.put(JSONObject().apply {
                 put("startedAt", seg.startedAt)
                 put("durationSec", seg.endedAt?.let { ((it - seg.startedAt) / 1000L).coerceAtLeast(0) } ?: 0)
@@ -115,6 +126,22 @@ class BackupRepository @Inject constructor(
         val sessions = sessionDao.finishedByFinishTimeInRange(weekStartMs, nowMs)
         val cardioEntries = cardioDao.since(weekStartMs)
 
+        // Batched like the full export (P-01): one week is bounded, but the per-row shape was the
+        // same and there is no reason for it to be.
+        val weekIds = sessions.map { it.id }
+        val weekExercises = weekIds.chunked(SQLITE_BIND_CHUNK)
+            .flatMap { loggedExerciseDao.forSessions(it) }
+        val exercisesBySession = weekExercises.groupBy { it.sessionId }
+        val setsByExercise = weekExercises.map { it.id }.chunked(SQLITE_BIND_CHUNK)
+            .flatMap { loggedSetDao.forLoggedExercises(it) }
+            .groupBy { it.loggedExerciseId }
+        val moodBySession = weekIds.chunked(SQLITE_BIND_CHUNK)
+            .flatMap { db.moodDao().forSessions(it) }
+            .associateBy { it.sessionId }
+        val segmentsBySession = weekIds.chunked(SQLITE_BIND_CHUNK)
+            .flatMap { db.sessionSegmentDao().forSessions(it) }
+            .groupBy { it.sessionId }
+
         val root = JSONObject().apply {
             put("exportedAt", dateFmt.format(Instant.now().atZone(zone)))
             // The current ISO week, so the numbers agree with everything the app calls "this week".
@@ -122,7 +149,8 @@ class BackupRepository @Inject constructor(
             put("periodDays", 7)
             val sessArr = JSONArray()
             sessions.forEach { s ->
-                val exercises = loggedExerciseDao.forSession(s.id)
+                currentCoroutineContext().ensureActive()
+                val exercises = exercisesBySession[s.id].orEmpty()
                 val sObj = JSONObject().apply {
                     put("id", s.id)
                     put("dayKey", s.dayKey)
@@ -140,11 +168,11 @@ class BackupRepository @Inject constructor(
                     put("intensity", s.intensity)
                     put("tags", s.tags)
                     put("journal", s.journal)
-                    put("mood", db.moodDao().forSession(s.id)?.mood ?: "")
-                    put("segments", segmentsJson(s.id))
+                    put("mood", moodBySession[s.id]?.mood ?: "")
+                    put("segments", segmentsJson(segmentsBySession[s.id].orEmpty()))
                     val exArr = JSONArray()
                     exercises.forEach { ex ->
-                        val sets = loggedSetDao.forLoggedExercise(ex.id)
+                        val sets = setsByExercise[ex.id].orEmpty()
                         exArr.put(JSONObject().apply {
                             put("exerciseId", ex.exerciseId)
                             // The DISPLAY name, the same resolution exportSessionJson uses. Falling
@@ -199,130 +227,177 @@ class BackupRepository @Inject constructor(
      * back in. The real restore path is the whole-DB backup ([backupToUri] / [restoreFromUri]).
      * Named so it doesn't imply recoverability (#70).
      */
-    suspend fun exportFullDataJson(): File = withContext(Dispatchers.IO) {
-        val allSessions = sessionDao.allFinished()
-        val allCardio = cardioDao.since(0L)
-        val allCoachGoals = coachGoalDao.all()
+    suspend fun exportFullDataJson(onProgress: (done: Int, total: Int) -> Unit = { _, _ -> }): File =
+        withContext(Dispatchers.IO) {
+            val allSessions = sessionDao.allFinished()
+            val allCardio = cardioDao.since(0L)
+            val allCoachGoals = coachGoalDao.all()
 
-        val root = JSONObject().apply {
-            put("exportVersion", 1)
-            put("exportedAt", dateFmt.format(Instant.now().atZone(zone)))
-            put("appVersion", com.forge.app.BuildConfig.VERSION_NAME)
+            // ── Everything the sessions need, in batches rather than per row (P-01) ──
+            //
+            // This used to run `3 + 3S + E` queries for S sessions and E exercises: exercises,
+            // mood and segments per session, then sets per exercise. A year of training is a
+            // thousand round trips through Room while the user waits on a file. Chunked because
+            // SQLite caps the number of bound variables in one statement, and grouped once.
+            val sessionIds = allSessions.map { it.id }
+            val exercises = sessionIds.chunked(SQLITE_BIND_CHUNK)
+                .flatMap { loggedExerciseDao.forSessions(it) }
+            val exercisesBySession = exercises.groupBy { it.sessionId }
+            val setsByExercise = exercises.map { it.id }.chunked(SQLITE_BIND_CHUNK)
+                .flatMap { loggedSetDao.forLoggedExercises(it) }
+                .groupBy { it.loggedExerciseId }
+            val moodBySession = sessionIds.chunked(SQLITE_BIND_CHUNK)
+                .flatMap { db.moodDao().forSessions(it) }
+                .associateBy { it.sessionId }
+            val segmentsBySession = sessionIds.chunked(SQLITE_BIND_CHUNK)
+                .flatMap { db.sessionSegmentDao().forSessions(it) }
+                .groupBy { it.sessionId }
 
-            // User-facing preferences (the JSON export documents 'settings'). The whole-DB
-            // VACUUM backup remains the authoritative restore source.
-            put("settings", JSONObject().apply {
-                put("useKg", settingsRepo.useKg.first())
-                put("weightUnit", settingsRepo.weightUnit.first().label)
-                put("userGoal", settingsRepo.userGoal.first())
-                put("userName", settingsRepo.userName.first())
-                put("daysPerWeek", settingsRepo.daysPerWeek.first())
-                put("firstDayMonday", settingsRepo.firstDayMonday.first())
-            })
+            // Streamed to a scratch file and renamed in, rather than built as one JSONObject tree
+            // and formatted into one String (P-01). Both of those held the entire export in memory
+            // at once — twice over, at the moment of formatting — and a half-written file could be
+            // read as a complete one.
+            val target = exportFile(context, "avex_export.json")
+            val scratch = File(target.parentFile, target.name + ".part")
+            scratch.bufferedWriter().use { out ->
+                JsonWriter(out).use { w ->
+                    w.setIndent("  ")
+                    w.beginObject()
+                    w.name("exportVersion").value(1L)
+                    w.name("exportedAt").value(dateFmt.format(Instant.now().atZone(zone)))
+                    w.name("appVersion").value(com.forge.app.BuildConfig.VERSION_NAME)
 
-            val sessArr = JSONArray()
-            allSessions.forEach { s ->
-                val exercises = loggedExerciseDao.forSession(s.id)
-                val sObj = JSONObject().apply {
-                    put("id", s.id)
-                    put("dayKey", s.dayKey)
-                    put("startedAt", s.startedAt)
-                    put("finishedAt", s.finishedAt ?: 0)
-                    put("activeSeconds", activeSecondsOf(s))
-                    put("totalVolumeLb", s.totalVolumeLb ?: 0)
-                    put("prCount", s.prCount)
-                    put("setCount", s.setCount)
-                    put("sessionType", s.sessionType)
-                    put("intensity", s.intensity)
-                    put("isUntracked", s.isUntracked)
-                    put("tags", s.tags)
-                    put("journal", s.journal)
-                    put("mood", db.moodDao().forSession(s.id)?.mood ?: "")
-                    put("segments", segmentsJson(s.id))
-                    val exArr = JSONArray()
-                    exercises.forEach { ex ->
-                        val sets = loggedSetDao.forLoggedExercise(ex.id)
-                        exArr.put(JSONObject().apply {
-                            put("exerciseId", ex.exerciseId)
-                            put("swappedName", ex.swappedName ?: "")
-                            put("orderIndex", ex.orderIndex)
-                            put("difficulty", ex.difficulty?.name ?: "")
-                            put("skipped", ex.skipped)
-                            put("note", ex.note ?: "")
-                            val setArr = JSONArray()
-                            sets.forEach { set ->
-                                setArr.put(JSONObject().apply {
-                                    put("weightText", set.weightText)
-                                    putOrOmit("weightLb", set.weightLb)
-                                    put("reps", set.reps)
-                                    putOrOmit("rpe", set.rpe)
-                                    put("completedAt", set.completedAt)
-                                    put("difficultyTag", set.difficultyTag ?: "")
-                                    // These change what the set MEANS, so an export without them is
-                                    // not the same training history: a timed hold's reps is not a
-                                    // count, and an assisted set is not PR-eligible. Re-importing an
-                                    // export that omitted them turned a 90 s weighted plank into a
-                                    // 90-rep 45 lb set at the top of the Hall of Fame.
-                                    put("durationSeconds", set.durationSeconds ?: 0)
-                                    put("isAssisted", set.isAssisted)
-                                    put("isAmrap", set.isAmrap)
-                                    put("toFailure", set.toFailure)
-                                    put("setType", set.setType ?: "")
-                                    put("dropAnnotation", set.dropAnnotation ?: "")
-                                })
+                    // User-facing preferences (the JSON export documents 'settings'). The whole-DB
+                    // VACUUM backup remains the authoritative restore source.
+                    w.name("settings").beginObject()
+                    w.name("useKg").value(settingsRepo.useKg.first())
+                    w.name("weightUnit").value(settingsRepo.weightUnit.first().label)
+                    w.name("userGoal").value(settingsRepo.userGoal.first())
+                    w.name("userName").value(settingsRepo.userName.first())
+                    w.name("daysPerWeek").value(settingsRepo.daysPerWeek.first().toLong())
+                    w.name("firstDayMonday").value(settingsRepo.firstDayMonday.first())
+                    w.endObject()
+
+                    w.name("sessions").beginArray()
+                    allSessions.forEachIndexed { index, s ->
+                        // Cooperative cancellation, per session: the loops below are CPU work, and
+                        // a user who navigates away from a long export was previously waited on.
+                        currentCoroutineContext().ensureActive()
+                        w.beginObject()
+                        w.name("id").value(s.id)
+                        w.name("dayKey").value(s.dayKey)
+                        w.name("startedAt").value(s.startedAt)
+                        w.name("finishedAt").value(s.finishedAt ?: 0L)
+                        w.name("activeSeconds").value(activeSecondsOf(s).toLong())
+                        w.name("totalVolumeLb").value(s.totalVolumeLb ?: 0.0)
+                        w.name("prCount").value(s.prCount.toLong())
+                        w.name("setCount").value(s.setCount.toLong())
+                        w.name("sessionType").value(s.sessionType)
+                        w.name("intensity").value(s.intensity)
+                        w.name("isUntracked").value(s.isUntracked)
+                        w.name("tags").value(s.tags)
+                        w.name("journal").value(s.journal)
+                        w.name("mood").value(moodBySession[s.id]?.mood ?: "")
+                        w.name("segments").beginArray()
+                        segmentsBySession[s.id].orEmpty().forEach { seg ->
+                            w.beginObject()
+                            w.name("startedAt").value(seg.startedAt)
+                            w.name("durationSec")
+                                .value(seg.endedAt?.let { ((it - seg.startedAt) / 1000L).coerceAtLeast(0) } ?: 0L)
+                            w.endObject()
+                        }
+                        w.endArray()
+                        w.name("exercises").beginArray()
+                        exercisesBySession[s.id].orEmpty().forEach { ex ->
+                            w.beginObject()
+                            w.name("exerciseId").value(ex.exerciseId)
+                            w.name("swappedName").value(ex.swappedName ?: "")
+                            w.name("orderIndex").value(ex.orderIndex.toLong())
+                            w.name("difficulty").value(ex.difficulty?.name ?: "")
+                            w.name("skipped").value(ex.skipped)
+                            w.name("note").value(ex.note ?: "")
+                            w.name("sets").beginArray()
+                            setsByExercise[ex.id].orEmpty().forEach { set ->
+                                w.beginObject()
+                                w.name("weightText").value(set.weightText)
+                                set.weightLb?.let { w.name("weightLb").value(it) }
+                                w.name("reps").value(set.reps.toLong())
+                                set.rpe?.let { w.name("rpe").value(it) }
+                                w.name("completedAt").value(set.completedAt)
+                                w.name("difficultyTag").value(set.difficultyTag ?: "")
+                                // These change what the set MEANS, so an export without them is
+                                // not the same training history: a timed hold's reps is not a
+                                // count, and an assisted set is not PR-eligible. Re-importing an
+                                // export that omitted them turned a 90 s weighted plank into a
+                                // 90-rep 45 lb set at the top of the Hall of Fame.
+                                w.name("durationSeconds").value((set.durationSeconds ?: 0).toLong())
+                                w.name("isAssisted").value(set.isAssisted)
+                                w.name("isAmrap").value(set.isAmrap)
+                                w.name("toFailure").value(set.toFailure)
+                                w.name("setType").value(set.setType ?: "")
+                                w.name("dropAnnotation").value(set.dropAnnotation ?: "")
+                                w.endObject()
                             }
-                            put("sets", setArr)
-                        })
+                            w.endArray()
+                            w.endObject()
+                        }
+                        w.endArray()
+                        w.endObject()
+                        onProgress(index + 1, allSessions.size)
                     }
-                    put("exercises", exArr)
+                    w.endArray()
+
+                    w.name("cardio").beginArray()
+                    allCardio.forEach { c ->
+                        w.beginObject()
+                        w.name("date").value(c.date)
+                        w.name("type").value(c.type)
+                        w.name("durationMin").value(c.durationMin.toLong())
+                        c.distanceKm?.let { w.name("distanceKm").value(it) }
+                        w.name("effort").value(c.effort ?: "")
+                        w.name("restReason").value(c.restReason ?: "")
+                        w.name("note").value(c.note ?: "")
+                        // Per-type fields (GYMAP-38); elevation stays canonical metres like distance is km.
+                        c.inclinePct?.let { w.name("inclinePct").value(it) }
+                        c.laps?.let { w.name("laps").value(it.toLong()) }
+                        c.elevationM?.let { w.name("elevationM").value(it) }
+                        w.endObject()
+                    }
+                    w.endArray()
+
+                    // Coach goals (v3 A2). The ZIP backup carries every table automatically; this
+                    // hand-rolled JSON does not, so each coach phase adds its own rows here — goals
+                    // are exactly the kind of thing a user wants out of the app, and they were
+                    // invisible to the JSON export before.
+                    w.name("coachGoals").beginArray()
+                    allCoachGoals.forEach { g ->
+                        w.beginObject()
+                        w.name("kind").value(g.kind)
+                        w.name("targetKey").value(g.targetKey)
+                        g.targetValue?.let { w.name("targetValue").value(it) }
+                        w.name("priority").value(g.priority.toLong())
+                        w.name("createdAt").value(g.createdAt)
+                        g.completedAt?.let { w.name("completedAt").value(it) }
+                        g.archivedAt?.let { w.name("archivedAt").value(it) }
+                        w.name("source").value(g.source)
+                        w.name("note").value(g.note)
+                        w.endObject()
+                    }
+                    w.endArray()
+                    w.endObject()
                 }
-                sessArr.put(sObj)
             }
-            put("sessions", sessArr)
-
-            val cardioArr = JSONArray()
-            allCardio.forEach { c ->
-                cardioArr.put(JSONObject().apply {
-                    put("date", c.date)
-                    put("type", c.type)
-                    put("durationMin", c.durationMin)
-                    putOrOmit("distanceKm", c.distanceKm)
-                    put("effort", c.effort ?: "")
-                    put("restReason", c.restReason ?: "")
-                    put("note", c.note ?: "")
-                    // Per-type fields (GYMAP-38); elevation stays canonical metres like distance is km.
-                    putOrOmit("inclinePct", c.inclinePct)
-                    putOrOmit("laps", c.laps)
-                    putOrOmit("elevationM", c.elevationM)
-                })
+            // Published by the rename, so a cancelled or failed export leaves the previous file
+            // rather than a truncated one under the name the user shares.
+            if (!scratch.renameTo(target)) {
+                target.delete()
+                if (!scratch.renameTo(target)) {
+                    scratch.delete()
+                    error("Could not publish ${target.name}")
+                }
             }
-            put("cardio", cardioArr)
-
-            // Coach goals (v3 A2). The ZIP backup carries every table automatically; this hand-rolled
-            // JSON does not, so each coach phase adds its own rows here — goals are exactly the kind of
-            // thing a user wants out of the app, and they were invisible to the JSON export before.
-            val goalsArr = JSONArray()
-            allCoachGoals.forEach { g ->
-                goalsArr.put(JSONObject().apply {
-                    put("kind", g.kind)
-                    put("targetKey", g.targetKey)
-                    putOrOmit("targetValue", g.targetValue)
-                    put("priority", g.priority)
-                    put("createdAt", g.createdAt)
-                    putOrOmit("completedAt", g.completedAt)
-                    putOrOmit("archivedAt", g.archivedAt)
-                    put("source", g.source)
-                    put("note", g.note)
-                })
-            }
-            put("coachGoals", goalsArr)
+            target
         }
-
-        // Fixed filename (overwrite) — see #84; avoids unbounded accumulation in filesDir.
-        val file = exportFile(context, "avex_export.json")
-        file.writeText(root.toString(2))
-        file
-    }
 
     /**
      * Export a SINGLE finished session as JSON — the per-session "save this workout's data" action on
@@ -351,7 +426,7 @@ class BackupRepository @Inject constructor(
                 put("tags", s.tags)
                 put("journal", s.journal)
                 put("mood", db.moodDao().forSession(s.id)?.mood ?: "")
-                put("segments", segmentsJson(s.id))
+                put("segments", segmentsJson(db.sessionSegmentDao().forSession(s.id)))
                 val exArr = JSONArray()
                 exercises.forEach { ex ->
                     val sets = loggedSetDao.forLoggedExercise(ex.id)
