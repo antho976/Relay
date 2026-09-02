@@ -19,9 +19,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * The apply path's two promises, against a real Room database.
@@ -39,6 +41,14 @@ import org.robolectric.RobolectricTestRunner
  * of the heavier collaborators are exercised by these paths.
  */
 @RunWith(RobolectricTestRunner::class)
+// A PLAIN Application, not Avex's own. Robolectric instantiates the manifest's `ForgeApp` by
+// default, whose `onCreate` launches Hilt's `ProgramRepository.ensureLoaded()` on a background
+// scope — which reads an EMPTY database (this class builds its own in-memory one) and calls
+// `Program.setActive(emptyList())`. That race replaced the process-global program while the fixture
+// below was reading it, and all seven H-03 transaction tests failed together with
+// `status=skipped, outcome=not_followed, active=[]`: a test-harness collision reported as a
+// production defect in the apply path.
+@Config(application = android.app.Application::class)
 class CoachRepositoryApplyTest {
 
     private val context: Context = ApplicationProvider.getApplicationContext()
@@ -133,11 +143,27 @@ class CoachRepositoryApplyTest {
         )
     }
 
-    @After
-    fun tearDown() = db.close()
+    /**
+     * `Program` is a process-global facade shared by every test in the JVM, so it is pinned to the
+     * seed split here rather than assumed — one test elsewhere calling `setActive` would otherwise
+     * decide what this fixture reads.
+     */
+    @Before
+    fun setUp() = Program.setActive(Program.seedDays)
 
-    /** The slot every decision here targets: the seed program's first Upper A exercise. */
-    private val slot = Program.days.first { it.key == DAY }.exercises.first()
+    @After
+    fun tearDown() {
+        Program.setActive(Program.seedDays)
+        db.close()
+    }
+
+    /**
+     * The slot every decision here targets: the seed program's first Upper A exercise.
+     *
+     * `seedDays`, not `days`: the latter is whatever is ACTIVE, which is process-global state this
+     * test does not own and cannot rely on being loaded.
+     */
+    private val slot = Program.seedDays.first { it.key == DAY }.exercises.first()
 
     /** A same-muscle library exercise that is NOT what the slot already shows — a real swap target. */
     private val replacement = ExerciseLibrary.all.first { it.muscle == slot.muscle && it.name != slot.name }
