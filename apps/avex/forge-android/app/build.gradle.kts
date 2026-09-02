@@ -310,7 +310,7 @@ dependencies {
     implementation("androidx.glance:glance-material3:1.1.1")
 
     // DocumentFile — enumerate a user-granted folder (Downloads) to auto-find gym-app exports (#GYMAP-17).
-    implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("androidx.documentfile:documentfile:1.1.0")
 
     // Baseline Profile — installs the generated app/src/main/baseline-prof.txt at runtime (P2).
     // profileinstaller is a no-op until the profile is generated on a device.
@@ -330,7 +330,7 @@ dependencies {
     testImplementation(libs.roborazzi.junit.rule)
     testImplementation(libs.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.test.junit)
-    androidTestImplementation("androidx.room:room-testing:2.7.2")
+    androidTestImplementation("androidx.room:room-testing:2.8.4")
     androidTestImplementation(libs.androidx.test.espresso.core)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)

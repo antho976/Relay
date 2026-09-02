@@ -214,7 +214,10 @@ class OverviewViewModel @Inject constructor(
             // and a completed weekly goal kept reading 4 / 4 in a week where nothing had happened
             // yet. Monthly rollover and a timezone change behaved the same way.
             timeSignals.dayStarts()
-        ) { _, _, _, _, _, _ ->
+        // Six flows: kotlinx.coroutines only declares typed combine overloads up to five, so
+        // this resolves to the vararg form and the lambda takes one Array, not six values.
+        // Every input was already ignored — the body re-reads both repositories.
+        ) { _ ->
             // Fall back on real failures only — a swallowed CancellationException would let a
             // cancelled recompute emit empty lists and blank the Home goal lines.
             val lift = runCatching { goalRepo.goalsWithProgress() }

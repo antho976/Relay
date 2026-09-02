@@ -87,7 +87,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     // The wearable/ongoing libs pull a pre-1.3 fragment transitively, which trips lint-vital's
     // InvalidFragmentVersionForActivityResult on registerForActivityResult — pin a modern one.
-    implementation("androidx.fragment:fragment:1.8.5")
+    implementation("androidx.fragment:fragment:1.9.0")
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.activity.compose)

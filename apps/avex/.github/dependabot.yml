@@ -46,6 +46,36 @@ updates:
           - "io.github.takahirom.roborazzi*"
           - "androidx.test*"
 
+  # The two Remotion projects (release video, feature vignettes) were absent from this file, so
+  # nothing opened update PRs for them and their lockfiles drifted until a dozen transitive
+  # advisories piled up in the security tab with no corresponding fix PR. Grouped per project and
+  # limited to a single PR each: this is render tooling for marketing video, not shipped code, and
+  # it should cost one review a week at most.
+  #
+  # ci.yml ignores remotion-*/** by design, so these PRs run no CI. Each project carries its own
+  # `npm run check`; run it before merging if the diff is more than a patch-level lockfile refresh.
+  - package-ecosystem: npm
+    directory: /remotion-vignettes
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 1
+    groups:
+      remotion-vignettes:
+        patterns:
+          - "*"
+
+  - package-ecosystem: npm
+    directory: /remotion-release
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 1
+    groups:
+      remotion-release:
+        patterns:
+          - "*"
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
