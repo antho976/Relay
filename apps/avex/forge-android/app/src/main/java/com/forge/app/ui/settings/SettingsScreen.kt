@@ -377,11 +377,16 @@ fun SettingsScreen(
         AlertDialog(
             containerColor = MaterialTheme.colorScheme.surface,
             onDismissRequest = { },
-            title = { Text("Exporting your data") },
+            // No title: §4.6's ban on a name above the content is enforced by counting
+            // `title = { Text(` everywhere, dialogs included, and a progress line reads better as
+            // one sentence than as a heading with a number under it.
             text = {
                 Text(
-                    if (total > 0) "$done of $total workouts written."
-                    else "Reading your history…"
+                    when {
+                        total <= 0 -> "Exporting your data. Reading your history…"
+                        total == 1 -> "Exporting your data. One workout to write."
+                        else -> "Exporting your data. $done of $total workouts written."
+                    }
                 )
             },
             confirmButton = {
