@@ -346,8 +346,13 @@ jobs:
         shell: bash
         run: |
           echo "::group::Compile errors"
-          grep -E "^e: |: error: |Unresolved reference|FAILURE: Build failed" "$RUNNER_TEMP/verify.log" \
-            | head -40 || echo "(none — see the test failures below)"
+          # -A 4 because a javac error is not self-contained: "cannot find symbol" says nothing
+          # without the `symbol:` and `location:` lines that follow it, and when the file is
+          # generated (Hilt, Room) the digest otherwise names a path that exists on no branch and
+          # stops. Kotlin's "e:" lines already carry their message, so the context costs a few
+          # blank lines there and answers the question here.
+          grep -A 4 -E "^e: |: error: |Unresolved reference|FAILURE: Build failed" "$RUNNER_TEMP/verify.log" \
+            | head -80 || echo "(none — see the test failures below)"
           echo "::endgroup::"
           echo "::group::Failing tests"
           grep -E "FAILED$|^\s+java\.lang\.AssertionError|tests completed," "$RUNNER_TEMP/verify.log" \
