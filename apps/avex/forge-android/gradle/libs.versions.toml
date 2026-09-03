@@ -14,7 +14,19 @@ lifecycle = "2.11.0"
 navigation-compose = "2.10.0"
 
 # Hilt + DI
-hilt = "2.56.2"
+#
+# Floored at 2.59.2 by androidx.hilt 1.4.0, which depends on hilt-android at 2.58 or later. Dagger
+# 2.58 REPLACED `ActivityComponentManager.getSavedStateHandleHolder()` with
+# `initSavedStateHandleHolders()` / `clearSavedStateHandleHolders()`. This pin is the KSP processor
+# as well as the runtime, so leaving it at 2.56.2 meant the 2.56 generator emitting
+# `componentManager().getSavedStateHandleHolder()` into Hilt_MainActivity against a 2.58+ runtime
+# that no longer has it — `:app:compileDebugJavaWithJavac` fails on generated code, naming a symbol
+# that appears nowhere in this repository. Generator and runtime have to be one version.
+#
+# 2.59.2 and not 2.60.x: 2.60 wants kotlin-stdlib and kotlin-metadata-jvm 2.3.21 and KSP 2.3.7,
+# which makes this a Kotlin toolchain upgrade rather than a Hilt one. 2.59.2 is the last release on
+# the 2.2 line this project builds with.
+hilt = "2.59.2"
 hilt-navigation-compose = "1.4.0"
 
 # Persistence
