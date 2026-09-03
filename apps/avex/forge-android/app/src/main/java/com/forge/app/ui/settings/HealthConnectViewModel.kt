@@ -53,6 +53,23 @@ class HealthConnectViewModel @Inject constructor(
         /** The first-connect weight backfill reached only the ordinary 30-day window because history
          *  access wasn't live at import time (H-05). The page says so and offers the older import. */
         val weightHistoryPartial: Boolean = false,
+        /**
+         * The installed provider implements `FEATURE_READ_HEALTH_DATA_HISTORY` at all (H-05).
+         *
+         * Gates the REQUEST: a permission the provider does not implement opens a consent screen
+         * the user cannot say yes to, so asking for it on connect can only make the connect look
+         * like it half-failed.
+         */
+        val historySupported: Boolean = false,
+        /**
+         * What the bodyweight row may say and offer about history depth (H-05).
+         *
+         * "You have not granted this yet" and "this provider cannot do this" need different words
+         * and only one of them has an action behind it. Avex asked unconditionally and offered the
+         * retry unconditionally, so a provider without the feature got a permanent
+         * "older weigh-ins need history access" line above a link that could never succeed.
+         */
+        val historyAffordance: BodyweightSync.HistoryAffordance = BodyweightSync.HistoryAffordance.NONE,
         /** Body-fat READ permission is granted — Avex may import a scale's body-fat % (GYMAP-62). */
         val bodyFatGranted: Boolean = false,
         /** Body-fat WRITE permission is granted — same read-only rule as [weightWriteGranted]. */
@@ -99,7 +116,9 @@ class HealthConnectViewModel @Inject constructor(
     val weightPermissions: Set<String> get() = manager.weightPermissions
 
     /** History permission (H-05) — requested with [weightPermissions] on connect so the first-connect
-     *  backfill can reach past the 30-day window, and alone by the "import older weight" retry. */
+     *  backfill can reach past the 30-day window, and alone by the "import older weight" retry.
+     *  Only ever launched behind [UiState.historySupported]: a permission the provider does not
+     *  implement opens a consent screen the user cannot answer. */
     val historyPermissions: Set<String> get() = manager.historyPermissions
 
     /** Permissions the body-fat launcher should request (read + write BodyFatRecord). */
@@ -197,7 +216,11 @@ class HealthConnectViewModel @Inject constructor(
      * next refresh tries again.
      */
     private suspend fun backfillWeightHistory(weightGranted: Boolean, force: Boolean) {
-        val historyGranted = if (weightGranted) manager.canReadHistory() else false
+        // A provider that does not implement extended history can never grant it, so it is not
+        // "declined, retry available" — it is the whole of the history this device has. Treating it
+        // as granted is what stops the page latching a permanent, unanswerable partial.
+        val historySupported = manager.historySupported()
+        val historyGranted = if (weightGranted && historySupported) manager.canReadHistory() else false
         var complete = settingsRepo.hcWeightHistoryImported.first()
         var partial = settingsRepo.hcWeightHistoryPartial.first()
         val due = BodyweightSync.shouldBackfillHistory(weightGranted, historyGranted, complete, partial)
@@ -226,8 +249,11 @@ class HealthConnectViewModel @Inject constructor(
             }
         }
         val windowPartial = BodyweightSync.historyWindowIsPartial(weightGranted, historyGranted, complete, partial)
+        val affordance = BodyweightSync.historyAffordance(weightGranted, historySupported, windowPartial)
         _state.update { it.copy(
             weightHistoryPartial = windowPartial,
+            historySupported = historySupported,
+            historyAffordance = affordance,
             importMessage = message ?: it.importMessage
         ) }
     }

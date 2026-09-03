@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import java.io.File
 import java.util.UUID
 
 /**
@@ -81,9 +82,47 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
     private val _failedSend = MutableStateFlow<WristEdit?>(null)
     val failedSend: StateFlow<WristEdit?> = _failedSend
 
+    /**
+     * The same edit, on disk, so it survives this process (M-10 / H-08).
+     *
+     * Everything above is heap state on a singleton, and Wear reclaims background processes hardest
+     * during the exact window the retry exists for: the watch out of range, waiting for the user to
+     * walk back. The edit and its only affordance disappeared together. The record is written
+     * BEFORE the row is optimistically removed and cleared only when the phone ACKNOWLEDGES the
+     * command — not when the transport merely accepted the bytes, which says nothing about whether
+     * the phone applied them.
+     */
+    private val editStore = WristEditStore(File(appContext.filesDir, WristEditStore.FILE_NAME))
+
+    /** The pending edit's id, mirrored in memory so an incoming ack never reads the file — acks
+     *  arrive on the main thread. */
+    @Volatile private var pendingEditId: String? = null
+
+    init {
+        // An edit this process never saw acknowledged. Offering the same-id replay is safe whatever
+        // happened to the original: the phone's ledger answers a duplicate with its recorded ack
+        // instead of running the command again.
+        val pending = editStore.load()
+        pendingEditId = pending?.commandId
+        _failedSend.value = pending
+    }
+
+    /** Record [edit] as pending, in memory and on disk. */
+    private fun rememberPendingEdit(edit: WristEdit) {
+        pendingEditId = edit.commandId
+        editStore.save(edit)
+    }
+
+    /** Forget the pending edit, in memory and on disk. */
+    private fun forgetPendingEdit() {
+        pendingEditId = null
+        editStore.clear()
+    }
+
     /** Re-send the edit that could not be delivered, under its original id. No-op when there is none. */
     fun retryFailedSend() {
         val failed = _failedSend.value ?: return
+        // The affordance goes; the RECORD stays, under the same id, until the phone answers it.
         _failedSend.value = null
         when (failed.kind) {
             WristEdit.Kind.RPE ->
@@ -94,7 +133,10 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
     }
 
     /** Drop a failure the user has acknowledged (or that a later edit has made irrelevant). */
-    fun clearFailedSend() { _failedSend.value = null }
+    fun clearFailedSend() {
+        _failedSend.value = null
+        forgetPendingEdit()
+    }
 
     /**
      * The phone speaks a newer protocol on a path the watch cannot work without — the UI shows
@@ -162,6 +204,13 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
             if (deleted) return clearLatchOnDelete(WearProtocol.PATH_CMD_ACK)
             if (!seeded) decodeInto<CmdAckDto>(bytes, WearProtocol.PATH_CMD_ACK) { ack ->
                 _lastAck.value = ack
+                // The phone has answered THIS command: the edit is no longer pending, so the
+                // durable record and any retry offer for it both go. Delivery alone never does
+                // this — the bytes reaching the transport is not the phone having applied them.
+                if (pendingEditId == ack.commandId) {
+                    _failedSend.value = null
+                    forgetPendingEdit()
+                }
                 // A successful LOG names its set — remember it locally for undo/RPE.
                 //
                 // "A successful ack with a setId" is not the same statement: an RPE ack carries the
@@ -264,10 +313,13 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
      * Callers pass the id from [lastLog]; the phone falls back to its own resolution when it is null.
      */
     fun sendUndoSet(sessionId: Long, setId: Long?, commandId: String? = null): String {
+        val id = commandId ?: newId()
+        // Durable BEFORE anything is taken away: between the removal and the transport's answer is
+        // precisely where the process can die, and that is the state this record exists for.
+        rememberPendingEdit(WristEdit(WristEdit.Kind.UNDO, id, sessionId, setId, rpe = null))
         val removed = _lastLog.value
         _lastLog.value = null // The row acted; don't offer to rate an undone set.
         _failedSend.value = null
-        val id = commandId ?: newId()
         return send(
             WearProtocol.PATH_CMD_UNDO_SET,
             UndoSetCommand(commandId = id, sessionId = sessionId, setId = setId)
@@ -282,9 +334,10 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
     }
 
     fun sendSetRpe(setId: Long, rpe: Double, commandId: String? = null): String {
+        val id = commandId ?: newId()
+        rememberPendingEdit(WristEdit(WristEdit.Kind.RPE, id, sessionId = 0L, setId = setId, rpe = rpe))
         _lastLog.value = _lastLog.value?.takeIf { it.setId == setId }?.copy(rpeSent = true)
         _failedSend.value = null
-        val id = commandId ?: newId()
         rememberRpeCommand(id)
         return send(
             WearProtocol.PATH_CMD_SET_RPE,
@@ -387,10 +440,12 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
      * a redelivery that races a landed command is dropped by the phone's deduper rather than
      * logging twice.
      *
-     * This does NOT survive process death — the queue is in memory. Genuine offline durability
-     * needs the commands moved onto DataClient, whose items persist and sync on reconnect (the
-     * /cmd/ack path already uses it), and that is a transport change on both sides rather than a
-     * fix here.
+     * The in-flight queue itself is still in memory, so a process death mid-retry loses the
+     * ATTEMPT — but no longer the edit: the pending record on disk outlives the process and comes
+     * back as an offer to re-send under the original id ([WristEditStore]). Making the delivery
+     * itself survive needs the commands moved onto DataClient, whose items persist and sync on
+     * reconnect (the /cmd/ack path already uses it), and that is a transport change on both sides
+     * rather than a fix here.
      */
     private suspend fun sendWithRetry(path: String, bytes: ByteArray): Boolean {
         var wait = SEND_RETRY_INITIAL_MS

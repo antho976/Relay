@@ -192,10 +192,9 @@ enum class BlockPhase(val code: String, val displayName: String) {
      * How aggressively progression should behave in this phase, as a multiplier on the coach's
      * usual ambition. Deload holds everything back; peak pushes.
      *
-     * Not yet threaded into the per-set load suggestion: the phase currently shapes the week
-     * through [volumeDelta] (the weekly pass) and the served deload week (BlockRepository), which
-     * is where the audited "phases changed nothing" gap was closed. Scaling the in-session load
-     * target by this value is the remaining step and is tracked in docs/AUDIT_DEFERRED.md.
+     * Composed with today's autoregulation by [composedLoadScale], which is what the per-set load
+     * suggestion and the pre-session brief both scale by (H-02). The phase also shapes the week
+     * through [volumeDelta] (the weekly pass) and the served deload week (BlockRepository).
      */
     val progressionScale: Double
         get() = when (this) {
@@ -221,5 +220,31 @@ enum class BlockPhase(val code: String, val displayName: String) {
 
     companion object {
         fun fromCode(code: String): BlockPhase? = entries.firstOrNull { it.code == code }
+
+        /**
+         * How the block's ambition and today's autoregulation combine into ONE load scale (H-02).
+         *
+         * They answer different questions — the phase is what this week of the mesocycle asks for,
+         * [dayScale] is how the athlete is today (readiness, or an explicit intensity pick, times
+         * any life-event easing) — so both apply, multiplicatively. Left uncomposed, the phase
+         * reached the plan's set counts and never the weight on the bar: the same bout got the same
+         * load target in Accumulate, Intensify, Peak and Deload.
+         *
+         * PRODUCT RULE, chosen here and stated so it can be argued with: the product is clamped to
+         * [MIN_COMPOSED_SCALE]–[MAX_COMPOSED_SCALE], so the two signals cannot compound into a cut
+         * or a jump neither of them asked for — a deload week met by low readiness eases to 20%
+         * below, not 22%, and a peak week met by high readiness tops out at 10% above. With no
+         * active block the phase scale is 1.0 and the result is exactly today's behaviour, which is
+         * what most sessions are.
+         */
+        fun composedLoadScale(phase: BlockPhase?, dayScale: Double): Double =
+            ((phase?.progressionScale ?: 1.0) * dayScale)
+                .coerceIn(MIN_COMPOSED_SCALE, MAX_COMPOSED_SCALE)
+
+        /** Floor for [composedLoadScale] — below this a "suggestion" is a different workout. */
+        const val MIN_COMPOSED_SCALE = 0.80
+
+        /** Ceiling for [composedLoadScale] — above this it is a jump, not a nudge. */
+        const val MAX_COMPOSED_SCALE = 1.10
     }
 }

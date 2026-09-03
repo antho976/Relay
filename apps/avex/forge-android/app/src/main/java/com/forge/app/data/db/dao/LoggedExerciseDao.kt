@@ -30,6 +30,16 @@ interface LoggedExerciseDao {
     suspend fun forSession(sessionId: Long): List<LoggedExercise>
 
     /**
+     * Every row for a BATCH of sessions, in one query (P-01).
+     *
+     * The JSON export asked per session, so a year of training was a thousand round trips through
+     * Room for a file the user is waiting on. Chunk the ids to stay under SQLite's variable limit
+     * and group the result once — see `BackupRepository`.
+     */
+    @Query("SELECT * FROM logged_exercise WHERE session_id IN (:sessionIds) ORDER BY session_id, order_index")
+    suspend fun forSessions(sessionIds: List<Long>): List<LoggedExercise>
+
+    /**
      * This session's row for one program SLOT, matching [LoggedExercise.effectiveSlotId]
      * (`slot_id` when swapped, else `exercise_id`).
      *

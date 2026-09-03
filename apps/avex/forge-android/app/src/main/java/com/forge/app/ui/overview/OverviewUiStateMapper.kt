@@ -32,10 +32,7 @@ internal fun buildOverviewUiState(
     stats: StatsRepository.WeeklyStats,
     recentCardio: List<CardioEntry>,
     shown: Set<String>,
-    trophiesUnlocked: Int,
-    distanceKm: Double,
     dayVolStats: Map<String, SessionDao.DayVolumeStats>,
-    cardioTargetMin: Int = 0,
     weightUnit: WeightUnit = WeightUnit.LB,
     useMiles: Boolean = false
 ): OverviewUiState {
@@ -108,7 +105,6 @@ internal fun buildOverviewUiState(
         workoutsThisWeek = stats.workouts,
         volumeThisWeekLb = stats.volumeLb,
         cardioMinutesThisWeek = stats.cardioMinutes,
-        cardioWeeklyTargetMin = cardioTargetMin,
         totalFinishedSessions = stats.totalFinishedSessions,
         streakDays = stats.streakDays,
         bestSessionThisWeekLb = stats.bestSessionThisWeekLb,
@@ -116,9 +112,7 @@ internal fun buildOverviewUiState(
         nextUpDayKey = stats.nextUpDayKey,
         weekDaysTrained = stats.weekDaysTrained,
         cardioWeekDays = cardioWeekDays,
-        recentItems = recentItems,
-        trophiesUnlocked = trophiesUnlocked,
-        cardioDistanceKm = distanceKm
+        recentItems = recentItems
     )
 }
 

@@ -94,7 +94,6 @@ data class OverviewUiState(
     val weeklyTrainingDays: Int = 4,
     val volumeThisWeekLb: Double = 0.0,
     val cardioMinutesThisWeek: Int = 0,
-    val cardioWeeklyTargetMin: Int = 0,
     val totalFinishedSessions: Int = 0,
     val streakDays: Int = 0,
     /** Highest single-session volume (lb) logged in the current ISO week; null/0 when none. */
@@ -110,8 +109,6 @@ data class OverviewUiState(
     val customDayName: String? = null,
     /** Combined gym + cardio, sorted newest first, capped at 3. */
     val recentItems: List<OverviewRecentItem> = emptyList(),
-    val trophiesUnlocked: Int = 0,
-    val cardioDistanceKm: Double = 0.0,
     /** Day key of an in-progress (unfinished) workout, if any — drives the resume banner + CTA. */
     val activeSessionDayKey: String? = null,
     /**
@@ -126,20 +123,7 @@ data class OverviewUiState(
     /** Lift-target goals + auto-tracked custom goals (achieved-first/closest-first). Home previews the
      *  top few as progress lines — the ambient motivator that replaced the generic coach entry. */
     val goals: List<com.forge.app.data.repo.GoalRepository.GoalProgress> = emptyList(),
-    val customGoals: List<com.forge.app.data.repo.ExtendedGoalRepository.Progress> = emptyList(),
-
-    // ── design/surface-experiment (2026-08-15) ────────────────────────────────────────────────
-    // The card-led Home leads with a NUMBER rather than the directive's name, and a hero figure in
-    // that direction carries its own trend. Both fields are additive: the shipped Home never reads
-    // them, so restoring `ui/overview` drops them with the rest of the branch.
-    /**
-     * Volume (lb) per ISO week, oldest → newest, for the last 8 weeks INCLUDING the current one.
-     * Always 8 entries once the flow has emitted; weeks with no session are an honest 0.0, so the
-     * caller can tell "no data yet" (all zero) from "a quiet week" (§12).
-     */
-    val weeklyVolumeSeriesLb: List<Double> = emptyList(),
-    /** Volume (lb) in the PREVIOUS ISO week — the hero card's delta denominator. */
-    val volumeLastWeekLb: Double = 0.0
+    val customGoals: List<com.forge.app.data.repo.ExtendedGoalRepository.Progress> = emptyList()
 ) {
     val hasActiveSession: Boolean get() = activeSessionDayKey != null
 }

@@ -165,6 +165,7 @@ fun SettingsScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val exportPath by viewModel.exportPath.collectAsStateWithLifecycle()
+    val exportProgress by viewModel.exportProgress.collectAsStateWithLifecycle()
     val photoCount by viewModel.photoCount.collectAsStateWithLifecycle()
 
     // Persisted across nav (rememberSaveable) so returning from a deep screen launched here — the
@@ -365,6 +366,32 @@ fun SettingsScreen(
                 }
             },
             dismissButton = { TextButton(onClick = { pendingRestoreUri = null }) { Text("Cancel") } }
+        )
+    }
+
+    // A whole training history is minutes of work on an old phone, and the export used to report
+    // nothing at all until the file appeared — so a user with two years of sessions could not tell
+    // a slow export from a stuck one, and had no way to stop it (P-01). Cancelling is safe: the
+    // export publishes by rename, so the previous file is still there afterwards.
+    exportProgress?.let { (done, total) ->
+        AlertDialog(
+            containerColor = MaterialTheme.colorScheme.surface,
+            onDismissRequest = { },
+            // No title: §4.6's ban on a name above the content is enforced by counting
+            // `title = { Text(` everywhere, dialogs included, and a progress line reads better as
+            // one sentence than as a heading with a number under it.
+            text = {
+                Text(
+                    when {
+                        total <= 0 -> "Exporting your data. Reading your history…"
+                        total == 1 -> "Exporting your data. One workout to write."
+                        else -> "Exporting your data. $done of $total workouts written."
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.cancelExport() }) { Text("Cancel") }
+            }
         )
     }
 
