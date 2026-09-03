@@ -5,13 +5,13 @@ kotlin = "2.2.10"
 ksp = "2.3.2"
 
 # Compose
-compose-bom = "2025.04.01"
+compose-bom = "2026.08.00"
 activity-compose = "1.10.1"
 # 2.11.0 is what androidx.hilt 1.4.0 pulls in transitively, and Gradle resolves to the higher
 # version regardless of what this pin says. Written down so the catalog describes the build that
 # actually runs rather than one that lost a conflict resolution.
 lifecycle = "2.11.0"
-navigation-compose = "2.8.9"
+navigation-compose = "2.10.0"
 
 # Hilt + DI
 hilt = "2.56.2"
