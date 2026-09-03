@@ -51,7 +51,7 @@ jobs:
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
-          "$sdkmanager" "platforms;android-37" > /dev/null
+          "$sdkmanager" "platforms;android-37.0" > /dev/null
 
       - name: Resolve and submit
         uses: gradle/actions/dependency-submission@v6
