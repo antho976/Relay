@@ -35,13 +35,13 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.common.rememberDrawProgress
 import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.util.Locale
 
 /**
  * Detail chart sheet opened by tapping the last-session strip. Shows a big volume-over-time
@@ -65,7 +65,7 @@ fun ExerciseChartSheet(
     val chrono = history.asReversed()
     val volumes = chrono.map { it.volumeLb }
     val zone = ZoneId.systemDefault()
-    val dateFmt = DateTimeFormatter.ofPattern("MMM d", Locale.getDefault())
+    val dateFmt = DateTimeFormatter.ofPattern("MMM d", currentLocale())
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,

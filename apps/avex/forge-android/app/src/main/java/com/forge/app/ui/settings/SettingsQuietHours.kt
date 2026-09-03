@@ -19,9 +19,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.notify.QuietWindow
+import com.forge.app.ui.common.currentLocale
 import java.time.DayOfWeek
 import java.time.format.TextStyle
-import java.util.Locale
 
 /**
  * The per-day quiet-hours editor (GYMAP-75) — one row per weekday showing its live window, tapping
@@ -34,12 +34,13 @@ internal fun QuietHoursDays(state: SettingsUiState, vm: SettingsViewModel) {
     val schedule = state.quietHoursSchedule
     val days = remember(state.firstDayMonday) { orderedDays(state.firstDayMonday) }
     var expanded by remember { mutableStateOf<DayOfWeek?>(null) }
+    val locale = currentLocale()
 
     Column {
         days.forEach { day ->
             val window = schedule.windowFor(day)
             QuietDayRow(
-                label = day.getDisplayName(TextStyle.SHORT, Locale.getDefault()),
+                label = day.getDisplayName(TextStyle.SHORT, locale),
                 window = window,
                 expanded = expanded == day,
                 onToggle = { expanded = if (expanded == day) null else day }

@@ -31,11 +31,11 @@ import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.currentLocale
 import java.io.File
 import java.text.SimpleDateFormat
 import java.time.ZoneId
 import java.util.Date
-import java.util.Locale
 import kotlin.math.abs
 
 // ── Same weight, different body ──────────────────────────────────────────────
@@ -174,7 +174,7 @@ private fun PairThumb(
             )
         )
         Text(
-            SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(photo.takenAtMs)).uppercase(),
+            SimpleDateFormat("MMM d", currentLocale()).format(Date(photo.takenAtMs)).uppercase(),
             style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.92f), fontSize = 9.sp,
             modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 7.dp, vertical = 6.dp)
         )

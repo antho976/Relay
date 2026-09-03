@@ -43,6 +43,7 @@ import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.common.forgeShimmer
 import com.forge.app.ui.common.rememberDrawProgress
 import com.forge.app.ui.theme.ForgeMotion
@@ -50,7 +51,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.time.ZoneId
 import java.util.Date
-import java.util.Locale
 
 // ── Hero ───────────────────────────────────────────────────────────────────
 
@@ -165,7 +165,7 @@ private fun BandFrame(
                 Column(Modifier.align(Alignment.BottomStart).padding(horizontal = 9.dp, vertical = 8.dp)) {
                     Text(tag, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.7f))
                     Text(
-                        SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(photo.takenAtMs)).uppercase(),
+                        SimpleDateFormat("MMM d", currentLocale()).format(Date(photo.takenAtMs)).uppercase(),
                         style = MaterialTheme.typography.labelMedium, color = Color.White
                     )
                 }

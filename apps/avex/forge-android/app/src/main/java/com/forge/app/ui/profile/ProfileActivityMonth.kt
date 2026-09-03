@@ -37,6 +37,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.theme.MonoSectionAnchor
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -197,7 +198,7 @@ internal fun ProfileActivityMonth(
 
     val empty = MaterialTheme.colorScheme.outline.copy(alpha = MONTH_EMPTY_ALPHA)
     val future = MaterialTheme.colorScheme.outline.copy(alpha = MONTH_FUTURE_ALPHA)
-    val monthName = month.month.getDisplayName(TextStyle.FULL, Locale.getDefault()).uppercase()
+    val monthName = month.month.getDisplayName(TextStyle.FULL, currentLocale()).uppercase()
 
     Column(modifier.fillMaxWidth()) {
         // Not `SectionAnchor`: its trailing slot is a navigation link ("view all →"), and the month
@@ -410,10 +411,11 @@ private val DAY_READING_FMT: DateTimeFormatter =
  */
 @Composable
 private fun WeekdayHeader(muted: Color) {
+    val locale = currentLocale()
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(MONTH_CELL_GAP)) {
         for (day in 1..7) {
             Text(
-                DayOfWeek.of(day).getDisplayName(TextStyle.NARROW, Locale.getDefault()).uppercase(),
+                DayOfWeek.of(day).getDisplayName(TextStyle.NARROW, locale).uppercase(),
                 style = MaterialTheme.typography.labelMedium,
                 color = muted,
                 textAlign = TextAlign.Center,

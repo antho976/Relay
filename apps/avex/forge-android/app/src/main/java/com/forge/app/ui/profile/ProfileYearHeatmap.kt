@@ -21,10 +21,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.currentLocale
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.TextStyle
-import java.util.Locale
 
 /** Fixed gutter for the mono month label so day-of-month columns line up across every row. */
 private val MONTH_LABEL_WIDTH = 26.dp
@@ -63,6 +63,7 @@ internal fun YearConsistencySection(
     val maxCount = remember(thisYear) { (thisYear.values.maxOrNull() ?: 1).coerceAtLeast(1) }
     val activeDays = thisYear.size
     val faint = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
+    val locale = currentLocale()
 
     Column(modifier) {
         SectionHeader("THIS YEAR", muted)
@@ -72,7 +73,7 @@ internal fun YearConsistencySection(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         LocalDate.of(year, m, 1).month
-                            .getDisplayName(TextStyle.SHORT, Locale.getDefault()).uppercase(),
+                            .getDisplayName(TextStyle.SHORT, locale).uppercase(),
                         style = MaterialTheme.typography.labelSmall,
                         color = muted,
                         fontSize = 9.sp,

@@ -24,11 +24,11 @@ import com.forge.app.data.repo.StatsRepository
 import com.forge.app.domain.units.formatDistance
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
+import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.util.Locale
 
 // ─── Shared summary sheet (opened from OverviewScreen for a tapped recent item) ───────────
 
@@ -61,7 +61,7 @@ fun SummarySheet(
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
             val zone = ZoneId.systemDefault()
             val date = Instant.ofEpochMilli(dateMs).atZone(zone).toLocalDate()
-            val dateStr = date.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault()))
+            val dateStr = date.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", currentLocale()))
 
             if (tag.isNotEmpty()) {
                 Text(tag, style = MaterialTheme.typography.labelSmall,

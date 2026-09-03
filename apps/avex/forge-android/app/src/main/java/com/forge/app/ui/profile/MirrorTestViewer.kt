@@ -73,6 +73,7 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.onboarding.MAX_BODYWEIGHT_LB
 import com.forge.app.ui.onboarding.MIN_BODYWEIGHT_LB
 import com.forge.app.ui.onboarding.parseSaneBodyweightLb
@@ -83,7 +84,6 @@ import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Date
-import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -234,7 +234,7 @@ internal fun GalleryViewerPager(
             ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
-                        SimpleDateFormat("EEEE, MMM d, yyyy", Locale.getDefault()).format(Date(currentDate)),
+                        SimpleDateFormat("EEEE, MMM d, yyyy", currentLocale()).format(Date(currentDate)),
                         style = MaterialTheme.typography.labelMedium, color = accent,
                         modifier = Modifier.bounceClick { showDatePicker = true }.padding(vertical = 4.dp)
                     )
