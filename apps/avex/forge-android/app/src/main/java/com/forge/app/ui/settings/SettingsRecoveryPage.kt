@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.PermissionController
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.domain.health.BodyweightSync
 import com.forge.app.domain.health.WearableBrand
 
 /**
@@ -158,8 +159,15 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             connected = state.weightGranted,
             connectable = connectable,
             // History access rides the first connect (H-05) so the one-time backfill can reach past
-            // Health Connect's 30-day window; declining it still connects the row.
-            onConnect = { weightLauncher.launch(viewModel.weightPermissions + viewModel.historyPermissions) },
+            // Health Connect's 30-day window; declining it still connects the row. Asked for only
+            // where the provider implements it — an unsupported permission is a consent screen the
+            // user cannot say yes to, so requesting it can only make the connect look like it failed.
+            onConnect = {
+                weightLauncher.launch(
+                    if (state.historySupported) viewModel.weightPermissions + viewModel.historyPermissions
+                    else viewModel.weightPermissions
+                )
+            },
             receiving = state.signalFlow?.weight
         )
         if (state.weightGranted) {
@@ -173,13 +181,25 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
                 SettingsActionLink("Allow write-back →") { weightLauncher.launch(viewModel.weightPermissions) }
             }
             SettingsActionLink("Import latest weight →") { viewModel.importNow() }
-            if (state.weightHistoryPartial) {
-                Text(
-                    "Only the last 30 days came over. Older weigh-ins need history access.",
+            // Two different facts, two different lines. A grant the user has not given yet comes
+            // with the action that gives it; a provider that has no extended history at all comes
+            // with none, because there is nothing to tap. Offering the retry regardless is what left
+            // an unsupported provider with a permanent link that could never do anything.
+            when (state.historyAffordance) {
+                BodyweightSync.HistoryAffordance.RETRY -> {
+                    Text(
+                        "Only the last 30 days came over. Older weigh-ins need history access.",
+                        style = MaterialTheme.typography.bodySmall, color = muted,
+                        modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
+                    )
+                    SettingsActionLink("Import older weight →") { historyLauncher.launch(viewModel.historyPermissions) }
+                }
+                BodyweightSync.HistoryAffordance.UNSUPPORTED -> Text(
+                    "This Health Connect app only shares the last 30 days of weight.",
                     style = MaterialTheme.typography.bodySmall, color = muted,
                     modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
                 )
-                SettingsActionLink("Import older weight →") { historyLauncher.launch(viewModel.historyPermissions) }
+                BodyweightSync.HistoryAffordance.NONE -> Unit
             }
             state.importMessage?.let {
                 Text(

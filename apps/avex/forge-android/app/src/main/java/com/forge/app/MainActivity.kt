@@ -65,6 +65,10 @@ import javax.inject.Inject
 
 private const val PENDING_IMPORT_URI_KEY = "pending_import_uri"
 
+/** An unhandled widget tap, kept across a recreation so the deep-link is not lost (M-30). */
+private const val WIDGET_REQUEST_ID_KEY = "widget_request_id"
+private const val WIDGET_REQUEST_DAY_KEY = "widget_request_day_key"
+
 @AndroidEntryPoint
 // FragmentActivity (a superclass of ComponentActivity) is required by androidx.biometric's
 // BiometricPrompt, which drives the app / gallery lock (GYMAP-69). Everything else — Compose,
@@ -98,6 +102,14 @@ class MainActivity : FragmentActivity() {
         if (dayKey.isNullOrBlank()) return
         widgetRequestSeq += 1
         widgetOpenRequest = com.forge.app.widget.WidgetOpenRequest(widgetRequestSeq, dayKey)
+    }
+
+    /**
+     * The nav host has routed the tap, or rejected it against a program that had actually loaded.
+     * Until then the request stays — including across a recreation, see [onSaveInstanceState].
+     */
+    private fun widgetOpenHandled() {
+        widgetOpenRequest = null
     }
     private var privacyPolicyRequest by mutableStateOf(0)
 
@@ -156,6 +168,15 @@ class MainActivity : FragmentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         pendingImportUri?.let { outState.putString(PENDING_IMPORT_URI_KEY, it.toString()) }
+        // An UNHANDLED widget tap outlives the Activity (M-30). The request lived only in this
+        // field and was read only when `savedInstanceState == null`, so a recreation while the
+        // nav host was still waiting for the program — a rotation, or the process being rebuilt
+        // behind the launcher — cancelled the effect and threw the tap away: the widget's primary
+        // action did nothing, with no way to tell it had been asked for.
+        widgetOpenRequest?.let {
+            outState.putLong(WIDGET_REQUEST_ID_KEY, it.id)
+            outState.putString(WIDGET_REQUEST_DAY_KEY, it.dayKey)
+        }
         super.onSaveInstanceState(outState)
     }
 
@@ -299,8 +320,18 @@ class MainActivity : FragmentActivity() {
         // Widget deep-link: a home-screen widget tap carries the day to open (the next-up day, or the
         // active session's day when one is in progress). Read it once on a fresh launch and hand it to
         // the nav host, which opens it on top of Overview so Back returns home.
-        if (savedInstanceState == null)
+        if (savedInstanceState == null) {
             requestWidgetOpen(intent?.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY))
+        } else {
+            // A tap the previous instance had not finished routing yet. Restored with its ORIGINAL
+            // id, so it stays the same event rather than becoming a second one.
+            val dayKey = savedInstanceState.getString(WIDGET_REQUEST_DAY_KEY)
+            val id = savedInstanceState.getLong(WIDGET_REQUEST_ID_KEY)
+            if (!dayKey.isNullOrBlank() && id > 0L) {
+                widgetRequestSeq = id
+                widgetOpenRequest = com.forge.app.widget.WidgetOpenRequest(id, dayKey)
+            }
+        }
         if (savedInstanceState == null && opensHealthConnectPrivacyPolicy(intent?.action)) privacyPolicyRequest++
 
         // A cold-start share/open of an export file (#GYMAP-17) — import it once, not again on a
@@ -501,6 +532,7 @@ class MainActivity : FragmentActivity() {
                                     ) {
                                         ForgeNavHost(
                                             widgetOpen = widgetOpenRequest,
+                                            onWidgetOpenHandled = ::widgetOpenHandled,
                                             privacyPolicyRequest = privacyPolicyRequest
                                         )
                                     }

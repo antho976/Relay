@@ -45,6 +45,7 @@ class ProgressPhotoRepositoryTest {
         override suspend fun upsert(entry: BodyweightEntry): Long = 0L
         override fun observeRecent(limit: Int): Flow<List<BodyweightEntry>> = flowOf(emptyList())
         override suspend fun latest(): BodyweightEntry? = null
+        override suspend fun earliestSince(sinceMs: Long): BodyweightEntry? = null
         override suspend fun byDateKey(dateKey: String): BodyweightEntry? = null
         override suspend fun all(): List<BodyweightEntry> = emptyList()
         override suspend fun since(sinceMs: Long): List<BodyweightEntry> = emptyList()

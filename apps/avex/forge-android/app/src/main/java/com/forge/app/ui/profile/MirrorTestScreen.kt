@@ -107,7 +107,11 @@ fun MirrorTestScreen(
     val outline = MaterialTheme.colorScheme.outline
     val background = MaterialTheme.colorScheme.background
 
-    val zone = remember { ZoneId.systemDefault() }
+    // Not remembered (M-15). A remembered zone survives recomposition by definition, so after a
+    // flight the gallery kept bucketing new-zone photo timestamps by the old zone's day boundaries.
+    // Re-read here, like CardioScreen: `today` below is keyed on it, so a changed zone re-derives
+    // the days rather than quietly mis-slicing them.
+    val zone = ZoneId.systemDefault()
     val settings = LocalForgeSettings.current
     val firstDayMonday = settings.firstDayMonday
     val weightUnit = settings.weightUnit

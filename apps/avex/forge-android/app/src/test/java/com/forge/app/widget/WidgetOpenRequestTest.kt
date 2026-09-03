@@ -1,5 +1,6 @@
 package com.forge.app.widget
 
+import com.forge.app.program.Program
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
@@ -66,5 +67,48 @@ class WidgetOpenRequestTest {
     fun aDayTheProgramNoLongerHasIsRejectedRatherThanLeftPending() {
         assertEquals(WidgetDestination.Unrecognised, widgetDestinationFor("deleted-day", loadedProgram))
         assertEquals(WidgetDestination.Unrecognised, widgetDestinationFor("", loadedProgram))
+    }
+
+    // ── Readiness, not a timer ───────────────────────────────────────────────
+
+    /**
+     * The gap the four-second poll left. It waited, then judged the key against whatever `Program`
+     * happened to hold — which on a slow cold start is still the seed split — and discarded the tap.
+     * A load in flight and a day the program does not have became the same answer.
+     */
+    @Test
+    fun aTapIsNotAnsweredUntilTheProgramHasActuallyLoaded() {
+        assertEquals(
+            "still loading: wait, do not judge",
+            WidgetRouting.Wait,
+            widgetRoutingFor(Program.Readiness.PENDING, "upper-a", seedProgram)
+        )
+        assertEquals(
+            "loaded: now the key means something",
+            WidgetRouting.Decided(WidgetDestination.GymDay("upper-a")),
+            widgetRoutingFor(Program.Readiness.LOADED, "upper-a", loadedProgram)
+        )
+    }
+
+    /**
+     * A load that FAILED is not a verdict on the day either — the program is still the seed split.
+     * Consuming the tap here is the same silent loss, reached by a different route, so the request
+     * is kept for a load that does succeed.
+     */
+    @Test
+    fun aFailedLoadKeepsTheTapRatherThanRejectingIt() {
+        assertEquals(
+            WidgetRouting.Wait,
+            widgetRoutingFor(Program.Readiness.FAILED, "upper-a", seedProgram)
+        )
+    }
+
+    /** And a loaded program that genuinely lacks the day DOES answer — the request is spent. */
+    @Test
+    fun aLoadedProgramWithoutTheDayIsAnAnswer() {
+        assertEquals(
+            WidgetRouting.Decided(WidgetDestination.Unrecognised),
+            widgetRoutingFor(Program.Readiness.LOADED, "deleted-day", loadedProgram)
+        )
     }
 }

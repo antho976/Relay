@@ -18,9 +18,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,6 +51,18 @@ fun filterLibrary(query: String, exclude: Set<String>): List<ExerciseDef> {
 }
 
 /**
+ * The picked ids, as something a `Bundle` can hold.
+ *
+ * `rememberSaveable` has no built-in saver for a `Set`, and the platform can only store a small
+ * closed set of types — `ArrayList<String>` is one of them, a bare `Set` is not. Selection order
+ * carries no meaning here, so the round trip through a list loses nothing.
+ */
+private val PickedSaver: Saver<MutableState<Set<String>>, ArrayList<String>> = Saver(
+    save = { ArrayList(it.value) },
+    restore = { mutableStateOf(it.toSet()) }
+)
+
+/**
  * Searchable, multi-select picker over the exercise library (machines included; owner-only
  * plate-count stations and already-present moves filtered out). Shared by the onboarding "make my
  * own" flow, the Program Editor, and the freestyle logger. Rows lead with the [ExerciseIcons]
@@ -66,8 +81,13 @@ fun ExerciseLibraryPicker(
     confirmLabel: String = "Add",
     singleSelect: Boolean = false
 ) {
-    var query by remember { mutableStateOf("") }
-    var picked by remember { mutableStateOf(emptySet<String>()) }
+    // Saveable, not remembered (H-13). The ViewModel restores WHICH dialog was open, so a rotation
+    // mid-swap reopened the right picker — with the typed query gone and every pick cleared, which
+    // is the half of "the in-flight edit survives" that the user actually notices. Both call sites
+    // are in distinct composition positions, so the Add picker and the Swap picker keep separate
+    // slots and cannot inherit each other's draft.
+    var query by rememberSaveable { mutableStateOf("") }
+    var picked by rememberSaveable(saver = PickedSaver) { mutableStateOf(emptySet<String>()) }
     val results = remember(query, exclude) { filterLibrary(query, exclude) }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {

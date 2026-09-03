@@ -47,6 +47,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.domain.goal.GoalMetric
+import com.forge.app.domain.goal.customPinKey
+import com.forge.app.domain.goal.liftPinKey
 import com.forge.app.domain.goal.GoalPeriod
 import com.forge.app.domain.units.distanceInputValue
 import com.forge.app.domain.units.distanceUnitLabel

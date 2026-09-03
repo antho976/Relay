@@ -46,14 +46,46 @@ class CardioDayAnchorTest {
         assertEquals("and it has by Tuesday — the same entries, a different day", 25, onTuesday[1].minutes)
     }
 
+    /**
+     * Crossing midnight changes the row, and this pins BOTH of the ways it does.
+     *
+     * The cells first. [CardioDayCell] carries minutes and a rest flag and nothing else, so a
+     * FUTURE day and a past day with nothing logged are the same value — comparing cell lists over
+     * a week whose only entry is Monday's compares two identical lists and always has. The version
+     * of this test that did exactly that reported a defect in the day anchor that was not there,
+     * for the whole of its life. Tuesday needs an entry for the cells to be able to differ at all.
+     */
     @Test
-    fun crossingMidnightChangesTheCellsWithoutAnyNewEntry() {
-        val week = listOf(run(ms(2026, 6, 22)))
+    fun crossingMidnightRevealsTheNewDaysOwnEntry() {
+        val week = listOf(run(ms(2026, 6, 22), dur = 40), run(ms(2026, 6, 23), dur = 25))
 
         val before = CardioViewModel.buildWeekDays(week, zone, monday)
         val after = CardioViewModel.buildWeekDays(week, zone, monday.plusDays(1))
 
         assertTrue("the week row must not be identical across a day boundary", before != after)
+        assertEquals("Tuesday is still ahead on Monday", 0, before[1].minutes)
+        assertEquals("and is its own logged day by Tuesday", 25, after[1].minutes)
+    }
+
+    /**
+     * ...and the today styling, which is the half that moves even on a day with nothing logged.
+     * `WeekBoxRow` takes `todayDow` as its own input, derived from the same anchor, so the dashed
+     * marker and the bold weekday letter follow midnight whether or not any cell value changes.
+     */
+    @Test
+    fun theTodayMarkerFollowsTheAnchorEvenWithNothingLogged() {
+        fun todayDow(on: LocalDate) = on.dayOfWeek.value - 1
+
+        assertEquals(0, todayDow(monday))
+        assertEquals("a day later marks a different column, with no entry involved", 1, todayDow(monday.plusDays(1)))
+
+        // And the cells behind it are genuinely unchanged, which is why the marker has to be its
+        // own input rather than something the cell list could imply.
+        val week = listOf(run(ms(2026, 6, 22)))
+        assertEquals(
+            CardioViewModel.buildWeekDays(week, zone, monday.plusDays(1)),
+            CardioViewModel.buildWeekDays(week, zone, monday.plusDays(2))
+        )
     }
 
     @Test

@@ -24,12 +24,28 @@ data class ProgramGenerationIntent(
     /** The instant the attempt began — the deload week is anchored on it, not on the boot that finishes it. */
     val atMs: Long,
     /** [programSignature] of the program this attempt is replacing. */
-    val beforeSignature: String
+    val beforeSignature: String,
+    /**
+     * [programSignature] of the program this attempt is about to WRITE (M-06).
+     *
+     * `beforeSignature` alone can only say "something changed", and something else changing is not
+     * this attempt committing. A generation that failed, followed by a custom save or a reroll
+     * before the next boot, left a program matching neither — and the boot applied the abandoned
+     * attempt's deload marker to a plan it had never touched. Recognising the attempt's OWN result
+     * is what tells a commit from someone else's write.
+     *
+     * Empty for an intent written by a build that predates it; that falls back to the old rule.
+     */
+    val afterSignature: String = "",
+    /** Identifies the attempt, so an intent found later can be told from a fresh one. */
+    val opId: String = ""
 ) {
     fun toJson(): String = JSONObject().apply {
         put("deload", deload)
         put("atMs", atMs)
         put("before", beforeSignature)
+        put("after", afterSignature)
+        put("op", opId)
     }.toString()
 
     companion object {
@@ -41,7 +57,9 @@ data class ProgramGenerationIntent(
                 ProgramGenerationIntent(
                     deload = o.optBoolean("deload", false),
                     atMs = o.optLong("atMs", 0L).takeIf { it > 0L } ?: return null,
-                    beforeSignature = o.optString("before")
+                    beforeSignature = o.optString("before"),
+                    afterSignature = o.optString("after"),
+                    opId = o.optString("op")
                 )
             }.getOrNull()
         }
@@ -61,6 +79,13 @@ sealed interface PendingGeneration {
      * instant for a deload, and 0 — "not in a deload week" — for an ordinary regeneration.
      */
     data class Apply(val deloadStartMs: Long) : PendingGeneration
+
+    /**
+     * The program on disk is neither what the attempt was replacing nor what it would have written:
+     * something else has changed it since. The attempt's marker must NOT be applied to a plan it
+     * never produced — the intent is dropped and the deload state left as it is (M-06).
+     */
+    data object Superseded : PendingGeneration
 }
 
 /**
@@ -70,10 +95,27 @@ sealed interface PendingGeneration {
 fun resolvePendingGeneration(
     intent: ProgramGenerationIntent?,
     currentSignature: String
-): PendingGeneration = when {
-    intent == null -> PendingGeneration.None
-    intent.beforeSignature == currentSignature -> PendingGeneration.Discard
-    else -> PendingGeneration.Apply(if (intent.deload) intent.atMs else 0L)
+): PendingGeneration {
+    if (intent == null) return PendingGeneration.None
+    val marker = PendingGeneration.Apply(if (intent.deload) intent.atMs else 0L)
+    return when {
+        // The attempt's OWN result is on disk: it committed. Checked FIRST, so a regeneration whose
+        // output happens to equal its input — deterministic picks, constrained equipment — is read
+        // as the commit it was rather than as "nothing changed". Under the old rule that case was
+        // indistinguishable from a failure, and a marker the user had asked for was discarded.
+        intent.afterSignature.isNotEmpty() && currentSignature == intent.afterSignature -> marker
+
+        // Untouched: the transaction never committed. The marker is left exactly as it was.
+        currentSignature == intent.beforeSignature -> PendingGeneration.Discard
+
+        // An intent from a build that recorded no `after` can only use the old rule: anything that
+        // is not the before-program reads as a commit.
+        intent.afterSignature.isEmpty() -> marker
+
+        // Neither. A custom save, a reroll, or a later generation has written since, and this
+        // attempt's marker describes none of them.
+        else -> PendingGeneration.Superseded
+    }
 }
 
 /**

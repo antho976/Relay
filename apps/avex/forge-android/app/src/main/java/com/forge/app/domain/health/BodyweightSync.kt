@@ -92,4 +92,37 @@ object BodyweightSync {
         complete: Boolean,
         partial: Boolean
     ): Boolean = weightReadGranted && !historyGranted && (complete || partial)
+
+    /** What the bodyweight row may say and offer about history depth. */
+    enum class HistoryAffordance {
+        /** Nothing to say: either history is live, or no pass has run yet. */
+        NONE,
+        /** The provider supports history and Avex does not have it: say so, offer the retry. */
+        RETRY,
+        /**
+         * The provider does not implement extended history at all. Say what the limit is and offer
+         * NOTHING — the permission cannot be granted, so a retry link opens a consent screen the
+         * user cannot answer and comes back having changed nothing, every time.
+         */
+        UNSUPPORTED
+    }
+
+    /**
+     * Which of the two (H-05). "Not granted" and "not supported" produced the same permanent
+     * "older weigh-ins need history access" line with the same dead retry beneath it, because the
+     * provider's capability was never asked about.
+     *
+     * @param historySupported the provider implements `FEATURE_READ_HEALTH_DATA_HISTORY`.
+     * @param windowIsPartial [historyWindowIsPartial] for the same pass.
+     */
+    fun historyAffordance(
+        weightReadGranted: Boolean,
+        historySupported: Boolean,
+        windowIsPartial: Boolean
+    ): HistoryAffordance = when {
+        !weightReadGranted -> HistoryAffordance.NONE
+        !historySupported -> HistoryAffordance.UNSUPPORTED
+        windowIsPartial -> HistoryAffordance.RETRY
+        else -> HistoryAffordance.NONE
+    }
 }
