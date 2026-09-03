@@ -340,8 +340,9 @@ jobs:
         # bookkeeping, so the tail of the log is the answer rather than 250 lines of cache keys.
         #
         # Compile errors first (a broken build has no test results to summarise), then the failing
-        # test names. Both are already on disk; this only makes them findable without downloading
-        # an artifact.
+        # test names, then lint's errors — pipeline order, so the tail of the log is the gate that
+        # actually stopped. All three are already on disk; this only makes them findable without
+        # downloading an artifact.
         if: failure()
         shell: bash
         run: |
@@ -357,6 +358,15 @@ jobs:
           echo "::group::Failing tests"
           grep -E "FAILED$|^\s+java\.lang\.AssertionError|tests completed," "$RUNNER_TEMP/verify.log" \
             | head -60 || echo "(none)"
+          echo "::endgroup::"
+          echo "::group::Lint errors"
+          # Gradle prints lint's FIRST failure and stops, so a run with thirteen errors names one
+          # and hides twelve, and the rest exist only inside a zip you have to download. Every
+          # report line already carries the file, the line, the message and the check id, which is
+          # the whole answer. Errors only — the warnings are not what failed the build.
+          find forge-android -name 'lint-results-*.txt' -print0 2>/dev/null \
+            | xargs -0 -r grep -h ": Error: " \
+            | sort -u | head -60 || echo "(none — lint is not what failed)"
           echo "::endgroup::"
 
   instrumented:
