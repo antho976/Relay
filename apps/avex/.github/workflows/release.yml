@@ -119,7 +119,7 @@ jobs:
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
-          "$sdkmanager" "platforms;android-36" > /dev/null
+          "$sdkmanager" "platforms;android-37.0" > /dev/null
 
       - name: Materialise the upload key
         # RUNNER_TEMP, not the workspace: nothing under the checkout can then be swept into an

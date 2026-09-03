@@ -34,6 +34,7 @@ import com.forge.app.domain.photo.PhotoPose
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.experiment.CardShape
 import com.forge.app.ui.goals.GoalProgressLine
 import com.forge.app.ui.goals.customGoalTitle
@@ -44,7 +45,6 @@ import com.forge.app.ui.theme.MonoSectionAnchor
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
-import java.util.Locale
 
 /** Size of one filmstrip photo cell — portrait 3:4, tall enough to actually read as a photo. */
 private val StripCellWidth = 132.dp
@@ -356,7 +356,7 @@ private fun StripPhotoCell(photo: ProgressPhoto, file: File, onOpenGallery: () -
             )
         }
         Text(
-            SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(photo.takenAtMs)).uppercase(),
+            SimpleDateFormat("MMM d", currentLocale()).format(Date(photo.takenAtMs)).uppercase(),
             style = MaterialTheme.typography.labelSmall,
             color = Color.White.copy(alpha = 0.92f), fontSize = 8.sp,
             modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 9.dp, vertical = 8.dp)

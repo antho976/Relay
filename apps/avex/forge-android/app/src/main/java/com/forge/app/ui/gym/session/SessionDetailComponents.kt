@@ -49,6 +49,7 @@ import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.common.EditorialHairline
+import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.session.state.ExerciseDetail
 import com.forge.app.ui.gym.session.state.SessionChartStyle
@@ -65,7 +66,6 @@ import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.util.Locale
 
 // ─── Header + summary + muscle map ─────────────────────────────────────────────
 
@@ -93,7 +93,7 @@ internal fun SessionHeaderBlock(
         Column(Modifier.weight(1f)) {
             val zone = ZoneId.systemDefault()
             val date = Instant.ofEpochMilli(data.dateMs).atZone(zone).toLocalDate()
-            val dateStr = date.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault()))
+            val dateStr = date.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", currentLocale()))
             val sub = buildList {
                 // Deload marker wins; otherwise the stored session-type's pill (TEST/TECHNIQUE/… once a
                 // picker writes them) — same resolution as the Overview status pill so the two can't drift.

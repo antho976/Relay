@@ -55,6 +55,7 @@ import com.forge.app.domain.units.formatWeightDelta
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.currentLocale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -62,7 +63,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.time.ZoneId
 import java.util.Date
-import java.util.Locale
 import kotlin.math.abs
 
 /**
@@ -266,7 +266,7 @@ private fun ComparePane(
     Column(modifier.padding(horizontal = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(tag, style = MaterialTheme.typography.labelMedium, color = accent)
         Text(
-            SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(photo.takenAtMs)),
+            SimpleDateFormat("MMM d, yyyy", currentLocale()).format(Date(photo.takenAtMs)),
             style = MaterialTheme.typography.labelSmall, color = muted, textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(8.dp))

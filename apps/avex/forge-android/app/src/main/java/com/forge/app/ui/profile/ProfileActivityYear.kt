@@ -25,12 +25,12 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.theme.MonoSectionAnchor
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.TextStyle
-import java.util.Locale
 
 /**
  * # ACTIVITY — the whole year, as a contribution graph
@@ -252,12 +252,13 @@ private fun yearReading(year: Int, activeDays: Int, sessions: Int): String =
  */
 @Composable
 private fun MonthLabels(band: HalfYear, slots: Int, muted: Color) {
+    val locale = currentLocale()
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(CELL_GAP)) {
         band.spans.forEachIndexed { i, span ->
             if (span <= 0) return@forEachIndexed
             Text(
                 YearMonth.of(2000, band.firstMonth + i).month
-                    .getDisplayName(TextStyle.NARROW, Locale.getDefault()).uppercase(),
+                    .getDisplayName(TextStyle.NARROW, locale).uppercase(),
                 style = MaterialTheme.typography.labelSmall,
                 color = muted,
                 modifier = Modifier.weight(span.toFloat())

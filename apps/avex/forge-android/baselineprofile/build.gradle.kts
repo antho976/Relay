@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "com.forge.app.baselineprofile"
-    compileSdk = 36
+    // Tracks :app: this module builds against it, so it needs the same APIs visible.
+    compileSdk = 37
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

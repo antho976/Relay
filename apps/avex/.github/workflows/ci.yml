@@ -201,13 +201,29 @@ jobs:
           add-job-summary: on-failure
 
       - name: Install the Android platform this build compiles against
-        # compileSdk 36 is newer than the runner image is guaranteed to carry. Installing it turns
+        # compileSdk 37 is newer than the runner image is guaranteed to carry. Installing it turns
         # "the hosted image happened to have it" into a stated dependency, and keeps the failure
         # legible on the day it does not.
+        #
+        # `android-37.0`, not `android-37`. Android platforms are minor-versioned now — the
+        # catalogue offers 36, 36.1, 37.0, 37.1 and 37.2 betas, and there is no bare `android-37`
+        # at all. Asking for one fails identically to asking for a version that does not exist.
+        #
+        # On failure it says WHICH platforms the runner can actually see. `sdkmanager` reports a
+        # package it cannot find as a one-line warning and a non-zero exit, which is
+        # indistinguishable from a network blip unless you can compare it against the catalogue —
+        # and the catalogue is the thing that decides whether a compileSdk bump is possible at all.
         run: |
+          set -o pipefail
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
-          "$sdkmanager" "platforms;android-36" > /dev/null
+          if ! "$sdkmanager" "platforms;android-37.0"; then
+            echo "::group::Platforms this runner can install"
+            "$sdkmanager" --list 2>/dev/null | grep -E "^\s*platforms;android-[0-9]+" | sort -u || true
+            echo "::endgroup::"
+            echo "::error::platforms;android-37.0 could not be installed. See the list above for what exists."
+            exit 1
+          fi
 
       - name: Cache Robolectric runtime jars
         # Robolectric fetches its android-all jars at TEST time into ~/.m2, outside Gradle's
@@ -290,6 +306,13 @@ jobs:
       - name: Android Lint (release variant, phone + wear)
         # The release variant specifically: lint-vital rules only run there, and those are the ones
         # that fail a Play upload rather than merely annoying a reviewer.
+        #
+        # Runs even when the tests failed. Lint and the test suite are independent gates over the
+        # same compile, and skipping this one because the other went red means each round trip
+        # answers exactly one question: fix the test, wait fifteen minutes, and only then find out
+        # lint has thirteen errors of its own. The Gradle invocation above already passes
+        # `--continue` for the same reason one level down.
+        if: ${{ !cancelled() }}
         run: ./forge-android/gradlew -p forge-android --continue :app:lintRelease :wear:lintRelease
 
       - name: Upload lint reports
@@ -305,6 +328,10 @@ jobs:
         # assembleRelease is UNSIGNED here (this workflow holds no secrets) and exists to exercise
         # R8: shrinking, obfuscation, and the keep rules that stop Room/DataStore enum round-trips
         # from being renamed out from under the database.
+        #
+        # Also runs on a red job, for the reason lint does: an R8 keep-rule failure is a separate
+        # fact from a failing test, and waiting a cycle to learn it is a cycle spent.
+        if: ${{ !cancelled() }}
         run: ./forge-android/gradlew -p forge-android assembleDebug assembleRelease
 
       - name: Upload debug APKs
@@ -324,18 +351,33 @@ jobs:
         # bookkeeping, so the tail of the log is the answer rather than 250 lines of cache keys.
         #
         # Compile errors first (a broken build has no test results to summarise), then the failing
-        # test names. Both are already on disk; this only makes them findable without downloading
-        # an artifact.
+        # test names, then lint's errors — pipeline order, so the tail of the log is the gate that
+        # actually stopped. All three are already on disk; this only makes them findable without
+        # downloading an artifact.
         if: failure()
         shell: bash
         run: |
           echo "::group::Compile errors"
-          grep -E "^e: |: error: |Unresolved reference|FAILURE: Build failed" "$RUNNER_TEMP/verify.log" \
-            | head -40 || echo "(none — see the test failures below)"
+          # -A 4 because a javac error is not self-contained: "cannot find symbol" says nothing
+          # without the `symbol:` and `location:` lines that follow it, and when the file is
+          # generated (Hilt, Room) the digest otherwise names a path that exists on no branch and
+          # stops. Kotlin's "e:" lines already carry their message, so the context costs a few
+          # blank lines there and answers the question here.
+          grep -A 4 -E "^e: |: error: |Unresolved reference|FAILURE: Build failed" "$RUNNER_TEMP/verify.log" \
+            | head -80 || echo "(none — see the test failures below)"
           echo "::endgroup::"
           echo "::group::Failing tests"
           grep -E "FAILED$|^\s+java\.lang\.AssertionError|tests completed," "$RUNNER_TEMP/verify.log" \
             | head -60 || echo "(none)"
+          echo "::endgroup::"
+          echo "::group::Lint errors"
+          # Gradle prints lint's FIRST failure and stops, so a run with thirteen errors names one
+          # and hides twelve, and the rest exist only inside a zip you have to download. Every
+          # report line already carries the file, the line, the message and the check id, which is
+          # the whole answer. Errors only — the warnings are not what failed the build.
+          find forge-android -name 'lint-results-*.txt' -print0 2>/dev/null \
+            | xargs -0 -r grep -h ": Error: " \
+            | sort -u | head -60 || echo "(none — lint is not what failed)"
           echo "::endgroup::"
 
   instrumented:
@@ -377,7 +419,7 @@ jobs:
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
-          "$sdkmanager" "platforms;android-36" > /dev/null
+          "$sdkmanager" "platforms;android-37.0" > /dev/null
 
       - name: Enable KVM
         run: |
