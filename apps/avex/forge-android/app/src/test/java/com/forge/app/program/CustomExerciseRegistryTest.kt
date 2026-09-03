@@ -8,6 +8,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * The custom-exercise registry: the JSON blob it persists as, and the resolvers it feeds. A saved
@@ -19,6 +20,14 @@ import org.robolectric.RobolectricTestRunner
  * unimplemented.
  */
 @RunWith(RobolectricTestRunner::class)
+// A PLAIN Application, not Avex's own — the same collision CoachRepositoryApplyTest documents.
+// Robolectric instantiates the manifest's `ForgeApp` for every test method, and its `onCreate`
+// launches `settingsRepository.customExercises.collect { CustomExerciseRegistry.setAll(it) }` on a
+// background scope. DataStore is empty here, so that collector calls `setAll(emptyList())` at some
+// unpredictable point INSIDE the test body — wiping the very process-global registry these tests
+// register into. It landed between a `put` and the read below on CI run 286 and not on 285, at the
+// same source: `expected:<GLUTES> but was:<null>`, a harness race reported as a registry defect.
+@Config(application = android.app.Application::class)
 class CustomExerciseRegistryTest {
 
     private val sled = CustomExerciseDef("custom-sled-push", "Sled Push", "quads")
