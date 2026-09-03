@@ -17,7 +17,7 @@ val hasReleaseKeystore = keystorePropertiesFile.exists() &&
 
 android {
     namespace = "com.forge.wear"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         // SAME applicationId as the phone — required for Play wear-track distribution and for the
@@ -25,9 +25,12 @@ android {
         // scheme: phone versionCode + 100_000 (Play requires distinct codes per APK on one listing).
         applicationId = "com.quietsoftware.avex"
         minSdk = 30 // Wear OS 3+ (every Galaxy Watch since 2021; the plan's locked floor).
-        // Matches :app and compileSdk. Play's annual target-API rule reaches API 36 for updates at
-        // the end of August 2026, and a listing is only as current as its least-current APK — a
-        // wear APK left at 35 would block the whole release.
+        // Matches :app. Play's annual target-API rule reaches API 36 for updates at the end of
+        // August 2026, and a listing is only as current as its least-current APK — a wear APK
+        // left at 35 would block the whole release. compileSdk is deliberately ahead at 37: it
+        // only widens the APIs available at compile time, and the AndroidX generation this module
+        // depends on requires it. targetSdk is what opts into runtime behaviour, so it moves on
+        // Play's schedule, not on AndroidX's.
         targetSdk = 36
         versionCode = 100_091
         versionName = "0.9"

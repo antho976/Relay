@@ -34,8 +34,12 @@ val hasReleaseKeystore = keystorePropertiesFile.exists() &&
 
 android {
     namespace = "com.forge.app"
-    // Android 16 is both the Health Connect compile floor and the phone release target.
-    compileSdk = 36
+    // Ahead of targetSdk on purpose. compileSdk only decides which APIs are VISIBLE at compile
+    // time; the AndroidX generation this app depends on is built against 37 and its AAR metadata
+    // refuses anything older. targetSdk is the one that opts into new runtime behaviour, and it
+    // stays at 36 — Android 16 is the Health Connect compile floor and the phone release target,
+    // and Play's annual target-API rule moves it on its own schedule, not AndroidX's.
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.quietsoftware.avex"

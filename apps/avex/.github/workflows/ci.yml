@@ -201,13 +201,13 @@ jobs:
           add-job-summary: on-failure
 
       - name: Install the Android platform this build compiles against
-        # compileSdk 36 is newer than the runner image is guaranteed to carry. Installing it turns
+        # compileSdk 37 is newer than the runner image is guaranteed to carry. Installing it turns
         # "the hosted image happened to have it" into a stated dependency, and keeps the failure
         # legible on the day it does not.
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
-          "$sdkmanager" "platforms;android-36" > /dev/null
+          "$sdkmanager" "platforms;android-37" > /dev/null
 
       - name: Cache Robolectric runtime jars
         # Robolectric fetches its android-all jars at TEST time into ~/.m2, outside Gradle's
@@ -377,7 +377,7 @@ jobs:
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
-          "$sdkmanager" "platforms;android-36" > /dev/null
+          "$sdkmanager" "platforms;android-37" > /dev/null
 
       - name: Enable KVM
         run: |
