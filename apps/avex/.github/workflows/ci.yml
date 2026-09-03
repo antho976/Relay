@@ -306,6 +306,13 @@ jobs:
       - name: Android Lint (release variant, phone + wear)
         # The release variant specifically: lint-vital rules only run there, and those are the ones
         # that fail a Play upload rather than merely annoying a reviewer.
+        #
+        # Runs even when the tests failed. Lint and the test suite are independent gates over the
+        # same compile, and skipping this one because the other went red means each round trip
+        # answers exactly one question: fix the test, wait fifteen minutes, and only then find out
+        # lint has thirteen errors of its own. The Gradle invocation above already passes
+        # `--continue` for the same reason one level down.
+        if: ${{ !cancelled() }}
         run: ./forge-android/gradlew -p forge-android --continue :app:lintRelease :wear:lintRelease
 
       - name: Upload lint reports
@@ -321,6 +328,10 @@ jobs:
         # assembleRelease is UNSIGNED here (this workflow holds no secrets) and exists to exercise
         # R8: shrinking, obfuscation, and the keep rules that stop Room/DataStore enum round-trips
         # from being renamed out from under the database.
+        #
+        # Also runs on a red job, for the reason lint does: an R8 keep-rule failure is a separate
+        # fact from a failing test, and waiting a cycle to learn it is a cycle spent.
+        if: ${{ !cancelled() }}
         run: ./forge-android/gradlew -p forge-android assembleDebug assembleRelease
 
       - name: Upload debug APKs
