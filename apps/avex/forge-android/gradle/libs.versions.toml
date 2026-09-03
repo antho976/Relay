@@ -7,15 +7,15 @@ ksp = "2.3.2"
 # Compose
 compose-bom = "2025.04.01"
 activity-compose = "1.10.1"
-lifecycle = "2.9.0"
+# 2.11.0 is what androidx.hilt 1.4.0 pulls in transitively, and Gradle resolves to the higher
+# version regardless of what this pin says. Written down so the catalog describes the build that
+# actually runs rather than one that lost a conflict resolution.
+lifecycle = "2.11.0"
 navigation-compose = "2.8.9"
 
 # Hilt + DI
-# androidx.hilt is held at 1.2.0 by compileSdk, same wall as core-ktx above: 1.4.0 requires
-# compileSdk 37 and transitively pulls lifecycle 2.11.0, which requires 37 too — so the
-# catalog pin of lifecycle 2.9.0 does not hold it back (CI run 33662166299).
 hilt = "2.56.2"
-hilt-navigation-compose = "1.2.0"
+hilt-navigation-compose = "1.4.0"
 
 # Persistence
 room = "2.8.4"
@@ -58,7 +58,7 @@ concurrent-futures = "1.2.0"
 
 # WorkManager
 work = "2.10.1"
-hilt-work = "1.2.0"
+hilt-work = "1.4.0"
 
 # Test
 junit = "4.13.2"
@@ -75,11 +75,7 @@ uiautomator = "2.4.0"
 
 [libraries]
 # Core AndroidX
-# core-ktx is held at 1.17.0 by compileSdk: 1.19.0 fails :app/:wear checkDebugAarMetadata with
-# "requires ... version 37 or later of the Android APIs" (CI run 33660499290). Raising it means
-# compileSdk 37 in :app and :wear plus the two sdkmanager pins in ci.yml — a build-policy change,
-# not a dependency bump. Dependabot will keep proposing 1.19.0 until that happens.
-androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version = "1.17.0" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version = "1.19.0" }
 androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version = "1.2.0" }
 androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version = "1.4.2" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity-compose" }
