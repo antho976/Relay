@@ -73,6 +73,50 @@ class BodyweightGoalBaselineTest {
         assertTrue("reached at the target", done.achieved)
     }
 
+    /**
+     * The shipped test read progress after every weigh-in, so the very first read always landed
+     * while 200 was the only weight on file — and stored 200 for the right answer for the wrong
+     * reason. Adoption happens on the next READ, which in practice is days of weigh-ins later.
+     *
+     * Two writes, then the first read: log 200 on Monday and 190 on Tuesday, open Goals on
+     * Wednesday. Taking the latest weight records the journey as having begun at 190, and the 10 lb
+     * already lost never happened.
+     */
+    @Test
+    fun theFirstWeighInWinsEvenWhenNothingReadProgressUntilAfterTheSecond() = runTest {
+        repo.create(GoalMetric.BODYWEIGHT, GoalPeriod.ALL, targetValue = 180.0)
+        weighIn(200.0, "2026-01-05")
+        weighIn(190.0, "2026-01-06")
+
+        val first = bodyweightGoal()
+        assertEquals("the journey started at 200, not where it had got to", 200.0, first.baselineValue!!, 0.001)
+        assertEquals("200 → 190 of 200 → 180 is halfway", 0.5f, first.fraction, 0.01f)
+        assertEquals(200.0, db.extendedGoalDao().getAll().single().stretchValue!!, 0.001)
+    }
+
+    /**
+     * A weigh-in that PREDATES the goal is not its start either: the goal was created after it, and
+     * `create` already stored the baseline in that case. Only weights from the goal's own life
+     * qualify, so a stale reading cannot be adopted as a journey the user had not begun.
+     */
+    @Test
+    fun aWeighInFromBeforeTheGoalIsNotAdoptedAsItsStart() = runTest {
+        weighIn(210.0, "2026-01-04")
+        // A goal whose baseline was cleared (or a row from before baselines were stored at all):
+        // the only weigh-in on file is older than the goal.
+        repo.create(GoalMetric.BODYWEIGHT, GoalPeriod.ALL, targetValue = 180.0)
+        val created = db.extendedGoalDao().getAll().single()
+        db.extendedGoalDao().insert(created.copy(stretchValue = null))
+
+        assertNull("nothing from this goal's own life to start from", bodyweightGoal().baselineValue)
+
+        weighIn(200.0, "2026-01-06")
+        assertEquals(
+            "the first weigh-in the goal actually lived through",
+            200.0, bodyweightGoal().baselineValue!!, 0.001
+        )
+    }
+
     @Test
     fun theBaselineIsWrittenBackRatherThanRecomputedEveryRead() = runTest {
         repo.create(GoalMetric.BODYWEIGHT, GoalPeriod.ALL, targetValue = 180.0)

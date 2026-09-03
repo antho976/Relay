@@ -156,4 +156,52 @@ class BodyweightSyncTest {
         // the window: offer the older import rather than believe the latch.
         assertTrue(BodyweightSync.historyWindowIsPartial(weightReadGranted = true, historyGranted = false, complete = true, partial = false))
     }
+
+    // ── H-05: not granted and not supported are different states ─────────────
+
+    /**
+     * A provider that does not implement `FEATURE_READ_HEALTH_DATA_HISTORY` cannot grant it, so the
+     * window it gave IS the whole history it has. Avex asked for the permission unconditionally and
+     * offered the retry unconditionally, so such a provider got a permanent "older weigh-ins need
+     * history access" line above a link to a consent screen the user could not answer — every tap
+     * returning to the same line.
+     */
+    @Test
+    fun `an unsupported provider is told apart from a declined grant`() {
+        // Supported, not granted, a pass has run: the retry is real, so offer it.
+        assertEquals(
+            BodyweightSync.HistoryAffordance.RETRY,
+            BodyweightSync.historyAffordance(
+                weightReadGranted = true, historySupported = true, windowIsPartial = true
+            )
+        )
+        // Not supported: say what the limit is, offer nothing — even though the window IS partial
+        // by the grant-only rule, which is exactly the state that produced the dead link.
+        assertEquals(
+            BodyweightSync.HistoryAffordance.UNSUPPORTED,
+            BodyweightSync.historyAffordance(
+                weightReadGranted = true, historySupported = false, windowIsPartial = true
+            )
+        )
+        assertEquals(
+            BodyweightSync.HistoryAffordance.UNSUPPORTED,
+            BodyweightSync.historyAffordance(
+                weightReadGranted = true, historySupported = false, windowIsPartial = false
+            )
+        )
+        // Supported and live (or no pass yet): nothing to say.
+        assertEquals(
+            BodyweightSync.HistoryAffordance.NONE,
+            BodyweightSync.historyAffordance(
+                weightReadGranted = true, historySupported = true, windowIsPartial = false
+            )
+        )
+        // Weight itself is not connected: the row shows no history line at all.
+        assertEquals(
+            BodyweightSync.HistoryAffordance.NONE,
+            BodyweightSync.historyAffordance(
+                weightReadGranted = false, historySupported = false, windowIsPartial = true
+            )
+        )
+    }
 }

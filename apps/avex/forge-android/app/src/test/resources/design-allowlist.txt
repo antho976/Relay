@@ -266,7 +266,6 @@
 2 hype program/ExerciseLibrary.kt "insane"
 1 hype program/Trophies.kt "Beast"
 1 literal-duration ui/common/AvexWordmark.kt literal duration
-1 literal-duration ui/common/ForgeShimmer.kt literal duration
 1 literal-duration ui/common/LaunchScenes.kt literal duration
 2 literal-duration ui/gym/train/components/RestTimerBubble.kt literal duration
 16 literal-duration ui/profile/TrophyIconMotion.kt literal duration

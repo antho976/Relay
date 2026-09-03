@@ -64,15 +64,11 @@ import com.forge.app.ui.settings.SettingsScreen
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.trophies.TrophiesScreen
 
-/** How long a widget tap waits for the DB-backed program before it judges the day it names (M-30). */
-private const val WIDGET_PROGRAM_WAIT_MS = 4_000L
-
-/** Poll interval for that wait. `Program.isLoaded` is a volatile flag, not a flow. */
-private const val PROGRAM_POLL_MS = 50L
-
 @Composable
 fun ForgeNavHost(
     widgetOpen: com.forge.app.widget.WidgetOpenRequest? = null,
+    /** Called once [widgetOpen] has been routed or rejected against a loaded program (M-30). */
+    onWidgetOpenHandled: () -> Unit = {},
     privacyPolicyRequest: Int = 0
 ) {
     val nav = rememberNavController()
@@ -122,29 +118,36 @@ fun ForgeNavHost(
     // Keyed on the REQUEST, not on the day it names (M-30): tapping the same widget twice assigned
     // the same string, which is no state change, so the second tap ran nothing at all.
     //
-    // And the program is awaited before the key is judged. `Program` reports the hard-coded seed
-    // split until the database program is loaded into it, so a cold tap for a custom builder day
-    // was validated against a split that had never contained it, rejected, and — the string being
-    // unchanged — never retried. The wait is bounded: a program that never loads leaves the user on
-    // Home rather than on a screen that is still deciding.
-    LaunchedEffect(widgetOpen) {
+    // And the program's READINESS is what gates the judgement, not a timer (M-30). `Program` reports
+    // the hard-coded seed split until the database program is loaded into it, so a cold tap for a
+    // custom builder day was validated against a split that had never contained it and rejected.
+    // The four-second poll that replaced that made a slow load indistinguishable from a day the
+    // program does not have: the timeout expired, the key was judged against the seed anyway, and
+    // the tap was discarded. Only a LOADED program may reject a key; a load still in flight is
+    // waited for, and one that has FAILED leaves the request alone rather than answering it wrongly.
+    val programReadiness by com.forge.app.program.Program.readiness.collectAsStateWithLifecycle()
+    LaunchedEffect(widgetOpen, programReadiness) {
         val request = widgetOpen ?: return@LaunchedEffect
-        kotlinx.coroutines.withTimeoutOrNull(WIDGET_PROGRAM_WAIT_MS) {
-            while (!com.forge.app.program.Program.isLoaded) kotlinx.coroutines.delay(PROGRAM_POLL_MS)
-        }
-        when (val destination = com.forge.app.widget.widgetDestinationFor(
+        val routing = com.forge.app.widget.widgetRoutingFor(
+            programReadiness,
             request.dayKey,
             com.forge.app.program.Program.dayKeys
-        )) {
+        )
+        if (routing !is com.forge.app.widget.WidgetRouting.Decided) return@LaunchedEffect
+        when (val destination = routing.destination) {
             is com.forge.app.widget.WidgetDestination.GymDay -> nav.navigate(Routes.gymDay(destination.dayKey))
             com.forge.app.widget.WidgetDestination.CardioTab -> {
                 nav.popBackStack(Routes.OVERVIEW, false)
                 pendingHubPage = BottomTab.CARDIO
             }
-            // A day the loaded program no longer has: the request is spent either way, so the user
+            // A day the LOADED program no longer has: the request is spent either way, so the user
             // stays where they are rather than being re-routed on every recomposition.
             com.forge.app.widget.WidgetDestination.Unrecognised -> Unit
         }
+        // Consumed only now — once a real program answered it. Held in the Activity's saved state
+        // until this point, so a recreation mid-wait (a rotation, or the process being rebuilt
+        // behind the launcher) resumes the tap instead of dropping it.
+        onWidgetOpenHandled()
     }
     LaunchedEffect(privacyPolicyRequest) {
         if (privacyPolicyRequest > 0) {

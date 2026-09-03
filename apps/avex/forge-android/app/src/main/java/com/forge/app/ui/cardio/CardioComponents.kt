@@ -172,6 +172,13 @@ internal fun CardioHero(
 @Composable
 internal fun CardioGoalsSection(
     goals: List<ExtendedGoalRepository.Progress>,
+    /**
+     * Local midnight of the day the surrounding state describes (M-32). The deadline captions are
+     * date-grained readings — "3 days left" — and memoising them on the goal list alone let them
+     * outlive the day they were computed for: nothing about a goal ROW changes at midnight, so a
+     * tab left open counted down to a deadline that had already moved.
+     */
+    todayStartMs: Long,
     onOpenGoals: () -> Unit,
     onBg: Color,
     muted: Color,
@@ -194,8 +201,10 @@ internal fun CardioGoalsSection(
                 .sortedWith(compareBy<ExtendedGoalRepository.Progress> { it.achieved }.thenByDescending { it.fraction })
                 .take(3)
         }
-        // One timestamp for the whole trim, so its captions can't disagree about the day.
-        val now = remember(preview) { System.currentTimeMillis() }
+        // One timestamp for the whole trim, so its captions can't disagree about the day — keyed on
+        // the day as well as on the goals, because a period boundary changes what the caption should
+        // say without changing any goal's numbers.
+        val now = remember(preview, todayStartMs) { System.currentTimeMillis() }
         Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
             preview.forEach { g ->
                 GoalProgressLine(

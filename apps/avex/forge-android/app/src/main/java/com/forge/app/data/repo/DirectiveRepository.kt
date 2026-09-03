@@ -30,6 +30,7 @@ class DirectiveRepository @Inject constructor(
     private val coachGoalRepository: CoachGoalRepository,
     private val academyRepository: AcademyRepository,
     private val workoutRepository: WorkoutRepository,
+    private val blockRepository: BlockRepository,
     private val clock: Clock
 ) {
 
@@ -41,7 +42,16 @@ class DirectiveRepository @Inject constructor(
          * gates: the curriculum carries "what do I do?" until the advisors can, so the card
          * degrades from personalised to principled instead of going quiet.
          */
-        val coldStartLesson: com.forge.app.domain.academy.Lesson? = null
+        val coldStartLesson: com.forge.app.domain.academy.Lesson? = null,
+        /**
+         * The readiness this answer was computed with (P-02).
+         *
+         * Carried rather than left for the caller to ask for again: `readinessScale()` walks every
+         * finished session, its exercises and its sets, and the glance publisher was calling it
+         * beside `today()` — which had just done the same walk to reach the same number. One
+         * assembly, one answer, and the two cannot disagree.
+         */
+        val readiness: com.forge.app.domain.adapt.Recommendation.ReadinessScale? = null
     )
 
     /**
@@ -91,11 +101,15 @@ class DirectiveRepository @Inject constructor(
         )
         val weekdayMode = mode == WeeklySchedule.MODE_WEEKDAY
         // A blank weekday slot is a deliberate rest day. The resolver still names the next scheduled
-        // workout so the rest can say what's coming, but only a day resolved for TODAY may become
-        // "train". The offset used to be dropped here, so Wednesday's rest opened Thursday's session
-        // as if it were today's. Sequence mode has no calendar; its answer is always today's.
-        val restDayScheduled = weekdayMode && resolved != null && resolved.daysAhead > 0
-        val nextUp = resolved?.dayKey?.takeUnless { restDayScheduled }
+        // workout so the rest can say what's coming, but only a day the resolver places TODAY may
+        // become "train".
+        //
+        // Read the placement, not the offset. Offset zero is also what the sequence FALLBACK carries
+        // when a weekday schedule resolves nothing at all — every slot rest, or every slot naming a
+        // day a regenerate has since dropped — and taking that as today's scheduled session put the
+        // user in a workout their own schedule does not contain, on a day it marks as rest.
+        val nextUp = WeeklySchedule.trainTodayKey(resolved)
+        val upcoming = WeeklySchedule.upcomingKey(resolved)
 
         // A consistency goal is the athlete's own weekly budget; without one the coach doesn't
         // invent a number to hold them to.
@@ -116,17 +130,23 @@ class DirectiveRepository @Inject constructor(
             sessionsThisWeek = TodayDirective.sessionsSince(snapshot, weekStartMs),
             weeklyTarget = weeklyTarget,
             freestyle = freestyle,
-            upcomingDayKey = resolved?.dayKey?.takeIf { restDayScheduled },
-            upcomingInDays = resolved?.daysAhead ?: 0
+            upcomingDayKey = upcoming,
+            upcomingInDays = if (upcoming != null) resolved?.daysAhead ?: 0 else 0
         )
 
+        // The active block's phase, so the brief the athlete reads before the session describes the
+        // same week the Coach tab does (H-02). Fail-soft: no block, or an unreadable one, is the
+        // no-phase case, which composes to exactly the previous behaviour.
+        val phase = runCatching { blockRepository.active() }.getOrNull()
+            ?.let { com.forge.app.domain.coach.BlockPhase.fromCode(it.phase) }
         val brief = directive.dayKey?.let { key ->
             PreSessionBrief.build(
                 s = snapshot,
                 dayKey = key,
                 readiness = readiness,
                 life = life,
-                weightUnit = protocolUnit(settingsRepository.weightUnit.first())
+                weightUnit = protocolUnit(settingsRepository.weightUnit.first()),
+                phase = phase
             )
         }
         // Below the gates the directive is curriculum-driven; past them the lesson drops away on
@@ -136,7 +156,7 @@ class DirectiveRepository @Inject constructor(
         ) {
             runCatching { academyRepository.coldStartLesson() }.getOrNull()
         } else null
-        return TodayAnswer(directive, brief, lesson)
+        return TodayAnswer(directive, brief, lesson, readiness)
     }
 
     private fun todayStart(nowMs: Long, zone: ZoneId): Long =

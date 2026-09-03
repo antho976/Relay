@@ -67,7 +67,14 @@ object VolumeResponse {
         val slotMuscle = s.program.flatMap { it.slots }.associate { it.exerciseId to it.muscle }
         // muscle -> week -> rep sets across every lift of that muscle
         val setsByMuscleWeek = HashMap<MuscleGroup, HashMap<Long, Int>>()
-        // muscle -> exercise id -> week -> that lift's best working e1RM in the week
+        // muscle -> PERFORMED lift id -> week -> that lift's best working e1RM in the week.
+        //
+        // Keyed by what was lifted, not by the slot it was lifted in (H-06). Slot keys are how
+        // history is filed — Coach has to be able to target a plan row whatever was done in it — but
+        // a slot is not a lift: swap a fly into a bench slot and the week-over-week change across
+        // that boundary is 300 lb against 50 lb, which is not a response to volume, it is two
+        // different exercises. The muscle still comes from the slot, because the slot is what the
+        // program says this work is for.
         val e1rmByMuscleLiftWeek = HashMap<MuscleGroup, HashMap<String, HashMap<Long, Double>>>()
         s.exerciseHistory.forEach { (id, bouts) ->
             val muscle = slotMuscle[id] ?: return@forEach
@@ -76,7 +83,9 @@ object VolumeResponse {
                 val weekSets = setsByMuscleWeek.getOrPut(muscle) { HashMap() }
                 weekSets[week] = (weekSets[week] ?: 0) + bout.sets.count { it.isRepSet() }
                 val e1rm = bout.bestE1rm() ?: return@forEach
-                val liftWeeks = e1rmByMuscleLiftWeek.getOrPut(muscle) { HashMap() }.getOrPut(id) { HashMap() }
+                // A bout with no recorded performed id was never swapped, so the slot IS its lift.
+                val lift = bout.performedExerciseId ?: id
+                val liftWeeks = e1rmByMuscleLiftWeek.getOrPut(muscle) { HashMap() }.getOrPut(lift) { HashMap() }
                 liftWeeks[week] = maxOf(liftWeeks[week] ?: 0.0, e1rm)
             }
         }

@@ -8,7 +8,6 @@ import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CardioRepository
 import com.forge.app.data.repo.CustomizationRepository
 import com.forge.app.data.repo.StatsRepository
-import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.data.repo.WorkoutRepository
 import com.forge.app.domain.adapt.Recommendation
 import com.forge.app.domain.coach.AutoCoachPlanner
@@ -36,19 +35,11 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 
-/**
- * design/surface-experiment — how many ISO weeks the Home hero card's sparkline spans. Eight is
- * roughly two mesocycles: long enough for a trend to have a shape, short enough that the current
- * week still moves the line visibly.
- */
-private const val VOLUME_WEEKS = 8
-
 @HiltViewModel
 class OverviewViewModel @Inject constructor(
     private val statsRepo: StatsRepository,
     private val cardioRepo: CardioRepository,
     private val settingsRepo: SettingsRepository,
-    private val trophyRepo: TrophyRepository,
     private val customizationRepo: CustomizationRepository,
     private val workoutRepo: WorkoutRepository,
     private val goalRepo: com.forge.app.data.repo.GoalRepository,
@@ -73,57 +64,13 @@ class OverviewViewModel @Inject constructor(
     // the stored image is a COVER, a background rather than a portrait, and a 36dp circle crop of
     // one claims a face the app has never asked for.
 
-    /** The header row's identity. */
-    data class HomeIdentity(val name: String)
-
-    private val _identity = MutableStateFlow(HomeIdentity(""))
-    val identity: StateFlow<HomeIdentity> = _identity
-
-    /** Re-read the display name. Called at open and on resume — it is edited over on Profile. */
-    fun refreshIdentity() = viewModelScope.launch {
-        _identity.value = HomeIdentity(runCatching { settingsRepo.userName.first() }.getOrDefault(""))
-    }
-
     /**
-     * Volume per ISO week for the last [VOLUME_WEEKS] weeks including the current one, oldest →
-     * newest. Weeks with no session bucket to an honest 0.0 rather than being dropped, so the
-     * sparkline's x-axis stays even and a quiet week reads as a dip instead of disappearing.
-     *
-     * Bucketed by `started_at` — the day you trained — which is the convention `SessionDao` states
-     * for every weekly aggregation and which the hero figure above this curve is queried with
-     * (`observeVolumeSince`). This bucketed by `finished_at` instead, so a session begun 23:30
-     * Sunday and racked 00:40 Monday landed in one week for the figure and the next for the curve
-     * drawn under it: the card then computed its delta between a numerator and a denominator from
-     * two different conventions, which is exactly what reading both off one series was meant to
-     * prevent. `finished_at` still gates the filter — an unfinished session has no volume to plot.
+     * REMOVED with the rest of P-15: `weeklyVolumeSeries` and the unbounded
+     * `observeAllFinishedSessions()` flow behind it filled two state fields no Home composable
+     * reads. Keeping them "for the surface experiment" kept an O(N) pass over the entire session
+     * history one combine line away from being live again, and kept the fields alive so nothing
+     * flagged them as dead. Both are in the history if that branch returns.
      */
-    private fun weeklyVolumeSeries(sessions: List<com.forge.app.data.db.entities.Session>): List<Double> {
-        val zone = java.time.ZoneId.systemDefault()
-        val thisMonday = java.time.LocalDate.now(zone).let { it.minusDays(it.dayOfWeek.value - 1L) }
-        val buckets = DoubleArray(VOLUME_WEEKS)
-        sessions.forEach { s ->
-            if (s.finishedAt == null) return@forEach
-            val day = java.time.Instant.ofEpochMilli(s.startedAt).atZone(zone).toLocalDate()
-            val monday = day.minusDays(day.dayOfWeek.value - 1L)
-            val weeksBack = java.time.temporal.ChronoUnit.WEEKS.between(monday, thisMonday).toInt()
-            if (weeksBack in 0 until VOLUME_WEEKS) {
-                buckets[VOLUME_WEEKS - 1 - weeksBack] += s.totalVolumeLb ?: 0.0
-            }
-        }
-        return buckets.toList()
-    }
-
-    /**
-     * NOT SUBSCRIBED (P-15). `observeAllFinishedSessions()` is an unbounded query and
-     * [weeklyVolumeSeries] is an O(N) pass over its whole result, re-run on every session-table
-     * invalidation — to fill two fields the shipped Home never reads (their own KDoc says so). Kept
-     * with the rest of the surface experiment it belongs to, so restoring that branch is still one
-     * combine line.
-     */
-    @Suppress("unused")
-    private val weeklyVolumeFlow = statsRepo.observeAllFinishedSessions()
-        .map { weeklyVolumeSeries(it) }
-        .flowOn(Dispatchers.Default)
 
     /** Today's watch steps against a typical day (W6) — null hides the Home movement line entirely. */
     data class TodayMovement(val steps: Int, val typicalSteps: Int?)
@@ -182,20 +129,6 @@ class OverviewViewModel @Inject constructor(
                 com.forge.app.program.Program.days.isEmpty()
             )
 
-    /**
-     * Weekly cardio distance, on the SAME ISO-week boundary as every other "this week" number and
-     * re-anchored on each day / timezone / clock change.
-     *
-     * It used to be a rolling `now − 7 days` computed ONCE in the ViewModel constructor: it
-     * disagreed with the Mon–Sun dots beside it on early weekdays, and left the app open for two
-     * days and it still described the seven days ending when the screen was first opened.
-     */
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    private val weeklyCardioKm: kotlinx.coroutines.flow.Flow<Double?> =
-        timeSignals.dayStarts().flatMapLatest {
-            cardioRepo.observeDistanceKmSince(com.forge.app.core.time.mondayStartMs(clock.nowMs()))
-        }
-
     /** Goals for the Home preview, recomputed whenever a goal is added/edited/removed OR one of the
      *  progress INPUTS moves: a session finishes (lift bests + weekly tallies), cardio is logged or
      *  edited, or a new weigh-in lands. The input tables are observed directly rather than
@@ -214,9 +147,10 @@ class OverviewViewModel @Inject constructor(
             // and a completed weekly goal kept reading 4 / 4 in a week where nothing had happened
             // yet. Monthly rollover and a timezone change behaved the same way.
             timeSignals.dayStarts()
-        // Six flows: kotlinx.coroutines only declares typed combine overloads up to five, so
-        // this resolves to the vararg form and the lambda takes one Array, not six values.
-        // Every input was already ignored — the body re-reads both repositories.
+        // Six flows: kotlinx.coroutines declares typed combine overloads only up to five, so this
+        // resolves to the VARARG form, whose transform takes a single Array<Any?> — not six
+        // parameters. None of the emitted values is read (each is only a "something moved,
+        // recompute" tick and the body re-reads both repositories), so the array is discarded.
         ) { _ ->
             // Fall back on real failures only — a swallowed CancellationException would let a
             // cancelled recompute emit empty lists and blank the Home goal lines.
@@ -227,14 +161,17 @@ class OverviewViewModel @Inject constructor(
             lift to custom
         }.flowOn(Dispatchers.Default)
 
+    // P-15: six inputs, each of which reaches something Home draws. Three more were subscribed for
+    // state fields no composable read — the unlocked-trophy ID LIST (collected only to take its
+    // size), the week's cardio distance, and the cardio weekly target — so every trophy unlock,
+    // every cardio row and every settings change woke this combine and rebuilt the whole Home state
+    // to fill fields that were then thrown away. The fields are gone with them; a surface that
+    // wants them adds the input back beside the field it feeds.
     val state: StateFlow<OverviewUiState> = combine(
         statsRepo.observeWeeklyStats(),
         cardioRepo.observeRecent(7),
         settingsRepo.shownMilestones,
-        trophyRepo.observeUnlockedIds(),
-        weeklyCardioKm,
         statsRepo.observeDayVolumeStats(),
-        settingsRepo.cardioWeeklyTargetMin,
         settingsRepo.weightUnit,
         settingsRepo.useMiles
     ) { args ->
@@ -243,22 +180,16 @@ class OverviewViewModel @Inject constructor(
         val recentCardio = args[1] as List<com.forge.app.data.db.entities.CardioEntry>
         @Suppress("UNCHECKED_CAST")
         val shown = args[2] as Set<String>
-        val unlockedIds = args[3] as List<*>
-        val distanceKm = (args[4] as Double?) ?: 0.0
         @Suppress("UNCHECKED_CAST")
-        val dayVolStats = args[5] as Map<String, SessionDao.DayVolumeStats>
-        val cardioTarget = args[6] as Int
-        val weightUnit = args[7] as WeightUnit
-        val useMiles = args[8] as Boolean
+        val dayVolStats = args[3] as Map<String, SessionDao.DayVolumeStats>
+        val weightUnit = args[4] as WeightUnit
+        val useMiles = args[5] as Boolean
 
         buildOverviewUiState(
             stats = stats,
             recentCardio = recentCardio,
             shown = shown,
-            trophiesUnlocked = unlockedIds.size,
-            distanceKm = distanceKm,
             dayVolStats = dayVolStats,
-            cardioTargetMin = cardioTarget,
             weightUnit = weightUnit,
             useMiles = useMiles
         )
@@ -318,7 +249,6 @@ class OverviewViewModel @Inject constructor(
         // stay, so a surface that brings the cards back asks for them.
         refreshDirective()
         refreshMovement()
-        refreshIdentity()   // design/surface-experiment — the header row's greeting + avatar
         // Backfill the first-touch flag for users who already have history, so the onboarding cards
         // never reappear for a returning user (e.g. after a data wipe). finishWorkout() sets it going forward.
         viewModelScope.launch {

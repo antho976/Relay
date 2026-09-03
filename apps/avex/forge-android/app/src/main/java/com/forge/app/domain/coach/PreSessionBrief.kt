@@ -71,11 +71,21 @@ object PreSessionBrief {
         readiness: Recommendation.ReadinessScale?,
         life: LifeEvents.State,
         weightUnit: ProtocolWeightUnit = ProtocolWeightUnit.LB,
+        /**
+         * The active training block's phase, or null when there is no block (H-02).
+         *
+         * The brief is what the athlete reads BEFORE the session, and it was computed from
+         * readiness and life events alone — so a Deload week and a Peak week opened with the same
+         * numbers as an Accumulate one, contradicting the phase the Coach tab was showing them.
+         */
+        phase: BlockPhase? = null,
         t: AdaptThresholds = AdaptThresholds()
     ): Brief? {
         val day = s.program.firstOrNull { it.dayKey == dayKey } ?: return null
         val readinessScale = 1 + (readiness?.percent ?: 0) / 100.0
-        val loadScale = readinessScale * life.loadScale
+        // One composition rule, shared with the per-set suggestion, so the brief and the session
+        // cannot describe two different days.
+        val loadScale = BlockPhase.composedLoadScale(phase, readinessScale * life.loadScale)
 
         val targets = day.slots
             // An injured movement isn't "eased", it's off today's session entirely.

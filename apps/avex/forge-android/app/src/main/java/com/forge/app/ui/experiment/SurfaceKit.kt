@@ -367,46 +367,80 @@ fun SurfaceSparkline(
 ) {
     if (values.size < 2) return
     val progress = rememberDrawProgress(key = values, spec = ForgeMotion.drawTween())
-    // Reduced to what the chart can actually show, once (P-13) — see [sparklineSeries]. Every frame
-    // of the reveal below rebuilds both paths, so the point count is paid ~54 times per entry.
+    // Reduced to what the chart can actually show, once (P-13) — see [sparklineSeries].
     val plotted = remember(values) { sparklineSeries(values) }
-    val min = plotted.min()
-    val max = plotted.max()
-    val range = (max - min).takeIf { it > 0.0 } ?: 1.0
+    // The extrema are a property of the DATA, so they belong outside the draw scope: they were
+    // recomputed on every recomposition, and the reveal recomposes ~54 times per entry (P-13).
+    val min = remember(plotted) { plotted.min() }
+    val range = remember(plotted) { (plotted.max() - min).takeIf { it > 0.0 } ?: 1.0 }
+    // And so are the paths, once the canvas size is known — which the reveal does not change. Both
+    // were rebuilt every frame, point by point, to draw the same shape under a moving clip.
+    val geometry = remember(plotted) { SparklineGeometry() }
     Canvas(modifier.semantics { contentDescription = reading }) {
-        val h = size.height
         val w = size.width
         val stroke = 2.dp.toPx()
         val dot = 3.dp.toPx()
         // Half a stroke would clear the line; the dot is fatter, so it sets the inset.
         val inset = maxOf(stroke / 2f, dot)
-        val plotH = (h - inset * 2f).coerceAtLeast(1f)
-        // Only the right edge needs the horizontal inset — the first point is a line end, the last
-        // one carries the dot.
-        val plotW = (w - inset).coerceAtLeast(1f)
-        val stepX = plotW / (plotted.size - 1)
-        fun yOf(v: Double) = inset + plotH - ((v - min) / range * plotH).toFloat()
-        val line = Path().apply {
-            plotted.forEachIndexed { i, v ->
-                if (i == 0) moveTo(0f, yOf(v)) else lineTo(stepX * i, yOf(v))
-            }
-        }
-        val area = Path().apply {
-            moveTo(0f, h)
-            plotted.forEachIndexed { i, v -> lineTo(stepX * i, yOf(v)) }
-            lineTo(stepX * (plotted.size - 1), h)
-            close()
-        }
+        geometry.ensure(size, plotted, min, range, inset)
         clipRect(right = (w * progress).coerceAtLeast(0.01f)) {
-            drawPath(area, Brush.verticalGradient(listOf(color.copy(alpha = 0.15f), Color.Transparent)))
-            drawPath(line, color, style = Stroke(width = stroke, cap = StrokeCap.Round))
+            drawPath(geometry.area, Brush.verticalGradient(listOf(color.copy(alpha = 0.15f), Color.Transparent)))
+            drawPath(geometry.line, color, style = Stroke(width = stroke, cap = StrokeCap.Round))
         }
-        // The end dot rides the reveal frontier, then settles on the last point.
+        // The only per-frame work left: the end dot riding the reveal frontier.
         val fx = (plotted.size - 1) * progress
         val i = fx.toInt().coerceIn(0, plotted.size - 2)
         val t = fx - i
-        val y = yOf(plotted[i]) + (yOf(plotted[i + 1]) - yOf(plotted[i])) * t
-        drawCircle(color, radius = dot, center = Offset(stepX * fx, y))
+        val ys = geometry.ys
+        val y = ys[i] + (ys[i + 1] - ys[i]) * t
+        drawCircle(color, radius = dot, center = Offset(geometry.stepX * fx, y))
+    }
+}
+
+/**
+ * The sparkline's geometry, built once per (series, canvas size) rather than once per frame (P-13).
+ *
+ * Capping the input at 512 points bounded the cost; it did not remove it. A reveal animates only
+ * the clip frontier and the end dot, and both `Path`s were still constructed point by point on
+ * every one of its frames — for a shape that had not changed since the first. Held in a `remember`
+ * keyed on the series, so new data gets a fresh instance and a resize rebuilds in place.
+ */
+private class SparklineGeometry {
+    private var builtFor: androidx.compose.ui.geometry.Size? = null
+
+    var line: Path = Path(); private set
+    var area: Path = Path(); private set
+
+    /** The y of every plotted point, so the end dot interpolates without re-deriving them. */
+    var ys: FloatArray = FloatArray(0); private set
+    var stepX: Float = 0f; private set
+
+    fun ensure(
+        size: androidx.compose.ui.geometry.Size,
+        plotted: List<Double>,
+        min: Double,
+        range: Double,
+        inset: Float
+    ) {
+        if (builtFor == size) return
+        builtFor = size
+        val plotH = (size.height - inset * 2f).coerceAtLeast(1f)
+        // Only the right edge needs the horizontal inset — the first point is a line end, the last
+        // one carries the dot.
+        val plotW = (size.width - inset).coerceAtLeast(1f)
+        stepX = plotW / (plotted.size - 1)
+        ys = FloatArray(plotted.size) { i ->
+            inset + plotH - ((plotted[i] - min) / range * plotH).toFloat()
+        }
+        line = Path().apply {
+            ys.forEachIndexed { i, y -> if (i == 0) moveTo(0f, y) else lineTo(stepX * i, y) }
+        }
+        area = Path().apply {
+            moveTo(0f, size.height)
+            ys.forEachIndexed { i, y -> lineTo(stepX * i, y) }
+            lineTo(stepX * (ys.size - 1), size.height)
+            close()
+        }
     }
 }
 

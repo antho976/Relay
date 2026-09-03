@@ -65,6 +65,10 @@ object SnapshotAssembler {
                     skipped = le.skipped,
                     swappedName = le.swappedName,
                     sets = setsByLoggedExercise[le.id].orEmpty().sortedBy { it.setIndex },
+                    // The slot is the key; the lift performed IN it is carried alongside, because a
+                    // swapped row is filed under the slot and is not the same exercise as its
+                    // neighbours. Comparing e1RMs across a swap is comparing two lifts (H-06).
+                    performedExerciseId = le.exerciseId,
                     sessionType = session.sessionType
                 )
             }

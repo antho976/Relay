@@ -241,11 +241,19 @@ class CardioViewModel @Inject constructor(
     // metrics this page owns. Home keeps the mixed top-3; this is the cardio lens on the same data.
     private val cardioGoalsFlow = combine(
         extendedGoalRepo.observeAll(),
-        entriesFlow
-    ) { _, _ ->
+        entriesFlow,
+        // The calendar is an input here too (M-32). A weekly or monthly goal's window is derived at
+        // read time, so its progress only moved when a table did: leave this tab open from Sunday
+        // into Monday and a completed weekly goal kept reading 4 / 4 in a week where nothing had
+        // happened yet. Home's goal flow was given the day signal and this one was not.
+        dayStart
+    ) { _, _, _ ->
+        // The instant this recompute is FOR, read once and used for both the window arithmetic and
+        // the caption, rather than each of them reading its own clock.
+        val nowMs = clock.nowMs()
         // Fall back on real failures only — a swallowed CancellationException would let a cancelled
         // recompute emit an empty list and blank the goal lines.
-        runCatching { extendedGoalRepo.goalsWithProgress() }
+        runCatching { extendedGoalRepo.goalsWithProgress(nowMs) }
             .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else emptyList() }
             .filter { it.metric == GoalMetric.CARDIO_DISTANCE || it.metric == GoalMetric.CARDIO_MINUTES }
     }.flowOn(Dispatchers.Default)
