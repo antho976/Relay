@@ -102,28 +102,44 @@ object ProgressionAdvisor {
         fastStep: Boolean = false,
         /** Calibrated: taken jumps keep failing — hold the weight instead of progressing (Phase 2). */
         consolidate: Boolean = false,
+        /**
+         * The active training block's phase, or null when there is no block (H-02).
+         *
+         * The phase used to reach the plan's set counts and the served deload week and never the
+         * weight on the bar, so the same bout got the same load target in Accumulate, Intensify,
+         * Peak and Deload. Composed with today's scale by [BlockPhase.composedLoadScale].
+         */
+        phase: com.forge.app.domain.coach.BlockPhase? = null,
         t: AdaptThresholds = AdaptThresholds()
     ): Recommendation.WeightChange? {
         if (unit == ExerciseUnit.BODYWEIGHT) return null
         val working = prevSets.filter { !it.isAssisted && it.weightLb != null }
         val prevMax = working.maxOfOrNull { it.weightLb!! } ?: return null
 
-        val scale: Double
-        val scaleNote: String?
+        val dayScale: Double
+        val dayNote: String?
         when {
             intensity != IntensityIntent.NORMAL -> {
-                scale = intensityScale(intensity, t)
-                scaleNote = "intensity adjusted"
+                dayScale = intensityScale(intensity, t)
+                dayNote = "intensity adjusted"
             }
             readiness != null -> {
-                scale = 1 + readiness.percent / 100.0
-                scaleNote = if (readiness.percent < 0) "eased ${-readiness.percent}% — readiness low"
+                dayScale = 1 + readiness.percent / 100.0
+                dayNote = if (readiness.percent < 0) "eased ${-readiness.percent}% — readiness low"
                 else "+${readiness.percent}% — readiness high"
             }
             else -> {
-                scale = 1.0
-                scaleNote = null
+                dayScale = 1.0
+                dayNote = null
             }
+        }
+        // The block's ambition and today's answer, composed once (H-02). No block leaves this
+        // exactly as it was: `composedLoadScale(null, x) == x` for any scale in range.
+        val scale = com.forge.app.domain.coach.BlockPhase.composedLoadScale(phase, dayScale)
+        val scaleNote = when {
+            phase == null || phase.progressionScale == 1.0 -> dayNote
+            dayNote == null -> "${phase.displayName.lowercase()} phase"
+            else -> "$dayNote · ${phase.displayName.lowercase()} phase"
         }
 
         // How hard was that? One model, all the logged evidence (A1) — per-set RPE first, then

@@ -55,4 +55,37 @@ class WearEditRecoveryTest {
     fun aFailedUndoWithNothingToRestoreStaysEmpty() {
         assertNull(WearEditRecovery.afterFailedUndo(current = null, removed = null))
     }
+
+    // ── Durability across process death (M-10 / H-08) ─────────────────────────
+
+    /**
+     * The recovery above was RAM-only, on a singleton, in a background process Wear reclaims
+     * hardest during exactly the window it exists for — the watch out of range, waiting for the
+     * user to walk back. So the pending edit has to be a record, and a record has to survive a
+     * round trip and refuse to guess at a damaged one.
+     */
+    @Test
+    fun `a pending edit survives the round trip through its record`() {
+        val rpe = WristEdit(WristEdit.Kind.RPE, "cmd-1", sessionId = 0L, setId = 42L, rpe = 8.5)
+        assertEquals(rpe, WearEditRecovery.decode(WearEditRecovery.encode(rpe)))
+
+        // An undo carries a session and may carry no set id at all; both nulls round-trip as nulls
+        // rather than as zero, which would name a set that does not exist.
+        val undo = WristEdit(WristEdit.Kind.UNDO, "cmd-2", sessionId = 7L, setId = null, rpe = null)
+        val restored = WearEditRecovery.decode(WearEditRecovery.encode(undo))
+        assertEquals(undo, restored)
+        assertNull(restored!!.setId)
+        assertNull(restored.rpe)
+    }
+
+    @Test
+    fun `a record that cannot be trusted is discarded rather than guessed at`() {
+        assertNull(WearEditRecovery.decode(null))
+        assertNull("empty", WearEditRecovery.decode(""))
+        assertNull("truncated mid-write", WearEditRecovery.decode("v1|RPE|cmd-1|0"))
+        assertNull("a format this build does not know", WearEditRecovery.decode("v2|RPE|cmd-1|0|42|8.5"))
+        assertNull("a kind this build does not know", WearEditRecovery.decode("v1|REORDER|cmd-1|0|42|8.5"))
+        assertNull("no command id, so no id to replay under", WearEditRecovery.decode("v1|RPE||0|42|8.5"))
+        assertNull("a session id that is not a number", WearEditRecovery.decode("v1|UNDO|cmd-1|x|42|"))
+    }
 }

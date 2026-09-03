@@ -1,7 +1,6 @@
 package com.forge.app.data.importer
 
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import androidx.room.withTransaction
@@ -47,7 +46,8 @@ class WorkoutImportRepository @Inject constructor(
     private val cardioDao: com.forge.app.data.db.dao.CardioDao,
     private val coachGoalDao: com.forge.app.data.db.dao.CoachGoalDao,
     private val bodyweightDao: com.forge.app.data.db.dao.BodyweightDao,
-    private val settingsRepo: SettingsRepository
+    private val settingsRepo: SettingsRepository,
+    private val grants: com.forge.app.data.repo.PersistedTreeGrants
 ) {
     /** uri → (lastModified, what the scan concluded). Bounded by [MAX_SCAN_FILES] per folder. */
     private val scanCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, FoundImport?>>()
@@ -180,12 +180,28 @@ class WorkoutImportRepository @Inject constructor(
         found
     }
 
-    /** Take a persistable read grant on the picked folder and remember it, so later scans need no re-pick. */
-    suspend fun rememberFolder(treeUri: Uri) = withContext(Dispatchers.IO) {
-        runCatching {
-            context.contentResolver.takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
+    /**
+     * Take a persistable read grant on the picked folder and remember it, so later scans need no
+     * re-pick — and give up the folder this one replaces (M-18).
+     *
+     * Neither half used to happen. The take was best-effort and its failure swallowed, so a folder
+     * that could not be granted was still stored as the connected one and every later scan came
+     * back empty for no stated reason. And the previous tree was never released: point import at a
+     * second folder and Avex kept read access to the first with no setting naming it — the same
+     * invisible retained grant "Remove folder" was fixed for, reached by replacing instead of
+     * removing. Release goes through [PersistedTreeGrants] so a tree the BACKUP folder also names
+     * is left alone; it has another owner.
+     *
+     * @return false when the grant could not be taken; the remembered folder is then unchanged.
+     */
+    suspend fun rememberFolder(treeUri: Uri): Boolean = withContext(Dispatchers.IO) {
+        if (!grants.take(treeUri, write = false)) return@withContext false
+        val previous = settingsRepo.importFolderUri.first()
         settingsRepo.setImportFolderUri(treeUri.toString())
+        if (previous != null && previous != treeUri.toString()) {
+            grants.releaseUnlessSharedWith(previous, com.forge.app.data.repo.PersistedTreeGrants.Owner.IMPORT)
+        }
+        true
     }
 
     private suspend fun insert(
@@ -247,7 +263,6 @@ class WorkoutImportRepository @Inject constructor(
                 // and every one of them is a candidate against every other. The second of two
                 // legitimately different midnight workouts was reported as a duplicate and dropped,
                 // silently, on an import path whose whole promise is that it does not lose anything.
-                val incomingPrint = incomingPrintOf(session, matchCache)
 
                 // EVERY slot this workout could occupy, checked regardless of the order the file
                 // presents its workouts in.
@@ -264,8 +279,14 @@ class WorkoutImportRepository @Inject constructor(
                 // the one source that cannot disagree with itself.
                 val windowEndMs = session.startedAtMs + MAX_START_NUDGES * 1000L
                 val occupied = sessionDao.startRefsInRange(session.startedAtMs, windowEndMs)
+                // Printed AGAINST EACH CANDIDATE SLOT, because the print now covers values the
+                // insert derives from the slot — the end time and active duration a source may not
+                // state, and each set's completion stamp (M-03). A single slot-free print could not
+                // include them, which is why an export corrected in one of those fields alone was
+                // discarded as identical.
                 val alreadyStored = occupied.firstOrNull {
-                    it.id !in claimedStoredIds && storedPrintOf(it.id) == incomingPrint
+                    it.id !in claimedStoredIds &&
+                        storedPrintOf(it.id) == incomingPrintOf(session, it.startedAt, matchCache)
                 }
                 if (alreadyStored != null) {
                     claimedStoredIds += alreadyStored.id
@@ -290,19 +311,9 @@ class WorkoutImportRepository @Inject constructor(
                 //
                 // Only a SYNTHESISED duration — for a source that records no end time at all — is
                 // clamped, and only into a plausible session length.
-                val sourceActive = session.activeSeconds?.takeIf { it > 0 }
-                val sourceFinished = session.finishedAtMs?.takeIf { it > startedAt }
-                val synthesisedSec = (sourceActive ?: (totalSets * SECONDS_PER_SET))
-                    .coerceIn(60, MAX_SYNTHESISED_ACTIVE_SEC)
-                val finishedAt = sourceFinished ?: (startedAt + synthesisedSec * 1000L)
-                val activeSec = sourceActive
-                    ?: if (sourceFinished != null) {
-                        // A real start/end pair from another app is the best estimate available;
-                        // bound it only against nonsense, not down to a "plausible" session length.
-                        ((finishedAt - startedAt) / 1000L).toInt().coerceIn(0, MAX_WALL_CLOCK_ACTIVE_SEC)
-                    } else {
-                        synthesisedSec
-                    }
+                val timing = timingFor(session, totalSets, startedAt)
+                val finishedAt = timing.finishedAtMs
+                val activeSec = timing.activeSeconds
 
                 // Another app's split doesn't map to ours, so those still land as freestyle — but our
                 // OWN export names the day each workout belonged to, and forcing that to FREESTYLE
@@ -516,10 +527,48 @@ class WorkoutImportRepository @Inject constructor(
      * Exercise ids resolve through the SAME [matchCache] the insert uses, so the id compared here is
      * the id that would be written — an unmatched name folds to its synthetic id on both sides.
      */
+    /** What the insert would store for a session's end time and active duration, at [startedAt]. */
+    private data class ImportTiming(val finishedAtMs: Long, val activeSeconds: Int)
+
+    /**
+     * Three separate facts, and conflating them rewrote real training history.
+     *
+     * `finishedAt` is when the workout ENDED — kept verbatim from the source. A session started
+     * Friday evening and resumed Sunday morning legitimately spans two days. `activeSeconds` is
+     * time actually spent training, which the app stores separately for exactly that reason.
+     * Deriving one from the other and then clamping the result to 6 h turned that 70-minute
+     * session into a claimed six-hour one, and clamped a 45-second finisher UP to a minute. Only a
+     * SYNTHESISED duration — for a source that records no end time at all — is clamped, and only
+     * into a plausible session length.
+     *
+     * One function, because the duplicate print now compares these values too (M-03) and a second
+     * copy of this derivation would eventually disagree with the one that writes the rows.
+     */
+    private fun timingFor(session: ImportedSession, totalSets: Int, startedAt: Long): ImportTiming {
+        val sourceActive = session.activeSeconds?.takeIf { it > 0 }
+        val sourceFinished = session.finishedAtMs?.takeIf { it > startedAt }
+        val synthesisedSec = (sourceActive ?: (totalSets * SECONDS_PER_SET))
+            .coerceIn(60, MAX_SYNTHESISED_ACTIVE_SEC)
+        val finishedAt = sourceFinished ?: (startedAt + synthesisedSec * 1000L)
+        val activeSec = sourceActive
+            ?: if (sourceFinished != null) {
+                // A real start/end pair from another app is the best estimate available; bound it
+                // only against nonsense, not down to a "plausible" session length.
+                ((finishedAt - startedAt) / 1000L).toInt().coerceIn(0, MAX_WALL_CLOCK_ACTIVE_SEC)
+            } else {
+                synthesisedSec
+            }
+        return ImportTiming(finishedAt, activeSec)
+    }
+
     private fun incomingPrintOf(
         session: ImportedSession,
+        startedAt: Long,
         matchCache: HashMap<String, String?>
-    ): String = fingerprintOf(
+    ): String {
+        val totalSets = session.exercises.sumOf { it.sets.size }
+        val timing = timingFor(session, totalSets, startedAt)
+        return fingerprintOf(
         FingerprintSession(
             dayKey = session.dayKey ?: Program.FREESTYLE_DAY_KEY,
             sessionType = session.sessionType ?: "normal",
@@ -527,6 +576,10 @@ class WorkoutImportRepository @Inject constructor(
             isUntracked = session.isUntracked,
             tags = session.tags ?: "",
             journal = session.note ?: "",
+            finishedAt = timing.finishedAtMs,
+            activeSeconds = timing.activeSeconds,
+            prCount = session.prCount ?: 0,
+            mood = session.mood ?: "",
             exercises = session.exercises.mapIndexed { position, ex ->
                 val matched = ex.catalogueId ?: matchCache.getOrPut(ex.name) { ExerciseNameMatcher.match(ex.name) }
                 FingerprintExercise(
@@ -548,13 +601,15 @@ class WorkoutImportRepository @Inject constructor(
                             toFailure = s.toFailure,
                             setType = s.setType ?: if (s.isWarmup) "warmup" else null,
                             difficultyTag = s.difficultyTag,
-                            dropAnnotation = s.dropAnnotation
+                            dropAnnotation = s.dropAnnotation,
+                            completedAt = s.completedAtMs ?: timing.finishedAtMs
                         )
                     }
                 )
             }
         )
-    )
+        )
+    }
 
     /** [incomingPrintOf] for a session already in the database. Null when the row has gone. */
     private suspend fun storedPrintOf(sessionId: Long): String? {
@@ -568,6 +623,10 @@ class WorkoutImportRepository @Inject constructor(
                 isUntracked = stored.isUntracked,
                 tags = stored.tags,
                 journal = stored.journal,
+                finishedAt = stored.finishedAt ?: 0L,
+                activeSeconds = stored.activeSeconds,
+                prCount = stored.prCount,
+                mood = moodDao.forSession(sessionId)?.mood ?: "",
                 exercises = loggedExerciseDao.forSession(sessionId).map { le ->
                     FingerprintExercise(
                         orderIndex = le.orderIndex,
@@ -588,7 +647,8 @@ class WorkoutImportRepository @Inject constructor(
                                 toFailure = s.toFailure,
                                 setType = s.setType,
                                 difficultyTag = s.difficultyTag,
-                                dropAnnotation = s.dropAnnotation
+                                dropAnnotation = s.dropAnnotation,
+                                completedAt = s.completedAt
                             )
                         }
                     )

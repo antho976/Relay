@@ -18,6 +18,10 @@ interface MoodDao {
     @Query("SELECT * FROM mood_entry WHERE session_id = :sessionId LIMIT 1")
     suspend fun forSession(sessionId: Long): MoodEntry?
 
+    /** One row per session for a BATCH of sessions (P-01). See [LoggedExerciseDao.forSessions]. */
+    @Query("SELECT * FROM mood_entry WHERE session_id IN (:sessionIds)")
+    suspend fun forSessions(sessionIds: List<Long>): List<MoodEntry>
+
     @Query("SELECT * FROM mood_entry")
     fun observeAll(): Flow<List<MoodEntry>>
 

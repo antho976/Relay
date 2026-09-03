@@ -45,6 +45,7 @@ class DayViewModel @Inject constructor(
     internal val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
     internal val warmupRepo: com.forge.app.data.repo.WarmupRepository,
     internal val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
+    internal val blockRepo: com.forge.app.data.repo.BlockRepository,
     internal val clock: Clock,
     @ApplicationContext internal val appContext: Context,
     internal val bridge: WorkoutSessionBridge,
@@ -82,6 +83,15 @@ class DayViewModel @Inject constructor(
 
     /** Today's readiness scale (engine System 6). Null = neutral / below the data gates. */
     internal var readiness: com.forge.app.domain.adapt.Recommendation.ReadinessScale? = null
+
+    /**
+     * The active training block's phase, or null when there is no block (H-02).
+     *
+     * The phase reached the plan's set counts and the served deload week and never the weight on
+     * the bar, so the same bout got the same load target in Accumulate, Intensify, Peak and Deload.
+     * Loaded beside readiness and composed with it by [com.forge.app.domain.coach.BlockPhase.composedLoadScale].
+     */
+    internal var blockPhase: com.forge.app.domain.coach.BlockPhase? = null
 
     /** The rest interval being measured right now: opened on set log, closed by the next set. */
     internal var openRestEvent: OpenRestEvent? = null
@@ -235,7 +245,11 @@ class DayViewModel @Inject constructor(
         // already-built chips pick it up.
         viewModelScope.launch {
             readiness = adaptationRepo.readinessScale()
-            if (readiness != null && _state.value.exercises.isNotEmpty()) refreshExercises()
+            blockPhase = runCatching { blockRepo.active() }.getOrNull()
+                ?.let { com.forge.app.domain.coach.BlockPhase.fromCode(it.phase) }
+            if ((readiness != null || blockPhase != null) && _state.value.exercises.isNotEmpty()) {
+                refreshExercises()
+            }
         }
         // Equipment + dislikes + curated freeze drive the swap picker's candidate pool (program-unlock
         // Phase 4 + frozen-preset). A curated preset (Developer's) locks swaps to its pool too.

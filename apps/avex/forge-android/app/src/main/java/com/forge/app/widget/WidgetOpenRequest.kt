@@ -1,5 +1,7 @@
 package com.forge.app.widget
 
+import com.forge.app.program.Program
+
 /**
  * One widget tap, as an EVENT rather than a value (M-30).
  *
@@ -26,6 +28,34 @@ sealed interface WidgetDestination {
      */
     data object Unrecognised : WidgetDestination
 }
+
+/**
+ * What to do with a widget tap right now, given how far the program load has got (M-30).
+ *
+ * The distinction the four-second poll could not make: a program still loading and a program that
+ * does not contain the day looked identical once the timer expired, so a slow cold start discarded
+ * the tap. Only [Program.Readiness.LOADED] can answer the question at all.
+ */
+sealed interface WidgetRouting {
+    /**
+     * Not answerable yet — keep the request. Covers a load in flight AND one that failed: neither
+     * says anything about whether the day exists, and consuming the tap on either is how the
+     * widget's primary action silently did nothing.
+     */
+    data object Wait : WidgetRouting
+
+    /** A real program answered: route [destination] and retire the request either way. */
+    data class Decided(val destination: WidgetDestination) : WidgetRouting
+}
+
+/** [widgetDestinationFor], gated on readiness. */
+fun widgetRoutingFor(
+    readiness: Program.Readiness,
+    dayKey: String,
+    programDayKeys: List<String>
+): WidgetRouting =
+    if (readiness != Program.Readiness.LOADED) WidgetRouting.Wait
+    else WidgetRouting.Decided(widgetDestinationFor(dayKey, programDayKeys))
 
 /** The cardio widget's key prefix. Its taps select a hub page instead of opening a day. */
 private const val CARDIO_KEY_PREFIX = "cardio"

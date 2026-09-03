@@ -127,23 +127,19 @@ class CoachViewModel @Inject constructor(
         )
         // Opening the page clears the Overview "new report" banner for this week.
         brief?.let { runCatching { coachRepo.markSeen(it.pass.weekId) } }
-        // Everything the page KEEPS but does not render (see [CoachActions]) lands after the first
-        // non-loading frame rather than holding it (P-06). `goalRepo.states()` and `conflicts()`
-        // each assemble a full adaptation snapshot — session, exercise and set history, related
-        // repositories, Health Connect recovery — and the project fields cost three more queries
-        // plus a scanner pass, for output no composable reads. The loads and their side effects
-        // stay exactly as they were; only their position relative to first paint moves.
-        loadUnrendered()
-    }
-
-    /**
-     * The goal and project state the page holds for whichever surface picks them up next. Loaded
-     * after the visible frame; the goal-conflict Academy unlock rides along with it, so nothing the
-     * engine relies on is lost by moving it.
-     */
-    private suspend fun loadUnrendered() {
-        refreshGoals()
-        refreshProjects()
+        // NOTHING else. Opening the page used to also load the goal and project state, which no
+        // composable reads (P-06). Moving it after first paint stopped it delaying the frame and
+        // left the cost: `goalRepo.states()` and `conflicts()` each assemble a full adaptation
+        // snapshot — session, exercise and set history, related repositories, Health Connect
+        // recovery — and the project fields cost three more queries plus a scanner pass, on every
+        // single open, for output that is never rendered.
+        //
+        // Every action that can CHANGE any of it already refreshes it (`addGoal` → [refreshGoals];
+        // the block and project actions → [refreshProjects]), so the state is loaded by the surface
+        // that asks for it. That includes the goal-conflict Academy unlock, which now runs when a
+        // goal is added or edited — the moment a conflict can come into being — instead of on every
+        // visit to a page that does not show one. Reinstate an eager load here the day a composable
+        // genuinely reads these fields.
     }
 
     // ─── Decision lifecycle ────────────────────────────────────────────────────

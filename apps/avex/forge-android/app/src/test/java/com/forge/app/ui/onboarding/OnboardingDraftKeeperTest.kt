@@ -3,7 +3,6 @@ package com.forge.app.ui.onboarding
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -25,6 +24,9 @@ import org.junit.Test
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class OnboardingDraftKeeperTest {
+
+    /** Mirrors [OnboardingDraftKeeper]'s own (private) debounce. */
+    private val debounceMs = 250L
 
     /** The screen's own defaults on a fresh install — what its first snapshot looks like. */
     private fun defaults(seed: Long = 7L) = OnboardingDraft(
@@ -51,6 +53,24 @@ class OnboardingDraftKeeperTest {
         write = { disk.draft = it; disk.writes++ }
     ).also { runCurrent() }   // let the one-shot load land, as the screen waits for it
 
+    /**
+     * Run the debounced autosave, if one is due.
+     *
+     * NOT `advanceUntilIdle()`, which was the bug in two of these. The keeper's writer lives in
+     * `backgroundScope`, and `advanceUntilIdle` does not advance virtual time on behalf of
+     * background work — it decides the scheduler is idle while a `delay(250)` sits in it, and
+     * returns having run nothing. Both tests then read zero writes and asserted the ViewModel had
+     * failed to persist, when nothing had been given the chance to.
+     *
+     * Advancing PAST the debounce and then running what that released is the honest form, and it is
+     * equally correct for the tests that assert a write must NOT happen: they now prove the writer
+     * declined, rather than that it never woke up.
+     */
+    private fun TestScope.settleDebounce() {
+        advanceTimeBy(debounceMs + 50)
+        runCurrent()
+    }
+
     /** What a freshly composed screen reads: the draft its `remember` initialisers hydrate from. */
     private fun OnboardingDraftKeeper.freshScreenReads(): OnboardingDraft? =
         (state.value as DraftLoad.Ready).draft
@@ -73,7 +93,7 @@ class OnboardingDraftKeeperTest {
 
         // The recreated screen's first snapshot equals what it hydrated from: nothing to write.
         keeper.update(edited)
-        advanceUntilIdle()
+        settleDebounce()
         assertEquals("one conflated write, the latest edit", 1, disk.writes)
         assertEquals(edited, disk.draft)
     }
@@ -91,7 +111,7 @@ class OnboardingDraftKeeperTest {
         // Rotate: the fresh screen hydrates from the ViewModel and its first snapshot is identical.
         assertEquals(edited, keeper.freshScreenReads())
         keeper.update(edited)
-        advanceUntilIdle()
+        settleDebounce()
         assertEquals("no second write for an unchanged snapshot", 1, disk.writes)
         assertEquals(edited, disk.draft)
     }
@@ -104,7 +124,7 @@ class OnboardingDraftKeeperTest {
 
         // The screen composes with its own defaults (including a freshly rolled preview seed).
         keeper.update(defaults(seed = 99L))
-        advanceUntilIdle()
+        settleDebounce()
         assertNull("defaults carry nothing the user said", disk.draft)
         assertEquals(0, disk.writes)
 
@@ -113,7 +133,7 @@ class OnboardingDraftKeeperTest {
         // ...and the first real answer diffs against it and is persisted.
         val picked = defaults(seed = 99L).copy(planMode = PLAN_GENERATED)
         keeper.update(picked)
-        advanceUntilIdle()
+        settleDebounce()
         assertEquals(picked, disk.draft)
         assertEquals(1, disk.writes)
     }
@@ -134,7 +154,7 @@ class OnboardingDraftKeeperTest {
         readFails = false
 
         keeper.update(defaults())
-        advanceUntilIdle()
+        settleDebounce()
         assertSame("the good draft is untouched", real, disk.draft)
         assertEquals(0, disk.writes)
     }
@@ -153,7 +173,7 @@ class OnboardingDraftKeeperTest {
         keeper.update(defaults())
         runCurrent()
         assertEquals(midway(), keeper.freshScreenReads())
-        advanceUntilIdle()
+        settleDebounce()
         assertEquals(0, disk.writes)
     }
 
@@ -166,7 +186,7 @@ class OnboardingDraftKeeperTest {
         keeper.stopWrites()
         // Completion's atomic write removes the draft; the pending debounced save must not bring it back.
         disk.draft = null
-        advanceUntilIdle()
+        settleDebounce()
         assertNull(disk.draft)
         assertEquals(0, disk.writes)
     }

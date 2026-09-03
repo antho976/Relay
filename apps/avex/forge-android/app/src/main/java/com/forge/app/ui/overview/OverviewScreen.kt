@@ -67,10 +67,10 @@ import com.forge.app.ui.goals.GoalProgressLine
 import com.forge.app.ui.goals.customGoalTitle
 import com.forge.app.ui.goals.customGoalValueLine
 import com.forge.app.ui.goals.goalCaption
-import com.forge.app.ui.goals.customPinKey
+import com.forge.app.domain.goal.customPinKey
 import com.forge.app.ui.goals.goalGlyph
 import com.forge.app.ui.goals.liftGoalGlyph
-import com.forge.app.ui.goals.liftPinKey
+import com.forge.app.domain.goal.liftPinKey
 import java.time.LocalDate
 
 /**

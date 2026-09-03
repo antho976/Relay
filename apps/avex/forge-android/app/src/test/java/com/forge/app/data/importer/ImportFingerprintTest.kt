@@ -26,10 +26,11 @@ class ImportFingerprintTest {
         toFailure: Boolean = false,
         setType: String? = null,
         difficultyTag: String? = null,
-        dropAnnotation: String? = null
+        dropAnnotation: String? = null,
+        completedAt: Long = FINISHED_AT
     ) = FingerprintSet(
         reps, weightLb, weightText, durationSeconds, rpe,
-        isAssisted, isAmrap, toFailure, setType, difficultyTag, dropAnnotation
+        isAssisted, isAmrap, toFailure, setType, difficultyTag, dropAnnotation, completedAt
     )
 
     private fun exercise(
@@ -50,7 +51,11 @@ class ImportFingerprintTest {
         tags: String = "",
         journal: String = "",
         exercises: List<FingerprintExercise> = listOf(exercise())
-    ) = FingerprintSession(dayKey, sessionType, intensity, isUntracked, tags, journal, exercises)
+    ) = FingerprintSession(
+        dayKey, sessionType, intensity, isUntracked, tags, journal,
+        finishedAt = FINISHED_AT, activeSeconds = ACTIVE_SEC, prCount = 0, mood = "",
+        exercises = exercises
+    )
 
     private fun assertDistinct(changed: FingerprintSession, what: String) {
         assertNotEquals("$what changes what the workout means", fingerprintOf(session()), fingerprintOf(changed))
@@ -128,5 +133,31 @@ class ImportFingerprintTest {
         val b = session(exercises = listOf(exercise(sets = listOf(set(weightLb = 225.00004)))))
 
         assertEquals(fingerprintOf(a), fingerprintOf(b))
+    }
+
+    // ── M-03: the fields the first pass still could not see ──────────────────
+
+    /**
+     * Five values the insert writes and a user can change, and the print did not cover: an export
+     * corrected in one of them alone printed identically and was discarded, on the one path whose
+     * promise is that it does not lose anything.
+     */
+    @Test
+    fun theSessionsOwnTimingCountsAndMoodAreAllPartOfTheWorkout() {
+        assertDistinct(session().copy(finishedAt = FINISHED_AT + 60_000), "a corrected end time")
+        assertDistinct(session().copy(activeSeconds = ACTIVE_SEC + 300), "a corrected active duration")
+        assertDistinct(session().copy(prCount = 1), "a re-counted PR")
+        assertDistinct(session().copy(mood = "strong"), "a mood added after the fact")
+    }
+
+    @Test
+    fun aSetsOwnCompletionInstantIsPartOfTheWorkout() {
+        val later = session(exercises = listOf(exercise(sets = listOf(set(completedAt = FINISHED_AT + 90_000)))))
+        assertDistinct(later, "a corrected per-set instant")
+    }
+
+    private companion object {
+        const val FINISHED_AT = 1_767_600_000_000L
+        const val ACTIVE_SEC = 3_600
     }
 }

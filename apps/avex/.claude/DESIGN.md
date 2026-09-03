@@ -182,7 +182,7 @@ sheet top 16 — no custom radii. Photos: rounded 16 clips, caption UNDER the pl
 `EditorialFigure` · `EditorialLegend` · `SegmentPill` · `ForgeSwitch` · `InlineEmptyHint` ·
 `NotificationBell` / `CountBadge` · `ArrivalBannerHost` · `AvexWordmark` · `AvexIntro` · `IconLaunchScene` · `bounceClick` /
 `bounceCombinedClick` · `clickableLabeled` · `GlyphButton` · `ForgeHeroAction` · `ForgePrimaryCapsule` /
-`ForgeOutlineCapsule` · `ForgeRowPill` · `ForgeShimmer` · `ConfettiOverlay` · `statsEntrance` ·
+`ForgeOutlineCapsule` · `ForgeRowPill` · `ForgeShimmer` / `ForgeShimmerHost` · `ConfettiOverlay` · `statsEntrance` ·
 `EntranceItem` · `rememberDrawProgress` · `CountUpText` · `ExerciseLibraryPicker` ·
 `ProvideTouchExploration` · `SnackbarController` · `DayLogSheet`. **A pattern used on a 3rd
 screen gets promoted here the same turn (§2⑥)** — `DoctrineParityTest` checks this list against the
