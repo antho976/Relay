@@ -139,6 +139,15 @@ class ProgramCustomizationRepository @Inject constructor(
     suspend fun effectivePlanForDay(dayKey: String): List<ExercisePlan> =
         editablePlanForDay(dayKey).filterNot { it.removed }.map { it.plan }
 
+    /** Shared phone/watch session list, including distinct slots added during this workout. */
+    suspend fun effectivePlanForSession(dayKey: String, loggedSlotIds: Collection<String>): List<ExercisePlan> {
+        if (Program.days.none { it.key == dayKey }) return emptyList()
+        val planned = effectivePlanForDay(dayKey)
+        val ids = planned.mapTo(mutableSetOf()) { it.id }
+        val extras = loggedSlotIds.distinct().filterNot { it in ids }.mapNotNull { Program.exercise(it) }
+        return planned + extras
+    }
+
     /**
      * Whether the user has curated this day's exercise ORDER or composition — an explicit reorder,
      * an added exercise, or a removed one. Pure rep/set tweaks (incl. coach-applied) don't count.

@@ -50,7 +50,9 @@ class SetLogUseCase @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val timerHolder: SessionTimerHolder,
     private val focusHolder: com.forge.app.service.wear.WearFocusHolder,
-    private val clock: Clock
+    private val clock: Clock,
+    private val programRepo: com.forge.app.data.repo.ProgramRepository,
+    private val programCustomRepo: com.forge.app.data.repo.ProgramCustomizationRepository
 ) {
     data class Result(
         val ok: Boolean,
@@ -63,6 +65,7 @@ class SetLogUseCase @Inject constructor(
     )
 
     suspend fun logFromWatch(cmd: LogSetCommand): Result {
+        if (!Program.isLoaded) programRepo.ensureLoaded()
         val session = sessionDao.getActiveSession() ?: return Result(false, "no active session")
         if (session.id != cmd.sessionId) return Result(false, "session changed")
         // Freestyle sessions never mirror to the wrist (WatchSessionMirror gates them), so no
@@ -73,9 +76,9 @@ class SetLogUseCase @Inject constructor(
         }
 
         // ── Resolve the current slot exactly as the wrist saw it (mirror logic) ──
-        val plan = Program.day(session.dayKey)
-        if (plan.exercises.isEmpty()) return Result(false, "no plan")
         val logged = loggedExerciseDao.forSession(session.id)
+        val plan = programCustomRepo.effectivePlanForSession(session.dayKey, logged.map { it.effectiveSlotId })
+        if (plan.isEmpty()) return Result(false, "no plan")
         val allSets = loggedSetDao.allForSession(session.id)
         val setsByLogged = allSets.groupBy { it.loggedExerciseId }
         fun loggedFor(planId: String) =
@@ -83,7 +86,7 @@ class SetLogUseCase @Inject constructor(
 
         // The SAME current-slot policy the mirror displays (CurrentSlotResolver) — what the wrist
         // showed is what this log targets.
-        val rows = plan.exercises.map { ex -> ex to loggedFor(ex.id) }
+        val rows = plan.map { ex -> ex to loggedFor(ex.id) }
         val lastLoggedIdx = allSets.maxByOrNull { it.completedAt }
             ?.let { last -> rows.indexOfFirst { (_, row) -> row?.id == last.loggedExerciseId } }
             ?.takeIf { it >= 0 }
@@ -95,7 +98,7 @@ class SetLogUseCase @Inject constructor(
             lastLoggedIdx = lastLoggedIdx,
             earlyDoneIdx = earlyDoneIdx
         )
-        val slotPlan = plan.exercises[currentIdx]
+        val slotPlan = plan[currentIdx]
         if (cmd.exerciseId != null && cmd.exerciseId != slotPlan.id) {
             // The wrist showed a different exercise than is now current (a phone log advanced it
             // mid-flight) — refuse rather than logging against the wrong slot.
@@ -108,7 +111,7 @@ class SetLogUseCase @Inject constructor(
         val effectiveId = row?.exerciseId
             ?: swap?.swappedExerciseId?.takeIf { it.isNotBlank() }
             ?: slotPlan.id
-        val effectivePlan = Program.exercise(effectiveId) ?: slotPlan
+        val effectivePlan = if (effectiveId == slotPlan.id) slotPlan else Program.exercise(effectiveId) ?: slotPlan
 
         // A timed hold cannot be logged from the wrist, because the protocol has no duration field
         // to log it WITH. LogSetCommand carries only weight and reps, so a plank prescribed as

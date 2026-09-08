@@ -15,3 +15,13 @@ Validation: 45 focused recovery/startup tests passed, 0 skipped. This includes r
 reopening, interrupted recovery retries, schema/value snapshot copying, gated preference reads
 and writes, and startup with the real Hilt application graph. Full-suite and physical-device
 checks are not yet complete.
+
+## Watch program resolution (A08–A09)
+
+Phone refresh, watch display and watch logging share the customized session-plan resolver.
+The mirror observes customization and program revisions. Watch logging/mirroring and reminder
+and recap workers load the saved program before resolving it; unknown day keys are rejected.
+
+Validation: 11 focused plan, current-slot and application-startup tests passed. Customized
+removal, addition, ordering and prescription updates are covered with real Room. Paired-watch
+cold wake and live synchronization remain device checks.

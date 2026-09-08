@@ -38,21 +38,7 @@ internal suspend fun DayViewModel.refreshExercises() {
     val previousFinishedEarlyById = _state.value.exercises.associate { it.plan.id to it.finishedEarly }
     val previousOrderById = _state.value.exercises.mapIndexed { i, e -> e.plan.id to i }.toMap()
 
-    val effectivePlans = programCustomRepo.effectivePlanForDay(dayKey)
-    val effectiveIds = effectivePlans.mapTo(mutableSetOf()) { it.id }
-    // Logged exercises added mid-session that aren't part of the day's plan (e.g. a lift picked
-    // from another day) — render them too, resolved from the library, so they don't silently
-    // vanish on refresh (leaving an invisible orphan row). Resolve by the SLOT id (not exercise_id):
-    // a swapped entry's exercise_id is the swapped exercise, but it's matched below via bySlotId, so
-    // the extra plan must carry the slot id or the row orphans again (#11).
-    // Iterate the deduped bySlotId keys, not the raw logged rows: when two rows collide on the
-    // same out-of-plan effectiveSlotId (a stale pre-v22 row, a double cross-day add), the raw list
-    // would emit one identical extra plan per row and render duplicate cards. bySlotId already
-    // collapsed the collision to one entry.
-    val extraPlans = bySlotId.keys
-        .filterNot { it in effectiveIds }
-        .mapNotNull { Program.exercise(it) }
-    val allPlans = effectivePlans + extraPlans
+    val allPlans = programCustomRepo.effectivePlanForSession(dayKey, bySlotId.keys)
 
     // Each card's build is independent DB reads — fan them out concurrently instead of
     // deriving the day one exercise at a time (the dominant cost of opening the screen).

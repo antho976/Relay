@@ -37,10 +37,12 @@ class TrainingReminderWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val sessionDao: SessionDao,
     private val settingsRepo: SettingsRepository,
-    private val statsRepo: StatsRepository
+    private val statsRepo: StatsRepository,
+    private val programRepo: com.forge.app.data.repo.ProgramRepository
 ) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result {
+        if (!com.forge.app.program.Program.isLoaded) programRepo.ensureLoaded()
         if (!settingsRepo.trainingReminderEnabled.first()) return Result.success()
         if (settingsRepo.isQuietNow()) return Result.success() // skip; it fires again tomorrow
         // Don't nudge "train today" while a workout is literally in progress — they're already here.
