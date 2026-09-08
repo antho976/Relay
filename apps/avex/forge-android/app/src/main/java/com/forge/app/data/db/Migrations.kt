@@ -502,6 +502,14 @@ val MIGRATION_35_36 = object : Migration(35, 36) {
     }
 }
 
+/** v37: outcomes share the same commit as watch-triggered workout writes. */
+val MIGRATION_36_37 = object : Migration(36, 37) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS `wear_command` (`command_id` TEXT NOT NULL, " +
+            "`ack_json` TEXT NOT NULL, `completed_at` INTEGER NOT NULL, PRIMARY KEY(`command_id`))")
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -527,5 +535,6 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_32_33,
     MIGRATION_33_34,
     MIGRATION_34_35,
-    MIGRATION_35_36
+    MIGRATION_35_36,
+    MIGRATION_36_37
 )

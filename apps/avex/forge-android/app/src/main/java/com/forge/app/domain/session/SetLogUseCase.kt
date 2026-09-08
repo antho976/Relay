@@ -61,7 +61,8 @@ class SetLogUseCase @Inject constructor(
         /** The log needs a wrist confirm tap (big jump) — not an error, not logged yet. */
         val needsConfirm: Boolean = false,
         /** The written set's row id on success — rides the ack so wrist RPE can target it. */
-        val setId: Long? = null
+        val setId: Long? = null,
+        val restSeconds: Int? = null
     )
 
     suspend fun logFromWatch(cmd: LogSetCommand): Result {
@@ -159,7 +160,7 @@ class SetLogUseCase @Inject constructor(
             }
         }
 
-        // ── Rest timer first (the wrist should feel the countdown instantly), then the write ──
+        // Resolve rest now; the handler starts it only after the command transaction commits.
         val restOverride = swap?.restTimerOverrideSeconds
         val rest = RestAdvisor.restSeconds(
             plan = effectivePlan,
@@ -168,7 +169,6 @@ class SetLogUseCase @Inject constructor(
             compoundBase = settingsRepo.restCompoundSeconds.first(),
             isolationBase = settingsRepo.restIsolationSeconds.first()
         )
-        timerHolder.controller.start(rest.seconds)
 
         // Read-and-create in one transaction, the same funnel the day screen uses. Separate steps
         // here and separate steps there meant the wrist and the phone could each find no row for
@@ -182,17 +182,20 @@ class SetLogUseCase @Inject constructor(
             swappedName = swap?.swappedName?.takeIf { it.isNotBlank() },
             swappedUnit = swap?.swappedUnit?.takeIf { it.isNotBlank() }
         )
-        val setId = workoutRepo.logSet(
-            loggedExerciseId = leId,
-            weightText = weightText,
-            weightLb = weightLb,
-            reps = reps
-        )
+        val setId = try {
+            workoutRepo.logSet(loggedExerciseId = leId, weightText = weightText, weightLb = weightLb, reps = reps)
+        } catch (_: com.forge.app.data.db.SessionClosedException) {
+            return Result(false, "session finished")
+        }
         // PR at write time — the repository-level pass freestyle logging already uses, so the wrist
         // gold moment and the phone's flags agree.
         val wasPr = workoutRepo.flagPrForLoggedExercise(leId, effectiveId)
-        return Result(true, wasPr = wasPr, setId = setId)
+        return Result(true, wasPr = wasPr, setId = setId, restSeconds = rest.seconds)
     }
+
+    suspend fun prepareProgram() { if (!Program.isLoaded) programRepo.ensureLoaded() }
+
+    fun startRestAfterCommit(seconds: Int) { timerHolder.controller.start(seconds) }
 
     /** Rate the set a log ack named — targeted by row id, so it can't land on the wrong set. */
     suspend fun rpeFromWatch(setId: Long, rpe: Double): Result {

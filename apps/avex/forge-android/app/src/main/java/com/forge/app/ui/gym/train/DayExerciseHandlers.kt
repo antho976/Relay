@@ -291,8 +291,19 @@ internal fun DayViewModel.logSet(
             // event only after the timer is already on screen so the insert never delays the bubble.
             val restEndedAtMs = clock.nowMs()
 
-            // Start the rest timer before the DB write so the bubble + countdown appear the
-            // instant you tap — not after the insert and per-exercise rebuild round-trip.
+            // Was an inline copy of ensureLoggedExercise's body, and the copy had no guard: two rapid
+            // taps both read a stale null from UI state and both inserted a row for the same slot.
+            val leId = ensureLoggedExercise(exerciseId) ?: return@launch
+
+            workoutRepo.logSet(
+                loggedExerciseId = leId,
+                weightText = weightText,
+                weightLb = newWeightLb,
+                reps = reps,
+                durationSeconds = durationSeconds
+            )
+
+            // Start rest only after the set commits; a concurrent finish rejects the late write.
             // Rest follows the exercise actually performed (#11): a swapped slot uses the swapped exercise's
             // movement profile (compound/isolation + rep heaviness), so a cross-type swap rests correctly and
             // the realized-rest sample (keyed below by effectiveExerciseId) tunes the matching role. Falls back
@@ -312,18 +323,6 @@ internal fun DayViewModel.logSet(
                 setIndex = currentUi.loggedSets.size,
                 plannedSeconds = rest.seconds,
                 startedAtMs = restEndedAtMs
-            )
-
-            // Was an inline copy of ensureLoggedExercise's body, and the copy had no guard: two rapid
-            // taps both read a stale null from UI state and both inserted a row for the same slot.
-            val leId = ensureLoggedExercise(exerciseId) ?: return@launch
-
-            workoutRepo.logSet(
-                loggedExerciseId = leId,
-                weightText = weightText,
-                weightLb = newWeightLb,
-                reps = reps,
-                durationSeconds = durationSeconds
             )
 
             // First set of this exercise while a suggestion chip was showing → record suggestion vs
@@ -360,6 +359,9 @@ internal fun DayViewModel.logSet(
                     _state.update { it.copy(undoableSetId = null) }
                 }
             }
+        } catch (_: com.forge.app.data.db.SessionClosedException) {
+            // Finish won the transaction race. Its totals stay authoritative and no rest starts.
+            return@launch
         } finally {
             // Every exit releases, including the weight-jump warning's early return and a
             // cancellation when the screen goes away mid-write.

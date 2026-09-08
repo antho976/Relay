@@ -25,3 +25,16 @@ and recap workers load the saved program before resolving it; unknown day keys a
 Validation: 11 focused plan, current-slot and application-startup tests passed. Customized
 removal, addition, ordering and prescription updates are covered with real Room. Paired-watch
 cold wake and live synchronization remain device checks.
+
+## Atomic watch outcomes and finished-session guard (A10–A11)
+
+Room v37 stores a watch command's acknowledgement in the same transaction as its mutation.
+Duplicate deliveries replay it after transport or timer failure. Completed legacy ledger entries
+remain recognized. Timers and acknowledgement publication run after commit. Live set insertion
+checks its parent session inside the writer transaction and rejects a finished or missing parent.
+
+Validation: 21 focused tests passed, covering concurrent duplicate deliveries, failure after
+mutation, lost acknowledgement, post-commit timer failure, upgrade compatibility, and races
+between session finish and set insertion. A real v36 SQLite fixture opened through the production
+Room builder retains its workout history after migration. Android migration tests compile;
+instrumented execution and paired-watch behavior remain unverified.

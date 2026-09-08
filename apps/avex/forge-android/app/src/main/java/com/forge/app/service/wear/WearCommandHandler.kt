@@ -27,8 +27,14 @@ class WearCommandHandler @Inject constructor(
      * so a set logged just before the phone process died is neither logged twice nor left
      * unacknowledged on the wrist.
      */
-    private suspend fun runOnce(commandId: String, effect: suspend () -> CmdAckDto) =
-        ledger.run(commandId, publish = { publisher.publishAck(it) }, effect = effect)
+    private suspend fun runOnce(
+        commandId: String,
+        afterCommit: suspend (CmdAckDto) -> Unit = {},
+        effect: suspend () -> CmdAckDto
+    ) {
+        setLog.prepareProgram()
+        ledger.run(commandId, publish = { publisher.publishAck(it) }, afterCommit = afterCommit, effect = effect)
+    }
 
     suspend fun handleLogSet(bytes: ByteArray) {
         val cmd = when (val d = WearCodec.decode<LogSetCommand>(bytes)) {
@@ -36,8 +42,12 @@ class WearCommandHandler @Inject constructor(
             WearCodec.DecodeResult.NewerVersion -> return refuseNewerVersion(bytes)
             else -> return // Invalid: corrupt bytes, nothing to ack against.
         }
-        runOnce(cmd.commandId) {
+        var restSeconds: Int? = null
+        runOnce(cmd.commandId, afterCommit = { ack ->
+            if (ack.ok) restSeconds?.let { setLog.startRestAfterCommit(it) }
+        }) {
             val result = setLog.logFromWatch(cmd)
+            restSeconds = result.restSeconds
             CmdAckDto(
                 commandId = cmd.commandId,
                 ok = result.ok,

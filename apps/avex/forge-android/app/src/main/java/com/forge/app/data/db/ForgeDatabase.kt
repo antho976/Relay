@@ -112,6 +112,7 @@ import com.forge.app.data.db.entities.VacationPeriod
  */
 @Database(
     entities = [
+        com.forge.app.data.db.entities.WearCommand::class,
         Session::class,
         LoggedExercise::class,
         LoggedSet::class,
@@ -149,11 +150,12 @@ import com.forge.app.data.db.entities.VacationPeriod
         TrainingBlock::class,
         CoachProject::class
     ],
-    version = 36,
+    version = 37,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class ForgeDatabase : RoomDatabase() {
+    abstract fun wearCommandDao(): com.forge.app.data.db.dao.WearCommandDao
     abstract fun sessionDao(): SessionDao
     abstract fun loggedExerciseDao(): LoggedExerciseDao
     abstract fun loggedSetDao(): LoggedSetDao
