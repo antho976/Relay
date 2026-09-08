@@ -180,3 +180,16 @@ SDK 36 and explicit SDK 34 sandboxes. The default test SDK is now explicitly 34,
 screenshot fixtures, and ordinary unit tests use a plain Application. The real startup and retained
 Coach tests explicitly opt into ForgeApp; API-specific notification tests keep their SDK overrides.
 This avoids unrelated background Hilt startup in DAO tests and keeps the test environment stable.
+
+## Additional release-dependency findings
+
+The push surfaced 53 existing GitHub dependency alerts. Resolving both release runtime graphs showed
+three alerts affecting two shipped libraries: phone Guava 31.1-android (alerts 10/11) and watch
+protobuf-javalite 3.21.8 (alert 13). Constraints now select Guava 33.3.1-android, matching the existing
+watch version, and protobuf-javalite 3.25.5, the advisory's patched version. Shared catalog entries keep
+these choices explicit.
+
+The other alerted package coordinates were absent from both resolved release runtime graphs. That
+is an exposure classification, not a declaration that every build/test-toolchain alert is resolved.
+No broad toolchain migration or alert dismissal was performed. GitHub's default-branch alert count
+will also continue to describe main until relevant changes are merged and its graph is refreshed.
