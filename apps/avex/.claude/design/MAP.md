@@ -814,3 +814,10 @@ under a dumbbell lift's name reads as a bug rather than as advice.
 
 `Skip warm-up` is gone as a button: it and `Start lifting` did exactly the same thing. Not-today and
 not-this-week survive as the persistent opt-outs, as does Home's hold-to-skip long press.
+
+## Startup recovery waiting state (2026-09-07)
+
+Before restored storage is safe to open, MainActivity shows a neutral text-only preparing state
+with the existing theme, body typography and 24 dp gutters. It contains no private data or spinner.
+The normal application and its protection settings load after recovery; a failed recovery keeps
+the app on a retry instruction instead of exposing a partially restored dataset.

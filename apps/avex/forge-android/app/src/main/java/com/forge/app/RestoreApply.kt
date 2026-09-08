@@ -3,77 +3,17 @@ package com.forge.app
 import java.io.File
 
 /**
- * Applying a staged restore at boot, as one set or not at all.
+ * Boot-time restore of a database, preferences, photos and avatar before live storage opens.
  *
- * `BackupRepository.restoreFromUri` stages up to four components — the database, the DataStore
- * preferences file, the progress-photo folder and the avatar — and this puts them into place before
- * Room or DataStore is ever opened. Doing it at boot is what avoids replacing files while live flows
- * are reading them.
+ * The immutable set record names every component; the commit journal names outstanding swaps.
+ * Original bytes (including committed WAL frames) remain in snapshots until validation succeeds.
+ * A separate recovery record fixes the direction before rollback or confirmation starts. Recovery
+ * copies from immutable snapshots, then publishes a settled marker before deleting any of them.
+ * Every process-death boundary can therefore resume without confusing rollback with validation.
  *
- * ## Why this is two phases
- *
- * It used to copy and rename each component into place in turn, set a flag if one failed, and CARRY
- * ON. The database is the anchor the others describe, so a user could finish a boot with a database
- * from the backup and preferences, photos and an avatar from before it — a program describing days
- * none of their sessions match. The failed component was then retried on a LATER boot, so any
- * setting they changed in the meantime was silently overwritten when the staged preferences finally
- * landed. The code's own comments called the set atomic; it was not.
- *
- * So everything that can realistically fail happens in phase 1, where nothing is live yet and
- * abandoning costs nothing: the byte copy, a cross-filesystem move, a full disk, a file another
- * process still holds. Phase 2 is renames within a single directory, which are atomic and
- * essentially cannot fail once the bytes are already there. If any component cannot be staged, every
- * staged sibling is returned to its pending name and the boot runs entirely on pre-restore data,
- * with the whole set retried as one unit next time.
- *
- * ## Why phase 2 is journalled AND reversible
- *
- * "Essentially cannot fail" is not the same as cannot, and phase 2 has two ways to end badly. A
- * process death between two renames leaves some components swapped and some not, with nothing on
- * disk saying so — that is what [JOURNAL] is for. A rename that simply FAILS mid-set leaves the same
- * mixture, except the process is still running and about to finish booting into it.
- *
- * A journal alone does not fix the second one: deferring the failed component to the next boot
- * re-creates the exact defect described above, because the app comes up on a restored database with
- * pre-restore preferences and lands the staged ones later, over whatever the user changed in
- * between. So each component's pre-restore bytes are moved aside rather than overwritten, and if the
- * set cannot be completed every one of them goes back. `apply` therefore never returns having left a
- * mixture: either the whole set is live, or none of it is and the whole set is queued to retry.
- *
- * ## Why a set needs a manifest, and why the snapshots outlive the swap
- *
- * Staging writes the components one after another and used to be trusted on sight: if
- * `pending_restore.db` existed, it was a restore. A process killed part-way through staging left a
- * truncated database, or a complete one beside another backup's preferences, and this renamed it
- * live. So staging now publishes a [RestoreManifest] last, and a pending set is applied only when
- * every file on disk is exactly what that manifest describes; anything else is quarantined.
- *
- * And the swap is not the end of the restore. Each component's pre-restore bytes stay beside it as
- * a `.prerestore` snapshot until the application has opened the restored database through Room
- * and called [confirm]; if that open fails, [revert] puts every component of the set back. The
- * snapshots used to be discarded the moment the renames finished, which is exactly when nothing
- * had yet proven the replacement could be opened.
- *
- * ## The three states, and why membership is separate from progress
- *
- * [JOURNAL] is PROGRESS: what is left to commit, shortened as each component lands and deleted when
- * empty. [SET_RECORD] is MEMBERSHIP: everything the set consists of, written before the first live
- * rename and untouched until [confirm] or [revert]. Together they name exactly three states at boot:
- *
- *  - journal present            → mid-commit. Resume it, rolling the WHOLE set back if it fails.
- *  - journal absent, record present → landed, unproven. Go back into the Room open. This is the
- *    state that did not exist before: an empty journal read as "nothing in flight", so a set that
- *    landed and lost its process before validation had its snapshots swept as orphans and was never
- *    offered to [revert] at all.
- *  - both absent                → nothing in flight. Only here may anything be swept.
- *
- * Conflating the two is what made resume unsafe. Membership was derived from the journal, so a set
- * resumed on a later boot could only see the components it still had to commit: roll that back and
- * the ones an earlier boot had already landed — the database, first in commit order and so first to
- * leave the journal — stayed live, on top of preferences from before the backup.
- *
- * Lives outside `ForgeApp` so the sequencing is reachable from a test with a temp directory; the
- * Application only supplies the two paths and records the confirmation flag.
+ * [apply] returns true only for a landed set awaiting database validation. A failed recovery is
+ * kept on disk and must block consumers; [hasUnsettledRecovery] covers unreadable legacy journals.
+ * Storage work belongs on the bootstrap I/O dispatcher, never in Application's main-thread work.
  */
 internal object RestoreApply {
 
@@ -126,6 +66,10 @@ internal object RestoreApply {
      */
     private const val SET_RECORD = "pending_restore_set"
 
+    // Direction is durable before recovery mutates anything. Snapshots remain immutable until
+    // a settled marker is published, so replaying a partial rollback never deletes restored originals.
+    private const val RECOVERY = "pending_restore_recovery"
+
     /**
      * What [SET_RECORD] replaced: a post-hoc, best-effort record of the same membership, written
      * AFTER the set landed. Only ever read now to be swept, so an install interrupted across the
@@ -150,7 +94,14 @@ internal object RestoreApply {
      *   here, or one a previous boot left part-way through and this boot finished. The only case
      *   that may be reported to the user as a successful restore.
      */
+    fun hasUnsettledRecovery(filesDir: File): Boolean =
+        listOf(JOURNAL, SET_RECORD, RECOVERY).any { File(filesDir, it).exists() }
+
     fun apply(filesDir: File, liveDb: File): Boolean {
+        if (File(filesDir, RECOVERY).exists()) {
+            check(resumeRecovery(filesDir, liveDb)) { "Restore recovery is incomplete" }
+            return false
+        }
         // A journal that EXISTS but cannot be read is the one state in which doing nothing is the
         // only safe move. Its components are mid-commit, so sweeping would strand them and staging a
         // new set would interleave two restores — and we cannot tell which components they are.
@@ -292,45 +243,109 @@ internal object RestoreApply {
      * pre-restore snapshot and the record of what the set replaced.
      */
     fun confirm(filesDir: File, liveDb: File) {
-        ORDER.forEach { c -> liveFor(c, filesDir, liveDb)?.let { discard(snapshotOf(it)) } }
-        discard(setRecordFile(filesDir))
-        discard(File(filesDir, LEGACY_APPLIED))
+        val recovery = File(filesDir, RECOVERY)
+        check(!recovery.exists()) { "Cannot confirm while rollback is pending" }
+        check(writeRecovery(filesDir, "settled", ORDER)) { "Could not journal restore confirmation" }
+        check(resumeRecovery(filesDir, liveDb)) { "Could not retire restore snapshots" }
     }
 
-    /**
-     * The restored database could NOT be opened: put every component of the landed set back.
-     *
-     * A component with a snapshot gets its pre-restore bytes back over the restored ones; a
-     * component the set replaced nothing with (no snapshot, but named in [SET_RECORD]) has its
-     * restored bytes removed, which is the state it was in before — the fresh-install case, where
-     * the restored database landed over no database at all. The database's sidecars go
-     * with it, so nothing can replay over the file that returns. The set itself is not requeued: it
-     * was validated through this same configuration when it was staged, so a file that cannot be
-     * opened now has been damaged since, and retrying it would only fail the same way.
-     *
-     * @return true when every component that had a snapshot is back in place.
-     */
+    /** Roll back a rejected restore. False leaves all recovery records and snapshots retryable. */
     fun revert(filesDir: File, liveDb: File): Boolean {
-        // The whole set, as recorded before the first rename — not just the components that had
-        // something to move aside. A component that replaced nothing has no snapshot to find it by,
-        // and one landed on an EARLIER boot has long since left the journal.
-        val members = readSetRecord(filesDir)?.takeIf { it.isNotEmpty() }
-            ?: readLegacyApplied(filesDir)
-        var ok = true
-        for (component in ORDER) {
-            val live = liveFor(component, filesDir, liveDb) ?: continue
-            val snapshot = snapshotOf(live)
-            if (!snapshot.exists() && component !in members) continue
-            discard(live)
-            if (component == DB) {
-                discard(File(liveDb.path + "-wal"))
-                discard(File(liveDb.path + "-shm"))
+        if (File(filesDir, RECOVERY).exists()) return resumeRecovery(filesDir, liveDb)
+        val recorded = readSetRecord(filesDir) ?: return false
+        val members = (recorded + readLegacyApplied(filesDir) + ORDER.filter {
+            liveFor(it, filesDir, liveDb)?.let(::snapshotOf)?.exists() == true
+        }).distinct()
+        if (members.isEmpty()) return true
+        if (!writeRecovery(filesDir, "revert", members)) return false
+        return resumeRecovery(filesDir, liveDb)
+    }
+
+    private fun writeRecovery(filesDir: File, action: String, members: List<String>): Boolean =
+        runCatching {
+            val scratch = File(filesDir, "$RECOVERY.tmp")
+            scratch.outputStream().use { out ->
+                out.write((listOf(action) + members).joinToString("\n").toByteArray())
+                out.fd.sync()
             }
-            if (snapshot.exists() && !move(snapshot, live)) ok = false
+            check(scratch.renameTo(File(filesDir, RECOVERY))) { "Could not publish recovery direction" }
+            true
+        }.getOrDefault(false)
+
+    private fun resumeRecovery(filesDir: File, liveDb: File): Boolean = runCatching {
+        val record = File(filesDir, RECOVERY).readLines()
+        val action = record.firstOrNull()
+        check(action in setOf("revert", "rollback", "settled", "settled-revert")) { "Unknown restore recovery direction" }
+        val members = record.drop(1)
+        if (action == "revert" || action == "rollback") {
+            for (component in members) {
+                val live = liveFor(component, filesDir, liveDb) ?: continue
+                val pending = pendingFor(component, filesDir) ?: continue
+                val snapshot = snapshotOf(live)
+                val staged = if (component == PHOTOS) pending.takeIf { it.isDirectory }
+                    else stagedBeside(live)
+                // If staging still exists and no original was moved aside, this component never
+                // changed. Do not delete its live bytes (also handles a failed snapshot operation).
+                val untouched = staged != null && !snapshot.exists()
+                if (action == "rollback" && !pending.exists()) {
+                    val incoming = staged ?: live.takeIf { it.exists() }
+                    if (incoming != null) copyPublished(incoming, pending)
+                }
+                if (!untouched) {
+                    if (component == DB) {
+                        removeChecked(File(liveDb.path + "-wal"))
+                        removeChecked(File(liveDb.path + "-shm"))
+                    }
+                    if (snapshot.exists()) copyPublished(snapshot, live) else removeChecked(live)
+                    if (component == DB) {
+                        // WAL is committed database state. SHM is an index SQLite can rebuild.
+                        val wal = File(liveDb.path + "-wal")
+                        snapshotOf(wal).takeIf { it.exists() }?.let { copyPublished(it, wal) }
+                    }
+                }
+            }
+            if (action == "revert") RestoreManifest.discard(filesDir)
+            check(writeRecovery(filesDir, if (action == "revert") "settled-revert" else "settled", members)) { "Could not journal completed rollback" }
         }
-        discard(setRecordFile(filesDir))
-        discard(File(filesDir, LEGACY_APPLIED))
-        return ok
+        // A crash during cleanup resumes here, never back in the destructive recovery loop.
+        for (component in members) {
+            if (component != PHOTOS) liveFor(component, filesDir, liveDb)?.let(::stagedBeside)?.let(::discard)
+            if (action == "revert" || action == "settled-revert")
+                pendingFor(component, filesDir)?.let(::removeChecked)
+        }
+        for (component in ORDER) liveFor(component, filesDir, liveDb)?.let {
+            removeChecked(snapshotOf(it))
+        }
+        removeChecked(snapshotOf(File(liveDb.path + "-wal")))
+        removeChecked(snapshotOf(File(liveDb.path + "-shm")))
+        removeChecked(journalFile(filesDir))
+        removeChecked(setRecordFile(filesDir))
+        removeChecked(File(filesDir, LEGACY_APPLIED))
+        removeChecked(File(filesDir, RECOVERY))
+        true
+    }.getOrDefault(false)
+
+    /** Copy first and publish beside the destination; never consume the recovery source. */
+    private fun copyPublished(from: File, to: File) {
+        to.parentFile?.mkdirs()
+        val scratch = File(to.path + ".recovery-copy")
+        removeChecked(scratch)
+        if (from.isDirectory) {
+            check(from.copyRecursively(scratch, overwrite = true)) { "Could not copy ${from.name}" }
+        } else {
+            from.inputStream().use { input ->
+                scratch.outputStream().use { output -> input.copyTo(output); output.fd.sync() }
+            }
+        }
+        if (scratch.isDirectory || to.isDirectory) removeChecked(to)
+        check(scratch.renameTo(to)) { "Could not publish ${to.name}" }
+    }
+
+    private fun removeChecked(file: File) {
+        if (!file.exists()) return
+        check(if (file.isDirectory) file.deleteRecursively() else file.delete()) {
+            "Could not remove ${file.name}"
+        }
     }
 
     /** Remove a pending set that was never finished, marker first so a crash mid-way leaves no READY. */
@@ -378,13 +393,10 @@ internal object RestoreApply {
         if (members.isEmpty()) return true
         return runCatching {
             val scratch = File(filesDir, "$SET_RECORD.tmp")
-            scratch.writeText(members.joinToString("\n"))
+            scratch.outputStream().use { it.write(members.joinToString("\n").toByteArray()); it.fd.sync() }
             if (!scratch.renameTo(target)) {
-                target.delete()
-                if (!scratch.renameTo(target)) {
-                    scratch.delete()
-                    return@runCatching false
-                }
+                scratch.delete()
+                return@runCatching false
             }
             target.isFile
         }.getOrDefault(false)
@@ -443,10 +455,18 @@ internal object RestoreApply {
     }
 
     private fun commitComponent(component: String, filesDir: File, liveDb: File): Commit = when (component) {
-        DB -> commitFile(liveDb) {
-            // Drop stale WAL/-shm sidecars so SQLite can't replay old frames over the restored file.
-            deleteOrThrow(File(liveDb.path + "-wal"))
-            deleteOrThrow(File(liveDb.path + "-shm"))
+        DB -> {
+            val wal = File(liveDb.path + "-wal")
+            // No consumers are open during bootstrap. Preserve the original committed frames
+            // before the base-file swap; a retry never overwrites an already captured WAL.
+            val saved = runCatching {
+                check(!wal.exists() || wal.isFile) { "Database WAL is not a file" }
+                if (wal.exists() && !snapshotOf(wal).exists()) copyPublished(wal, snapshotOf(wal))
+            }.isSuccess
+            if (!saved) Commit.FAILED else commitFile(liveDb) {
+                deleteOrThrow(wal)
+                deleteOrThrow(File(liveDb.path + "-shm"))
+            }
         }
         PREFS -> commitFile(File(filesDir, PREFS_PATH))
         AVATAR -> commitFile(File(filesDir, AVATAR_NAME))
@@ -465,7 +485,8 @@ internal object RestoreApply {
      * smaller thing than one that cannot be backed out of half way.
      */
     private fun commitFile(live: File, afterSwap: () -> Unit = {}): Commit {
-        val staged = stagedBeside(live) ?: return Commit.ALREADY
+        val staged = stagedBeside(live) ?: return if (runCatching(afterSwap).isSuccess)
+            Commit.ALREADY else Commit.FAILED
         if (!snapshot(live)) return Commit.FAILED
         val ok = runCatching {
             if (!staged.renameTo(live)) error("Could not move ${live.name} into place")
@@ -494,23 +515,8 @@ internal object RestoreApply {
      * restored bytes out to the pending name reproduces that.
      */
     private fun rollBack(filesDir: File, liveDb: File, entries: List<String>) {
-        for (component in entries) {
-            val live = liveFor(component, filesDir, liveDb) ?: continue
-            val pending = pendingFor(component, filesDir) ?: continue
-            val staged = if (component == PHOTOS) null else stagedBeside(live)
-            when {
-                staged != null -> move(staged, pending)
-                // An uncommitted photo folder is already sitting at the pending name.
-                component == PHOTOS && pending.isDirectory -> Unit
-                live.exists() -> move(live, pending)
-            }
-            snapshotOf(live).takeIf { it.exists() }?.let { move(it, live) }
-        }
-        writeJournal(filesDir, emptyList())
-        // The set is back at its pending names and nothing of it is live, so there is nothing left
-        // to confirm or revert. Leaving the record would read as a landed set awaiting validation.
-        discard(setRecordFile(filesDir))
-        discard(File(filesDir, LEGACY_APPLIED))
+        check(writeRecovery(filesDir, "rollback", entries)) { "Could not journal restore rollback" }
+        check(resumeRecovery(filesDir, liveDb)) { "Restore rollback is incomplete" }
     }
 
     /**
@@ -523,7 +529,7 @@ internal object RestoreApply {
     private fun snapshot(live: File): Boolean {
         if (!live.exists()) return true
         val snapshot = snapshotOf(live)
-        if (snapshot.exists()) discard(snapshot)
+        if (snapshot.exists()) return true
         return move(live, snapshot)
     }
 
@@ -601,13 +607,10 @@ internal object RestoreApply {
         val file = journalFile(filesDir)
         if (remaining.isEmpty()) return@runCatching !file.exists() || file.delete()
         val scratch = File(filesDir, "$JOURNAL.tmp")
-        scratch.writeText(remaining.joinToString("\n"))
+        scratch.outputStream().use { it.write(remaining.joinToString("\n").toByteArray()); it.fd.sync() }
         if (!scratch.renameTo(file)) {
-            file.delete()
-            if (!scratch.renameTo(file)) {
-                scratch.delete()
-                return@runCatching false
-            }
+            scratch.delete()
+            return@runCatching false
         }
         true
     }.getOrDefault(false)
@@ -615,12 +618,8 @@ internal object RestoreApply {
     /**
      * Phase 1 for one component: get [pending]'s bytes next to [live] without touching [live].
      *
-     * The MOVE is attempted first and the copy is the fallback. This runs in `Application.onCreate`,
-     * on the main thread, before any UI exists, and copying a multi-megabyte `forge.db`
-     * byte-for-byte is seconds of frozen screen on a mid-range device with a long history — a
-     * plausible ANR at the one moment a user is least willing to force-stop the app. `filesDir` and
-     * `databases/` are the same filesystem, so the move is O(1); a device where it isn't falls back
-     * to the copy.
+     * Rename first to avoid copying large databases. Cross-filesystem staging falls back to a
+     * copy. Bootstrap runs on IO, before opening live storage.
      *
      * @return the staged file, or null if the bytes could not be placed — in which case [live] is
      *   exactly as it was.
@@ -645,10 +644,10 @@ internal object RestoreApply {
 
     /** Rename [from] onto [to], falling back to a copy across filesystems. Handles folders. */
     private fun move(from: File, to: File): Boolean = runCatching {
-        if (to.exists()) discard(to)
         if (from.renameTo(to)) return@runCatching true
-        if (from.isDirectory) from.copyRecursively(to, overwrite = true)
-        else from.copyTo(to, overwrite = true)
+        // Publish only a complete copy. A partial .prerestore file must never be mistaken for
+        // an original snapshot after disk exhaustion or process death during the fallback.
+        copyPublished(from, to)
         discard(from)
         true
     }.getOrDefault(false)

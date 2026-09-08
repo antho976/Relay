@@ -610,7 +610,7 @@ class RestoreApplyTest {
         assertEquals("live-avatar", liveAvatar().readText())
         assertEquals("live-photo", File(livePhotos(), "pp_old.jpg").readText())
         assertFalse("the restored photos went with the set", File(livePhotos(), "pp_new.jpg").exists())
-        assertFalse("no sidecar can replay over the returned file", File(liveDb.path + "-wal").exists())
+        assertEquals("original committed frames return, not frames from the failed open", "stale-wal", File(liveDb.path + "-wal").readText())
         assertFalse("nothing is left aside", File(liveDb.path + ".prerestore").exists())
         assertFalse("and the set is not requeued", File(filesDir, "pending_restore.db").exists())
     }
