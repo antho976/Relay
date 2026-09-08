@@ -38,3 +38,18 @@ mutation, lost acknowledgement, post-commit timer failure, upgrade compatibility
 between session finish and set insertion. A real v36 SQLite fixture opened through the production
 Room builder retains its workout history after migration. Android migration tests compile;
 instrumented execution and paired-watch behavior remain unverified.
+
+## Engine performance and freshness (A12–A16, O02)
+
+History assembly and adaptation, weekly-coach, lesson and directive evaluation run on Default.
+The unsafe cross-request time-only cache is removed. A directive passes one snapshot through
+readiness and life-event assessment, avoiding the former repeated finished-history reads.
+Stats listens to actual finished history and other engine inputs, with duplicate suppression and
+coalescing. Rolling charts refresh at date boundaries; planned targets observe effective program
+customizations independently of heavy history aggregation.
+
+Validation: 14 engine/coach tests passed. New Room tests cover same-count set edits, suppression
+of unfinished-session journal edits, fresh snapshots after writes/deletes and forward/backward
+clock changes, and a retained stats subscription across midnight and plan edits. A mixed-SDK
+Robolectric run failed in native loading; the consistent-SDK group passed. No device frame-time
+benchmark or speedup is claimed.

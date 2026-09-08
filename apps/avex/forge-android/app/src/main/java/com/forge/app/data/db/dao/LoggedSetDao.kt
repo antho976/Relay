@@ -372,6 +372,16 @@ interface LoggedSetDao {
     """)
     suspend fun allForFinishedSessions(): List<LoggedSet>
 
+    @Query("""
+        SELECT ls.* FROM logged_set ls
+        INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE s.finished_at IS NOT NULL AND s.is_untracked = 0
+          AND ls.duration_seconds IS NULL
+        ORDER BY ls.completed_at ASC
+    """)
+    fun observeAllForFinishedSessions(): Flow<List<LoggedSet>>
+
     /** Peak single-session total volume — feeds the "Volume King" / "Volume Beast" trophies. */
     @Query("""
         SELECT MAX(session_total) FROM (

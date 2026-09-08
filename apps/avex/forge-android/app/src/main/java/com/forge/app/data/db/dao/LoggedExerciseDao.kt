@@ -262,6 +262,14 @@ interface LoggedExerciseDao {
     """)
     suspend fun allForFinishedSessions(): List<LoggedExercise>
 
+    @Query("""
+        SELECT le.* FROM logged_exercise le
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE s.finished_at IS NOT NULL AND s.is_untracked = 0
+        ORDER BY s.started_at ASC, le.order_index ASC
+    """)
+    fun observeAllForFinishedSessions(): Flow<List<LoggedExercise>>
+
     /** Set superset group for an exercise (#38). */
     /**
      * Single-column writes, so two of these racing can't clobber each other.

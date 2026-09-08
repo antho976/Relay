@@ -180,7 +180,11 @@ class CoachRepository @Inject constructor(
     private val weeklyPassMutex = Mutex()
 
     /** Run this week's pass if it hasn't run yet; return the (existing or fresh) record. */
-    suspend fun ensureWeeklyPass(): CoachPass = weeklyPassMutex.withLock {
+    suspend fun ensureWeeklyPass(): CoachPass = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+        ensureWeeklyPassOnWorker()
+    }
+
+    private suspend fun ensureWeeklyPassOnWorker(): CoachPass = weeklyPassMutex.withLock {
         val zone = ZoneId.systemDefault()
         val today = Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
         val weekId = weekId(today)

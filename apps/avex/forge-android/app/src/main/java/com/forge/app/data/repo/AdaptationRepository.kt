@@ -28,6 +28,8 @@ import com.forge.app.program.MuscleGroup
 import com.forge.app.program.ProblemArea
 import com.forge.app.program.Program
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -85,9 +87,6 @@ class AdaptationRepository @Inject constructor(
     /** Dismissing or applying advice mutes that id for this long — no re-nagging. */
     private val adviceCooldownMs = 14L * 24 * 60 * 60 * 1000
 
-    /** How long a snapshot stays reusable by [snapshotCached] — long enough to bridge a screen hop. */
-    private val SNAPSHOT_CACHE_MS = 60_000L
-
     /**
      * The full adaptation snapshot. THROWS on a read/assembly failure so error-aware callers can tell a
      * real failure apart from a genuinely empty pre-baseline history — the Week Brief hides "Last week"
@@ -124,7 +123,7 @@ class AdaptationRepository @Inject constructor(
         zoneId = java.time.ZoneId.systemDefault()
     )
 
-    private suspend fun assembleSnapshot(): AdaptationSnapshot {
+    private suspend fun assembleSnapshot(): AdaptationSnapshot = withContext(Dispatchers.Default) {
         // The DAO queries already exclude unfinished + untracked; the session list must too.
         val sessions = sessionDao.allFinished().filter { !it.isUntracked }
         val loggedExercises = loggedExerciseDao.allForFinishedSessions()
@@ -137,7 +136,7 @@ class AdaptationRepository @Inject constructor(
         // B1: an injured movement (or anything hitting an injured muscle) is off the table until
         // cleared, so the coach can never propose swapping INTO it. Treated as an exclusion at the
         // candidate-pool seam rather than a special case downstream — one rule, one place.
-        val life = lifeEvents(clock.nowMs())
+        val life = lifeEvents(clock.nowMs(), sessions)
         val restrictedIds = life.restrictedExerciseIds +
             ExerciseLibrary.all
                 .filter { it.muscle in life.restrictedMuscles }
@@ -201,9 +200,7 @@ class AdaptationRepository @Inject constructor(
             health = healthConnectManager.readRecovery(now - healthLookbackMs, now),
             zoneId = java.time.ZoneId.systemDefault()
         )
-        lastSnapshot = snap
-        lastSnapshotAtMs = now
-        return snap
+        snap
     }
 
     /**
@@ -232,40 +229,34 @@ class AdaptationRepository @Inject constructor(
         )
     }
 
-    @Volatile private var lastSnapshot: AdaptationSnapshot? = null
-    @Volatile private var lastSnapshotAtMs: Long = 0L
-
-    /**
-     * Like [snapshot] but reuses one assembled in the last [SNAPSHOT_CACHE_MS] — for READ-ONLY display
-     * (the Coach Lab) opened right after a path that already snapshotted (the Week Brief / Overview), so
-     * the whole-history fan-out doesn't run twice in one user action. Mutating callers must use [snapshot].
-     */
-    suspend fun snapshotCached(): AdaptationSnapshot {
-        lastSnapshot?.let { if (clock.nowMs() - lastSnapshotAtMs <= SNAPSHOT_CACHE_MS) return it }
-        return snapshot()
-    }
+    /** Compatibility entry point. Reuse snapshots within one request, never across mutations. */
+    suspend fun snapshotCached(): AdaptationSnapshot = snapshot()
 
     /**
      * Today's readiness scale (System 6), or null below the data gates / at net zero.
      * Deliberately lighter than [snapshot] — two small queries, no whole-history set
      * fan-out — so the day screen can load it at session open.
      */
-    suspend fun readinessScale(): Recommendation.ReadinessScale? {
-        val now = clock.nowMs()
-        return ReadinessAdvisor.evaluate(
-            sessions = sessionDao.allFinished().filter { !it.isUntracked },
-            cardio = cardioDao.since(now - signalWindowMs),
+    suspend fun readinessScale(
+        snapshot: AdaptationSnapshot? = null,
+        life: com.forge.app.domain.coach.LifeEvents.State? = null
+    ): Recommendation.ReadinessScale? = withContext(Dispatchers.Default) {
+        val now = snapshot?.nowMs ?: clock.nowMs()
+        val sessions = snapshot?.sessions ?: sessionDao.allFinished().filter { !it.isUntracked }
+        ReadinessAdvisor.evaluate(
+            sessions = sessions,
+            cardio = snapshot?.cardio ?: cardioDao.since(now - signalWindowMs),
             nowMs = now,
             zoneId = java.time.ZoneId.systemDefault(),
             onVacation = com.forge.app.domain.vacation.VacationCalendar.onVacation(vacationDao.all()),
             // One more small query, in the spirit of this path staying light: how the last session
             // felt is the cheapest readiness signal there is (A1).
-            moods = moodDao.since(now - readinessMoodWindowMs),
+            moods = snapshot?.moods ?: moodDao.since(now - readinessMoodWindowMs),
             // B1: this morning's check-in and the athlete's life state. Each is one small query;
             // the path stays far lighter than a whole-history fan-out.
             checkins = checkinDao.since(now - checkinWindowMs),
-            health = healthConnectManager.readRecovery(now - readinessHealthLookbackMs, now),
-            lifeEvents = lifeEvents(now)
+            health = snapshot?.health ?: healthConnectManager.readRecovery(now - readinessHealthLookbackMs, now),
+            lifeEvents = life ?: lifeEvents(now, sessions)
         )
     }
 
@@ -273,16 +264,23 @@ class AdaptationRepository @Inject constructor(
      * The athlete's current life state (B1) — illness, a training gap, injury restrictions. Read
      * here so every consumer (readiness, the watcher, the directive) sees one answer.
      */
-    suspend fun lifeEvents(nowMs: Long = clock.nowMs()): com.forge.app.domain.coach.LifeEvents.State =
+    suspend fun lifeEvents(
+        nowMs: Long = clock.nowMs(),
+        sessions: List<com.forge.app.data.db.entities.Session>? = null
+    ): com.forge.app.domain.coach.LifeEvents.State = withContext(Dispatchers.Default) {
         runCatching {
             com.forge.app.domain.coach.LifeEvents.assess(
-                sessions = sessionDao.allFinished().filter { !it.isUntracked },
+                sessions = sessions ?: sessionDao.allFinished().filter { !it.isUntracked },
                 checkins = checkinDao.since(nowMs - checkinWindowMs),
                 cardio = cardioDao.since(nowMs - checkinWindowMs),
                 restrictions = injuryDao.active(),
                 nowMs = nowMs
             )
-        }.getOrDefault(com.forge.app.domain.coach.LifeEvents.State.NONE)
+        }.getOrElse {
+            if (it is kotlinx.coroutines.CancellationException) throw it
+            com.forge.app.domain.coach.LifeEvents.State.NONE
+        }
+    }
 
     /**
      * The Overview coach feed off ONE snapshot: actionable arbitrated recommendations (deload +
@@ -298,7 +296,7 @@ class AdaptationRepository @Inject constructor(
         val restingHrSpike: RestingHrTrend.Readout? = null
     )
 
-    suspend fun coachFeed(): CoachFeed {
+    suspend fun coachFeed(): CoachFeed = withContext(Dispatchers.Default) {
         // Overview calls this from a bare viewModelScope.launch with no error path, so degrade to an
         // empty snapshot (no recs) rather than crashing the home screen on a corrupt row.
         val s = snapshotOrEmpty()
@@ -312,7 +310,7 @@ class AdaptationRepository @Inject constructor(
         // Off-app recovery snapshot: resting HR up vs the user's own baseline (gated; empty when HC
         // is unconnected). Surfaced separately from the fatigue score for its own Overview card.
         val restingHrSpike = RestingHrTrend.spike(s.health.restingHr, s.nowMs, t)
-        return CoachFeed(arbitrated, building, t.deloadScoreThreshold, restingHrSpike)
+        CoachFeed(arbitrated, building, t.deloadScoreThreshold, restingHrSpike)
     }
 
     /** Just the actionable recommendations (kept for callers that don't need the fatigue read). */
@@ -323,7 +321,7 @@ class AdaptationRepository @Inject constructor(
      * shouldn't pay for the plateau ladder + arbitration [coachFeed] builds for the Overview.
      * (DeloadAdvisor still runs ProgressionAdvisor once internally for its plateau driver.)
      */
-    suspend fun deloadSuggestion(): Recommendation.DeloadSuggestion? = DeloadAdvisor.evaluate(snapshot())
+    suspend fun deloadSuggestion(): Recommendation.DeloadSuggestion? = withContext(Dispatchers.Default) { DeloadAdvisor.evaluate(snapshot()) }
 
     /**
      * Everything the Stats page reads from the engine, off ONE snapshot fan-out: the fatigue
@@ -340,10 +338,10 @@ class AdaptationRepository @Inject constructor(
         val insights: List<Recommendation.Insight>
     )
 
-    suspend fun engineStatsRead(): EngineStatsRead {
+    suspend fun engineStatsRead(): EngineStatsRead = withContext(Dispatchers.Default) {
         val s = snapshot()
         val t = AdaptThresholds()
-        return EngineStatsRead(
+        EngineStatsRead(
             fatigue = DeloadAdvisor.fatigue(s, t),
             deloadScoreThreshold = t.deloadScoreThreshold,
             plateaus = ProgressionAdvisor.evaluate(s, t),

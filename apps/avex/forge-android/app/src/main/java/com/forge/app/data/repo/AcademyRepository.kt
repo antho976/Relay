@@ -67,8 +67,14 @@ class AcademyRepository @Inject constructor(
      * loop should not be doing ledger writes, and "has this user ever logged a set?" is a question
      * the snapshot already answers.
      */
-    suspend fun syncCoachMoments() {
-        val snapshot = runCatching { adaptationRepository.snapshotCached() }.getOrNull() ?: return
+    suspend fun syncCoachMoments() = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+        syncCoachMomentsOnWorker()
+    }
+
+    private suspend fun syncCoachMomentsOnWorker() {
+        val snapshot = runCatching { adaptationRepository.snapshotCached() }.getOrElse {
+            if (it is kotlinx.coroutines.CancellationException) throw it else null
+        } ?: return
 
         // Cold start: the curriculum's first lesson exists from the moment there's a program.
         if (snapshot.program.isNotEmpty()) unlock("fundamentals.what_a_program_is")

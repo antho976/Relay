@@ -77,7 +77,9 @@ class StatsRepository @Inject constructor(
     private val bodyweightRepo: BodyweightRepository,
     private val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
     private val timeSignals: com.forge.app.core.time.TimeSignals,
-    private val clock: Clock
+    private val clock: Clock,
+    private val programRepo: ProgramRepository,
+    private val programCustomRepo: ProgramCustomizationRepository
 ) {
 
     data class WeeklyStats(
@@ -473,8 +475,9 @@ class StatsRepository @Inject constructor(
     fun observeGymStats(): Flow<GymStats> {
         return combine(
             loggedSetDao.observeAllFinishedSetsWithSession(),
-            loggedExerciseDao.observeRecentPrs()
-        ) { allSets, prRows ->
+            loggedExerciseDao.observeRecentPrs(),
+            timeSignals.dayStarts()
+        ) { allSets, prRows, _ ->
           coroutineScope {
             // Rolling-7-day working sets for the volume-by-muscle read, recomputed per emission so the
             // window slides while the screen stays open. Derived from allSets (already tracked /
@@ -494,10 +497,7 @@ class StatsRepository @Inject constructor(
                 e1rmLifts = buildE1rmLifts(allSets),
                 strengthCurves = buildStrengthCurves(allSets),
                 weeklySetsByMuscle = buildWeeklySetsByMuscle(volumeSets),
-                // Always compute the planned targets here (cheap, program-only); freestyle zeroes them in
-                // the trailing combine so toggling the mode doesn't re-run any of the heavy aggregations.
-                plannedSetsByMuscle =
-                    com.forge.app.program.VolumeTargets.plannedWeeklySetsByMuscle(Program.days),
+                plannedSetsByMuscle = emptyMap(),
                 weeklyTonnage = buildWeeklyTonnage(deloadTrend),
                 dailyActivity = buildDailyActivity(allSets),
                 rpeDistribution = buildRpeDistribution(allSets),
@@ -524,7 +524,14 @@ class StatsRepository @Inject constructor(
                 }
             else stats.hallOfFame
             stats.copy(bodyweightPoints = points, hallOfFame = hallOfFame)
-        }.combine(settingsRepo.freestyleMode) { stats, freestyle ->
+        }.combine(combine(programRepo.revision, programCustomRepo.observeAll()) { _, _ ->
+            if (!Program.isLoaded) programRepo.ensureLoaded()
+            val effective = Program.days.map { day ->
+                day.copy(exercises = programCustomRepo.effectivePlanForDay(day.key))
+            }
+            com.forge.app.program.VolumeTargets.plannedWeeklySetsByMuscle(effective)
+        }) { stats, planned -> stats.copy(plannedSetsByMuscle = planned) }
+        .combine(settingsRepo.freestyleMode) { stats, freestyle ->
             // No fixed plan (freestyle) → no planned volume targets to chart actual sets against. Folded
             // in last so flipping freestyle only re-runs this cheap copy, not the aggregations above.
             if (freestyle) stats.copy(plannedSetsByMuscle = emptyMap()) else stats

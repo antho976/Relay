@@ -44,6 +44,8 @@ data class CustomExerciseRef(
 class ProgramCustomizationRepository @Inject constructor(
     private val dao: ProgramCustomizationDao
 ) {
+    fun observeAll(): Flow<List<ProgramCustomization>> = dao.observeAll().distinctUntilChanged()
+
     fun observeForDay(dayKey: String): Flow<List<ProgramCustomization>> =
         dao.observeForDay(dayKey)
 
