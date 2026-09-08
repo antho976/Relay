@@ -115,7 +115,12 @@ object PreSessionBrief {
             ?.maxOrNull()
 
         val isPlates = slot.unit == ExerciseUnit.PLATES
-        val step = WeightSteps.weightStep(weightUnit, isPlates).let { if (isPlates) it * PLATE_LB else it }
+        val step = WeightSteps.weightStep(weightUnit, isPlates) * when {
+            isPlates -> s.prefs.plateLb
+            weightUnit == ProtocolWeightUnit.KG -> 2.2046226218487757
+            weightUnit == ProtocolWeightUnit.ST -> 14.0
+            else -> 1.0
+        }
 
         val (raw, coldStart) = when {
             slot.unit == ExerciseUnit.BODYWEIGHT -> null to false
@@ -130,11 +135,12 @@ object PreSessionBrief {
             // rounded — and always downward, because rounding a 5% hold back up to the same weight
             // would quietly ignore the readiness read that asked for it.
             if (!coldStart && kotlin.math.abs(adjusted - base) < 0.01) base
-            else floorToStep(adjusted, step)
+            else floorToStep(adjusted, step).takeIf { it > 0.0 }
         }
 
         val intent = when {
             slot.unit == ExerciseUnit.BODYWEIGHT -> "Reps at the top of the range"
+            raw != null && scaled == null -> "No lower loadable weight; keep the weight and ease the reps"
             coldStart && scaled != null -> "First time here, seeded from your similar lifts"
             coldStart -> "First time here, so find a weight you can control"
             sore -> "Eased while ${slot.muscle.displayName.lowercase()} is sore"
@@ -182,13 +188,8 @@ object PreSessionBrief {
         else -> "A normal session: earn the reps before the weight moves"
     }
 
-    /** Floor to a loadable step, never below one step — the coach never asks for a phantom plate. */
-    private fun floorToStep(value: Double, step: Double): Double {
-        if (step <= 0) return value
-        val snapped = kotlin.math.floor(value / step) * step
-        return if (snapped < step) step else snapped
-    }
-
-    /** Plate exercises step in half-plates; the table speaks plates, the engine speaks pounds. */
-    private const val PLATE_LB = 45.0
+    /** Round downward on the stored-pound grid; zero means no supported positive load. */
+    private fun floorToStep(value: Double, step: Double): Double =
+        if (step <= 0.0 || !step.isFinite()) value
+        else kotlin.math.floor(value / step + 1e-9) * step
 }

@@ -109,7 +109,7 @@
         <service
             android:name=".glance.ReadinessComplicationService"
             android:exported="true"
-            android:label="Avex readiness"
+            android:label="Avex load adjustment"
             android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
             <intent-filter>
                 <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />

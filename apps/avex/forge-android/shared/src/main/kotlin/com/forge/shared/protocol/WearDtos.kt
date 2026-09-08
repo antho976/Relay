@@ -77,15 +77,18 @@ data class ConfigDto(
     /** "#RRGGBB" accent hex; empty = the app default accent. */
     val accentHex: String = "",
     val accentEnabled: Boolean = true,
-    val unit: ProtocolWeightUnit = ProtocolWeightUnit.LB
+    val unit: ProtocolWeightUnit = ProtocolWeightUnit.LB,
+    val supportsHrAcknowledgements: Boolean = false
 )
 
 /** The tile/idle-home payload ([WearProtocol.PATH_GLANCE_TODAY]), stamped with its data age. */
 @Serializable
 data class GlanceTodayDto(
     val v: Int = WearProtocol.VERSION,
-    /** Readiness scale percent, null below the coach's data gates (degrade, never blank). */
+    /** Legacy field: signed load adjustment, never a 0-100 readiness score. New phones leave null. */
     val readinessPercent: Int? = null,
+    /** Suggested load change in percentage points, -5 through +5; null below data gates. */
+    val loadAdjustmentPercent: Int? = null,
     /** Next planned day's display name; null in freestyle / no-plan mode. */
     val nextDayTitle: String? = null,
     /**
@@ -186,11 +189,16 @@ data class HrBatchDto(
      * this the phone can measure the offset and compare like with like. 0 = an older watch build
      * that doesn't send it; the phone then falls back to a fixed skew tolerance.
      */
-    val sentAtMs: Long = 0L
+    val sentAtMs: Long = 0L,
+    val batchId: String? = null
 ) {
     @Serializable
     data class Sample(val atMs: Long, val bpm: Int)
 }
+
+/** Confirms that a bounded HR batch has been validated and persisted (or terminally discarded). */
+@Serializable
+data class HrBatchAckDto(val v: Int = WearProtocol.VERSION, val sessionId: Long, val batchId: String)
 
 /** Command acknowledgement ([WearProtocol.PATH_CMD_ACK]) — a DataItem so it survives a flap. */
 @Serializable
@@ -241,3 +249,13 @@ data class HapticAckDto(
     val timerEndAtMs: Long,
     val atMs: Long
 )
+
+/** New watches can also read the signed adjustment emitted by older phones. */
+val GlanceTodayDto.loadAdjustment: Int?
+    get() = (loadAdjustmentPercent ?: readinessPercent)?.takeIf { it in -5..5 }
+
+fun loadAdjustmentText(value: Int?): String = when {
+    value == null -> "–"
+    value > 0 -> "+$value%"
+    else -> "$value%"
+}

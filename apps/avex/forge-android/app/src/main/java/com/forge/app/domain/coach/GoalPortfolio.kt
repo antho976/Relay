@@ -245,13 +245,11 @@ object GoalPortfolio {
         val ratio = BalancePair.fromCode(goal.targetKey)?.let { pair ->
             val fourWeeks = s.nowMs - 4 * WEEK_MS
             val byMuscle = mutableMapOf<MuscleGroup, Int>()
-            for (day in s.program) {
-                for (slot in day.slots) {
-                    val sets = s.exerciseHistory[slot.exerciseId].orEmpty()
-                        .filter { it.countsForProgression && !it.skipped && it.sessionStartedAt >= fourWeeks }
-                        .sumOf { it.sets.size }
-                    if (sets > 0) byMuscle[slot.muscle] = (byMuscle[slot.muscle] ?: 0) + sets
-                }
+            for (slot in s.program.flatMap { it.slots }.distinctBy { it.exerciseId }) {
+                val sets = s.exerciseHistory[slot.exerciseId].orEmpty()
+                    .filter { it.countsForProgression && !it.skipped && it.sessionStartedAt >= fourWeeks }
+                    .sumOf { it.sets.size }
+                if (sets > 0) byMuscle[slot.muscle] = (byMuscle[slot.muscle] ?: 0) + sets
             }
             val a = pair.left.sumOf { byMuscle[it] ?: 0 }
             val b = pair.right.sumOf { byMuscle[it] ?: 0 }

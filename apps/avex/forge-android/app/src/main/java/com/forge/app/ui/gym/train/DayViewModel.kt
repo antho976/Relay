@@ -169,9 +169,8 @@ class DayViewModel @Inject constructor(
         // phone screen only ever rebuilt from its own actions. So a set logged on the wrist was
         // invisible here, and the next setIndex was computed from a list that did not contain it.
         //
-        // Compare counts rather than refreshing on every emission: a set logged on the phone has
-        // already refreshed this screen, so equal counts mean there is nothing new to pull in.
-        // That comparison is also what stops this becoming a refresh feedback loop.
+        // Compare complete rows: ratings can change without adding a set. The delayed UI comparison
+        // still avoids rebuilding cards that a local write already reconciled.
         viewModelScope.launch {
             var lastSessionId: Long? = null
             var job: Job? = null
@@ -182,7 +181,6 @@ class DayViewModel @Inject constructor(
                 job?.cancel()
                 job = if (sid == null) null else viewModelScope.launch {
                     workoutRepo.observeSetsForSession(sid)
-                        .map { it.size }
                         .distinctUntilChanged()
                         // Debounced so a LOCAL log does not land here. Logging on the phone writes
                         // to Room and then refreshes just that card via the fast single-exercise
@@ -191,9 +189,9 @@ class DayViewModel @Inject constructor(
                         // A wrist-written set has no such follow-up, so it is still unreconciled
                         // when the delay expires and gets the refresh it needs.
                         .debounce(1_500)
-                        .collect { dbCount ->
-                            val uiCount = _state.value.exercises.sumOf { it.loggedSets.size }
-                            if (dbCount != uiCount) refreshExercises()
+                        .collect { dbSets ->
+                            val uiSets = _state.value.exercises.flatMap { it.loggedSets }
+                            if (dbSets.toSet() != uiSets.toSet()) refreshExercises()
                         }
                 }
             }

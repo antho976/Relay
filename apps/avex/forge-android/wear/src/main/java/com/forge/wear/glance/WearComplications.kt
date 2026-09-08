@@ -1,5 +1,8 @@
 package com.forge.wear.glance
 
+import com.forge.shared.protocol.loadAdjustment
+import com.forge.shared.protocol.loadAdjustmentText
+
 import androidx.wear.watchface.complications.data.ComplicationData
 import androidx.wear.watchface.complications.data.ComplicationType
 import androidx.wear.watchface.complications.data.CountDownTimeReference
@@ -26,23 +29,23 @@ class ReadinessComplicationService : SuspendingComplicationDataSourceService() {
 
     override fun getPreviewData(type: ComplicationType): ComplicationData? = when (type) {
         ComplicationType.RANGED_VALUE -> RangedValueComplicationData.Builder(
-            value = 82f, min = 0f, max = 100f, contentDescription = text("Readiness")
-        ).setText(text("82")).build()
-        ComplicationType.SHORT_TEXT -> ShortTextComplicationData.Builder(text("82"), text("Readiness"))
-            .setTitle(text("READY")).build()
+            value = 3f, min = 0f, max = 10f, contentDescription = text("Suggested load adjustment: -2%")
+        ).setText(text("-2%")).build()
+        ComplicationType.SHORT_TEXT -> ShortTextComplicationData.Builder(text("-2%"), text("Suggested load adjustment"))
+            .setTitle(text("LOAD")).build()
         else -> null
     }
 
     override suspend fun onComplicationRequest(request: ComplicationRequest): ComplicationData? {
-        val readiness = WearGlanceStore.glance(this)?.readinessPercent
+        val readiness = WearGlanceStore.glance(this)?.loadAdjustment
         return when (request.complicationType) {
             ComplicationType.RANGED_VALUE -> RangedValueComplicationData.Builder(
-                value = (readiness ?: 0).toFloat(), min = 0f, max = 100f,
-                contentDescription = text("Readiness")
-            ).setText(text(readiness?.toString() ?: "—")).build()
+                value = ((readiness ?: 0) + 5).toFloat(), min = 0f, max = 10f,
+                contentDescription = text("Suggested load adjustment")
+            ).setText(text(loadAdjustmentText(readiness))).build()
             ComplicationType.SHORT_TEXT -> ShortTextComplicationData.Builder(
-                text(readiness?.toString() ?: "—"), text("Readiness")
-            ).setTitle(text("READY")).build()
+                text(loadAdjustmentText(readiness)), text("Suggested load adjustment")
+            ).setTitle(text("LOAD")).build()
             else -> null
         }
     }

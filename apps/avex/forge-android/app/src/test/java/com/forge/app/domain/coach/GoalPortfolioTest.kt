@@ -445,4 +445,12 @@ class GoalPortfolioTest {
         val snap = snapshot()
         assertEquals(GoalPortfolio.evaluate(goals, snap), GoalPortfolio.evaluate(goals, snap))
     }
+    @Test fun repeatedProgramSlotsDoNotChangeBalanceForTheSameHistory() {
+        val s = snapshot(slots = listOf(slot("bench", MuscleGroup.CHEST), slot("row", MuscleGroup.BACK)),
+            history = mapOf("bench" to listOf(bout(2, 50.0)), "row" to listOf(bout(2, 50.0))))
+        val g = goal(CoachGoalKind.BALANCE, targetKey = BalancePair.PUSH_PULL.code)
+        val repeated = s.copy(program = s.program + ProgramDaySnap("extra", "Extra", listOf(slot("bench"))))
+        assertEquals(GoalPortfolio.evaluate(listOf(g), s), GoalPortfolio.evaluate(listOf(g), repeated))
+    }
+
 }

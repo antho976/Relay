@@ -144,17 +144,11 @@ class WearHrService : Service() {
             // (session_id, at_ms) with IGNORE-on-conflict, so a re-send is free.
             val batch = synchronized(pending) { pending.toList() }
             if (batch.isEmpty()) continue
-            if (!repo.sendHrBatchAwait(sessionId, batch, totalKcal)) continue
-            // Drop the samples that were actually delivered, BY IDENTITY. Removing batch.size
-            // items from the front instead assumed the front of the deque was still the snapshot,
-            // which stops being true the moment PENDING_CAP evicts: a send that takes long enough
-            // for the buffer to fill — the slow-delivery case this buffer exists for — has already
-            // dropped some of the snapshot off the front, so counting off batch.size then deletes
-            // that many NEWLY ARRIVED samples which were never sent at all. Samples are keyed
-            // (session_id, at_ms) with IGNORE-on-conflict on the phone, so matching on at_ms is
-            // exactly as precise as the storage is.
-            val delivered = batch.mapTo(HashSet(batch.size)) { it.atMs }
-            synchronized(pending) { pending.removeAll { it.atMs in delivered } }
+            for (chunk in batch.chunked(com.forge.shared.protocol.WearProtocol.HR_SEND_BATCH_SIZE)) {
+                if (!repo.sendHrBatchAwait(sessionId, chunk, totalKcal)) break
+                val delivered = chunk.mapTo(HashSet(chunk.size)) { it.atMs }
+                synchronized(pending) { pending.removeAll { it.atMs in delivered } }
+            }
         }
     }
 

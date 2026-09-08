@@ -176,13 +176,11 @@ object ProjectScanner {
     private fun setsByMuscle(s: AdaptationSnapshot, weeks: Int): Map<MuscleGroup, Int> {
         val since = s.nowMs - weeks * WEEK_MS
         val byMuscle = HashMap<MuscleGroup, Int>()
-        for (day in s.program) {
-            for (slot in day.slots) {
+        for (slot in s.program.flatMap { it.slots }.distinctBy { it.exerciseId }) {
                 val sets = s.exerciseHistory[slot.exerciseId].orEmpty()
                     .filter { it.countsForProgression && !it.skipped && it.sessionStartedAt >= since }
                     .sumOf { bout -> bout.sets.count { it.durationSeconds == null } }
                 if (sets > 0) byMuscle[slot.muscle] = (byMuscle[slot.muscle] ?: 0) + sets
-            }
         }
         // Per-week average when the window is longer than a week, so thresholds read the same way.
         return if (weeks <= 1) byMuscle else byMuscle.mapValues { it.value }

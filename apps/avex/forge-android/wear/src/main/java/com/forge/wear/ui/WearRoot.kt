@@ -1,5 +1,8 @@
 package com.forge.wear.ui
 
+import com.forge.shared.protocol.loadAdjustment
+import com.forge.shared.protocol.loadAdjustmentText
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -182,9 +185,9 @@ private fun IdleScreen(glance: GlanceTodayDto?) {
                     Spacer(Modifier.height(4.dp))
                     Text("Open Avex on your phone", style = WearType.body, color = colors.muted, textAlign = TextAlign.Center)
                 }
-                glance.readinessPercent != null -> {
-                    Text("${glance.readinessPercent}", style = WearType.figure, color = colors.onBg)
-                    Text("READY", style = WearType.labelSmall, color = colors.muted)
+                glance.loadAdjustment != null -> {
+                    Text(loadAdjustmentText(glance.loadAdjustment), style = WearType.figure, color = colors.onBg)
+                    Text("LOAD", style = WearType.labelSmall, color = colors.muted)
                     GlanceLines(glance)
                 }
                 else -> {

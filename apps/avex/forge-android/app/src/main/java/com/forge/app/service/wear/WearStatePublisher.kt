@@ -110,7 +110,7 @@ class WearStatePublisher @Inject constructor(
                 settingsRepo.accentEnabled,
                 settingsRepo.weightUnit
             ) { hex, enabled, unit: WeightUnit ->
-                ConfigDto(accentHex = hex, accentEnabled = enabled, unit = unit.toProtocol())
+                ConfigDto(accentHex = hex, accentEnabled = enabled, unit = unit.toProtocol(), supportsHrAcknowledgements = true)
             }.distinctUntilChanged().collect { putItem(WearProtocol.PATH_CONFIG, WearCodec.encode(it)) }
         }
         // App open is a glance surface point — and so is a watch ARRIVING (P-02). The one-shot gate
@@ -150,7 +150,7 @@ class WearStatePublisher @Inject constructor(
             ?.takeIf { !freestyle && Program.days.isNotEmpty() }
             ?.let { Program.dayDisplayName(it) }
         val dto = GlanceTodayDto(
-            readinessPercent = readiness?.percent,
+            loadAdjustmentPercent = readiness?.percent,
             nextDayTitle = nextDayTitle,
             directiveHeadline = answer?.directive?.headline,
             directiveReason = answer?.directive?.reason,
@@ -174,6 +174,10 @@ class WearStatePublisher @Inject constructor(
      * once [ACK_HISTORY] newer ones exist — long past any plausible sync delay, and never the item
      * just written.
      */
+    suspend fun publishHrAck(ack: com.forge.shared.protocol.HrBatchAckDto) {
+        putItem(WearProtocol.PATH_HR_ACK, WearCodec.encode(ack))
+    }
+
     suspend fun publishAck(ack: CmdAckDto) {
         val path = WearProtocol.ackPath(ack.commandId)
         putItem(path, WearCodec.encode(ack))
