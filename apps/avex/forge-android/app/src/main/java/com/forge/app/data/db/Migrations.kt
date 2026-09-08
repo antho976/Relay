@@ -510,6 +510,17 @@ val MIGRATION_36_37 = object : Migration(36, 37) {
     }
 }
 
+/** v38: stable freestyle-save identity and indices for history/time-window queries. */
+val MIGRATION_37_38 = object : Migration(37, 38) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `session` ADD COLUMN `draft_id` TEXT")
+        db.execSQL("CREATE UNIQUE INDEX `index_session_draft_id` ON `session` (`draft_id`)")
+        db.execSQL("CREATE INDEX `index_session_started_at` ON `session` (`started_at`)")
+        db.execSQL("CREATE INDEX `index_session_finished_at` ON `session` (`finished_at`)")
+        db.execSQL("CREATE INDEX `index_session_day_key_finished_at` ON `session` (`day_key`, `finished_at`)")
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -536,5 +547,6 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_33_34,
     MIGRATION_34_35,
     MIGRATION_35_36,
-    MIGRATION_36_37
+    MIGRATION_36_37,
+    MIGRATION_37_38
 )

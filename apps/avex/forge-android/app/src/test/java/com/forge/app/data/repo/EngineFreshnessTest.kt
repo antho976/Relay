@@ -100,4 +100,27 @@ class EngineFreshnessTest {
         } finally { job.cancelAndJoin() }
     }
 
+    @Test fun `weekly count volume and dots all attribute cross-midnight training to its start`() = runBlocking {
+        val oldZone = java.util.TimeZone.getDefault()
+        try {
+            for (zoneName in listOf("UTC", "America/Toronto")) {
+                java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone(zoneName))
+                val zone = java.time.ZoneId.of(zoneName)
+                val monday = java.time.LocalDate.of(2026, 3, 9).atStartOfDay(zone)
+                now = monday.plusHours(1).toInstant().toEpochMilli()
+                val sid = db.sessionDao().insert(session(
+                    startedAt = monday.minusMinutes(10).toInstant().toEpochMilli(),
+                    finishedAt = monday.plusMinutes(10).toInstant().toEpochMilli()
+                ).copy(totalVolumeLb = 500.0))
+                val stats = StatsRepository(db.sessionDao(), db.cardioDao(), db.loggedExerciseDao(), db.loggedSetDao(),
+                    db.vacationDao(), BodyweightRepository(db.bodyweightDao(), clock, HealthConnectManager(context), settings),
+                    settings, TimeSignals(clock), clock, program, custom).observeWeeklyStats().first()
+                assertEquals(0, stats.workouts)
+                assertEquals(0.0, stats.volumeLb, 0.0)
+                assertTrue(stats.weekDaysTrained.isEmpty())
+                db.sessionDao().delete(db.sessionDao().get(sid)!!)
+            }
+        } finally { java.util.TimeZone.setDefault(oldZone) }
+    }
+
 }

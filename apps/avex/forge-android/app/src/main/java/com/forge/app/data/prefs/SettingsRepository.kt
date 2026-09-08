@@ -1302,7 +1302,14 @@ class SettingsRepository @Inject constructor(
             // "Never ask to dislike after a swap" is an explicit, deliberate opt-out — same rationale as
             // freestyle: a reset shouldn't silently re-surface a dialog the user permanently dismissed.
             val swapDislikePrompt = prefs[PreferenceKeys.SWAP_DISLIKE_PROMPT_ENABLED]
+            // User-authored content shares this store but is not a resettable setting.
+            val customExercises = prefs[PreferenceKeys.CUSTOM_EXERCISES]
+            val customCardio = prefs[PreferenceKeys.CUSTOM_CARDIO_TYPES]
+            val draft = prefs[PreferenceKeys.FREESTYLE_DRAFT]
             prefs.clear()
+            customExercises?.let { prefs[PreferenceKeys.CUSTOM_EXERCISES] = it }
+            customCardio?.let { prefs[PreferenceKeys.CUSTOM_CARDIO_TYPES] = it }
+            draft?.let { prefs[PreferenceKeys.FREESTYLE_DRAFT] = it }
             onboarding?.let { prefs[PreferenceKeys.ONBOARDING_DONE] = it }
             welcomed?.let { prefs[PreferenceKeys.WELCOMED] = it }
             memberSince?.let { prefs[PreferenceKeys.MEMBER_SINCE_MS] = it }

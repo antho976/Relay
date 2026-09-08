@@ -159,16 +159,13 @@ class StatsRepository @Inject constructor(
             val schedule = signals.schedule
             val todayDate = todayLocal(zone)
             val finishedAts = signals.allFinishedAts
-            // Sessions finished in the current ISO week — shared by the lit-day dots AND the
-            // best-session tile so they filter the list once, not twice.
-            val thisWeekSessions = recentSessions.filter { it.finishedAt != null && it.finishedAt!! >= weekStartMs }
+            // Attribute the weekly summary to session start, matching its count and volume queries.
+            val thisWeekSessions = recentSessions.filter { it.finishedAt != null && it.startedAt >= weekStartMs }
             // Dots use the SAME week anchor as the workout/volume/cardio counts above, so the count
             // and the lit dots can never describe different weeks within a view.
             val weekDaysTrained = thisWeekSessions
                 .map {
-                    // Bucket by the same timestamp the week filter uses (finishedAt), so a session
-                    // that started before midnight but finished this week lands on the right day.
-                    val d = Instant.ofEpochMilli(it.finishedAt!!).atZone(zone).toLocalDate()
+                    val d = Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate()
                     d.dayOfWeek.value - 1 // 0=Mon..6=Sun
                 }
                 .toSet()
@@ -404,13 +401,9 @@ class StatsRepository @Inject constructor(
         val allRpe = exerciseDetails.flatMap { it.sets }.mapNotNull { it.rpe }
         val durationMin = session.durationMinutes()
         val title = Program.dayDisplayName(session.dayKey)
-        // The previous session of this same training, for the summary-tile up/down/same carets. The DAO
-        // returns the most-recent OTHER session of this day_key regardless of date, so drop it when it
-        // actually finished LATER (i.e. we're viewing an older session from History) — otherwise the
-        // caret would compare against a future session and invert.
-        val curFinishedAt = session.finishedAt ?: Long.MAX_VALUE
-        val prevSession = sessionDao.previousFinishedForDay(session.dayKey, session.id)
-            ?.takeIf { (it.finishedAt ?: Long.MAX_VALUE) < curFinishedAt }
+        val prevSession = sessionDao.previousFinishedForDay(
+            session.dayKey, session.id, session.finishedAt ?: Long.MAX_VALUE
+        )
 
         return SessionDetailData(
             sessionId = session.id,

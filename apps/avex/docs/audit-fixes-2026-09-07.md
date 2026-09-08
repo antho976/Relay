@@ -53,3 +53,21 @@ of unfinished-session journal edits, fresh snapshots after writes/deletes and fo
 clock changes, and a retained stats subscription across midnight and plan edits. A mixed-SDK
 Robolectric run failed in native loading; the consistent-SDK group passed. No device frame-time
 benchmark or speedup is claimed.
+
+## History, resets, freestyle recovery and release guard (A17–A22, O01)
+
+Historical comparisons select the predecessor before the viewed finish time with an id tie-break.
+Weekly count, volume and dots consistently attribute a workout to its start. Settings reset
+preserves custom exercise/type definitions and freestyle drafts. Storage counts the shared export
+directory. The release workflow only overwrites an existing draft; published or unknown states
+are refused. No release was created or changed.
+
+Freestyle drafts retain a UUID through autosave/resume. Room v38 atomically commits that identity,
+the exercise/set graph, and finish totals. Retries reuse the saved session; draft resume recognizes
+consumed identities and retries idempotent health mirrors after commit. Session time/day indices
+cover common history reads without a table scan or sort in the measured SQLite query plans.
+
+Validation: 16 focused freestyle/history/reset tests passed, plus the production v36-to-current
+Room migration and compiled Android migration cases. Four mocked release states verify creation
+for absence, replacement for drafts, and refusal for published/unknown metadata. Device crash-kill
+and Health Connect replay testing remain outstanding.

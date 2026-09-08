@@ -131,10 +131,12 @@ private data class FsExercise(
 private fun draftFrom(
     items: List<FsExercise>,
     openedAtMs: Long,
-    weightUnit: com.forge.app.domain.units.WeightUnit
+    weightUnit: com.forge.app.domain.units.WeightUnit,
+    draftId: String
 ): FreestyleDraft =
     FreestyleDraft(
         openedAtMs = openedAtMs,
+        draftId = draftId,
         unitLabel = weightUnit.label,
         exercises = items.map { ex ->
             FreestyleDraftExercise(
@@ -341,6 +343,7 @@ fun FreestyleLogScreen(
     // so resuming a draft can rewind it to the original open time (bounded by MAX_RESUME_REWIND_MS on
     // resume, so a long app-kill gap doesn't inflate the recorded duration).
     var openedAtMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    var draftId by remember { mutableStateOf(java.util.UUID.randomUUID().toString()) }
     val elapsedMs by produceState(0L, openedAtMs) {
         while (true) { value = System.currentTimeMillis() - openedAtMs; delay(1000) }
     }
@@ -372,7 +375,7 @@ fun FreestyleLogScreen(
         if (leaving || !draftChecked || pendingDraft != null) return@LaunchedEffect
         if (items.isEmpty()) { viewModel.clearDraft(); return@LaunchedEffect }
         delay(600)   // debounce: only persist once a burst of edits settles
-        viewModel.saveDraft(draftFrom(items, openedAtMs, weightUnit))
+        viewModel.saveDraft(draftFrom(items, openedAtMs, weightUnit, draftId))
     }
 
     fun updateExercise(i: Int, transform: (FsExercise) -> FsExercise) {
@@ -383,7 +386,7 @@ fun FreestyleLogScreen(
     fun leave() {
         leaving = true
         if (draftChecked && pendingDraft == null && items.isNotEmpty()) {
-            viewModel.saveDraft(draftFrom(items, openedAtMs, weightUnit))
+            viewModel.saveDraft(draftFrom(items, openedAtMs, weightUnit, draftId))
         }
         onBack()
     }
@@ -448,7 +451,7 @@ fun FreestyleLogScreen(
         }
         if (payload.isNotEmpty()) {
             leaving = true   // stop the debounced autosave from re-writing the draft after save clears it
-            viewModel.save(payload, openedAtMs) { onBack() }
+            viewModel.save(payload, openedAtMs, draftId) { onBack() }
         }
     }
 
@@ -501,6 +504,7 @@ fun FreestyleLogScreen(
                                 // gap of hours/days) the original time is meaningless, so start fresh
                                 // rather than record the whole away time as workout duration.
                                 val now = System.currentTimeMillis()
+                                draftId = draft.draftId
                                 openedAtMs = draft.openedAtMs.takeIf { now - it <= MAX_RESUME_REWIND_MS } ?: now
                                 pendingDraft = null
                             },
@@ -570,6 +574,7 @@ fun FreestyleLogScreen(
                     scope.launch {
                         // Seed the log from the past session and (re)start the clock from now.
                         items = templateViewModel.loadTemplate(sessionId).toItems(weightUnit)
+                        draftId = java.util.UUID.randomUUID().toString()
                         openedAtMs = System.currentTimeMillis()
                         showTemplates = false
                     }

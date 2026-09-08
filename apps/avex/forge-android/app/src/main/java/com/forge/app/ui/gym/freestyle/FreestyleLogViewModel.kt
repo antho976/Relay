@@ -101,7 +101,9 @@ class FreestyleLogViewModel @Inject constructor(
 
     /** Read + parse the saved in-progress draft, or null when there is none / it can't be parsed. */
     internal suspend fun loadDraft(): FreestyleDraft? =
-        settingsRepo.freestyleDraft()?.let { FreestyleDraft.fromJson(it) }
+        settingsRepo.freestyleDraft()?.let { FreestyleDraft.fromJson(it) }?.takeUnless {
+            workoutRepo.isFreestyleDraftSaved(it.draftId)
+        }
 
     /**
      * Autosave the current in-progress log (fire-and-forget; the screen debounces the calls).
@@ -132,7 +134,7 @@ class FreestyleLogViewModel @Inject constructor(
      * [startedAtMs] is when the logger was opened — it becomes the session start so the recorded
      * duration reflects the real time spent logging instead of ~0.
      */
-    fun save(items: List<FreestyleExerciseInput>, startedAtMs: Long, onSaved: () -> Unit) {
+    fun save(items: List<FreestyleExerciseInput>, startedAtMs: Long, draftId: String, onSaved: () -> Unit) {
         // One save per tap-storm: the button stays enabled through a multi-exercise write, and a
         // second run inserts the whole workout again as a separate session.
         if (saveJob?.isActive == true) return
@@ -150,8 +152,7 @@ class FreestyleLogViewModel @Inject constructor(
                     val muscle = ex.customMuscleCode?.takeIf { it.isNotBlank() } ?: return@forEach
                     settingsRepo.registerCustomExercise(com.forge.app.program.CustomExerciseDef(ex.libId, name, muscle))
                 }
-                val sessionId = workoutRepo.inTransaction {
-                    val sessionId = workoutRepo.createFreestyleSession(startedAtMs)
+                workoutRepo.saveFreestyleDraft(draftId, startedAtMs) { sessionId ->
                     items.forEachIndexed { exIdx, ex ->
                         val loggedExerciseId =
                             workoutRepo.addExerciseToSession(sessionId, ex.libId, exIdx, swappedName = ex.customName)
@@ -169,11 +170,7 @@ class FreestyleLogViewModel @Inject constructor(
                         // counts toward the lifetime PR total + the PRs list (not just the raw max-weight stats).
                         workoutRepo.flagPrForLoggedExercise(loggedExerciseId, ex.libId)
                     }
-                    sessionId
                 }
-                // Outside the transaction: finishing mirrors to Health Connect and can rotate the
-                // program, neither of which belongs inside a database transaction.
-                workoutRepo.finishSession(sessionId)
                 // The log is now a real finished session — drop its resume draft so it can't be re-offered.
                 settingsRepo.clearFreestyleDraft()
             }
