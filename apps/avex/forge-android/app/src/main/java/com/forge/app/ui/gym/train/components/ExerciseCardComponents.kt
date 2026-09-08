@@ -489,7 +489,7 @@ internal fun UpNextBubble(
                 .fillMaxWidth()
                 .padding(horizontal = 24.dp)
                 .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
-                .clickable { if (upcoming.isNotEmpty()) expanded = !expanded }
+                .clickable { expanded = !expanded }
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -498,7 +498,7 @@ internal fun UpNextBubble(
             Column(modifier = Modifier.weight(1f)) {
                 Text("UP NEXT", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
                 val label = buildString {
-                    append(nextName ?: "Last exercise — hit FINISH")
+                    append(nextName ?: "Last exercise · finish or add another")
                     if (!nextTarget.isNullOrBlank()) append(" · $nextTarget")
                 }
                 Text(label, style = MaterialTheme.typography.bodyMedium, color = onBg)
@@ -514,9 +514,7 @@ internal fun UpNextBubble(
                     )
                 }
             }
-            if (upcoming.isNotEmpty()) {
-                Text(if (expanded) "▲" else "▾", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
-            }
+            Text(if (expanded) "▲" else "▾", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
         }
 
         if (expanded) {

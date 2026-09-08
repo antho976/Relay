@@ -78,6 +78,9 @@ class FreestyleTemplateViewModel @Inject constructor(
     private val loggedSetDao: LoggedSetDao
 ) : ViewModel() {
 
+    val hasTemplates = sessionDao.observeHasReusableWorkout()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     /**
      * Every finished workout as a template row, newest first. Joins each session to its (non-skipped)
      * exercise names off the main thread; sessions that logged nothing are dropped (nothing to reuse).
@@ -129,7 +132,7 @@ class FreestyleTemplateViewModel @Inject constructor(
                     )
                 }
             byLib.getOrPut(le.exerciseId) { mutableListOf() }.addAll(sets)
-            if (isCustomExerciseId(le.exerciseId)) {
+            if (com.forge.app.program.ExerciseLibrary.byId(le.exerciseId) == null) {
                 le.swappedName?.takeIf { it.isNotBlank() }?.let { customNames[le.exerciseId] = it }
                 // The unit is on the row for exactly this reason; the rebuild was ignoring it.
                 le.swappedUnit?.takeIf { it.isNotBlank() }?.let { unitCodes[le.exerciseId] = it }
@@ -141,7 +144,7 @@ class FreestyleTemplateViewModel @Inject constructor(
             val registered = if (isCustomExerciseId(libId)) CustomExerciseRegistry.get(libId) else null
             FreestyleTemplateExercise(
                 libId, sets,
-                customName = customNames[libId] ?: registered?.name,
+                customName = customNames[libId] ?: registered?.name ?: Program.exerciseDisplayName(libId),
                 unitCode = unitCodes[libId],
                 muscleCode = registered?.muscleCode
             )

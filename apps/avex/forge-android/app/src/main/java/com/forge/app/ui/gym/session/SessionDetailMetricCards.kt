@@ -136,7 +136,7 @@ internal fun MetricExerciseCard(
                 "No ${metric.label.lowercase()} logged for this session.",
                 style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 11.sp
             )
-            return@MetricCardShell
+            if (exercises.none { it.sets.isNotEmpty() }) return@MetricCardShell
         }
         // Bars always compare the exercises; the bars/line toggle now only restyles the per-set chart
         // inside an expanded row. The first row opens by default to hint that rows are tappable.
@@ -207,7 +207,7 @@ private fun ExerciseDrillRow(
                 )
                 Text(if (expanded) "▾" else "▸", style = MaterialTheme.typography.labelMedium, color = accent)
             }
-            val frac = (value / rawMax).toFloat() * barProgress
+            val frac = if (rawMax > 0) (value / rawMax).toFloat() * barProgress else 0f
             Box(
                 modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50))
                     .background(outline.copy(alpha = 0.25f))
@@ -244,32 +244,33 @@ internal fun RpeExerciseCard(
 ) {
     // Hoisted above the card and memoized so the filter/map don't re-run each recomposition and the
     // selection state is created unconditionally (independent of the empty-state guard).
-    val withRpe = remember(exercises) { exercises.filter { it.avgRpe > 0.0 } }
-    val names = remember(withRpe) { withRpe.map { it.name } }
+    val loggedExercises = remember(exercises) { exercises.filter { it.sets.isNotEmpty() } }
+    val names = remember(loggedExercises) { loggedExercises.map { it.name } }
     // Track the selection by name so it survives a reorder; fall back to the first if it vanishes.
-    var selectedName by rememberSaveable { mutableStateOf(withRpe.firstOrNull()?.name.orEmpty()) }
+    var selectedName by rememberSaveable { mutableStateOf(loggedExercises.firstOrNull()?.name.orEmpty()) }
     MetricCardShell("RPE", style, onStyle, onBg, muted, accent, outline) {
-        if (withRpe.isEmpty()) {
+        if (loggedExercises.isEmpty()) {
             Text(
                 "No RPE logged for this session.",
                 style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 11.sp
             )
             return@MetricCardShell
         }
-        val idx = withRpe.indexOfFirst { it.name == selectedName }.let { if (it >= 0) it else 0 }
-        val ex = withRpe[idx]
+        val idx = loggedExercises.indexOfFirst { it.name == selectedName }.let { if (it >= 0) it else 0 }
+        val ex = loggedExercises[idx]
         ExercisePicker(
             items = names,
             selectedIndex = idx,
-            onSelect = { selectedName = withRpe[it].name },
+            onSelect = { selectedName = loggedExercises[it].name },
             onBg = onBg, muted = muted, outline = outline
         )
         val rated = ex.sets.count { it.rpe != null }
         Text(
-            "Avg RPE ${rpeLabel(ex.avgRpe)} · $rated ${if (rated == 1) "set" else "sets"} rated",
+            if (rated == 0) "No RPE logged for this exercise."
+            else "Avg RPE ${rpeLabel(ex.avgRpe)} · $rated ${if (rated == 1) "set" else "sets"} rated",
             style = MaterialTheme.typography.labelMedium, color = muted
         )
-        PerExerciseSetChart(ex, SessionMetric.RPE, style, accent, muted, outline)
+        ExerciseDetailBody(ex, SessionMetric.RPE, style, onBg, muted, accent, outline)
     }
 }
 

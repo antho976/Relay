@@ -177,6 +177,7 @@ internal fun ProfileHeaderCard(
             // Name — tap to edit. Its own click consumes the tap so it doesn't also open the photo picker.
             if (editing) {
                 val focus = remember { FocusRequester() }
+                var hadFocus by remember { mutableStateOf(false) }
                 LaunchedEffect(Unit) { focus.requestFocus() }
                 // Commit on Done OR focus loss so a typed name is never silently lost; blank is
                 // ignored (it would otherwise wipe back to the "Athlete" placeholder).
@@ -194,7 +195,10 @@ internal fun ProfileHeaderCard(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { commit() }),
                     modifier = Modifier.fillMaxWidth().focusRequester(focus)
-                        .onFocusChanged { if (!it.isFocused && editing) commit() }
+                        .onFocusChanged {
+                            if (it.isFocused) hadFocus = true
+                            else if (hadFocus && editing) commit()
+                        }
                 )
             } else {
                 Text(

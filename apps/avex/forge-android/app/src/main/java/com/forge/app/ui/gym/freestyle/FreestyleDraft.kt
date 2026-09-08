@@ -32,7 +32,9 @@ internal data class FreestyleDraftExercise(
     val libId: String,
     val sets: List<FreestyleDraftSet>,
     val name: String? = null,
-    val muscleCode: String? = null
+    val muscleCode: String? = null,
+    val bodyweight: Boolean? = null,
+    val timed: Boolean? = null
 )
 
 /**
@@ -69,6 +71,8 @@ internal data class FreestyleDraft(
                 // Custom-move identity, written only for a custom — a library draft stays as compact as before.
                 ex.name?.let { put("name", it) }
                 ex.muscleCode?.let { put("muscle", it) }
+                ex.bodyweight?.let { put("bodyweight", it) }
+                ex.timed?.let { put("timed", it) }
                 put("sets", JSONArray(ex.sets.map { s ->
                     JSONObject().apply {
                         put("w", s.weight)
@@ -125,6 +129,8 @@ internal data class FreestyleDraft(
                     libId = exo.getString("libId"),
                     name = exo.optString("name").ifBlank { null },
                     muscleCode = exo.optString("muscle").ifBlank { null },
+                    bodyweight = if (exo.has("bodyweight")) exo.getBoolean("bodyweight") else null,
+                    timed = if (exo.has("timed")) exo.getBoolean("timed") else null,
                     sets = (0 until setsArr.length()).map { j ->
                         val so = setsArr.getJSONObject(j)
                         FreestyleDraftSet(

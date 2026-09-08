@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.forge.app.domain.units.WeightUnit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.forge.app.ui.theme.LocalForgeSettings
 
 /**
@@ -87,8 +88,15 @@ fun CoachScreen(
     entryPoint: CoachEntryPoint = CoachEntryPoint.ACCOUNT,
     // Lands on Settings → Recovery; the unconnected inputs carry it as a Connect pill.
     onConnectHealth: (() -> Unit)? = null,
-    viewModel: CoachViewModel = hiltViewModel()
+    viewModel: CoachViewModel = hiltViewModel(),
+    isVisible: Boolean = true
 ) {
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(viewModel, lifecycle, isVisible) {
+        if (isVisible) lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+            viewModel.refreshWhileVisible()
+        }
+    }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val weightUnit = LocalForgeSettings.current.weightUnit
     val c = rememberCoachColors()

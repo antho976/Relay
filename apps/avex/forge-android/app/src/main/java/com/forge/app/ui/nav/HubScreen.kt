@@ -174,6 +174,7 @@ fun HubScreen(
                     onBuildPlan = { nav.navigate(Routes.programBuilder()) }
                 )
                 BottomTab.COACH -> CoachScreen(
+                    isVisible = pagerState.settledPage == page,
                     onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
                 )
                 // A pager page, so no back arrow — swiping off it IS the back gesture.

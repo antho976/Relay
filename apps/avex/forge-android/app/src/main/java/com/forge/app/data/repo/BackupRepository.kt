@@ -187,12 +187,7 @@ class BackupRepository @Inject constructor(
                             put("skipped", ex.skipped)
                             val setArr = JSONArray()
                             sets.forEach { set ->
-                                setArr.put(JSONObject().apply {
-                                    putOrOmit("weightLb", set.weightLb)
-                                    put("reps", set.reps)
-                                    putOrOmit("rpe", set.rpe)
-                                    put("difficultyTag", set.difficultyTag ?: "")
-                                })
+                                setArr.put(JSONObject(exportSetFields(set)))
                             }
                             put("sets", setArr)
                         })
@@ -319,23 +314,14 @@ class BackupRepository @Inject constructor(
                             w.name("sets").beginArray()
                             setsByExercise[ex.id].orEmpty().forEach { set ->
                                 w.beginObject()
-                                w.name("weightText").value(set.weightText)
-                                set.weightLb?.let { w.name("weightLb").value(it) }
-                                w.name("reps").value(set.reps.toLong())
-                                set.rpe?.let { w.name("rpe").value(it) }
-                                w.name("completedAt").value(set.completedAt)
-                                w.name("difficultyTag").value(set.difficultyTag ?: "")
-                                // These change what the set MEANS, so an export without them is
-                                // not the same training history: a timed hold's reps is not a
-                                // count, and an assisted set is not PR-eligible. Re-importing an
-                                // export that omitted them turned a 90 s weighted plank into a
-                                // 90-rep 45 lb set at the top of the Hall of Fame.
-                                w.name("durationSeconds").value((set.durationSeconds ?: 0).toLong())
-                                w.name("isAssisted").value(set.isAssisted)
-                                w.name("isAmrap").value(set.isAmrap)
-                                w.name("toFailure").value(set.toFailure)
-                                w.name("setType").value(set.setType ?: "")
-                                w.name("dropAnnotation").value(set.dropAnnotation ?: "")
+                                exportSetFields(set).forEach { (key, value) ->
+                                    w.name(key)
+                                    when (value) {
+                                        is Number -> w.value(value)
+                                        is Boolean -> w.value(value)
+                                        else -> w.value(value.toString())
+                                    }
+                                }
                                 w.endObject()
                             }
                             w.endArray()
@@ -439,14 +425,7 @@ class BackupRepository @Inject constructor(
                         put("note", ex.note ?: "")
                         val setArr = JSONArray()
                         sets.forEach { set ->
-                            setArr.put(JSONObject().apply {
-                                put("weightText", set.weightText)
-                                putOrOmit("weightLb", set.weightLb)
-                                put("reps", set.reps)
-                                putOrOmit("rpe", set.rpe)
-                                put("completedAt", set.completedAt)
-                                put("difficultyTag", set.difficultyTag ?: "")
-                            })
+                            setArr.put(JSONObject(exportSetFields(set)))
                         }
                         put("sets", setArr)
                     })

@@ -30,7 +30,9 @@ class HevyImporter : GymImporter {
 
             val reps = ImportParsing.parseReps(ImportParsing.cell(row, idx, "reps"))
             val weightKg = ImportParsing.parseWeight(ImportParsing.cell(row, idx, "weight_kg"))
-            if (reps == null && (weightKg == null || weightKg == 0.0)) continue
+            val durationSeconds = ImportParsing.cell(row, idx, "duration_seconds").toDoubleOrNull()
+                ?.takeIf { it.isFinite() && it > 0 && it <= Int.MAX_VALUE }?.toInt()?.takeIf { it > 0 }
+            if ((reps ?: 0) <= 0 && (weightKg == null || weightKg == 0.0) && durationSeconds == null) continue
 
             val weightLb = weightKg?.takeIf { it > 0.0 }?.let { ImportParsing.roundWeight(ImportParsing.kgToLb(it)) }
             val rpe = ImportParsing.parseWeight(ImportParsing.cell(row, idx, "rpe"))?.takeIf { it in 1.0..10.0 }
@@ -48,7 +50,7 @@ class HevyImporter : GymImporter {
                 )
             }
             session.exercises.getOrPut(exerciseName) { mutableListOf() }.add(
-                ImportedSet(weightLb = weightLb, reps = reps ?: 0, rpe = rpe, isWarmup = setType == "warmup")
+                ImportedSet(weightLb = weightLb, reps = reps ?: 0, durationSeconds = durationSeconds, rpe = rpe, isWarmup = setType == "warmup")
             )
         }
         return sessions.values.map { it.toImported() }

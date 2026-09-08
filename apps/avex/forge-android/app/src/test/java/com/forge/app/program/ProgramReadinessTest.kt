@@ -32,4 +32,16 @@ class ProgramReadinessTest {
             Program.Readiness.LOADED, Program.readiness.value
         )
     }
+
+    @Test fun indexedLookupPreservesFirstMatchAndReplacesOldProgram() {
+        val day = Program.seedDays.first()
+        val first = day.exercises.first().copy(name = "First")
+        val duplicate = first.copy(name = "Second")
+        Program.setActive(listOf(day.copy(exercises = listOf(first, duplicate))))
+        repeat(1000) { assertEquals("First", Program.exercise(first.id)?.name) }
+        Program.setActive(listOf(day.copy(exercises = listOf(duplicate))))
+        assertEquals("Second", Program.exercise(first.id)?.name)
+        Program.setActive(emptyList())
+        assertEquals(day.exercises.first().name, Program.exerciseDisplayName(first.id))
+    }
 }

@@ -280,4 +280,25 @@ class BackupRestoreTest {
         repo.restoreFromUri(Uri.fromFile(junk))
         assertFalse(RestoreManifest.file(context.filesDir).exists())
     }
+
+    @Test fun `all JSON export routes preserve timed and assisted set meaning`() = runTest {
+        val sid = db.sessionDao().insert(session(startedAt = clock.nowMs() - 100_000, finishedAt = clock.nowMs() - 1))
+        val ex = db.loggedExerciseDao().insert(loggedExercise(sessionId = sid, exerciseId = "plank"))
+        db.loggedSetDao().insert(loggedSet(loggedExerciseId = ex, weightLb = 45.0, reps = 0).copy(
+            durationSeconds = 90, isAssisted = true, isAmrap = true, toFailure = true,
+            setType = "drop", dropAnnotation = "20/4"
+        ))
+        val files = listOf(repo.exportSessionJson(sid)!!, repo.exportWeeklyJson(), repo.exportFullDataJson())
+        for (file in files) {
+            val imported = com.forge.app.data.importer.ForgeJsonImporter().parse(file.readText(), false)
+            assertEquals(file.name, 1, imported.size)
+            val set = imported.single().exercises.single().sets.single()
+            assertEquals(90, set.durationSeconds)
+            assertTrue(set.isAssisted)
+            assertTrue(set.isAmrap)
+            assertTrue(set.toFailure)
+            assertEquals("drop", set.setType)
+            assertEquals("20/4", set.dropAnnotation)
+        }
+    }
 }

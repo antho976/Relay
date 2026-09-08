@@ -161,6 +161,9 @@ interface SessionDao {
     @Query("SELECT EXISTS(SELECT 1 FROM session WHERE finished_at IS NOT NULL)")
     suspend fun hasAnyFinishedSession(): Boolean
 
+    @Query("SELECT EXISTS(SELECT 1 FROM session s JOIN logged_exercise e ON e.session_id = s.id WHERE s.finished_at IS NOT NULL AND e.skipped = 0)")
+    fun observeHasReusableWorkout(): Flow<Boolean>
+
     /**
      * Day keys of sessions finished since [sinceMs] — the widget's "trained today" set, which feeds
      * `WeeklySchedule.resolveNextUp`. Tracked only, matching what DirectiveRepository already

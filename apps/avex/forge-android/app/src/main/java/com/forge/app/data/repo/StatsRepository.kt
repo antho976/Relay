@@ -484,7 +484,7 @@ class StatsRepository @Inject constructor(
             val deloadRowsD = async { sessionDao.allFinishedVolumeDeload() }
             val weekCompD = async { buildWeekComparison() }
             val prTimes = prTimesD.await()
-            val deloadTrend = buildVolumeDeloadTrend(deloadRowsD.await())
+            val deloadTrend = buildVolumeDeloadTrend(deloadRowsD.await(), maxSessions = Int.MAX_VALUE)
             GymStats(
                 recentPrs = buildPrEntries(prRows, allSets),
                 e1rmLifts = buildE1rmLifts(allSets),

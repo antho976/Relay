@@ -59,11 +59,12 @@ internal fun buildSessionMuscleSplit(
 }
 
 internal fun buildVolumeDeloadTrend(
-    rows: List<com.forge.app.data.db.dao.SessionDao.SessionVolumeDeloadRow>
+    rows: List<com.forge.app.data.db.dao.SessionDao.SessionVolumeDeloadRow>,
+    maxSessions: Int = 30
 ): List<VolumeDeloadPoint> {
     return rows
         .filter { it.totalVolumeLb != null && (it.totalVolumeLb ?: 0.0) > 0 }
-        .takeLast(30)
+        .takeLast(maxSessions)
         .map { row ->
             VolumeDeloadPoint(
                 sessionDate = row.startedAt,
