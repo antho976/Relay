@@ -1,5 +1,8 @@
 package com.forge.wear.glance
 
+import com.forge.shared.protocol.loadAdjustment
+import com.forge.shared.protocol.loadAdjustmentText
+
 import android.content.Context
 import androidx.wear.protolayout.ColorBuilders.argb
 import androidx.wear.protolayout.DimensionBuilders.dp
@@ -114,14 +117,14 @@ class TodayTileService : AvexTileService() {
         // figure and next-day fallback still stand.
         val directive = glance.directiveHeadline?.takeIf { it.isNotBlank() }
         val headline = directive?.uppercase()
-            ?: glance.readinessPercent?.let { "$it" }
+            ?: glance.loadAdjustment?.let { loadAdjustmentText(it) }
             ?: (glance.nextDayTitle ?: "REST")
         val headlineCaption = when {
             directive != null -> "TODAY"
-            glance.readinessPercent != null -> "READY"
+            glance.loadAdjustment != null -> "LOAD"
             else -> "NEXT"
         }
-        val nextLine = glance.nextDayTitle?.takeIf { directive == null && glance.readinessPercent != null }
+        val nextLine = glance.nextDayTitle?.takeIf { directive == null && glance.loadAdjustment != null }
         return column(
             label(context, "AVEX · TODAY", MUTED),
             gap(4f),

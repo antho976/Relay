@@ -66,7 +66,7 @@ class WearCodecTest {
                 .decodeToString()
         )
         assertEquals(
-            """{"v":1,"accentHex":"#3D4F73","accentEnabled":false,"unit":"ST"}""",
+            """{"v":1,"accentHex":"#3D4F73","accentEnabled":false,"unit":"ST","supportsHrAcknowledgements":false}""",
             WearCodec.encode(ConfigDto(accentHex = "#3D4F73", accentEnabled = false, unit = ProtocolWeightUnit.ST))
                 .decodeToString()
         )

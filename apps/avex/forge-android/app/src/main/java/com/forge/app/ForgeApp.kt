@@ -29,8 +29,8 @@ class ForgeApp : Application(), Configuration.Provider {
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var reminderScheduler: ReminderScheduler
     @Inject lateinit var wearStatePublisher: com.forge.app.service.wear.WearStatePublisher
-    /** Lazy: a normal boot must not open Room here; only a landed restore proves itself through it. */
-    @Inject lateinit var database: dagger.Lazy<com.forge.app.data.db.ForgeDatabase>
+    private val startupGate = StartupGate()
+    internal suspend fun awaitStorageReady() = startupGate.await()
 
     /** App-lifetime work that should survive any screen (the wear publisher's collectors, W1). */
     private val appScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
@@ -40,9 +40,21 @@ class ForgeApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
-        applyPendingRestore()
         installCrashLogger()
         if (isDebuggable()) installStrictMode()
+        appScope.launch(Dispatchers.IO) {
+            try {
+                applyPendingRestore()
+                startupGate.complete()
+                startAppServices()
+            } catch (failure: Exception) {
+                startupGate.fail(failure)
+                runCatching { writeCrashLog(failure) }
+            }
+        }
+    }
+
+    private fun startAppServices() {
         WorkoutSessionService.createChannels(this)
         WeeklyRecapWorker.schedule(this)
         // Seed-if-empty + load the DB-backed active program into the Program facade (program-unlock Phase 1).
@@ -82,7 +94,10 @@ class ForgeApp : Application(), Configuration.Provider {
         // never returns having left a mixture. Either the whole set is live, or none of it is and
         // the set is queued to retry — so the boot below always runs on one coherent dataset, and
         // the user is told nothing rather than told something untrue.
-        if (!RestoreApply.apply(filesDir, liveDb)) return
+        if (!RestoreApply.apply(filesDir, liveDb)) {
+            check(!RestoreApply.hasUnsettledRecovery(filesDir)) { "Restore recovery needs another attempt" }
+            return
+        }
 
         // The set is live, but its pre-restore snapshots are still on disk. The restored database
         // is proven only once THIS configuration has opened it — migrations, identity check and a
@@ -90,10 +105,15 @@ class ForgeApp : Application(), Configuration.Provider {
         // released or put back on the answer. Staging already opened the file through the same
         // builder, so a failure here means the bytes were damaged in between; it used to mean an
         // app that could not start, with the previous database already discarded.
-        val opened = runCatching {
-            database.get().openHelper.writableDatabase
-                .query("SELECT count(*) FROM session").use { it.moveToFirst() }
-        }.isSuccess
+        // A disposable validator, closed BEFORE rollback. Never initialize or close the app's
+        // singleton Room instance while its underlying file is still being selected.
+        val validator = com.forge.app.data.db.forgeDatabaseBuilder(this, liveDb.path).build()
+        val opened = try {
+            runCatching {
+                validator.openHelper.writableDatabase.query("SELECT count(*) FROM session")
+                    .use { it.moveToFirst() }
+            }.isSuccess
+        } finally { validator.close() }
         if (opened) {
             RestoreApply.confirm(filesDir, liveDb)
             // One-shot flag so MainActivity can confirm the restore landed on this launch — the swap
@@ -102,7 +122,7 @@ class ForgeApp : Application(), Configuration.Provider {
             // "successfully" on a partial one.
             runCatching { File(filesDir, RESTORE_DONE_FLAG).writeText("1") }
         } else {
-            RestoreApply.revert(filesDir, liveDb)
+            check(RestoreApply.revert(filesDir, liveDb)) { "Could not finish restore rollback" }
             runCatching { File(filesDir, RESTORE_FAILED_FLAG).writeText("1") }
         }
     }

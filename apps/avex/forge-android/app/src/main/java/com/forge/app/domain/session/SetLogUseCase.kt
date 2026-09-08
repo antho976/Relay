@@ -50,7 +50,9 @@ class SetLogUseCase @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val timerHolder: SessionTimerHolder,
     private val focusHolder: com.forge.app.service.wear.WearFocusHolder,
-    private val clock: Clock
+    private val clock: Clock,
+    private val programRepo: com.forge.app.data.repo.ProgramRepository,
+    private val programCustomRepo: com.forge.app.data.repo.ProgramCustomizationRepository
 ) {
     data class Result(
         val ok: Boolean,
@@ -59,10 +61,12 @@ class SetLogUseCase @Inject constructor(
         /** The log needs a wrist confirm tap (big jump) — not an error, not logged yet. */
         val needsConfirm: Boolean = false,
         /** The written set's row id on success — rides the ack so wrist RPE can target it. */
-        val setId: Long? = null
+        val setId: Long? = null,
+        val restSeconds: Int? = null
     )
 
     suspend fun logFromWatch(cmd: LogSetCommand): Result {
+        if (!Program.isLoaded) programRepo.ensureLoaded()
         val session = sessionDao.getActiveSession() ?: return Result(false, "no active session")
         if (session.id != cmd.sessionId) return Result(false, "session changed")
         // Freestyle sessions never mirror to the wrist (WatchSessionMirror gates them), so no
@@ -73,9 +77,9 @@ class SetLogUseCase @Inject constructor(
         }
 
         // ── Resolve the current slot exactly as the wrist saw it (mirror logic) ──
-        val plan = Program.day(session.dayKey)
-        if (plan.exercises.isEmpty()) return Result(false, "no plan")
         val logged = loggedExerciseDao.forSession(session.id)
+        val plan = programCustomRepo.effectivePlanForSession(session.dayKey, logged.map { it.effectiveSlotId })
+        if (plan.isEmpty()) return Result(false, "no plan")
         val allSets = loggedSetDao.allForSession(session.id)
         val setsByLogged = allSets.groupBy { it.loggedExerciseId }
         fun loggedFor(planId: String) =
@@ -83,7 +87,7 @@ class SetLogUseCase @Inject constructor(
 
         // The SAME current-slot policy the mirror displays (CurrentSlotResolver) — what the wrist
         // showed is what this log targets.
-        val rows = plan.exercises.map { ex -> ex to loggedFor(ex.id) }
+        val rows = plan.map { ex -> ex to loggedFor(ex.id) }
         val lastLoggedIdx = allSets.maxByOrNull { it.completedAt }
             ?.let { last -> rows.indexOfFirst { (_, row) -> row?.id == last.loggedExerciseId } }
             ?.takeIf { it >= 0 }
@@ -95,7 +99,7 @@ class SetLogUseCase @Inject constructor(
             lastLoggedIdx = lastLoggedIdx,
             earlyDoneIdx = earlyDoneIdx
         )
-        val slotPlan = plan.exercises[currentIdx]
+        val slotPlan = plan[currentIdx]
         if (cmd.exerciseId != null && cmd.exerciseId != slotPlan.id) {
             // The wrist showed a different exercise than is now current (a phone log advanced it
             // mid-flight) — refuse rather than logging against the wrong slot.
@@ -108,7 +112,7 @@ class SetLogUseCase @Inject constructor(
         val effectiveId = row?.exerciseId
             ?: swap?.swappedExerciseId?.takeIf { it.isNotBlank() }
             ?: slotPlan.id
-        val effectivePlan = Program.exercise(effectiveId) ?: slotPlan
+        val effectivePlan = if (effectiveId == slotPlan.id) slotPlan else Program.exercise(effectiveId) ?: slotPlan
 
         // A timed hold cannot be logged from the wrist, because the protocol has no duration field
         // to log it WITH. LogSetCommand carries only weight and reps, so a plank prescribed as
@@ -156,7 +160,7 @@ class SetLogUseCase @Inject constructor(
             }
         }
 
-        // ── Rest timer first (the wrist should feel the countdown instantly), then the write ──
+        // Resolve rest now; the handler starts it only after the command transaction commits.
         val restOverride = swap?.restTimerOverrideSeconds
         val rest = RestAdvisor.restSeconds(
             plan = effectivePlan,
@@ -165,7 +169,6 @@ class SetLogUseCase @Inject constructor(
             compoundBase = settingsRepo.restCompoundSeconds.first(),
             isolationBase = settingsRepo.restIsolationSeconds.first()
         )
-        timerHolder.controller.start(rest.seconds)
 
         // Read-and-create in one transaction, the same funnel the day screen uses. Separate steps
         // here and separate steps there meant the wrist and the phone could each find no row for
@@ -179,17 +182,20 @@ class SetLogUseCase @Inject constructor(
             swappedName = swap?.swappedName?.takeIf { it.isNotBlank() },
             swappedUnit = swap?.swappedUnit?.takeIf { it.isNotBlank() }
         )
-        val setId = workoutRepo.logSet(
-            loggedExerciseId = leId,
-            weightText = weightText,
-            weightLb = weightLb,
-            reps = reps
-        )
+        val setId = try {
+            workoutRepo.logSet(loggedExerciseId = leId, weightText = weightText, weightLb = weightLb, reps = reps)
+        } catch (_: com.forge.app.data.db.SessionClosedException) {
+            return Result(false, "session finished")
+        }
         // PR at write time — the repository-level pass freestyle logging already uses, so the wrist
         // gold moment and the phone's flags agree.
         val wasPr = workoutRepo.flagPrForLoggedExercise(leId, effectiveId)
-        return Result(true, wasPr = wasPr, setId = setId)
+        return Result(true, wasPr = wasPr, setId = setId, restSeconds = rest.seconds)
     }
+
+    suspend fun prepareProgram() { if (!Program.isLoaded) programRepo.ensureLoaded() }
+
+    fun startRestAfterCommit(seconds: Int) { timerHolder.controller.start(seconds) }
 
     /** Rate the set a log ack named — targeted by row id, so it can't land on the wrong set. */
     suspend fun rpeFromWatch(setId: Long, rpe: Double): Result {

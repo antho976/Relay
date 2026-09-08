@@ -74,35 +74,39 @@ internal fun sameWeightPairs(
     val weighed = photos.filter { it.weightLb != null }
     if (weighed.size < 2) return emptyList()
 
-    val candidates = ArrayList<SameWeightPair>()
-    for (i in weighed.indices) {
-        for (j in i + 1 until weighed.size) {
-            val a = weighed[i]
-            val b = weighed[j]
-            if (a.pose != b.pose) continue
-            val wa = a.weightLb!!
-            val wb = b.weightLb!!
-            if (abs(wa - wb) > SAME_WEIGHT_TOL_LB) continue
-            val days = daysBetween(a.takenAtMs, b.takenAtMs, zone)
-            if (days < MIN_DAYS_APART) continue
-            val (before, after) = if (a.takenAtMs <= b.takenAtMs) a to b else b to a
-            candidates += SameWeightPair(before, after, (wa + wb) / 2.0, days)
-        }
-    }
-
-    val ranked = candidates.sortedWith(
-        compareByDescending<SameWeightPair> { it.daysApart }
-            .thenBy { abs(it.after.weightLb!! - it.before.weightLb!!) }
-    )
+    // Three greedy selections preserve the original ranking without allocating every pair.
+    // Calendar conversion happens once per photo instead of once per candidate.
+    val dates = weighed.map { java.time.Instant.ofEpochMilli(it.takenAtMs).atZone(zone).toLocalDate().toEpochDay() }
     val used = HashSet<String>()
-    val picked = ArrayList<SameWeightPair>()
-    for (p in ranked) {
-        if (setOf(p.before.fileName, p.after.fileName) == exclude) continue
-        if (p.before.fileName in used || p.after.fileName in used) continue
-        picked += p
-        used += p.before.fileName
-        used += p.after.fileName
-        if (picked.size >= MAX_SAME_WEIGHT_PAIRS) break
+    val picked = ArrayList<SameWeightPair>(MAX_SAME_WEIGHT_PAIRS)
+    repeat(MAX_SAME_WEIGHT_PAIRS) {
+        var bestI = -1
+        var bestJ = -1
+        var bestDays = -1L
+        var bestGap = Double.POSITIVE_INFINITY
+        for (i in weighed.indices) {
+            val a = weighed[i]
+            if (a.fileName in used) continue
+            for (j in i + 1 until weighed.size) {
+                val b = weighed[j]
+                if (b.fileName in used || a.pose != b.pose) continue
+                if (exclude.size == 2 && a.fileName in exclude && b.fileName in exclude) continue
+                val gap = abs(a.weightLb!! - b.weightLb!!)
+                if (gap > SAME_WEIGHT_TOL_LB || !gap.isFinite()) continue
+                val days = abs(dates[i] - dates[j])
+                if (days < MIN_DAYS_APART) continue
+                if (days > bestDays || (days == bestDays && gap < bestGap)) {
+                    bestI = i; bestJ = j; bestDays = days; bestGap = gap
+                }
+            }
+        }
+        if (bestI < 0) return picked
+        val a = weighed[bestI]
+        val b = weighed[bestJ]
+        val (before, after) = if (a.takenAtMs <= b.takenAtMs) a to b else b to a
+        picked += SameWeightPair(before, after, (a.weightLb!! + b.weightLb!!) / 2.0, bestDays)
+        used += a.fileName
+        used += b.fileName
     }
     return picked
 }

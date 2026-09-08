@@ -241,6 +241,9 @@ ksp {
 }
 
 dependencies {
+    constraints {
+        implementation(libs.guava) { because("Avoid vulnerable transitive Android Guava versions (Dependabot 10/11)") }
+    }
     // The pure protocol/timer core shared with the watch (W1). api: its coroutines/serialization
     // types appear in :app signatures.
     api(project(":shared"))

@@ -93,7 +93,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 
-private data class FsSet(
+internal data class FsSet(
     val weight: String = "",
     val reps: String = "",
     val setType: String? = null,       // null | "warmup" | "drop" — the mutually-exclusive shape
@@ -113,7 +113,7 @@ private data class FsSet(
         rpe?.let { add("RPE ${rpeLabel(it)}") }
     }
 }
-private data class FsExercise(
+internal data class FsExercise(
     val libId: String,
     val name: String,
     val muscle: MuscleGroup,
@@ -128,13 +128,15 @@ private data class FsExercise(
 
 /** Snapshot the current log into a resumable draft (raw typed text is preserved verbatim, stamped
  *  with the unit it was typed in — see [FreestyleDraft.unitLabel]). */
-private fun draftFrom(
+internal fun draftFrom(
     items: List<FsExercise>,
     openedAtMs: Long,
-    weightUnit: com.forge.app.domain.units.WeightUnit
+    weightUnit: com.forge.app.domain.units.WeightUnit,
+    draftId: String
 ): FreestyleDraft =
     FreestyleDraft(
         openedAtMs = openedAtMs,
+        draftId = draftId,
         unitLabel = weightUnit.label,
         exercises = items.map { ex ->
             FreestyleDraftExercise(
@@ -143,8 +145,10 @@ private fun draftFrom(
                     FreestyleDraftSet(it.weight, it.reps, it.setType, it.isAmrap, it.toFailure, it.rpe, it.hold)
                 },
                 // Only a custom needs its identity written — a library move re-derives on restore.
-                name = ex.name.takeIf { ex.custom },
-                muscleCode = ex.muscle.code.takeIf { ex.custom }
+                name = ex.name,
+                muscleCode = ex.muscle.code,
+                bodyweight = ex.bodyweight,
+                timed = ex.timed
             )
         }
     )
@@ -156,7 +160,7 @@ private fun draftFrom(
  *  Weight text is re-expressed in [weightUnit] when the draft was typed in a different one. The
  *  draft stores raw display-unit text, so without this a "100" drafted in lb came back as 100 kg
  *  after a unit change and was saved as 220 lb. */
-private fun draftToItems(
+internal fun draftToItems(
     draft: FreestyleDraft,
     weightUnit: com.forge.app.domain.units.WeightUnit
 ): List<FsExercise> {
@@ -171,17 +175,18 @@ private fun draftToItems(
                 )
             }
             .ifEmpty { listOf(FsSet()) }
-        if (isCustomExerciseId(de.libId)) {
+        if (ExerciseLibrary.byId(de.libId) == null) {
             // A pre-v3 custom can't exist (the schema bump discards those drafts), but a hand-edited
             // or truncated blob might still land here — drop it rather than invent a name.
-            val name = de.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val name = de.name?.takeIf { it.isNotBlank() } ?: de.libId
             return@mapNotNull FsExercise(
                 libId = de.libId,
                 name = name,
                 muscle = de.muscleCode?.let { MuscleGroup.fromCode(it) }
                     ?: CustomExerciseRegistry.muscle(de.libId)
                     ?: MuscleGroup.entries.first(),
-                bodyweight = false,
+                bodyweight = de.bodyweight ?: false,
+                timed = de.timed ?: de.sets.any { it.hold.isNotBlank() },
                 custom = true,
                 sets = sets
             )
@@ -191,8 +196,8 @@ private fun draftToItems(
             libId = def.id,
             name = def.name,
             muscle = def.muscle,
-            bodyweight = def.unit == ExerciseUnit.BODYWEIGHT,
-            timed = def.timed,
+            bodyweight = de.bodyweight ?: (def.unit == ExerciseUnit.BODYWEIGHT),
+            timed = de.timed ?: def.timed,
             sets = sets
         )
     }
@@ -334,13 +339,14 @@ fun FreestyleLogScreen(
     var showBrowser by remember { mutableStateOf(false) }
     // "Start from a past workout" (GYMAP-48): every finished session as a reusable template. Offered
     // only on the empty logger (below), and seeds the log with that session's exercises + sets.
-    val templates by templateViewModel.templates.collectAsStateWithLifecycle()
+    val hasTemplates by templateViewModel.hasTemplates.collectAsStateWithLifecycle()
     var showTemplates by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     // When the logger was opened — becomes the saved session's start so its duration isn't ~0. Mutable
     // so resuming a draft can rewind it to the original open time (bounded by MAX_RESUME_REWIND_MS on
     // resume, so a long app-kill gap doesn't inflate the recorded duration).
     var openedAtMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    var draftId by remember { mutableStateOf(java.util.UUID.randomUUID().toString()) }
     val elapsedMs by produceState(0L, openedAtMs) {
         while (true) { value = System.currentTimeMillis() - openedAtMs; delay(1000) }
     }
@@ -372,7 +378,7 @@ fun FreestyleLogScreen(
         if (leaving || !draftChecked || pendingDraft != null) return@LaunchedEffect
         if (items.isEmpty()) { viewModel.clearDraft(); return@LaunchedEffect }
         delay(600)   // debounce: only persist once a burst of edits settles
-        viewModel.saveDraft(draftFrom(items, openedAtMs, weightUnit))
+        viewModel.saveDraft(draftFrom(items, openedAtMs, weightUnit, draftId))
     }
 
     fun updateExercise(i: Int, transform: (FsExercise) -> FsExercise) {
@@ -383,7 +389,7 @@ fun FreestyleLogScreen(
     fun leave() {
         leaving = true
         if (draftChecked && pendingDraft == null && items.isNotEmpty()) {
-            viewModel.saveDraft(draftFrom(items, openedAtMs, weightUnit))
+            viewModel.saveDraft(draftFrom(items, openedAtMs, weightUnit, draftId))
         }
         onBack()
     }
@@ -448,7 +454,7 @@ fun FreestyleLogScreen(
         }
         if (payload.isNotEmpty()) {
             leaving = true   // stop the debounced autosave from re-writing the draft after save clears it
-            viewModel.save(payload, openedAtMs) { onBack() }
+            viewModel.save(payload, openedAtMs, draftId) { onBack() }
         }
     }
 
@@ -501,6 +507,7 @@ fun FreestyleLogScreen(
                                 // gap of hours/days) the original time is meaningless, so start fresh
                                 // rather than record the whole away time as workout duration.
                                 val now = System.currentTimeMillis()
+                                draftId = draft.draftId
                                 openedAtMs = draft.openedAtMs.takeIf { now - it <= MAX_RESUME_REWIND_MS } ?: now
                                 pendingDraft = null
                             },
@@ -545,7 +552,7 @@ fun FreestyleLogScreen(
                         ForgeOutlineCapsule("+ Add exercise", onClick = { showBrowser = true }, modifier = Modifier.fillMaxWidth())
                         // Reuse-a-session shortcut — only on the empty log (seeding over a started log is odd)
                         // and only when there's history to reuse (§12: no dead-end entry into an empty picker).
-                        if (items.isEmpty() && templates.isNotEmpty()) {
+                        if (items.isEmpty() && hasTemplates) {
                             Spacer(Modifier.height(12.dp))
                             Text(
                                 "start from a past workout →",
@@ -563,6 +570,7 @@ fun FreestyleLogScreen(
         }
 
         if (showTemplates) {
+            val templates by templateViewModel.templates.collectAsStateWithLifecycle()
             FreestyleTemplatePicker(
                 templates = templates,
                 onClose = { showTemplates = false },
@@ -570,6 +578,7 @@ fun FreestyleLogScreen(
                     scope.launch {
                         // Seed the log from the past session and (re)start the clock from now.
                         items = templateViewModel.loadTemplate(sessionId).toItems(weightUnit)
+                        draftId = java.util.UUID.randomUUID().toString()
                         openedAtMs = System.currentTimeMillis()
                         showTemplates = false
                     }

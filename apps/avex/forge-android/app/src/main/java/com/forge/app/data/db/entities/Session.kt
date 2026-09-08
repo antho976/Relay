@@ -2,6 +2,7 @@ package com.forge.app.data.db.entities
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
@@ -13,7 +14,12 @@ import androidx.room.PrimaryKey
  * overview / history screens can list sessions cheaply without re-joining
  * exercises and sets.
  */
-@Entity(tableName = "session")
+@Entity(tableName = "session", indices = [
+    Index(value = ["draft_id"], unique = true),
+    Index(value = ["started_at"]),
+    Index(value = ["finished_at"]),
+    Index(value = ["day_key", "finished_at"])
+])
 data class Session(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     @ColumnInfo(name = "day_key") val dayKey: String,
@@ -39,7 +45,8 @@ data class Session(
      * wall-clock finishedAt−startedAt would wrongly count). 0 for pre-feature sessions; readers
      * fall back to wall-clock when it's 0.
      */
-    @ColumnInfo(name = "active_seconds") val activeSeconds: Int = 0
+    @ColumnInfo(name = "active_seconds") val activeSeconds: Int = 0,
+    @ColumnInfo(name = "draft_id") val draftId: String? = null
 )
 
 /**

@@ -83,8 +83,16 @@ class OverviewViewModel @Inject constructor(
      * previous 14 full days as "typical" (null below 3 days of history — no fake baseline). Fail-soft:
      * not granted / no provider / read error → null → the line simply doesn't render (GYMAP-64 rule).
      */
-    fun refreshMovement() = viewModelScope.launch {
-        if (!healthConnectManager.canReadSteps()) { _movement.value = null; return@launch }
+    private val movementRefresh = com.forge.app.core.ConflatedRefresh(viewModelScope) {
+        runCatching { loadMovement() }.onFailure {
+            if (it is kotlinx.coroutines.CancellationException) throw it
+            _movement.value = null
+        }
+    }
+    fun refreshMovement() = movementRefresh.request()
+
+    private suspend fun loadMovement() {
+        if (!healthConnectManager.canReadSteps()) { _movement.value = null; return }
         val zone = java.time.ZoneId.systemDefault()
         val now = clock.nowMs()
         val today = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
@@ -247,8 +255,7 @@ class OverviewViewModel @Inject constructor(
         // cardio, restrictions, moods, bodyweight, swaps, preferences, cooldowns and a Health
         // Connect recovery read — on every Home open. The fields, the mapping and [refreshCoach]
         // stay, so a surface that brings the cards back asks for them.
-        refreshDirective()
-        refreshMovement()
+        // The screen resume observer owns initial and subsequent visible refreshes.
         // Backfill the first-touch flag for users who already have history, so the onboarding cards
         // never reappear for a returning user (e.g. after a data wipe). finishWorkout() sets it going forward.
         viewModelScope.launch {
@@ -282,9 +289,11 @@ class OverviewViewModel @Inject constructor(
      * Recompute today's answer (Coach v3 B2). Called at open and on resume: a directive that still
      * says "Push day" after you've trained, or after midnight, is worse than no directive.
      */
-    fun refreshDirective() = viewModelScope.launch {
-        _directive.value = runCatching { directiveRepo.today() }.getOrNull()
+    private val directiveRefresh = com.forge.app.core.ConflatedRefresh(viewModelScope) {
+        _directive.value = runCatching { directiveRepo.today() }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
     }
+    fun refreshDirective() = directiveRefresh.request()
 
     /**
      * "Try demo data" opt-in (Cat 10): wire the otherwise-unreachable [SampleDataSeeder] to the

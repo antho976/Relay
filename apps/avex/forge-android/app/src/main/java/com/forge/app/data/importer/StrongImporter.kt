@@ -38,7 +38,9 @@ class StrongImporter : GymImporter {
             val reps = ImportParsing.parseReps(ImportParsing.cell(row, idx, "reps"))
             val weightRaw = ImportParsing.parseWeight(ImportParsing.cell(row, idx, "weight"))
             // Rows with neither reps nor weight are cardio/distance-only — not a resistance set.
-            if (reps == null && (weightRaw == null || weightRaw == 0.0)) continue
+            val durationSeconds = ImportParsing.cell(row, idx, "seconds").toDoubleOrNull()
+                ?.takeIf { it.isFinite() && it > 0 && it <= Int.MAX_VALUE }?.toInt()?.takeIf { it > 0 }
+            if ((reps ?: 0) <= 0 && (weightRaw == null || weightRaw == 0.0) && durationSeconds == null) continue
 
             val kg = if (hasUnitCol)
                 ImportParsing.cell(row, idx, "weight unit").lowercase().startsWith("kg")
@@ -57,7 +59,7 @@ class StrongImporter : GymImporter {
                 )
             }
             session.exercises.getOrPut(exerciseName) { mutableListOf() }
-                .add(ImportedSet(weightLb = weightLb, reps = reps ?: 0, rpe = rpe))
+                .add(ImportedSet(weightLb = weightLb, reps = reps ?: 0, durationSeconds = durationSeconds, rpe = rpe))
         }
         return sessions.values.map { it.toImported() }
     }

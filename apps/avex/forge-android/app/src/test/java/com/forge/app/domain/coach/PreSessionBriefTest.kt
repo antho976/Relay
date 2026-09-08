@@ -162,7 +162,26 @@ class PreSessionBriefTest {
             snapshot(), "push", Recommendation.ReadinessScale(-4, "low", Confidence.MEDIUM),
             LifeEvents.State.NONE, ProtocolWeightUnit.KG
         )!!
-        assertEquals(0.0, brief.targets.single().targetWeightLb!! % 2.5, 0.001)
+        val kg = brief.targets.single().targetWeightLb!! / 2.2046226218487757
+        assertEquals(0.0, kg % 2.5, 0.001)
+    }
+
+    @Test fun lightPlateStacksEaseOnTheirConfiguredPlateGrid() {
+        val r = Recommendation.ReadinessScale(-5, "low", Confidence.MEDIUM)
+        val s = snapshot(slots = listOf(slot("bench", unit = ExerciseUnit.PLATES)),
+            history = mapOf("bench" to listOf(bout(3, listOf(set(15.0)))))).copy(prefs = PrefsSnap(plateLb = 15.0))
+        assertEquals(7.5, build(s, readiness = r)!!.targets.single().targetWeightLb!!, 0.001)
+        val light = s.copy(exerciseHistory = mapOf("bench" to listOf(bout(3, listOf(set(7.5))))))
+        val target = build(light, readiness = r)!!.targets.single()
+        assertNull(target.targetWeightLb)
+        assertTrue(target.intent.contains("No lower loadable weight"))
+    }
+
+    @Test fun stoneStepsAreConvertedToStoredPoundsBeforeRounding() {
+        val s = snapshot(history = mapOf("bench" to listOf(bout(3, listOf(set(100.0))))))
+        val target = PreSessionBrief.build(s, "push", Recommendation.ReadinessScale(-5, "low", Confidence.MEDIUM),
+            LifeEvents.State.NONE, ProtocolWeightUnit.ST)!!.targets.single().targetWeightLb!!
+        assertEquals(91.0, target, 0.001)
     }
 
     // ── Determinism ────────────────────────────────────────────────────────────

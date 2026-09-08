@@ -45,7 +45,10 @@ import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import com.forge.app.R
@@ -263,12 +266,14 @@ fun Plate(
     modifier: Modifier = Modifier,
     dissolve: Boolean = false
 ) {
+    var maxPixels by remember(cover) { mutableIntStateOf(0) }
     Image(
-        painter = painterResource(cover),
+        painter = academyCoverPainter(cover, maxPixels),
         contentDescription = null,   // the caption beneath it already speaks (§14)
         contentScale = ContentScale.Crop,
         colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) }),
         modifier = modifier
+            .onSizeChanged { maxPixels = maxOf(it.width, it.height) }
             .fillMaxWidth()
             .aspectRatio(aspect)
             .then(

@@ -44,6 +44,8 @@ data class CustomExerciseRef(
 class ProgramCustomizationRepository @Inject constructor(
     private val dao: ProgramCustomizationDao
 ) {
+    fun observeAll(): Flow<List<ProgramCustomization>> = dao.observeAll().distinctUntilChanged()
+
     fun observeForDay(dayKey: String): Flow<List<ProgramCustomization>> =
         dao.observeForDay(dayKey)
 
@@ -138,6 +140,15 @@ class ProgramCustomizationRepository @Inject constructor(
     /** Returns the effective exercise list for a day, applying all customizations (removed dropped). */
     suspend fun effectivePlanForDay(dayKey: String): List<ExercisePlan> =
         editablePlanForDay(dayKey).filterNot { it.removed }.map { it.plan }
+
+    /** Shared phone/watch session list, including distinct slots added during this workout. */
+    suspend fun effectivePlanForSession(dayKey: String, loggedSlotIds: Collection<String>): List<ExercisePlan> {
+        if (Program.days.none { it.key == dayKey }) return emptyList()
+        val planned = effectivePlanForDay(dayKey)
+        val ids = planned.mapTo(mutableSetOf()) { it.id }
+        val extras = loggedSlotIds.distinct().filterNot { it in ids }.mapNotNull { Program.exercise(it) }
+        return planned + extras
+    }
 
     /**
      * Whether the user has curated this day's exercise ORDER or composition — an explicit reorder,

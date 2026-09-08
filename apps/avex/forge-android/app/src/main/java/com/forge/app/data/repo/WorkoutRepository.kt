@@ -351,7 +351,32 @@ class WorkoutRepository @Inject constructor(
         //
         // Committing the stamp together with everything derived from it means the two states a
         // crash can leave are "not finished" (retry converges) and "finished and complete".
-        val outcome = database.withTransaction {
+        val outcome = finishInTransaction(sessionId, now)
+        return finishAfterCommit(outcome, now)
+    }
+
+    private suspend fun finishAfterCommit(outcome: FinishOutcome, now: Long): Int {
+
+        if (outcome !is FinishOutcome.Won) {
+            return if (outcome is FinishOutcome.AlreadyFinished) outcome.activeSeconds else 0
+        }
+
+        // Everything past the commit is a side effect on state this transaction does not own:
+        // DataStore (the rotation counter), Health Connect, and the widget. None of it belongs
+        // inside a Room transaction — `maybeRotateProgram` writes DataStore and can regenerate a
+        // whole program, which would hold the database lock for the duration.
+        //
+        // Each is attempted independently. They used to run in sequence with no guard, so a throw
+        // in the rotation (a DataStore read failure, a generation error) skipped the Health Connect
+        // mirrors AND the widget refresh, and the finish itself then reported a failure to a caller
+        // whose local data was already correctly committed.
+        finishSideEffect { maybeRotateProgram() }
+        finishSideEffect { writeFinishMirrors(outcome.session, endMs = now, activeSeconds = outcome.activeSeconds) }
+        finishSideEffect { refreshWidget() }
+        return outcome.activeSeconds
+    }
+
+    private suspend fun finishInTransaction(sessionId: Long, now: Long): FinishOutcome = database.withTransaction {
             // ONE writer finishes a session, and SQLite decides which. A read, a `finishedAt == null`
             // check and a write are three steps with two gaps in them, and a double-tapped FINISH, a
             // finish racing the orphan-recovery pass, or a wrist command arriving as the phone
@@ -390,23 +415,33 @@ class WorkoutRepository @Inject constructor(
             }
         }
 
-        if (outcome !is FinishOutcome.Won) {
-            return if (outcome is FinishOutcome.AlreadyFinished) outcome.activeSeconds else 0
-        }
 
-        // Everything past the commit is a side effect on state this transaction does not own:
-        // DataStore (the rotation counter), Health Connect, and the widget. None of it belongs
-        // inside a Room transaction — `maybeRotateProgram` writes DataStore and can regenerate a
-        // whole program, which would hold the database lock for the duration.
-        //
-        // Each is attempted independently. They used to run in sequence with no guard, so a throw
-        // in the rotation (a DataStore read failure, a generation error) skipped the Health Connect
-        // mirrors AND the widget refresh, and the finish itself then reported a failure to a caller
-        // whose local data was already correctly committed.
-        finishSideEffect { maybeRotateProgram() }
-        finishSideEffect { writeFinishMirrors(outcome.session, endMs = now, activeSeconds = outcome.activeSeconds) }
-        finishSideEffect { refreshWidget() }
-        return outcome.activeSeconds
+    /** One draft can create and finish at most one workout, even after process death before clearing it. */
+    suspend fun saveFreestyleDraft(
+        draftId: String,
+        startedAtMs: Long,
+        writeExercises: suspend (Long) -> Unit
+    ): Long {
+        val now = clock.nowMs()
+        val (id, outcome) = database.withTransaction {
+            sessionDao.forDraft(draftId)?.let { return@withTransaction it.id to null }
+            val id = sessionDao.insert(Session(dayKey = Program.FREESTYLE_DAY_KEY,
+                startedAt = startedAtMs.coerceAtMost(now), draftId = draftId))
+            writeExercises(id)
+            id to finishInTransaction(id, now)
+        }
+        outcome?.let { finishAfterCommit(it, now) }
+        return id
+    }
+
+    suspend fun isFreestyleDraftSaved(draftId: String): Boolean {
+        val session = sessionDao.forDraft(draftId) ?: return false
+        // A crash before draft consumption may have skipped external mirrors. Their stable client
+        // record ids make this retry safe; program rotation must not run again.
+        session.finishedAt?.let { end ->
+            finishSideEffect { writeFinishMirrors(session, end, session.activeSeconds) }
+        }
+        return true
     }
 
     /** What the finish transaction decided, so the side effects below it know whether to run. */

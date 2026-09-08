@@ -5,6 +5,8 @@ import com.forge.app.data.db.dao.SessionHrSampleDao
 import com.forge.app.data.db.entities.SessionHrSample
 import com.forge.shared.protocol.HrBatchDto
 import com.forge.shared.protocol.WearCodec
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,14 +25,21 @@ class WearHrIngest @Inject constructor(
 ) {
     private val watchKcalBySession = java.util.concurrent.ConcurrentHashMap<Long, Double>()
 
-    suspend fun handleBatch(bytes: ByteArray) {
+    private val ingestMutex = Mutex()
+
+    suspend fun handleBatch(bytes: ByteArray): com.forge.shared.protocol.HrBatchAckDto? = ingestMutex.withLock { ingestBatch(bytes) }
+
+    private suspend fun ingestBatch(bytes: ByteArray): com.forge.shared.protocol.HrBatchAckDto? {
         val batch = when (val d = WearCodec.decode<HrBatchDto>(bytes)) {
             is WearCodec.DecodeResult.Ok -> d.value
-            else -> return
+            else -> return null
         }
-        val active = sessionDao.getActiveSession() ?: return
-        if (active.id != batch.sessionId) return
-        if (hrDao.countForSession(active.id) >= MAX_SAMPLES_PER_SESSION) return
+        if (batch.samples.size > com.forge.shared.protocol.WearProtocol.HR_MAX_RECEIVE_BATCH_SIZE) return null
+        val ack = batch.batchId?.let { com.forge.shared.protocol.HrBatchAckDto(sessionId = batch.sessionId, batchId = it) }
+        val active = sessionDao.getActiveSession() ?: return ack
+        if (active.id != batch.sessionId) return ack
+        val remainingCapacity = MAX_SAMPLES_PER_SESSION - hrDao.countForSession(active.id)
+        if (remainingCapacity <= 0) return ack
         // Compare like with like. The samples carry WATCH-clock timestamps; `active.startedAt` is a
         // PHONE-clock instant. Filtering one against the other dropped the opening seconds of every
         // trace whenever the watch ran behind — routine, since Wear time sync is periodic. When the
@@ -39,13 +48,17 @@ class WearHrIngest @Inject constructor(
         // bounds the damage of.
         val skewMs = if (batch.sentAtMs > 0L) batch.sentAtMs - clock.nowMs() else 0L
         val floorMs = active.startedAt + skewMs - CLOCK_SKEW_TOLERANCE_MS
+        val existing = hrDao.existingTimestamps(active.id, batch.samples.map { it.atMs }).toSet()
         val rows = batch.samples.asSequence()
+            .distinctBy { it.atMs }
+            .filter { it.atMs !in existing }
             .filter { it.bpm in MIN_BPM..MAX_BPM && it.atMs >= floorMs }
-            .take(MAX_SAMPLES_PER_BATCH)
+            .take(remainingCapacity)
             .map { SessionHrSample(sessionId = active.id, atMs = it.atMs, bpm = it.bpm) }
             .toList()
         if (rows.isNotEmpty()) hrDao.insertAll(rows)
-        batch.totalKcal?.takeIf { it > 0 }?.let { watchKcalBySession[active.id] = it }
+        batch.totalKcal?.takeIf { it.isFinite() && it > 0 }?.let { watchKcalBySession[active.id] = it }
+        return ack
     }
 
     /** The watch's measured calories for [sessionId], if any arrived this process lifetime. */
@@ -58,7 +71,6 @@ class WearHrIngest @Inject constructor(
 
         const val MIN_BPM = 25
         const val MAX_BPM = 240
-        const val MAX_SAMPLES_PER_BATCH = 64
         /** ~4h at 1 Hz — a runaway stream can't grow a session's trace unbounded. */
         const val MAX_SAMPLES_PER_SESSION = 15_000
     }

@@ -85,6 +85,9 @@ android {
 }
 
 dependencies {
+    constraints {
+        implementation(libs.protobuf.lite) { because("Patch protobuf parser denial of service (Dependabot 13)") }
+    }
     implementation(project(":shared"))
 
     implementation(libs.androidx.core.ktx)
@@ -122,7 +125,7 @@ dependencies {
     // Live HR during sessions via Health Services (W3). Its API returns Guava ListenableFutures,
     // so guava-android must be on the classpath for the await() bridge.
     implementation(libs.health.services.client)
-    implementation("com.google.guava:guava:33.3.1-android")
+    implementation(libs.guava)
 
     testImplementation(libs.junit)
 }

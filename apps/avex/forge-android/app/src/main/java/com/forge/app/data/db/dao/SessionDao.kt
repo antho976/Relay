@@ -23,6 +23,9 @@ interface SessionDao {
     @Query("SELECT * FROM session WHERE id = :id")
     suspend fun get(id: Long): Session?
 
+    @Query("SELECT * FROM session WHERE draft_id = :draftId LIMIT 1")
+    suspend fun forDraft(draftId: String): Session?
+
     /**
      * Stamp [finishedAt] on a session that is still open, and report whether THIS call was the one
      * that did it (1) or found it already finished (0).
@@ -158,6 +161,9 @@ interface SessionDao {
     @Query("SELECT EXISTS(SELECT 1 FROM session WHERE finished_at IS NOT NULL)")
     suspend fun hasAnyFinishedSession(): Boolean
 
+    @Query("SELECT EXISTS(SELECT 1 FROM session s JOIN logged_exercise e ON e.session_id = s.id WHERE s.finished_at IS NOT NULL AND e.skipped = 0)")
+    fun observeHasReusableWorkout(): Flow<Boolean>
+
     /**
      * Day keys of sessions finished since [sinceMs] — the widget's "trained today" set, which feeds
      * `WeeklySchedule.resolveNextUp`. Tracked only, matching what DirectiveRepository already
@@ -171,14 +177,17 @@ interface SessionDao {
     @Query("SELECT finished_at FROM session WHERE finished_at >= :sinceMs AND is_untracked = 0")
     suspend fun finishedAtsSince(sinceMs: Long): List<Long>
 
-    /** Previous finished session for the same day (excludes current — used for session comparison #52). */
+    /** Previous same-day session, with a stable id tie-break for equal finish timestamps. */
     @Query("""
         SELECT * FROM session
         WHERE day_key = :dayKey AND finished_at IS NOT NULL AND is_untracked = 0
           AND id != :excludeSessionId
-        ORDER BY finished_at DESC LIMIT 1
+          AND (finished_at < :beforeFinishedAt OR (finished_at = :beforeFinishedAt AND id < :excludeSessionId))
+        ORDER BY finished_at DESC, id DESC LIMIT 1
     """)
-    suspend fun previousFinishedForDay(dayKey: String, excludeSessionId: Long): Session?
+    suspend fun previousFinishedForDay(
+        dayKey: String, excludeSessionId: Long, beforeFinishedAt: Long = Long.MAX_VALUE
+    ): Session?
 
     /** Best (highest) volume ever recorded for a given day, excluding the current session (#53). */
     @Query("""

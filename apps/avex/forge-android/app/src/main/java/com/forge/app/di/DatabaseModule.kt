@@ -40,7 +40,9 @@ object DatabaseModule {
     fun provideDatabase(@ApplicationContext context: Context): ForgeDatabase =
         // One builder, shared with restore validation, so the file a restore accepts is a file
         // this exact configuration can open (see ForgeDatabaseFactory.kt).
-        forgeDatabaseBuilder(context, "forge.db").build()
+        forgeDatabaseBuilder(context, "forge.db")
+            .openHelperFactory(com.forge.app.StartupOpenHelperFactory(context))
+            .build()
 
     @Provides fun provideSessionDao(db: ForgeDatabase): SessionDao = db.sessionDao()
     @Provides fun provideLoggedExerciseDao(db: ForgeDatabase): LoggedExerciseDao = db.loggedExerciseDao()

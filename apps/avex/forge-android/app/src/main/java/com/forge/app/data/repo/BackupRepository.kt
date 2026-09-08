@@ -187,12 +187,7 @@ class BackupRepository @Inject constructor(
                             put("skipped", ex.skipped)
                             val setArr = JSONArray()
                             sets.forEach { set ->
-                                setArr.put(JSONObject().apply {
-                                    putOrOmit("weightLb", set.weightLb)
-                                    put("reps", set.reps)
-                                    putOrOmit("rpe", set.rpe)
-                                    put("difficultyTag", set.difficultyTag ?: "")
-                                })
+                                setArr.put(JSONObject(exportSetFields(set)))
                             }
                             put("sets", setArr)
                         })
@@ -319,23 +314,14 @@ class BackupRepository @Inject constructor(
                             w.name("sets").beginArray()
                             setsByExercise[ex.id].orEmpty().forEach { set ->
                                 w.beginObject()
-                                w.name("weightText").value(set.weightText)
-                                set.weightLb?.let { w.name("weightLb").value(it) }
-                                w.name("reps").value(set.reps.toLong())
-                                set.rpe?.let { w.name("rpe").value(it) }
-                                w.name("completedAt").value(set.completedAt)
-                                w.name("difficultyTag").value(set.difficultyTag ?: "")
-                                // These change what the set MEANS, so an export without them is
-                                // not the same training history: a timed hold's reps is not a
-                                // count, and an assisted set is not PR-eligible. Re-importing an
-                                // export that omitted them turned a 90 s weighted plank into a
-                                // 90-rep 45 lb set at the top of the Hall of Fame.
-                                w.name("durationSeconds").value((set.durationSeconds ?: 0).toLong())
-                                w.name("isAssisted").value(set.isAssisted)
-                                w.name("isAmrap").value(set.isAmrap)
-                                w.name("toFailure").value(set.toFailure)
-                                w.name("setType").value(set.setType ?: "")
-                                w.name("dropAnnotation").value(set.dropAnnotation ?: "")
+                                exportSetFields(set).forEach { (key, value) ->
+                                    w.name(key)
+                                    when (value) {
+                                        is Number -> w.value(value)
+                                        is Boolean -> w.value(value)
+                                        else -> w.value(value.toString())
+                                    }
+                                }
                                 w.endObject()
                             }
                             w.endArray()
@@ -439,14 +425,7 @@ class BackupRepository @Inject constructor(
                         put("note", ex.note ?: "")
                         val setArr = JSONArray()
                         sets.forEach { set ->
-                            setArr.put(JSONObject().apply {
-                                put("weightText", set.weightText)
-                                putOrOmit("weightLb", set.weightLb)
-                                put("reps", set.reps)
-                                putOrOmit("rpe", set.rpe)
-                                put("completedAt", set.completedAt)
-                                put("difficultyTag", set.difficultyTag ?: "")
-                            })
+                            setArr.put(JSONObject(exportSetFields(set)))
                         }
                         put("sets", setArr)
                     })
@@ -705,10 +684,9 @@ class BackupRepository @Inject constructor(
      * Preferred path is `VACUUM INTO` — one file, no WAL/-shm sidecars, a consistent point-in-time
      * copy. But `VACUUM INTO` needs SQLite ≥ 3.27, which only ships with Android 11+ (the bundled
      * SQLite is tied to the OS version); on older devices it fails to compile with
-     * "near 'INTO': syntax error". So we fall back to checkpointing the WAL into the main DB and
-     * copying the file: `wal_checkpoint(TRUNCATE)` merges every pending frame into the main file
-     * and empties the WAL, and a user-initiated backup on this single-user offline app has no
-     * concurrent writers, so the on-disk file is a consistent snapshot.
+     * "near 'INTO': syntax error". So we fall back to
+     * reading the source under a transaction into a separate SQLite database. Queries include
+     * committed WAL frames and one pinned snapshot; no live-file copy or checkpoint assumption.
      */
     private fun snapshotDatabase(): File {
         sweepStaleTemps()
@@ -722,16 +700,7 @@ class BackupRepository @Inject constructor(
             // Old-SQLite fallback. Start from a clean temp in case VACUUM left a partial file.
             if (temp.exists()) temp.delete()
             try {
-                writable.query("PRAGMA wal_checkpoint(TRUNCATE)").use { it.moveToFirst() }
-                val livePath = writable.path ?: context.getDatabasePath(DB_NAME).path
-                File(livePath).copyTo(temp, overwrite = true)
-                // The live DB is WAL-mode, so the copy's header says WAL but has no -wal/-shm
-                // beside it — which older SQLite (< 3.22) can't open read-only, and restore
-                // validation opens read-only. Rewrite the copy to a rollback-journal DB so it
-                // loads anywhere, matching the clean non-WAL file VACUUM INTO would have produced.
-                android.database.sqlite.SQLiteDatabase.openDatabase(
-                    temp.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READWRITE
-                ).use { it.execSQL("PRAGMA journal_mode=DELETE") }
+                com.forge.app.data.db.copySqliteSnapshot(writable, temp)
             } catch (copyError: Throwable) {
                 temp.delete() // don't leave a half-written snapshot in cache if both paths fail
                 vacuumError.addSuppressed(copyError)

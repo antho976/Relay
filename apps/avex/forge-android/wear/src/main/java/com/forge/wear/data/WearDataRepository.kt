@@ -49,6 +49,17 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
     private val _session = MutableStateFlow<SessionLiveDto?>(null)
     val session: StateFlow<SessionLiveDto?> = _session
 
+    private val hrAcks = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.CompletableDeferred<Long>>()
+
+    private val timerReceiptPrefs = appContext.getSharedPreferences("timer_receipt", Context.MODE_PRIVATE)
+    private val timerReceipt = TimerReceiptAnchor(
+        timerReceiptPrefs.getString("payload", null), timerReceiptPrefs.getLong("received_at", 0L)
+    ) { payload, receivedAt ->
+        timerReceiptPrefs.edit().putString("payload", payload).putLong("received_at", receivedAt).apply()
+    }
+
+    fun timerReceivedAt(timer: TimerStateDto): Long = timerReceipt.receivedAt(timer, System.currentTimeMillis())
+
     private val _timer = MutableStateFlow<TimerStateDto?>(null)
     val timer: StateFlow<TimerStateDto?> = _timer
 
@@ -154,7 +165,7 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
     val newerVersion: StateFlow<Boolean> = _newerVersion
 
     /** Paths the watch genuinely cannot proceed on. `/glance/today` is deliberately not one. */
-    private fun blocksTheUi(path: String) = path != WearProtocol.PATH_GLANCE_TODAY
+    private fun blocksTheUi(path: String) = path != WearProtocol.PATH_GLANCE_TODAY && path != WearProtocol.PATH_HR_ACK
 
     private fun markVersion(path: String, newer: Boolean) {
         synchronized(newerVersionPaths) {
@@ -198,6 +209,12 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
         // Acks live at "$PATH_CMD_ACK/$commandId" — one path each, so a second command's ack can't
         // supersede an unsynced first one — hence a prefix match rather than equality. A replayed
         // ack is not an event: it answers a command from a previous run of this app.
+        if (path == WearProtocol.PATH_HR_ACK) {
+            if (!deleted) decodeInto<com.forge.shared.protocol.HrBatchAckDto>(bytes, path) { ack ->
+                hrAcks[ack.batchId]?.complete(ack.sessionId)
+            }
+            return
+        }
         if (path.startsWith(WearProtocol.PATH_CMD_ACK)) {
             // A DELETED item says nothing about what protocol the phone speaks, so it must not
             // leave this path latched as newer — see [clearLatchOnDelete].
@@ -234,11 +251,12 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
         when (path) {
             WearProtocol.PATH_SESSION_LIVE -> decodeInto<SessionLiveDto>(bytes, path) { _session.value = it }
             WearProtocol.PATH_TIMER_STATE -> decodeInto<TimerStateDto>(bytes, path) { dto ->
+                val receivedAt = timerReceivedAt(dto)
                 _timer.value = dto
                 // Both clocks in one payload: the phone's at publish, ours now. The complication
                 // renders the countdown without ever seeing an arrival time, so it needs this.
                 if (dto.publishedAtMs > 0L) {
-                    WearClockSkew.record(appContext, dto.publishedAtMs, System.currentTimeMillis())
+                    WearClockSkew.record(appContext, dto.publishedAtMs, receivedAt)
                 }
             }
             WearProtocol.PATH_CONFIG -> decodeInto<ConfigDto>(bytes, path) { _config.value = it }
@@ -380,15 +398,23 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
         sessionId: Long,
         samples: List<com.forge.shared.protocol.HrBatchDto.Sample>,
         totalKcal: Double?
-    ): Boolean = sendWithRetry(
-        WearProtocol.PATH_HR_BATCH,
-        WearCodec.encode(
-            com.forge.shared.protocol.HrBatchDto(
-                sessionId = sessionId, samples = samples, totalKcal = totalKcal,
-                sentAtMs = System.currentTimeMillis()
-            )
-        )
-    )
+    ): Boolean {
+        require(samples.size <= WearProtocol.HR_SEND_BATCH_SIZE)
+        val id = newId()
+        val ack = kotlinx.coroutines.CompletableDeferred<Long>()
+        hrAcks[id] = ack
+        try {
+            val delivered = sendWithRetry(WearProtocol.PATH_HR_BATCH, WearCodec.encode(
+                com.forge.shared.protocol.HrBatchDto(sessionId = sessionId, samples = samples,
+                    totalKcal = totalKcal, sentAtMs = System.currentTimeMillis(), batchId = id)
+            ))
+            if (!delivered) return false
+            // Older phones have no persistence ack. Keep their transport fallback, using their
+            // supported 64-sample chunks; upgraded peers require confirmation after the Room write.
+            if (!_config.value.supportsHrAcknowledgements) return true
+            return kotlinx.coroutines.withTimeoutOrNull(5_000) { ack.await() == sessionId } ?: false
+        } finally { hrAcks.remove(id) }
+    }
 
     fun sendHapticAck(timerEndAtMs: Long) {
         sendBytes(

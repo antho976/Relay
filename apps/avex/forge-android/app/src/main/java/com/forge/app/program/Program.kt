@@ -277,8 +277,14 @@ object Program {
         )
     )
 
-    @Volatile
-    private var active: List<DayPlan> = defaultDays
+    private class IndexedProgram(val days: List<DayPlan>) {
+        val exercises = days.asSequence().flatMap { it.exercises.asSequence() }
+            .distinctBy { it.id }.associateBy { it.id }
+    }
+
+    private val seedIndex = IndexedProgram(defaultDays)
+    @Volatile private var activeIndex = seedIndex
+    private val active: List<DayPlan> get() = activeIndex.days
 
     @Volatile
     private var loaded = false
@@ -324,7 +330,7 @@ object Program {
 
     /** Swap in a new active program (ProgramRepository, after load / generate). */
     fun setActive(newDays: List<DayPlan>) {
-        active = newDays
+        activeIndex = IndexedProgram(newDays.toList())
         loaded = true
         _readiness.value = Readiness.LOADED
     }
@@ -351,7 +357,7 @@ object Program {
             ?: defaultDays.firstOrNull { it.key == key }
 
     fun exercise(id: String): ExercisePlan? =
-        active.flatMap { it.exercises }.firstOrNull { it.id == id }
+        activeIndex.exercises[id]
             ?: ExerciseLibrary.byId(id)?.toPlan()
             // A user-created freestyle move has no program slot and no library row; its identity
             // (name + the muscle picked at creation) lives in the registry. Resolved LAST so a
@@ -374,7 +380,7 @@ object Program {
             // the seed so old history/PRs read right. Kept on the DISPLAY path only (not in [exercise])
             // so volume/muscle aggregation and the adaptation engine still treat a rotated-out id as
             // absent, exactly as before — this fix is about names, not about counting old sets (C3).
-            ?: defaultDays.flatMap { it.exercises }.firstOrNull { it.id == id }?.name
+            ?: seedIndex.exercises[id]?.name
             ?: humanizeExerciseId(id)
 
     /** Last-ditch readable label from an id ("cable-crunch" / "cable_crunch" → "Cable Crunch"). Only

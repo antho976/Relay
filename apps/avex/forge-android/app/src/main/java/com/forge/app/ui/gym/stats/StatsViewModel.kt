@@ -31,21 +31,14 @@ class StatsViewModel @Inject constructor(
     adaptationRepo: AdaptationRepository,
     private val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
     private val sessionDao: SessionDao,
-    private val cardioRepo: CardioRepository
+    private val cardioRepo: CardioRepository,
+    engineInputs: com.forge.app.data.repo.EngineInputSignals
 ) : ViewModel() {
 
-    /**
-     * The engine read is a whole-history snapshot fan-out. Re-run it whenever the set of FINISHED
-     * sessions changes — a session finishes, or "Reset session data" / a delete wipes them — by
-     * keying off the finished-session COUNT, NOT the per-set reactive combine below, so it still
-     * can't join the per-set hot path (logging sets in an in-progress session leaves the count,
-     * and so this flow, untouched). A one-shot init load instead left the always-on balance ratios
-     * (push/pull, quad/ham) stale on the retained ViewModel after a reset — GYMAP-18. runCatching
-     * degrades a snapshot failure to null (no pulse/plateaus/insights) rather than crashing.
-     */
+    /** Refresh for changed engine inputs, including same-count edits and date boundaries. */
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val engineFlow: StateFlow<AdaptationRepository.EngineStatsRead?> =
-        sessionDao.observeFinishedCount()
+        engineInputs.changes()
             .mapLatest {
                 // Degrade a real snapshot failure to null (no pulse/plateaus/insights), but let a
                 // mapLatest cancellation propagate — swallowing it could emit a stale null.

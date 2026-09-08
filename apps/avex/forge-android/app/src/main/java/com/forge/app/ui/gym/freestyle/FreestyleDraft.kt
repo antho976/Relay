@@ -32,7 +32,9 @@ internal data class FreestyleDraftExercise(
     val libId: String,
     val sets: List<FreestyleDraftSet>,
     val name: String? = null,
-    val muscleCode: String? = null
+    val muscleCode: String? = null,
+    val bodyweight: Boolean? = null,
+    val timed: Boolean? = null
 )
 
 /**
@@ -53,11 +55,13 @@ internal data class FreestyleDraft(
      * saved as 100 kg — a 220 lb set, in the history and every aggregate built on it. Null restores
      * verbatim, which is the old behaviour and the only honest answer for a draft that never said.
      */
-    val unitLabel: String? = null
+    val unitLabel: String? = null,
+    val draftId: String = java.util.UUID.randomUUID().toString()
 ) {
     fun toJson(): String = JSONObject().apply {
         put("schema", SCHEMA)
         put("openedAtMs", openedAtMs)
+        put("draftId", draftId)
         // Additive and optional, like the per-set tags: an older build ignores "u", and a draft
         // without it reads back as null. No schema bump, so an in-progress log survives the upgrade.
         unitLabel?.let { put("u", it) }
@@ -67,6 +71,8 @@ internal data class FreestyleDraft(
                 // Custom-move identity, written only for a custom — a library draft stays as compact as before.
                 ex.name?.let { put("name", it) }
                 ex.muscleCode?.let { put("muscle", it) }
+                ex.bodyweight?.let { put("bodyweight", it) }
+                ex.timed?.let { put("timed", it) }
                 put("sets", JSONArray(ex.sets.map { s ->
                     JSONObject().apply {
                         put("w", s.weight)
@@ -123,6 +129,8 @@ internal data class FreestyleDraft(
                     libId = exo.getString("libId"),
                     name = exo.optString("name").ifBlank { null },
                     muscleCode = exo.optString("muscle").ifBlank { null },
+                    bodyweight = if (exo.has("bodyweight")) exo.getBoolean("bodyweight") else null,
+                    timed = if (exo.has("timed")) exo.getBoolean("timed") else null,
                     sets = (0 until setsArr.length()).map { j ->
                         val so = setsArr.getJSONObject(j)
                         FreestyleDraftSet(
@@ -142,7 +150,8 @@ internal data class FreestyleDraft(
                 // A blob that somehow carries the same move twice must not restore two rows: the
                 // logger keys its lazy list on libId, and a duplicate crashes it on every resume.
                 exercises = exercises.distinctBy { it.libId },
-                unitLabel = o.optString("u").ifBlank { null }
+                unitLabel = o.optString("u").ifBlank { null },
+                draftId = o.optString("draftId").ifBlank { "legacy-${o.getLong("openedAtMs")}" }
             )
         }.getOrNull()
     }

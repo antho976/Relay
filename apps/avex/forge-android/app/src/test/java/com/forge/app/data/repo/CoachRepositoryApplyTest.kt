@@ -59,10 +59,11 @@ class CoachRepositoryApplyTest {
      * markAppliedNow — after the overlay write and before the ledger stamp, exactly the gap the
      * audit's reproduction fails in. Flip this and the next apply dies inside that gap.
      */
+    private var nowMs = NOW
     private var clockFails = false
     private val clock = Clock {
         if (clockFails) throw IllegalStateException("injected: died between overlay write and ledger stamp")
-        NOW
+        nowMs
     }
 
     private val settings = SettingsRepository(context, clock)
@@ -197,6 +198,29 @@ class CoachRepositoryApplyTest {
         } finally {
             clockFails = false
         }
+    }
+
+    @Test fun correctiveDecisionCanRestoreCoachOwnedRangeAfterUserUndoExpires() = runTest {
+        val original = proposed("rep_shift", newRange)
+        repo.applyDecision(original)
+        nowMs += 14L * 86_400_000
+        val correction = proposed("revert", original.toString())
+        repo.applyDecision(correction)
+        assertEquals(CoachRepository.STATUS_APPLIED, decision(correction).status)
+        assertEquals("reverted", decision(original).status)
+        assertNull(programCustomizationRepo.overrideFor(DAY, slot.id)?.repRangeOverride)
+    }
+
+    @Test fun correctiveDecisionPreservesLaterUserEditAndDoesNotFoldFailedOriginal() = runTest {
+        val original = proposed("rep_shift", newRange)
+        repo.applyDecision(original)
+        nowMs += 14L * 86_400_000
+        programCustomizationRepo.setRepRange(DAY, slot.id, "15-20", source = OverlaySource.USER)
+        val correction = proposed("revert", original.toString())
+        repo.applyDecision(correction)
+        assertEquals(CoachRepository.STATUS_SKIPPED, decision(correction).status)
+        assertEquals(CoachRepository.STATUS_APPLIED, decision(original).status)
+        assertEquals("15-20", programCustomizationRepo.overrideFor(DAY, slot.id)?.repRangeOverride)
     }
 
     // ── H-03: one transaction, so a retry applies exactly once ─────────────────

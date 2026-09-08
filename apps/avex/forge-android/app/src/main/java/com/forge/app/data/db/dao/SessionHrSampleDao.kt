@@ -19,6 +19,9 @@ interface SessionHrSampleDao {
     @Query("SELECT COUNT(*) FROM session_hr_sample WHERE session_id = :sessionId")
     suspend fun countForSession(sessionId: Long): Int
 
+    @Query("SELECT at_ms FROM session_hr_sample WHERE session_id = :sessionId AND at_ms IN (:timestamps)")
+    suspend fun existingTimestamps(sessionId: Long, timestamps: List<Long>): List<Long>
+
     @Query("DELETE FROM session_hr_sample WHERE session_id = :sessionId")
     suspend fun deleteForSession(sessionId: Long)
 }

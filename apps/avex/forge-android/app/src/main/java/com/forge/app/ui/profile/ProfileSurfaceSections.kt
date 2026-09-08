@@ -517,7 +517,7 @@ private fun leanMassMetric(
 ): BodyMetric {
     val display = entries.map { toDisplayWeight(it.weightLb, weightUnit) }
     return BodyMetric(
-        label = "MUSCLE",
+        label = "LEAN MASS",
         figure = display.lastOrNull()?.let { "%.1f".format(it) },
         unit = unitLabel(weightUnit).uppercase(),
         deltaValue = windowDelta(entries.map { it.recordedAt }, display),

@@ -19,6 +19,9 @@ object WearProtocol {
     const val PATH_SESSION_LIVE = "/session/live"
     const val PATH_TIMER_STATE = "/timer/state"
     const val PATH_CONFIG = "/config"
+    const val PATH_HR_ACK = "/hr/ack"
+    const val HR_SEND_BATCH_SIZE = 64
+    const val HR_MAX_RECEIVE_BATCH_SIZE = 240
     const val PATH_GLANCE_TODAY = "/glance/today"
     /** Command acknowledgements, keyed by commandId — the watch's pending→confirmed signal. */
     /**

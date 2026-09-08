@@ -37,6 +37,8 @@ import com.forge.app.ui.common.clickableLabeled
  */
 @Composable
 internal fun BackupPage(vm: SettingsViewModel, modifier: Modifier = Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val state by vm.state.collectAsStateWithLifecycle()
     val enabled by vm.autoBackupEnabled.collectAsStateWithLifecycle()
     val folderUri by vm.backupFolderUri.collectAsStateWithLifecycle()
     val savedAt by vm.autoBackupSavedAt.collectAsStateWithLifecycle()
@@ -47,7 +49,10 @@ internal fun BackupPage(vm: SettingsViewModel, modifier: Modifier = Modifier) {
     LaunchedEffect(Unit) { vm.refreshAutoBackupInfo() }
 
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        uri?.let { vm.setBackupFolder(it) }
+        uri?.let {
+            if (state.galleryLockEnabled) authenticateSettingsAction(context, vm, "Unlock photos for this backup folder") { vm.setBackupFolder(it) }
+            else vm.setBackupFolder(it)
+        }
     }
 
     val onBg = MaterialTheme.colorScheme.onBackground
@@ -95,7 +100,10 @@ internal fun BackupPage(vm: SettingsViewModel, modifier: Modifier = Modifier) {
         // rather than sitting mid-scroll as a bare text link, which is where it used to live.
         Spacer(Modifier.height(24.dp))
         SettingsActionRow {
-            SettingsPrimaryAction(label = "Back up now", onClick = vm::backupNow)
+            SettingsPrimaryAction(label = "Back up now", onClick = {
+                if (state.galleryLockEnabled) authenticateSettingsAction(context, vm, "Unlock photos for this backup") { vm.backupNow() }
+                else vm.backupNow()
+            })
             if (folderUri != null) {
                 SettingsOutlineAction("Remove folder", onClick = vm::clearBackupFolder)
             }

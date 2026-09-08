@@ -180,7 +180,11 @@ class CoachRepository @Inject constructor(
     private val weeklyPassMutex = Mutex()
 
     /** Run this week's pass if it hasn't run yet; return the (existing or fresh) record. */
-    suspend fun ensureWeeklyPass(): CoachPass = weeklyPassMutex.withLock {
+    suspend fun ensureWeeklyPass(): CoachPass = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+        ensureWeeklyPassOnWorker()
+    }
+
+    private suspend fun ensureWeeklyPassOnWorker(): CoachPass = weeklyPassMutex.withLock {
         val zone = ZoneId.systemDefault()
         val today = Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
         val weekId = weekId(today)
@@ -671,23 +675,12 @@ class CoachRepository @Inject constructor(
             }
             "revert" -> {
                 val originalId = d.payload?.toLongOrNull() ?: return retireUnresolvable(id)
-                // A refused undo is a PERMANENT refusal, not a retry.
-                //
-                // undoDecisionLocked returns without touching the original when it is no longer
-                // applied, or when the per-slot LIFO guard sees a newer decision owning the slot.
-                // The revert used to mark itself applied regardless — leaving the original
-                // applied+failed, which is exactly what appliedFailed() feeds to the watcher's
-                // revert derivation. So the same revert was re-proposed at the top of every pass
-                // forever, ahead of every real adjustment and inside a change budget of one or two.
-                // Tapping it did nothing, and the watcher's 14-day catch-all then scored it as a
-                // WIN for the revert type.
-                if (undoDecisionLocked(originalId)) {
+                // An evaluated forward correction is not constrained by the user's short undo
+                // window. It still verifies live ownership before touching the original overlay.
+                if (undoDecisionLocked(originalId, corrective = true)) {
                     markAppliedNow(id, null)
                 } else {
                     coachDao.setStatus(id, STATUS_SKIPPED)
-                    // Retire the original too, so it stops re-deriving a revert nobody can run.
-                    // 'folded' is the existing terminal status that still feeds the bias.
-                    coachDao.setStatus(originalId, STATUS_FOLDED)
                 }
             }
             else -> return retireUnresolvable(id)
@@ -767,13 +760,14 @@ class CoachRepository @Inject constructor(
     /** @return true when the undo actually ran; false when it was refused (already retired, or a
      *  newer decision owns the slot). Callers that need to know — the revert path — must not treat
      *  a refusal as success. */
-    private suspend fun undoDecisionLocked(id: Long): Boolean {
+    private suspend fun undoDecisionLocked(id: Long, corrective: Boolean = false): Boolean {
         val d = coachDao.decision(id) ?: return false
         if (d.status != STATUS_APPLIED) return false
         // Past its window, a change is no longer one-tap undoable — see [markAppliedNow]. Rows
         // applied before the stamp existed carry null and keep the old unbounded behaviour rather
         // than having a window retro-fitted onto them.
-        d.undoExpiresAt?.let { if (clock.nowMs() > it) return false }
+        if (!corrective) d.undoExpiresAt?.let { if (clock.nowMs() > it) return false }
+        if (corrective && (liveSlot(d) == null || userOwnsSlot(d))) return false
         // Per-slot LIFO: if a newer still-active coach decision owns this slot's overlay, refuse —
         // restoring the older before-state would silently wipe the newer change, and the watcher's
         // own revert pipeline reverts newest-first so the chain unwinds cleanly (seam fix, finding 9).

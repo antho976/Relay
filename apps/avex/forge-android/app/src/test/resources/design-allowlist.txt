@@ -98,10 +98,6 @@
 1 alpha ui/gym/train/components/SetRow.kt 0.85
 1 alpha ui/overview/OverviewScreen.kt 0.3
 1 alpha ui/overview/SummarySheet.kt 0.2
-2 alpha ui/overview/components/DayEditComponents.kt 0.3
-4 alpha ui/overview/components/DayEditComponents.kt 0.4
-1 alpha ui/overview/components/DayEditComponents.kt 0.5
-1 alpha ui/overview/components/DayEditComponents.kt 0.55
 1 alpha ui/overview/components/NavTile.kt 0.08
 1 alpha ui/overview/components/NavTile.kt 0.10
 1 alpha ui/overview/components/NavTile.kt 0.28
@@ -109,10 +105,6 @@
 2 alpha ui/overview/components/OverviewComponents.kt 0.75
 2 alpha ui/overview/components/OverviewComponents.kt 0.85
 2 alpha ui/overview/components/OverviewComponents.kt 0.9
-1 alpha ui/overview/components/OverviewTiles.kt 0.2
-2 alpha ui/overview/components/OverviewTiles.kt 0.5
-1 alpha ui/overview/components/OverviewTiles.kt 0.75
-1 alpha ui/overview/components/OverviewTiles.kt 0.82
 1 alpha ui/profile/BodyMeasurementsScreen.kt 0.30
 1 alpha ui/profile/BodyMeasurementsScreen.kt 0.55
 1 alpha ui/profile/GallerySameWeight.kt 0.92
@@ -200,12 +192,11 @@
 2 em-dash ui/gym/train/DaySwapHandlers.kt em dash in string
 1 em-dash ui/gym/train/DayViewModelBuilders.kt em dash in string
 1 em-dash ui/gym/train/components/ExerciseCard.kt em dash in string
-1 em-dash ui/gym/train/components/ExerciseCardComponents.kt em dash in string
 1 em-dash ui/gym/train/components/ExerciseChartSheet.kt em dash in string
 1 em-dash ui/gym/train/components/SetInputRow.kt em dash in string
 1 em-dash ui/gym/train/components/SetRow.kt em dash in string
 2 em-dash ui/trophies/TrophiesComponents.kt em dash in string
-4 em-dash wear/glance/WearComplications.kt em dash in string
+2 em-dash wear/glance/WearComplications.kt em dash in string
 2 em-dash wear/ui/SessionScreen.kt em dash in string
 1 em-dash wear/ui/WearRoot.kt em dash in string
 2 em-dash widget/ForgeWidget.kt em dash in string
@@ -245,10 +236,8 @@
 1 font-size ui/onboarding/PlanModeVignettes.kt fontSize=
 1 font-size ui/overview/HistoryComponents.kt fontSize=
 4 font-size ui/overview/SummarySheet.kt fontSize=
-5 font-size ui/overview/components/DayEditComponents.kt fontSize=
 1 font-size ui/overview/components/NavTile.kt fontSize=
 12 font-size ui/overview/components/OverviewComponents.kt fontSize=
-10 font-size ui/overview/components/OverviewTiles.kt fontSize=
 2 font-size ui/profile/BodyMeasurementsScreen.kt fontSize=
 2 font-size ui/profile/GallerySameWeight.kt fontSize=
 2 font-size ui/profile/ProfileBody.kt fontSize=
@@ -324,4 +313,3 @@
 6 unlabelled-clickable ui/gym/train/components/ExerciseCardComponents.kt .clickable(
 4 unlabelled-clickable ui/gym/train/components/RestTimerBubble.kt .clickable(
 1 unlabelled-clickable ui/gym/train/components/SetInputRow.kt .clickable(
-3 unlabelled-clickable ui/overview/components/OverviewTiles.kt .clickable(

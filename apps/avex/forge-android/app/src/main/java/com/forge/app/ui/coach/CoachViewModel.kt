@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.ensureActive
 import java.time.Instant
 import javax.inject.Inject
 import kotlin.math.roundToInt
@@ -40,6 +41,7 @@ class CoachViewModel @Inject constructor(
     private val academyRepo: com.forge.app.data.repo.AcademyRepository,
     private val blockRepo: com.forge.app.data.repo.BlockRepository,
     private val projectRepo: com.forge.app.data.repo.ProjectRepository,
+    private val inputSignals: com.forge.app.data.repo.EngineInputSignals,
     private val programChangeGuard: ProgramChangeGuard
 ) : ViewModel() {
 
@@ -93,38 +95,41 @@ class CoachViewModel @Inject constructor(
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    init {
-        viewModelScope.launch { load() }
+    suspend fun refreshWhileVisible() {
+        inputSignals.changes().collect { load() }
     }
 
-    private suspend fun load() {
+    private suspend fun load() = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
         // Defense in depth: the coach entry points are hidden for freestyle, but if the page is
         // reached anyway, don't run the weekly pass against an empty program (it would write a
         // coach_pass row and could auto-apply).
         if (settingsRepo.freestyleMode.first()) {
             _state.value = UiState(loading = false, freestyle = true)
-            return
+            return@withContext
         }
         val brief = runCatching { coachRepo.brief() }.getOrNull()
         val watch = runCatching { coachRepo.coachLab() }.getOrNull()
         val timeline = runCatching { coachRepo.timeline() }.getOrNull()
-        // brief()/coachLab() just snapshotted; this reuses their cache instead of a fresh fan-out.
+        // A fresh snapshot reflects current training and Health Connect inputs on each visible refresh.
         val snap = runCatching { adaptationRepo.snapshotCached() }.getOrNull()
         // A2: the coach's own moments — a stall held because the athlete is cutting unlocks its
         // lesson the first time it happens. Idempotent, so calling it on every open is fine.
         runCatching { academyRepo.syncCoachMoments() }
-        _state.value = UiState(
+        val activeBlock = runCatching { blockRepo.active() }.getOrNull()
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        _state.update { current -> current.copy(
             loading = false,
+            freestyle = false,
             brief = brief,
             watch = watch,
             timeline = timeline,
             e1rmBySlot = snap?.let(::e1rmSeries).orEmpty(),
             health = snap?.let(::healthSeries) ?: HealthSeries(),
             daysToNextBrief = snap?.let { 7 - todayIndex(it) } ?: 0,
-            block = runCatching { blockRepo.active() }.getOrNull(),
+            block = activeBlock,
             profile = snap?.let { com.forge.app.domain.coach.PersonalProfile.build(it) }
                 ?: com.forge.app.domain.coach.PersonalProfile.Profile.DEFAULTS
-        )
+        ) }
         // Opening the page clears the Overview "new report" banner for this week.
         brief?.let { runCatching { coachRepo.markSeen(it.pass.weekId) } }
         // NOTHING else. Opening the page used to also load the goal and project state, which no

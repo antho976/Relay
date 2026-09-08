@@ -419,7 +419,7 @@ internal fun GalleryViewerPager(
     }
 
     if (showDatePicker) {
-        val dpState = rememberDatePickerState(initialSelectedDateMillis = currentDate)
+        val dpState = rememberDatePickerState(initialSelectedDateMillis = photoDatePickerSeed(currentDate))
         // Shared §5 tones — M3's own default lands this dialog on an unthemed, markedly paler slab.
         val pickerColors = forgeDatePickerColors()
         DatePickerDialog(
@@ -545,3 +545,8 @@ internal fun GalleryFullImage(
         Box(modifier)
     }
 }
+
+/** Material selects UTC calendar dates; seed it with the photo's local calendar date. */
+internal fun photoDatePickerSeed(instantMs: Long, zone: ZoneId = ZoneId.systemDefault()): Long =
+    Instant.ofEpochMilli(instantMs).atZone(zone).toLocalDate()
+        .atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()

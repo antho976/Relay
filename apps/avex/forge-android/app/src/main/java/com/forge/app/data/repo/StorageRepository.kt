@@ -47,11 +47,7 @@ class StorageRepository @Inject constructor(
         val photos = dirSize(photoRepo.dir) + (avatarRepo.file.takeIf { it.exists() }?.length() ?: 0L)
         val database = backupRepo.dbSizeBytes()
         val backup = File(files, AUTO_BACKUP_NAME).takeIf { it.exists() }?.length() ?: 0L
-        // Shareable exports the user last generated (JSON/CSV/PDF) — transient, sit in filesDir root.
-        val exports = files.listFiles()?.filter {
-            it.isFile && it.name.startsWith("forge_") && it.name != AUTO_BACKUP_NAME &&
-                it.extension in EXPORT_EXTENSIONS
-        }?.sumOf { it.length() } ?: 0L
+        val exports = dirSize(File(files, com.forge.app.core.io.EXPORTS_DIR))
         val cache = dirSize(context.cacheDir)
         val categories = listOf(
             StorageCategory("photos", "Photos", photos),
@@ -76,6 +72,5 @@ class StorageRepository @Inject constructor(
     private companion object {
         // Kept in sync with BackupRepository.AUTO_BACKUP_NAME (its constant is private; this is a leaf read).
         const val AUTO_BACKUP_NAME = "forge_auto_backup.zip"
-        val EXPORT_EXTENSIONS = setOf("json", "csv", "pdf")
     }
 }

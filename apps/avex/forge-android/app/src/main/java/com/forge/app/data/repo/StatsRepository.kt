@@ -77,7 +77,9 @@ class StatsRepository @Inject constructor(
     private val bodyweightRepo: BodyweightRepository,
     private val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
     private val timeSignals: com.forge.app.core.time.TimeSignals,
-    private val clock: Clock
+    private val clock: Clock,
+    private val programRepo: ProgramRepository,
+    private val programCustomRepo: ProgramCustomizationRepository
 ) {
 
     data class WeeklyStats(
@@ -157,16 +159,13 @@ class StatsRepository @Inject constructor(
             val schedule = signals.schedule
             val todayDate = todayLocal(zone)
             val finishedAts = signals.allFinishedAts
-            // Sessions finished in the current ISO week — shared by the lit-day dots AND the
-            // best-session tile so they filter the list once, not twice.
-            val thisWeekSessions = recentSessions.filter { it.finishedAt != null && it.finishedAt!! >= weekStartMs }
+            // Attribute the weekly summary to session start, matching its count and volume queries.
+            val thisWeekSessions = recentSessions.filter { it.finishedAt != null && it.startedAt >= weekStartMs }
             // Dots use the SAME week anchor as the workout/volume/cardio counts above, so the count
             // and the lit dots can never describe different weeks within a view.
             val weekDaysTrained = thisWeekSessions
                 .map {
-                    // Bucket by the same timestamp the week filter uses (finishedAt), so a session
-                    // that started before midnight but finished this week lands on the right day.
-                    val d = Instant.ofEpochMilli(it.finishedAt!!).atZone(zone).toLocalDate()
+                    val d = Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate()
                     d.dayOfWeek.value - 1 // 0=Mon..6=Sun
                 }
                 .toSet()
@@ -402,13 +401,9 @@ class StatsRepository @Inject constructor(
         val allRpe = exerciseDetails.flatMap { it.sets }.mapNotNull { it.rpe }
         val durationMin = session.durationMinutes()
         val title = Program.dayDisplayName(session.dayKey)
-        // The previous session of this same training, for the summary-tile up/down/same carets. The DAO
-        // returns the most-recent OTHER session of this day_key regardless of date, so drop it when it
-        // actually finished LATER (i.e. we're viewing an older session from History) — otherwise the
-        // caret would compare against a future session and invert.
-        val curFinishedAt = session.finishedAt ?: Long.MAX_VALUE
-        val prevSession = sessionDao.previousFinishedForDay(session.dayKey, session.id)
-            ?.takeIf { (it.finishedAt ?: Long.MAX_VALUE) < curFinishedAt }
+        val prevSession = sessionDao.previousFinishedForDay(
+            session.dayKey, session.id, session.finishedAt ?: Long.MAX_VALUE
+        )
 
         return SessionDetailData(
             sessionId = session.id,
@@ -473,8 +468,9 @@ class StatsRepository @Inject constructor(
     fun observeGymStats(): Flow<GymStats> {
         return combine(
             loggedSetDao.observeAllFinishedSetsWithSession(),
-            loggedExerciseDao.observeRecentPrs()
-        ) { allSets, prRows ->
+            loggedExerciseDao.observeRecentPrs(),
+            timeSignals.dayStarts()
+        ) { allSets, prRows, _ ->
           coroutineScope {
             // Rolling-7-day working sets for the volume-by-muscle read, recomputed per emission so the
             // window slides while the screen stays open. Derived from allSets (already tracked /
@@ -488,16 +484,13 @@ class StatsRepository @Inject constructor(
             val deloadRowsD = async { sessionDao.allFinishedVolumeDeload() }
             val weekCompD = async { buildWeekComparison() }
             val prTimes = prTimesD.await()
-            val deloadTrend = buildVolumeDeloadTrend(deloadRowsD.await())
+            val deloadTrend = buildVolumeDeloadTrend(deloadRowsD.await(), maxSessions = Int.MAX_VALUE)
             GymStats(
                 recentPrs = buildPrEntries(prRows, allSets),
                 e1rmLifts = buildE1rmLifts(allSets),
                 strengthCurves = buildStrengthCurves(allSets),
                 weeklySetsByMuscle = buildWeeklySetsByMuscle(volumeSets),
-                // Always compute the planned targets here (cheap, program-only); freestyle zeroes them in
-                // the trailing combine so toggling the mode doesn't re-run any of the heavy aggregations.
-                plannedSetsByMuscle =
-                    com.forge.app.program.VolumeTargets.plannedWeeklySetsByMuscle(Program.days),
+                plannedSetsByMuscle = emptyMap(),
                 weeklyTonnage = buildWeeklyTonnage(deloadTrend),
                 dailyActivity = buildDailyActivity(allSets),
                 rpeDistribution = buildRpeDistribution(allSets),
@@ -524,7 +517,14 @@ class StatsRepository @Inject constructor(
                 }
             else stats.hallOfFame
             stats.copy(bodyweightPoints = points, hallOfFame = hallOfFame)
-        }.combine(settingsRepo.freestyleMode) { stats, freestyle ->
+        }.combine(combine(programRepo.revision, programCustomRepo.observeAll()) { _, _ ->
+            if (!Program.isLoaded) programRepo.ensureLoaded()
+            val effective = Program.days.map { day ->
+                day.copy(exercises = programCustomRepo.effectivePlanForDay(day.key))
+            }
+            com.forge.app.program.VolumeTargets.plannedWeeklySetsByMuscle(effective)
+        }) { stats, planned -> stats.copy(plannedSetsByMuscle = planned) }
+        .combine(settingsRepo.freestyleMode) { stats, freestyle ->
             // No fixed plan (freestyle) → no planned volume targets to chart actual sets against. Folded
             // in last so flipping freestyle only re-runs this cheap copy, not the aggregations above.
             if (freestyle) stats.copy(plannedSetsByMuscle = emptyMap()) else stats

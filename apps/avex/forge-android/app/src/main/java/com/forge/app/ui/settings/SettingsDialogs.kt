@@ -152,7 +152,8 @@ internal fun DataExportDialog(
             // Each row carries a distinct format and action, which is what earns a list (§4.10).
             Column {
                 SettingsSectionHeader("Quick export", top = 0.dp)
-                ExportRow("All my data", "JSON", "every session, set & setting", onBg, muted) { viewModel.exportFullBackup(); onDismiss() }
+                SettingsExplainer("For a restorable copy including photos, use Settings → Backup.", Modifier.padding(horizontal = SETTINGS_GUTTER))
+                ExportRow("Training history", "JSON", "finished workouts, cardio, goals & selected preferences", onBg, muted) { viewModel.exportFullBackup(); onDismiss() }
                 ExportRow("This week", "JSON", "summary for AI analysis", onBg, muted) { viewModel.exportWeeklyJson(); onDismiss() }
                 ExportRow("All sessions", "CSV", "spreadsheet of every session", onBg, muted) { viewModel.exportSessionsCsv(); onDismiss() }
                 ExportRow("All PRs", "CSV", "your best lift per exercise", onBg, muted) { viewModel.exportPrsCsv(); onDismiss() }

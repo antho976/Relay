@@ -48,11 +48,14 @@ internal fun SecurityPage(state: SettingsUiState, vm: SettingsViewModel, modifie
     var noCredentialNote by remember { mutableStateOf(false) }
     var showTimeoutDialog by remember { mutableStateOf(false) }
 
-    // Turning a lock ON needs an enrolled credential; OFF is always allowed. Without a device lock we
-    // refuse and explain rather than enabling a lock that can never be satisfied.
+    // Disabling a protection requires a successful system credential, including gallery-only mode.
     fun toggle(want: Boolean, set: (Boolean) -> Unit) {
         when {
-            !want -> { set(false); noCredentialNote = false }
+            !want -> {
+                authenticateSettingsAction(context, vm, "Confirm before turning off this lock") {
+                    set(false); noCredentialNote = false
+                }
+            }
             BiometricAuthenticator.canAuthenticate(context) -> { set(true); noCredentialNote = false }
             else -> noCredentialNote = true
         }
@@ -151,4 +154,20 @@ private fun AutoLockRow(currentSec: Int, onClick: () -> Unit) {
         }
         Text(autoLockLabel(currentSec), style = MaterialTheme.typography.bodyMedium, color = onBg)
     }
+}
+
+/** Shared credential boundary for disabling protection and manually exporting protected photos. */
+internal fun authenticateSettingsAction(
+    context: android.content.Context,
+    vm: SettingsViewModel,
+    subtitle: String,
+    action: () -> Unit
+) {
+    var host = context
+    while (host is android.content.ContextWrapper && host !is androidx.fragment.app.FragmentActivity) {
+        host = host.baseContext
+    }
+    val activity = host as? androidx.fragment.app.FragmentActivity ?: return
+    BiometricAuthenticator.authenticate(activity, subtitle,
+        onSuccess = { vm.protectionAuthenticated(); action() }, onError = { _, _ -> })
 }

@@ -18,11 +18,8 @@ import androidx.datastore.preferences.preferencesDataStore
  * recommended way to declare a DataStore — it manages the file path, schema migration,
  * and prevents accidentally creating multiple stores for the same file.
  *
- * The corruption handler is not optional here. Without it a damaged preferences file throws
- * `CorruptionException` on EVERY read, and because MainActivity resolves five of these flows with
- * `runBlocking` in `onCreate`, that surfaces as an unrecoverable crash-on-launch loop: the app
- * cannot start, so the user can never reach the setting that would fix it. Their only recourse is
- * clearing app data, which destroys the database too.
+ * The corruption handler prevents damaged preferences from making every startup read fail.
+ * Reads and writes wait for recovery before the underlying store is constructed.
  *
  * A restore makes that reachable rather than theoretical — it stages a preferences blob taken from
  * a backup file and swaps it into place at boot, so any damage in that file becomes damage here.
@@ -30,10 +27,17 @@ import androidx.datastore.preferences.preferencesDataStore
  * Resetting to defaults loses preferences, which is recoverable (they are re-enterable, and the
  * training data in Room is untouched). A launch loop is not.
  */
-val Context.forgePreferences: DataStore<Preferences> by preferencesDataStore(
+private val Context.rawForgePreferences: DataStore<Preferences> by preferencesDataStore(
     name = "forge_settings",
     corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() }
 )
+
+/** Recovery must finish before any reader or writer can initialize the live DataStore. */
+val Context.forgePreferences: DataStore<Preferences>
+    get() = com.forge.app.GatedDataStore(
+        awaitReady = { (applicationContext as? com.forge.app.ForgeApp)?.awaitStorageReady() },
+        delegate = { rawForgePreferences }
+    )
 
 /** Centralised keys so misspellings are caught at compile time. */
 object PreferenceKeys {

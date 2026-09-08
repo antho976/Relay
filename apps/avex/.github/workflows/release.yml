@@ -243,8 +243,12 @@ jobs:
           # Idempotent: re-running a release (a flaked upload, a re-dispatch) must refresh the
           # artifacts on the existing draft rather than failing with "release already exists" and
           # leaving a half-populated one behind.
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            echo "Release $TAG already exists — replacing its artifacts."
+          if draft_state=$(gh release view "$TAG" --json isDraft --jq '.isDraft'); then
+            if [ "$draft_state" != "true" ]; then
+              echo "::error::Release $TAG is published. Refusing to replace public artifacts."
+              exit 1
+            fi
+            echo "Draft $TAG already exists. Replacing its artifacts."
             gh release upload "$TAG" release-artifacts/* --clobber
           else
             gh release create "$TAG" \

@@ -27,6 +27,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
@@ -60,7 +65,11 @@ import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import javax.inject.Inject
 
 private const val PENDING_IMPORT_URI_KEY = "pending_import_uri"
@@ -296,6 +305,24 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         pendingImportUri = savedInstanceState?.getString(PENDING_IMPORT_URI_KEY)?.let(Uri::parse)
         enableEdgeToEdge()
+        // Secure before the first frame, including while recovery or preferences are slow.
+        applyPrivacyMode(true)
+        var contentReady = false
+        splash.setKeepOnScreenCondition { !contentReady }
+        setContent { StartupMessage("Preparing Avex…") }
+        lifecycleScope.launch { delay(2000); contentReady = true }
+        lifecycleScope.launch {
+            try {
+                applicationContext.awaitStorageReady()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                contentReady = true
+                setContent {
+                    StartupMessage("Avex could not finish restoring your data. Close and reopen the app to retry.")
+                }
+                return@launch
+            }
         // Consume the restore flag on a fresh launch only (not a config-change recreate) and queue the
         // confirmation for the notifications feed — the silent boot-swap otherwise gives no sign at all.
         // The feed holds it until cleared, so rotation no longer needs saveable dialog state.
@@ -338,12 +365,6 @@ class MainActivity : FragmentActivity() {
         // config-change recreate (the queued notice carries the result across rotation).
         if (savedInstanceState == null) handleImportIntent(intent)
 
-        // Hold the splash until prefs resolve, so the bare theme gradient (the null onboarding state)
-        // never flashes before the first real screen (P1). A 2s backstop releases it even if the prefs
-        // flow never emits (corrupt/stalled DataStore) — a brief gradient beats a permanent splash.
-        var contentReady = false
-        splash.setKeepOnScreenCondition { !contentReady }
-        lifecycleScope.launch { delay(2000); contentReady = true }
 
         // Honor the system "Remove animations" preference so ForgeMotion gates every transition,
         // and keep honoring it LIVE: register an observer so toggling it mid-session takes effect
@@ -358,34 +379,15 @@ class MainActivity : FragmentActivity() {
         // screen — which keeps working however many times the permission was already denied, unlike
         // a re-request. Nothing interrupts a cold launch to ask.
 
-        AutoBackupWorker.schedule(this)
+        AutoBackupWorker.schedule(this@MainActivity)
         // The widget rolls over at local midnight from here (REPLACE, so re-arming on each launch
         // just re-anchors it to the current zone rather than stacking work).
-        com.forge.app.service.WidgetMidnightWorker.schedule(this)
+        com.forge.app.service.WidgetMidnightWorker.schedule(this@MainActivity)
 
-        // Apply privacy mode (#152) synchronously BEFORE the first frame so it's never unsecured,
-        // then keep a collector for live changes. Paint the window background to match the active
-        // theme in the same pass so the post-splash "UI not loaded" frame never flashes an off-theme
-        // color — it tracks the live amoled setting, so a later theme change adapts the boot
-        // background on its own (no XML edit needed).
-        // Also read the chosen app icon here so the launch intro can theme itself to it on the very
-        // first frame (no plain→themed pop), plus the "Custom startup animation" setting so a user who
-        // turned it off goes straight to the plain black-and-white Avex with no themed flash. One cached
-        // DataStore read pass, same as privacy/amoled.
-        // ONE read of the preferences file, not five subscriptions to it. These values have to be
-        // applied before the first frame — the secure-window flag, the lock gate and the window
-        // background all decide what that frame looks like — so the read is still synchronous, but
-        // it is now a single file read instead of five with the main thread parked on each.
-        // Defaults rather than a crash if the read fails anyway: this runs before setContent, so an
-        // exception here is an uncaught crash on EVERY launch with no way back into the app.
-        //
-        // The fallback used to say every protection was OFF, which made a transient read failure
-        // indistinguishable from a user who wants none: FLAG_SECURE was cleared, AppLockManager was
-        // primed unlocked, and a locked gallery rendered behind no gate. Protections now come from
-        // ProtectionSentinel, which remembers what the user last actually chose in a separate file —
-        // and, having never seen one, secures the window without priming a lock nobody asked for.
-        val startup = runBlocking {
-            runCatching { settingsRepo.startupPreferences() }
+        // Read off Main with a bounded wait. A failed/stalled read uses the remembered privacy
+        // protections; no real app content is composed before these flags and gates are primed.
+        val startup = withContext(Dispatchers.IO) {
+            runCatching { withTimeout(2000) { settingsRepo.startupPreferences() } }
                 .onSuccess { ok ->
                     ProtectionSentinel.remember(
                         this@MainActivity,
@@ -397,6 +399,7 @@ class MainActivity : FragmentActivity() {
                     )
                 }
                 .getOrElse {
+                    if (it is CancellationException && it !is TimeoutCancellationException) throw it
                     val known = ProtectionSentinel.fallback(this@MainActivity)
                     SettingsRepository.StartupPreferences(
                         privacyMode = known.privacyMode,
@@ -571,6 +574,7 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+        }
     }
 }
 
@@ -603,3 +607,17 @@ private fun ImportConfirmationDialog(
 internal fun opensHealthConnectPrivacyPolicy(action: String?): Boolean =
     action == "androidx.health.connect.action.SHOW_PERMISSIONS_RATIONALE" ||
         action == "android.intent.action.VIEW_PERMISSION_USAGE"
+
+/** Only visible during real startup latency or failed recovery, before private content exists. */
+@Composable
+private fun StartupMessage(message: String) {
+    ForgeTheme {
+        Box(
+            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+                .safeDrawingPadding().padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+        }
+    }
+}

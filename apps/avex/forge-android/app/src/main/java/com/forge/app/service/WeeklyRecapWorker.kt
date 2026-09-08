@@ -50,10 +50,12 @@ class WeeklyRecapWorker @AssistedInject constructor(
     private val coachRepo: CoachRepository,
     private val trophyRepo: TrophyRepository,
     private val vacationRepo: VacationRepository,
-    private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository
+    private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
+    private val programRepo: com.forge.app.data.repo.ProgramRepository
 ) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result {
+        if (!com.forge.app.program.Program.isLoaded) programRepo.ensureLoaded()
         // Quiet hours: defer (retry) the whole batch rather than dropping it. Each nudge below has
         // its own opt-out: the coach-brief push and the come-back nudge are SEPARATE features with
         // their own channels, so they are NOT gated by the weekly-recap toggle (that toggle, labelled

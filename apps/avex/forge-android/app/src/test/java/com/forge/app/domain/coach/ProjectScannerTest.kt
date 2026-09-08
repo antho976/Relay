@@ -54,6 +54,12 @@ class ProjectScannerTest {
         health = health
     )
 
+    @Test fun repeatedProgramSlotsDoNotMultiplyLoggedWork() {
+        val base = healthy()
+        val repeated = base.copy(program = base.program + base.program.first().copy(dayKey = "extra", slots = base.program.first().slots.take(1)))
+        assertEquals(ProjectScanner.scan(base), ProjectScanner.scan(repeated))
+    }
+
     /** A snapshot with no lever worth naming: balanced, conditioned, rested, adherent. */
     private fun healthy() = snapshot(
         slots = listOf(slot("bench", MuscleGroup.CHEST), slot("row", MuscleGroup.BACK)),

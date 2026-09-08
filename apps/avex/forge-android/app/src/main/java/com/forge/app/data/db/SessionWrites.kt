@@ -29,6 +29,8 @@ import com.forge.app.data.db.entities.Session
  * gap against every writer in the process. These live here rather than inside the repository so the
  * DAO suites can drive the real code concurrently rather than a copy of it.
  */
+internal class SessionClosedException : IllegalStateException("Session is no longer active")
+
 internal object SessionWrites {
 
     /**
@@ -84,6 +86,9 @@ internal object SessionWrites {
      * leaves indices 0 and 2 with a count of 2, and a count would write a second index 2.
      */
     suspend fun insertSetWithNextIndex(db: ForgeDatabase, set: LoggedSet): Long = db.withTransaction {
+        val exercise = db.loggedExerciseDao().get(set.loggedExerciseId) ?: throw SessionClosedException()
+        val session = db.sessionDao().get(exercise.sessionId) ?: throw SessionClosedException()
+        if (session.finishedAt != null) throw SessionClosedException()
         val next = (db.loggedSetDao().maxSetIndex(set.loggedExerciseId) ?: -1) + 1
         db.loggedSetDao().insert(set.copy(setIndex = next))
     }

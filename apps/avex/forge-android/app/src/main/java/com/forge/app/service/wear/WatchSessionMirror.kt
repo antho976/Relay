@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onStart
 import javax.inject.Inject
 import javax.inject.Singleton
 import com.forge.app.domain.units.weightInputValue
@@ -46,10 +47,13 @@ class WatchSessionMirror @Inject constructor(
     private val loggedSetDao: LoggedSetDao,
     private val customizationRepo: com.forge.app.data.repo.CustomizationRepository,
     private val settingsRepo: SettingsRepository,
-    private val focusHolder: WearFocusHolder
+    private val focusHolder: WearFocusHolder,
+    private val programRepo: com.forge.app.data.repo.ProgramRepository,
+    private val programCustomRepo: com.forge.app.data.repo.ProgramCustomizationRepository
 ) {
     @OptIn(ExperimentalCoroutinesApi::class)
     val sessionLive: Flow<SessionLiveDto?> = sessionDao.observeActiveSession()
+        .onStart { if (!Program.isLoaded) programRepo.ensureLoaded() }
         .flatMapLatest { session ->
             // Freestyle ("Open workout") logs are draft-built on the phone and exist as an active
             // session only for the instant save() runs — never a live sitting the wrist could join.
@@ -61,7 +65,9 @@ class WatchSessionMirror @Inject constructor(
                 loggedExerciseDao.observeForSession(session.id),
                 loggedSetDao.observeAllForSession(session.id),
                 settingsRepo.weightUnit,
-                focusHolder.earlyDone
+                combine(focusHolder.earlyDone, programCustomRepo.observeForDay(session.dayKey), programRepo.revision) {
+                    _, _, _ -> Unit
+                }
             ) { exercises, sets, unit, _ -> buildDto(session, exercises, sets, unit) }
         }
 
@@ -70,14 +76,15 @@ class WatchSessionMirror @Inject constructor(
         logged: List<LoggedExercise>,
         sets: List<LoggedSet>,
         unit: WeightUnit
-    ): SessionLiveDto {
-        val plan = Program.day(session.dayKey)
+    ): SessionLiveDto? {
+        if (Program.days.none { it.key == session.dayKey }) return null
+        val plan = programCustomRepo.effectivePlanForSession(session.dayKey, logged.map { it.effectiveSlotId })
         val setsByLoggedExercise = sets.groupBy { it.loggedExerciseId }
         // Per-plan-slot logged rows: a slot's row matches by slotId (swapped) or exerciseId (direct).
         fun loggedFor(planId: String): LoggedExercise? =
             logged.firstOrNull { it.slotId == planId || (it.slotId == null && it.exerciseId == planId) }
 
-        val counts = plan.exercises.map { ex ->
+        val counts = plan.map { ex ->
             val row = loggedFor(ex.id)
             val done = row?.let { setsByLoggedExercise[it.id]?.size } ?: 0
             Triple(ex, row, done)
@@ -105,7 +112,8 @@ class WatchSessionMirror @Inject constructor(
         val effectiveId = current?.second?.exerciseId
             ?: swap?.swappedExerciseId?.takeIf { it.isNotBlank() }
             ?: current?.first?.id
-        val effectivePlan = effectiveId?.let { Program.exercise(it) } ?: current?.first
+        val effectivePlan = if (effectiveId == current?.first?.id) current?.first
+            else effectiveId?.let { Program.exercise(it) } ?: current?.first
         val isPlates = effectivePlan?.unit == ExerciseUnit.PLATES
 
         // The wrist's target weight = the same prefill the phone's input seeds from: the last set
@@ -146,7 +154,7 @@ class WatchSessionMirror @Inject constructor(
                     ?: effectivePlan?.name ?: ex.name
             },
             exerciseIndex = if (current == null) 0 else currentIdx + 1,
-            exerciseCount = plan.exercises.size,
+            exerciseCount = plan.size,
             setIndex = current?.let { (ex, _, done) -> (done + 1).coerceAtMost(ex.sets) } ?: 0,
             setTotal = current?.first?.sets ?: 0,
             targetWeightText = targetWeightText,

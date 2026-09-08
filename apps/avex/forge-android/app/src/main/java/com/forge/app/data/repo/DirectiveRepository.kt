@@ -58,7 +58,8 @@ class DirectiveRepository @Inject constructor(
      * Today's one answer. Never throws and never returns null: a coach that goes blank on a bad
      * read has broken its only promise, so a failure degrades to the rest-day answer.
      */
-    suspend fun today(): TodayAnswer = runCatching { compute() }.getOrElse {
+    suspend fun today(): TodayAnswer = runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { compute() } }.getOrElse {
+        if (it is kotlinx.coroutines.CancellationException) throw it
         TodayAnswer(
             directive = TodayDirective.Directive(
                 kind = TodayDirective.Kind.REST,
@@ -71,8 +72,8 @@ class DirectiveRepository @Inject constructor(
 
     private suspend fun compute(): TodayAnswer {
         val snapshot = adaptationRepository.snapshotCached()
-        val life = adaptationRepository.lifeEvents(snapshot.nowMs)
-        val readiness = adaptationRepository.readinessScale()
+        val life = adaptationRepository.lifeEvents(snapshot.nowMs, snapshot.sessions)
+        val readiness = adaptationRepository.readinessScale(snapshot, life)
         val freestyle = settingsRepository.freestyleMode.first()
 
         val zone = ZoneId.systemDefault()

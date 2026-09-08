@@ -105,7 +105,7 @@ class ProtectionFallbackTest {
     }
 
     @Test
-    fun resettingSettingsOnlyAlsoClearsTheSentinel() = runTest {
+    fun resettingSettingsOnlyPreservesProtectionAndSentinel() = runTest {
         repo.setPrivacyMode(true)
         ProtectionSentinel.remember(
             context,
@@ -116,8 +116,8 @@ class ProtectionFallbackTest {
 
         repo.resetSettingsOnly()
 
-        assertNull(ProtectionSentinel.lastKnown(context))
-        assertFalse("privacy mode is not preserved by this reset, so it must not return", repo.privacyMode.first())
+        assertEquals(true, ProtectionSentinel.lastKnown(context)?.privacyMode)
+        assertTrue("preferences reset must not weaken privacy", repo.privacyMode.first())
     }
 
     // ── Case 3: an explicit choice always beats the sentinel ──────────────────
