@@ -21,7 +21,9 @@ class SettingsContentResetTest {
         val repo = SettingsRepository(context, Clock { 1000 })
         val keys = listOf(PreferenceKeys.CUSTOM_EXERCISES, PreferenceKeys.CUSTOM_CARDIO_TYPES, PreferenceKeys.FREESTYLE_DRAFT)
         context.forgePreferences.edit { prefs -> keys.forEach { prefs[it] = "saved-${it.name}" } }
+        repo.setGalleryLockEnabled(true)
         repo.resetSettingsOnly()
+        assertTrue(repo.galleryLockEnabled.first())
         val after = context.forgePreferences.data.first()
         keys.forEach { assertEquals("saved-${it.name}", after[it]) }
     }

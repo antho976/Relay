@@ -1306,7 +1306,15 @@ class SettingsRepository @Inject constructor(
             val customExercises = prefs[PreferenceKeys.CUSTOM_EXERCISES]
             val customCardio = prefs[PreferenceKeys.CUSTOM_CARDIO_TYPES]
             val draft = prefs[PreferenceKeys.FREESTYLE_DRAFT]
+            val appLock = prefs[PreferenceKeys.APP_LOCK_ENABLED]
+            val galleryLock = prefs[PreferenceKeys.GALLERY_LOCK_ENABLED]
+            val timeout = prefs[PreferenceKeys.APP_LOCK_TIMEOUT_SEC]
+            val privacy = prefs[PreferenceKeys.PRIVACY_MODE]
             prefs.clear()
+            appLock?.let { prefs[PreferenceKeys.APP_LOCK_ENABLED] = it }
+            galleryLock?.let { prefs[PreferenceKeys.GALLERY_LOCK_ENABLED] = it }
+            timeout?.let { prefs[PreferenceKeys.APP_LOCK_TIMEOUT_SEC] = it }
+            privacy?.let { prefs[PreferenceKeys.PRIVACY_MODE] = it }
             customExercises?.let { prefs[PreferenceKeys.CUSTOM_EXERCISES] = it }
             customCardio?.let { prefs[PreferenceKeys.CUSTOM_CARDIO_TYPES] = it }
             draft?.let { prefs[PreferenceKeys.FREESTYLE_DRAFT] = it }
@@ -1318,9 +1326,7 @@ class SettingsRepository @Inject constructor(
             freestyle?.let { prefs[PreferenceKeys.FREESTYLE_MODE] = it }
             swapDislikePrompt?.let { prefs[PreferenceKeys.SWAP_DISLIKE_PROMPT_ENABLED] = it }
         }
-        // Privacy mode and the two locks are NOT in the preserved set above, so this resets them to
-        // defaults — which only holds if the sentinel forgets them too. See [resetAll].
-        ProtectionSentinel.forget(context)
+        // Security survives a preferences reset, including the sentinel fallback for missing keys.
     }
 
     /**

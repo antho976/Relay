@@ -71,6 +71,9 @@ class AppLockManager @Inject constructor(
         recompute()
     }
 
+    /** Read by protected settings actions after the system credential callback. */
+    val isAuthenticated: Boolean get() = sessionValid
+
     /** A successful unlock from either gate validates the whole foreground session. */
     fun markAuthenticated() {
         sessionValid = true

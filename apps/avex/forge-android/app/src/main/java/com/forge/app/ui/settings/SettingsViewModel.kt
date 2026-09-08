@@ -109,6 +109,8 @@ data class SettingsUiState(
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
+    private val appLockManager: com.forge.app.security.AppLockManager,
+    private val protectedSettings: com.forge.app.security.ProtectedSettingsActions,
     private val resetRepo: ResetRepository,
     private val backupRepo: com.forge.app.data.repo.BackupRepository,
     private val storageRepo: com.forge.app.data.repo.StorageRepository,
@@ -414,8 +416,9 @@ class SettingsViewModel @Inject constructor(
     fun setPrivacyMode(v: Boolean) = write { settingsRepo.setPrivacyMode(v) }
     // App / gallery lock (GYMAP-69). Enabling is gated on an available device credential in the UI
     // (Security page), so these persist the choice directly.
-    fun setAppLockEnabled(v: Boolean) = write { settingsRepo.setAppLockEnabled(v) }
-    fun setGalleryLockEnabled(v: Boolean) = write { settingsRepo.setGalleryLockEnabled(v) }
+    fun protectionAuthenticated() = appLockManager.markAuthenticated()
+    fun setAppLockEnabled(v: Boolean) = write { protectedSettings.setAppLock(v) }
+    fun setGalleryLockEnabled(v: Boolean) = write { protectedSettings.setGalleryLock(v) }
     fun setAppLockTimeoutSec(v: Int) = write { settingsRepo.setAppLockTimeoutSec(v) }
     fun setAvailableEquipment(codes: Set<String>) = write {
         settingsRepo.setAvailableEquipment(codes)
@@ -823,6 +826,10 @@ class SettingsViewModel @Inject constructor(
      *  other preference edit here (M-22); the seeding backup that follows stays an ordinary,
      *  cancellable job, since a long copy must never become unstoppable just to make the pref durable. */
     fun setBackupFolder(uri: android.net.Uri) = viewModelScope.launch {
+        if (!protectedSettings.canExportPhotos()) {
+            _statusMessage.value = "Unlock your photo gallery before changing the backup folder."
+            return@launch
+        }
         val connected = withContext(NonCancellable) { backupRepo.rememberBackupFolder(uri) }
         // Only seed a folder Avex can actually keep writing to (M-18). The grant failure used to be
         // swallowed and the backup run anyway — which succeeded on the picker's own transient
@@ -846,6 +853,10 @@ class SettingsViewModel @Inject constructor(
 
     /** Run a backup right now — to internal storage and the picked folder — the "Back up now" action. */
     fun backupNow() = viewModelScope.launch {
+        if (!protectedSettings.canExportPhotos()) {
+            _statusMessage.value = "Unlock your photo gallery before backing up photos."
+            return@launch
+        }
         val folder = settingsRepo.backupFolderUri.first()?.let { android.net.Uri.parse(it) }
         runCatching { backupRepo.autoBackup(folder) }
             .onSuccess { _statusMessage.value = "Backed up."; refreshAutoBackupInfo() }
