@@ -55,6 +55,7 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             val leId = ensureLoggedExercise(event.exerciseId) ?: return@launch
             workoutRepo.setRating(leId, event.rating)
             refreshExercise(event.exerciseId)
+            updateRestForLatestEffort(event.exerciseId)
         }
         is DayUiEvent.UpdateNote -> viewModelScope.launch {
             // The note also commits from NoteField's onDispose, which fires while the screen is
@@ -135,6 +136,7 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             val nextTag = when (event.currentTag) { null -> "easy"; "easy" -> "hard"; else -> null }
             workoutRepo.setDifficultyTag(event.setId, nextTag)
             refreshExerciseForSet(event.setId)
+            findExerciseIdForSet(event.setId)?.let { updateRestForLatestEffort(it, event.setId) }
         }
         is DayUiEvent.WarmupReaction -> {
             val current = _state.value.warmupReactions.toMutableMap()
@@ -192,6 +194,7 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
         is DayUiEvent.SetRpe -> viewModelScope.launch {
             workoutRepo.setRpe(event.setId, event.rpe)
             refreshExerciseForSet(event.setId)
+            findExerciseIdForSet(event.setId)?.let { updateRestForLatestEffort(it, event.setId) }
         }
         is DayUiEvent.AddBonusSet -> _state.update { s ->
             s.copy(exercises = s.exercises.map {
@@ -308,7 +311,7 @@ internal fun DayViewModel.logSet(
             // movement profile (compound/isolation + rep heaviness), so a cross-type swap rests correctly and
             // the realized-rest sample (keyed below by effectiveExerciseId) tunes the matching role. Falls back
             // to the slot plan when the id can't be resolved.
-            val restPlan = com.forge.app.program.Program.exercise(effectiveExerciseId) ?: plan
+            val restPlan = (com.forge.app.program.Program.exercise(effectiveExerciseId) ?: plan).copy(reps = plan.reps)
             val rest = computeRestPrescription(restPlan, currentUi.difficulty, currentUi.restTimerOverrideSeconds)
             restTimer.start(rest.seconds)
             // Push the started timer into UI state synchronously so it's visible before refreshExercise

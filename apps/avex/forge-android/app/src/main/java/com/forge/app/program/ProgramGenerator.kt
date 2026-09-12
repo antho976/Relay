@@ -10,7 +10,7 @@ data class GenerationParams(
     val goal: String = "build_muscle",
     /** Training experience — scales volume + filters movement difficulty via [GoalProfiles]. */
     val experience: String = "intermediate",
-    /** Flagged problem areas — movements stressing these are strongly avoided (Phase 3). */
+    /** Flagged problem areas exclude movements with a matching known contraindication. */
     val problemAreas: Set<ProblemArea> = emptySet(),
     /** Muscles to bias extra volume toward (granular emphasis, Phase 3). */
     val priorityMuscles: Set<MuscleGroup> = emptySet(),
@@ -78,8 +78,6 @@ object ProgramGenerator {
     private const val ROLE_NON_LOADABLE = 0.5
     /** Down-weight a movement whose pattern was already used in this day (variety, not a hard rule). */
     private const val PATTERN_REPEAT_PENALTY = 0.25
-    /** Multiplier for a movement that stresses a flagged problem area — strongly avoided, not banned. */
-    private const val CONTRA_PENALTY = 0.08
     /** Volume multiplier for a deload week (Phase 4 periodization). */
     private const val DELOAD_FACTOR = 0.55
     /** Down-weight a movement already used *earlier this week* so multi-day splits vary across days. */
@@ -165,8 +163,10 @@ object ProgramGenerator {
             val usedInDay = HashSet<String>()
             val usedPatterns = HashSet<MovementPattern>()
             val exercises = day.targets.mapIndexedNotNull { si, slot ->
+                if (setsByDay[di][si] == 0) return@mapIndexedNotNull null
                 val avail = ExerciseLibrary.availablePool(available, params.frozenIds)
                     .filter { it.muscle == slot.muscle && it.id !in disliked }
+                    .filter { ExerciseLibrary.contraindicationsOf(it).none { area -> area in params.problemAreas } }
                 // Last-resort bodyweight fills only enter the pool when nothing the user actually owns
                 // can train this muscle — so an equipped user never gets a bodyweight squat, but a
                 // bodyweight-only / minimal setup is never starved into an empty day.
@@ -175,15 +175,10 @@ object ProgramGenerator {
                 // exhausted, DROP the slot (a slightly shorter day) rather than repeat a movement —
                 // a duplicate reads as a bug, breaks per-exercise logging, and crashed the session list.
                 val base = forMuscle.filterNot { it.id in usedInDay }
-                // Experience caps movement difficulty, but never empty the slot — fall back if needed.
-                val candidates = base.filter { it.difficulty.ordinal <= maxDifficulty.ordinal }.ifEmpty { base }
-                // A pinned exercise for this muscle is forced into the slot when it's a valid candidate —
-                // unless it stresses a flagged problem area: don't hard-place a movement the user flagged
-                // as harmful, let the weighting (which down-weights it) decide instead.
-                val pinned = candidates.firstOrNull {
-                    it.id in params.pinned &&
-                        ExerciseLibrary.contraindicationsOf(it).none { area -> area in params.problemAreas }
-                }
+                // Respect the experience ceiling even when it leaves a slot unavailable.
+                val candidates = base.filter { it.difficulty.ordinal <= maxDifficulty.ordinal }
+                // Pins are honored only after equipment, recovery-related restrictions and skill filters.
+                val pinned = candidates.firstOrNull { it.id in params.pinned }
                 // A heavy STRENGTH slot must lead with a compound when one is available — an
                 // isolation (leg curl, fly) may only headline if it's all the equipment allows.
                 val pool = if (slot.scheme == RepScheme.STRENGTH)
@@ -206,36 +201,18 @@ object ProgramGenerator {
                     val pattern = ExerciseLibrary.patternOf(def)
                     val patternW = if (pattern != MovementPattern.ISOLATION && pattern in usedPatterns)
                         PATTERN_REPEAT_PENALTY else 1.0
-                    val contraW = if (ExerciseLibrary.contraindicationsOf(def).any { it in params.problemAreas })
-                        CONTRA_PENALTY else 1.0
                     val stackW = if (preferStack && def.unit == ExerciseUnit.DUMBBELL) LIGHT_DB_PENALTY else 1.0
                     val avoidW = if (def.id in params.avoid) AVOID_PENALTY else 1.0
-                    likeW * recentW * weekW * roleFactor(def, slot.scheme) * patternW * contraW * def.pickBias * stackW * avoidW
+                    likeW * recentW * weekW * roleFactor(def, slot.scheme) * patternW * def.pickBias * stackW * avoidW
                 } ?: return@mapIndexedNotNull null
                 usedInDay += pick.id
                 usedInWeek += pick.id
                 ExerciseLibrary.patternOf(pick).takeIf { it != MovementPattern.ISOLATION }
                     ?.let { usedPatterns += it }
                 GeneratedExercise(pick.id, setsByDay[di][si], repsFor(pick, slot.scheme, params.goal))
-            }.ifEmpty {
-                // A generated day must never ship empty — disliking every movement for a muscle (or
-                // aggressive equipment / problem-area filters) can otherwise drop every slot, stranding
-                // the user on a blank session screen. Last resort, ignoring the dislikes that emptied the
-                // day: one movement for the lead slot's muscle; if the pool has nothing for that muscle
-                // (e.g. a frozen preset, or a muscle with no available movement), ANY available movement,
-                // so the day is never blank whenever there's at least one target and a non-empty pool.
-                val lead = day.targets.firstOrNull()
-                val pool = ExerciseLibrary.availablePool(available, params.frozenIds)
-                val fallback = lead?.let { slot -> pool.firstOrNull { it.muscle == slot.muscle } }
-                    ?: pool.firstOrNull()
-                if (lead != null && fallback != null) {
-                    listOf(GeneratedExercise(
-                        fallback.id,
-                        setsByDay[di].getOrElse(0) { VolumeModel.MIN_SETS },
-                        repsFor(fallback, lead.scheme, params.goal)
-                    ))
-                } else emptyList()
             }
+            // An unfillable day stays empty, as with an empty frozen pool. Never bypass a
+            // restriction or borrow an unrelated muscle just to make a day look populated.
             GeneratedDay(day.key, day.name, day.word, day.accentHex, day.key, exercises)
         }
         return liftDays
@@ -264,7 +241,10 @@ object ProgramGenerator {
     /** Numeric ranges like "8-10" / "15" take the goal-adjusted scheme reps; "AMRAP"/"30-60s"/"10/leg" stay. */
     private val NUMERIC_REPS = Regex("""^\d+(-\d+)?$""")
     private fun repsFor(def: ExerciseDef, scheme: RepScheme, goal: String): String =
-        if (def.defaultReps.matches(NUMERIC_REPS)) GoalProfiles.reps(goal, scheme) else def.defaultReps
+        if (!def.defaultReps.matches(NUMERIC_REPS)) def.defaultReps
+        else if (ExerciseTag.COMPOUND !in def.tags && goal == "get_stronger") {
+            if (scheme == RepScheme.PUMP) "12-15" else "8-12"
+        } else GoalProfiles.reps(goal, scheme)
 
     private inline fun weightedPick(
         items: List<ExerciseDef>,

@@ -24,7 +24,7 @@ class WeeklyScheduleTest {
     }
 
     @Test fun defaultMapsProgramDaysOntoFirstWeekdays() {
-        assertEquals(listOf("upper-a", "lower-a", "upper-b", "lower-b", "", "", ""), WeeklySchedule.defaultFor(keys))
+        assertEquals(listOf("upper-a", "lower-a", "", "upper-b", "lower-b", "", ""), WeeklySchedule.defaultFor(keys))
     }
 
     @Test fun weekday_todaysScheduledWorkoutIsNextUp() {

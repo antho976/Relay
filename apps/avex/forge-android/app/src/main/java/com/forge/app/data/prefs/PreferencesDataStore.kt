@@ -360,7 +360,7 @@ object PreferenceKeys {
     val LAST_CARDIO_TYPE = stringPreferencesKey("last_cardio_type")
 
     /** Default rest between sets (seconds), per movement type — the base the RestAdvisor builds on.
-     *  Absent ⇒ the canonical 180 (compound) / 90 (isolation). */
+     *  Absent ⇒ the canonical 120 (compound) / 90 (isolation). */
     val REST_COMPOUND_SECONDS = intPreferencesKey("rest_compound_seconds")
     val REST_ISOLATION_SECONDS = intPreferencesKey("rest_isolation_seconds")
 

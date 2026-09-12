@@ -98,7 +98,13 @@ class DirectiveRepository @Inject constructor(
             schedule = schedule,
             dayKeys = dayKeys,
             lastFinishedDayKey = lastFinished,
-            trainedTodayKeys = trainedTodayKeys
+            trainedTodayKeys = trainedTodayKeys,
+            recoveryDays = com.forge.app.domain.schedule.TrainingRecovery.daysUntilRecovered(
+                Program.days,
+                snapshot.sessions.filter { !it.isUntracked }.mapNotNull { session ->
+                    session.finishedAt?.let { session.dayKey to java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+                }, today
+            )
         )
         val weekdayMode = mode == WeeklySchedule.MODE_WEEKDAY
         // A blank weekday slot is a deliberate rest day. The resolver still names the next scheduled

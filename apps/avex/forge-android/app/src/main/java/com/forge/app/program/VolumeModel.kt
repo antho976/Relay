@@ -4,7 +4,7 @@ import kotlin.math.roundToInt
 
 /**
  * Turns a split's *structure* into concrete per-slot set counts (program-unlock Phase 4 — generator
- * intelligence). Sets are scheme-based (heavy compounds get 4, accessories 3) so per-session volume
+ * intelligence). Sets are scheme-based (compounds get 3, pump accessories 2) so per-session volume
  * stays sane; **weekly volume scales naturally with frequency** because more training days = more
  * slots for a muscle. A per-muscle **weekly cap** trims junk volume on high-frequency splits, and
  * `emphasis` finally does something — focused muscles get an extra set per slot (it was a no-op before).
@@ -18,22 +18,23 @@ object VolumeModel {
     private const val MAX_EMPHASIS_HEADROOM = 2
 
     private fun baseSets(scheme: RepScheme): Int = when (scheme) {
-        RepScheme.STRENGTH -> 4      // the day's heavy compound
+        RepScheme.STRENGTH -> 3      // the day's heavy compound
         RepScheme.HYPERTROPHY -> 3
-        RepScheme.PUMP -> 3          // accessory / isolation
+        RepScheme.PUMP -> 2          // accessory / isolation
     }
 
-    /** Weekly set ceiling per muscle — beyond this is junk volume; high-frequency splits get scaled down. */
+    /** Conservative direct-set ceilings, not biological limits. Arms/delts/glutes also receive
+     * substantial work from presses, pulls and leg compounds, so their direct budgets are lower. */
     val weeklyCap: Map<MuscleGroup, Int> = mapOf(
         MuscleGroup.CHEST to 18,
         MuscleGroup.BACK to 20,
-        MuscleGroup.SHOULDERS to 16,
-        MuscleGroup.REAR_DELTS to 12,
-        MuscleGroup.BICEPS to 16,
-        MuscleGroup.TRICEPS to 16,
+        MuscleGroup.SHOULDERS to 10,
+        MuscleGroup.REAR_DELTS to 8,
+        MuscleGroup.BICEPS to 8,
+        MuscleGroup.TRICEPS to 8,
         MuscleGroup.QUADS to 18,
         MuscleGroup.HAMSTRINGS to 16,
-        MuscleGroup.GLUTES to 14,
+        MuscleGroup.GLUTES to 10,
         MuscleGroup.CALVES to 14,
         MuscleGroup.CORE to 12
     )
@@ -108,24 +109,25 @@ object VolumeModel {
             // trimmed away — but bounded (not slots.size × bonus, which on a high-frequency split let a
             // prioritised muscle blow well past the junk-volume ceiling).
             val cap = (personalCaps[muscle] ?: weeklyCap[muscle] ?: return@forEach) +
-                if (muscle in focus) minOf(slots.size * EMPHASIS_BONUS_SETS, MAX_EMPHASIS_HEADROOM) else 0
-            // No slot can go below [minSets], so a muscle with enough slots has a weekly total this
-            // cap cannot reach: eight slots at a floor of two is sixteen sets, whatever the ceiling
-            // says. The trim loop already stopped there — it ran out of slots above the floor and
-            // broke — but it did so while still "over cap", so the model went on describing a
-            // ceiling the structure it had just built could never sit under.
-            //
-            // Trimming a muscle further means REMOVING a slot, which is a different decision from
-            // resizing one and belongs to the generator that chose the split, not to this pass. So
-            // state the achievable number instead of pretending: below the floor, the floor is the cap.
-            val structuralFloor = slots.size * minSets
-            val effectiveCap = maxOf(cap, structuralFloor)
+                if (muscle in focus && muscle !in personalCaps) minOf(slots.size * EMPHASIS_BONUS_SETS, MAX_EMPHASIS_HEADROOM) else 0
+            val personal = muscle in personalCaps
+            val floor = if (personal) 0 else minSets
+            val effectiveCap = if (personal) cap.coerceAtLeast(0) else maxOf(cap, slots.size * minSets)
             var total = slots.sumOf { (di, si) -> result[di][si] }
             while (total > effectiveCap) {
-                val biggest = slots.filter { (di, si) -> result[di][si] > minSets }
+                val biggest = slots.filter { (di, si) -> result[di][si] > floor }
                     .maxByOrNull { (di, si) -> result[di][si] } ?: break
                 result[biggest.first][biggest.second] -= 1
                 total -= 1
+            }
+        }
+        // A long exercise list or several priority muscles must not silently create a marathon.
+        // Trim extra sets, keeping each movement's minimum and the weekly ceilings above intact.
+        result.forEach { sets ->
+            val sessionCap = maxOf(sets.size * minSets, minOf(24, (24 * volumeFactor).roundToInt()))
+            while (sets.sum() > sessionCap) {
+                val index = sets.indices.filter { sets[it] > minSets }.maxByOrNull { sets[it] } ?: break
+                sets[index]--
             }
         }
         return result.map { it.toList() }

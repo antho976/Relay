@@ -103,7 +103,15 @@ class ForgeWidget : GlanceAppWidget() {
             schedule = settings.weeklySchedule.first(),
             dayKeys = Program.dayKeys,
             lastFinishedDayKey = entryPoint.sessionDao().lastFinishedDayKey(),
-            trainedTodayKeys = trainedTodayKeys
+            trainedTodayKeys = trainedTodayKeys,
+            recoveryDays = com.forge.app.domain.schedule.TrainingRecovery.daysUntilRecovered(
+                Program.days,
+                entryPoint.sessionDao().finishedForRecoverySince(
+                    today.minusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+                ).mapNotNull { session ->
+                    session.finishedAt?.let { session.dayKey to java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+                }, today
+            )
         )
         val nextDayPlan = nextDayKey?.let { key -> Program.days.firstOrNull { it.key == key } }
         // "Go with the flow" — drives the fallback copy below so the widget doesn't claim a plan exists.

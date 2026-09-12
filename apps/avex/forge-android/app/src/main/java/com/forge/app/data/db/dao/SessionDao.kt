@@ -271,6 +271,10 @@ interface SessionDao {
     """)
     suspend fun finishedInRangeTracked(fromMs: Long, toMs: Long): List<Session>
 
+    /** Recovery is anchored to completion, including sessions that started before midnight. */
+    @Query("SELECT * FROM session WHERE finished_at >= :sinceMs AND is_untracked = 0")
+    suspend fun finishedForRecoverySince(sinceMs: Long): List<Session>
+
     /**
      * Sessions whose *finish* time falls in [fromMs, toMs) — used by the weekly AI export so a
      * session that started before the window boundary but finished inside it is still included.

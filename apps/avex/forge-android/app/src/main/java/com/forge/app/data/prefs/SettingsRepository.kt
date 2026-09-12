@@ -713,8 +713,8 @@ class SettingsRepository @Inject constructor(
         context.forgePreferences.edit { it[PreferenceKeys.DAYS_PER_WEEK] = n.coerceIn(1, 7) }
 
     /** Default rest base (seconds) per movement type — what the rest timer starts at before personal
-     *  tuning + the brutal bonus. Defaults to the canonical 180 / 90; clamped to a sane 30s–10min. */
-    val restCompoundSeconds: Flow<Int> = pref { it[PreferenceKeys.REST_COMPOUND_SECONDS] ?: 180 }
+     *  tuning + the brutal bonus. Defaults to the canonical 120 / 90; clamped to a sane 30s–10min. */
+    val restCompoundSeconds: Flow<Int> = pref { it[PreferenceKeys.REST_COMPOUND_SECONDS] ?: com.forge.app.program.SessionEstimate.COMPOUND_REST }
     val restIsolationSeconds: Flow<Int> = pref { it[PreferenceKeys.REST_ISOLATION_SECONDS] ?: 90 }
     suspend fun setRestCompoundSeconds(s: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.REST_COMPOUND_SECONDS] = s.coerceIn(30, 600) }

@@ -16,9 +16,9 @@ object SessionEstimate {
     private const val WORK_SECONDS_PER_SET = 45
     private const val WARMUP_SECONDS = 300
     /** Canonical rest bases (seconds) — also the defaults a user's Session-settings override falls back to. */
-    const val COMPOUND_REST = 180
+    const val COMPOUND_REST = 120
     const val ISOLATION_REST = 90
-    private const val HEAVY_REST_BONUS = 30
+    private const val HEAVY_REST_BONUS = 60
 
     /**
      * Compound vs isolation classification: generated plans carry tags; legacy/tagless
@@ -30,7 +30,7 @@ object SessionEstimate {
         else plan.muscle in BIG_MUSCLES
 
     /**
-     * Recommended rest between sets (seconds): longer for compounds, +30s when the reps are heavy (≤8).
+     * Recommended rest: 2 minutes for compounds, 90 seconds for isolation, +60s for heavy compounds.
      * [compoundBase]/[isolationBase] default to the canonical values; the rest timer passes the user's
      * Session-settings overrides so a "I rest 4 min on compounds" preference flows through everywhere.
      */
@@ -40,9 +40,9 @@ object SessionEstimate {
         isolationBase: Int = ISOLATION_REST
     ): Int {
         val base = if (isCompound(plan)) compoundBase else isolationBase
-        // Heaviness = the LOW end of the range (the heaviest set you'd do). Using the max rep
-        // meant strength ranges like "6-10" were never flagged heavy.
-        val heavy = minReps(plan.reps)?.let { if (it <= 8) HEAVY_REST_BONUS else 0 } ?: 0
+        // Only genuinely low-rep prescriptions earn extra rest. An 8-12 range, timed hold,
+        // or per-side notation does not establish heavy loading.
+        val heavy = if (isCompound(plan) && isHeavy(plan.reps)) HEAVY_REST_BONUS else 0
         return base + heavy
     }
 
@@ -61,7 +61,9 @@ object SessionEstimate {
         return ((minutes + 2) / 5) * 5 // nearest 5
     }
 
-    /** Smallest number embedded in a rep string ("6-10"→6) — the heaviest set of the range. */
-    private fun minReps(reps: String): Int? =
-        Regex("\\d+").findAll(reps).map { it.value.toInt() }.minOrNull()
+    private fun isHeavy(reps: String): Boolean {
+        val match = Regex("""^(\d+)(?:-(\d+))?$""").matchEntire(reps.trim()) ?: return false
+        val upper = match.groupValues[2].ifEmpty { match.groupValues[1] }.toIntOrNull() ?: return false
+        return upper in 1..6
+    }
 }
