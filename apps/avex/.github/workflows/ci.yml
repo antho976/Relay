@@ -162,6 +162,9 @@ jobs:
         # A reporter that can lie about a failure needs its own test, and this one costs a second.
         run: python3 .github/scripts/test_summary_test.py
 
+      - name: Emulator readiness self check
+        run: python3 .github/scripts/emulator_ready_test.py
+
   verify:
     name: Verify (JVM)
     needs: guard
