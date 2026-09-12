@@ -16,6 +16,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import com.forge.app.data.db.entities.CoachDecision
@@ -48,6 +49,8 @@ import com.forge.app.ui.theme.ForgeTheme
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.RoborazziOptions
 import com.github.takahirom.roborazzi.captureRoboImage
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -115,6 +118,34 @@ class CoachLedgerScreenshotTest {
 
     @Test
     fun ledger() = shoot("coach-ledger") { ledger(activeState())() }
+
+    /**
+     * The default page, advanced tracking off: the account and what is next, then the foot that
+     * names what is off and turns it on. Shot at the seam where the record ends and NEXT follows,
+     * which is where the difference is. (Scrolling to "NEXT" itself would match the "next brief" meta at
+     * the top of the page, so the anchor is the first rung under it.)
+     */
+    @Test
+    fun ledgerBasic() = shoot("coach-ledger-basic", scrollTo = "Twenty-five applied") {
+        ledger(activeState().copy(advanced = false))()
+    }
+
+    /**
+     * A LazyColumn only composes what is near the viewport, so absence is proved by scrolling:
+     * `performScrollToNode` walks the whole list and fails when nothing matches, and that failure
+     * is the assertion. NEXT is scrolled to first so the pass is not an artefact of an empty page.
+     */
+    @Test
+    fun theBasicLedgerDrawsNoReadings() {
+        compose.setContent { ForgeTheme { ledger(activeState().copy(advanced = false))() } }
+        val column = compose.onAllNodes(hasScrollAction()).onFirst()
+        column.performScrollToNode(hasText("Twenty-five applied"))
+        compose.onNodeWithText("NEXT").assertIsDisplayed()
+        listOf("SIGNALS", "BLOCK", "WHAT IT READS", "LEARNED").forEach { anchor ->
+            val found = runCatching { column.performScrollToNode(hasText(anchor)) }.isSuccess
+            assertFalse("$anchor is drawn with advanced tracking off", found)
+        }
+    }
 
     /** §14: the whole account must survive the biggest font without clipping or lost content. */
     @Test
@@ -186,6 +217,26 @@ class CoachLedgerScreenshotTest {
         compose.onNodeWithText("SIGNALS").assertIsDisplayed()
     }
 
+    /** The foot of the default page turns the readings on in place, through the one preference. */
+    @Test
+    fun theFootTurnsAdvancedTrackingOn() {
+        var set: Boolean? = null
+        compose.setContent {
+            ForgeTheme {
+                CoachLedger(
+                    state = activeState().copy(advanced = false),
+                    weightUnit = WeightUnit.LB,
+                    now = NOW,
+                    actions = CoachActions(setAdvanced = { set = it })
+                )
+            }
+        }
+        compose.onAllNodes(hasScrollAction()).onFirst()
+            .performScrollToNode(hasText("Show advanced tracking", substring = true))
+        compose.onNodeWithText("Show advanced tracking", substring = true).performClick()
+        assertEquals(true, set)
+    }
+
     /** AMOLED is a shipped ground, not a variant. */
     @Test
     fun ledgerAmoled() = shoot("coach-ledger-amoled", amoled = true) { ledger(activeState())() }
@@ -194,9 +245,10 @@ class CoachLedgerScreenshotTest {
 private const val NOW = 1_755_648_000_000L // 2025-08-20T00:00:00Z, fixed so goldens are stable.
 private const val DAY = 24L * 60 * 60 * 1000
 
-/** A mid-journey account: two open calls, settled history, real readings. */
+/** A mid-journey account: two open calls, settled history, real readings, advanced tracking on. */
 private fun activeState() = CoachViewModel.UiState(
     loading = false,
+    advanced = true,
     brief = CoachBrief(
         pass = CoachPass("2025-W34", NOW, CoachRepository.STATUS_PROPOSED, null),
         decisions = listOf(
@@ -373,9 +425,14 @@ private fun goalState(
     reading = reading
 )
 
-/** A brand-new account: the baseline still filling, nothing to decide, nothing to look back on. */
+/**
+ * A brand-new account: the baseline still filling, nothing to decide, nothing to look back on.
+ * Advanced tracking is on here so every region's ZERO shape stays pinned (the empty recovery meter,
+ * the unlit phase rail, the Connect pills); with it off this account is the baseline entry alone.
+ */
 private fun baselineState() = CoachViewModel.UiState(
     loading = false,
+    advanced = true,
     brief = CoachBrief(
         pass = CoachPass("2025-W34", NOW, CoachRepository.STATUS_HOLD, "Still learning — 2 session(s) logged."),
         decisions = emptyList(),

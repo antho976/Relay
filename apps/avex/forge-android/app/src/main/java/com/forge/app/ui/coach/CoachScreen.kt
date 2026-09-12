@@ -26,13 +26,18 @@
 package com.forge.app.ui.coach
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -61,6 +66,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.forge.app.domain.units.WeightUnit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 
 /**
@@ -79,6 +85,12 @@ enum class CoachEntryPoint { ACCOUNT, WHERE_YOU_STAND }
  * from and its own Apply; then every week before it, stamped with what became of it; then the
  * live reading the coach works from; then the longer arcs; then the standing balance of what it
  * has learned. One column, no lenses, nothing folded behind a tap.
+ *
+ * How much of that column is drawn is the ONE preference the page reads (Settings → Coach →
+ * Advanced tracking). Off, which is the default, it is the account and what is next: the calls
+ * and what became of them, which is all most people open it for. On, the readings behind the
+ * calls come back. The coach itself behaves the same either way, and the page closes on the
+ * switch so nobody has to find it in Settings first.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -105,9 +117,10 @@ fun CoachScreen(
     val now = remember(state.brief, state.timeline) { System.currentTimeMillis() }
 
     // A deep link that used to open the Signals lens scrolls to the reading it meant, once, after
-    // the first read lands. Everything else opens at the top of the account.
-    LaunchedEffect(state.loading, entryPoint) {
-        if (!state.loading && entryPoint == CoachEntryPoint.WHERE_YOU_STAND) {
+    // the first read lands. Everything else opens at the top of the account, and so does that link
+    // while advanced tracking is off: there is no reading below the account to land on.
+    LaunchedEffect(state.loading, state.advanced, entryPoint) {
+        if (!state.loading && state.advanced && entryPoint == CoachEntryPoint.WHERE_YOU_STAND) {
             listState.scrollToItem(accountItemCount(state))
         }
     }
@@ -161,7 +174,8 @@ fun CoachScreen(
                     applyAll = viewModel::applyAll,
                     startBlock = viewModel::startBlock,
                     endBlock = viewModel::endBlock,
-                    connectHealth = onConnectHealth
+                    connectHealth = onConnectHealth,
+                    setAdvanced = viewModel::setAdvanced
                 ),
                 listState = listState,
                 modifier = Modifier.padding(inner)
@@ -184,7 +198,8 @@ internal data class CoachActions(
     val applyAll: (String) -> Unit = {},
     val startBlock: () -> Unit = {},
     val endBlock: () -> Unit = {},
-    val connectHealth: (() -> Unit)? = null
+    val connectHealth: (() -> Unit)? = null,
+    val setAdvanced: (Boolean) -> Unit = {}
 )
 
 /**
@@ -219,25 +234,66 @@ internal fun CoachLedger(
             onUndo = actions.undo,
             onApplyAll = actions.applyAll
         )
-        coachStand(
-            state = state,
-            weightUnit = weightUnit,
-            c = c,
-            onConnectHealth = actions.connectHealth
-        )
-        coachBlock(
-            state = state,
-            c = c,
-            onStartBlock = actions.startBlock,
-            onEndBlock = actions.endBlock
-        )
-        coachInputs(
-            state = state,
-            c = c,
-            onConnectHealth = actions.connectHealth
-        )
+        // The readings behind the calls draw only under advanced tracking. What is NEXT stays on
+        // every account: it is the one line that turns a quiet page forward, and it is short.
+        if (state.advanced) {
+            coachStand(
+                state = state,
+                weightUnit = weightUnit,
+                c = c,
+                onConnectHealth = actions.connectHealth
+            )
+            coachBlock(
+                state = state,
+                c = c,
+                onStartBlock = actions.startBlock,
+                onEndBlock = actions.endBlock
+            )
+            coachInputs(
+                state = state,
+                c = c,
+                onConnectHealth = actions.connectHealth
+            )
+        }
         coachUnlocks(state = state, c = c)
-        coachLearned(state = state, c = c)
+        if (state.advanced) coachLearned(state = state, c = c)
+        coachTracking(state = state, c = c, onSetAdvanced = actions.setAdvanced)
+    }
+}
+
+/**
+ * THE FOOT — the one place the page says how much of itself it is drawing.
+ *
+ * Advanced tracking is a Settings switch, and a switch nobody has seen is a feature nobody has.
+ * So the account closes on it: with the readings off, one muted line names what is off and the
+ * action turns it on in place, so the page grows under the tap rather than sending the reader
+ * through Settings to find out what they were missing. With them on, the same rung offers the
+ * way back. It is the same preference either way, with Settings as its other home.
+ */
+private fun LazyListScope.coachTracking(
+    state: CoachViewModel.UiState,
+    c: CoachColors,
+    onSetAdvanced: (Boolean) -> Unit
+) {
+    item("tracking") {
+        Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(6)) {
+            Spacer(Modifier.height(30.dp))
+            if (!state.advanced) {
+                Text(
+                    "The readings behind the calls are off: signals, block, inputs, learned.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.muted
+                )
+                Spacer(Modifier.height(2.dp))
+            }
+            // onBg, not accent: accent-as-text clears AA on two of the five accents only (§14),
+            // and the arrow already marks the line as the action.
+            CoachAction(
+                if (state.advanced) "Hide advanced tracking →" else "Show advanced tracking →",
+                c.onBg,
+                if (state.advanced) "Hide advanced tracking" else "Show advanced tracking"
+            ) { onSetAdvanced(!state.advanced) }
+        }
     }
 }
 

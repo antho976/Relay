@@ -345,9 +345,24 @@ is one column read in this order, and every region is a file:
    instead of a quiet line: the serif count, the meter, and what fills it.
 2. **`WHERE YOU STAND`** (`CoachStand.kt`) — recovery load + only the checks that FIRED, lifts on
    watch with real trends, and the inputs with their charts and Connect pills.
-3. **`AHEAD`** (`CoachAhead.kt`) — block phase rail, goals, the one project, the milestone rail.
+3. **`BLOCK`** and **`NEXT` / `WHAT UNLOCKS`** (`CoachBlock.kt`) — the phase rail with its start
+   / end action, then the rungs still ahead with the real thing that opens each.
 4. **`WHAT IT HAS LEARNED`** (`CoachLearned.kt`) — the standing balance: autopilot trust per type,
    the biases, your numbers.
+
+**Advanced tracking (2026-09-11, Antho: "I hardly need or want half of what's in there").** The
+page reads ONE preference, `SettingsRepository.coachAdvanced` (Settings → Coach → Advanced
+tracking, a `ToggleRow`, default OFF). Off, the column is the account and `NEXT` alone: the calls,
+what became of them, and the one forward line. On, `SIGNALS`, `BLOCK`, `WHAT IT READS` and
+`LEARNED` draw between and after them as before. It is a VIEW preference: the weekly pass, the
+inputs it reads and auto-apply are untouched, and the switch rides its own collector in
+`CoachViewModel.refreshWhileVisible` rather than `EngineInputSignals`. The `WHERE_YOU_STAND` deep
+link opens at the top of the account while it is off. **The page closes on the switch** (`coachTracking`,
+`CoachScreen.kt`): off, one muted line names what is off and a `Show advanced tracking →` action
+flips the preference in place so the page grows under the tap; on, the same rung reads `Hide`. A
+Settings switch nobody has seen is a feature nobody has, so the page is its first home and
+Settings → Coach its second. The action is onBg, not accent (§14). `coach-ledger-basic.png` pins
+the default; every other Coach golden is the advanced page.
 
 **The spine** (`Modifier.ledgerSpine`, `CoachUi.kt`) is the one line on the page and it is DATA: the
 time axis, drawn at x=10dp inside the gutter so all four regions keep the one 24dp content column.

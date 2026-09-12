@@ -373,6 +373,9 @@ object PreferenceKeys {
     /** Coach mode (auto-coach Phase 4): "suggest" (default) | "auto" (earned auto-apply). */
     val COACH_MODE = stringPreferencesKey("coach_mode")
 
+    /** Whether the Coach page shows its readings (signals, block, inputs, learned). Off = calls only. */
+    val COACH_ADVANCED = booleanPreferencesKey("coach_advanced")
+
     /** Whether the one-time "how your coach learns" intro card has been dismissed (CO6). */
     val COACH_BRIEF_INTRO_SEEN = booleanPreferencesKey("coach_brief_intro_seen")
 

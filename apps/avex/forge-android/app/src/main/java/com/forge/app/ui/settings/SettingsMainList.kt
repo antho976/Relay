@@ -327,7 +327,7 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
         !s.coachEnabled -> "Off"
         s.coachMode == "auto" -> "On · earning auto-apply"
         else -> "On · suggest mode"
-    }
+    } + if (s.coachEnabled && s.coachAdvanced) " · advanced tracking" else ""
     SettingsPage.Security -> "App lock ${if (s.appLockEnabled) "on" else "off"} · gallery ${if (s.galleryLockEnabled) "on" else "off"}"
     SettingsPage.Recovery -> "Health Connect · sleep & resting HR"
     SettingsPage.ExercisePrefs -> "${s.liked.size} liked · ${s.disliked.size} disliked"

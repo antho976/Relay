@@ -981,6 +981,15 @@ class SettingsRepository @Inject constructor(
     suspend fun setCoachMode(mode: String) =
         context.forgePreferences.edit { it[PreferenceKeys.COACH_MODE] = mode }
 
+    /**
+     * Advanced tracking on the Coach page. Off (default) the page is the account alone: this
+     * week's calls and the record. On, it also shows the readings the calls were made from — the
+     * signals, the block, the inputs with their charts, and what the coach has learned.
+     */
+    val coachAdvanced: Flow<Boolean> = pref { it[PreferenceKeys.COACH_ADVANCED] ?: false }
+    suspend fun setCoachAdvanced(v: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.COACH_ADVANCED] = v }
+
     /** ISO week id of the last Week Brief the user opened/dismissed — gates the Overview banner. */
     val lastSeenCoachWeekId: Flow<String> = pref { it[PreferenceKeys.LAST_SEEN_COACH_WEEK_ID] ?: "" }
     suspend fun setLastSeenCoachWeekId(weekId: String) =
