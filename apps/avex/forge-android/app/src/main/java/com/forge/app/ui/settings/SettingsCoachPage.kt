@@ -33,8 +33,9 @@ import com.forge.app.ui.common.clickableLabeled
  * Coach settings — configuration ONLY. The coach's content (this week's brief, the trust ledger,
  * the week-by-week record with undo) lives on the Coach tab (Now/Journey lenses); mirroring it
  * here made a second coach page. What configures the coach: the master switch, the
- * suggest-vs-auto mode, and an at-a-glance of the input feeds it needs (a silent Health Connect
- * feed taps through to Wearable, where it's switched on).
+ * suggest-vs-auto mode, the advanced-tracking switch that decides how much of the Coach page is
+ * drawn, and an at-a-glance of the input feeds it needs (a silent Health Connect feed taps through
+ * to Wearable, where it's switched on).
  */
 @Composable
 internal fun CoachSettingsPage(
@@ -99,6 +100,17 @@ internal fun CoachSettingsPage(
                     )
                 }
             }
+
+            // How much of the Coach page to draw. Off, the page is the account alone: the calls and
+            // what became of them, which is all most people open it for. On, the readings behind
+            // the calls come back: signals, the block, the inputs with their charts, and what the
+            // coach has learned. Nothing about the coach's behaviour changes either way.
+            SettingsSectionHeader("Coach page")
+            ToggleRow(
+                "Advanced tracking",
+                "Also show signals, block, inputs and what it has learned.",
+                state.coachAdvanced
+            ) { vm.setCoachAdvanced(it) }
         }
         Spacer(Modifier.height(24.dp))
     }

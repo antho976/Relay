@@ -95,6 +95,8 @@ data class SettingsUiState(
     val programEmphasis: String = "balanced",
     /** Coach mode (auto-coach Phase 4): "suggest" | "auto" (earned auto-apply). */
     val coachMode: String = "suggest",
+    /** Advanced tracking: the Coach page shows its readings, not just its calls. */
+    val coachAdvanced: Boolean = false,
     /** "Go with the flow": no fixed plan; the home leads with freestyle logging instead of day cards. */
     val freestyleMode: Boolean = false,
     /** Whether the Coach feature is surfaced (tab + banners). Off hides it until re-enabled. */
@@ -176,6 +178,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { withContext(NonCancellable) { block() } }
 
     fun setCoachMode(mode: String) = write { settingsRepo.setCoachMode(mode) }
+    fun setCoachAdvanced(v: Boolean) = write { settingsRepo.setCoachAdvanced(v) }
 
     // ─── Day-aware scheduling (weekly plan vs sequence) ───────────────────────
     val scheduleMode: StateFlow<String> = settingsRepo.scheduleMode
@@ -296,6 +299,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(maxDbWeightLb = v)
     }.combine(settingsRepo.coachMode) { s, v ->
         s.copy(coachMode = v)
+    }.combine(settingsRepo.coachAdvanced) { s, v ->
+        s.copy(coachAdvanced = v)
     }.combine(settingsRepo.accentColorHex) { s, v ->
         s.copy(accentColorHex = v)
     }.combine(settingsRepo.accentEnabled) { s, v ->

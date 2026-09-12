@@ -79,6 +79,11 @@ enum class CoachEntryPoint { ACCOUNT, WHERE_YOU_STAND }
  * from and its own Apply; then every week before it, stamped with what became of it; then the
  * live reading the coach works from; then the longer arcs; then the standing balance of what it
  * has learned. One column, no lenses, nothing folded behind a tap.
+ *
+ * How much of that column is drawn is the ONE preference the page reads (Settings → Coach →
+ * Advanced tracking). Off, which is the default, it is the account and what is next: the calls
+ * and what became of them, which is all most people open it for. On, the readings behind the
+ * calls come back. The coach itself behaves the same either way.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -105,9 +110,10 @@ fun CoachScreen(
     val now = remember(state.brief, state.timeline) { System.currentTimeMillis() }
 
     // A deep link that used to open the Signals lens scrolls to the reading it meant, once, after
-    // the first read lands. Everything else opens at the top of the account.
-    LaunchedEffect(state.loading, entryPoint) {
-        if (!state.loading && entryPoint == CoachEntryPoint.WHERE_YOU_STAND) {
+    // the first read lands. Everything else opens at the top of the account, and so does that link
+    // while advanced tracking is off: there is no reading below the account to land on.
+    LaunchedEffect(state.loading, state.advanced, entryPoint) {
+        if (!state.loading && state.advanced && entryPoint == CoachEntryPoint.WHERE_YOU_STAND) {
             listState.scrollToItem(accountItemCount(state))
         }
     }
@@ -219,25 +225,29 @@ internal fun CoachLedger(
             onUndo = actions.undo,
             onApplyAll = actions.applyAll
         )
-        coachStand(
-            state = state,
-            weightUnit = weightUnit,
-            c = c,
-            onConnectHealth = actions.connectHealth
-        )
-        coachBlock(
-            state = state,
-            c = c,
-            onStartBlock = actions.startBlock,
-            onEndBlock = actions.endBlock
-        )
-        coachInputs(
-            state = state,
-            c = c,
-            onConnectHealth = actions.connectHealth
-        )
+        // The readings behind the calls draw only under advanced tracking. What is NEXT stays on
+        // every account: it is the one line that turns a quiet page forward, and it is short.
+        if (state.advanced) {
+            coachStand(
+                state = state,
+                weightUnit = weightUnit,
+                c = c,
+                onConnectHealth = actions.connectHealth
+            )
+            coachBlock(
+                state = state,
+                c = c,
+                onStartBlock = actions.startBlock,
+                onEndBlock = actions.endBlock
+            )
+            coachInputs(
+                state = state,
+                c = c,
+                onConnectHealth = actions.connectHealth
+            )
+        }
         coachUnlocks(state = state, c = c)
-        coachLearned(state = state, c = c)
+        if (state.advanced) coachLearned(state = state, c = c)
     }
 }
 

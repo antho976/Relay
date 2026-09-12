@@ -64,6 +64,11 @@ class CoachViewModel @Inject constructor(
         val loading: Boolean = true,
         /** Freestyle has no plan to coach against; the page explains itself and loads nothing. */
         val freestyle: Boolean = false,
+        /**
+         * Advanced tracking (Settings → Coach). Off, the page is the account and what is next;
+         * on, the readings behind the calls are drawn too: signals, block, inputs, learned.
+         */
+        val advanced: Boolean = false,
         val brief: CoachBrief? = null,
         val watch: CoachWatch? = null,
         val timeline: CoachTimeline? = null,
@@ -95,7 +100,10 @@ class CoachViewModel @Inject constructor(
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    suspend fun refreshWhileVisible() {
+    suspend fun refreshWhileVisible() = kotlinx.coroutines.coroutineScope {
+        // The advanced-tracking switch is a view preference, not an engine input: it flips which
+        // regions the page draws without re-running the weekly pass, so it rides its own collector.
+        launch { settingsRepo.coachAdvanced.collect { v -> _state.update { it.copy(advanced = v) } } }
         inputSignals.changes().collect { load() }
     }
 
@@ -104,7 +112,7 @@ class CoachViewModel @Inject constructor(
         // reached anyway, don't run the weekly pass against an empty program (it would write a
         // coach_pass row and could auto-apply).
         if (settingsRepo.freestyleMode.first()) {
-            _state.value = UiState(loading = false, freestyle = true)
+            _state.value = UiState(loading = false, freestyle = true, advanced = _state.value.advanced)
             return@withContext
         }
         val brief = runCatching { coachRepo.brief() }.getOrNull()
