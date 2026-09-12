@@ -79,7 +79,7 @@ class ProgramGeneratorTest {
         // pickBias + the non-loadable STRENGTH penalty keep them out. Statistical over many seeds.
         val n = 80
         val amrapLeads = (0 until n).count { s ->
-            val lead = ProgramGenerator.generate(GenerationParams(3), mwm, emptySet(), emptySet(), seed = s.toLong())
+            val lead = ProgramGenerator.generate(GenerationParams(5), mwm, emptySet(), emptySet(), seed = s.toLong())
                 .first { it.key == "push" }.exercises.first()
             ExerciseLibrary.byId(lead.libId)!!.defaultReps == "AMRAP"
         }
@@ -93,7 +93,7 @@ class ProgramGeneratorTest {
         // only real overload path.
         fun stackLeads(dbMaxLb: Double?): Int = (0 until 80).count { s ->
             val lead = ProgramGenerator.generate(
-                GenerationParams(3, dbMaxLb = dbMaxLb), mwm, emptySet(), emptySet(), seed = s.toLong()
+                GenerationParams(5, dbMaxLb = dbMaxLb), mwm, emptySet(), emptySet(), seed = s.toLong()
             ).first { it.key == "push" }.exercises.first()
             val u = ExerciseLibrary.byId(lead.libId)!!.unit
             u == ExerciseUnit.WEIGHT || u == ExerciseUnit.PLATES
@@ -108,7 +108,7 @@ class ProgramGeneratorTest {
         // A movement the coach tried that failed (CoachGenBias.avoid) is softly steered around.
         fun benchAppears(avoid: Set<String>): Int = (0 until 80).count { s ->
             ProgramGenerator.generate(
-                GenerationParams(3, avoid = avoid), mwm, emptySet(), emptySet(), seed = s.toLong()
+                GenerationParams(5, avoid = avoid), mwm, emptySet(), emptySet(), seed = s.toLong()
             ).first { it.key == "push" }.exercises.any { it.libId == "db-bench-press" }
         }
         val avoided = benchAppears(setOf("db-bench-press"))
@@ -119,7 +119,7 @@ class ProgramGeneratorTest {
     @Test
     fun volumeBiasFlowsThroughToGeneratedSets() {
         fun chestSets(bias: Map<MuscleGroup, Int>) = ProgramGenerator.generate(
-            GenerationParams(3, volumeBias = bias), mwm, emptySet(), emptySet(), seed = 4L
+            GenerationParams(5, volumeBias = bias), mwm, emptySet(), emptySet(), seed = 4L
         ).flatMap { it.exercises }
             .filter { ExerciseLibrary.byId(it.libId)?.muscle == MuscleGroup.CHEST }
             .sumOf { it.sets }
@@ -135,7 +135,7 @@ class ProgramGeneratorTest {
         var innerThigh = 0
         var legExtension = 0
         repeat(100) { s ->
-            ProgramGenerator.generate(GenerationParams(3, frozenIds = frozen), mwm, emptySet(), emptySet(), seed = s.toLong())
+            ProgramGenerator.generate(GenerationParams(5, frozenIds = frozen), mwm, emptySet(), emptySet(), seed = s.toLong())
                 .flatMap { it.exercises }.forEach {
                     when (it.libId) {
                         "mwm-inner-thigh" -> innerThigh++
@@ -165,7 +165,7 @@ class ProgramGeneratorTest {
 
     @Test
     fun dislikedExcluded() {
-        val days = ProgramGenerator.generate(GenerationParams(3), emptySet(), emptySet(), setOf("db-bench-press"), seed = 7L)
+        val days = ProgramGenerator.generate(GenerationParams(5), emptySet(), emptySet(), setOf("db-bench-press"), seed = 7L)
         assertTrue(days.flatMap { it.exercises }.none { it.libId == "db-bench-press" })
     }
 
@@ -190,7 +190,7 @@ class ProgramGeneratorTest {
     @Test
     fun dumbbellsAndBench_fillsBackAndRearDelts() {
         val available = setOf(Equipment.DUMBBELLS, Equipment.BENCH)
-        val days = ProgramGenerator.generate(GenerationParams(3), available, emptySet(), emptySet(), seed = 5L)
+        val days = ProgramGenerator.generate(GenerationParams(5), available, emptySet(), emptySet(), seed = 5L)
         val muscles = days.flatMap { it.exercises }.mapNotNull { ExerciseLibrary.byId(it.libId)?.muscle }.toSet()
         assertTrue("BACK should be fillable with dumbbells+bench", MuscleGroup.BACK in muscles)
         assertTrue("REAR_DELTS should be fillable with dumbbells+bench", MuscleGroup.REAR_DELTS in muscles)
@@ -199,7 +199,7 @@ class ProgramGeneratorTest {
     @Test
     fun liftDaysHaveFiveToSevenExercises() {
         // Phase 4 tuning: each session should be a "standard" 5-7 movements (with full equipment).
-        val days = ProgramGenerator.generate(GenerationParams(3), emptySet(), emptySet(), emptySet(), seed = 11L)
+        val days = ProgramGenerator.generate(GenerationParams(5), emptySet(), emptySet(), emptySet(), seed = 11L)
         days.forEach { d ->
             assertTrue("${d.key} has ${d.exercises.size} exercises", d.exercises.size in 5..7)
         }
@@ -225,7 +225,7 @@ class ProgramGeneratorTest {
         val n = 60
         var compound = 0
         repeat(n) { s ->
-            val days = ProgramGenerator.generate(GenerationParams(3), emptySet(), emptySet(), emptySet(), seed = s.toLong())
+            val days = ProgramGenerator.generate(GenerationParams(5), emptySet(), emptySet(), emptySet(), seed = s.toLong())
             val lead = days.first { it.key == "push" }.exercises.first()
             if (ExerciseTag.COMPOUND in ExerciseLibrary.byId(lead.libId)!!.tags) compound++
         }
@@ -239,7 +239,7 @@ class ProgramGeneratorTest {
         val n = 60
         var bilateral = 0
         repeat(n) { s ->
-            val days = ProgramGenerator.generate(GenerationParams(3), emptySet(), emptySet(), emptySet(), seed = s.toLong())
+            val days = ProgramGenerator.generate(GenerationParams(5), emptySet(), emptySet(), emptySet(), seed = s.toLong())
             val lead = days.first { it.key == "legs" }.exercises.first()
             if (!ExerciseLibrary.byId(lead.libId)!!.defaultReps.contains("/")) bilateral++
         }
@@ -250,7 +250,7 @@ class ProgramGeneratorTest {
     fun emphasisAddsVolumeToTheFocusedMuscles() {
         // Phase 4: emphasis was a no-op before. Arms+shoulders emphasis should raise weekly bicep volume.
         fun weeklyBiceps(emphasis: String): Int =
-            ProgramGenerator.generate(GenerationParams(3, emphasis = emphasis), emptySet(), emptySet(), emptySet(), seed = 4L)
+            ProgramGenerator.generate(GenerationParams(5, emphasis = emphasis), emptySet(), emptySet(), emptySet(), seed = 4L)
                 .flatMap { it.exercises }
                 .filter { ExerciseLibrary.byId(it.libId)?.muscle == MuscleGroup.BICEPS }
                 .sumOf { it.sets }
@@ -261,7 +261,7 @@ class ProgramGeneratorTest {
     fun goalShiftsRepRanges() {
         // Phase 2: same seed → same exercises, but the goal reshapes numeric rep ranges.
         fun reps(goal: String) = ProgramGenerator.generate(
-            GenerationParams(3, goal = goal), emptySet(), emptySet(), emptySet(), seed = 8L
+            GenerationParams(5, goal = goal), emptySet(), emptySet(), emptySet(), seed = 8L
         ).flatMap { it.exercises }.map { it.reps }.toSet()
         val strong = reps("get_stronger")
         val build = reps("build_muscle")
@@ -273,7 +273,7 @@ class ProgramGeneratorTest {
     fun experienceScalesVolume() {
         // Phase 2: beginners train less total volume than advanced lifters.
         fun totalSets(level: String) = ProgramGenerator.generate(
-            GenerationParams(3, experience = level), emptySet(), emptySet(), emptySet(), seed = 8L
+            GenerationParams(5, experience = level), emptySet(), emptySet(), emptySet(), seed = 8L
         ).flatMap { it.exercises }.sumOf { it.sets }
         assertTrue("beginner volume should be below advanced", totalSets("beginner") < totalSets("advanced"))
     }
@@ -282,7 +282,7 @@ class ProgramGeneratorTest {
     fun beginnerAvoidsAdvancedMovements() {
         // Phase 2: with alternatives available, a beginner is never handed an ADVANCED lift.
         val days = ProgramGenerator.generate(
-            GenerationParams(3, experience = "beginner"), emptySet(), emptySet(), emptySet(), seed = 8L
+            GenerationParams(5, experience = "beginner"), emptySet(), emptySet(), emptySet(), seed = 8L
         )
         val anyAdvanced = days.flatMap { it.exercises }
             .any { ExerciseLibrary.byId(it.libId)?.difficulty == Difficulty.ADVANCED }
@@ -298,11 +298,11 @@ class ProgramGeneratorTest {
         val n = 40
         repeat(n) { s ->
             val flagged = ProgramGenerator.generate(
-                GenerationParams(3, problemAreas = setOf(ProblemArea.LOWER_BACK)),
+                GenerationParams(5, problemAreas = setOf(ProblemArea.LOWER_BACK)),
                 emptySet(), emptySet(), emptySet(), seed = s.toLong()
             ).flatMap { it.exercises }.count { it.libId in backLoaders }
             val unflagged = ProgramGenerator.generate(
-                GenerationParams(3), emptySet(), emptySet(), emptySet(), seed = s.toLong()
+                GenerationParams(5), emptySet(), emptySet(), emptySet(), seed = s.toLong()
             ).flatMap { it.exercises }.count { it.libId in backLoaders }
             if (flagged <= unflagged) avoidedCount++
         }
@@ -313,7 +313,7 @@ class ProgramGeneratorTest {
     fun priorityMuscleAddsVolume() {
         // Phase 3: granular priority adds volume to the chosen muscle.
         fun chestSets(priority: Set<MuscleGroup>) = ProgramGenerator.generate(
-            GenerationParams(3, priorityMuscles = priority), emptySet(), emptySet(), emptySet(), seed = 4L
+            GenerationParams(5, priorityMuscles = priority), emptySet(), emptySet(), emptySet(), seed = 4L
         ).flatMap { it.exercises }.filter { ExerciseLibrary.byId(it.libId)?.muscle == MuscleGroup.CHEST }.sumOf { it.sets }
         assertTrue("chest priority should raise chest volume",
             chestSets(setOf(MuscleGroup.CHEST)) > chestSets(emptySet()))
@@ -324,7 +324,7 @@ class ProgramGeneratorTest {
         // Phase 3: a pinned exercise is kept across seeds when its muscle is trained + equipment allows.
         repeat(20) { s ->
             val days = ProgramGenerator.generate(
-                GenerationParams(3, pinned = setOf("goblet-squat")),
+                GenerationParams(5, pinned = setOf("goblet-squat")),
                 emptySet(), emptySet(), emptySet(), seed = s.toLong()
             )
             assertTrue("goblet-squat should be pinned in (seed $s)",
@@ -418,7 +418,7 @@ class ProgramGeneratorTest {
         // Regression: deload floored at MIN_SETS, so a beginner's already-light accessory muscles
         // (e.g. calves, one PUMP slot) didn't drop at all. They should now.
         fun calfSets(deload: Boolean) = ProgramGenerator.generate(
-            GenerationParams(3, experience = "beginner", deload = deload),
+            GenerationParams(5, experience = "beginner", deload = deload),
             emptySet(), emptySet(), emptySet(), seed = 8L
         ).flatMap { it.exercises }
             .filter { ExerciseLibrary.byId(it.libId)?.muscle == MuscleGroup.CALVES }

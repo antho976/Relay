@@ -103,19 +103,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # The IMMUTABLE commit, not the ref that pointed at it when the run was queued.
-          #
-          # `github.ref` on a pull_request is `refs/pull/N/merge`, a transient ref GitHub deletes
-          # when the PR merges or closes. A Verify that started late — because Guard finished first
-          # and the merge happened in between — checked out a ref that no longer existed and failed
-          # before compiling anything, which is exactly how two PRs reached main without their tests
-          # ever running against them. `github.event.pull_request.merge_commit_sha` is the same tree
-          # by SHA and cannot be deleted out from under a queued job; `github.sha` covers every other
-          # trigger, and `inputs.ref` still wins for a release call that names a tag.
-          ref: >-
-            ${{ inputs.ref
-              || github.event.pull_request.merge_commit_sha
-              || github.sha }}
+          # Pin the RUN's immutable commit. On pull_request this is its synthetic merge commit.
+          # The PR object's merge_commit_sha can still name the previous revision during a push:
+          # run 34670747736 executed a new workflow over the old PR tree and missed its new files.
+          # inputs.ref still wins for a release workflow call that explicitly selects a tag.
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Verify the checkout contains this PR revision
+        if: github.event_name == 'pull_request'
+        env:
+          EXPECTED_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/verify_ci_revision.py "$EXPECTED_PR_HEAD"
 
       - name: Validate Gradle wrapper checksum
         # The wrapper jar is a committed BINARY that every later step executes. Without this, a
@@ -162,6 +160,11 @@ jobs:
         # A reporter that can lie about a failure needs its own test, and this one costs a second.
         run: python3 .github/scripts/test_summary_test.py
 
+      - name: CI helper self checks
+        run: |
+          python3 .github/scripts/emulator_ready_test.py
+          python3 .github/scripts/verify_ci_revision_test.py
+
   verify:
     name: Verify (JVM)
     needs: guard
@@ -170,19 +173,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # The IMMUTABLE commit, not the ref that pointed at it when the run was queued.
-          #
-          # `github.ref` on a pull_request is `refs/pull/N/merge`, a transient ref GitHub deletes
-          # when the PR merges or closes. A Verify that started late — because Guard finished first
-          # and the merge happened in between — checked out a ref that no longer existed and failed
-          # before compiling anything, which is exactly how two PRs reached main without their tests
-          # ever running against them. `github.event.pull_request.merge_commit_sha` is the same tree
-          # by SHA and cannot be deleted out from under a queued job; `github.sha` covers every other
-          # trigger, and `inputs.ref` still wins for a release call that names a tag.
-          ref: >-
-            ${{ inputs.ref
-              || github.event.pull_request.merge_commit_sha
-              || github.sha }}
+          # Pin the RUN's immutable commit. On pull_request this is its synthetic merge commit.
+          # The PR object's merge_commit_sha can still name the previous revision during a push:
+          # run 34670747736 executed a new workflow over the old PR tree and missed its new files.
+          # inputs.ref still wins for a release workflow call that explicitly selects a tag.
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Set up JDK 21
         uses: actions/setup-java@v6
@@ -390,19 +385,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # The IMMUTABLE commit, not the ref that pointed at it when the run was queued.
-          #
-          # `github.ref` on a pull_request is `refs/pull/N/merge`, a transient ref GitHub deletes
-          # when the PR merges or closes. A Verify that started late — because Guard finished first
-          # and the merge happened in between — checked out a ref that no longer existed and failed
-          # before compiling anything, which is exactly how two PRs reached main without their tests
-          # ever running against them. `github.event.pull_request.merge_commit_sha` is the same tree
-          # by SHA and cannot be deleted out from under a queued job; `github.sha` covers every other
-          # trigger, and `inputs.ref` still wins for a release call that names a tag.
-          ref: >-
-            ${{ inputs.ref
-              || github.event.pull_request.merge_commit_sha
-              || github.sha }}
+          # Pin the RUN's immutable commit. On pull_request this is its synthetic merge commit.
+          # The PR object's merge_commit_sha can still name the previous revision during a push:
+          # run 34670747736 executed a new workflow over the old PR tree and missed its new files.
+          # inputs.ref still wins for a release workflow call that explicitly selects a tag.
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Set up JDK 21
         uses: actions/setup-java@v6

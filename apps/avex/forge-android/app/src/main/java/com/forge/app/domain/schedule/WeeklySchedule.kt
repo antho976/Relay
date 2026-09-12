@@ -26,9 +26,20 @@ object WeeklySchedule {
     fun encode(slots: List<String>): String =
         (0 until SLOTS).joinToString(",") { slots.getOrElse(it) { "" } }
 
-    /** A friendly default when the user hasn't set a schedule yet: program days on the first weekdays. */
-    fun defaultFor(dayKeys: List<String>): List<String> =
-        (0 until SLOTS).map { dayKeys.getOrElse(it) { "" } }
+    /** Spread sessions across the week, with intervening rest days for full-body plans. */
+    fun defaultFor(dayKeys: List<String>): List<String> {
+        val positions = when (dayKeys.size) {
+            1 -> listOf(0)
+            2 -> listOf(0, 3)
+            3 -> listOf(0, 2, 4)
+            4 -> listOf(0, 1, 3, 4)
+            5 -> listOf(0, 1, 2, 4, 5)
+            else -> (0 until minOf(dayKeys.size, SLOTS)).toList()
+        }
+        val result = MutableList(SLOTS) { "" }
+        positions.forEachIndexed { i, position -> result[position] = dayKeys[i] }
+        return result
+    }
 
     /**
      * The "next up" program day, or null when there is no resolvable day (empty program). In weekday
@@ -49,9 +60,10 @@ object WeeklySchedule {
         schedule: List<String>,
         dayKeys: List<String>,
         lastFinishedDayKey: String?,
-        trainedTodayKeys: Set<String>
+        trainedTodayKeys: Set<String>,
+        recoveryDays: Map<String, Int> = emptyMap()
     ): String? = resolveNextUpWithOffset(
-        mode, todayIndex, schedule, dayKeys, lastFinishedDayKey, trainedTodayKeys
+        mode, todayIndex, schedule, dayKeys, lastFinishedDayKey, trainedTodayKeys, recoveryDays
     )?.dayKey
 
     /**
@@ -70,11 +82,12 @@ object WeeklySchedule {
         schedule: List<String>,
         dayKeys: List<String>,
         lastFinishedDayKey: String?,
-        trainedTodayKeys: Set<String>
+        trainedTodayKeys: Set<String>,
+        recoveryDays: Map<String, Int> = emptyMap()
     ): NextUp? {
         if (dayKeys.isEmpty()) return null
         if (mode == MODE_WEEKDAY) {
-            nextScheduled(todayIndex, schedule, dayKeys.toSet(), trainedTodayKeys)?.let { return it }
+            nextScheduled(todayIndex, schedule, dayKeys.toSet(), trainedTodayKeys, recoveryDays)?.let { return it }
             // Nothing in the whole week resolves. The sequence guess is still offered — a user is
             // never left without a suggestion — but it is labelled for what it is, so a caller that
             // needs a DATE can refuse it and one that only needs a suggestion can take it.
@@ -84,8 +97,9 @@ object WeeklySchedule {
                 placement = Placement.UNSCHEDULED
             )
         }
-        // Sequence mode has no calendar at all: "next" is simply what to do now.
-        return NextUp(sequenceNextUp(dayKeys, lastFinishedDayKey), daysAhead = 0)
+        val key = sequenceNextUp(dayKeys, lastFinishedDayKey)
+        val wait = maxOf(recoveryDays[key] ?: 0, if (trainedTodayKeys.isNotEmpty()) 1 else 0)
+        return NextUp(key, daysAhead = wait, placement = if (wait > 0) Placement.UPCOMING else Placement.TODAY)
     }
 
     /**
@@ -132,13 +146,15 @@ object WeeklySchedule {
         todayIndex: Int,
         schedule: List<String>,
         validKeys: Set<String>,
-        trainedTodayKeys: Set<String>
+        trainedTodayKeys: Set<String>,
+        recoveryDays: Map<String, Int> = emptyMap()
     ): NextUp? {
         for (i in 0 until SLOTS) {
             val weekday = (todayIndex + i) % SLOTS
             val key = schedule.getOrElse(weekday) { "" }
             if (key.isBlank() || key !in validKeys) continue
-            if (i == 0 && key in trainedTodayKeys) continue
+            if (i == 0 && trainedTodayKeys.isNotEmpty()) continue
+            if (i < (recoveryDays[key] ?: 0)) continue
             return NextUp(key, daysAhead = i, placement = if (i == 0) Placement.TODAY else Placement.UPCOMING)
         }
         return null

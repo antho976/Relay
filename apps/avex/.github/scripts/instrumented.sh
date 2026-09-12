@@ -21,6 +21,8 @@ set -euo pipefail
 # was supposed to be watching.
 APP_ID=com.quietsoftware.avex
 LOGCAT=smoke-logcat.txt
+source "$(dirname "${BASH_SOURCE[0]}")/emulator_ready.sh"
+trap 'status=$?; if ((status != 0)); then capture_emulator_failure; fi; exit "$status"' EXIT
 
 echo "::group::Room migration test"
 # Guarded rather than bare so a failure can say WHAT failed. Under `set -e` a bare call aborts the
@@ -88,7 +90,7 @@ if [ -n "$apksigner" ]; then
   echo "Signature present."
 fi
 
-adb install -r -d "$apk"
+install_release_apk "$apk"
 echo "::endgroup::"
 
 echo "::group::Cold-launch the release build"

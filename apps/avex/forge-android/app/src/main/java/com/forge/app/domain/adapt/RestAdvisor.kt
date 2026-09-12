@@ -36,10 +36,11 @@ data class RestPrescription(val seconds: Int, val reason: String)
  * deterministic functions of their inputs.
  *
  * Base prescription comes from [SessionEstimate.restSeconds] (movement-role + rep-heaviness
- * aware) plus the existing +30s-after-brutal rule; on top of that, a per-role personal
+ * aware) with easy/hard/brutal effort adjustments. A per-role personal
  * correction factor is learned from realized rest behavior ([RestEvent]s) — the median of
  * realized ÷ base, clamped to ±[AdaptThresholds.maxRestAdjust], applied only once a role
- * has ≥ [AdaptThresholds.minRestSamples] qualified samples. Realized is compared against
+ * has ≥ [AdaptThresholds.minRestSamples] qualified samples. Only shortening is used in prescriptions;
+ * completion intervals cannot establish a need for longer rest. Realized is compared against
  * the *base*, not the (possibly already-tuned) planned seconds, so the factor converges
  * instead of oscillating back to neutral once the user follows the tuned timer.
  *
@@ -47,6 +48,19 @@ data class RestPrescription(val seconds: Int, val reason: String)
  * signal to second-guess.
  */
 object RestAdvisor {
+
+    /** Prefer the most specific observation, without treating a missing rating as failure. */
+    fun effortForSet(rpe: Double?, tag: String?, exerciseEffort: EffortRating?): EffortRating? = when {
+        rpe != null && rpe.isFinite() && rpe in 6.0..10.0 -> when {
+            rpe >= 10.0 -> EffortRating.BRUTAL
+            rpe >= 9.0 -> EffortRating.HARD
+            rpe <= 7.0 -> EffortRating.EASY
+            else -> EffortRating.JUST_RIGHT
+        }
+        tag == "hard" -> EffortRating.HARD
+        tag == "easy" -> EffortRating.EASY
+        else -> exerciseEffort
+    }
 
     fun movementRole(plan: ExercisePlan): MovementRole =
         if (SessionEstimate.isCompound(plan)) MovementRole.COMPOUND else MovementRole.ISOLATION
@@ -69,7 +83,7 @@ object RestAdvisor {
             role = movementRole(plan),
             // The factor is realized ÷ base, so this base MUST be the SAME one [restSeconds] later
             // applies the factor to (the user's Session-settings override), or the learned correction
-            // mis-scales every prescription for anyone whose base isn't the canonical 180/90.
+            // mis-scales every prescription for anyone whose base isn't the canonical 120/90.
             baseSeconds = SessionEstimate.restSeconds(plan, compoundBase, isolationBase),
             realizedSeconds = e.realizedSeconds
         )
@@ -103,7 +117,10 @@ object RestAdvisor {
         val roleLabel = if (role == MovementRole.COMPOUND) "compound" else "isolation"
         val parts = mutableListOf("$roleLabel base ${mmss(base)}")
 
-        val factor = tuning.factors[role]
+        // Completion-to-completion intervals include the next set and equipment setup.
+        // They may support a shorter preference, but cannot prove a need for longer recovery.
+        // Only reported effort may extend the prescription.
+        val factor = tuning.factors[role]?.coerceAtMost(1.0)
             ?.takeIf { (tuning.sampleCounts[role] ?: 0) >= t.minRestSamples }
         var seconds = base
         if (factor != null) {
@@ -116,6 +133,13 @@ object RestAdvisor {
                 val pctPart = if (pct < 0) "−${-pct}% to match your usual rest" else "+$pct% to match your usual rest"
                 parts += "$pctPart (from $n rest${if (n == 1) "" else "s"} logged)"
             }
+        }
+        if (lastEffort == EffortRating.EASY) {
+            seconds = (seconds - 30).coerceAtLeast(60)
+            parts += "−30s after an easy set"
+        } else if (lastEffort == EffortRating.HARD) {
+            seconds += 15
+            parts += "+15s after a hard set"
         }
         if (lastEffort == EffortRating.BRUTAL) {
             seconds += t.brutalRestBonusSeconds

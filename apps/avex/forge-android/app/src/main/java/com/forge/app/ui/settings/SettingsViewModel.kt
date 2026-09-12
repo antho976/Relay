@@ -38,7 +38,7 @@ data class SettingsUiState(
     /** Hold the screen awake during an active session (GYMAP-74). Default on. */
     val keepScreenOn: Boolean = true,
     /** Default rest bases (seconds) per movement type — the Session-settings rest override. */
-    val restCompoundSeconds: Int = 180,
+    val restCompoundSeconds: Int = com.forge.app.program.SessionEstimate.COMPOUND_REST,
     val restIsolationSeconds: Int = 90,
     val quietHoursEnabled: Boolean = false,
     val quietHoursSchedule: com.forge.app.domain.notify.QuietHoursSchedule =

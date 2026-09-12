@@ -13,7 +13,7 @@ import org.junit.Test
 
 /**
  * System 2 of the adaptation engine. "10-12"/"12-15" rep ranges keep SessionEstimate's
- * heavy-reps bonus out of the way, so the canonical bases here are 180s (compound) and
+ * heavy-reps bonus out of the way, so the canonical bases here are 120s (compound) and
  * 90s (isolation).
  */
 class RestAdvisorTest {
@@ -30,7 +30,7 @@ class RestAdvisorTest {
 
     private fun event(exerciseId: String, realized: Int) = RestEvent(
         sessionId = 1, exerciseId = exerciseId, setIndex = 0,
-        plannedSeconds = 180, realizedSeconds = realized,
+        plannedSeconds = 120, realizedSeconds = realized,
         endedBy = "next_set", secondsAdded = 0, loggedAt = 0
     )
 
@@ -50,8 +50,8 @@ class RestAdvisorTest {
     @Test
     fun coldStart_noSamples_usesCanonicalBase() {
         val p = RestAdvisor.restSeconds(compoundPlan, lastEffort = null, overrideSeconds = null)
-        assertEquals(180, p.seconds)
-        assertTrue(p.reason.contains("compound base 3:00"))
+        assertEquals(120, p.seconds)
+        assertTrue(p.reason.contains("compound base 2:00"))
     }
 
     @Test
@@ -64,7 +64,7 @@ class RestAdvisorTest {
     @Test
     fun brutalSetAddsTheBonus_withReason() {
         val p = RestAdvisor.restSeconds(compoundPlan, EffortRating.BRUTAL, null)
-        assertEquals(210, p.seconds)
+        assertEquals(150, p.seconds)
         assertTrue(p.reason.contains("+30s after a brutal set"))
     }
 
@@ -74,32 +74,32 @@ class RestAdvisorTest {
     fun tooFewSamples_staysUntuned() {
         // 7 samples (one below the gate) of strong shortening must change nothing.
         val tuning = tuningFor(List(7) { event("ua1", 90) })
-        assertEquals(180, RestAdvisor.restSeconds(compoundPlan, null, null, tuning).seconds)
+        assertEquals(120, RestAdvisor.restSeconds(compoundPlan, null, null, tuning).seconds)
     }
 
     @Test
     fun enoughSamples_tunesTowardTheUsersPace() {
-        // 8 samples at 135s vs a 180s base → factor 0.75 → 135s, with the % in the reason.
-        val tuning = tuningFor(List(8) { event("ua1", 135) })
+        // 8 samples at 90s vs a 120s base → factor 0.75 → 90s, with the % in the reason.
+        val tuning = tuningFor(List(8) { event("ua1", 90) })
         val p = RestAdvisor.restSeconds(compoundPlan, null, null, tuning)
-        assertEquals(135, p.seconds)
+        assertEquals(90, p.seconds)
         assertTrue(p.reason.contains("−25%"))
         assertTrue(p.reason.contains("usual rest"))
     }
 
     @Test
     fun adjustmentIsClampedToTheMaxBand() {
-        // Realized 45s vs 180s base = ratio 0.25 — clamps to 0.60 → 108 → grid 105.
+        // Realized 45s vs 120s base = ratio 0.375 — clamps to 0.60 → 72 → grid 75.
         val tuning = tuningFor(List(12) { event("ua1", 45) })
         assertEquals(0.60, tuning.factors.getValue(MovementRole.COMPOUND), 0.0001)
-        assertEquals(105, RestAdvisor.restSeconds(compoundPlan, null, null, tuning).seconds)
+        assertEquals(75, RestAdvisor.restSeconds(compoundPlan, null, null, tuning).seconds)
     }
 
     @Test
     fun tunedDurationSnapsToTheGrid() {
-        // Factor 0.9 → 162s, which isn't a timer-friendly value → snaps to 165.
-        val tuning = tuningFor(List(8) { event("ua1", 162) })
-        assertEquals(165, RestAdvisor.restSeconds(compoundPlan, null, null, tuning).seconds)
+        // Factor 0.9 → 108s, which isn't a timer-friendly value → snaps to 105.
+        val tuning = tuningFor(List(8) { event("ua1", 108) })
+        assertEquals(105, RestAdvisor.restSeconds(compoundPlan, null, null, tuning).seconds)
     }
 
     // ── Sample qualification ──────────────────────────────────────────────────
@@ -127,7 +127,7 @@ class RestAdvisorTest {
     @Test
     fun medianResistsOutliers() {
         // Eight samples at ratio 0.75 and one at 2× — the median holds at 0.75.
-        val events = List(8) { event("ua1", 135) } + event("ua1", 360)
+        val events = List(8) { event("ua1", 90) } + event("ua1", 240)
         assertEquals(0.75, tuningFor(events).factors.getValue(MovementRole.COMPOUND), 0.0001)
     }
 
@@ -135,7 +135,7 @@ class RestAdvisorTest {
 
     @Test
     fun sameInputsProduceTheSamePrescription() {
-        val tuning = tuningFor(List(8) { event("ua1", 135) })
+        val tuning = tuningFor(List(8) { event("ua1", 90) })
         assertEquals(
             RestAdvisor.restSeconds(compoundPlan, EffortRating.BRUTAL, null, tuning),
             RestAdvisor.restSeconds(compoundPlan, EffortRating.BRUTAL, null, tuning)

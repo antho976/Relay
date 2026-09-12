@@ -62,3 +62,25 @@ internal suspend fun DayViewModel.closeOpenRestEvent(sessionId: Long, endedAtMs:
         secondsAdded = open.secondsAdded
     )
 }
+
+/** Reprice only the current set's open rest, retaining elapsed time and manual timer adjustments. */
+internal fun DayViewModel.updateRestForLatestEffort(exerciseId: String, setId: Long? = null) {
+    val open = openRestEvent ?: return
+    val timer = restTimer.state.value ?: return
+    if (timer.isFinished || open.skipped) return
+    val ui = _state.value.exercises.firstOrNull { it.plan.id == exerciseId } ?: return
+    val latest = ui.loggedSets.lastOrNull() ?: return
+    if (setId != null && latest.id != setId) return
+    val effectiveId = ui.effectiveExerciseId.ifBlank { exerciseId }
+    if (open.exerciseId != effectiveId || open.setIndex != ui.loggedSets.lastIndex) return
+    val plan = (com.forge.app.program.Program.exercise(effectiveId) ?: ui.plan).copy(reps = ui.plan.reps)
+    val effort = com.forge.app.domain.adapt.RestAdvisor.effortForSet(latest.rpe, latest.difficultyTag, ui.difficulty)
+    val prescription = computeRestPrescription(plan, effort, ui.restTimerOverrideSeconds)
+    val delta = prescription.seconds - open.plannedSeconds
+    if (delta != 0) {
+        restTimer.addSeconds(delta)
+        if (timer.isPaused) restTimer.pause()
+    }
+    openRestEvent = open.copy(plannedSeconds = prescription.seconds)
+    _state.update { it.copy(restTimer = restTimer.state.value, restTimerReason = prescription.reason) }
+}

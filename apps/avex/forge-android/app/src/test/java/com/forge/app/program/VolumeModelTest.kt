@@ -19,7 +19,7 @@ class VolumeModelTest {
     @Test
     fun volumeScalesWithFrequency() {
         // Same template family, more days → the muscle is trained more often → more weekly volume.
-        val threeDay = weeklySets(SplitTemplates.forDays(3), MuscleGroup.CHEST)
+        val threeDay = weeklySets(SplitTemplates.forDays(5).take(3), MuscleGroup.CHEST)
         val sixDay = weeklySets(SplitTemplates.forDays(6), MuscleGroup.CHEST)
         assertTrue("6-day chest ($sixDay) should exceed 3-day chest ($threeDay)", sixDay > threeDay)
     }

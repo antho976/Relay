@@ -72,9 +72,7 @@ class TrainingReminderWorker @AssistedInject constructor(
         // loaded). Sequence mode has no fixed rest days, so the gentle rest note only applies here.
         // Freestyle has no schedule, so it can't be a "scheduled rest day".
         val isRestDay = !freestyle && dayName == null &&
-            Program.dayKeys.isNotEmpty() &&
-            settingsRepo.scheduleMode.first() == WeeklySchedule.MODE_WEEKDAY &&
-            settingsRepo.weeklySchedule.first().getOrNull(today.dayOfWeek.value - 1).isNullOrBlank()
+            Program.dayKeys.isNotEmpty()
 
         val nudge = TrainingReminder.build(
             trainedToday = finishedToday.isNotEmpty(),
@@ -96,18 +94,20 @@ class TrainingReminderWorker @AssistedInject constructor(
         if (dayKeys.isEmpty()) return null
         val todayIndex = today.dayOfWeek.value - 1
         val mode = settingsRepo.scheduleMode.first()
-        val key = if (mode == WeeklySchedule.MODE_WEEKDAY) {
-            settingsRepo.weeklySchedule.first().getOrNull(todayIndex)?.takeIf { it.isNotBlank() && it in dayKeys }
-        } else {
-            WeeklySchedule.resolveNextUp(
-                mode = mode,
-                todayIndex = todayIndex,
-                schedule = emptyList(),
-                dayKeys = dayKeys,
-                lastFinishedDayKey = sessionDao.lastFinishedDayKey(),
-                trainedTodayKeys = trainedTodayKeys
+        val zone = ZoneId.systemDefault()
+        val recent = sessionDao.finishedForRecoverySince(
+            today.minusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        )
+        val key = WeeklySchedule.trainTodayKey(WeeklySchedule.resolveNextUpWithOffset(
+            mode = mode, todayIndex = todayIndex, schedule = settingsRepo.weeklySchedule.first(),
+            dayKeys = dayKeys, lastFinishedDayKey = sessionDao.lastFinishedDayKey(),
+            trainedTodayKeys = trainedTodayKeys,
+            recoveryDays = com.forge.app.domain.schedule.TrainingRecovery.daysUntilRecovered(
+                Program.days, recent.mapNotNull { session ->
+                    session.finishedAt?.let { session.dayKey to java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+                }, today
             )
-        }
+        ))
         return key?.let { k -> Program.days.firstOrNull { it.key == k }?.defaultName }
     }
 

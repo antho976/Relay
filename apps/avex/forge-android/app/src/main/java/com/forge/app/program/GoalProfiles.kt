@@ -11,7 +11,7 @@ object GoalProfiles {
     /**
      * Rep range for a slot's [scheme], shifted by [goal]:
      * - `get_stronger` → lower (heavier),
-     * - `lose_weight` → higher (more conditioning),
+     * - `lose_weight` → retain muscle with the same resistance-training ranges,
      * - `build_muscle` / `general_fitness` / anything else → the scheme's default hypertrophy range.
      */
     fun reps(goal: String, scheme: RepScheme): String = when (goal) {
@@ -19,11 +19,6 @@ object GoalProfiles {
             RepScheme.STRENGTH -> "4-6"
             RepScheme.HYPERTROPHY -> "6-8"
             RepScheme.PUMP -> "8-12"
-        }
-        "lose_weight" -> when (scheme) {
-            RepScheme.STRENGTH -> "8-12"
-            RepScheme.HYPERTROPHY -> "12-15"
-            RepScheme.PUMP -> "15-20"
         }
         else -> scheme.reps
     }
@@ -37,7 +32,7 @@ object GoalProfiles {
     /** Per-set volume multiplier — beginners do less, advanced do a touch more. */
     fun volumeFactor(experience: String): Double = when (experience) {
         "beginner" -> 0.8
-        "advanced" -> 1.15
+        "advanced" -> 1.25
         else -> 1.0
     }
 }

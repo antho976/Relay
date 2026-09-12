@@ -11,7 +11,7 @@ class GoalProfilesTest {
     fun goalShiftsRepRanges() {
         // get_stronger goes heavier, lose_weight goes higher, build_muscle keeps the scheme default.
         assertEquals("4-6", GoalProfiles.reps("get_stronger", RepScheme.STRENGTH))
-        assertEquals("15-20", GoalProfiles.reps("lose_weight", RepScheme.PUMP))
+        assertEquals("12-15", GoalProfiles.reps("lose_weight", RepScheme.PUMP))
         assertEquals(RepScheme.HYPERTROPHY.reps, GoalProfiles.reps("build_muscle", RepScheme.HYPERTROPHY))
         assertEquals(RepScheme.STRENGTH.reps, GoalProfiles.reps("general_fitness", RepScheme.STRENGTH))
     }

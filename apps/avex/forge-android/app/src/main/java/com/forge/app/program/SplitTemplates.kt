@@ -34,10 +34,10 @@ data class DayArchetype(
 )
 
 /**
- * Maps days/week (1..7) to a split structure, so the plan SHAPE scales with day-count
- * (3-day ≠ 7-day). Tuned (Phase 4) for **5–7 exercises per session**, ordered heavy-compound
+ * Maps days/week (1..7) to a split structure, so the plan shape scales with day-count
+ * (3-day ≠ 7-day). Full-body days carry more movements at modest set counts; split days use 5–7. Ordered heavy-compound
  * first → isolation last. Per-slot set counts come from [VolumeModel] (frequency-aware), not from
- * here — so the same template gives ~10 chest sets/wk at 1× frequency and ~14 at 2×.
+ * here — with conservative session and weekly ceilings. Seven days includes a short core/calves day.
  *
  * Slots can repeat a muscle (e.g. CHEST ×2) — the generator picks a *distinct* exercise for each,
  * so you get a press + a second chest movement rather than the same lift twice.
@@ -171,8 +171,8 @@ object SplitTemplates {
     private fun fullBodyA(key: String, name: String, word: String, accent: String = BLUE) =
         DayArchetype(key, name, word, accent, listOf(
             MuscleSlot(MuscleGroup.QUADS, STR),
-            MuscleSlot(MuscleGroup.CHEST, HYP),
-            MuscleSlot(MuscleGroup.BACK, HYP),
+            MuscleSlot(MuscleGroup.CHEST, STR),
+            MuscleSlot(MuscleGroup.BACK, STR),
             MuscleSlot(MuscleGroup.HAMSTRINGS, HYP),
             MuscleSlot(MuscleGroup.SHOULDERS, PUMP),
             MuscleSlot(MuscleGroup.BICEPS, PUMP),
@@ -184,8 +184,8 @@ object SplitTemplates {
     private fun fullBodyB(key: String, name: String, word: String, accent: String = BLUE) =
         DayArchetype(key, name, word, accent, listOf(
             MuscleSlot(MuscleGroup.HAMSTRINGS, STR),
-            MuscleSlot(MuscleGroup.CHEST, HYP),
-            MuscleSlot(MuscleGroup.BACK, HYP),
+            MuscleSlot(MuscleGroup.CHEST, STR),
+            MuscleSlot(MuscleGroup.BACK, STR),
             MuscleSlot(MuscleGroup.QUADS, HYP),
             MuscleSlot(MuscleGroup.GLUTES, HYP),
             MuscleSlot(MuscleGroup.REAR_DELTS, PUMP),
@@ -193,22 +193,16 @@ object SplitTemplates {
             MuscleSlot(MuscleGroup.CORE, PUMP)
         ))
 
-    private fun arms(key: String, name: String = "Arms & Delts", word: String = "ARMS", accent: String = PURPLE) =
-        DayArchetype(key, name, word, accent, listOf(
-            // Leads with the triceps press — the library has no biceps compound, and a STRENGTH curl
-            // slot prescribed 4-6 rep heaving under the get_stronger goal. Curls run HYP/PUMP.
-            MuscleSlot(MuscleGroup.TRICEPS, STR),
-            MuscleSlot(MuscleGroup.BICEPS, HYP),
-            MuscleSlot(MuscleGroup.TRICEPS, HYP),
-            MuscleSlot(MuscleGroup.BICEPS, PUMP),
-            MuscleSlot(MuscleGroup.SHOULDERS, PUMP),
-            MuscleSlot(MuscleGroup.REAR_DELTS, PUMP)
-        ))
-
     fun forDays(daysPerWeek: Int): List<DayArchetype> = when (daysPerWeek.coerceIn(1, 7)) {
-        1 -> listOf(fullBodyA("fb", "Full Body", "FULL"))
+        1 -> listOf(fullBodyA("fb", "Full Body", "FULL").let {
+            it.copy(targets = it.targets + MuscleSlot(MuscleGroup.CALVES, PUMP))
+        })
         2 -> listOf(fullBodyA("fb-a", "Full Body A", "FULL"), fullBodyB("fb-b", "Full Body B", "BODY"))
-        3 -> listOf(push("push"), pull("pull"), legs("legs"))
+        3 -> listOf(
+            fullBodyA("fb-a", "Full Body A", "FULL"),
+            fullBodyB("fb-b", "Full Body B", "BODY"),
+            fullBodyA("fb-c", "Full Body C", "FULL")
+        )
         4 -> listOf(
             upperA("upper-a", "Upper A", "PUSH"), lowerA("lower-a", "Lower A", "QUADS"),
             upperB("upper-b", "Upper B", "PULL"), lowerB("lower-b", "Lower B", "HAMS")
@@ -222,9 +216,13 @@ object SplitTemplates {
             push("push-b", "Push B", "PUSH"), pull("pull-b", "Pull B", "PULL"), legs("legs-b", "Legs B", "LEGS")
         )
         else -> listOf(
-            push("push-a"), pull("pull-a"), legs("legs-a"),
-            push("push-b", "Push B", "PUSH"), pull("pull-b", "Pull B", "PULL"),
-            legs("legs-b", "Legs B", "LEGS"), arms("arms")
+            push("push-a"), legs("legs-a"), pull("pull-a"),
+            push("push-b", "Push B", "PUSH"), legs("legs-b", "Legs B", "LEGS"),
+            pull("pull-b", "Pull B", "PULL"),
+            DayArchetype("core-calves", "Core & Calves", "CORE", BLUE, listOf(
+                MuscleSlot(MuscleGroup.CORE, PUMP),
+                MuscleSlot(MuscleGroup.CALVES, PUMP)
+            ))
         )
     }
 }

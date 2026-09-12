@@ -109,7 +109,13 @@ class DayListViewModel @Inject constructor(
             else -> com.forge.app.domain.schedule.WeeklySchedule.resolveNextUp(
                 mode = scheduleMode, todayIndex = today.dayOfWeek.value - 1, schedule = schedule,
                 dayKeys = Program.dayKeys, lastFinishedDayKey = lastFinishedDayKey,
-                trainedTodayKeys = trainedTodayKeys
+                trainedTodayKeys = trainedTodayKeys,
+                recoveryDays = com.forge.app.domain.schedule.TrainingRecovery.daysUntilRecovered(
+                    Program.days,
+                    recentSessions.filter { !it.isUntracked }.mapNotNull { session ->
+                        session.finishedAt?.let { session.dayKey to java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+                    }, today
+                )
             ) ?: (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
         }
 

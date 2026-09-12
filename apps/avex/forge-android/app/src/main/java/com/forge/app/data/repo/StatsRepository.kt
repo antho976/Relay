@@ -177,7 +177,13 @@ class StatsRepository @Inject constructor(
             val nextUpDayKey = com.forge.app.domain.schedule.WeeklySchedule.resolveNextUp(
                 mode = scheduleMode, todayIndex = todayDate.dayOfWeek.value - 1, schedule = schedule,
                 dayKeys = Program.dayKeys, lastFinishedDayKey = lastFinished?.dayKey,
-                trainedTodayKeys = trainedTodayKeys
+                trainedTodayKeys = trainedTodayKeys,
+                recoveryDays = com.forge.app.domain.schedule.TrainingRecovery.daysUntilRecovered(
+                    Program.days,
+                    recentSessions.filter { !it.isUntracked }.mapNotNull { session ->
+                        session.finishedAt?.let { session.dayKey to java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+                    }, todayDate
+                )
             ) ?: (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
             // Best single session this ISO week — the heaviest tonnage day, for the StatsTile.
             val bestSessionThisWeekLb = thisWeekSessions.mapNotNull { it.totalVolumeLb }.maxOrNull()
