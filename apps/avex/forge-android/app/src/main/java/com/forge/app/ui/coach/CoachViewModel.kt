@@ -155,6 +155,14 @@ class CoachViewModel @Inject constructor(
         // genuinely reads these fields.
     }
 
+    /**
+     * Flip advanced tracking from the page itself. The preference is the one source of truth and
+     * [refreshWhileVisible] collects it, so the page redraws from the write, not from here.
+     */
+    fun setAdvanced(v: Boolean) = viewModelScope.launch {
+        runCatching { settingsRepo.setCoachAdvanced(v) }
+    }
+
     // ─── Decision lifecycle ────────────────────────────────────────────────────
 
     fun apply(decisionId: Long) {

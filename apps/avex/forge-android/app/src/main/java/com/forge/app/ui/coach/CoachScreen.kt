@@ -26,13 +26,18 @@
 package com.forge.app.ui.coach
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -61,6 +66,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.forge.app.domain.units.WeightUnit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 
 /**
@@ -83,7 +89,8 @@ enum class CoachEntryPoint { ACCOUNT, WHERE_YOU_STAND }
  * How much of that column is drawn is the ONE preference the page reads (Settings → Coach →
  * Advanced tracking). Off, which is the default, it is the account and what is next: the calls
  * and what became of them, which is all most people open it for. On, the readings behind the
- * calls come back. The coach itself behaves the same either way.
+ * calls come back. The coach itself behaves the same either way, and the page closes on the
+ * switch so nobody has to find it in Settings first.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -167,7 +174,8 @@ fun CoachScreen(
                     applyAll = viewModel::applyAll,
                     startBlock = viewModel::startBlock,
                     endBlock = viewModel::endBlock,
-                    connectHealth = onConnectHealth
+                    connectHealth = onConnectHealth,
+                    setAdvanced = viewModel::setAdvanced
                 ),
                 listState = listState,
                 modifier = Modifier.padding(inner)
@@ -190,7 +198,8 @@ internal data class CoachActions(
     val applyAll: (String) -> Unit = {},
     val startBlock: () -> Unit = {},
     val endBlock: () -> Unit = {},
-    val connectHealth: (() -> Unit)? = null
+    val connectHealth: (() -> Unit)? = null,
+    val setAdvanced: (Boolean) -> Unit = {}
 )
 
 /**
@@ -248,6 +257,43 @@ internal fun CoachLedger(
         }
         coachUnlocks(state = state, c = c)
         if (state.advanced) coachLearned(state = state, c = c)
+        coachTracking(state = state, c = c, onSetAdvanced = actions.setAdvanced)
+    }
+}
+
+/**
+ * THE FOOT — the one place the page says how much of itself it is drawing.
+ *
+ * Advanced tracking is a Settings switch, and a switch nobody has seen is a feature nobody has.
+ * So the account closes on it: with the readings off, one muted line names what is off and the
+ * action turns it on in place, so the page grows under the tap rather than sending the reader
+ * through Settings to find out what they were missing. With them on, the same rung offers the
+ * way back. It is the same preference either way, with Settings as its other home.
+ */
+private fun LazyListScope.coachTracking(
+    state: CoachViewModel.UiState,
+    c: CoachColors,
+    onSetAdvanced: (Boolean) -> Unit
+) {
+    item("tracking") {
+        Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(6)) {
+            Spacer(Modifier.height(30.dp))
+            if (!state.advanced) {
+                Text(
+                    "The readings behind the calls are off: signals, block, inputs, learned.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.muted
+                )
+                Spacer(Modifier.height(2.dp))
+            }
+            // onBg, not accent: accent-as-text clears AA on two of the five accents only (§14),
+            // and the arrow already marks the line as the action.
+            CoachAction(
+                if (state.advanced) "Hide advanced tracking →" else "Show advanced tracking →",
+                c.onBg,
+                if (state.advanced) "Hide advanced tracking" else "Show advanced tracking"
+            ) { onSetAdvanced(!state.advanced) }
+        }
     }
 }
 

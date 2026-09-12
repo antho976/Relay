@@ -104,7 +104,8 @@ internal fun CoachSettingsPage(
             // How much of the Coach page to draw. Off, the page is the account alone: the calls and
             // what became of them, which is all most people open it for. On, the readings behind
             // the calls come back: signals, the block, the inputs with their charts, and what the
-            // coach has learned. Nothing about the coach's behaviour changes either way.
+            // coach has learned. Nothing about the coach's behaviour changes either way. The Coach
+            // page closes on the same switch, so this is its second home, not its only one.
             SettingsSectionHeader("Coach page")
             ToggleRow(
                 "Advanced tracking",

@@ -16,6 +16,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import com.forge.app.data.db.entities.CoachDecision
@@ -48,6 +49,7 @@ import com.forge.app.ui.theme.ForgeTheme
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.RoborazziOptions
 import com.github.takahirom.roborazzi.captureRoboImage
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
@@ -118,9 +120,9 @@ class CoachLedgerScreenshotTest {
     fun ledger() = shoot("coach-ledger") { ledger(activeState())() }
 
     /**
-     * The default page, advanced tracking off: the account and what is next, and nothing the
-     * account was made from. Shot at the seam where the record ends and NEXT follows, which is
-     * where the difference is. (Scrolling to "NEXT" itself would match the "next brief" meta at
+     * The default page, advanced tracking off: the account and what is next, then the foot that
+     * names what is off and turns it on. Shot at the seam where the record ends and NEXT follows,
+     * which is where the difference is. (Scrolling to "NEXT" itself would match the "next brief" meta at
      * the top of the page, so the anchor is the first rung under it.)
      */
     @Test
@@ -213,6 +215,26 @@ class CoachLedgerScreenshotTest {
             }
         }
         compose.onNodeWithText("SIGNALS").assertIsDisplayed()
+    }
+
+    /** The foot of the default page turns the readings on in place, through the one preference. */
+    @Test
+    fun theFootTurnsAdvancedTrackingOn() {
+        var set: Boolean? = null
+        compose.setContent {
+            ForgeTheme {
+                CoachLedger(
+                    state = activeState().copy(advanced = false),
+                    weightUnit = WeightUnit.LB,
+                    now = NOW,
+                    actions = CoachActions(setAdvanced = { set = it })
+                )
+            }
+        }
+        compose.onAllNodes(hasScrollAction()).onFirst()
+            .performScrollToNode(hasText("Show advanced tracking", substring = true))
+        compose.onNodeWithText("Show advanced tracking", substring = true).performClick()
+        assertEquals(true, set)
     }
 
     /** AMOLED is a shipped ground, not a variant. */
