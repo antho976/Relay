@@ -312,7 +312,19 @@ internal fun DayViewModel.logSet(
             // the realized-rest sample (keyed below by effectiveExerciseId) tunes the matching role. Falls back
             // to the slot plan when the id can't be resolved.
             val restPlan = (com.forge.app.program.Program.exercise(effectiveExerciseId) ?: plan).copy(reps = plan.reps)
-            val rest = computeRestPrescription(restPlan, currentUi.difficulty, currentUi.restTimerOverrideSeconds)
+            // The rest follows the set actually performed: its reps decide whether the heavy bonus
+            // applies, and its weight against the heaviest known working weight (prior sessions'
+            // frontier, or the heaviest set so far today) decides whether it was a light / feeler
+            // set that earns a short rest rather than the compound base (2026-09-21).
+            val performed = com.forge.app.domain.adapt.PerformedSet(
+                reps = reps.takeIf { it > 0 },
+                weightLb = newWeightLb,
+                referenceWeightLb = listOfNotNull(
+                    lastWeightLb, currentUi.loggedSets.mapNotNull { it.weightLb }.maxOrNull()
+                ).maxOrNull(),
+                durationSeconds = durationSeconds
+            )
+            val rest = computeRestPrescription(restPlan, currentUi.difficulty, currentUi.restTimerOverrideSeconds, performed)
             restTimer.start(rest.seconds)
             // Push the started timer into UI state synchronously so it's visible before refreshExercise
             // re-renders — don't wait for the collector coroutine to forward the first emission.
@@ -325,7 +337,8 @@ internal fun DayViewModel.logSet(
                 exerciseId = effectiveExerciseId,
                 setIndex = currentUi.loggedSets.size,
                 plannedSeconds = rest.seconds,
-                startedAtMs = restEndedAtMs
+                startedAtMs = restEndedAtMs,
+                light = rest.light
             )
 
             // First set of this exercise while a suggestion chip was showing → record suggestion vs

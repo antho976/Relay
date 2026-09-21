@@ -283,10 +283,12 @@ internal fun annotateNextExerciseDeltas(exercises: List<ExerciseUiState>): List<
 internal fun DayViewModel.computeRestPrescription(
     plan: ExercisePlan,
     effortRating: EffortRating?,
-    overrideSeconds: Int? = null
+    overrideSeconds: Int? = null,
+    performed: com.forge.app.domain.adapt.PerformedSet? = null
 ): RestPrescription = RestAdvisor.restSeconds(
     plan, effortRating, overrideSeconds, restTuning,
-    compoundBase = restBaseCompound, isolationBase = restBaseIsolation
+    compoundBase = restBaseCompound, isolationBase = restBaseIsolation,
+    performed = performed
 )
 
 internal fun computePrFlags(

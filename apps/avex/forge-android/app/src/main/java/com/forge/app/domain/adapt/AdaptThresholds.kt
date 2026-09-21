@@ -52,6 +52,10 @@ data class AdaptThresholds(
     val maxSaneRestSeconds: Int = 600,
     /** Extra rest after a BRUTAL-rated previous set (pre-existing rule, now owned here). */
     val brutalRestBonusSeconds: Int = 30,
+    /** A set at or below this fraction of the exercise's known working weight is a light / feeler set. */
+    val lightSetFraction: Double = 0.6,
+    /** Rest a light set is capped to — it did not earn the compound base, let alone the heavy bonus. */
+    val lightSetRestSeconds: Int = 60,
 
     // ── Deload (System 5: accumulated fatigue) ─────────────────────────────────
     /** The fatigue window: signals are measured over the most recent N days. */

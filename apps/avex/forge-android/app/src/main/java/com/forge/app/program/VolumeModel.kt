@@ -1,5 +1,6 @@
 package com.forge.app.program
 
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 /**
@@ -21,6 +22,24 @@ object VolumeModel {
         RepScheme.STRENGTH -> 3      // the day's heavy compound
         RepScheme.HYPERTROPHY -> 3
         RepScheme.PUMP -> 2          // accessory / isolation
+    }
+
+    /**
+     * Extra sets the heavy compound carries for a strength goal (2026-09-21): 4-6-rep work needs
+     * more sets to reach a useful dose, and it is the one slot a strength trainee is there for.
+     * Only at full volume — a beginner's ramp and a deload keep the plain base.
+     */
+    private const val STRENGTH_GOAL_BONUS_SETS = 1
+
+    private fun slotSets(slot: MuscleSlot, focus: Set<MuscleGroup>, volumeFactor: Double, goal: String, minSets: Int): Int {
+        val withEmphasis = baseSets(slot.scheme) + if (slot.muscle in focus) EMPHASIS_BONUS_SETS else 0
+        val scaled = withEmphasis * volumeFactor
+        // The heavy compound rounds UP so a beginner's 0.8 ramp keeps 3 sets of the main lift while
+        // the accessories drop to 2 — a compound emphasis rather than a flat 2-2-2 day.
+        val rounded = if (slot.scheme == RepScheme.STRENGTH) ceil(scaled).toInt() else scaled.roundToInt()
+        val strengthBonus = if (slot.scheme == RepScheme.STRENGTH && goal == "get_stronger" && volumeFactor >= 1.0)
+            STRENGTH_GOAL_BONUS_SETS else 0
+        return (rounded + strengthBonus).coerceIn(minSets, MAX_SETS)
     }
 
     /** Conservative direct-set ceilings, not biological limits. Arms/delts/glutes also receive
@@ -62,6 +81,9 @@ object VolumeModel {
      * [bias] is the coach's net applied volume adjustment per muscle (CoachGenBias): each +1 lands on
      * the muscle's currently-smallest slot, each −1 comes off its largest — spread, not stacked —
      * applied BEFORE the weekly cap so the junk-volume guard still has the last word.
+     *
+     * [goal] is the onboarding goal: `get_stronger` gives the heavy compound an extra set at full
+     * volume (see [slotSets]); every other goal uses the scheme bases as they are.
      */
     fun allocate(
         days: List<DayArchetype>,
@@ -69,6 +91,7 @@ object VolumeModel {
         volumeFactor: Double = 1.0,
         minSets: Int = MIN_SETS,
         bias: Map<MuscleGroup, Int> = emptyMap(),
+        goal: String = "build_muscle",
         /**
          * Per-muscle weekly ceilings measured from THIS athlete (Coach v3 D's `PersonalProfile`),
          * overriding the population defaults in [weeklyCap] where they've been earned. Empty until
@@ -78,11 +101,7 @@ object VolumeModel {
         personalCaps: Map<MuscleGroup, Int> = emptyMap()
     ): List<List<Int>> {
         val result: List<IntArray> = days.map { day ->
-            IntArray(day.targets.size) { si ->
-                val slot = day.targets[si]
-                val withEmphasis = baseSets(slot.scheme) + if (slot.muscle in focus) EMPHASIS_BONUS_SETS else 0
-                (withEmphasis * volumeFactor).roundToInt().coerceIn(minSets, MAX_SETS)
-            }
+            IntArray(day.targets.size) { si -> slotSets(day.targets[si], focus, volumeFactor, goal, minSets) }
         }
         val positions = HashMap<MuscleGroup, MutableList<Pair<Int, Int>>>()
         days.forEachIndexed { di, day ->

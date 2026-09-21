@@ -68,8 +68,21 @@ Applied on `claude/plan-making-system-review-46wxow` after the review above, and
 
 Also filed: `barbell-hip-thrust` → HIP_THRUST and `mwm-upright-row` → LATERAL_RAISE (they were pattern-less compounds); `SplitTemplates` documentation corrected.
 
+### Rest timer and set counts (follow-up, same day)
+
+The rest prescription only read the plan text, so a 4-6 compound prescription started a 3:00 timer after a warm-up-weight set of 12, and a feeler set at half the working weight got the full 2:00 compound base. Both now price the set actually performed, on the phone and on the watch:
+
+| Change | Before → after |
+| --- | --- |
+| `RestAdvisor.restSeconds` takes a `PerformedSet` (reps, weight, the heaviest known working weight for the exercise). The heavy bonus applies only when the set had ≤ 6 reps, not merely when the plan says 4-6. | 4-6 plan, 12 reps at working weight: 3:00 → 2:00. 4-6 plan, 5 reps: 3:00 unchanged. Plan-level estimates (no set) unchanged. |
+| A set at or below 60% of the known working weight (prior-session frontier, or the heaviest set so far today) is a light / feeler set and is capped at 1:00 (`AdaptThresholds.lightSetFraction`, `lightSetRestSeconds`). Effort ratings still adjust on top; an explicit per-exercise override still wins. Bodyweight work and a first-ever session have no reference and are never judged light. | 50 lb against a 135 lb working weight: 2:00 (or 3:00) → 1:00. |
+| Light rests are not persisted as `RestEvent`s, so they cannot teach the tuner that the user rests briefly on compounds. Re-pricing after a rating uses the same performed-set view, so a rating cannot re-award a heavy bonus or un-cap a light set. | — |
+| Set counts: the heavy STRENGTH slot rounds up when volume is scaled, so a beginner keeps 3 sets of the main lift with 2-set accessories instead of a flat 2-2-2 day; `get_stronger` adds one set to the STRENGTH slot at full volume (4 × 4-6 for an intermediate, 5 for advanced), never to accessories and never on a beginner ramp or a deload. | Beginner 5-day chest: 2 + 2 + 2 → 3 + 2 + 3. Intermediate `get_stronger` bench: 3 × 4-6 → 4 × 4-6. |
+
+Rep ranges were reviewed and left as they were: 6-10 / 8-12 / 12-15 for a muscle goal and 4-6 / 6-8 / 8-12 for a strength goal, with isolations never below 8-12 under a strength goal and `fixedReps` movements keeping their own range.
+
 ### Validation of the corrections
 
 - `ProgramGeneratorQualityTest` (14 tests) pins every finding above; `ExerciseLibraryTest` gained the two metadata checks.
-- The pure `program` package and `domain/schedule` suites were compiled standalone with `kotlinc` against JUnit 4 and run here: 115 tests, 0 failures (the Robolectric-backed `CustomExerciseRegistryTest` and `ProgramGenerationIntentTest` need the Android toolchain and were not run).
-- `ProgramRepository`, `AdaptationRepository`, `SettingsRepository`, `PreferencesDataStore` and `SettingsViewModel` changes could not be compiled in this environment (no Android SDK); they were reviewed by diff. The full Gradle run should be the gate before merge.
+- The pure `program` package, `domain/schedule`, `RestAdvisor` and their suites were compiled standalone with `kotlinc` against JUnit 4 (Room annotations stubbed) and run here: 136 tests, 0 failures (the Robolectric-backed `CustomExerciseRegistryTest` and `ProgramGenerationIntentTest` need the Android toolchain and were not run).
+- `ProgramRepository`, `AdaptationRepository`, `SettingsRepository`, `PreferencesDataStore`, `SettingsViewModel`, `SetLogUseCase`, the day-screen handlers and `OnboardingScreen` changes could not be compiled in this environment (no Android SDK); they were reviewed by diff. The full Gradle run should be the gate before merge.

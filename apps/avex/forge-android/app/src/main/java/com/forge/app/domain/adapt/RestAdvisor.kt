@@ -28,8 +28,25 @@ data class RestTuning(
     }
 }
 
-/** A rest duration plus the always-present explanation of how it was derived. */
-data class RestPrescription(val seconds: Int, val reason: String)
+/**
+ * A rest duration plus the always-present explanation of how it was derived. [light] marks a rest
+ * capped because the set was a light / feeler set — such rests are not evidence of the user's pace
+ * and are kept out of [RestAdvisor.samples].
+ */
+data class RestPrescription(val seconds: Int, val reason: String, val light: Boolean = false)
+
+/**
+ * What the set that just ended actually was, so the rest follows the work done rather than the
+ * plan text alone (2026-09-21). [referenceWeightLb] is the heaviest known working weight for the
+ * exercise (the prior-session frontier, or the heaviest set so far this session); null when there
+ * is nothing to compare against, which disables the light-set rule.
+ */
+data class PerformedSet(
+    val reps: Int?,
+    val weightLb: Double?,
+    val referenceWeightLb: Double?,
+    val durationSeconds: Int? = null
+)
 
 /**
  * System 2 of the adaptation engine: adaptive rest. Pure — both entry points are
@@ -99,7 +116,15 @@ object RestAdvisor {
         return RestTuning(factors = factors, sampleCounts = byRole.mapValues { it.value.size })
     }
 
-    /** The rest the timer should run for after a set of [plan], with its explanation. */
+    /**
+     * The rest the timer should run for after a set of [plan], with its explanation.
+     *
+     * [performed] — the set that just ended — decides two things the plan text can't: the heavy
+     * bonus applies only when the set was actually heavy (≤ [SessionEstimate.HEAVY_MAX_REPS] reps),
+     * and a light / feeler set (≤ [AdaptThresholds.lightSetFraction] of the known working weight)
+     * is capped at [AdaptThresholds.lightSetRestSeconds]. A 4-6 prescription used to start a 3:00
+     * timer after a warm-up-weight set of 12 (2026-09-21).
+     */
     fun restSeconds(
         plan: ExercisePlan,
         lastEffort: EffortRating?,
@@ -107,13 +132,19 @@ object RestAdvisor {
         tuning: RestTuning = RestTuning.NEUTRAL,
         t: AdaptThresholds = AdaptThresholds(),
         compoundBase: Int = SessionEstimate.COMPOUND_REST,
-        isolationBase: Int = SessionEstimate.ISOLATION_REST
+        isolationBase: Int = SessionEstimate.ISOLATION_REST,
+        performed: PerformedSet? = null
     ): RestPrescription {
         if (overrideSeconds != null) {
             return RestPrescription(overrideSeconds, "your custom rest for this exercise")
         }
         val role = movementRole(plan)
-        val base = SessionEstimate.restSeconds(plan, compoundBase, isolationBase)
+        val light = isLight(performed, t)
+        // A light set earns neither the heavy bonus nor, below, the full base.
+        val base = SessionEstimate.restSeconds(
+            plan, compoundBase, isolationBase,
+            performedReps = if (light) Int.MAX_VALUE else performed?.reps
+        )
         val roleLabel = if (role == MovementRole.COMPOUND) "compound" else "isolation"
         val parts = mutableListOf("$roleLabel base ${mmss(base)}")
 
@@ -134,6 +165,11 @@ object RestAdvisor {
                 parts += "$pctPart (from $n rest${if (n == 1) "" else "s"} logged)"
             }
         }
+        if (light) {
+            seconds = minOf(seconds, t.lightSetRestSeconds)
+            val pct = (t.lightSetFraction * 100).roundToInt()
+            parts += "light set (≤$pct% of your working weight) · capped at ${mmss(t.lightSetRestSeconds)}"
+        }
         if (lastEffort == EffortRating.EASY) {
             seconds = (seconds - 30).coerceAtLeast(60)
             parts += "−30s after an easy set"
@@ -145,7 +181,18 @@ object RestAdvisor {
             seconds += t.brutalRestBonusSeconds
             parts += "+${t.brutalRestBonusSeconds}s after a brutal set"
         }
-        return RestPrescription(seconds, parts.joinToString(" · "))
+        return RestPrescription(seconds, parts.joinToString(" · "), light = light)
+    }
+
+    /**
+     * A set at or below [AdaptThresholds.lightSetFraction] of the exercise's known working weight.
+     * Needs a real weight on both sides: bodyweight work, an unparsed entry, or an exercise with no
+     * history is never judged light.
+     */
+    fun isLight(performed: PerformedSet?, t: AdaptThresholds = AdaptThresholds()): Boolean {
+        val weight = performed?.weightLb ?: return false
+        val reference = performed.referenceWeightLb ?: return false
+        return reference > 0 && weight <= reference * t.lightSetFraction
     }
 
     /**
