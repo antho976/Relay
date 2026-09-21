@@ -328,6 +328,12 @@ object PreferenceKeys {
     /** A program regeneration currently in flight, as JSON — see
      *  [com.forge.app.domain.program.ProgramGenerationIntent]. Absent when none is. */
     val PROGRAM_GENERATION_INTENT = stringPreferencesKey("program_generation_intent")
+    /**
+     * The RNG seed the active program was generated from (2026-09-21). A deload and the restore
+     * after it regenerate with THIS seed so the athlete keeps the movements they were already
+     * doing; a fresh generate / re-roll writes a new one. Absent for programs older than the key.
+     */
+    val PROGRAM_GENERATION_SEED = longPreferencesKey("program_generation_seed")
     /** ExerciseLibrary ids the user LIKES — weighted up in selection (recurs more). */
     val LIKED_EXERCISES = stringSetPreferencesKey("liked_exercises")
     /** ExerciseLibrary ids the user DISLIKES — excluded from generation + swaps. */

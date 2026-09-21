@@ -38,13 +38,17 @@ internal data class OpenRestEvent(
     val plannedSeconds: Int,
     val startedAtMs: Long,
     val secondsAdded: Int = 0,
-    val skipped: Boolean = false
+    val skipped: Boolean = false,
+    /** The rest was capped for a light / feeler set — not evidence of the user's pace, never persisted. */
+    val light: Boolean = false
 )
 
 /** Close (and persist) the open rest interval — the set logged at [endedAtMs] ended it. */
 internal suspend fun DayViewModel.closeOpenRestEvent(sessionId: Long, endedAtMs: Long) {
     val open = openRestEvent ?: return
     openRestEvent = null
+    // A light set's short rest would teach the tuner that this user rests briefly on compounds.
+    if (open.light) return
     val realized = ((endedAtMs - open.startedAtMs) / 1000L).toInt()
     if (realized <= 0) return
     val endedBy = when {
@@ -75,7 +79,18 @@ internal fun DayViewModel.updateRestForLatestEffort(exerciseId: String, setId: L
     if (open.exerciseId != effectiveId || open.setIndex != ui.loggedSets.lastIndex) return
     val plan = (com.forge.app.program.Program.exercise(effectiveId) ?: ui.plan).copy(reps = ui.plan.reps)
     val effort = com.forge.app.domain.adapt.RestAdvisor.effortForSet(latest.rpe, latest.difficultyTag, ui.difficulty)
-    val prescription = computeRestPrescription(plan, effort, ui.restTimerOverrideSeconds)
+    // Same performed-set view the timer was started with, so re-pricing for a rating can't
+    // re-award a heavy bonus or un-cap a light set.
+    val performed = com.forge.app.domain.adapt.PerformedSet(
+        reps = latest.reps.takeIf { it > 0 },
+        weightLb = latest.weightLb,
+        referenceWeightLb = listOfNotNull(
+            ui.priorFrontier.mapNotNull { it.weightLb }.maxOrNull(),
+            ui.loggedSets.dropLast(1).mapNotNull { it.weightLb }.maxOrNull()
+        ).maxOrNull(),
+        durationSeconds = latest.durationSeconds
+    )
+    val prescription = computeRestPrescription(plan, effort, ui.restTimerOverrideSeconds, performed)
     val delta = prescription.seconds - open.plannedSeconds
     if (delta != 0) {
         restTimer.addSeconds(delta)

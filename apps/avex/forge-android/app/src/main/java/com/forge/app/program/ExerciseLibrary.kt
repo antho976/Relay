@@ -52,7 +52,12 @@ data class ExerciseDef(
      * field normally is, and these sets are kept out of every weight×reps stat (volume, e1RM, PR).
      * [defaultReps] still carries the target as a time string (e.g. "30-60s") for display.
      */
-    val timed: Boolean = false
+    val timed: Boolean = false,
+    /**
+     * The rep range is part of the movement (a swing is a 12-15 ballistic, a pause squat a 3-6
+     * grind): the generator keeps [defaultReps] instead of the slot scheme's range.
+     */
+    val fixedReps: Boolean = false
 ) {
     /**
      * Owner-only movement — the plate-count ([ExerciseUnit.PLATES]) station exercises, which are
@@ -799,7 +804,7 @@ object ExerciseLibrary {
             muscleTarget = "Quads · strength out of the hole",
             why = "Pausing at the bottom kills the bounce and builds strength and control where squats are hardest.",
             whenToUse = "Strength block, or to fix a weak bottom position.",
-            pickBias = 0.5),
+            pickBias = 0.5, fixedReps = true),
         ExerciseDef("trap-bar-deadlift", "Trap-Bar Deadlift", MuscleGroup.QUADS,
             listOf(Equipment.TRAP_BAR), ExerciseUnit.WEIGHT,
             listOf(COMP, FW), Difficulty.BEGINNER, 3, "5-8", "Stand inside the bar, push the floor away",
@@ -831,6 +836,12 @@ object ExerciseLibrary {
             whenToUse = "Hamstring isolation, or when your lower back is tired."),
 
         // ── Glutes (generalized) ──
+        ExerciseDef("seated-leg-curl", "Seated Leg Curl", MuscleGroup.HAMSTRINGS,
+            listOf(Equipment.MACHINE), ExerciseUnit.WEIGHT,
+            listOf(ISO, MC), Difficulty.BEGINNER, 3, "10-15", "Hips pinned, curl under the pad, slow return",
+            muscleTarget = "Hamstrings (stretched at the hip — the seated version works them longer)",
+            why = "The other leg-curl station. Sitting keeps the hamstrings stretched at the hip, which the lying version can't — and it gives a second leg day its own curl instead of another deadlift.",
+            whenToUse = "Second leg day of the week, or when the lying machine is taken."),
         ExerciseDef("barbell-hip-thrust", "Barbell Hip Thrust", MuscleGroup.GLUTES,
             listOf(Equipment.BARBELL, Equipment.BENCH), ExerciseUnit.WEIGHT,
             listOf(COMP, FW), Difficulty.INTERMEDIATE, 4, "8-12", "Upper back on the bench, drive hips to lockout",
@@ -848,7 +859,8 @@ object ExerciseLibrary {
             listOf(COMP, FW), Difficulty.INTERMEDIATE, 3, "12-15", "Hinge and snap the hips — it's not a squat",
             muscleTarget = "Glutes + hamstrings, explosive",
             why = "An explosive hip hinge that builds the glutes and conditioning at once — power comes from snapping the hips.",
-            whenToUse = "Glute and conditioning work with a kettlebell."),
+            whenToUse = "Glute and conditioning work with a kettlebell.",
+            fixedReps = true),
 
         // ── Calves (generalized) ──
         ExerciseDef("calf-raise-machine", "Calf Raise (machine)", MuscleGroup.CALVES,
@@ -889,9 +901,12 @@ object ExerciseLibrary {
     fun forMuscle(muscle: MuscleGroup): List<ExerciseDef> = all.filter { it.muscle == muscle }
 
     /**
-     * Movement pattern per exercise (program-unlock Phase 4). Only the compound / core movements are
-     * listed; everything else is single-joint accessory work → [MovementPattern.ISOLATION] by default.
-     * Kept as one compact map rather than a field on every entry — single source, easy to tweak.
+     * Movement pattern per exercise (program-unlock Phase 4). Compound / core movements carry their
+     * compound pattern; single-joint work carries its family (FLY, CURL, LATERAL_RAISE …) so the
+     * generator can tell two flavours of one isolation apart (2026-09-21). Anything unlisted →
+     * [MovementPattern.ISOLATION], the un-penalized catch-all. Kept as one compact map rather than a
+     * field on every entry — single source, easy to tweak; [ExerciseLibraryTest] checks every
+     * COMPOUND entry is listed.
      */
     private val patterns: Map<String, MovementPattern> = mapOf(
         // Pressing
@@ -967,7 +982,57 @@ object ExerciseLibrary {
         "conventional-deadlift" to MovementPattern.HINGE,
         "trap-bar-deadlift" to MovementPattern.HINGE,
         "kb-swing" to MovementPattern.HINGE,
-        "cable-crunch" to MovementPattern.CORE
+        "cable-crunch" to MovementPattern.CORE,
+        "mwm-oblique-side-bend" to MovementPattern.CORE,
+        "side-plank" to MovementPattern.CORE,
+        // Compounds that had no pattern (2026-09-21): the hip thrust is deliberately NOT a hinge
+        // (see above), and the upright row shares its prime mover with a lateral raise.
+        "barbell-hip-thrust" to MovementPattern.HIP_THRUST,
+        "mwm-upright-row" to MovementPattern.LATERAL_RAISE,
+        // Single-joint families (2026-09-21)
+        "db-fly" to MovementPattern.FLY,
+        "pec-deck" to MovementPattern.FLY,
+        "cable-fly" to MovementPattern.FLY,
+        "mwm-straight-arm-pulldown" to MovementPattern.PULLOVER,
+        "db-pullover" to MovementPattern.PULLOVER,
+        "db-lateral-raise" to MovementPattern.LATERAL_RAISE,
+        "cable-lateral-raise" to MovementPattern.LATERAL_RAISE,
+        "band-lateral-raise" to MovementPattern.LATERAL_RAISE,
+        "db-rear-delt-fly" to MovementPattern.REAR_DELT,
+        "face-pull" to MovementPattern.REAR_DELT,
+        "reverse-pec-deck" to MovementPattern.REAR_DELT,
+        "band-pull-apart" to MovementPattern.REAR_DELT,
+        "suspension-face-pull" to MovementPattern.REAR_DELT,
+        "bw-prone-reverse-fly" to MovementPattern.REAR_DELT,
+        "db-hammer-curl" to MovementPattern.CURL,
+        "db-curl" to MovementPattern.CURL,
+        "db-incline-curl" to MovementPattern.CURL,
+        "mwm-seated-bicep-curl" to MovementPattern.CURL,
+        "db-concentration-curl" to MovementPattern.CURL,
+        "mwm-standing-bicep-curl" to MovementPattern.CURL,
+        "barbell-curl" to MovementPattern.CURL,
+        "ez-bar-curl" to MovementPattern.CURL,
+        "cable-curl" to MovementPattern.CURL,
+        "preacher-curl" to MovementPattern.CURL,
+        "bw-doorframe-curl" to MovementPattern.CURL,
+        "db-overhead-tricep-ext" to MovementPattern.TRICEP_EXTENSION,
+        "db-skull-crusher" to MovementPattern.TRICEP_EXTENSION,
+        "ez-bar-skullcrusher" to MovementPattern.TRICEP_EXTENSION,
+        "mwm-tricep-pushdown" to MovementPattern.PUSHDOWN,
+        "cable-tricep-pushdown" to MovementPattern.PUSHDOWN,
+        "leg-extension" to MovementPattern.LEG_EXTENSION,
+        "leg-curl" to MovementPattern.LEG_CURL,
+        "lying-leg-curl" to MovementPattern.LEG_CURL,
+        "seated-leg-curl" to MovementPattern.LEG_CURL,
+        "bw-sliding-leg-curl" to MovementPattern.LEG_CURL,
+        "db-glute-bridge" to MovementPattern.HIP_THRUST,
+        "bw-single-leg-glute-bridge" to MovementPattern.HIP_THRUST,
+        "mwm-leg-kickback" to MovementPattern.KICKBACK,
+        "cable-glute-kickback" to MovementPattern.KICKBACK,
+        "standing-calf-raise" to MovementPattern.CALF_RAISE,
+        "seated-calf-raise" to MovementPattern.CALF_RAISE,
+        "single-leg-calf-raise" to MovementPattern.CALF_RAISE,
+        "calf-raise-machine" to MovementPattern.CALF_RAISE
     )
 
     fun patternOf(def: ExerciseDef): MovementPattern =

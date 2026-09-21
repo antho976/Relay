@@ -148,9 +148,9 @@ class SetLogUseCase @Inject constructor(
         val weightLb = WeightParser.parse(weightText, effectivePlan.unit, plateLb)
 
         // ── Hard jump bound (wrist policy — a confirm TAP, no dialogs on a 1.4" screen) ──
+        val frontierMax = workoutRepo.repMaxFrontierForExercise(effectiveId, null)
+            .mapNotNull { it.weightLb }.maxOrNull()
         if (!cmd.confirmedJump) {
-            val frontierMax = workoutRepo.repMaxFrontierForExercise(effectiveId, null)
-                .mapNotNull { it.weightLb }.maxOrNull()
             if (weightLb != null && frontierMax != null && frontierMax > 0) {
                 val isPlates = effectivePlan.unit == ExerciseUnit.PLATES
                 val bigJump =
@@ -161,13 +161,22 @@ class SetLogUseCase @Inject constructor(
         }
 
         // Resolve rest now; the handler starts it only after the command transaction commits.
+        // Priced on the set actually performed, exactly as the phone does (2026-09-21).
         val restOverride = swap?.restTimerOverrideSeconds
         val rest = RestAdvisor.restSeconds(
             plan = effectivePlan,
             lastEffort = null,
             overrideSeconds = restOverride,
             compoundBase = settingsRepo.restCompoundSeconds.first(),
-            isolationBase = settingsRepo.restIsolationSeconds.first()
+            isolationBase = settingsRepo.restIsolationSeconds.first(),
+            performed = com.forge.app.domain.adapt.PerformedSet(
+                reps = reps,
+                weightLb = weightLb,
+                referenceWeightLb = listOfNotNull(
+                    frontierMax,
+                    row?.id?.let { id -> setsByLogged[id]?.mapNotNull { it.weightLb }?.maxOrNull() }
+                ).maxOrNull()
+            )
         )
 
         // Read-and-create in one transaction, the same funnel the day screen uses. Separate steps

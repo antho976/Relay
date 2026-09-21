@@ -212,8 +212,9 @@ class ProgramGeneratorTest {
         val numeric = Regex("""^\d+(-\d+)?$""")
         val days = ProgramGenerator.generate(GenerationParams(5), emptySet(), emptySet(), emptySet(), seed = 21L)
         days.flatMap { it.exercises }.forEach { ex ->
-            val natural = ExerciseLibrary.byId(ex.libId)!!.defaultReps
-            val ok = ex.reps in schemeValues || (!numeric.matches(natural) && ex.reps == natural)
+            val def = ExerciseLibrary.byId(ex.libId)!!
+            val natural = def.defaultReps
+            val ok = ex.reps in schemeValues || ((!numeric.matches(natural) || def.fixedReps) && ex.reps == natural)
             assertTrue("reps '${ex.reps}' (natural '$natural') for ${ex.libId}", ok)
         }
     }

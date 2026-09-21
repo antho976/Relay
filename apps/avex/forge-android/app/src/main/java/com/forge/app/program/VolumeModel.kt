@@ -1,5 +1,6 @@
 package com.forge.app.program
 
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 /**
@@ -21,6 +22,24 @@ object VolumeModel {
         RepScheme.STRENGTH -> 3      // the day's heavy compound
         RepScheme.HYPERTROPHY -> 3
         RepScheme.PUMP -> 2          // accessory / isolation
+    }
+
+    /**
+     * Extra sets the heavy compound carries for a strength goal (2026-09-21): 4-6-rep work needs
+     * more sets to reach a useful dose, and it is the one slot a strength trainee is there for.
+     * Only at full volume — a beginner's ramp and a deload keep the plain base.
+     */
+    private const val STRENGTH_GOAL_BONUS_SETS = 1
+
+    private fun slotSets(slot: MuscleSlot, focus: Set<MuscleGroup>, volumeFactor: Double, goal: String, minSets: Int): Int {
+        val withEmphasis = baseSets(slot.scheme) + if (slot.muscle in focus) EMPHASIS_BONUS_SETS else 0
+        val scaled = withEmphasis * volumeFactor
+        // The heavy compound rounds UP so a beginner's 0.8 ramp keeps 3 sets of the main lift while
+        // the accessories drop to 2 — a compound emphasis rather than a flat 2-2-2 day.
+        val rounded = if (slot.scheme == RepScheme.STRENGTH) ceil(scaled).toInt() else scaled.roundToInt()
+        val strengthBonus = if (slot.scheme == RepScheme.STRENGTH && goal == "get_stronger" && volumeFactor >= 1.0)
+            STRENGTH_GOAL_BONUS_SETS else 0
+        return (rounded + strengthBonus).coerceIn(minSets, MAX_SETS)
     }
 
     /** Conservative direct-set ceilings, not biological limits. Arms/delts/glutes also receive
@@ -62,6 +81,9 @@ object VolumeModel {
      * [bias] is the coach's net applied volume adjustment per muscle (CoachGenBias): each +1 lands on
      * the muscle's currently-smallest slot, each −1 comes off its largest — spread, not stacked —
      * applied BEFORE the weekly cap so the junk-volume guard still has the last word.
+     *
+     * [goal] is the onboarding goal: `get_stronger` gives the heavy compound an extra set at full
+     * volume (see [slotSets]); every other goal uses the scheme bases as they are.
      */
     fun allocate(
         days: List<DayArchetype>,
@@ -69,6 +91,7 @@ object VolumeModel {
         volumeFactor: Double = 1.0,
         minSets: Int = MIN_SETS,
         bias: Map<MuscleGroup, Int> = emptyMap(),
+        goal: String = "build_muscle",
         /**
          * Per-muscle weekly ceilings measured from THIS athlete (Coach v3 D's `PersonalProfile`),
          * overriding the population defaults in [weeklyCap] where they've been earned. Empty until
@@ -78,11 +101,7 @@ object VolumeModel {
         personalCaps: Map<MuscleGroup, Int> = emptyMap()
     ): List<List<Int>> {
         val result: List<IntArray> = days.map { day ->
-            IntArray(day.targets.size) { si ->
-                val slot = day.targets[si]
-                val withEmphasis = baseSets(slot.scheme) + if (slot.muscle in focus) EMPHASIS_BONUS_SETS else 0
-                (withEmphasis * volumeFactor).roundToInt().coerceIn(minSets, MAX_SETS)
-            }
+            IntArray(day.targets.size) { si -> slotSets(day.targets[si], focus, volumeFactor, goal, minSets) }
         }
         val positions = HashMap<MuscleGroup, MutableList<Pair<Int, Int>>>()
         days.forEachIndexed { di, day ->
@@ -103,7 +122,10 @@ object VolumeModel {
                 }
             }
         }
-        // Per-muscle weekly cap: shave the largest slots down until under the ceiling.
+        // Per-muscle weekly cap: shave sets until under the ceiling — accessories first (PUMP, then
+        // HYPERTROPHY, largest slot first within a scheme), the heavy STRENGTH compound last. Shaving
+        // "the largest slot" alone hit the compound first on every tie, so an advanced leg day ran
+        // 3 sets of squats next to 4 of leg extensions (2026-09-21).
         positions.forEach { (muscle, slots) ->
             // Focused muscles get a little headroom above the cap so the emphasis isn't immediately
             // trimmed away — but bounded (not slots.size × bonus, which on a high-frequency split let a
@@ -115,21 +137,32 @@ object VolumeModel {
             val effectiveCap = if (personal) cap.coerceAtLeast(0) else maxOf(cap, slots.size * minSets)
             var total = slots.sumOf { (di, si) -> result[di][si] }
             while (total > effectiveCap) {
-                val biggest = slots.filter { (di, si) -> result[di][si] > floor }
-                    .maxByOrNull { (di, si) -> result[di][si] } ?: break
-                result[biggest.first][biggest.second] -= 1
+                val victim = slots.filter { (di, si) -> result[di][si] > floor }
+                    .maxWithOrNull(trimOrder(days) { (di, si) -> result[di][si] }) ?: break
+                result[victim.first][victim.second] -= 1
                 total -= 1
             }
         }
         // A long exercise list or several priority muscles must not silently create a marathon.
         // Trim extra sets, keeping each movement's minimum and the weekly ceilings above intact.
-        result.forEach { sets ->
+        result.forEachIndexed { di, sets ->
             val sessionCap = maxOf(sets.size * minSets, minOf(24, (24 * volumeFactor).roundToInt()))
             while (sets.sum() > sessionCap) {
-                val index = sets.indices.filter { sets[it] > minSets }.maxByOrNull { sets[it] } ?: break
+                val index = sets.indices.filter { sets[it] > minSets }
+                    .maxWithOrNull(compareBy({ trimRank(days[di].targets[it].scheme) }, { sets[it] })) ?: break
                 sets[index]--
             }
         }
         return result.map { it.toList() }
+    }
+
+    /** Lowest-priority scheme first (PUMP > HYPERTROPHY > STRENGTH), then the largest slot. */
+    private fun trimOrder(days: List<DayArchetype>, setsAt: (Pair<Int, Int>) -> Int): Comparator<Pair<Int, Int>> =
+        compareBy<Pair<Int, Int>>({ (di, si) -> trimRank(days[di].targets[si].scheme) }, { setsAt(it) })
+
+    private fun trimRank(scheme: RepScheme): Int = when (scheme) {
+        RepScheme.PUMP -> 2
+        RepScheme.HYPERTROPHY -> 1
+        RepScheme.STRENGTH -> 0
     }
 }

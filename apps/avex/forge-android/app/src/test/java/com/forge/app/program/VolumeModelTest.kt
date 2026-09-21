@@ -119,6 +119,35 @@ class VolumeModelTest {
     }
 
     @Test
+    fun strengthGoalAddsASetToTheHeavyCompoundOnly() {
+        val days = SplitTemplates.forDays(5)
+        val muscle = VolumeModel.allocate(days)
+        val strength = VolumeModel.allocate(days, goal = "get_stronger")
+        days.forEachIndexed { di, day ->
+            day.targets.forEachIndexed { si, slot ->
+                if (slot.scheme == RepScheme.STRENGTH) assertEquals("${day.key}[$si]", muscle[di][si] + 1, strength[di][si])
+                else assertEquals("${day.key}[$si]", muscle[di][si], strength[di][si])
+            }
+        }
+        // Not at reduced volume: a beginner's ramp and a deload keep the plain base.
+        val beginner = VolumeModel.allocate(days, volumeFactor = 0.8, goal = "get_stronger")
+        val beginnerMuscle = VolumeModel.allocate(days, volumeFactor = 0.8)
+        assertEquals(beginnerMuscle, beginner)
+    }
+
+    @Test
+    fun beginnersKeepThreeSetsOfTheHeavyCompound() {
+        // 3 × 0.8 = 2.4 used to round every slot to a flat 2; the heavy compound now rounds up.
+        val days = SplitTemplates.forDays(5)
+        val sets = VolumeModel.allocate(days, volumeFactor = GoalProfiles.volumeFactor("beginner"))
+        days.forEachIndexed { di, day ->
+            day.targets.forEachIndexed { si, slot ->
+                assertEquals("${day.key}[$si] ${slot.scheme}", if (slot.scheme == RepScheme.STRENGTH) 3 else 2, sets[di][si])
+            }
+        }
+    }
+
+    @Test
     fun perSessionVolumeStaysReasonable() {
         // A "standard" day should be ~12–24 sets, not 30 (the clamp-everything-to-max failure mode).
         VolumeModel.allocate(SplitTemplates.forDays(3)).forEach { day ->

@@ -67,4 +67,28 @@ class ExerciseLibraryTest {
             }
         }
     }
+
+    @Test
+    fun everyCompoundCarriesAMovementPattern() {
+        // A COMPOUND entry with no pattern silently counts as an un-penalized isolation for the
+        // generator's repeat guard AND gets no secondary muscles in the recovery guard. The hip
+        // thrust and upright row had fallen through this way (2026-09-21).
+        val missing = ExerciseLibrary.all
+            .filter { ExerciseTag.COMPOUND in it.tags && ExerciseLibrary.patternOf(it) == MovementPattern.ISOLATION }
+            .map { it.id }
+        assertTrue("compounds without a movement pattern: $missing", missing.isEmpty())
+    }
+
+    @Test
+    fun everyIsolationInAMultiSlotMuscleBelongsToAFamily() {
+        // Muscles that get two slots on one day rely on isolation families to avoid a DB + cable
+        // lateral raise or two skull crushers in the same session. Only bona-fide odd-ones-out
+        // (adduction / abduction stations, wall sit, dead hang, superman) may stay generic.
+        val allowed = setOf("mwm-inner-thigh", "mwm-outer-leg-kick", "wall-sit", "dead-hang", "bw-superman", "side-plank")
+        val generic = ExerciseLibrary.all
+            .filter { ExerciseTag.ISOLATION in it.tags && ExerciseLibrary.patternOf(it) == MovementPattern.ISOLATION }
+            .map { it.id }
+            .filterNot { it in allowed }
+        assertTrue("isolations with no family: $generic", generic.isEmpty())
+    }
 }

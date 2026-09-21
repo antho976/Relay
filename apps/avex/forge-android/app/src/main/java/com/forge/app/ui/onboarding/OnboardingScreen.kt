@@ -227,9 +227,10 @@ fun OnboardingScreen(
     }
     // The volume that split plans to carry, before any gear filter — what lets the ledger draw a
     // real week one step before the exercises exist.
-    val plannedSets = remember(daysPerWeek, experience) {
-        if (daysPerWeek in 1..7) ProgramGenerator.plannedSetsPerDay(daysPerWeek, experience.ifBlank { "intermediate" })
-        else emptyList()
+    val plannedSets = remember(daysPerWeek, experience, goal) {
+        if (daysPerWeek in 1..7) ProgramGenerator.plannedSetsPerDay(
+            daysPerWeek, experience.ifBlank { "intermediate" }, goal.ifBlank { "build_muscle" }
+        ) else emptyList()
     }
     // Pure preview — recomputed whenever an input or the re-roll seed changes. Null until there is
     // gear to build from: the ledger draws empty tracks rather than inventing a week (§12).
