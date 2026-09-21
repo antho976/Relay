@@ -103,7 +103,10 @@ object VolumeModel {
                 }
             }
         }
-        // Per-muscle weekly cap: shave the largest slots down until under the ceiling.
+        // Per-muscle weekly cap: shave sets until under the ceiling — accessories first (PUMP, then
+        // HYPERTROPHY, largest slot first within a scheme), the heavy STRENGTH compound last. Shaving
+        // "the largest slot" alone hit the compound first on every tie, so an advanced leg day ran
+        // 3 sets of squats next to 4 of leg extensions (2026-09-21).
         positions.forEach { (muscle, slots) ->
             // Focused muscles get a little headroom above the cap so the emphasis isn't immediately
             // trimmed away — but bounded (not slots.size × bonus, which on a high-frequency split let a
@@ -115,21 +118,32 @@ object VolumeModel {
             val effectiveCap = if (personal) cap.coerceAtLeast(0) else maxOf(cap, slots.size * minSets)
             var total = slots.sumOf { (di, si) -> result[di][si] }
             while (total > effectiveCap) {
-                val biggest = slots.filter { (di, si) -> result[di][si] > floor }
-                    .maxByOrNull { (di, si) -> result[di][si] } ?: break
-                result[biggest.first][biggest.second] -= 1
+                val victim = slots.filter { (di, si) -> result[di][si] > floor }
+                    .maxWithOrNull(trimOrder(days) { (di, si) -> result[di][si] }) ?: break
+                result[victim.first][victim.second] -= 1
                 total -= 1
             }
         }
         // A long exercise list or several priority muscles must not silently create a marathon.
         // Trim extra sets, keeping each movement's minimum and the weekly ceilings above intact.
-        result.forEach { sets ->
+        result.forEachIndexed { di, sets ->
             val sessionCap = maxOf(sets.size * minSets, minOf(24, (24 * volumeFactor).roundToInt()))
             while (sets.sum() > sessionCap) {
-                val index = sets.indices.filter { sets[it] > minSets }.maxByOrNull { sets[it] } ?: break
+                val index = sets.indices.filter { sets[it] > minSets }
+                    .maxWithOrNull(compareBy({ trimRank(days[di].targets[it].scheme) }, { sets[it] })) ?: break
                 sets[index]--
             }
         }
         return result.map { it.toList() }
+    }
+
+    /** Lowest-priority scheme first (PUMP > HYPERTROPHY > STRENGTH), then the largest slot. */
+    private fun trimOrder(days: List<DayArchetype>, setsAt: (Pair<Int, Int>) -> Int): Comparator<Pair<Int, Int>> =
+        compareBy<Pair<Int, Int>>({ (di, si) -> trimRank(days[di].targets[si].scheme) }, { setsAt(it) })
+
+    private fun trimRank(scheme: RepScheme): Int = when (scheme) {
+        RepScheme.PUMP -> 2
+        RepScheme.HYPERTROPHY -> 1
+        RepScheme.STRENGTH -> 0
     }
 }

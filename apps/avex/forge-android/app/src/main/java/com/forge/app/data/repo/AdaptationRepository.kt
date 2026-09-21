@@ -27,6 +27,7 @@ import com.forge.app.program.GenerationParams
 import com.forge.app.program.MuscleGroup
 import com.forge.app.program.ProblemArea
 import com.forge.app.program.Program
+import com.forge.app.program.ProgramGenerator
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -172,17 +173,30 @@ class AdaptationRepository @Inject constructor(
         }
 
         val now = clock.nowMs()
+        // What each day trains, by library id (a swapped slot counts as the lift it was swapped
+        // to), so a proposal never duplicates a movement the same day already holds.
+        val dayIdsBySlot = HashMap<String, Set<String>>()
+        effectiveDays.forEach { day ->
+            val ids = day.exercises.map { swaps[it.id]?.swappedExerciseId ?: it.id }.toSet()
+            day.exercises.forEach { dayIdsBySlot[it.id] = ids }
+        }
         val snap = SnapshotAssembler.assemble(
             nowMs = now,
             program = effectiveDays,
             swapCandidateIds = { plan ->
                 // Never offer the exercise the slot is ALREADY swapped to: it was the deterministic
                 // first candidate, so the coach re-proposed a rotation that was already in effect,
-                // every week, permanently occupying the change budget.
+                // every week, permanently occupying the change budget. Ranked by the generator
+                // (same role, same pattern first, loadable ahead of handheld) and excluding the
+                // rest of the day — library order used to send a stalled back squat to a goblet
+                // squat and a stalled fly to the press the day opened with (2026-09-21).
                 val current = swaps[plan.id]?.swappedExerciseId
-                ExerciseLibrary.swapCandidates(plan.muscle, equipment, disliked + restrictedIds, frozenIds)
-                    .map { it.id }
-                    .filter { it != plan.id && it != current }
+                val performed = current?.let { ExerciseLibrary.byId(it) } ?: ExerciseLibrary.byId(plan.id)
+                val pool = ExerciseLibrary.swapCandidates(plan.muscle, equipment, disliked + restrictedIds, frozenIds)
+                val ranked = if (performed != null)
+                    ProgramGenerator.rankSwapCandidates(performed, pool, dayIdsBySlot[plan.id].orEmpty())
+                else pool
+                ranked.map { it.id }.filter { it != plan.id && it != current }
             },
             sessions = sessions,
             loggedExercises = loggedExercises,
@@ -405,7 +419,10 @@ class AdaptationRepository @Inject constructor(
             settingsRepository.availableEquipment.first()
                 .mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
             settingsRepository.likedExercises.first(),
-            settingsRepository.dislikedExercises.first()
+            settingsRepository.dislikedExercises.first(),
+            // Same seed as the program being deloaded: lighter volume on the SAME movements, not a
+            // new program (2026-09-21).
+            keepPicks = true
         )
         // A deload regenerates a real plan, so a freestyle user who reached this is now following one —
         // flip freestyle off (mirrors SettingsViewModel.generateDeloadWeek) so the plan actually surfaces.

@@ -558,7 +558,9 @@ class SettingsViewModel @Inject constructor(
             val days = settingsRepo.daysPerWeek.first()
             programRepository.generate(
                 buildParams(days).copy(deload = true),
-                currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first()
+                currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first(),
+                // Same movements at lighter volume — the seed of the program being deloaded.
+                keepPicks = true
             )
             if (wasFreestyle) settingsRepo.setFreestyleMode(false)
             _statusMessage.value = "Deload week generated at lighter volume. Open Gym to see it."

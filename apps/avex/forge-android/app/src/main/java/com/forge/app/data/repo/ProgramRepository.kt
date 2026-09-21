@@ -186,15 +186,25 @@ class ProgramRepository @Inject constructor(
         }
     }
 
-    /** Generate a fresh program from [params] + equipment/like/dislike, persist it, and load it (Phase 2). */
+    /**
+     * Generate a fresh program from [params] + equipment/like/dislike, persist it, and load it (Phase 2).
+     *
+     * [keepPicks] regenerates from the seed the active program was built with, so — inputs being
+     * equal — the athlete gets the SAME movements at the new volume. That is what a deload and the
+     * restore after it need: they used to draw a fresh seed, so the deload week replaced the whole
+     * program and the restore replaced it again (3 of 30 slots survived; 2026-09-21). A program
+     * from before the seed was recorded falls back to a fresh draw.
+     */
     suspend fun generate(
         params: GenerationParams,
         available: Set<Equipment>,
         liked: Set<String>,
         disliked: Set<String>,
         recent: Set<String> = emptySet(),
-        seed: Long = System.nanoTime()
+        seed: Long = System.nanoTime(),
+        keepPicks: Boolean = false
     ): Unit = mutationMutex.withLock {
+        val effectiveSeed = if (keepPicks) settings.programGenerationSeed.first() ?: seed else seed
         // The regenerate is about to clear the customization overlay (reconcile below) — fold the
         // coach's learned adjustments into the new BASELINE so they survive the refresh. volumeBias
         // and prefer/avoid feed selection inside the generator; repBias is applied to the slot reps
@@ -202,7 +212,7 @@ class ProgramRepository @Inject constructor(
         val bias = coachBias()
         val genParams = params.copy(volumeBias = bias.volumeBias, avoid = params.avoid + bias.avoid)
         val generated = ProgramGenerator.generate(
-            genParams, available, liked + bias.prefer, disliked, recent, seed
+            genParams, available, liked + bias.prefer, disliked, recent, effectiveSeed
         )
         val days = ArrayList<ProgramDay>()
         val slots = ArrayList<ProgramSlot>()
@@ -248,6 +258,7 @@ class ProgramRepository @Inject constructor(
         // remaining window: a crash between this transaction and this write is finished on the
         // next boot by [reconcilePendingGeneration].
         settings.setDeloadWeekStartMs(if (params.deload) intent.atMs else 0L)
+        settings.setProgramGenerationSeed(effectiveSeed)
         settings.clearProgramGenerationIntent()
         loadIntoFacade(refreshWidget = true)
     }
@@ -351,14 +362,16 @@ class ProgramRepository @Inject constructor(
      *
      * Deliberately NOT [rerollAll]: that passes the current picks as `recent` so the generator
      * anti-repeats them, which would charge the user a whole new program as the price of ending a
-     * deload. Here `recent` is empty and the params are unchanged, so the generator is free to
-     * re-select what they were already doing — at full volume, because [currentParams] leaves
-     * `deload` unset and [generate] clears the deload marker for any non-deload regenerate.
+     * deload. Here `recent` is empty, the params are unchanged and `keepPicks` replays the seed the
+     * program was built with, so the generator re-selects what they were already doing — at full
+     * volume, because [currentParams] leaves `deload` unset and [generate] clears the deload marker
+     * for any non-deload regenerate.
      */
     suspend fun restoreAfterDeload() {
         generate(
             currentParams(), currentEquipment(),
-            settings.likedExercises.first(), settings.dislikedExercises.first()
+            settings.likedExercises.first(), settings.dislikedExercises.first(),
+            keepPicks = true
         )
     }
 
@@ -372,9 +385,11 @@ class ProgramRepository @Inject constructor(
 
     /** Re-roll just one day's exercises (anti-repeating its current picks), keeping the rest intact. */
     suspend fun rerollDay(dayKey: String) {
-        // Anti-repeat against the WHOLE current week, not just this day, so a single-day re-roll
-        // doesn't hand back a movement another (unchanged) day already uses.
-        val recent = Program.days.flatMap { it.exercises }.map { it.id }.toSet()
+        // Anti-repeat this day's own picks (recent), and seed the generator's week-repeat penalty
+        // with what the OTHER, unchanged days actually use — it used to generate a phantom week and
+        // de-duplicate against that instead of the real one (2026-09-21).
+        val recent = Program.days.filter { it.key == dayKey }.flatMap { it.exercises }.map { it.id }.toSet()
+        val usedElsewhere = Program.days.filter { it.key != dayKey }.flatMap { it.exercises }.map { it.id }.toSet()
         val bias = coachBias()
         // Volume-stable rotation: a single-day re-roll changes WHICH exercises, not how many sets, so
         // it keeps this day's current EFFECTIVE per-position set counts (baseline + any override) and
@@ -385,13 +400,17 @@ class ProgramRepository @Inject constructor(
             currentParams().let { it.copy(avoid = it.avoid + bias.avoid) },
             currentEquipment(),
             settings.likedExercises.first() + bias.prefer, settings.dislikedExercises.first(),
-            recent, System.nanoTime()
+            recent, System.nanoTime(),
+            usedElsewhere = usedElsewhere, onlyDay = dayKey
         )
         val day = fresh.firstOrNull { it.key == dayKey } ?: return
+        // Positional set carry-over is only meaningful when the day kept its shape; a day that
+        // gained or lost a slot takes the generator's own counts rather than shifted ones.
+        val carrySets = effectiveSets.size == day.exercises.size
         val slots = day.exercises.mapIndexed { j, ge ->
             ProgramSlot(
                 "$dayKey-$j", dayKey, j, ge.libId,
-                effectiveSets.getOrElse(j) { ge.sets }, bias.repBias[ge.libId] ?: ge.reps
+                if (carrySets) effectiveSets[j] else ge.sets, bias.repBias[ge.libId] ?: ge.reps
             )
         }
         // One transaction (seam finding 13). Only THIS day's overlays were cleared, so fold only this

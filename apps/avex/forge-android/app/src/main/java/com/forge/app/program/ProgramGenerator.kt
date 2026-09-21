@@ -59,11 +59,15 @@ data class GeneratedDay(
  * Pure, deterministic-by-seed program generator. Picks the split for the requested day-count, then
  * fills each day's muscle slots from the equipment-filtered library. Selection is weighted so:
  * **dislikes are excluded, likes weighted up, [recent] picks down-weighted** (rotation variety),
- * the slot's scheme steers toward the right movement type (STRENGTH→compound, PUMP→isolation),
- * **repeated movement patterns within a day are penalized** so you don't get three of the same row
- * (program-unlock Phase 4 — generator intelligence), and each movement's [ExerciseDef.pickBias]
- * keeps niche accessories from headlining a slot as often as the muscle's default picks. Set counts
- * come from [VolumeModel] (frequency-aware). No Android/DB deps → unit-testable on the JVM.
+ * the slot's scheme steers toward the right movement type (STRENGTH→loadable compound, PUMP→isolation),
+ * a slot's preferred [MuscleSlot.pattern] steers toward the right lead (a squat, not a trap-bar
+ * deadlift, opens a quad day), **repeated movement patterns within a day are penalized as a group**
+ * so five hinge candidates can't out-vote one leg curl (program-unlock Phase 4 — generator
+ * intelligence), single-joint families (two lateral raises, two curls) count as repeats too, and
+ * each movement's [ExerciseDef.pickBias] keeps niche accessories from headlining a slot as often as
+ * the muscle's default picks. Pins land in the slot that fits their tags — an isolation never takes
+ * the heavy slot. Set counts come from [VolumeModel] (frequency-aware). No Android/DB deps →
+ * unit-testable on the JVM.
  */
 object ProgramGenerator {
 
@@ -76,8 +80,22 @@ object ProgramGenerator {
     private const val ROLE_UNILATERAL = 0.35
     /** AMRAP/timed movements can't express a heavy 6-10 — poor leads for a progressive-overload slot. */
     private const val ROLE_NON_LOADABLE = 0.5
-    /** Down-weight a movement whose pattern was already used in this day (variety, not a hard rule). */
-    private const val PATTERN_REPEAT_PENALTY = 0.25
+    /**
+     * Total weight a *used* pattern's candidates share, relative to one fresh candidate. Applied as a
+     * group (divided among the candidates of that pattern), not per candidate: per-candidate 0.25
+     * let five stale hinges out-weigh the one fresh leg curl, so 38% of leg days ran two deadlift
+     * variants (2026-09-21).
+     */
+    private const val PATTERN_REPEAT_PENALTY = 0.1
+    /** Multiplier on a candidate whose pattern differs from the slot's preferred [MuscleSlot.pattern]. */
+    private const val SLOT_PATTERN_MISMATCH = 0.15
+    /**
+     * Heavy-slot loadability tiers (2026-09-21). A barbell / plate-loaded / stack movement is the
+     * progressive-overload path; dumbbells and kettlebells top out; bodyweight can't add load at all.
+     * Applied in STRENGTH slots only — a DB-only setup is unaffected (every candidate shares a tier).
+     */
+    private const val LOAD_TIER_HANDHELD = 0.6
+    private const val LOAD_TIER_BODYWEIGHT = 0.3
     /** Volume multiplier for a deload week (Phase 4 periodization). */
     private const val DELOAD_FACTOR = 0.55
     /** Down-weight a movement already used *earlier this week* so multi-day splits vary across days. */
@@ -88,6 +106,9 @@ object ProgramGenerator {
     private const val LIGHT_DB_PENALTY = 0.3
     /** Multiplier for a movement the coach tried and the watcher failed (soft, like dislikes aren't). */
     private const val AVOID_PENALTY = 0.2
+    /** Swap ranking: a candidate of the current movement's own pattern is the "fresh variation" a stall wants. */
+    private const val SWAP_SAME_PATTERN = 1.5
+    private const val SWAP_ROLE_MISMATCH = 0.3
 
     /**
      * The sets each day of a [daysPerWeek] split is planned to carry, before any equipment filter —
@@ -136,13 +157,23 @@ object ProgramGenerator {
         return params.volumeBias.keys.associateWith { m -> (withBias[m] ?: 0) - (without[m] ?: 0) }
     }
 
+    /**
+     * @param usedElsewhere library ids the *rest of the program* already carries when only one day is
+     *   being re-rolled — seeded into the week-repeat penalty so the fresh day avoids what the
+     *   unchanged days use (2026-09-21). Ignored for a whole-program generate.
+     * @param onlyDay when non-null, only the day with this key is filled; every other day comes back
+     *   with an empty exercise list. A single-day re-roll used to generate a phantom week and
+     *   de-duplicate against *that* instead of the real one.
+     */
     fun generate(
         params: GenerationParams,
         available: Set<Equipment>,
         liked: Set<String>,
         disliked: Set<String>,
         recent: Set<String> = emptySet(),
-        seed: Long = Random.nextLong()
+        seed: Long = Random.nextLong(),
+        usedElsewhere: Set<String> = emptySet(),
+        onlyDay: String? = null
     ): List<GeneratedDay> {
         val rng = Random(seed)
         val template = SplitTemplates.forDays(params.daysPerWeek)
@@ -157,31 +188,39 @@ object ProgramGenerator {
             personalCaps = params.personalCaps
         )
         val maxDifficulty = GoalProfiles.maxDifficulty(params.experience)
+        val pool = ExerciseLibrary.availablePool(available, params.frozenIds)
+        // Every filter that applies before selection, per muscle — shared by the slots AND the pin
+        // pre-pass so a pin can never bypass what a slot honours.
+        val candidatesByMuscle = HashMap<MuscleGroup, List<ExerciseDef>>()
+        fun candidatesFor(muscle: MuscleGroup): List<ExerciseDef> = candidatesByMuscle.getOrPut(muscle) {
+            val avail = pool
+                .filter { it.muscle == muscle && it.id !in disliked }
+                .filter { ExerciseLibrary.contraindicationsOf(it).none { area -> area in params.problemAreas } }
+            // Last-resort bodyweight fills only enter the pool when nothing the user actually owns
+            // can train this muscle — so an equipped user never gets a bodyweight squat, but a
+            // bodyweight-only / minimal setup is never starved into an empty day.
+            val forMuscle = avail.filterNot { it.fallbackOnly }.ifEmpty { avail }
+            // Respect the experience ceiling even when it leaves a slot unavailable.
+            forMuscle.filter { it.difficulty.ordinal <= maxDifficulty.ordinal }
+        }
         // Tracks picks across the WHOLE week so a muscle trained on two days gets different movements.
-        val usedInWeek = HashSet<String>()
+        val usedInWeek = HashSet<String>(if (onlyDay != null) usedElsewhere else emptySet())
         val liftDays = template.mapIndexed { di, day ->
+            if (onlyDay != null && day.key != onlyDay) {
+                return@mapIndexed GeneratedDay(day.key, day.name, day.word, day.accentHex, day.key, emptyList())
+            }
             val usedInDay = HashSet<String>()
             val usedPatterns = HashSet<MovementPattern>()
+            val pinnedFor = placePins(day, setsByDay[di], params.pinned, ::candidatesFor)
             val exercises = day.targets.mapIndexedNotNull { si, slot ->
                 if (setsByDay[di][si] == 0) return@mapIndexedNotNull null
-                val avail = ExerciseLibrary.availablePool(available, params.frozenIds)
-                    .filter { it.muscle == slot.muscle && it.id !in disliked }
-                    .filter { ExerciseLibrary.contraindicationsOf(it).none { area -> area in params.problemAreas } }
-                // Last-resort bodyweight fills only enter the pool when nothing the user actually owns
-                // can train this muscle — so an equipped user never gets a bodyweight squat, but a
-                // bodyweight-only / minimal setup is never starved into an empty day.
-                val forMuscle = avail.filterNot { it.fallbackOnly }.ifEmpty { avail }
                 // Never place the same exercise twice in one day: if the (equipment-limited) pool is
                 // exhausted, DROP the slot (a slightly shorter day) rather than repeat a movement —
                 // a duplicate reads as a bug, breaks per-exercise logging, and crashed the session list.
-                val base = forMuscle.filterNot { it.id in usedInDay }
-                // Respect the experience ceiling even when it leaves a slot unavailable.
-                val candidates = base.filter { it.difficulty.ordinal <= maxDifficulty.ordinal }
-                // Pins are honored only after equipment, recovery-related restrictions and skill filters.
-                val pinned = candidates.firstOrNull { it.id in params.pinned }
+                val candidates = candidatesFor(slot.muscle).filterNot { it.id in usedInDay }
                 // A heavy STRENGTH slot must lead with a compound when one is available — an
                 // isolation (leg curl, fly) may only headline if it's all the equipment allows.
-                val pool = if (slot.scheme == RepScheme.STRENGTH)
+                val slotPool = if (slot.scheme == RepScheme.STRENGTH)
                     candidates.filter { ExerciseTag.COMPOUND in it.tags }.ifEmpty { candidates }
                 else candidates
                 // Light dumbbells can't progressively load a heavy slot — when the user's heaviest
@@ -190,20 +229,24 @@ object ProgramGenerator {
                 // overload path; auto-coach Phase 0, generalized to WEIGHT movements 2026-06-11).
                 val preferStack = slot.scheme == RepScheme.STRENGTH &&
                     (params.dbMaxLb ?: Double.MAX_VALUE) < LIGHT_DB_LB &&
-                    pool.any {
+                    slotPool.any {
                         (it.unit == ExerciseUnit.PLATES || it.unit == ExerciseUnit.WEIGHT) &&
-                            ExerciseTag.COMPOUND in it.tags
+                            !isHandheld(it) && ExerciseTag.COMPOUND in it.tags
                     }
-                val pick = pinned ?: weightedPick(pool, rng) { def ->
+                // Group size per pattern, so a used pattern's penalty is shared across its candidates.
+                val patternCounts = slotPool.groupingBy { ExerciseLibrary.patternOf(it) }.eachCount()
+                val pick = pinnedFor[si] ?: weightedPick(slotPool, rng) { def ->
                     val likeW = if (def.id in liked) LIKE_BOOST else 1.0
                     val recentW = if (def.id in recent) RECENT_PENALTY else 1.0
                     val weekW = if (def.id in usedInWeek) WEEK_REPEAT_PENALTY else 1.0
                     val pattern = ExerciseLibrary.patternOf(def)
                     val patternW = if (pattern != MovementPattern.ISOLATION && pattern in usedPatterns)
-                        PATTERN_REPEAT_PENALTY else 1.0
-                    val stackW = if (preferStack && def.unit == ExerciseUnit.DUMBBELL) LIGHT_DB_PENALTY else 1.0
+                        PATTERN_REPEAT_PENALTY / (patternCounts[pattern] ?: 1) else 1.0
+                    val slotPatternW = if (slot.pattern != null && pattern != slot.pattern) SLOT_PATTERN_MISMATCH else 1.0
+                    val stackW = if (preferStack && isHandheld(def)) LIGHT_DB_PENALTY else 1.0
                     val avoidW = if (def.id in params.avoid) AVOID_PENALTY else 1.0
-                    likeW * recentW * weekW * roleFactor(def, slot.scheme) * patternW * def.pickBias * stackW * avoidW
+                    likeW * recentW * weekW * roleFactor(def, slot.scheme) * patternW * slotPatternW *
+                        def.pickBias * stackW * avoidW
                 } ?: return@mapIndexedNotNull null
                 usedInDay += pick.id
                 usedInWeek += pick.id
@@ -219,20 +262,95 @@ object ProgramGenerator {
     }
 
     /**
-     * Heavy (STRENGTH) slots favour **bilateral** compounds (squat / hinge / press / row) as the lead
-     * lift, demote unilateral compounds (lunges, single-leg) to accessory weight, and avoid isolation.
-     * PUMP slots favour isolation; HYPERTROPHY is neutral.
+     * Decide which slot each pinned movement takes on [day], before any slot is filled (2026-09-21).
+     *
+     * A pin used to be honoured on the FIRST slot of its muscle — the STRENGTH slot — whatever the
+     * movement was, so a pinned fly led the push day at 6-10 and the day lost its press. Now a
+     * compound pin prefers the muscle's STRENGTH slot (then its first slot); an isolation pin takes
+     * the muscle's last PUMP slot, then its last HYPERTROPHY slot, and never a STRENGTH slot — on a
+     * day where the muscle's only slot is the heavy one, the pin simply isn't placed there.
+     */
+    private fun placePins(
+        day: DayArchetype,
+        sets: List<Int>,
+        pinned: Set<String>,
+        candidatesFor: (MuscleGroup) -> List<ExerciseDef>
+    ): Map<Int, ExerciseDef> {
+        if (pinned.isEmpty()) return emptyMap()
+        val taken = HashMap<Int, ExerciseDef>()
+        // Sorted for determinism: a pin's placement can't depend on Set iteration order.
+        pinned.sorted().forEach { id ->
+            val def = ExerciseLibrary.byId(id) ?: return@forEach
+            // Pins are honored only after equipment, recovery-related restrictions and skill filters.
+            if (candidatesFor(def.muscle).none { it.id == id }) return@forEach
+            if (taken.values.any { it.id == id }) return@forEach
+            val open = day.targets.indices.filter {
+                day.targets[it].muscle == def.muscle && sets[it] > 0 && it !in taken
+            }
+            val slot = if (ExerciseTag.COMPOUND in def.tags) {
+                open.firstOrNull { day.targets[it].scheme == RepScheme.STRENGTH } ?: open.firstOrNull()
+            } else {
+                open.lastOrNull { day.targets[it].scheme == RepScheme.PUMP }
+                    ?: open.lastOrNull { day.targets[it].scheme == RepScheme.HYPERTROPHY }
+            } ?: return@forEach
+            taken[slot] = def
+        }
+        return taken
+    }
+
+    /**
+     * Rank the swap pool for a slot currently holding [current] — the order the coach's stall-swap
+     * and the pain re-route should propose from (2026-09-21). Library order used to be the ranking,
+     * so a stalled back squat was told to rotate to a goblet squat and a stalled fly to the bench
+     * press the day already opened with. The ranking is deterministic (stable sort, library order on
+     * ties): same role as [current] (compound ↔ compound), the same movement pattern first (a fresh
+     * *variation* is what restarts a stall), loadable movements ahead of handheld / bodyweight for a
+     * compound, [ExerciseDef.pickBias] last. [excludeIds] — the day's other movements — never appear.
+     */
+    fun rankSwapCandidates(
+        current: ExerciseDef,
+        pool: List<ExerciseDef>,
+        excludeIds: Set<String> = emptySet()
+    ): List<ExerciseDef> {
+        val currentCompound = ExerciseTag.COMPOUND in current.tags
+        val currentPattern = ExerciseLibrary.patternOf(current)
+        val eligible = pool.filter { it.id != current.id && it.id !in excludeIds }
+        val ranked = eligible.filterNot { it.fallbackOnly }.ifEmpty { eligible }
+        return ranked.sortedByDescending { def ->
+            val role = if ((ExerciseTag.COMPOUND in def.tags) == currentCompound) 1.0 else SWAP_ROLE_MISMATCH
+            val load = if (currentCompound) loadTier(def) * (if (def.defaultReps.matches(NUMERIC_REPS)) 1.0 else ROLE_NON_LOADABLE) else 1.0
+            val pattern = if (ExerciseLibrary.patternOf(def) == currentPattern) SWAP_SAME_PATTERN else 1.0
+            role * load * pattern * def.pickBias
+        }
+    }
+
+    /**
+     * Heavy (STRENGTH) slots favour **bilateral, loadable** compounds (squat / hinge / press / row) as
+     * the lead lift, demote unilateral compounds (lunges, single-leg) to accessory weight, prefer a
+     * bar or stack over handheld and bodyweight loads, and avoid isolation. PUMP slots favour
+     * isolation; HYPERTROPHY is neutral.
      */
     private fun roleFactor(def: ExerciseDef, scheme: RepScheme): Double = when (scheme) {
         RepScheme.STRENGTH -> when {
             ExerciseTag.COMPOUND !in def.tags -> ROLE_MISMATCH
             isUnilateral(def) -> ROLE_UNILATERAL
             !def.defaultReps.matches(NUMERIC_REPS) -> ROLE_NON_LOADABLE
-            else -> ROLE_MATCH
+            else -> ROLE_MATCH * loadTier(def)
         }
         RepScheme.PUMP -> if (ExerciseTag.ISOLATION in def.tags) 2.0 else 0.5
         RepScheme.HYPERTROPHY -> 1.0
     }
+
+    /** Barbell / plate-loaded / stack = 1.0; dumbbells and kettlebells top out; bodyweight can't add load. */
+    private fun loadTier(def: ExerciseDef): Double = when {
+        def.unit == ExerciseUnit.BODYWEIGHT -> LOAD_TIER_BODYWEIGHT
+        isHandheld(def) -> LOAD_TIER_HANDHELD
+        else -> 1.0
+    }
+
+    /** Dumbbell or kettlebell — loads that top out at the heaviest one the user owns. */
+    private fun isHandheld(def: ExerciseDef): Boolean =
+        def.unit == ExerciseUnit.DUMBBELL || Equipment.KETTLEBELL in def.equipment
 
     /** Per-side movements (lunges, step-ups, single-leg work) — flagged by per-leg reps or LUNGE pattern. */
     private fun isUnilateral(def: ExerciseDef): Boolean =
@@ -240,10 +358,18 @@ object ProgramGenerator {
 
     /** Numeric ranges like "8-10" / "15" take the goal-adjusted scheme reps; "AMRAP"/"30-60s"/"10/leg" stay. */
     private val NUMERIC_REPS = Regex("""^\d+(-\d+)?$""")
+
+    /**
+     * Reps for [def] in a [scheme] slot. Non-numeric and [ExerciseDef.fixedReps] movements keep their
+     * own range. An isolation that ends up in a STRENGTH slot (nothing compound was available) is
+     * prescribed the HYPERTROPHY range, never a heavy 6-10 wall sit or leg curl (2026-09-21).
+     */
     private fun repsFor(def: ExerciseDef, scheme: RepScheme, goal: String): String =
-        if (!def.defaultReps.matches(NUMERIC_REPS)) def.defaultReps
+        if (!def.defaultReps.matches(NUMERIC_REPS) || def.fixedReps) def.defaultReps
         else if (ExerciseTag.COMPOUND !in def.tags && goal == "get_stronger") {
             if (scheme == RepScheme.PUMP) "12-15" else "8-12"
+        } else if (ExerciseTag.COMPOUND !in def.tags && scheme == RepScheme.STRENGTH) {
+            GoalProfiles.reps(goal, RepScheme.HYPERTROPHY)
         } else GoalProfiles.reps(goal, scheme)
 
     private inline fun weightedPick(

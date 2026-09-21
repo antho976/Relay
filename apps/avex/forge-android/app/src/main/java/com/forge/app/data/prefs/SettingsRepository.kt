@@ -847,6 +847,11 @@ class SettingsRepository @Inject constructor(
     suspend fun clearProgramGenerationIntent() =
         context.forgePreferences.edit { it.remove(PreferenceKeys.PROGRAM_GENERATION_INTENT) }
 
+    /** Seed the active program was generated from, or null for a program that predates the key. */
+    val programGenerationSeed: Flow<Long?> = pref { it[PreferenceKeys.PROGRAM_GENERATION_SEED] }
+    suspend fun setProgramGenerationSeed(seed: Long) =
+        context.forgePreferences.edit { it[PreferenceKeys.PROGRAM_GENERATION_SEED] = seed }
+
     // ─── Day-aware scheduling (weekly plan vs legacy sequence) ────────────────
     /** "sequence" (default — day after the last finished) or "weekday" (fixed Mon..Sun plan). */
     val scheduleMode: Flow<String> = pref { it[PreferenceKeys.SCHEDULE_MODE] ?: com.forge.app.domain.schedule.WeeklySchedule.MODE_SEQUENCE }
