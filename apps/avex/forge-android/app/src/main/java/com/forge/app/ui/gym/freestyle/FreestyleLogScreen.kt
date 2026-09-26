@@ -285,7 +285,13 @@ fun FreestyleLogScreen(
                 }
             }
             if (sets.isEmpty()) null
-            else FreestyleExerciseInput(ex.libId, sets, ex.name.takeIf { ex.custom }, ex.muscle.code.takeIf { ex.custom })
+            // The name travels for every non-library row (it becomes swapped_name, which is all an
+            // imported row has); a muscle only for a user-created move, the one kind the registry
+            // owns. Sending it for imported ids registered them as Chest (audit 2026-09-26, 02).
+            else FreestyleExerciseInput(
+                ex.libId, sets, ex.name.takeIf { ex.custom },
+                ex.muscle?.code.takeIf { ex.custom && isCustomExerciseId(ex.libId) }
+            )
         }
         if (payload.isNotEmpty()) {
             leaving = true   // stop the debounced autosave from re-writing the draft after save clears it

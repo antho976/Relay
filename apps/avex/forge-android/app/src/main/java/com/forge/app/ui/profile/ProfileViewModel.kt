@@ -88,11 +88,20 @@ class ProfileViewModel @Inject constructor(
     private val _bodyweightMessage = MutableStateFlow<String?>(null)
     val bodyweightMessage: StateFlow<String?> = _bodyweightMessage.asStateFlow()
 
-    /** Save a typed weigh-in (lb) for [date] with an optional [note]; the trend updates reactively. */
+    /**
+     * Save a typed weigh-in (lb) for [date]; the trend updates reactively. A null [note] means the
+     * note field was never touched, so the day keeps whatever note it already has, rather than the
+     * sheet's possibly-unseeded blank erasing it (audit 2026-09-26, 03). A blank string clears it.
+     */
     fun logBodyweight(weightLb: Double, date: LocalDate, note: String?) = viewModelScope.launch {
-        bodyweightRepo.log(weightLb, date, note)
+        if (note == null) bodyweightRepo.logWeightOnly(weightLb, date)
+        else bodyweightRepo.log(weightLb, date, note)
         _bodyweightMessage.value = "Saved."
     }
+
+    /** The weigh-in stored for [date], however old — seeds the log sheet for a backdated day. */
+    suspend fun bodyweightOn(date: LocalDate): BodyweightEntry? =
+        runCatching { bodyweightRepo.entryFor(date) }.getOrNull()
 
     /** Pull the latest weight from Health Connect into the log (no-op if nothing newer). */
     fun importBodyweight() = viewModelScope.launch {

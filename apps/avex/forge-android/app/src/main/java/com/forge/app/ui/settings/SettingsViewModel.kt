@@ -448,20 +448,10 @@ class SettingsViewModel @Inject constructor(
     fun setCoachEnabled(v: Boolean) = write { settingsRepo.setCoachEnabled(v) }
     /** Weekly cardio-minutes goal for the cardio tab (no effect on the lifting plan). */
     fun setCardioWeeklyTargetMin(min: Int) = write { settingsRepo.setCardioWeeklyTargetMin(min) }
-    /** All generation inputs read from prefs — keeps the three generate paths in sync (Phase 2 / 3). */
-    private suspend fun buildParams(days: Int) = com.forge.app.program.GenerationParams(
-        daysPerWeek = days,
-        emphasis = settingsRepo.programEmphasis.first(),
-        goal = settingsRepo.userGoal.first().ifBlank { "build_muscle" },
-        experience = settingsRepo.programExperience.first(),
-        problemAreas = settingsRepo.problemAreas.first()
-            .mapNotNull { com.forge.app.program.ProblemArea.fromCode(it) }.toSet(),
-        priorityMuscles = settingsRepo.priorityMuscles.first()
-            .mapNotNull { runCatching { com.forge.app.program.MuscleGroup.fromCode(it) }.getOrNull() }.toSet(),
-        pinned = settingsRepo.pinnedExercises.first(),
-        dbMaxLb = settingsRepo.maxDbWeightLb.first(),
-        frozenIds = settingsRepo.frozenExerciseIds.first()
-    )
+    /** All generation inputs read from prefs, through the one shared builder: a copy here left out
+     *  personal caps, so Settings generated a different program than rotation and deload (audit
+     *  2026-09-26, 08). */
+    private suspend fun buildParams(days: Int) = programRepository.currentParams(days)
     private suspend fun currentEquipment(): Set<com.forge.app.program.Equipment> =
         settingsRepo.availableEquipment.first()
             .mapNotNull { runCatching { com.forge.app.program.Equipment.valueOf(it) }.getOrNull() }.toSet()

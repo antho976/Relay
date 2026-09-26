@@ -469,6 +469,7 @@ fun ProfileScreen(
             entries = bodyweight,
             canImport = weightConnected,
             message = bodyweightMessage,
+            lookupDay = viewModel::bodyweightOn,
             onSave = { lb, date, note ->
                 viewModel.logBodyweight(lb, date, note)
                 showWeightSheet = false
