@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.mutableStateOf
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
@@ -61,8 +62,20 @@ data class FreestyleExerciseInput(
 class FreestyleLogViewModel @Inject constructor(
     private val workoutRepo: WorkoutRepository,
     private val settingsRepo: SettingsRepository,
-    private val customizationRepo: CustomizationRepository
+    private val customizationRepo: CustomizationRepository,
+    private val snackbar: com.forge.app.ui.common.SnackbarController
 ) : ViewModel() {
+
+    /**
+     * The app's one Undo snackbar, for a removed set or exercise. The removal already happened on
+     * screen; [restore] puts it back if the user taps Undo inside the window.
+     */
+    fun offerUndo(message: String, restore: () -> Unit) {
+        snackbar.showUndo(message) { restore() }
+    }
+
+    /** The in-progress log. Compose state, held here so it outlives a configuration change. */
+    internal val log = FsLogState()
 
     val weightUnit: StateFlow<com.forge.app.domain.units.WeightUnit> =
         settingsRepo.weightUnit.stateIn(
@@ -177,4 +190,34 @@ class FreestyleLogViewModel @Inject constructor(
             onSaved()
         }
     }
+}
+
+/**
+ * Everything the freestyle logger is holding for the workout in progress. Plain snapshot state, read
+ * and written by the screen, kept on the ViewModel only so it survives activity recreation; process
+ * death is covered separately by the autosaved [FreestyleDraft].
+ */
+internal class FsLogState {
+    val items = mutableStateOf<List<FsExercise>>(emptyList())
+    /** The one exercise whose entry slab is showing; null folds everything. */
+    val activeId = mutableStateOf<String?>(null)
+    /** Entry-slab state per exercise, present only once touched. Absent means "show the seed". */
+    val entries = mutableStateOf<Map<String, FsEntry>>(emptyMap())
+    val tagsOpenFor = mutableStateOf<String?>(null)
+    val lastTime = mutableStateOf<Map<String, List<com.forge.app.data.db.entities.LoggedSet>>>(emptyMap())
+    val pinnedNotes = mutableStateOf<Map<String, String>>(emptyMap())
+    /** A running hold timer: which exercise and when it started. */
+    val stopwatch = mutableStateOf<Pair<String, Long>?>(null)
+    val lastLoggedAtMs = mutableStateOf<Long?>(null)
+    val showBrowser = mutableStateOf(false)
+    val showTemplates = mutableStateOf(false)
+    /** When the logger was opened: the saved session's start, so its duration isn't ~0. A resumed
+     *  draft can rewind it (bounded on resume). */
+    val openedAtMs = mutableStateOf(System.currentTimeMillis())
+    val draftId = mutableStateOf(java.util.UUID.randomUUID().toString())
+    val pendingDraft = mutableStateOf<FreestyleDraft?>(null)
+    val draftChecked = mutableStateOf(false)
+    /** Set the moment the screen commits to leaving (save or back), which stops the debounced
+     *  autosave from resurrecting a resume offer for a workout that was just saved. */
+    val leaving = mutableStateOf(false)
 }

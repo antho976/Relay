@@ -28,10 +28,6 @@
 3 alpha ui/gym/freestyle/ExerciseBrowserScreen.kt 0.12
 1 alpha ui/gym/freestyle/ExerciseBrowserScreen.kt 0.28
 1 alpha ui/gym/freestyle/ExerciseBrowserScreen.kt 0.3
-1 alpha ui/gym/freestyle/FreestyleLogScreen.kt 0.14
-1 alpha ui/gym/freestyle/FreestyleLogScreen.kt 0.3
-1 alpha ui/gym/freestyle/FreestyleLogScreen.kt 0.4
-2 alpha ui/gym/freestyle/FreestyleLogScreen.kt 0.5
 2 alpha ui/gym/session/SessionDetailComponents.kt 0.26
 2 alpha ui/gym/session/SessionDetailComponents.kt 0.34
 1 alpha ui/gym/stats/StatsAdherence.kt 0.18
@@ -148,7 +144,6 @@
 1 bang ui/gym/train/DayScreen.kt ! in string  # announceForAccessibility("New personal record!") — the ONLY real §11 bang left in the tree now that != / !! no longer count. Screen-reader copy, so fixing it is a spoken-voice decision, not a mechanical one.
 3 divider ui/cardio/components/CardioLogComponents.kt Divider(
 1 divider ui/common/Editorial.kt Divider(
-1 divider ui/gym/freestyle/FreestyleLogScreen.kt Divider(
 1 divider ui/gym/stats/StatsOverview.kt Divider(
 4 divider ui/gym/train/DaySessionContent.kt Divider(
 1 divider ui/gym/train/components/AddExerciseSheet.kt Divider(
@@ -179,7 +174,6 @@
 1 em-dash security/LocalAppLock.kt em dash in string
 2 em-dash service/WeeklyRecapWorker.kt em dash in string
 2 em-dash ui/coach/CoachUi.kt em dash in string
-1 em-dash ui/gym/freestyle/FreestyleLogScreen.kt em dash in string
 2 em-dash ui/gym/train/DayDialogs.kt em dash in string
 1 em-dash ui/gym/train/DayListScreen.kt em dash in string
 1 em-dash ui/gym/train/DayScreen.kt em dash in string
@@ -210,7 +204,6 @@
 1 font-size ui/common/DayLog.kt fontSize=
 3 font-size ui/common/Editorial.kt fontSize=
 1 font-size ui/common/SegmentPill.kt fontSize=
-11 font-size ui/gym/freestyle/FreestyleLogScreen.kt fontSize=
 2 font-size ui/gym/freestyle/FreestyleTemplatePicker.kt fontSize=
 3 font-size ui/gym/session/SessionDetailCharts.kt fontSize=
 5 font-size ui/gym/session/SessionDetailComponents.kt fontSize=

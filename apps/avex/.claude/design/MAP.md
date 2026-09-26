@@ -422,7 +422,18 @@ any activity, `buildYearActivity` in `ProfileRepository`), filmstrip.
   tap-into-day + long-press reorder + Save/Add at page end; day detail = rename/type/colour + exercise
   rows → SetsReps sheet (set stepper + rep-preset pills + in-place swap), duplicate/remove day at page
   end; removes undo via snackbar, never confirm)
-- `FREESTYLE_LOG`
+- `FREESTYLE_LOG` (the "go with the flow" logger, `ui/gym/freestyle/FreestyleLog*`). **Rebuilt
+  set-by-set 2026-09-26.** Empty, it is a start page: a search field (opens the exercise browser),
+  YOUR MOVES (recent moves with last time's top set and when, an accent + adds one), and REPEAT A
+  WORKOUT (the two latest sessions behind a neutral repeat mark; "all ->" opens the picker). With no
+  history it shows a three-step guide instead. In a workout exactly one exercise is open: its logged
+  sets form a ledger (tap one to edit it in the slab; delete offers Undo), a LAST row carries last
+  time's sets (tap to load, "Repeat all" on a fresh exercise), and the entry slab starts filled from
+  the set just logged or last time's first set, so a straight set is one tap on Log set. Every other
+  exercise folds to one line with its top set. The header reads clock, rest since the last set,
+  exercises, sets and volume; the footer is an "Add an exercise" search field over a RECENT rail. The
+  log lives on the ViewModel (survives rotation and font changes); the autosaved draft covers
+  process death and reopens as UNFINISHED WORKOUT with an accent Resume log hero.
 - `MIRROR_TEST` (the photo **Gallery**, `ui/profile/MirrorTest*` + `Gallery*`). **Rebuilt
   gallery-first 2026-08-22** (Antho: "a full revamp, it should be like a real gallery, with date,
   tags, compare, muscle tag"). The library leads; the instruments scroll away above it.
@@ -733,7 +744,7 @@ Styled dark: `surface` plate, onBg text, accent Undo.
 **Timed holds** (GYMAP-51: plank/dead-hang/wall-sit/side-plank, flagged `ExerciseDef.timed`) log a
 held DURATION not reps — the set-log row's REPS column becomes HOLD and the input swaps in a `m:ss`
 readout + a wall-clock-anchored start/stop stopwatch (live session, `SetInputRow`) or a manual
-`m:ss` field (freestyle); a timed set stores `logged_set.duration_seconds`, carries reps 0, and is
+`m:ss` field with a start/stop timer (freestyle); a timed set stores `logged_set.duration_seconds`, carries reps 0, and is
 excluded from every weight×reps stat (volume/e1RM/PR) — history/detail read it as "0:45" / "Best
 0:45".
 
