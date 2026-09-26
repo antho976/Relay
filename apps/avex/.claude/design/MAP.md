@@ -357,12 +357,17 @@ what became of them, and the one forward line. On, `SIGNALS`, `BLOCK`, `WHAT IT 
 `LEARNED` draw between and after them as before. It is a VIEW preference: the weekly pass, the
 inputs it reads and auto-apply are untouched, and the switch rides its own collector in
 `CoachViewModel.refreshWhileVisible` rather than `EngineInputSignals`. The `WHERE_YOU_STAND` deep
-link opens at the top of the account while it is off. **The page closes on the switch** (`coachTracking`,
-`CoachScreen.kt`): off, one muted line names what is off and a `Show advanced tracking →` action
-flips the preference in place so the page grows under the tap; on, the same rung reads `Hide`. A
-Settings switch nobody has seen is a feature nobody has, so the page is its first home and
-Settings → Coach its second. The action is onBg, not accent (§14). `coach-ledger-basic.png` pins
-the default; every other Coach golden is the advanced page.
+link opens at the top of the account while it is off. **Off, the page OFFERS the switch in a pop-up**
+(`CoachAdvancedPrompt.kt`, 2026-09-25, Antho: "should be a pop-up like the notifications ... with a
+remind me later or ignore"; it replaced a `Show advanced tracking →` foot line). It is shaped like
+the arrival receipt (an overlay under the status bar, surface fill, nothing on the page moves) but
+carries a decision: `Turn on` flips the preference in place, `Remind me later` holds it back a week,
+`Ignore` retires it for good. Both are one preference, `SettingsRepository.coachAdvancedPromptAfter`
+(epoch ms; 0 = now, `Long.MAX_VALUE` = ignored). It waits ~700ms for the entrance cascade, only
+shows on a page with an account to read, and only while the hub is on Coach. On, the account closes
+on `Hide advanced tracking →` (`coachTracking`), onBg not accent (§14). Settings → Coach stays the
+switch's other home. `coach-ledger-basic.png` pins the default, `coach-advanced-prompt.png` the
+pop-up; every other Coach golden is the advanced page.
 
 **The spine** (`Modifier.ledgerSpine`, `CoachUi.kt`) is the one line on the page and it is DATA: the
 time axis, drawn at x=10dp inside the gutter so all four regions keep the one 24dp content column.
