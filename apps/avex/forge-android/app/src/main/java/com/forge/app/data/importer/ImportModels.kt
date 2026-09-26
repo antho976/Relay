@@ -218,6 +218,8 @@ sealed interface ImportResult {
         val duplicatesSkipped: Int = 0,
         /** Workouts an earlier build imported with less in them, corrected in place from this file. */
         val workoutsCorrected: Int = 0,
+        /** Lifting sessions an earlier build made out of cardio rows, removed now the rows import as cardio. */
+        val phantomWorkoutsRemoved: Int = 0,
         /** Cardio entries written (Avex JSON, and Strong/Hevy cardio rows). */
         val cardioEntries: Int = 0,
         /** Coach goals written (Avex JSON export only). */
@@ -273,6 +275,11 @@ fun ImportResult.userMessage(): String = when (this) {
             append(" $workoutsCorrected already in your log ")
             append(if (workoutsCorrected == 1) "was" else "were")
             append(" filled in from this file.")
+        }
+        if (phantomWorkoutsRemoved > 0) {
+            append(" $phantomWorkoutsRemoved cardio ")
+            append(if (phantomWorkoutsRemoved == 1) "session an earlier import logged as a workout is" else "sessions an earlier import logged as workouts are")
+            append(" now cardio.")
         }
         if (cardioEntries > 0) {
             append(" $cardioEntries cardio ")
