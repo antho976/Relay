@@ -154,8 +154,8 @@ internal fun FsResumePrompt(
         items.forEach { exercise ->
             val n = exercise.sets.size
             val meta = buildString {
-                append(exercise.muscle.displayName.uppercase())
-                append(" · $n ${if (n == 1) "SET" else "SETS"}")
+                exercise.muscle?.let { append(it.displayName.uppercase()).append(" · ") }
+                append("$n ${if (n == 1) "SET" else "SETS"}")
                 exercise.topSet(weightUnit)?.let { append(" · TOP ${exercise.setReading(it, unitLabel)}") }
             }
             FsExerciseTitle(exercise, meta)
@@ -179,8 +179,12 @@ private fun FsExerciseTitle(
 ) {
     val cs = MaterialTheme.colorScheme
     Row(modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
-        MuscleFigure(
-            muscle = exercise.muscle,
+        val muscle = exercise.muscle
+        // An imported move with no known muscle draws nothing rather than a guessed figure; the
+        // empty slot keeps its name aligned with the rows around it.
+        if (muscle == null) Box(Modifier.width(40.dp).height(44.dp))
+        else MuscleFigure(
+            muscle = muscle,
             lit = lerp(cs.primary, cs.onSurface, 0.32f),
             body = cs.onSurfaceVariant.copy(alpha = 0.15f),
             detail = cs.onSurfaceVariant.copy(alpha = 0.35f),
@@ -210,8 +214,7 @@ internal fun FsFoldedCard(
     val cs = MaterialTheme.colorScheme
     val n = exercise.sets.size
     val meta = buildString {
-        append(exercise.muscle.displayName.uppercase())
-        append(" · ")
+        exercise.muscle?.let { append(it.displayName.uppercase()).append(" · ") }
         if (n == 0) append("NO SETS YET")
         else {
             append("$n ${if (n == 1) "SET" else "SETS"}")
@@ -262,8 +265,8 @@ internal fun FsOpenCard(
     val volume = exercise.volumeLb(weightUnit)
     val n = exercise.sets.size
     val meta = buildString {
-        append(exercise.muscle.displayName.uppercase())
-        append(" · $n ${if (n == 1) "SET" else "SETS"}")
+        exercise.muscle?.let { append(it.displayName.uppercase()).append(" · ") }
+        append("$n ${if (n == 1) "SET" else "SETS"}")
         if (volume > 0) append(" · ${formatWeight(volume, weightUnit)}")
     }
     Column(

@@ -161,6 +161,9 @@ class FreestyleLogViewModel @Inject constructor(
                 // registry here, before the rows land, so every consumer of the finished session
                 // (stats, anatomy, recap, template reuse) can already resolve the id.
                 items.forEach { ex ->
+                    // Only a user-created id belongs in the registry: an imported id written there
+                    // is read as that muscle by every aggregation (audit 2026-09-26, 02).
+                    if (!isCustomExerciseId(ex.libId)) return@forEach
                     val name = ex.customName?.takeIf { it.isNotBlank() } ?: return@forEach
                     val muscle = ex.customMuscleCode?.takeIf { it.isNotBlank() } ?: return@forEach
                     settingsRepo.registerCustomExercise(com.forge.app.program.CustomExerciseDef(ex.libId, name, muscle))

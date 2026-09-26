@@ -39,6 +39,8 @@ import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.db.entities.LeanMassEntry
 import com.forge.app.domain.measurement.BodyMeasurementType
 import com.forge.app.domain.units.formatVolumeCompact
+import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.units.formatWeightDelta
 import com.forge.app.domain.units.lengthInputValue
 import com.forge.app.domain.units.lengthUnitLabel
 import com.forge.app.domain.units.toDisplayLength
@@ -309,11 +311,13 @@ private fun ComparisonBar(
 // ── Body ──────────────────────────────────────────────────────────────────────────────────────
 
 /** One body metric, flattened for a row. A null [figure] means nothing has been logged yet. */
-private data class BodyMetric(
+internal data class BodyMetric(
     val label: String,
     val figure: String?,
     val unit: String?,
     val deltaValue: Double?,
+    /** The delta's magnitude as text when a bare one-decimal number would mislead (stones). */
+    val deltaText: String? = null,
     val series: List<Double>,
     /** The verb TalkBack announces for the row's tap: "Log weight", "Open sizes". */
     val action: String,
@@ -447,7 +451,7 @@ private fun BodyMetricRow(metric: BodyMetric, accent: Color, onBg: Color, muted:
                 metric.deltaValue?.let { d ->
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        "${if (d > 0) "↑" else "↓"} ${"%.1f".format(abs(d))}",
+                        "${if (d > 0) "↑" else "↓"} ${metric.deltaText ?: "%.1f".format(abs(d))}",
                         style = MaterialTheme.typography.labelSmall,
                         // Direction only: gaining or losing weight is not a verdict, so this stays
                         // on the muted rung rather than reaching for positive/negative (§11).
@@ -476,17 +480,24 @@ private fun BodyMetricRow(metric: BodyMetric, accent: Color, onBg: Color, muted:
 /** The comparison window for the "vs about a month ago" delta, matching the shipped body rows. */
 private const val DELTA_WINDOW_MS = 30L * 86_400_000L
 
-private fun weightMetric(
+internal fun weightMetric(
     entries: List<BodyweightEntry>,
     weightUnit: com.forge.app.domain.units.WeightUnit,
     onLog: () -> Unit
 ): BodyMetric {
     val display = entries.map { toDisplayWeight(it.weightLb, weightUnit) }
+    // Stones reads as "12 st 12 lb": a whole-stone figure put 180 lb at "13 ST", up to 7 lb out,
+    // and its delta printed decimal stones with no unit (audit 2026-09-26, 03).
+    val stones = weightUnit == com.forge.app.domain.units.WeightUnit.ST
+    val lbDelta = if (stones) windowDelta(entries.map { it.recordedAt }, entries.map { it.weightLb })
+        ?.takeIf { abs(it) >= 0.5 } else null
     return BodyMetric(
         label = "WEIGHT",
-        figure = display.lastOrNull()?.roundToInt()?.toString(),
-        unit = unitLabel(weightUnit).uppercase(),
-        deltaValue = windowDelta(entries.map { it.recordedAt }, display),
+        figure = if (stones) entries.lastOrNull()?.let { formatWeight(it.weightLb, weightUnit) }
+            else display.lastOrNull()?.roundToInt()?.toString(),
+        unit = if (stones) null else unitLabel(weightUnit).uppercase(),
+        deltaValue = if (stones) lbDelta else windowDelta(entries.map { it.recordedAt }, display),
+        deltaText = lbDelta?.let { formatWeightDelta(abs(it), weightUnit) },
         series = display,
         action = "Log",
         zeroLabel = "Log your first",

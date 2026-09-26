@@ -53,6 +53,7 @@ import com.forge.app.domain.units.distanceUnitLabel
 import com.forge.app.domain.units.elevationInputValue
 import com.forge.app.domain.units.parseToKm
 import com.forge.app.domain.units.parseToMeters
+import com.forge.app.domain.units.storedUnlessEdited
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -122,7 +123,9 @@ fun CardioLogSheet(
     }
     var showCreateCustom by rememberSaveable { mutableStateOf(false) }
     var durationText by rememberSaveable(editKey) { mutableStateOf(editing?.durationMin?.takeIf { it > 0 }?.toString() ?: "") }
-    var distanceText by rememberSaveable(editKey) { mutableStateOf(editing?.distanceKm?.let { distanceInputValue(it, useMiles) } ?: "") }
+    // Kept so save can tell an untouched field from an edit: the seed is rounded to one decimal.
+    val distanceSeed = editing?.distanceKm?.let { distanceInputValue(it, useMiles) }
+    var distanceText by rememberSaveable(editKey) { mutableStateOf(distanceSeed ?: "") }
     var effortCode by rememberSaveable(editKey) { mutableStateOf(editing?.effort) }
     val effort = CardioEffort.fromCode(effortCode)
     var restReasonCode by rememberSaveable(editKey) { mutableStateOf(editing?.restReason) }
@@ -134,7 +137,8 @@ fun CardioLogSheet(
     // gain (outdoor). Elevation seeds in the display unit; the field stores metres regardless.
     var inclineText by rememberSaveable(editKey) { mutableStateOf(editing?.inclinePct?.takeIf { it > 0 }?.let { plainDecimalInput(it) } ?: "") }
     var lapsText by rememberSaveable(editKey) { mutableStateOf(editing?.laps?.takeIf { it > 0 }?.toString() ?: "") }
-    var elevationText by rememberSaveable(editKey) { mutableStateOf(editing?.elevationM?.takeIf { it > 0 }?.let { elevationInputValue(it, useMiles) } ?: "") }
+    val elevationSeed = editing?.elevationM?.takeIf { it > 0 }?.let { elevationInputValue(it, useMiles) }
+    var elevationText by rememberSaveable(editKey) { mutableStateOf(elevationSeed ?: "") }
     // Weather / environment tags (GYMAP-39), multi-select — held in the same comma-joined form the
     // row stores, so the bundle carries a String and the Set is decoded from it.
     var conditionsCode by rememberSaveable(editKey) { mutableStateOf(editing?.conditions) }
@@ -158,12 +162,15 @@ fun CardioLogSheet(
     // Accepts plain minutes ("90") or an H:MM clock value ("1:30" -> 90) — GYMAP-41.
     val durationInt = parseDurationMin(durationText)
     // The field holds a number in the display unit; convert to the canonical km we store + pass to onSave.
-    val distanceKm = parseToKm(distanceText, useMiles)
+    // An untouched field keeps the stored km: re-parsing its one-decimal seed turned an adopted
+    // 10.047 km into 10.0 on a note-only edit, and 5 km edited in miles mode into 4.989 (audit
+    // 2026-09-26, 05). Elevation, seeded as a whole number, gets the same rule.
+    val distanceKm = storedUnlessEdited(distanceText, distanceSeed, editing?.distanceKm) { parseToKm(it, useMiles) }
     val intervalInt = intervalText.toIntOrNull()
     // Per-type fields — raw parsed values; the VM keeps only the ones the chosen activity surfaces.
     val inclineValue = inclineText.toDoubleOrNull()
     val lapsValue = lapsText.toIntOrNull()
-    val elevationValue = parseToMeters(elevationText, useMiles)
+    val elevationValue = storedUnlessEdited(elevationText, elevationSeed, editing?.elevationM) { parseToMeters(it, useMiles) }
     val canSubmit = if (type.isRest) restReason != null else durationInt > 0
 
     val onBg = MaterialTheme.colorScheme.onBackground

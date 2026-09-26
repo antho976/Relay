@@ -24,6 +24,13 @@ class BodyweightRepository @Inject constructor(
 ) {
     fun observeRecent(limit: Int = 90): Flow<List<BodyweightEntry>> = dao.observeRecent(limit)
 
+    /**
+     * The weigh-in stored for [date], at any age. The log sheet seeds from this when the picked day is
+     * older than [observeRecent]'s window; without it an old day looked empty and Save wiped its
+     * note (audit 2026-09-26, 03).
+     */
+    suspend fun entryFor(date: LocalDate): BodyweightEntry? = dao.byDateKey(date.toString())
+
     /** Today, from the injected clock — the default for a weigh-in with no explicit date. */
     private fun today(zone: ZoneId = ZoneId.systemDefault()): LocalDate =
         Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
