@@ -274,12 +274,16 @@ proves the migration works, and a wrong one is a "cannot verify the data integri
 launch. It is not attempted here. The watch half IS closed: the pending edit survives the process,
 comes back as an offer to re-send under its original id, and is retired only by an acknowledgement.
 
-**M-03 — correction versus a second workout.** The duplicate print now covers every field the insert
-writes, including the session's end time, active duration, PR count, mood and each set's completion
-instant, which it did not before — so a corrected export is no longer silently discarded. It still
-lands BESIDE the original rather than replacing it, because a session row carries no source
-identity to replace by. That wants a `source_ref` column (source-install namespace plus the exported
-session id) and a transactional upsert, and it is the same migration blocker.
+**M-03 — correction versus a second workout.** Superseded by the 2026-09-26 audit (09 P2, "Import
+duplicate check duplicates history"). The exact print of every stored field made a corrected copy
+land BESIDE the original, and it also duplicated history on ordinary re-imports: a workout the user
+had annotated after importing, a movement the name matcher had since learned, and Avex's own export
+re-imported on the device that wrote it. The guard now compares only what the source states
+(`WorkoutIdentity`: start window, movement, and each set's reps, load, hold, RPE and warm-up), so an
+annotation-only correction is recognised as the same workout and skipped. An import still merges
+and never overwrites. Applying a correction in place still wants a `source_ref` column
+(source-install namespace plus the exported session id) and a transactional upsert, which is the
+same migration blocker.
 
 **H-02 — Peak's test week.** The phase now reaches the weight on the bar. A Peak week's test-day
 behaviour is still descriptive copy rather than a tagged prescription the session can act on.

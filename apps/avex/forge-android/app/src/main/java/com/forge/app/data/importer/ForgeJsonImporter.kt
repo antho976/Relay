@@ -111,17 +111,29 @@ class ForgeJsonImporter : GymImporter {
                         completedAtMs = set.optLong("completedAt", 0L).takeIf { it > 0L }
                     ))
                 }
-                if (sets.isNotEmpty()) {
+                val skipped = ex.optBoolean("skipped", false)
+                // A skipped exercise is exported with no sets and is still history: the skip feeds
+                // the honesty % and the engine's population. Dropping it lost every skip in a
+                // device migration and made the re-import no longer match the workout it came from.
+                if (sets.isNotEmpty() || skipped) {
                     exercises.add(ImportedExercise(
                         name = name, sets = sets,
                         note = ex.optString("note").ifBlank { null }, catalogueId = catalogueId,
                         orderIndex = ex.optInt("orderIndex", -1).takeIf { it >= 0 },
                         difficulty = difficulty,
-                        skipped = ex.optBoolean("skipped", false)
+                        skipped = skipped,
+                        sourceExerciseId = ex.optString("exerciseId").ifBlank { null },
+                        // Only meaningful on a library movement; an unmatched one keeps its name as
+                        // the label anyway.
+                        swappedName = ex.optString("swappedName").ifBlank { null }?.takeIf { catalogueId != null },
+                        wasPr = ex.optBoolean("wasPr", false),
+                        hitFullTarget = ex.optBoolean("hitFullTarget", false),
+                        supersetGroup = ex.optString("supersetGroup").ifBlank { null }
                     ))
                 }
             }
-            if (exercises.isNotEmpty()) {
+            // A workout of nothing but skipped exercises has no work in it to import.
+            if (exercises.any { it.sets.isNotEmpty() }) {
                 out.add(
                     ImportedSession(
                         startedAtMs = startedAt,
@@ -151,7 +163,7 @@ class ForgeJsonImporter : GymImporter {
      * existed and read by nobody: a user migrating via the JSON export lost every cardio session and
      * every goal, and the summary line ("Imported 612 workouts · 24,918 sets") never mentioned it.
      */
-    override fun parseExtras(text: String): ImportedExtras {
+    override fun parseExtras(text: String, assumeKg: Boolean): ImportedExtras {
         val root = try {
             JSONObject(text)
         } catch (e: org.json.JSONException) {
@@ -175,7 +187,10 @@ class ForgeJsonImporter : GymImporter {
                         note = c.optString("note").ifBlank { null },
                         inclinePct = c.optDouble("inclinePct", 0.0).takeIf { it > 0.0 },
                         laps = c.optInt("laps", 0).takeIf { it > 0 },
-                        elevationM = c.optDouble("elevationM", 0.0).takeIf { it != 0.0 }
+                        elevationM = c.optDouble("elevationM", 0.0).takeIf { it != 0.0 },
+                        intervalCount = c.optInt("intervalCount", 0).takeIf { it > 0 },
+                        hrZone = c.optString("hrZone").ifBlank { null },
+                        conditions = c.optString("conditions").ifBlank { null }
                     )
                 )
             }

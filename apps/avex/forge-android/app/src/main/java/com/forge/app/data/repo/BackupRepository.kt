@@ -69,21 +69,16 @@ class BackupRepository @Inject constructor(
     /** The outcome of a restore attempt — distinct reasons so the UI can explain a failure (E6). */
     enum class RestoreOutcome { SUCCESS, NOT_A_BACKUP, NEWER_VERSION, TOO_OLD, CORRUPT, TOO_LARGE, IO_ERROR, NO_BACKUP_FILE }
 
-    /**
-     * Write [value] under [key], or leave the key out entirely when it is null.
-     *
-     * A nullable NUMBER used to be written as the empty string ("elevationM": ""), which makes the
-     * same field a number on one row and a string on the next — any reader using optDouble/optLong
-     * on the empty form silently gets the default instead of a signal that the value was absent.
-     * Omission is the JSON way to say "not recorded": our own importer already reads every one of
-     * these through opt*(key, default), so a missing key lands on exactly the same default, and an
-     * outside reader sees one type per field.
-     *
-     * Deliberately not JSONObject.NULL: org.json renders that back through optString as the literal
-     * text "null", which would be worse than the empty string it replaced.
-     */
-    private fun JSONObject.putOrOmit(key: String, value: Any?) {
-        if (value != null) put(key, value)
+    /** Stream one of the shared field maps (`exportSessionFields` and friends) into [JsonWriter]. */
+    private fun JsonWriter.fields(fields: Map<String, Any>) {
+        fields.forEach { (key, v) ->
+            name(key)
+            when (v) {
+                is Number -> value(v)
+                is Boolean -> value(v)
+                else -> value(v.toString())
+            }
+        }
     }
 
     /**
@@ -151,40 +146,19 @@ class BackupRepository @Inject constructor(
             sessions.forEach { s ->
                 currentCoroutineContext().ensureActive()
                 val exercises = exercisesBySession[s.id].orEmpty()
-                val sObj = JSONObject().apply {
-                    put("id", s.id)
-                    put("dayKey", s.dayKey)
+                // The exact `startedAt` is in the shared fields, alongside the human date. Without
+                // it a weekly export re-read at local midnight described a DIFFERENT session start
+                // from the full export's, so importing both files inserted every recent workout twice.
+                val sObj = JSONObject(exportSessionFields(s, activeSecondsOf(s), moodBySession[s.id]?.mood ?: "")).apply {
                     put("date", dateFmt.format(Instant.ofEpochMilli(s.startedAt).atZone(zone)))
-                    // The exact instant, alongside the human date. Without it a weekly export
-                    // re-read at local midnight described a DIFFERENT session start from the full
-                    // export's, so importing both files inserted every recent workout twice.
-                    put("startedAt", s.startedAt)
-                    put("finishedAt", s.finishedAt ?: 0)
                     put("activeMin", activeMinutesOf(s))
-                    put("activeSeconds", activeSecondsOf(s))
-                    put("totalVolumeLb", s.totalVolumeLb ?: 0)
-                    put("prCount", s.prCount)
-                    put("setCount", s.setCount)
-                    put("intensity", s.intensity)
-                    put("tags", s.tags)
-                    put("journal", s.journal)
-                    put("mood", moodBySession[s.id]?.mood ?: "")
                     put("segments", segmentsJson(segmentsBySession[s.id].orEmpty()))
                     val exArr = JSONArray()
                     exercises.forEach { ex ->
                         val sets = setsByExercise[ex.id].orEmpty()
-                        exArr.put(JSONObject().apply {
-                            put("exerciseId", ex.exerciseId)
-                            // The DISPLAY name, the same resolution exportSessionJson uses. Falling
-                            // back to the raw id wrote "ua1" as the human name for the seed-split
-                            // ids, which resolve only on the display path and are deliberately not
-                            // in ExerciseLibrary: re-importing the file matched nothing, so years of
-                            // bench-press history came back as a movement called "Ua1", de-linked
-                            // from its own stats. The AI reading this file saw the id too.
-                            put("name", com.forge.app.program.Program.exerciseDisplayName(ex.exerciseId, ex.swappedName))
+                        exArr.put(JSONObject(exportExerciseFields(ex)).apply {
+                            // The weekly file's original spelling, kept for readers of this file.
                             put("effort", ex.difficulty?.name ?: "")
-                            put("note", ex.note ?: "")
-                            put("skipped", ex.skipped)
                             val setArr = JSONArray()
                             sets.forEach { set ->
                                 setArr.put(JSONObject(exportSetFields(set)))
@@ -199,12 +173,9 @@ class BackupRepository @Inject constructor(
             put("sessions", sessArr)
             val cardioArr = JSONArray()
             cardioEntries.forEach { c ->
-                cardioArr.put(JSONObject().apply {
-                    put("date", dateFmt.format(Instant.ofEpochMilli(c.date).atZone(zone)))
-                    put("type", c.type)
-                    put("durationMin", c.durationMin)
-                    putOrOmit("distanceKm", c.distanceKm)
-                    put("effort", c.effort ?: "")
+                cardioArr.put(JSONObject(exportCardioFields(c)).apply {
+                    // The human day beside the exact `date` instant.
+                    put("day", dateFmt.format(Instant.ofEpochMilli(c.date).atZone(zone)))
                 })
             }
             put("cardio", cardioArr)
@@ -217,10 +188,11 @@ class BackupRepository @Inject constructor(
     }
 
     /**
-     * Full data dump as JSON — every session + exercise + set + cardio entry + a snapshot of key
-     * settings. This is a *lossy, human/AI-readable export*, NOT a restore source: nothing reads it
-     * back in. The real restore path is the whole-DB backup ([backupToUri] / [restoreFromUri]).
-     * Named so it doesn't imply recoverability (#70).
+     * Full data dump as JSON — every session + exercise + set + cardio entry + coach goal + a
+     * snapshot of key settings. It is human/AI-readable and `ForgeJsonImporter` MERGES it back in,
+     * so every field written here should be read there (round trip covered by
+     * `ExportImportRoundTripTest`). It is still not a restore source: the whole-DB backup
+     * ([backupToUri] / [restoreFromUri]) is. Named so it doesn't imply recoverability (#70).
      */
     suspend fun exportFullDataJson(onProgress: (done: Int, total: Int) -> Unit = { _, _ -> }): File =
         withContext(Dispatchers.IO) {
@@ -279,20 +251,7 @@ class BackupRepository @Inject constructor(
                         // a user who navigates away from a long export was previously waited on.
                         currentCoroutineContext().ensureActive()
                         w.beginObject()
-                        w.name("id").value(s.id)
-                        w.name("dayKey").value(s.dayKey)
-                        w.name("startedAt").value(s.startedAt)
-                        w.name("finishedAt").value(s.finishedAt ?: 0L)
-                        w.name("activeSeconds").value(activeSecondsOf(s).toLong())
-                        w.name("totalVolumeLb").value(s.totalVolumeLb ?: 0.0)
-                        w.name("prCount").value(s.prCount.toLong())
-                        w.name("setCount").value(s.setCount.toLong())
-                        w.name("sessionType").value(s.sessionType)
-                        w.name("intensity").value(s.intensity)
-                        w.name("isUntracked").value(s.isUntracked)
-                        w.name("tags").value(s.tags)
-                        w.name("journal").value(s.journal)
-                        w.name("mood").value(moodBySession[s.id]?.mood ?: "")
+                        w.fields(exportSessionFields(s, activeSecondsOf(s), moodBySession[s.id]?.mood ?: ""))
                         w.name("segments").beginArray()
                         segmentsBySession[s.id].orEmpty().forEach { seg ->
                             w.beginObject()
@@ -305,23 +264,11 @@ class BackupRepository @Inject constructor(
                         w.name("exercises").beginArray()
                         exercisesBySession[s.id].orEmpty().forEach { ex ->
                             w.beginObject()
-                            w.name("exerciseId").value(ex.exerciseId)
-                            w.name("swappedName").value(ex.swappedName ?: "")
-                            w.name("orderIndex").value(ex.orderIndex.toLong())
-                            w.name("difficulty").value(ex.difficulty?.name ?: "")
-                            w.name("skipped").value(ex.skipped)
-                            w.name("note").value(ex.note ?: "")
+                            w.fields(exportExerciseFields(ex))
                             w.name("sets").beginArray()
                             setsByExercise[ex.id].orEmpty().forEach { set ->
                                 w.beginObject()
-                                exportSetFields(set).forEach { (key, value) ->
-                                    w.name(key)
-                                    when (value) {
-                                        is Number -> w.value(value)
-                                        is Boolean -> w.value(value)
-                                        else -> w.value(value.toString())
-                                    }
-                                }
+                                w.fields(exportSetFields(set))
                                 w.endObject()
                             }
                             w.endArray()
@@ -336,17 +283,7 @@ class BackupRepository @Inject constructor(
                     w.name("cardio").beginArray()
                     allCardio.forEach { c ->
                         w.beginObject()
-                        w.name("date").value(c.date)
-                        w.name("type").value(c.type)
-                        w.name("durationMin").value(c.durationMin.toLong())
-                        c.distanceKm?.let { w.name("distanceKm").value(it) }
-                        w.name("effort").value(c.effort ?: "")
-                        w.name("restReason").value(c.restReason ?: "")
-                        w.name("note").value(c.note ?: "")
-                        // Per-type fields (GYMAP-38); elevation stays canonical metres like distance is km.
-                        c.inclinePct?.let { w.name("inclinePct").value(it) }
-                        c.laps?.let { w.name("laps").value(it.toLong()) }
-                        c.elevationM?.let { w.name("elevationM").value(it) }
+                        w.fields(exportCardioFields(c))
                         w.endObject()
                     }
                     w.endArray()
@@ -397,32 +334,13 @@ class BackupRepository @Inject constructor(
             put("exportVersion", 1)
             put("exportedAt", dateFmt.format(Instant.now().atZone(zone)))
             put("appVersion", com.forge.app.BuildConfig.VERSION_NAME)
-            put("session", JSONObject().apply {
-                put("id", s.id)
-                put("dayKey", s.dayKey)
+            put("session", JSONObject(exportSessionFields(s, activeSecondsOf(s), db.moodDao().forSession(s.id)?.mood ?: "")).apply {
                 put("date", dateFmt.format(Instant.ofEpochMilli(s.startedAt).atZone(zone)))
-                put("startedAt", s.startedAt)
-                put("finishedAt", s.finishedAt ?: 0)
-                put("activeSeconds", activeSecondsOf(s))
-                put("totalVolumeLb", s.totalVolumeLb ?: 0.0)
-                put("prCount", s.prCount)
-                put("setCount", s.setCount)
-                put("sessionType", s.sessionType)
-                put("intensity", s.intensity)
-                put("tags", s.tags)
-                put("journal", s.journal)
-                put("mood", db.moodDao().forSession(s.id)?.mood ?: "")
                 put("segments", segmentsJson(db.sessionSegmentDao().forSession(s.id)))
                 val exArr = JSONArray()
                 exercises.forEach { ex ->
                     val sets = loggedSetDao.forLoggedExercise(ex.id)
-                    exArr.put(JSONObject().apply {
-                        put("exerciseId", ex.exerciseId)
-                        put("name", com.forge.app.program.Program.exerciseDisplayName(ex.exerciseId, ex.swappedName))
-                        put("orderIndex", ex.orderIndex)
-                        put("difficulty", ex.difficulty?.name ?: "")
-                        put("skipped", ex.skipped)
-                        put("note", ex.note ?: "")
+                    exArr.put(JSONObject(exportExerciseFields(ex)).apply {
                         val setArr = JSONArray()
                         sets.forEach { set ->
                             setArr.put(JSONObject(exportSetFields(set)))
