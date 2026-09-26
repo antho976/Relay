@@ -53,6 +53,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.timer.RestTimerState
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.formatWeightDelta
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.theme.ForgeLastGreen
@@ -463,6 +465,22 @@ internal fun ExerciseCardFooter(
 }
 
 /**
+ * The UP NEXT pill's text for a suggested change of [deltaLb] (stored lb): signed, in the user's
+ * unit (a plate count on PLATES exercises), with the ↑/↓ outside the number. Null below half a
+ * pound, which is kg and plate rounding noise rather than a change.
+ *
+ * The pill used to print the raw pound Double ("+2.299999999999997 ↑" for a kg user, "+15" for one
+ * plate), pre-formatted in the ViewModel with no unit (audit 2026-09-26, DESIGN §11).
+ */
+internal fun upNextDeltaLabel(deltaLb: Double?, isPlates: Boolean, weightUnit: WeightUnit, plateLb: Double): String? {
+    if (deltaLb == null || !deltaLb.isFinite() || kotlin.math.abs(deltaLb) < 0.5) return null
+    val magnitude = kotlin.math.abs(deltaLb)
+    val amount = if (isPlates && plateLb > 0.0) "${formatPlateCount(magnitude / plateLb)} pl"
+        else formatWeightDelta(magnitude, weightUnit)
+    return if (deltaLb > 0) "+$amount ↑" else "−$amount ↓"
+}
+
+/**
  * Standalone "UP NEXT" bubble shown below the current exercise in the single-exercise
  * train view. Collapsed it shows the next exercise + target + suggested-weight delta pill;
  * tapping expands it to the full list of upcoming exercises (each tappable to jump to it).
@@ -471,7 +489,9 @@ internal fun ExerciseCardFooter(
 internal fun UpNextBubble(
     nextName: String?,
     nextTarget: String?,
-    nextDelta: String?,
+    /** The next exercise's own suggested change, in stored lb — formatted here, in the user's unit. */
+    nextDeltaLb: Double?,
+    nextIsPlates: Boolean,
     upcoming: List<Pair<Int, ExerciseUiState>>,
     onSelectExercise: (String) -> Unit,
     onOpenSwapPicker: (String) -> Unit,
@@ -503,11 +523,12 @@ internal fun UpNextBubble(
                 }
                 Text(label, style = MaterialTheme.typography.bodyMedium, color = onBg)
             }
-            nextDelta?.let { delta ->
+            val settings = LocalForgeSettings.current
+            upNextDeltaLabel(nextDeltaLb, nextIsPlates, settings.weightUnit, settings.plateWeightLb)?.let { delta ->
                 // A quiet hint — visible but not competing with the exercise name.
                 Box(modifier = Modifier.padding(horizontal = 4.dp)) {
                     Text(
-                        "$delta ${if (delta.startsWith("+")) "↑" else "↓"}",
+                        delta,
                         style = MaterialTheme.typography.labelSmall,
                         color = muted,
                         fontSize = 10.sp

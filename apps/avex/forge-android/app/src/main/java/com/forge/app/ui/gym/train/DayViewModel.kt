@@ -140,6 +140,25 @@ class DayViewModel @Inject constructor(
      *  whole thing twice — mirroring SessionDetailViewModel's exportJob/reLogJob guards. */
     internal var finishJob: Job? = null
 
+    /**
+     * Set once an exit (back, discard, resume later, cross-day go back, COMPLETE on the summary)
+     * starts, and never cleared: the ViewModel dies with the screen it is leaving (audit
+     * 2026-09-26, live-session double tap). Every exit trigger stays tappable until its DB writes
+     * finish, so a double tap used to send two PopBacks, and the second one popped the hub and left
+     * a blank screen. Touched only on the main dispatcher.
+     */
+    internal var leaving = false
+
+    /**
+     * The coroutine starting or resuming this day's session (init, or the cross-day "discard and
+     * start"). Held so Back during "Loading session…" can cancel it instead of letting it finish
+     * behind a closed screen and leave an orphan session plus its notification (audit 2026-09-26).
+     */
+    internal var beginJob: Job? = null
+
+    /** What [beginJob]'s start wrote, recorded even when the start is cancelled right after. */
+    internal var startedSession: com.forge.app.data.repo.StartedSession? = null
+
     init {
         var prevTimerFinished = false
         viewModelScope.launch {
@@ -150,7 +169,7 @@ class DayViewModel @Inject constructor(
                 _state.update { it.copy(restTimer = timer) }
             }
         }
-        viewModelScope.launch {
+        beginJob = viewModelScope.launch {
             // Only one session is active at a time. If a *different* day's workout is still in
             // progress, prompt (resume it, or discard & start this one) instead of silently
             // resuming the wrong day's sets under this plan.
