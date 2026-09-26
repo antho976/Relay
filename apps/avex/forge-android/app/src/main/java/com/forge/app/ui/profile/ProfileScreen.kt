@@ -406,12 +406,9 @@ fun ProfileScreen(
                     }
                 }
 
-                // ── Gallery filmstrip (index 4) ──────────────────────────────────
-                // Every cell opens the Gallery now — no header link, no viewer dialog, and no
-                // difference between having photos and not (Antho, 2026-08-22). See [GalleryStrip].
-                //
-                // Its empty state keeps the three-cell ghost strip, which is the only card fill left
-                // on this page; that is the one deliberate exception to the de-boxing.
+                // ── Gallery preview (index 4) ────────────────────────────────────
+                // Header and tiles all open the Gallery, photos or not (Antho, 2026-08-22). See
+                // [GalleryStrip].
                 Spacer(Modifier.height(34.dp))
                 Column(Modifier.fillMaxWidth().statsEntrance(4)) {
                     GalleryStrip(

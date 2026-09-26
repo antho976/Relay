@@ -2,49 +2,93 @@
 
 package com.forge.app.ui.profile
 
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.AddPhotoAlternate
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Compare
+import androidx.compose.material.icons.outlined.CreateNewFolder
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DriveFileRenameOutline
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.FolderOff
+import androidx.compose.material.icons.outlined.PhotoAlbum
+import androidx.compose.material.icons.outlined.PhotoCamera
+import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material.icons.outlined.ZoomIn
+import androidx.compose.material.icons.outlined.ZoomOut
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import com.forge.app.ui.common.window.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.repo.ProgressPhoto
-import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.ForgeOutlineCapsule
-import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.common.window.AlertDialog
+import com.forge.app.ui.common.window.DropdownMenu
+import com.forge.app.ui.common.window.ModalBottomSheet
 import com.forge.app.ui.theme.LocalForgeSettings
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -54,26 +98,19 @@ private data class ViewerTarget(val photos: List<ProgressPhoto>, val index: Int)
 /**
  * The photo **Gallery** (reached from the Profile teaser's "view all").
  *
- * Gallery-first, as of the tag revamp: the library leads. A compact masthead (mono eyebrow, serif
- * hero, the first↔now progress band) sits at the top of one lazy list, then the browse bar — search,
- * the pose lens, and the WHEN / MUSCLE / TAGS rails behind Filters — then the day-grouped grid with
- * its headers pinned as you scroll. The bodyweight trend and the auto-paired same-weight shots close
- * the roll. Everything above the grid scrolls away, because in a gallery the photos are the content
- * and the instruments are not.
+ * Built for getting to a photo, and to a comparison, in as few taps as possible:
  *
- * A photo carries four tag axes now: its **date**, its **pose** (where the camera stood), its
- * **muscle tags** (what the shot documents, from the app's own `MuscleGroup` vocabulary) and its
- * free **tags**. Filtering ANDs across those axes and ORs within them. Narrowing to a single muscle
- * turns it into a lens: the progress band re-pairs inside that muscle, so the mark at the top of the
- * screen answers "how has my back changed" and not only "how have I changed".
+ * - The grid starts right under one row of filter chips. Nothing stands between the top bar and
+ *   the photos except the compare shortcuts, which are one short row.
+ * - Search, import and everything else live in the top bar; the one primary action, taking a
+ *   photo, is the floating button.
+ * - Long-press starts a multi-selection, the way every Android gallery works: pick two to compare,
+ *   or any number to file into an album or delete.
+ * - Pinch the grid to change how many photos fit per row.
  *
- * Tapping a photo opens a swipeable full-screen viewer and metadata editor; holding one starts a
- * compare selection. Private, app-private files only (see [MirrorTestViewModel] /
- * [com.forge.app.data.repo.ProgressPhotoRepository]).
- *
- * The screen is written for an EMPTY library first: it opens here, not on a grid. Photos gate the
- * sections that would be dishonest without them, never the page itself, and each browse control is
- * gated on having something to narrow (see [GalleryFilterBar]).
+ * Albums are a filter, not a separate screen: the Album chip narrows this same grid, so search and
+ * the other filters keep working inside an album. Private, app-private files only (see
+ * [MirrorTestViewModel] / [com.forge.app.data.repo.ProgressPhotoRepository]).
  */
 @Composable
 fun MirrorTestScreen(
@@ -82,255 +119,268 @@ fun MirrorTestScreen(
     viewModel: MirrorTestViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val bodyweight by viewModel.bodyweight.collectAsStateWithLifecycle()
+    val actions = remember(viewModel) { GalleryActions.of(viewModel) }
+    GalleryScreen(state = state, actions = actions, onBack = onBack, onOpenCamera = onOpenCamera)
+}
 
-    // Top-level mode: false = the library (default); true = the optional Albums view.
-    var showAlbums by remember { mutableStateOf(false) }
-    // Within Albums: null = folder grid; non-null (incl "" for Unsorted) = that album's photos.
-    var openAlbum by remember { mutableStateOf<String?>(null) }
+/** Everything the gallery asks of its ViewModel, so [GalleryScreen] can be rendered from plain data. */
+@Stable
+internal class GalleryActions(
+    val fileFor: (ProgressPhoto) -> File,
+    val addPhotos: (uris: List<Uri>, album: String, pose: String, muscles: List<String>) -> Unit,
+    val createAlbum: (name: String, moving: List<ProgressPhoto>) -> Unit,
+    val renameAlbum: (old: String, new: String) -> Unit,
+    val deleteAlbum: (String) -> Unit,
+    val moveToAlbum: (List<ProgressPhoto>, String) -> Unit,
+    val deletePhotos: (List<ProgressPhoto>) -> Unit,
+    val setNote: (ProgressPhoto, String) -> Unit,
+    val setTitle: (ProgressPhoto, String) -> Unit,
+    val setAlbum: (ProgressPhoto, String) -> Unit,
+    val setPose: (ProgressPhoto, String) -> Unit,
+    val setMuscles: (ProgressPhoto, List<String>) -> Unit,
+    val setTags: (ProgressPhoto, List<String>) -> Unit,
+    val setWeight: (ProgressPhoto, Double?) -> Unit,
+    val setTakenAt: (ProgressPhoto, Long) -> Unit
+) {
+    companion object {
+        fun of(vm: MirrorTestViewModel) = GalleryActions(
+            fileFor = vm::fileFor,
+            addPhotos = { u, a, p, m -> vm.addPhotos(u, a, p, m) },
+            createAlbum = { n, m -> vm.createAlbum(n, m) },
+            renameAlbum = { o, n -> vm.renameAlbum(o, n) },
+            deleteAlbum = { vm.deleteAlbum(it) },
+            moveToAlbum = { ps, a -> vm.moveToAlbum(ps, a) },
+            deletePhotos = { vm.deletePhotos(it) },
+            setNote = { p, n -> vm.setNote(p, n) },
+            setTitle = { p, t -> vm.setTitle(p, t) },
+            setAlbum = { p, a -> vm.setAlbum(p, a) },
+            setPose = { p, x -> vm.setPose(p, x) },
+            setMuscles = { p, m -> vm.setMuscles(p, m) },
+            setTags = { p, t -> vm.setTags(p, t) },
+            setWeight = { p, w -> vm.setWeight(p, w) },
+            setTakenAt = { p, ms -> vm.setTakenAt(p, ms) }
+        )
+    }
+}
+
+@Composable
+internal fun GalleryScreen(
+    state: MirrorTestViewModel.UiState,
+    actions: GalleryActions,
+    onBack: () -> Unit,
+    onOpenCamera: () -> Unit
+) = GalleryTheme {
     var filter by remember { mutableStateOf(GalleryFilter()) }
-    var filtersOpen by remember { mutableStateOf(false) }
-    var compareMode by remember { mutableStateOf(false) }
-    val compareSel = remember { mutableStateListOf<ProgressPhoto>() }
-    // The pair shown in the compare sheet — set from the band, a same-weight card, or a selection.
-    var comparePair by remember { mutableStateOf<List<ProgressPhoto>?>(null) }
+    var searchOpen by remember { mutableStateOf(false) }
+    var selecting by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf(emptySet<String>()) }
+    var openFacet by remember { mutableStateOf<GalleryFacet?>(null) }
     var viewer by remember { mutableStateOf<ViewerTarget?>(null) }
-    var newAlbumOpen by remember { mutableStateOf(false) }
-    var renaming by remember { mutableStateOf<String?>(null) }
-    var addChooser by remember { mutableStateOf(false) }
-    val searchFocus = remember { FocusRequester() }
+    var comparePair by remember { mutableStateOf<Pair<ProgressPhoto, ProgressPhoto>?>(null) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var moveSheetOpen by remember { mutableStateOf(false) }
+    // Non-null while the New album dialog is up: the photos it will file into the new album.
+    var newAlbumFor by remember { mutableStateOf<List<ProgressPhoto>?>(null) }
+    var renamingAlbum by remember { mutableStateOf<String?>(null) }
+    var deletingAlbum by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
+    val fontScale = LocalDensity.current.fontScale
 
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
-    val outline = MaterialTheme.colorScheme.outline
-    val background = MaterialTheme.colorScheme.background
-
-    // Not remembered (M-15). A remembered zone survives recomposition by definition, so after a
-    // flight the gallery kept bucketing new-zone photo timestamps by the old zone's day boundaries.
-    // Re-read here, like CardioScreen: `today` below is keyed on it, so a changed zone re-derives
-    // the days rather than quietly mis-slicing them.
+    // Not remembered (M-15): a remembered zone survives a flight and keeps bucketing photos by the
+    // old zone's day boundaries. `today` below is keyed on it, so a changed zone re-derives the days.
     val zone = ZoneId.systemDefault()
     val settings = LocalForgeSettings.current
-    val firstDayMonday = settings.firstDayMonday
     val weightUnit = settings.weightUnit
 
-    // MULTI-select. It was `PickVisualMedia`, one photo per trip through the system picker — so
-    // documenting a session from several angles, which is the whole point of a physique gallery,
-    // meant repeating the entire add flow per shot. Imports inherit the lens you are browsing under:
-    // the active pose and the muscles you have narrowed to, because that is what you were looking at
-    // when you decided to add more of it.
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
-        if (uris.isNotEmpty()) {
-            viewModel.addPhotos(
-                uris,
-                album = if (showAlbums) (openAlbum ?: "") else "",
-                pose = filter.pose?.name ?: "",
-                muscles = filter.muscles.toList()
-            )
-        }
-    }
-    fun importPhoto() = picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-
-    // The visible library: every axis of the filter applied, then sorted.
-    val galleryPhotos = remember(state.photos, filter, firstDayMonday) {
-        applyGalleryFilter(state.photos, filter, zone, firstDayMonday)
+    val visible = remember(state.photos, filter, settings.firstDayMonday) {
+        applyGalleryFilter(state.photos, filter, zone, settings.firstDayMonday)
     }
     val today = remember(zone) { LocalDate.now(zone) }
-    val days = remember(galleryPhotos, today) { galleryDays(galleryPhotos, zone, today) }
-
-    // The band reads the muscle lens when there is exactly one, so it answers the question the grid
-    // is currently asking. With none or several it reads the whole library, as it always did.
-    val bandSource = remember(state.photos, filter.muscles) {
-        val sole = filter.soleMuscle
-        if (sole == null) state.photos else state.photos.filter { sole.code in it.muscles }
-    }
-    val (bandBefore, bandAfter) = remember(bandSource) { bestComparePair(bandSource) }
-
-    fun toggleCompare(photo: ProgressPhoto) {
-        val idx = compareSel.indexOfFirst { it.fileName == photo.fileName }
-        if (idx >= 0) compareSel.removeAt(idx)
-        else {
-            if (compareSel.size >= 2) compareSel.removeAt(0)
-            compareSel.add(photo)
+    val sections = remember(visible, today) { gallerySections(visible, zone, today) }
+    val (first, latest) = remember(visible) { bestComparePair(visible) }
+    // Pairing is O(n^2) over weighed photos, so it runs off the main thread; empty until it lands.
+    val samePairs by produceState(emptyList<SameWeightPair>(), visible, first, latest) {
+        value = withContext(Dispatchers.Default) {
+            sameWeightPairs(visible, zone, setOfNotNull(first?.fileName, latest?.fileName))
         }
     }
-    fun selectionIndexOf(photo: ProgressPhoto): Int? =
-        compareSel.indexOfFirst { it.fileName == photo.fileName }.takeIf { it >= 0 }
+    val suggestions = remember(first, latest, samePairs) { compareSuggestions(first, latest, samePairs) }
+    val selectedPhotos = remember(state.photos, selected) { state.photos.filter { it.fileName in selected } }
+    val libraryEmpty = !state.loading && state.photos.isEmpty()
+    val namedAlbum = filter.album?.takeIf { it.isNotEmpty() }
 
-    fun exitCompare() { compareMode = false; compareSel.clear() }
-    fun startCompareWith(photo: ProgressPhoto?) {
-        compareMode = true
-        compareSel.clear()
-        photo?.let { compareSel.add(it) }
+    fun exitSelection() { selecting = false; selected = emptySet() }
+    fun toggle(photo: ProgressPhoto) {
+        selected = if (photo.fileName in selected) selected - photo.fileName else selected + photo.fileName
     }
-    fun openViewer(list: List<ProgressPhoto>, photo: ProgressPhoto) {
-        viewer = ViewerTarget(list, list.indexOfFirst { it.fileName == photo.fileName }.coerceAtLeast(0))
-    }
+    fun closeSearch() { searchOpen = false; filter = filter.copy(query = "") }
 
-    // A free tag can outlive its last photo: untag the final #cut shot and the chip leaves the rail,
-    // stranding the grid on a filter the user can no longer see or undo. Pose and muscle are fixed
-    // vocabularies whose rails always draw, so only tags can go stale this way.
+    // Keep every piece of state honest as the library changes under it.
+    LaunchedEffect(state.photos) {
+        val live = state.photos.mapTo(HashSet()) { it.fileName }
+        if (!selected.all { it in live }) selected = selected.filterTo(HashSet()) { it in live }
+    }
+    // A tag or album can disappear with its last photo; a filter on it would strand the grid.
     LaunchedEffect(state.knownTags) {
-        val live = state.knownTags.toSet()
-        val kept = filter.tags intersect live
+        val kept = filter.tags intersect state.knownTags.toSet()
         if (kept != filter.tags) filter = filter.copy(tags = kept)
     }
-    LaunchedEffect(state.photos.size) { if (state.photos.size < 2 && compareMode) exitCompare() }
-
-    val tools = GalleryTools(
-        filter = filter,
-        onChange = { filter = it },
-        filtersOpen = filtersOpen,
-        onToggleFilters = { filtersOpen = !filtersOpen },
-        searchFocus = searchFocus
-    )
-
-    // Back drills out: compare → grid; album → folder grid → library → leave the screen.
-    fun goBack() {
-        when {
-            compareMode -> exitCompare()
-            openAlbum != null -> openAlbum = null
-            showAlbums -> showAlbums = false
-            else -> onBack()
+    LaunchedEffect(state.folders, state.loading) {
+        val album = filter.album ?: return@LaunchedEffect
+        if (!state.loading && album.isNotEmpty() && state.folders.none { it.name.equals(album, ignoreCase = true) }) {
+            filter = filter.copy(album = null)
         }
     }
-    BackHandler(enabled = compareMode || showAlbums) { goBack() }
 
-    val openName = openAlbum
-    val showAdd = !compareMode && (!showAlbums || openName != null)
+    BackHandler(enabled = selecting || searchOpen) {
+        if (selecting) exitSelection() else closeSearch()
+    }
 
-    val albumPhotos = remember(state.photos, openName, filter.sort) {
-        if (openName == null) emptyList()
-        else {
-            val ps = state.photosIn(openName)
-            if (filter.sort == GallerySort.OLDEST) ps.sortedBy { it.takenAtMs } else ps.sortedByDescending { it.takenAtMs }
+    // Imports inherit what you were looking at: the album, the pose and the muscles filtered to.
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
+        if (uris.isNotEmpty()) {
+            actions.addPhotos(uris, namedAlbum ?: "", filter.pose?.name ?: "", filter.muscles.toList())
         }
     }
-    val albumDays = remember(albumPhotos, today) { galleryDays(albumPhotos, zone, today) }
+    fun importPhotos() = picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+
+    val onPinch by rememberUpdatedState<(Boolean) -> Unit> { zoomIn -> filter = filter.stepColumns(denser = !zoomIn) }
+    val fabExpanded by remember { derivedStateOf { listState.firstVisibleItemIndex == 0 } }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            TopAppBar(
-                // §4.6: the serif "Gallery" hero below names the screen, so the bar carries no title.
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = { goBack() }) {
-                        Icon(
-                            if (compareMode) Icons.Filled.Close else Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = if (compareMode) "Leave compare" else "Back"
-                        )
-                    }
-                },
-                actions = {
-                    // ≤1 action (§2): add. Search, filters and compare all live in the content.
-                    if (showAdd) IconButton(onClick = { addChooser = true }) {
-                        Icon(Icons.Filled.Add, contentDescription = "Add photo", tint = accent)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
-        },
-        bottomBar = {
-            if (compareMode) CompareBar(
-                selectedCount = compareSel.size,
-                onClear = { compareSel.clear() },
-                onCompare = { comparePair = compareSel.toList() },
-                muted = muted, accent = accent
-            )
-        },
-        containerColor = Color.Transparent
-    ) { inner ->
-        LazyColumn(Modifier.fillMaxSize().padding(inner), state = listState) {
-            when {
-                // ── Compare: the whole library, selectable ──────────────────────────────────
-                compareMode -> {
-                    if (state.photos.isEmpty()) {
-                        item { Gutter { InlineEmptyHint("Add two shots before comparing.", muted) } }
-                    } else {
-                        val allDays = galleryDays(state.photos, zone, today)
-                        galleryGrid(
-                            allDays,
-                            GalleryGridSpec(
-                                columns = 3,
-                                fileFor = viewModel::fileFor,
-                                onPhotoClick = { toggleCompare(it) },
-                                selectable = true,
-                                selectionIndexOf = { selectionIndexOf(it) }
-                            ),
-                            muted, accent, background
-                        )
-                    }
-                }
-
-                // ── Albums: the folder grid, then one album's photos ────────────────────────
-                showAlbums && openName == null -> item {
-                    Gutter {
-                        Spacer(Modifier.height(4.dp))
-                        FolderGrid(
-                            folders = state.folders,
-                            onOpen = { openAlbum = it },
-                            onNewAlbum = { newAlbumOpen = true },
-                            fileFor = viewModel::fileFor,
-                            onBg = onBg, muted = muted, accent = accent, outline = outline
-                        )
-                    }
-                }
-                showAlbums -> {
-                    val album = openName.orEmpty()
-                    item {
-                        Gutter {
-                            Spacer(Modifier.height(4.dp))
-                            if (album.isNotBlank()) {
-                                AlbumActions(
-                                    onRename = { renaming = album },
-                                    onDelete = { viewModel.deleteAlbum(album); openAlbum = null },
-                                    accent = accent
-                                )
-                                Spacer(Modifier.height(14.dp))
-                            }
-                            if (albumPhotos.isEmpty()) {
-                                InlineEmptyHint("Nothing in this album yet. Add a photo with the + above.", muted)
-                            }
-                        }
-                    }
-                    galleryGrid(
-                        albumDays,
-                        GalleryGridSpec(
-                            columns = filter.columns,
-                            fileFor = viewModel::fileFor,
-                            onPhotoClick = { openViewer(albumPhotos, it) }
-                        ),
-                        muted, accent, background
+            Column {
+                when {
+                    selecting -> SelectionTopBar(
+                        count = selected.size,
+                        onClose = { exitSelection() },
+                        onSelectAll = { selected = visible.mapTo(HashSet()) { it.fileName } },
+                        onCompare = {
+                            val two = selectedPhotos.sortedBy { it.takenAtMs }
+                            if (two.size == 2) comparePair = two[0] to two[1]
+                        },
+                        onMove = { moveSheetOpen = true },
+                        onDelete = { confirmDelete = true }
+                    )
+                    searchOpen -> SearchTopBar(
+                        query = filter.query,
+                        onQueryChange = { filter = filter.copy(query = it) },
+                        onClose = { closeSearch() }
+                    )
+                    else -> LibraryTopBar(
+                        loading = state.loading,
+                        total = state.photos.size,
+                        shown = visible.size,
+                        narrowed = filter.narrowed,
+                        filter = filter,
+                        namedAlbum = namedAlbum,
+                        libraryEmpty = libraryEmpty,
+                        onBack = onBack,
+                        onSearch = { searchOpen = true },
+                        onImport = { importPhotos() },
+                        onSelect = { selecting = true },
+                        onFilterChange = { filter = it },
+                        onNewAlbum = { newAlbumFor = emptyList() },
+                        onRenameAlbum = { renamingAlbum = it },
+                        onDeleteAlbum = { deletingAlbum = it }
                     )
                 }
-
-                // ── The library ────────────────────────────────────────────────────────────
-                else -> galleryLibrary(
-                    loading = state.loading,
-                    photos = state.photos,
-                    visiblePhotos = galleryPhotos,
-                    days = days,
-                    knownTags = state.knownTags,
-                    tools = tools,
-                    bodyweight = bodyweight,
-                    bandBefore = bandBefore,
-                    bandAfter = bandAfter,
-                    zone = zone,
-                    weightUnit = weightUnit,
-                    fileFor = viewModel::fileFor,
-                    onOpenAlbums = { showAlbums = true },
-                    onStartCompare = { startCompareWith(null) },
-                    onLongPressPhoto = { p -> startCompareWith(p) },
-                    onCompare = { a, b -> comparePair = listOf(a, b) },
-                    onAdd = { addChooser = true },
-                    onView = { openViewer(galleryPhotos, it) },
-                    onBg = onBg, muted = muted, accent = accent, outline = outline, background = background
+                if (!selecting && !libraryEmpty && !state.loading) {
+                    GalleryFilterRow(
+                        filter = filter,
+                        hasAlbums = state.folders.any { it.name.isNotEmpty() },
+                        hasTags = state.knownTags.isNotEmpty(),
+                        onOpen = { openFacet = it },
+                        onClearAll = { filter = filter.clearedFacets() },
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                }
+            }
+        },
+        floatingActionButton = {
+            if (!selecting && !libraryEmpty && !state.loading) {
+                ExtendedFloatingActionButton(
+                    onClick = onOpenCamera,
+                    expanded = fabExpanded,
+                    icon = { Icon(Icons.Outlined.PhotoCamera, contentDescription = null) },
+                    text = { Text("Take photo") }
                 )
             }
-            item { Spacer(Modifier.height(40.dp)) }
         }
+    ) { inner ->
+        LazyColumn(
+            state = listState,
+            contentPadding = PaddingValues(top = inner.calculateTopPadding(), bottom = inner.calculateBottomPadding() + 96.dp),
+            modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+                // Two-finger pinch steps the grid density once per gesture. Watched on the Initial
+                // pass and consumed only while two fingers are down, so one-finger scrolling and
+                // taps reach the list untouched.
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    var zoom = 1f
+                    var fired = false
+                    do {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (event.changes.count { it.pressed } >= 2) {
+                            zoom *= event.calculateZoom()
+                            if (!fired && (zoom > 1.25f || zoom < 0.8f)) {
+                                onPinch(zoom > 1f)
+                                fired = true
+                            }
+                            event.changes.forEach { it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
+                }
+            }
+        ) {
+            galleryLibrary(
+                loading = state.loading,
+                libraryEmpty = libraryEmpty,
+                filter = filter,
+                sections = sections,
+                suggestions = suggestions,
+                grid = GalleryGridSpec(
+                    columns = filter.columns,
+                    fileFor = actions.fileFor,
+                    onPhotoClick = { p ->
+                        if (selecting) toggle(p)
+                        else viewer = ViewerTarget(visible, visible.indexOfFirst { it.fileName == p.fileName }.coerceAtLeast(0))
+                    },
+                    onPhotoLongClick = { p -> selecting = true; selected = selected + p.fileName },
+                    selecting = selecting,
+                    isSelected = { it.fileName in selected },
+                    onToggleSection = { section ->
+                        val names = section.photos.map { it.fileName }
+                        selected = if (names.all { it in selected }) selected - names.toSet() else selected + names
+                    },
+                    showDates = filter.columns < 5 && fontScale <= 1.5f
+                ),
+                zone = zone,
+                weightUnit = weightUnit,
+                fileFor = actions.fileFor,
+                onCompare = { a, b -> comparePair = a to b },
+                onTakePhoto = onOpenCamera,
+                onImport = { importPhotos() },
+                onClearFilters = { filter = filter.clearedFacets().copy(query = ""); searchOpen = false }
+            )
+        }
+    }
+
+    // A selection that empties (the last pick removed, or deleted elsewhere) stays open on purpose:
+    // the bar says "0 selected" and Close is right there, rather than the mode vanishing mid-gesture.
+
+    openFacet?.let { facet ->
+        GalleryFacetSheet(
+            facet = facet,
+            filter = filter,
+            photos = state.photos,
+            folders = state.folders,
+            knownTags = state.knownTags,
+            onChange = { filter = it },
+            onNewAlbum = { newAlbumFor = emptyList() },
+            onDismiss = { openFacet = null }
+        )
     }
 
     viewer?.let { target ->
@@ -340,80 +390,324 @@ fun MirrorTestScreen(
             albumNames = state.albumNames,
             knownTags = state.knownTags,
             weightUnit = weightUnit,
-            fileFor = viewModel::fileFor,
-            onSaveNote = { p, n -> viewModel.setNote(p, n) },
-            onSaveTitle = { p, t -> viewModel.setTitle(p, t) },
-            onMove = { p, a -> viewModel.setAlbum(p, a) },
-            onSetPose = { p, pose -> viewModel.setPose(p, pose) },
-            onSetMuscles = { p, m -> viewModel.setMuscles(p, m) },
-            onSetTags = { p, t -> viewModel.setTags(p, t) },
-            onSetWeight = { p, w -> viewModel.setWeight(p, w) },
-            onSetDate = { p, ms -> viewModel.setTakenAt(p, ms) },
-            onDelete = { p -> viewModel.deletePhoto(p); viewer = null },
+            fileFor = actions.fileFor,
+            onSaveNote = actions.setNote,
+            onSaveTitle = actions.setTitle,
+            onMove = actions.setAlbum,
+            onSetPose = actions.setPose,
+            onSetMuscles = actions.setMuscles,
+            onSetTags = actions.setTags,
+            onSetWeight = actions.setWeight,
+            onSetDate = actions.setTakenAt,
+            onDelete = { p -> actions.deletePhotos(listOf(p)); viewer = null },
             onDismiss = { viewer = null }
         )
     }
 
-    comparePair?.let { pair ->
-        if (pair.size == 2) CompareSheet(
-            pair = pair, zone = zone, weightUnit = weightUnit, fileFor = viewModel::fileFor,
+    comparePair?.let { (a, b) ->
+        CompareSheet(
+            pair = listOf(a, b), zone = zone, weightUnit = weightUnit, fileFor = actions.fileFor,
             onDismiss = { comparePair = null }
-        ) else comparePair = null
-    }
-
-    if (addChooser) {
-        AddPhotoChooser(
-            onCamera = { addChooser = false; onOpenCamera() },
-            onImport = { addChooser = false; importPhoto() },
-            onDismiss = { addChooser = false }
         )
     }
 
-    if (newAlbumOpen) {
+    if (confirmDelete) {
+        DeletePhotosDialog(
+            count = selectedPhotos.size,
+            onConfirm = { actions.deletePhotos(selectedPhotos); confirmDelete = false; exitSelection() },
+            onDismiss = { confirmDelete = false }
+        )
+    }
+
+    if (moveSheetOpen) {
+        MoveToAlbumSheet(
+            folders = state.folders,
+            onPick = { album -> actions.moveToAlbum(selectedPhotos, album); moveSheetOpen = false; exitSelection() },
+            onNewAlbum = { moveSheetOpen = false; newAlbumFor = selectedPhotos },
+            onDismiss = { moveSheetOpen = false }
+        )
+    }
+
+    newAlbumFor?.let { moving ->
         NameDialog(
             title = "New album",
             initial = "",
+            confirmLabel = "Create",
             onConfirm = { name ->
-                viewModel.createAlbum(name)
-                newAlbumOpen = false
-                val typed = name.trim()
-                openAlbum = state.albumNames.firstOrNull { it.equals(typed, ignoreCase = true) } ?: typed
+                actions.createAlbum(name, moving)
+                newAlbumFor = null
+                if (moving.isNotEmpty()) exitSelection()
+                // Land in the album just made, so the next import or move has somewhere to go.
+                filter = filter.clearedFacets().copy(album = name.trim())
             },
-            onDismiss = { newAlbumOpen = false }
+            onDismiss = { newAlbumFor = null }
         )
     }
 
-    renaming?.let { old ->
+    renamingAlbum?.let { old ->
         NameDialog(
             title = "Rename album",
             initial = old,
-            onConfirm = { viewModel.renameAlbum(old, it); openAlbum = it; renaming = null },
-            onDismiss = { renaming = null }
+            confirmLabel = "Rename",
+            onConfirm = { new ->
+                actions.renameAlbum(old, new)
+                filter = filter.copy(album = new.trim())
+                renamingAlbum = null
+            },
+            onDismiss = { renamingAlbum = null }
+        )
+    }
+
+    deletingAlbum?.let { name ->
+        AlertDialog(
+            onDismissRequest = { deletingAlbum = null },
+            title = { DialogTitle("Delete “$name”?") },
+            text = {
+                Text("Its photos stay in the gallery, just without an album.", style = MaterialTheme.typography.bodyMedium)
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    actions.deleteAlbum(name)
+                    filter = filter.copy(album = null)
+                    deletingAlbum = null
+                }) { Text("Delete album") }
+            },
+            dismissButton = { TextButton(onClick = { deletingAlbum = null }) { Text("Cancel") } }
         )
     }
 }
 
+// ── Top bars ─────────────────────────────────────────────────────────────────
+
+@Composable
+private fun galleryBarColors() = TopAppBarDefaults.topAppBarColors(
+    containerColor = MaterialTheme.colorScheme.background,
+    scrolledContainerColor = MaterialTheme.colorScheme.background
+)
+
+/** The resting bar: back, the screen's name over its count, then search, import and the menu. */
+@Composable
+private fun LibraryTopBar(
+    loading: Boolean,
+    total: Int,
+    shown: Int,
+    narrowed: Boolean,
+    filter: GalleryFilter,
+    namedAlbum: String?,
+    libraryEmpty: Boolean,
+    onBack: () -> Unit,
+    onSearch: () -> Unit,
+    onImport: () -> Unit,
+    onSelect: () -> Unit,
+    onFilterChange: (GalleryFilter) -> Unit,
+    onNewAlbum: () -> Unit,
+    onRenameAlbum: (String) -> Unit,
+    onDeleteAlbum: (String) -> Unit
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    TopAppBar(
+        title = {
+            GalleryBarTitle(
+                title = "Gallery",
+                subtitle = when {
+                    loading -> null
+                    narrowed -> "$shown of ${photoCountLabel(total)}"
+                    else -> photoCountLabel(total)
+                }
+            )
+        },
+        navigationIcon = {
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+        },
+        actions = {
+            if (!libraryEmpty && !loading) {
+                IconButton(onClick = onSearch) { Icon(Icons.Filled.Search, contentDescription = "Search photos") }
+            }
+            IconButton(onClick = onImport) {
+                Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = "Import from phone")
+            }
+            Box {
+                IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "More options") }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    fun pick(action: () -> Unit) { menuOpen = false; action() }
+                    if (!libraryEmpty) {
+                        MenuItem("Select photos", Icons.Outlined.CheckCircle) { pick(onSelect) }
+                        MenuItem(
+                            if (filter.sort == GallerySort.NEWEST) "Show oldest first" else "Show newest first",
+                            Icons.AutoMirrored.Filled.Sort
+                        ) {
+                            pick {
+                                onFilterChange(
+                                    filter.copy(sort = if (filter.sort == GallerySort.NEWEST) GallerySort.OLDEST else GallerySort.NEWEST)
+                                )
+                            }
+                        }
+                        MenuItem("Larger thumbnails", Icons.Outlined.ZoomIn, enabled = filter.columns > GALLERY_DENSITIES.first()) {
+                            pick { onFilterChange(filter.stepColumns(denser = false)) }
+                        }
+                        MenuItem("Smaller thumbnails", Icons.Outlined.ZoomOut, enabled = filter.columns < GALLERY_DENSITIES.last()) {
+                            pick { onFilterChange(filter.stepColumns(denser = true)) }
+                        }
+                    }
+                    MenuItem("New album", Icons.Outlined.CreateNewFolder) { pick(onNewAlbum) }
+                    if (namedAlbum != null) {
+                        MenuItem("Rename album", Icons.Outlined.DriveFileRenameOutline) { pick { onRenameAlbum(namedAlbum) } }
+                        MenuItem("Delete album", Icons.Outlined.FolderOff) { pick { onDeleteAlbum(namedAlbum) } }
+                    }
+                }
+            }
+        },
+        colors = galleryBarColors()
+    )
+}
+
+@Composable
+private fun MenuItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, enabled: Boolean = true, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(label) },
+        leadingIcon = { Icon(icon, contentDescription = null) },
+        enabled = enabled,
+        onClick = onClick
+    )
+}
+
 /**
- * The add-a-photo chooser sheet: the guided camera (do-it-now) or a gallery import (sidekick). Two
- * capsules and their anchor, nothing else — the "shots stay on your phone" reassurance line was
- * retired with the before/after share card (§2) and is not re-added here.
+ * The bar while photos are being picked: the count, and what the selection can do. Compare asks for
+ * exactly two, and the bar says so while one is picked instead of leaving a dead button to decode.
  */
 @Composable
-internal fun AddPhotoChooser(onCamera: () -> Unit, onImport: () -> Unit, onDismiss: () -> Unit) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(),
-        // §5: a modal is a `surface` fill — M3 defaults to the unthemed `surfaceContainerLow`.
-        containerColor = MaterialTheme.colorScheme.surface
-    ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
-            EditorialHeader("Add photo", muted, accent)
-            Spacer(Modifier.height(18.dp))
-            ForgePrimaryCapsule("Take a photo", onClick = onCamera, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(10.dp))
-            ForgeOutlineCapsule("Import from gallery", onClick = onImport, modifier = Modifier.fillMaxWidth())
+private fun SelectionTopBar(
+    count: Int,
+    onClose: () -> Unit,
+    onSelectAll: () -> Unit,
+    onCompare: () -> Unit,
+    onMove: () -> Unit,
+    onDelete: () -> Unit
+) {
+    TopAppBar(
+        title = {
+            GalleryBarTitle(
+                title = "$count selected",
+                subtitle = when (count) {
+                    0 -> "Tap photos to select them"
+                    1 -> "Pick one more to compare"
+                    else -> null
+                }
+            )
+        },
+        navigationIcon = {
+            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Cancel selection") }
+        },
+        actions = {
+            IconButton(onClick = onSelectAll) { Icon(Icons.Outlined.SelectAll, contentDescription = "Select all shown") }
+            IconButton(onClick = onCompare, enabled = count == 2) {
+                Icon(Icons.Outlined.Compare, contentDescription = "Compare the two selected photos")
+            }
+            IconButton(onClick = onMove, enabled = count > 0) {
+                Icon(Icons.Outlined.PhotoAlbum, contentDescription = "Move to album")
+            }
+            IconButton(onClick = onDelete, enabled = count > 0) {
+                Icon(Icons.Outlined.Delete, contentDescription = "Delete selected photos")
+            }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+    )
+}
+
+/** The bar while searching: the field takes the title's place and opens with the keyboard up. */
+@Composable
+private fun SearchTopBar(query: String, onQueryChange: (String) -> Unit, onClose: () -> Unit) {
+    val focus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    TopAppBar(
+        title = {
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onBackground),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+                decorationBox = { field ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) {
+                            Text(
+                                "Search titles, notes, tags, dates",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        field()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().focusRequester(focus)
+            )
+        },
+        navigationIcon = {
+            IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search") }
+        },
+        actions = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQueryChange("") }) { Icon(Icons.Filled.Close, contentDescription = "Clear search") }
+            }
+        },
+        colors = galleryBarColors()
+    )
+}
+
+/**
+ * A bar title with an optional quieter second line. The second line drops at large font scales,
+ * where two lines no longer fit the bar's fixed height and the title itself would be clipped.
+ */
+@Composable
+private fun GalleryBarTitle(title: String, subtitle: String?) {
+    val roomForTwo = LocalDensity.current.fontScale <= 1.3f
+    Column {
+        Text(title, style = MaterialTheme.typography.titleLarge)
+        if (subtitle != null && roomForTwo) {
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+// ── Move to album ────────────────────────────────────────────────────────────
+
+@Composable
+private fun MoveToAlbumSheet(
+    folders: List<MirrorTestViewModel.AlbumFolder>,
+    onPick: (String) -> Unit,
+    onNewAlbum: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Text(
+            "Move to album",
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 24.dp, vertical = 8.dp)
+        )
+        LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            items(folders.filter { it.name.isNotEmpty() }, key = { it.name }) { f ->
+                AlbumTargetRow(f.displayName, photoCountLabel(f.count), Icons.Outlined.Folder) { onPick(f.name) }
+            }
+            item { AlbumTargetRow("No album", "Take them out of their album", Icons.Outlined.FolderOff) { onPick("") } }
+            item { NewAlbumRow(onNewAlbum) }
+        }
+    }
+}
+
+@Composable
+private fun AlbumTargetRow(label: String, supporting: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(label) },
+        supportingContent = { Text(supporting) },
+        leadingContent = { Icon(icon, contentDescription = null, Modifier.padding(horizontal = 12.dp)) },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.selectable(selected = false, role = Role.Button, onClick = onClick).padding(horizontal = 8.dp)
+    )
 }

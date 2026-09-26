@@ -3,17 +3,12 @@ package com.forge.app.ui.profile
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.forge.app.data.db.entities.BodyweightEntry
-import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.data.repo.ProgressPhotoRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
@@ -27,8 +22,7 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class MirrorTestViewModel @Inject constructor(
-    private val photoRepo: ProgressPhotoRepository,
-    bodyweightRepo: BodyweightRepository
+    private val photoRepo: ProgressPhotoRepository
 ) : ViewModel() {
 
     /** One album folder for the gallery's top level — its photo count and newest-photo cover. */
@@ -59,12 +53,6 @@ class MirrorTestViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
-
-    /** Weigh-ins over the past year, oldest → newest — the bodyweight-through-time sparkline series. */
-    val bodyweight: StateFlow<List<BodyweightEntry>> =
-        bodyweightRepo.observeRecent(365)
-            .map { entries -> entries.sortedBy { it.recordedAt } }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     // Reload whenever the store changes. StateFlow emits its current value on subscribe, so this also
     // does the initial load — no separate init { reload() }.
@@ -105,7 +93,11 @@ class MirrorTestViewModel @Inject constructor(
         else namedFolders + AlbumFolder("", "Unsorted", unsorted.size, unsorted.firstOrNull())
     }
 
-    fun createAlbum(name: String) = viewModelScope.launch { photoRepo.createAlbum(name) }
+    /** Create an album and, when [moving] is non-empty, file those photos into it in the same pass. */
+    fun createAlbum(name: String, moving: List<ProgressPhoto> = emptyList()) = viewModelScope.launch {
+        val created = photoRepo.createAlbum(name)
+        if (created.isNotEmpty()) moving.forEach { photoRepo.setAlbum(it, created) }
+    }
     fun renameAlbum(old: String, new: String) = viewModelScope.launch { photoRepo.renameAlbum(old, new) }
     fun deleteAlbum(name: String) = viewModelScope.launch { photoRepo.deleteAlbum(name) }
 
@@ -133,6 +125,13 @@ class MirrorTestViewModel @Inject constructor(
     fun setWeight(photo: ProgressPhoto, weightLb: Double?) = viewModelScope.launch { photoRepo.setWeight(photo, weightLb) }
     fun setTakenAt(photo: ProgressPhoto, takenAtMs: Long) = viewModelScope.launch { photoRepo.setTakenAt(photo, takenAtMs) }
     fun deletePhoto(photo: ProgressPhoto) = viewModelScope.launch { photoRepo.delete(photo) }
+
+    /** Multi-select delete. Sequential for the same reason as [addPhotos]: one index, one lock. */
+    fun deletePhotos(photos: List<ProgressPhoto>) = viewModelScope.launch { photos.forEach { photoRepo.delete(it) } }
+
+    /** Multi-select move. "" takes the photos out of every album. */
+    fun moveToAlbum(photos: List<ProgressPhoto>, album: String) =
+        viewModelScope.launch { photos.forEach { photoRepo.setAlbum(it, album) } }
 
     fun fileFor(photo: ProgressPhoto): File = photoRepo.fileFor(photo)
 }

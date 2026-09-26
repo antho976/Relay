@@ -2,8 +2,14 @@
 
 package com.forge.app.ui.profile
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,26 +20,36 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DatePicker
-import com.forge.app.ui.common.window.DatePickerDialog
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
@@ -48,18 +64,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.window.DatePickerDialog
 import com.forge.app.ui.common.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.forge.app.core.io.OrientedBitmaps
@@ -72,7 +88,6 @@ import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.program.MuscleGroup
-import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.onboarding.MAX_BODYWEIGHT_LB
 import com.forge.app.ui.onboarding.MIN_BODYWEIGHT_LB
@@ -87,10 +102,10 @@ import java.util.Date
 import kotlin.math.roundToInt
 
 /**
- * Full-screen, swipeable photo viewer + metadata editor. Opens on the tapped photo and pages through
- * the exact list the grid showed. Each page shows the whole photo (Fit) over a dark scrim; the editor
- * beneath it owns every field the gallery filters on — date, title, pose, muscles, tags, bodyweight,
- * note and album — and deletes. Title, note, weight and a typed tag commit on swipe or dismiss;
+ * Full-screen, swipeable photo viewer + details editor. Opens on the tapped photo and pages through
+ * the exact list the grid showed. The photo fills the screen (Fit, on black) and a tap hides the
+ * controls. The details panel owns every field the gallery filters on (date, title, pose, muscles,
+ * tags, bodyweight, note and album); delete sits in the top bar behind a confirmation. Title, note, weight and a typed tag commit on swipe or dismiss;
  * chip taps (pose, muscles, tags, album) and the date reflect at once, because a chip that needs a
  * separate save step is a chip you cannot trust.
  */
@@ -200,220 +215,243 @@ internal fun GalleryViewerPager(
 
     val onSurface = MaterialTheme.colorScheme.onSurface
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
+
+    var chromeVisible by remember { mutableStateOf(true) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    val dateLabel = SimpleDateFormat("EEEE, MMM d, yyyy", currentLocale()).format(Date(currentDate))
+    val summary = photoTagSummary(currentPose, currentMuscles, currentTags)
+    val weightLine = shown.weightLb?.let { formatWeight(it, weightUnit) }
 
     Dialog(onDismissRequest = { commit(); onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.94f))) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                IconButton(onClick = { commit(); onDismiss() }) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White) }
-                Text(
-                    "${pagerState.currentPage + 1} / ${photos.size}",
-                    style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.85f)
-                )
-                Spacer(Modifier.size(48.dp))
-            }
-
-            HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth()) { page ->
-                GalleryFullImage(fileFor(photos[page]), Modifier.fillMaxSize().padding(horizontal = 8.dp))
-            }
-
-            // Metadata editor. Collapsed it is one reading of the shot (date, what it is of, its
-            // tags); expanded it is every field, in its own scroll so a full muscle rail at 200%
-            // font scale cannot push the photo off the screen. The photo stays the largest thing
-            // on a photo viewer, which is the whole reason the fields fold.
-            Column(
-                Modifier.fillMaxWidth()
-                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .heightIn(max = if (editorOpen) 420.dp else Dp.Unspecified)
-                    .verticalScroll(rememberScrollState())
-                    .padding(16.dp)
-            ) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(
-                        SimpleDateFormat("EEEE, MMM d, yyyy", currentLocale()).format(Date(currentDate)),
-                        style = MaterialTheme.typography.labelMedium, color = accent,
-                        modifier = Modifier.bounceClick { showDatePicker = true }.padding(vertical = 4.dp)
+        GalleryTheme {
+            Box(Modifier.fillMaxSize().background(Color.Black)) {
+                // The photo owns the whole screen; a tap hides the controls so nothing sits over it.
+                HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                    GalleryFullImage(
+                        fileFor(photos[page]),
+                        Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { chromeVisible = !chromeVisible } }
                     )
-                    IconButton(onClick = { commit(); onDelete(current) }) {
-                        Icon(Icons.Filled.Delete, contentDescription = "Delete photo", tint = MaterialTheme.colorScheme.error)
-                    }
                 }
-                // TITLE — the short label the grid and the day header show, above the long-form note
-                // it sits over. Same bare-field treatment as the note (§1: the page IS the surface),
-                // one type step up so the two read as caption-then-body rather than two equal fields.
-                Spacer(Modifier.height(8.dp))
-                BasicTextField(
-                    value = titleInput,
-                    onValueChange = { titleInput = it.take(60) },
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.titleMedium.copy(color = onSurface),
-                    cursorBrush = SolidColor(accent),
-                    decorationBox = { inner ->
-                        Box {
-                            if (titleInput.isEmpty()) Text(
-                                "Add a title…", style = MaterialTheme.typography.titleMedium,
-                                color = muted.copy(alpha = 0.6f), fontStyle = FontStyle.Italic
-                            )
-                            inner()
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(6.dp))
-                BasicTextField(
-                    value = noteInput,
-                    onValueChange = { noteInput = it.take(140) },
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = onSurface),
-                    cursorBrush = SolidColor(accent),
-                    decorationBox = { inner ->
-                        Box {
-                            if (noteInput.isEmpty()) Text(
-                                "Add a note…", style = MaterialTheme.typography.bodyMedium,
-                                color = muted.copy(alpha = 0.6f), fontStyle = FontStyle.Italic
-                            )
-                            inner()
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
 
-                // The reading, and the way into the fields that produce it.
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    Modifier.fillMaxWidth().bounceClick { editorOpen = !editorOpen }.padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                AnimatedVisibility(
+                    visible = chromeVisible,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.TopCenter)
                 ) {
-                    Text(
-                        photoTagSummary(currentPose, currentMuscles, currentTags),
-                        style = MaterialTheme.typography.labelMedium, color = muted,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        if (editorOpen) "done" else "edit →",
-                        style = MaterialTheme.typography.labelSmall, color = accent
-                    )
-                }
-
-                if (!editorOpen) return@Column
-
-                // POSE — where the camera stood. One per photo.
-                EditorField("Pose", muted) {
-                    PhotoPose.entries.forEach { p ->
-                        GalleryChip(p.label, selected = currentPose == p.name) {
-                            val next = if (currentPose == p.name) "" else p.name
-                            record(baseline(current).copy(pose = next))
-                            onSetPose(current, next)
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.6f), Color.Transparent)))
+                            .statusBarsPadding()
+                            .padding(horizontal = 4.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { commit(); onDismiss() }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
+                        }
+                        Text(
+                            "${pagerState.currentPage + 1} of ${photos.size}",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = Color.White,
+                            modifier = Modifier.weight(1f).padding(start = 4.dp)
+                        )
+                        IconButton(onClick = { confirmDelete = true }) {
+                            Icon(Icons.Outlined.Delete, contentDescription = "Delete photo", tint = Color.White)
                         }
                     }
                 }
 
-                // MUSCLES — what the shot is evidence of. Several per photo, from the program's own
-                // vocabulary, so a photo and a training week can be read against each other.
-                EditorField("Muscles", muted) {
-                    MuscleGroup.entries.forEach { m ->
-                        GalleryChip(m.displayName, selected = m.code in currentMuscles) {
-                            val next = if (m.code in currentMuscles) currentMuscles - m.code else currentMuscles + m.code
-                            record(baseline(current).copy(muscles = next))
-                            onSetMuscles(current, next)
-                        }
-                    }
-                }
-
-                // TAGS — whatever the user invents. Tapping one removes it; the rail underneath
-                // offers the tags already in the library, so the vocabulary converges instead of
-                // sprouting a new spelling of "cut" every time.
-                EditorField("Tags", muted) {
-                    currentTags.forEach { t ->
-                        GalleryChip(PhotoTag.display(t), selected = true, trailing = "✕") {
-                            val next = currentTags - t
-                            record(baseline(current).copy(tags = next))
-                            onSetTags(current, next)
-                        }
-                    }
-                    knownTags.filter { it !in currentTags }.take(6).forEach { t ->
-                        GalleryChip(PhotoTag.display(t), selected = false) {
-                            val next = PhotoTag.added(currentTags, t)
-                            record(baseline(current).copy(tags = next))
-                            onSetTags(current, next)
-                        }
-                    }
-                }
-                if (currentTags.size < PhotoTag.MAX_PER_PHOTO) {
-                    Spacer(Modifier.height(8.dp))
-                    BasicTextField(
-                        value = tagInput,
-                        onValueChange = { tagInput = it.take(PhotoTag.MAX_LENGTH + 1) },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = onSurface),
-                        cursorBrush = SolidColor(accent),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = {
-                            val next = PhotoTag.added(currentTags, tagInput)
-                            tagInput = ""
-                            if (next != currentTags) {
-                                record(baseline(current).copy(tags = next))
-                                onSetTags(current, next)
-                            }
-                        }),
-                        decorationBox = { inner ->
-                            Box {
-                                if (tagInput.isEmpty()) Text(
-                                    "Add a tag…", style = MaterialTheme.typography.bodyMedium,
-                                    color = muted.copy(alpha = 0.6f), fontStyle = FontStyle.Italic
+                AnimatedVisibility(
+                    visible = chromeVisible,
+                    enter = fadeIn() + slideInVertically { it / 3 },
+                    exit = fadeOut() + slideOutVertically { it / 3 },
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                ) {
+                    // Details. Closed, it is a reading of the shot and two buttons. Open, it is every
+                    // field the gallery filters on, in its own scroll so a full muscle list at 200%
+                    // font scale can never push the photo off the screen.
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                            .heightIn(max = if (editorOpen) 480.dp else Dp.Unspecified)
+                            .verticalScroll(rememberScrollState())
+                            .navigationBarsPadding()
+                            .imePadding()
+                            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp)
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            TextButton(
+                                onClick = { showDatePicker = true },
+                                colors = ButtonDefaults.textButtonColors(contentColor = onSurface),
+                                modifier = Modifier.weight(1f, fill = false)
+                            ) {
+                                Icon(
+                                    Icons.Outlined.CalendarMonth, contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp)
                                 )
-                                inner()
+                                Spacer(Modifier.width(8.dp))
+                                Text(dateLabel)
                             }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+                            Spacer(Modifier.width(8.dp))
+                            if (editorOpen) {
+                                Button(onClick = { commit(); editorOpen = false }) { Text("Done") }
+                            } else {
+                                FilledTonalButton(onClick = { editorOpen = true }) {
+                                    Icon(Icons.Outlined.Edit, contentDescription = null, Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Edit")
+                                }
+                            }
+                        }
 
-                // Bodyweight.
-                Spacer(Modifier.height(14.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("WEIGHT", style = MaterialTheme.typography.labelSmall, color = muted)
-                    Spacer(Modifier.width(10.dp))
-                    BasicTextField(
-                        value = weightInput,
-                        onValueChange = { weightInput = it.filter { c -> c.isDigit() || c == '.' }.take(6) },
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = onSurface),
-                        cursorBrush = SolidColor(accent),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        decorationBox = { inner ->
-                            Box {
-                                if (weightInput.isEmpty()) Text(
-                                    "Not set", style = MaterialTheme.typography.bodyMedium,
-                                    color = muted.copy(alpha = 0.6f)
+                        if (!editorOpen) {
+                            val title = titleInput.trim()
+                            val note = noteInput.trim()
+                            Column(Modifier.padding(horizontal = 12.dp)) {
+                                if (title.isNotEmpty()) {
+                                    Text(title, style = MaterialTheme.typography.titleMedium, color = onSurface)
+                                }
+                                if (note.isNotEmpty()) {
+                                    Text(note, style = MaterialTheme.typography.bodyMedium, color = onSurface)
+                                }
+                                val facts = listOfNotNull(summary, weightLine).joinToString(" · ")
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    facts.ifEmpty { "No title, pose or tags yet" },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = muted
                                 )
-                                inner()
                             }
-                        },
-                        modifier = Modifier.width(88.dp)
-                    )
-                    Text(unitLabel(weightUnit), style = MaterialTheme.typography.labelMedium, color = muted)
-                }
-                if (weightInvalid) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(weightRangeText, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-                }
+                            return@Column
+                        }
 
-                // Album.
-                EditorField("Album", muted) {
-                    GalleryChip("Unsorted", selected = currentAlbum.isBlank()) {
-                        record(baseline(current).copy(album = "")); onMove(current, "")
-                    }
-                    albumNames.forEach { name ->
-                        GalleryChip(name, selected = currentAlbum == name) {
-                            record(baseline(current).copy(album = name)); onMove(current, name)
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = titleInput,
+                            onValueChange = { titleInput = it.take(60) },
+                            label = { Text("Title") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = noteInput,
+                            onValueChange = { noteInput = it.take(140) },
+                            label = { Text("Note") },
+                            supportingText = { Text("${noteInput.length} / 140") },
+                            minLines = 2,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        // POSE: where the camera stood. One per photo; tap the picked one to clear it.
+                        EditorField("Pose", muted) {
+                            PhotoPose.entries.forEach { p ->
+                                EditorChip(p.label, selected = currentPose == p.name) {
+                                    val next = if (currentPose == p.name) "" else p.name
+                                    record(baseline(current).copy(pose = next))
+                                    onSetPose(current, next)
+                                }
+                            }
+                        }
+
+                        // MUSCLES: what the shot is evidence of, from the program's own vocabulary.
+                        EditorField("Muscles", muted) {
+                            MuscleGroup.entries.forEach { m ->
+                                EditorChip(m.displayName, selected = m.code in currentMuscles) {
+                                    val next = if (m.code in currentMuscles) currentMuscles - m.code else currentMuscles + m.code
+                                    record(baseline(current).copy(muscles = next))
+                                    onSetMuscles(current, next)
+                                }
+                            }
+                        }
+
+                        // TAGS: whatever the user invents. The suggestions are the tags already in
+                        // the library, so the vocabulary converges instead of sprouting spellings.
+                        EditorField("Tags", muted) {
+                            currentTags.forEach { t ->
+                                InputChip(
+                                    selected = true,
+                                    onClick = {
+                                        val next = currentTags - t
+                                        record(baseline(current).copy(tags = next))
+                                        onSetTags(current, next)
+                                    },
+                                    label = { Text(PhotoTag.display(t)) },
+                                    trailingIcon = {
+                                        Icon(Icons.Filled.Close, contentDescription = "Remove ${PhotoTag.display(t)}", Modifier.size(18.dp))
+                                    }
+                                )
+                            }
+                            knownTags.filter { it !in currentTags }.take(6).forEach { t ->
+                                SuggestionChip(
+                                    onClick = {
+                                        val next = PhotoTag.added(currentTags, t)
+                                        record(baseline(current).copy(tags = next))
+                                        onSetTags(current, next)
+                                    },
+                                    label = { Text(PhotoTag.display(t)) }
+                                )
+                            }
+                        }
+                        if (currentTags.size < PhotoTag.MAX_PER_PHOTO) {
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = tagInput,
+                                onValueChange = { tagInput = it.take(PhotoTag.MAX_LENGTH + 1) },
+                                label = { Text("Add a tag") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(onDone = {
+                                    val next = PhotoTag.added(currentTags, tagInput)
+                                    tagInput = ""
+                                    if (next != currentTags) {
+                                        record(baseline(current).copy(tags = next))
+                                        onSetTags(current, next)
+                                    }
+                                }),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = weightInput,
+                            onValueChange = { weightInput = it.filter { c -> c.isDigit() || c == '.' }.take(6) },
+                            label = { Text("Bodyweight") },
+                            suffix = { Text(unitLabel(weightUnit)) },
+                            singleLine = true,
+                            isError = weightInvalid,
+                            supportingText = if (weightInvalid) ({ Text(weightRangeText) }) else null,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        EditorField("Album", muted) {
+                            EditorChip("No album", selected = currentAlbum.isBlank()) {
+                                record(baseline(current).copy(album = "")); onMove(current, "")
+                            }
+                            albumNames.forEach { name ->
+                                EditorChip(name, selected = currentAlbum == name) {
+                                    record(baseline(current).copy(album = name)); onMove(current, name)
+                                }
+                            }
                         }
                     }
                 }
+            }
+
+            if (confirmDelete) {
+                DeletePhotosDialog(
+                    count = 1,
+                    onConfirm = { confirmDelete = false; commit(); onDelete(current) },
+                    onDismiss = { confirmDelete = false }
+                )
             }
         }
     }
@@ -483,31 +521,36 @@ internal fun weightCommitDecision(input: String, committedLb: Double?, unit: Wei
 }
 
 /**
- * What the shot is, in one line: its pose, the muscles it documents, and its tags. This is the
- * collapsed editor's whole content, so a photo always states its own metadata without being opened
- * for editing. Untagged says so plainly rather than rendering an empty row of nothing.
+ * What the shot is, in one line: its pose, the muscles it documents, and its tags. Null when the
+ * photo carries none of them, so the caller can say so in its own words.
  */
-private fun photoTagSummary(pose: String, muscles: List<String>, tags: List<String>): String {
+private fun photoTagSummary(pose: String, muscles: List<String>, tags: List<String>): String? {
     val parts = buildList {
-        PhotoPose.fromKey(pose)?.let { add(it.label.uppercase()) }
-        MuscleGroup.entries.filter { it.code in muscles }.forEach { add(it.displayName.uppercase()) }
+        PhotoPose.fromKey(pose)?.let { add(it.label) }
+        MuscleGroup.entries.filter { it.code in muscles }.forEach { add(it.displayName) }
         tags.forEach { add(PhotoTag.display(it)) }
     }
-    return if (parts.isEmpty()) "No pose, muscles or tags yet" else parts.joinToString(" · ")
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
 }
 
-/**
- * One labeled field of the metadata editor: a mono label over a wrapping chip rail. Every chip axis
- * shares this shell, so pose, muscles, tags and album read as one form rather than four.
- */
+/** One labelled group of the details editor: a title over a wrapping row of chips. */
 @Composable
 private fun EditorField(label: String, muted: Color, chips: @Composable () -> Unit) {
-    Spacer(Modifier.height(14.dp))
-    Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted)
-    Spacer(Modifier.height(8.dp))
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        chips()
-    }
+    Spacer(Modifier.height(16.dp))
+    Text(label, style = MaterialTheme.typography.titleSmall, color = muted)
+    Spacer(Modifier.height(4.dp))
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { chips() }
+}
+
+/** A toggle chip in the editor, with a check when on so the state never rests on colour alone. */
+@Composable
+private fun EditorChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label) },
+        leadingIcon = if (selected) ({ Icon(Icons.Filled.Check, contentDescription = null, Modifier.size(18.dp)) }) else null
+    )
 }
 
 /**
