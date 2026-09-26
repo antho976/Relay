@@ -169,39 +169,19 @@ object AcademyRegistry {
     /** App-usage moments — these write no coach row, which is why the ledger exists. */
     const val UNLOCK_COLD_START = "app.first_open"
     const val UNLOCK_FIRST_SET = "app.first_set_logged"
-    const val UNLOCK_TECHNIQUE_SESSION = "app.technique_session"
-    const val UNLOCK_FIRST_PROGRESSION = "coach.first_progression"
     const val UNLOCK_REST_TIMER = "app.rest_timer_used"
     const val UNLOCK_SORENESS_FLAG = "app.soreness_flagged"
     const val UNLOCK_WARMUP_SHOWN = "app.warmup_shown"
     const val UNLOCK_WEEK_BRIEF = "coach.first_week_brief"
     const val UNLOCK_READINESS_SHOWN = "coach.readiness_shown"
-    const val UNLOCK_GOAL_CONFLICT = "coach.goal_conflict"
-    const val UNLOCK_COLD_START_DONE = "app.cold_start_finished"
 
     /** Block moments (C). */
     const val UNLOCK_BLOCK_STARTED = "coach.block_started"
-    const val UNLOCK_PHASE_CHANGE = "coach.block_phase_changed"
-    const val UNLOCK_SCHEDULED_DELOAD = "coach.scheduled_deload"
 
     /** Learning-loop moments (D) — each fires when a personal number first changes a decision. */
     const val UNLOCK_PERSONAL_CAP = "coach.personal_volume_cap"
-    const val UNLOCK_PERSONAL_SPACING = "coach.personal_spacing"
-    const val UNLOCK_PERSONAL_REPS = "coach.personal_rep_range"
-    const val UNLOCK_IMBALANCE_PROJECT = "coach.imbalance_project"
-    const val UNLOCK_PROJECT_PROPOSED = "coach.project_proposed"
-
-    /** Initiative moments (E). */
-    const val UNLOCK_TIER_CHANGE = "coach.tier_changed"
-    const val UNLOCK_AUTONOMOUS_ACT = "coach.acted_alone"
-
-    /** Signal-slot moments (F). */
-    const val UNLOCK_HRV_TREND = "signals.hrv_trend_available"
 
     /** Engine moments (E-A → E-D). */
     const val UNLOCK_CARDIO_PRESCRIPTION = "engine.first_prescription"
-    const val UNLOCK_INTERFERENCE = "engine.interference_deduction"
-    const val UNLOCK_LIVE_HR = "engine.live_hr_session"
     const val UNLOCK_INTERVAL_PRESCRIPTION = "engine.interval_prescription"
-    const val UNLOCK_BASE_TREND = "engine.base_trend"
 }

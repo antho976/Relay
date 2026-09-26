@@ -1,6 +1,5 @@
 package com.forge.app.ui.coach
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -151,18 +150,5 @@ private fun PhaseRail(block: TrainingBlock?, c: CoachColors) {
             }
             if (i < BlockPhase.entries.lastIndex) Spacer(Modifier.width(6.dp))
         }
-    }
-}
-
-/** A group label with a reading, ranked below the 15sp anchor by SIZE. */
-@Composable
-internal fun GroupHeaderPlain(label: String, meta: String, c: CoachColors) {
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label.uppercase(), style = MaterialTheme.typography.labelLarge, color = c.muted)
-        Text(meta, style = MaterialTheme.typography.labelSmall, color = c.muted)
     }
 }

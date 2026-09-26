@@ -38,7 +38,6 @@ import com.forge.app.ui.common.ForgeIconTile
 import com.forge.app.ui.common.ForgeOptionCard
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePresetTile
-import com.forge.app.ui.common.ForgeSegmentedChoice
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.ForgeSwitch
 import com.forge.app.ui.common.bounceClick
@@ -118,11 +117,6 @@ internal fun OptionCard(
 @Composable
 internal fun ChoiceChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) =
     ForgeChoiceChip(label, selected, onClick, modifier)
-
-/** A two-option unit selector — equal-width capsule cells (lb | kg, mi | km). */
-@Composable
-internal fun UnitSegment(first: String, second: String, secondSelected: Boolean, onSelect: (Boolean) -> Unit) =
-    ForgeSegmentedChoice(listOf(first, second), if (secondSelected) 1 else 0, { onSelect(it == 1) }, Modifier.fillMaxWidth())
 
 /** A square-ish icon tile for the equipment fine-tune grid. */
 @Composable

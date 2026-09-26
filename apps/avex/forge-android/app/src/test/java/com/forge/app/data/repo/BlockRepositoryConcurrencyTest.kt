@@ -79,8 +79,6 @@ class BlockRepositoryConcurrencyTest {
         )
         val coachGoalRepository = CoachGoalRepository(
             coachGoalDao = db.coachGoalDao(),
-            exerciseGoalDao = db.exerciseGoalDao(),
-            extendedGoalDao = db.extendedGoalDao(),
             adaptationRepository = adaptationRepository,
             clock = clock
         )

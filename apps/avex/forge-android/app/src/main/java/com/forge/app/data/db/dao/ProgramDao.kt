@@ -7,17 +7,10 @@ import androidx.room.Query
 import androidx.room.Transaction
 import com.forge.app.data.db.entities.ProgramDay
 import com.forge.app.data.db.entities.ProgramSlot
-import kotlinx.coroutines.flow.Flow
 
 /** Reads/writes the active program (program-unlock plan, Phase 0). */
 @Dao
 interface ProgramDao {
-
-    @Query("SELECT * FROM program_day ORDER BY position ASC")
-    fun observeDays(): Flow<List<ProgramDay>>
-
-    @Query("SELECT * FROM program_slot ORDER BY day_id ASC, position ASC")
-    fun observeSlots(): Flow<List<ProgramSlot>>
 
     @Query("SELECT * FROM program_day ORDER BY position ASC")
     suspend fun days(): List<ProgramDay>

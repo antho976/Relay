@@ -7,7 +7,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.EditorialLegend
 
 /**
  * The profile's two local wrappers over the shared `ui/common` editorial primitives — a section
@@ -43,10 +42,4 @@ internal fun SectionHeader(
         action = action,
         onAction = onAction
     )
-}
-
-/** A dot-plus-caption legend line for the open full-width charts — the shared [EditorialLegend]. */
-@Composable
-internal fun ChartCaption(color: Color, label: String, muted: Color) {
-    EditorialLegend(color, label, muted)
 }

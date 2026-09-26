@@ -26,9 +26,6 @@ val IndigoOutline    = Color(0xFFDCDCE8)
 val IndigoOnBg       = Color(0xFF111118)
 val IndigoMuted      = Color(0xFF6B6B7A)
 
-val IndigoGradTop    = Color(0xFFF8F8FD)
-val IndigoGradBottom = Color(0xFFEBEBF2)
-
 // ── Accent presets (map to secondary token) ───────────────────────────────────
 /**
  * The default accent, 2026-08-23. It was Ember from 2026-08-16, and Navy before that; the reasoning

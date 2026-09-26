@@ -9,7 +9,6 @@ import com.forge.app.program.Program
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
-import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -192,36 +191,6 @@ class ProgramCustomizationRepository @Inject constructor(
         val existing = dao.forDay(dayKey).firstOrNull { it.exerciseId == exerciseId }
         dao.upsert((existing ?: ProgramCustomization(dayKey, exerciseId)).copy(removed = true))
     }
-
-    /** Restore a removed exercise. */
-    suspend fun restoreExercise(dayKey: String, exerciseId: String) {
-        val existing = dao.forDay(dayKey).firstOrNull { it.exerciseId == exerciseId }
-            ?: return
-        dao.upsert(existing.copy(removed = false))
-    }
-
-    /** Add a custom exercise to a day (#91). */
-    suspend fun addCustomExercise(
-        dayKey: String,
-        name: String,
-        muscle: MuscleGroup,
-        sets: Int = 3,
-        repRange: String = "8-10"
-    ): String {
-        val id = "custom_${UUID.randomUUID().toString().take(8)}"
-        dao.upsert(ProgramCustomization(
-            dayKey = dayKey,
-            exerciseId = id,
-            customName = name,
-            customMuscle = muscle.code,
-            setsOverride = sets,
-            repRangeOverride = repRange
-        ))
-        return id
-    }
-
-    /** Reset all customizations for a day. */
-    suspend fun resetDay(dayKey: String) = dao.clearDay(dayKey)
 
     // ─── Coach apply/undo support (auto-coach Phase 3) ────────────────────────
 

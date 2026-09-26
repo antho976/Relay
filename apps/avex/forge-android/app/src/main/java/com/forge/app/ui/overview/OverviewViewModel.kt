@@ -9,13 +9,8 @@ import com.forge.app.data.repo.CardioRepository
 import com.forge.app.data.repo.CustomizationRepository
 import com.forge.app.data.repo.StatsRepository
 import com.forge.app.data.repo.WorkoutRepository
-import com.forge.app.domain.adapt.Recommendation
-import com.forge.app.domain.coach.AutoCoachPlanner
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
-import com.forge.app.program.ExerciseLibrary
-import com.forge.app.ui.overview.state.CoachItem
-import com.forge.app.ui.overview.state.CoachLearningHint
 import com.forge.app.ui.overview.state.OverviewRecentItem
 import com.forge.app.ui.overview.state.OverviewUiState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -46,11 +41,8 @@ class OverviewViewModel @Inject constructor(
     private val extendedGoalRepo: com.forge.app.data.repo.ExtendedGoalRepository,
     private val bodyweightRepo: com.forge.app.data.repo.BodyweightRepository,
     private val sessionDao: SessionDao,
-    private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
-    private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
     private val directiveRepo: com.forge.app.data.repo.DirectiveRepository,
     private val programRepo: com.forge.app.data.repo.ProgramRepository,
-    private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard,
     private val healthConnectManager: com.forge.app.data.health.HealthConnectManager,
     private val timeSignals: com.forge.app.core.time.TimeSignals,
     private val clock: Clock
@@ -104,14 +96,6 @@ class OverviewViewModel @Inject constructor(
         val typical = if (prior.size >= 3) prior[prior.size / 2] else null
         _movement.value = TodayMovement(steps = todaySteps, typicalSteps = typical)
     }
-
-    private val _coach = MutableStateFlow<List<CoachItem>>(emptyList())
-
-    /** Sub-gate "still learning" nudge (CD-1) — null once the coach has activated. */
-    private val _coachLearning = MutableStateFlow<CoachLearningHint?>(null)
-
-    /** Sub-threshold fatigue nudge (Tier 3) — null unless the active coach is quiet but fatigue builds. */
-    private val _coachFatigue = MutableStateFlow<com.forge.app.ui.overview.state.FatigueHint?>(null)
 
     /**
      * Today's directive (Coach v3 B2) — the hero's content. Loaded once per open and refreshed on
@@ -211,12 +195,6 @@ class OverviewViewModel @Inject constructor(
         s.copy(activeSessionDayKey = active?.dayKey?.takeIf { it in com.forge.app.program.Program.dayKeys })
     }.combine(_directive) { s, answer ->
         s.copy(directive = answer?.directive, brief = answer?.brief, coldStartLesson = answer?.coldStartLesson)
-    }.combine(_coach) { s, coach ->
-        s.copy(coach = coach)
-    }.combine(_coachLearning) { s, hint ->
-        s.copy(coachLearning = hint)
-    }.combine(_coachFatigue) { s, f ->
-        s.copy(coachFatigue = f)
     }.combine(settingsRepo.daysPerWeek) { s, days ->
         // The "of N target" denominator is the actual number of training days in the generated program
         // (the real weekly schedule), not a hardcoded 6 and not the raw days/week preference — the two
@@ -248,13 +226,6 @@ class OverviewViewModel @Inject constructor(
     )
 
     init {
-        // reloadCoach() is deliberately NOT run here (P-14). It fills three state flows — coach,
-        // coachLearning, coachFatigue — that no composable on the shipped Home reads, and it is not
-        // a cheap read: the adaptation snapshot behind it walks every finished session, its logged
-        // exercises and its sets, then the sessions again through life events, plus check-ins,
-        // cardio, restrictions, moods, bodyweight, swaps, preferences, cooldowns and a Health
-        // Connect recovery read — on every Home open. The fields, the mapping and [refreshCoach]
-        // stay, so a surface that brings the cards back asks for them.
         // The screen resume observer owns initial and subsequent visible refreshes.
         // Backfill the first-touch flag for users who already have history, so the onboarding cards
         // never reappear for a returning user (e.g. after a data wipe). finishWorkout() sets it going forward.
@@ -294,87 +265,6 @@ class OverviewViewModel @Inject constructor(
             .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
     }
     fun refreshDirective() = directiveRefresh.request()
-
-    /**
-     * "Try demo data" opt-in (Cat 10): wire the otherwise-unreachable [SampleDataSeeder] to the
-     * zero-session welcome card so a new user can populate Stats/rank/coach in one tap. Guarded on an
-     * empty history so it can't double-seed; the Overview state refreshes itself via the DB flows.
-     */
-    fun loadSampleData() = viewModelScope.launch {
-        if (sessionDao.finishedCount() == 0) sampleDataSeeder.seed()
-    }
-
-    // ─── Coach feed (adaptation engine) ───────────────────────────────────────
-
-    private suspend fun reloadCoach() {
-        val feed = adaptationRepo.coachFeed()
-        val recs = feed.recommendations
-            .mapNotNull { it.toCoachItem() }
-            // Keep the engine's TOP 3 first (so a high-priority read-only nudge it ranked isn't bumped
-            // out by lower-ranked actions), THEN float the actionable ones to the top within those 3.
-            // Stable sort preserves the engine's order inside each group.
-            .take(3)
-            .sortedByDescending { it.applyLabel != null }
-        _coach.value = recs
-        // CD-1: only nudge "still learning" when there's nothing actionable AND the weekly pass
-        // hasn't activated yet (below MIN_SESSIONS). Cheap finished-count query, off the hot path.
-        // TRACKED sessions: this gates the coach, and an untracked session is excluded from
-        // suggestions by contract. The seed gate above deliberately stays inclusive — that one asks
-        // "does this install hold any history", which untracked history certainly is.
-        val logged = sessionDao.trackedFinishedCount()
-        _coachLearning.value = if (recs.isEmpty() && logged < AutoCoachPlanner.MIN_SESSIONS)
-            CoachLearningHint(logged, AutoCoachPlanner.MIN_SESSIONS - logged) else null
-        // Tier 3: when the coach is active but quiet, surface building fatigue (System 5 sub-threshold).
-        _coachFatigue.value = if (recs.isEmpty() && logged >= AutoCoachPlanner.MIN_SESSIONS) {
-            feed.fatigueBuilding?.let {
-                com.forge.app.ui.overview.state.FatigueHint(it.score, feed.fatigueThreshold, it.drivers.firstOrNull())
-            }
-        } else null
-    }
-
-    /**
-     * Recompute the Home coach cards. Not called at init (see there); the entry point exists so the
-     * surface that renders [OverviewUiState.coach] again asks for them explicitly.
-     */
-    fun refreshCoach() = viewModelScope.launch { reloadCoach() }
-
-    /**
-     * One-tap apply. Only the deload suggestion has one today; the rest apply in-session.
-     * The deload regenerates the program, which discards any in-progress workout — route it through
-     * the guard so that's confirmed (and reloaded) rather than wiped silently.
-     */
-    fun applyCoach(item: CoachItem) = viewModelScope.launch {
-        if (item.id == "deload.suggest") programChangeGuard.run { adaptationRepo.applyDeloadWeek(); reloadCoach() }
-        else reloadCoach()
-    }
-
-    /** Dismissal is logged (advice_event) — the engine mutes this id for its cooldown. */
-    fun dismissCoach(item: CoachItem) = viewModelScope.launch {
-        adaptationRepo.logAdviceDismissed(item.id)
-        reloadCoach()
-    }
-
-    private fun Recommendation.toCoachItem(): CoachItem? = when (this) {
-        is Recommendation.DeloadSuggestion -> CoachItem(
-            id = id, title = "Time for a deload week", body = reason,
-            applyLabel = "Generate deload week"
-        )
-        is Recommendation.VariationSwap -> {
-            val names = candidateIds.mapNotNull { ExerciseLibrary.byId(it)?.name }
-            CoachItem(
-                id = id, title = "Plateau: swap $exerciseName?",
-                body = reason + if (names.isNotEmpty()) " Try: ${names.joinToString(", ")}." else ""
-            )
-        }
-        is Recommendation.RepRangeShift -> CoachItem(
-            id = id, title = "Shift $exerciseName to $toReps reps", body = reason
-        )
-        is Recommendation.WeightChange -> CoachItem(
-            id = id, title = "Adjust $exerciseName to $inputText", body = reason
-        )
-        // Readiness scales feed the in-session chip; insights live on Stats.
-        else -> null
-    }
 
     fun onMilestoneShown(milestoneId: String) {
         viewModelScope.launch { settingsRepo.markMilestoneShown(milestoneId) }

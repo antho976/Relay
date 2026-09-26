@@ -292,29 +292,12 @@ class CoachViewModel @Inject constructor(
 
     // ─── Projects (D) ──────────────────────────────────────────────────────────
 
-    /** Accept the proposed project. Propose-only at this phase: nothing starts without this tap. */
-    fun acceptProject() = viewModelScope.launch {
-        val candidate = _state.value.projectProposal ?: return@launch
-        runCatching { projectRepo.accept(candidate) }
-        refreshProjects()
-    }
-
     /** Start a specific project the user chose from [UiState.projectOptions]. */
     fun startProject(candidate: com.forge.app.domain.coach.ProjectScanner.Candidate) =
         viewModelScope.launch {
             runCatching { projectRepo.accept(candidate) }
             refreshProjects()
         }
-
-    fun completeProject() = viewModelScope.launch {
-        _state.value.project?.let { runCatching { projectRepo.complete(it.id) } }
-        refreshProjects()
-    }
-
-    fun abandonProject() = viewModelScope.launch {
-        _state.value.project?.let { runCatching { projectRepo.abandon(it.id) } }
-        refreshProjects()
-    }
 
     private suspend fun refreshProjects() {
         // Read everything first, then update atomically: `_state.value = _state.value.copy(...)`

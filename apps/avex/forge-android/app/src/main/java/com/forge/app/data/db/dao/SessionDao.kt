@@ -161,9 +161,6 @@ interface SessionDao {
     @Query("SELECT EXISTS(SELECT 1 FROM session WHERE finished_at IS NOT NULL)")
     suspend fun hasAnyFinishedSession(): Boolean
 
-    @Query("SELECT EXISTS(SELECT 1 FROM session s JOIN logged_exercise e ON e.session_id = s.id WHERE s.finished_at IS NOT NULL AND e.skipped = 0)")
-    fun observeHasReusableWorkout(): Flow<Boolean>
-
     /**
      * Day keys of sessions finished since [sinceMs] — the widget's "trained today" set, which feeds
      * `WeeklySchedule.resolveNextUp`. Tracked only, matching what DirectiveRepository already
@@ -282,10 +279,6 @@ interface SessionDao {
     @Query("SELECT * FROM session WHERE finished_at IS NOT NULL AND finished_at >= :fromMs AND finished_at < :toMs ORDER BY started_at ASC")
     suspend fun finishedByFinishTimeInRange(fromMs: Long, toMs: Long): List<Session>
 
-    /** Reactive version of [finishedInRange] — emits on any session change. */
-    @Query("SELECT * FROM session WHERE finished_at IS NOT NULL AND started_at >= :fromMs AND started_at < :toMs ORDER BY started_at ASC")
-    fun observeFinishedInRange(fromMs: Long, toMs: Long): Flow<List<Session>>
-
     /**
      * Every session starting inside [fromMs, toMs), with the instant each one occupies — the whole
      * nudge window for one imported workout, in a single query.
@@ -323,20 +316,6 @@ interface SessionDao {
     /** All finished sessions ordered newest first — for session history screen (#62). */
     @Query("SELECT * FROM session WHERE finished_at IS NOT NULL ORDER BY started_at DESC")
     fun observeAllFinishedSessions(): Flow<List<Session>>
-
-    /** Sessions with mood for effort/difficulty trend (#95). */
-    @Query("""
-        SELECT s.started_at, m.mood FROM session s
-        INNER JOIN mood_entry m ON m.session_id = s.id
-        WHERE s.finished_at IS NOT NULL
-        ORDER BY s.started_at ASC
-    """)
-    fun observeMoodOverTime(): kotlinx.coroutines.flow.Flow<List<MoodOverTime>>
-
-    data class MoodOverTime(
-        @androidx.room.ColumnInfo(name = "started_at") val startedAt: Long,
-        @androidx.room.ColumnInfo(name = "mood") val mood: String
-    )
 
     /** Aggregate stats for a window — for week/month comparisons (#34, #130). */
     @Query("""
@@ -379,51 +358,6 @@ interface SessionDao {
         GROUP BY day_key
     """)
     suspend fun avgMaxVolumeByDayKey(): List<DayVolumeStats>
-
-    /** Lifetime aggregate for #40 session metrics. */
-    @Query("""
-        SELECT SUM(total_volume_lb) AS total_volume, COUNT(*) AS session_count,
-               AVG(set_count) AS avg_sets
-        FROM session WHERE finished_at IS NOT NULL AND total_volume_lb IS NOT NULL AND is_untracked = 0
-    """)
-    suspend fun lifetimeAggregate(): LifetimeAggregate
-
-    data class LifetimeAggregate(
-        @androidx.room.ColumnInfo(name = "total_volume") val totalVolume: Double?,
-        @androidx.room.ColumnInfo(name = "session_count") val sessionCount: Int,
-        @androidx.room.ColumnInfo(name = "avg_sets") val avgSets: Double?
-    )
-
-    /**
-     * Per-day-type: avg duration, PR rate, set count — for #134.
-     *
-     * The duration expression mirrors [com.forge.app.data.db.entities.Session.durationMinutes]:
-     * real ACTIVE seconds when the session recorded them, wall-clock only as the pre-feature
-     * fallback. Reading `finished_at - started_at` outright made this the one duration surface that
-     * disagreed with every other one — a session trained for 40 minutes at 18:00, resumed and
-     * finished at 22:30, averaged in as four and a half hours.
-     *
-     * `is_untracked = 0` matches [avgMaxVolumeByDayKey] and [lifetimeAggregate]: an untracked
-     * session is excluded from every other aggregate, so it can't be counted here either.
-     */
-    @Query("""
-        SELECT day_key, COUNT(*) AS session_count,
-               AVG(CASE WHEN active_seconds > 0 THEN active_seconds / 60.0
-                        ELSE (finished_at - started_at) / 60000.0 END) AS avg_duration_min,
-               AVG(CAST(pr_count AS FLOAT) / NULLIF(set_count, 0)) AS pr_rate,
-               SUM(total_volume_lb) AS total_vol
-        FROM session WHERE finished_at IS NOT NULL AND is_untracked = 0
-        GROUP BY day_key
-    """)
-    suspend fun perDayTypeStats(): List<DayTypeStats>
-
-    data class DayTypeStats(
-        @androidx.room.ColumnInfo(name = "day_key") val dayKey: String,
-        @androidx.room.ColumnInfo(name = "session_count") val sessionCount: Int,
-        @androidx.room.ColumnInfo(name = "avg_duration_min") val avgDurationMin: Double?,
-        @androidx.room.ColumnInfo(name = "pr_rate") val prRate: Double?,
-        @androidx.room.ColumnInfo(name = "total_vol") val totalVol: Double?
-    )
 
     data class DayVolumeStats(
         @androidx.room.ColumnInfo(name = "day_key") val dayKey: String,

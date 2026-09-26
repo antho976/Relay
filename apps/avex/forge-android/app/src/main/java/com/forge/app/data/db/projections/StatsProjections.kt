@@ -23,15 +23,6 @@ data class SetWithExerciseAndSession(
     @ColumnInfo(name = "rpe") val rpe: Double? = null
 )
 
-/**
- * One row per session in the heatmap window — used to count exercises per day after
- * grouping in Kotlin. The query returns `started_at` for each LoggedExercise; multiple
- * rows for the same session are fine because we aggregate to a single per-day count.
- */
-data class HeatmapTimestamp(
-    @ColumnInfo(name = "started_at") val startedAt: Long
-)
-
 data class RecentPrRow(
     @ColumnInfo(name = "exercise_id") val exerciseId: String,
     @ColumnInfo(name = "swapped_name") val swappedName: String?,

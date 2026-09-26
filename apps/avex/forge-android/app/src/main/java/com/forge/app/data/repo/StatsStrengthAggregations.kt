@@ -4,15 +4,11 @@ import com.forge.app.domain.adapt.E1rm
 import com.forge.app.program.MuscleGroup
 import com.forge.app.program.Program
 import com.forge.app.ui.gym.stats.state.E1rmLift
-import com.forge.app.ui.gym.stats.state.HistoryPoint
 import com.forge.app.ui.gym.stats.state.OverloadSummary
 import com.forge.app.ui.gym.stats.state.PatternAxis
 import com.forge.app.ui.gym.stats.state.PrEntry
 import com.forge.app.ui.gym.stats.state.PrRecency
 import com.forge.app.ui.gym.stats.state.PrRecord
-import com.forge.app.ui.gym.stats.state.RepMaxEntry
-import com.forge.app.ui.gym.stats.state.RepMaxSet
-import com.forge.app.ui.gym.stats.state.TimeToPrEntry
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -74,25 +70,6 @@ internal fun buildHallOfFame(
         .sortedWith(compareBy({ it.muscle.displayName }, { it.exerciseName }))
 }
 
-internal fun buildExerciseHistory(
-    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
-): Map<String, List<HistoryPoint>> {
-    return allSets
-        .filter { it.weightLb != null }
-        .groupBy { it.exerciseId }
-        .mapValues { (_, sets) ->
-            sets
-                .groupBy { it.sessionStartedAt }
-                .map { (sessionDate, sessionSets) ->
-                    HistoryPoint(
-                        sessionDate = sessionDate,
-                        maxWeightLb = sessionSets.maxOf { it.weightLb!! }
-                    )
-                }
-                .sortedBy { it.sessionDate }
-        }
-}
-
 /**
  * Epley estimated 1-rep max — delegates to the canonical [E1rm] so the Stats path and the
  * adaptation engine can never diverge. [E1rm.epley] guards `reps <= 1` (a true single's e1RM is
@@ -135,24 +112,6 @@ internal fun buildE1rmLifts(
         .sortedByDescending { it.currentE1rm }
         .take(6)
 }
-
-/** Best weight at each rep count for the single most-trained lift. */
-internal fun buildRepMaxes(
-    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
-): RepMaxSet? {
-    val byExercise = allSets.filter { it.weightLb != null && it.weightLb > 0 }.groupBy { it.exerciseId }
-    val top = byExercise.maxByOrNull { it.value.size } ?: return null
-    val name = Program.exercise(top.key)?.name ?: return null
-    val entries = top.value
-        .groupBy { it.reps }
-        .map { (reps, ss) -> RepMaxEntry(reps = reps, weightLb = ss.maxOf { it.weightLb!! }) }
-        .sortedBy { it.reps }
-    return if (entries.isEmpty()) null else RepMaxSet(exerciseName = name, entries = entries)
-}
-
-/** Average estimated-1RM growth per month across lifts, as a percent. */
-internal fun computeProgressiveOverload(lifts: List<E1rmLift>): Double? =
-    lifts.mapNotNull { it.monthlyPct }.takeIf { it.isNotEmpty() }?.average()
 
 /**
  * The concrete "progressive overload" series: per ISO week, the average of each tracked
@@ -250,28 +209,6 @@ internal fun buildPatternRadar(
         PatternAxis(label = label, currentE1rm = current[label] ?: 0.0, peakE1rm = p)
     }
     return if (axes.size >= 3) axes else emptyList()
-}
-
-internal fun buildTimeToPr(
-    rows: List<com.forge.app.data.db.dao.LoggedExerciseDao.ExercisePrDate>
-): List<TimeToPrEntry> {
-    return rows
-        .groupBy { it.exerciseId }
-        .mapNotNull { (exerciseId, dates) ->
-            if (dates.size < 2) return@mapNotNull null
-            val sorted = dates.sortedBy { it.sessionDate }
-            // Averaged over CALENDAR-day gaps, not elapsed milliseconds: the number is labelled and
-            // read as a day count ("a PR every ~9 days"), and dividing elapsed ms shortens any gap
-            // that crossed a spring-forward while lengthening one that crossed a fall-back.
-            val zone = ZoneId.systemDefault()
-            fun dayOf(ms: Long) = Instant.ofEpochMilli(ms).atZone(zone).toLocalDate()
-            val avgDays = sorted
-                .zipWithNext { a, b -> ChronoUnit.DAYS.between(dayOf(a.sessionDate), dayOf(b.sessionDate)) }
-                .average().roundToInt().coerceAtLeast(1)
-            val name = Program.exercise(exerciseId)?.name ?: return@mapNotNull null
-            TimeToPrEntry(exerciseId = exerciseId, exerciseName = name, avgDaysBetween = avgDays, prCount = dates.size)
-        }
-        .sortedBy { it.avgDaysBetween }
 }
 
 internal fun buildPrsByDayOfWeek(prTimes: List<Long>): List<Int> {

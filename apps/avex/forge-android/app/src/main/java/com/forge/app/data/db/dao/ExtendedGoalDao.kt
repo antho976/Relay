@@ -29,12 +29,6 @@ interface ExtendedGoalDao {
     @Query("SELECT * FROM extended_goal WHERE id = :id")
     suspend fun getById(id: Long): ExtendedGoal?
 
-    @Query("SELECT * FROM extended_goal WHERE exercise_id = :exerciseId")
-    fun observeForExercise(exerciseId: String): Flow<List<ExtendedGoal>>
-
-    @Query("UPDATE extended_goal SET completed_at = :ts WHERE id = :id")
-    suspend fun markComplete(id: Long, ts: Long)
-
     @Query("UPDATE extended_goal SET target_value = :target WHERE id = :id")
     suspend fun updateTarget(id: Long, target: Double)
 

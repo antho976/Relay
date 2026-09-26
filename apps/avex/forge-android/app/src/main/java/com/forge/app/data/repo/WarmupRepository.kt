@@ -22,18 +22,4 @@ class WarmupRepository @Inject constructor(private val dao: WarmupRoutineDao) {
         return if (items.isEmpty()) null
         else items.map { it.label }
     }
-
-    suspend fun addItem(dayKey: String, label: String, durationHint: String? = null) {
-        val existing = dao.forDay(dayKey)
-        dao.insert(WarmupRoutineItem(
-            dayKey = dayKey,
-            label = label,
-            orderIndex = (existing.maxOfOrNull { it.orderIndex } ?: 0) + 1,
-            durationHint = durationHint
-        ))
-    }
-
-    suspend fun removeItem(item: WarmupRoutineItem) = dao.delete(item)
-
-    suspend fun resetDay(dayKey: String) = dao.clearDay(dayKey)
 }

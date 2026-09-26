@@ -334,8 +334,8 @@ private data class BodyMetric(
  * This replaces the swipeable card strip (2026-08-22). The strip gave each metric its own figure,
  * delta and sparkline at a generous size, and charged the section its scanability: you had to swipe
  * to learn whether MUSCLE had data at all. Rows give that back. The sparkline survives the move at
- * a smaller size, in the slot between the name and the figure, which is the trade the shipped
- * `BodyMetricsSection` made too — and the reason it read well.
+ * a smaller size, in the slot between the name and the figure, which is the trade the earlier
+ * BODY section made too — and the reason it read well.
  *
  * Zero is drawn by the rows themselves: a metric with no readings still shows its name and its
  * action, exactly as the cards did (§12 — the rows ARE the zero-shape).

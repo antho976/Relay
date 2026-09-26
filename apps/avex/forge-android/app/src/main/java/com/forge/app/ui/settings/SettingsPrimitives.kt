@@ -421,33 +421,6 @@ internal fun HourPickerRow(label: String, hour: Int, onHourChange: (Int) -> Unit
 }
 
 @Composable
-internal fun TileOrderRow(
-    label: String,
-    canMoveUp: Boolean,
-    canMoveDown: Boolean,
-    onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit
-) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = onBg)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            // GlyphButton dims a disabled glyph to the shared §4.5 inert level and makes it inert,
-            // so an un-movable arrow never looks tappable (and never sits at an off-ladder 0.2).
-            GlyphButton("↑", "Move up", muted, onMoveUp, enabled = canMoveUp)
-            GlyphButton("↓", "Move down", muted, onMoveDown, enabled = canMoveDown)
-        }
-    }
-}
-
-@Composable
 internal fun DestructiveRow(label: String, isFactory: Boolean = false, onClick: () -> Unit) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant

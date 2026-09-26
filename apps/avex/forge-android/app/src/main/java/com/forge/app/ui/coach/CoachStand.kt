@@ -30,7 +30,6 @@ import com.forge.app.data.repo.TrackedLift
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.common.ForgeRowPill
-import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.statsEntrance
 import kotlin.math.abs
@@ -373,12 +372,3 @@ private fun SignalRow(sig: RecoverySignal, c: CoachColors, onConnectHealth: (() 
  */
 private fun signalReading(sig: RecoverySignal): String =
     if (sig.active) sig.detail else "none"
-
-/** The lens's one hint, for the state where the coach could not read its own inputs at all. */
-@Composable
-internal fun CoachStandUnavailable(c: CoachColors) {
-    InlineEmptyHint(
-        "Couldn't read the coach's inputs right now. Log a workout and check back.",
-        color = c.muted
-    )
-}

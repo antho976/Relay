@@ -2,9 +2,7 @@ package com.forge.app.data.repo
 
 import com.forge.app.core.time.Clock
 import com.forge.app.data.db.dao.CheckinDao
-import com.forge.app.data.db.dao.InjuryRestrictionDao
 import com.forge.app.data.db.entities.CheckinEntry
-import com.forge.app.data.db.entities.InjuryRestriction
 import com.forge.app.program.MuscleGroup
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
@@ -24,7 +22,6 @@ import javax.inject.Singleton
 @Singleton
 class CheckinRepository @Inject constructor(
     private val checkinDao: CheckinDao,
-    private val injuryDao: InjuryRestrictionDao,
     private val clock: Clock
 ) {
 
@@ -42,10 +39,6 @@ class CheckinRepository @Inject constructor(
     suspend fun today(): CheckinEntry? = checkinDao.forDate(todayKey())
 
     fun observeToday(): Flow<CheckinEntry?> = checkinDao.observeForDate(todayKey())
-
-    /** Recent check-ins for the engine's windows (readiness reads days, not history). */
-    suspend fun recentForEngine(windowDays: Int = ENGINE_WINDOW_DAYS): List<CheckinEntry> =
-        checkinDao.since(clock.nowMs() - windowDays * DAY_MS)
 
     /**
      * Save today's answers. Any subset may be null — a partial check-in beats an abandoned one.
@@ -82,39 +75,5 @@ class CheckinRepository @Inject constructor(
             )
         )
         Unit
-    }
-
-    // ── Injury restrictions ────────────────────────────────────────────────────
-
-    suspend fun activeRestrictions(): List<InjuryRestriction> = injuryDao.active()
-
-    fun observeActiveRestrictions() = injuryDao.observeActive()
-
-    suspend fun restrictMuscle(muscle: MuscleGroup, note: String = ""): Long =
-        injuryDao.insert(
-            InjuryRestriction(
-                scope = InjuryRestriction.SCOPE_MUSCLE,
-                targetKey = muscle.code,
-                note = note,
-                startedAt = clock.nowMs()
-            )
-        )
-
-    suspend fun restrictExercise(exerciseId: String, note: String = ""): Long =
-        injuryDao.insert(
-            InjuryRestriction(
-                scope = InjuryRestriction.SCOPE_EXERCISE,
-                targetKey = exerciseId,
-                note = note,
-                startedAt = clock.nowMs()
-            )
-        )
-
-    /** Cleared, not deleted: "I hurt my shoulder in July" explains July's numbers forever. */
-    suspend fun clearRestriction(id: Long) = injuryDao.clear(id, clock.nowMs())
-
-    private companion object {
-        const val DAY_MS = 24L * 60 * 60 * 1000
-        const val ENGINE_WINDOW_DAYS = 30
     }
 }

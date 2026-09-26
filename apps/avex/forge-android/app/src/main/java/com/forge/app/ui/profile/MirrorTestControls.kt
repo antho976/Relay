@@ -271,13 +271,6 @@ internal fun gallerySpanLabel(oldestMs: Long, newestMs: Long, zone: ZoneId): Str
     }
 }
 
-/** Days between two shots, for compare readouts. */
-internal fun daysBetween(aMs: Long, bMs: Long, zone: ZoneId): Long {
-    val a = Instant.ofEpochMilli(minOf(aMs, bMs)).atZone(zone).toLocalDate()
-    val b = Instant.ofEpochMilli(maxOf(aMs, bMs)).atZone(zone).toLocalDate()
-    return ChronoUnit.DAYS.between(a, b)
-}
-
 /**
  * Pick the strongest pair for the progress band: the newest photo, paired with the OLDEST photo that
  * shares its pose (so "front vs front" beats "front vs a leg shot"); falls back to the oldest overall.

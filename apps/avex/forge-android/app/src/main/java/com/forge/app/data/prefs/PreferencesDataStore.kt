@@ -314,11 +314,8 @@ object PreferenceKeys {
     val SCHEDULE_WEEKLY = stringPreferencesKey("schedule_weekly")
     /** N for the "every_n" cadence. */
     val ROTATION_EVERY_N = intPreferencesKey("rotation_every_n")
-    /** Unit for ROTATION_EVERY_N: "sessions" | "weeks". */
-    val ROTATION_UNIT = stringPreferencesKey("rotation_unit")
     /** Progress toward the next rotation. */
     val ROTATION_COUNTER = intPreferencesKey("rotation_counter")
-    val LAST_ROTATED_AT_MS = longPreferencesKey("last_rotated_at_ms")
     /**
      * When the current deload week was applied (epoch-ms). 0 = not in a deload week. Persists the
      * deload so auto-rotation pauses and DeloadAdvisor suppression fires (auto-coach seam, finding 18).
@@ -447,7 +444,7 @@ object PreferenceKeys {
         AVAILABLE_EQUIPMENT, FROZEN_EXERCISE_IDS, MAX_DB_WEIGHT_LB, SCHEDULE_MODE, SCHEDULE_WEEKLY,
         PINNED_EXERCISES, FAVORITE_EXERCISES, LIKED_EXERCISES, DISLIKED_EXERCISES,
         DELOAD_WEEK_START_MS, PROGRAM_GENERATION_INTENT, PROGRAM_GENERATION_SEED, ROTATION_COUNTER,
-        LAST_ROTATED_AT_MS, COACH_OFF_PASS_WEEK,
+        COACH_OFF_PASS_WEEK,
         // A rest timer running right now.
         REST_TIMER_END_AT, REST_TIMER_TOTAL, REST_TIMER_PAUSED_REMAINING,
         // Folder grants: forgetting the URI would leave the grant held with nothing naming it.
