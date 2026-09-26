@@ -137,8 +137,16 @@ class BlockRepository @Inject constructor(
      * a running deload would reroll the week and push its window out (the same guard the Coach's
      * apply uses). Failure is swallowed on purpose: the block has already moved, and the weekly
      * pass falls back to proposing the deload as a decision when none is running.
+     *
+     * Two cases are also left to that proposal. Regenerating discards the in-progress workout, and
+     * this runs on every app resume with nobody asked, so a workout started Sunday night and resumed
+     * after midnight into the deload week was deleted without a word; a proposal is applied from
+     * the UI, behind the confirm every other regeneration uses. And with the coach switched off it
+     * must not change the program at all: the block keeps its clock, but nothing is served.
      */
     private suspend fun serveScheduledDeload() {
+        if (!settingsRepository.coachEnabled.first()) return
+        if (database.sessionDao().getActiveSession() != null) return
         val startedAt = settingsRepository.deloadWeekStartMs.first()
         if (startedAt > 0L && clock.nowMs() < deloadWeekEndMs(startedAt)) return
         runCatching { adaptationRepository.applyDeloadWeek() }

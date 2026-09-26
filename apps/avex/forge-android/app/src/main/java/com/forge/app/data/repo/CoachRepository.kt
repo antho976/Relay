@@ -200,11 +200,21 @@ class CoachRepository @Inject constructor(
         //    the following Monday however much the history changed in between. The week id of the
         //    last off-pass is recorded below so the two cases can be told apart.
         // 2. The pass ERRORED. An error is not a result; it should be retried, not cached for a week.
+        //
+        // Regenerating deletes the week's decisions, so it never happens to a week the user has
+        // already acted on. The off-pass marker used to stay set all week (nothing cleared it), so
+        // once the coach was back on, EVERY later resume re-ran the week: an applied "Bench 3→4
+        // sets" lost its row and undo data while its overlay stayed live, was proposed again, and
+        // re-applied as 4→5 — on every resume, in auto mode.
         val offPassWeekId = settings.coachOffPassWeekId.first()
         coachDao.pass(weekId)?.let { existing ->
             val recordedWhileOff = existing.status == STATUS_SHADOW || offPassWeekId == weekId
-            val regenerate = (recordedWhileOff && !coachOff) || existing.status == STATUS_ERROR
-            if (!regenerate) return@withLock existing
+            val regenerate = ((recordedWhileOff && !coachOff) || existing.status == STATUS_ERROR) &&
+                coachDao.decisionsFor(weekId).all { it.status == STATUS_SHADOW || it.status == STATUS_PROPOSED }
+            if (!regenerate) {
+                if (!coachOff && offPassWeekId == weekId) runCatching { settings.setCoachOffPassWeekId("") }
+                return@withLock existing
+            }
             coachDao.clearPass(weekId)
         }
 
@@ -278,6 +288,8 @@ class CoachRepository @Inject constructor(
         // Remember that THIS week's pass ran with the coach off, whatever status it landed on, so
         // turning the coach back on mid-week can regenerate it rather than serve the inert result.
         if (won && coachOff) runCatching { settings.setCoachOffPassWeekId(weekId) }
+        // And forget it once a pass has run with the coach on: that pass is the real one now.
+        if (won && !coachOff && offPassWeekId == weekId) runCatching { settings.setCoachOffPassWeekId("") }
         // A switched-off coach records but never acts — shadow decisions aren't proposals, so there is
         // nothing to auto-apply (and autoApplyEarnedTypes only touches STATUS_PROPOSED rows anyway).
         val autoApplyTooSoon = previousPassRanAt != null &&
@@ -297,8 +309,13 @@ class CoachRepository @Inject constructor(
         if (settings.coachMode.first() != "auto") return
         val earned = TrustLedger.earnedTypes(coachDao.allDecisions().filter { it.weekId != weekId })
         if (earned.isEmpty()) return
+        // A deload regenerates the program, which discards the in-progress workout. Autopilot runs
+        // on an app resume, so with a workout open it leaves the deload proposed, to be applied
+        // from the UI behind its confirm, instead of deleting the workout unasked.
+        val workoutOpen = database.sessionDao().getActiveSession() != null
         coachDao.decisionsFor(weekId)
             .filter { it.status == STATUS_PROPOSED && it.type in earned }
+            .filterNot { it.type == "deload" && workoutOpen }
             .forEach { d ->
                 // One bad decision must not stop the rest, but a cancelled scope must unwind — swallowing
                 // CancellationException here would keep auto-applying inside a cancelled coroutine.

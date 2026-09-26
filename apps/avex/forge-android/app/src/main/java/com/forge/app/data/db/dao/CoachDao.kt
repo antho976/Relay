@@ -144,8 +144,10 @@ interface CoachDao {
     /**
      * Drop a week's pass and its decisions so the coach can regenerate the week from scratch. Used
      * when a pass recorded as inert SHADOW (coach switched off) must be re-run as a real proposal
-     * pass because the coach was switched back on mid-week. Shadow decisions are inert (no overlay,
-     * ignored by the watcher/ledger), so deleting them has no lingering effect.
+     * pass because the coach was switched back on mid-week, or an errored pass is retried. Deletes
+     * decisions of EVERY status, so the caller must only clear a week whose decisions are all shadow
+     * or proposed: shadow ones are inert (no overlay, ignored by the watcher/ledger) and a proposal
+     * has changed nothing yet, so neither has a lingering effect. An applied row carries undo data.
      */
     @Transaction
     suspend fun clearPass(weekId: String) {

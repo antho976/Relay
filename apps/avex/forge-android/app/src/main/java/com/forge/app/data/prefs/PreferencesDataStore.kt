@@ -415,4 +415,47 @@ object PreferenceKeys {
     /** Whether the one-time "tap your photo to change it" hint has been shown — it teaches the tap now
      *  that the old "tap to add a photo" placeholder no longer appears (a default is always assigned). */
     val AVATAR_EDIT_HINT_SHOWN = booleanPreferencesKey("avatar_edit_hint_shown")
+
+    /**
+     * Keys that "Reset app settings" keeps, because they are not settings: identity, protection,
+     * content the user wrote, one-shot latches, and the state the current program and engine run on.
+     *
+     * The reset clears the store and puts these back. It used to put back 16 keys copied by hand,
+     * which lost everything else that shares this store: milestones re-fired, dismissed notices came
+     * back, the deload marker went (so a deload in progress never ended), and the weekly schedule,
+     * liked/disliked/pinned exercises and problem areas were wiped under a dialog that says
+     * "Does not delete your data." A key added here later is kept without touching the reset.
+     */
+    val KEPT_ON_SETTINGS_RESET: Set<Preferences.Key<*>> = setOf(
+        // Identity and onboarding.
+        ONBOARDING_DONE, ONBOARDING_DRAFT, WELCOMED, MEMBER_SINCE_MS, USER_NAME, USER_GOAL, USER_SEX,
+        USER_AGE_YEARS, MAX_HR_OVERRIDE, FREESTYLE_MODE, SWAP_DISLIKE_PROMPT_ENABLED,
+        AVATAR_DEFAULT_ID,
+        // Protection.
+        APP_LOCK_ENABLED, GALLERY_LOCK_ENABLED, APP_LOCK_TIMEOUT_SEC, PRIVACY_MODE,
+        // Content the user wrote.
+        CUSTOM_EXERCISES, CUSTOM_CARDIO_TYPES, FREESTYLE_DRAFT, NOTE_TEMPLATES, PINNED_GOALS,
+        // One-shot latches and feed state: clearing them replays what already happened.
+        SHOWN_MILESTONES, UNREAD_MILESTONES, SYSTEM_NOTICES, DISMISSED_LESSON_NOTICES,
+        ANNOUNCED_LESSON_NOTICES, ANNOUNCED_CHECKIN_DATES, HC_DISMISSED_WATCH_IMPORTS,
+        HC_WEIGHT_HISTORY_IMPORTED, HC_WEIGHT_HISTORY_PARTIAL, CARDIO_WEARABLE_HINT_DISMISSED,
+        NOTIF_PERM_ASKED, FIRST_WORKOUT_DONE, PROGRAM_SEEDED, AVATAR_DEFAULT_SEEDED,
+        AVATAR_EDIT_HINT_SHOWN, COACH_ADVANCED_PROMPT_AFTER, COACH_BRIEF_INTRO_SEEN,
+        LAST_SEEN_COACH_WEEK_ID, LAST_SEEN_RANK_TIER_ORDINAL,
+        // What the current program was generated from, and the engine state riding on it.
+        DAYS_PER_WEEK, PROGRAM_EMPHASIS, PROGRAM_EXPERIENCE, PROBLEM_AREAS, PRIORITY_MUSCLES,
+        AVAILABLE_EQUIPMENT, FROZEN_EXERCISE_IDS, MAX_DB_WEIGHT_LB, SCHEDULE_MODE, SCHEDULE_WEEKLY,
+        PINNED_EXERCISES, FAVORITE_EXERCISES, LIKED_EXERCISES, DISLIKED_EXERCISES,
+        DELOAD_WEEK_START_MS, PROGRAM_GENERATION_INTENT, PROGRAM_GENERATION_SEED, ROTATION_COUNTER,
+        LAST_ROTATED_AT_MS, COACH_OFF_PASS_WEEK,
+        // A rest timer running right now.
+        REST_TIMER_END_AT, REST_TIMER_TOTAL, REST_TIMER_PAUSED_REMAINING,
+        // Folder grants: forgetting the URI would leave the grant held with nothing naming it.
+        BACKUP_FOLDER_URI, IMPORT_FOLDER_URI,
+    )
+
+    /** [KEPT_ON_SETTINGS_RESET], plus the per-day custom warmups ([warmupKey]), which are content.
+     *  The prefix also keeps [WARMUP_DISABLED_UNTIL_MS], a temporary skip the user set on purpose. */
+    fun keptOnSettingsReset(key: Preferences.Key<*>): Boolean =
+        key in KEPT_ON_SETTINGS_RESET || key.name.startsWith("warmup_")
 }

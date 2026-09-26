@@ -598,6 +598,13 @@ class WorkoutRepository @Inject constructor(
         // stays hidden behind the freestyle home (the manual Settings paths flip freestyle off, but
         // this background path can't ask). Skip entirely.
         if (settingsRepo.freestyleMode.first()) return
+        // Both branches below regenerate the program, and a regeneration discards the in-progress
+        // session. The session that just finished is no longer in progress, so one still open here
+        // is a different workout: a program session left running while a freestyle one was saved.
+        // Deleting it unasked is the one outcome worse than rotating late, so wait: the deload
+        // marker is left standing and the next finish retries, and this finish doesn't count
+        // toward rotation.
+        if (sessionDao.getActiveSession() != null) return
 
         val deloadStart = settingsRepo.deloadWeekStartMs.first()
         val deloadRange = if (deloadStart > 0) deloadWindow(deloadStart) else null

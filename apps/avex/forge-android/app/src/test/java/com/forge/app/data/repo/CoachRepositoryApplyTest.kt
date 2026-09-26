@@ -13,6 +13,7 @@ import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.coach.TrustLedger
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.Program
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -343,6 +344,54 @@ class CoachRepositoryApplyTest {
         // Nor do they break a streak: a real change afterwards starts counting from one.
         repo.applyDecision(proposed("rep_shift", payload = newRange))
         assertEquals(1, TrustLedger.assess(db.coachDao().allDecisions()).first { it.type == "rep_shift" }.streak)
+    }
+
+    /**
+     * Coach off → on mid-week (audit 2026-09-26, P1 #6). The off-pass marker used to stay set all
+     * week, so every later pass cleared the week — applied decisions and their undo data included —
+     * and proposed (and, in auto mode, applied) the same change again.
+     */
+    @Test
+    fun coachBackOnMidWeekRegeneratesOnceAndNeverDeletesAppliedDecisions() = runTest {
+        settings.setCoachEnabled(false)
+        val week = repo.ensureWeeklyPass().weekId
+        assertEquals(week, settings.coachOffPassWeekId.first())
+
+        settings.setCoachEnabled(true)
+        repo.ensureWeeklyPass()
+        // The pass that ran with the coach on is the real one, so the marker is gone.
+        assertEquals("", settings.coachOffPassWeekId.first())
+
+        db.coachDao().insertDecisions(listOf(
+            CoachDecision(
+                weekId = week, type = "volume", targetKey = slot.id, targetName = slot.name,
+                summary = "s", reason = "r", status = CoachRepository.STATUS_APPLIED,
+                dayKey = DAY, payload = "4", scopeKey = week
+            )
+        ))
+        repo.ensureWeeklyPass()
+        repo.ensureWeeklyPass()
+        assertEquals(1, db.coachDao().decisionsFor(week).count { it.status == CoachRepository.STATUS_APPLIED })
+    }
+
+    /** A stale marker (say, from a build before the fix) still can't clear a week the user acted on. */
+    @Test
+    fun staleOffPassMarkerDoesNotClearAWeekWithAppliedDecisions() = runTest {
+        settings.setCoachEnabled(true)
+        val week = repo.ensureWeeklyPass().weekId
+        db.coachDao().insertDecisions(listOf(
+            CoachDecision(
+                weekId = week, type = "volume", targetKey = slot.id, targetName = slot.name,
+                summary = "s", reason = "r", status = CoachRepository.STATUS_APPLIED,
+                dayKey = DAY, payload = "4", scopeKey = week
+            )
+        ))
+        settings.setCoachOffPassWeekId(week)
+
+        repo.ensureWeeklyPass()
+
+        assertEquals(1, db.coachDao().decisionsFor(week).count { it.status == CoachRepository.STATUS_APPLIED })
+        assertEquals("", settings.coachOffPassWeekId.first())
     }
 
     private companion object {
