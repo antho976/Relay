@@ -58,7 +58,6 @@ import com.forge.app.ui.gym.session.state.SessionMetric
 import com.forge.app.ui.gym.session.state.SetDetail
 import com.forge.app.ui.gym.stats.components.BodyHeatmap
 import com.forge.app.ui.gym.stats.state.MuscleSetCount
-import com.forge.app.ui.overview.SummaryStat
 import com.forge.app.ui.theme.ForgeError
 import com.forge.app.ui.theme.ForgeSuccess
 import com.forge.app.ui.theme.ForgeWarning
@@ -108,17 +107,18 @@ internal fun SessionHeaderBlock(
                 Text(sub, style = MaterialTheme.typography.labelSmall, letterSpacing = 1.5.sp, color = muted, fontSize = 9.sp)
                 Spacer(Modifier.height(2.dp))
             }
-            Text(data.title, style = MaterialTheme.typography.headlineSmall, color = onBg, fontWeight = FontWeight.Normal)
-            Text(dateStr, style = MaterialTheme.typography.bodySmall, color = muted, fontSize = 11.sp, fontStyle = FontStyle.Italic)
+            Text(data.title, style = MaterialTheme.typography.headlineMedium, color = onBg)
+            Spacer(Modifier.height(4.dp))
+            Text(dateStr, style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
             if (data.journal.isNotBlank()) {
                 Spacer(Modifier.height(10.dp))
                 Text("“${data.journal}”", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
             }
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(18.dp))
             SummaryStrip(data, onBg, muted)
         }
         if (data.muscleSplit.isNotEmpty()) {
-            CompactBodyMap(data.muscleSplit, accent, muted, outline, Modifier.width(116.dp))
+            CompactBodyMap(data.muscleSplit, accent, muted, outline, Modifier.width(100.dp))
         }
     }
 }
@@ -206,9 +206,10 @@ private fun MuscleMapDialog(
 }
 
 /**
- * The summary stats; wraps so it fits beside the muscle map. Volume & Sets carry an up/down/same
- * caret vs the last session of this same training ([SessionDetailData.prevVolumeLb]/[prevSetCount]);
- * the rest reuse the plain overview [SummaryStat].
+ * The summary figures; wraps so it fits beside the muscle map. Serif, like Stats' and History's
+ * figures, one step down from theirs so four or five sit beside the map without a wall. Volume and
+ * Sets carry an arrow vs the last session of this same training ([SessionDetailData.prevVolumeLb] /
+ * [prevSetCount]) only when it moved; "same" draws nothing.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -216,18 +217,23 @@ internal fun SummaryStrip(data: SessionDetailData, onBg: Color, muted: Color) {
     val weightUnit = LocalForgeSettings.current.weightUnit
     FlowRow(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(18.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        // 12, not 18: four figures (volume · duration · sets · PRs) fit one line beside the map
+        // on a phone instead of stranding the last one alone on a second row.
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         data.volumeLb?.takeIf { it > 0 }?.let {
-            TrendStat(formatVolume(it, weightUnit), "VOLUME", trendOf(it, data.prevVolumeLb), muted, onBg)
+            SessionFigure(formatVolume(it, weightUnit), "Volume", trendOf(it, data.prevVolumeLb), onBg, muted)
         }
-        data.durationMin?.takeIf { it > 0 }?.let { SummaryStat("$it min", "DURATION", muted, onBg) }
+        data.durationMin?.takeIf { it > 0 }?.let { SessionFigure("$it min", "Duration", null, onBg, muted) }
         if (data.setCount > 0) {
-            TrendStat("${data.setCount}", "SETS", trendOf(data.setCount.toDouble(), data.prevSetCount?.toDouble()), muted, onBg)
+            SessionFigure(
+                "${data.setCount}", if (data.setCount == 1) "Set" else "Sets",
+                trendOf(data.setCount.toDouble(), data.prevSetCount?.toDouble()), onBg, muted
+            )
         }
-        if (data.prCount > 0) SummaryStat("${data.prCount}", "PRs", muted, onBg)
-        data.avgRpe?.let { SummaryStat(rpeLabel(it), "AVG RPE", muted, onBg) }
+        if (data.prCount > 0) SessionFigure("${data.prCount}", if (data.prCount == 1) "PR" else "PRs", null, onBg, muted)
+        data.avgRpe?.let { SessionFigure(rpeLabel(it), "Avg RPE", null, onBg, muted) }
     }
 }
 
@@ -248,30 +254,31 @@ private fun trendOf(cur: Double, prev: Double?): Trend? {
     }
 }
 
-/** A summary stat (value over label) with a small up/down/same caret vs the last session. */
+/** One header figure: serif value over a mono label, with a ↑/↓ beside it when it moved. */
 @Composable
-private fun TrendStat(value: String, label: String, trend: Trend?, muted: Color, onBg: Color) {
-    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(value, style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.Normal)
-            trend?.let {
-                // §11 deltas: ↑ accent / ↓ muted — shape carries the direction, a contentDescription
-                // gives TalkBack a word.
-                val (glyph, color, desc) = when (it) {
-                    Trend.UP -> Triple("↑", MaterialTheme.colorScheme.primary, "up from last session")
-                    Trend.DOWN -> Triple("↓", muted, "down from last session")
-                    Trend.SAME -> Triple("=", muted.copy(alpha = 0.7f), "same as last session")
-                }
+private fun SessionFigure(value: String, label: String, trend: Trend?, onBg: Color, muted: Color) {
+    Column {
+        Row(verticalAlignment = Alignment.Top) {
+            Text(value, style = MaterialTheme.typography.headlineSmall, color = onBg)
+            // §11 deltas: ↑ accent / ↓ muted, the shape carries direction and a contentDescription
+            // gives TalkBack a word. SAME is not an exception, so it isn't flagged (§8).
+            val arrow = when (trend) {
+                Trend.UP -> Triple("↑", MaterialTheme.colorScheme.primary, "up from last session")
+                Trend.DOWN -> Triple("↓", muted, "down from last session")
+                else -> null
+            }
+            arrow?.let { (glyph, color, desc) ->
+                Spacer(Modifier.width(4.dp))
                 Text(
                     glyph,
                     style = MaterialTheme.typography.labelSmall,
                     color = color,
-                    fontSize = 8.sp,
-                    modifier = Modifier.semantics { contentDescription = desc }
+                    modifier = Modifier.padding(top = 2.dp).semantics { contentDescription = desc }
                 )
             }
         }
-        Text(label, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f), fontSize = 9.sp, letterSpacing = 0.5.sp)
+        Spacer(Modifier.height(2.dp))
+        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
     }
 }
 
@@ -294,20 +301,23 @@ internal fun ExerciseDetailBody(
 ) {
     val weightUnit = LocalForgeSettings.current.weightUnit
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        val hasChip = ex.e1rmLb != null || ex.isPr || ex.effort != null
-        if (hasChip) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                // A new best e1RM lights up like a PR; otherwise it's a quiet reference chip.
+        val hasMeta = ex.e1rmLb != null || ex.isPr || ex.effort != null
+        if (hasMeta) {
+            // Bare mono readings, not filled chips: they're passive, and a box is a promise of a tap
+            // (§1). Colour stays on the exceptions only, the PR and the effort's state.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 ex.e1rmLb?.let { e ->
-                    if (ex.e1rmIsBest) Chip("e1RM ${formatWeight(e, weightUnit)}", accent, accent.copy(alpha = 0.15f))
-                    else Chip("e1RM ${formatWeight(e, weightUnit)}", muted, outline.copy(alpha = 0.12f))
+                    MetaReading("E1RM ${formatWeight(e, weightUnit).uppercase()}", if (ex.e1rmIsBest) onBg else muted)
                 }
-                if (ex.isPr) Chip("PR", accent, accent.copy(alpha = 0.15f))
-                ex.effort?.let { Chip(it.displayName, effortColor(it), effortColor(it).copy(alpha = 0.15f)) }
+                if (ex.isPr) MetaReading("↑ PR", accent)
+                ex.effort?.let { MetaReading(it.displayName.uppercase(), effortColor(it)) }
             }
         }
         if (!ex.note.isNullOrBlank()) {
-            Text("“${ex.note}”", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 11.sp)
+            Text("“${ex.note}”", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
         }
         Text(exerciseSummary(ex, weightUnit), style = MaterialTheme.typography.bodySmall, color = muted)
         PerExerciseSetChart(ex, metric, style, accent, muted, outline)
@@ -373,12 +383,8 @@ private fun SetTable(sets: List<SetDetail>, onBg: Color, muted: Color, outline: 
 // ─── Small bits ────────────────────────────────────────────────────────────--
 
 @Composable
-private fun Chip(text: String, fg: Color, bg: Color) {
-    Box(
-        modifier = Modifier.clip(RoundedCornerShape(50)).background(bg).padding(horizontal = 8.dp, vertical = 2.dp)
-    ) {
-        Text(text, style = MaterialTheme.typography.labelSmall, color = fg, fontSize = 9.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
-    }
+private fun MetaReading(text: String, color: Color) {
+    Text(text, style = MaterialTheme.typography.labelMedium, color = color)
 }
 
 /** Passive set metadata — bare mono text, no box (§1: a border is earned by interactivity). */
