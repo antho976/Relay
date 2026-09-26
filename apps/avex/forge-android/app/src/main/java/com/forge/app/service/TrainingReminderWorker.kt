@@ -7,6 +7,7 @@ import androidx.work.BackoffPolicy
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.forge.app.data.db.dao.SessionDao
@@ -17,8 +18,10 @@ import com.forge.app.domain.schedule.WeeklySchedule
 import com.forge.app.program.Program
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import java.time.Duration
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -118,7 +121,8 @@ class TrainingReminderWorker @AssistedInject constructor(
         private const val WORK_NAME = "forge_training_reminder"
         private const val NOTIF_ID = 2002
 
-        /** Arm the daily reminder near [hour]. Use KEEP on boot, REPLACE when the user changes it. */
+        /** Arm the daily reminder near [hour]. [rearm] on boot or a clock change, REPLACE when the
+         *  user changes it. */
         fun schedule(context: Context, hour: Int, policy: ExistingPeriodicWorkPolicy) {
             val request = PeriodicWorkRequestBuilder<TrainingReminderWorker>(1, TimeUnit.DAYS)
                 .setInitialDelay(initialDelayMinutes(hour), TimeUnit.MINUTES)
@@ -126,6 +130,51 @@ class TrainingReminderWorker @AssistedInject constructor(
                 .build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(WORK_NAME, policy, request)
         }
+
+        /**
+         * Re-arm without cancelling a run that is due: KEEP the queued reminder when it is running
+         * or still lands on [hour], REPLACE it only when it has drifted off (2026-09-26 audit, 11 /
+         * W09). A REPLACE at every cold start raced the worker that had woken the process for this
+         * very reminder, and whenever it won, the next run was tomorrow.
+         */
+        suspend fun rearm(context: Context, hour: Int) {
+            val keep = try {
+                val live = WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK_NAME).first()
+                    .firstOrNull { !it.state.isFinished }
+                live != null && keepsQueuedRun(
+                    running = live.state == WorkInfo.State.RUNNING,
+                    nextRunAtMs = live.nextScheduleTimeMillis,
+                    hour = hour,
+                    zone = ZoneId.systemDefault()
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Can't see the queue: KEEP is the side that never cancels a due reminder, and it
+                // still enqueues one when nothing is queued.
+                true
+            }
+            schedule(context, hour, if (keep) ExistingPeriodicWorkPolicy.KEEP else ExistingPeriodicWorkPolicy.REPLACE)
+        }
+
+        /**
+         * True when the queued run should be left alone: it is running now, or its next run falls on
+         * [hour]:00 in [zone], allowing [ON_TIME_EARLY_S] for the whole-minute initial delay and
+         * [ON_TIME_LATE_S] for a periodic that WorkManager ran a little late. A DST change or a flight
+         * moves it by an hour or more and fails this, which is the drift the old boot REPLACE fixed.
+         */
+        internal fun keepsQueuedRun(running: Boolean, nextRunAtMs: Long, hour: Int, zone: ZoneId): Boolean {
+            if (running) return true
+            // Long.MAX_VALUE: WorkManager has no next run for it (blocked, or never scheduled).
+            if (nextRunAtMs == Long.MAX_VALUE) return false
+            val secondOfDay = Instant.ofEpochMilli(nextRunAtMs).atZone(zone).toLocalTime().toSecondOfDay()
+            val offset = Math.floorMod(secondOfDay - hour.coerceIn(0, 23) * 3_600, SECONDS_PER_DAY)
+            return offset <= ON_TIME_LATE_S || offset >= SECONDS_PER_DAY - ON_TIME_EARLY_S
+        }
+
+        private const val SECONDS_PER_DAY = 86_400
+        private const val ON_TIME_EARLY_S = 60
+        private const val ON_TIME_LATE_S = 15 * 60
 
         fun cancel(context: Context) {
             WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)

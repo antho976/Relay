@@ -392,8 +392,8 @@ class MainActivity : FragmentActivity() {
         // a re-request. Nothing interrupts a cold launch to ask.
 
         AutoBackupWorker.schedule(this@MainActivity)
-        // The widget rolls over at local midnight from here (REPLACE, so re-arming on each launch
-        // just re-anchors it to the current zone rather than stacking work).
+        // The widget rolls over at local midnight from here (KEEP under a per-midnight name, so
+        // re-arming on each launch is a no-op in the same zone rather than stacking work).
         com.forge.app.service.WidgetMidnightWorker.schedule(this@MainActivity)
 
         // Read off Main with a bounded wait. A failed/stalled read uses the remembered privacy
