@@ -150,7 +150,8 @@ class AdaptationRepository @Inject constructor(
             maxDbLb = settingsRepository.maxDbWeightLb.first(),
             // 0 = no active deload; lets DeloadAdvisor suppress right after an apply, before the
             // first deload-week session is even logged (seam fix, finding 18).
-            lastDeloadAppliedMs = settingsRepository.deloadWeekStartMs.first().takeIf { it > 0 }
+            lastDeloadAppliedMs = settingsRepository.deloadWeekStartMs.first().takeIf { it > 0 },
+            weightUnit = settingsRepository.weightUnit.first()
         )
 
         // The engine plans against EFFECTIVE sets (baseline + the user's/coach's per-slot overrides),
