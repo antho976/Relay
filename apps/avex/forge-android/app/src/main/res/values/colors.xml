@@ -2,6 +2,4 @@
 <resources>
     <!-- Match the Compose-side ForgeBackground so there's no flash on cold launch. -->
     <color name="forge_background">#0D0B09</color>
-    <!-- Matches the play-store icon asset's canvas so the launcher icon reads identically. -->
-    <color name="ic_launcher_background">#141414</color>
 </resources>

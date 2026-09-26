@@ -2,7 +2,6 @@
 package com.forge.app.ui.settings
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,7 +35,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -45,7 +43,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forge.app.R
 import com.forge.app.appicon.AppIcon
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.bounceClick
@@ -95,7 +92,7 @@ internal fun AppIconPickerSheet(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
     val current = AppIcon.fromKey(selectedKey)
-    // 30 icons want the room — open fully rather than at a half-height stop.
+    // Two dozen icons want the room — open fully rather than at a half-height stop.
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val byFamily = AppIcon.entries.groupBy { it.family }
 
@@ -173,8 +170,8 @@ internal fun AppIconPickerSheet(
     }
 }
 
-/** One rounded launcher-icon thumbnail — full-bleed art (the default composites its emblem over the
- *  real launcher background), an accent ring when it's the active pick, bounce when tappable. */
+/** One rounded launcher-icon thumbnail — the icon as a launcher shows it, an accent ring when it's
+ *  the active pick, bounce when tappable. */
 @Composable
 private fun AppIconThumb(
     icon: AppIcon,
@@ -191,7 +188,6 @@ private fun AppIconThumb(
         modifier = modifier
             .clip(shape)
             .then(if (onClick != null) Modifier.bounceClick(onClick = onClick) else Modifier)
-            .background(if (icon.isDefault) colorResource(R.color.ic_launcher_background) else Color.Transparent)
             .border(
                 width = if (isSelected) 2.dp else 1.dp,
                 color = if (isSelected) accent else outline.copy(alpha = 0.35f),
