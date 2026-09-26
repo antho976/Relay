@@ -78,7 +78,7 @@ data class OverviewUiState(
     val pendingMilestone: MilestoneEvent? = null,
     /** Next gym day in the rotation. */
     val nextUpDayKey: String = "upper-a",
-    /** 0=Mon..6=Sun indices that had a gym session this ISO week. */
+    /** Day indices in the user's week order (`userWeekDayIndex`) that had a gym session this week. */
     val weekDaysTrained: Set<Int> = emptySet(),
     /** 0=Mon..6=Sun indices that had a cardio entry this ISO week. */
     val cardioWeekDays: Set<Int> = emptySet(),

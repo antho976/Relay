@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -32,14 +31,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Icon
-import com.forge.app.ui.common.window.AlertDialog
 import com.forge.app.ui.common.window.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -59,23 +56,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.forge.app.ui.common.GlyphButton
 import com.forge.app.ui.common.clickableLabeled
-
-private val TIMEZONE_OPTIONS = listOf(
-    "America/Los_Angeles" to "Los Angeles (PST −8)",
-    "America/Denver"      to "Denver (MST −7)",
-    "America/Chicago"     to "Chicago (CST −6)",
-    "America/New_York"    to "New York (EST −5)",
-    "America/Sao_Paulo"   to "São Paulo (BRT −3)",
-    "UTC"                 to "UTC (±0)",
-    "Europe/London"       to "London (GMT +0)",
-    "Europe/Paris"        to "Paris (CET +1)",
-    "Europe/Moscow"       to "Moscow (MSK +3)",
-    "Asia/Kolkata"        to "Kolkata (IST +5:30)",
-    "Asia/Tokyo"          to "Tokyo (JST +9)",
-    "Australia/Sydney"    to "Sydney (AEST +10)"
-)
 
 @Composable
 internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
@@ -89,7 +70,6 @@ internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modif
         // Grouped by quiet mono anchors + air — no per-row hairlines (DESIGN §1/§7).
         SettingsSectionHeader("Display", top = 12.dp)
         ToggleRow("AMOLED pure black", "Pure-black backgrounds. Saves battery on OLED screens; on an LCD phone it just looks darker.", state.amoledMode, vm::setAmoledMode)
-        ToggleRow("Compact set logging", "Denser set rows for experienced users", state.compactSetLogging, vm::setCompactSetLogging)
         ToggleRow("Privacy mode", "Hide the app preview in recent apps & block screenshots", state.privacyMode, vm::setPrivacyMode)
 
         SettingsSectionHeader("Accent")
@@ -129,8 +109,6 @@ internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modif
 
 @Composable
 internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
-    var showTzPicker by remember { mutableStateOf(false) }
-
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -149,15 +127,19 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
         SettingsSegmentRow("Distance", listOf("km", "mi"), if (state.useMiles) 1 else 0) { vm.setUseMiles(it == 1) }
         SettingsSegmentRow("Length", listOf("cm", "in"), if (state.useCm) 0 else 1) { vm.setUseCm(it == 0) }
 
-        SettingsSectionHeader("Date & time")
-        val dateFormats = listOf("MMM d, yyyy", "dd/MM/yyyy", "MM/dd/yyyy")
-        SettingsSegmentRow("Date", listOf("Jan 5", "05/01", "01/05"), dateFormats.indexOf(state.dateFormat).coerceAtLeast(0)) {
-            vm.setDateFormat(dateFormats[it])
-        }
-        SettingsSegmentRow("Time", listOf("12h", "24h"), if (state.timeFormat24h) 1 else 0) { vm.setTimeFormat24h(it == 1) }
-        SettingsSegmentRow("Week starts", listOf("Mon", "Sun"), if (state.firstDayMonday) 0 else 1) { vm.setFirstDayMonday(it == 0) }
-        // A nav row like every other drill-in on Settings: the live zone is its value, → opens the picker.
-        SettingsNavRow("Timezone", timezoneLabel(state.timezone)) { showTzPicker = true }
+        // Only the controls the app honours (2026-09-26 audit, "Settings that do nothing"). Date
+        // format and Timezone were saved and previewed here but read by nothing: dates are drawn
+        // by ~45 fixed patterns and every clock follows the phone's zone. Both rows are gone until
+        // a redesign can honour them (`design/SETTLED.md`); their pref keys stay so a restore and
+        // a section reset still round-trip.
+        SettingsSectionHeader("Time")
+        SettingsSegmentRow("Clock", listOf("12h", "24h"), if (state.timeFormat24h) 1 else 0) { vm.setTimeFormat24h(it == 1) }
+        SettingsSegmentRow(
+            "Week starts",
+            listOf("Mon", "Sun"),
+            if (state.firstDayMonday) 0 else 1,
+            explainer = "Orders Home's week and what counts as this week."
+        ) { vm.setFirstDayMonday(it == 0) }
 
         SettingsSectionHeader("Strength standards")
         val sexes = listOf("male", "female")
@@ -170,225 +152,21 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
 
         SectionResetRow(com.forge.app.data.prefs.SettingsSection.FORMAT, vm)
     }
-
-    if (showTzPicker) {
-        TimezonePickerDialog(
-            current = state.timezone,
-            favorites = state.favoriteTimezones,
-            onPick = { vm.setTimezone(it); showTzPicker = false },
-            onToggleFavorite = vm::toggleFavoriteTimezone,
-            onDismiss = { showTzPicker = false }
-        )
-    }
 }
 
 // ─── Format-page building blocks ─────────────────────────────────────────────
 
-/** "135 lb · 5.0 km · 90 cm · Jan 5, 2026 · 6:30 PM": one sample of every format on the page. */
+/** "135 lb · 5.0 km · 90 cm · 6:30 PM": one sample of every format on the page. */
 private fun formatPreview(state: SettingsUiState): String {
-    val date = runCatching {
-        java.time.LocalDate.of(2026, 1, 5).format(java.time.format.DateTimeFormatter.ofPattern(state.dateFormat))
-    }.getOrDefault("Jan 5")
-    val time = java.time.LocalTime.of(18, 30)
-        .format(java.time.format.DateTimeFormatter.ofPattern(if (state.timeFormat24h) "HH:mm" else "h:mm a"))
+    val time = java.time.LocalTime.of(18, 30).format(
+        java.time.format.DateTimeFormatter.ofPattern(com.forge.app.domain.units.clockPattern(state.timeFormat24h))
+    )
     return listOf(
         com.forge.app.domain.units.formatWeight(135.0, state.weightUnit),
         com.forge.app.domain.units.formatDistance(5.0, state.useMiles),
         com.forge.app.domain.units.formatLength(90.0, state.useCm),
-        date,
         time
     ).joinToString(" · ")
-}
-
-/** The timezone row's value: a friendly preset label, the city of any other zone, or the device's. */
-private fun timezoneLabel(timezone: String): String = when {
-    timezone.isBlank() -> "${java.util.TimeZone.getDefault().id.substringAfterLast('/').replace('_', ' ')} · device"
-    else -> TIMEZONE_OPTIONS.firstOrNull { it.first == timezone }?.second
-        ?: timezone.substringAfterLast('/').replace('_', ' ')
-}
-
-/** One row in the searchable "all timezones" list. [label] is the friendly, offset-stamped display. */
-private data class TzEntry(val id: String, val city: String, val offsetMinutes: Int, val label: String)
-
-/** "+5:30" / "−8" / "±0" for a UTC offset given in minutes. */
-private fun tzOffsetLabel(mins: Int): String {
-    if (mins == 0) return "±0"
-    val sign = if (mins > 0) "+" else "−"
-    val abs = kotlin.math.abs(mins)
-    val h = abs / 60
-    val m = abs % 60
-    return if (m == 0) "$sign$h" else "$sign$h:${m.toString().padStart(2, '0')}"
-}
-
-/**
- * Every IANA zone (minus the noisy Etc/SystemV aliases & bare 3-letter ids), stamped with its
- * *current* UTC offset and sorted west→east then alphabetically. Built once per open via remember.
- */
-private fun allTimezones(): List<TzEntry> {
-    val now = java.time.Instant.now()
-    return java.time.ZoneId.getAvailableZoneIds()
-        .asSequence()
-        .filter { it.contains('/') && !it.startsWith("Etc/") && !it.startsWith("SystemV/") }
-        .map { id ->
-            val mins = java.time.ZoneId.of(id).rules.getOffset(now).totalSeconds / 60
-            val city = id.substringAfterLast('/').replace('_', ' ')
-            val region = id.substringBeforeLast('/').replace('_', ' ')
-            TzEntry(id, city, mins, "$city · $region  (UTC${tzOffsetLabel(mins)})")
-        }
-        .sortedWith(compareBy({ it.offsetMinutes }, { it.city }))
-        .toList()
-}
-
-/**
- * Timezone picker: a search box over the full IANA list. Tap ☆ to star a zone; starred zones (and
- * the current pick, if it isn't already pinned) sit at the top, followed by the common presets and
- * the full list. Tapping a row selects & closes; tapping its star just favorites and stays open.
- */
-@Composable
-private fun TimezonePickerDialog(
-    current: String,
-    favorites: Set<String>,
-    onPick: (String) -> Unit,
-    onToggleFavorite: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val onBg = MaterialTheme.colorScheme.onBackground
-    var query by remember { mutableStateOf("") }
-    val all = remember { allTimezones() }
-    val allById = remember(all) { all.associate { it.id to it.label } }
-    val commonIds = remember { TIMEZONE_OPTIONS.map { it.first }.toSet() }
-    fun labelFor(id: String): String =
-        allById[id] ?: TIMEZONE_OPTIONS.firstOrNull { it.first == id }?.second ?: id
-
-    val q = query.trim()
-    val filtered = remember(q) {
-        if (q.isBlank()) emptyList()
-        else all.filter { it.id.contains(q, ignoreCase = true) || it.label.contains(q, ignoreCase = true) }
-    }
-
-    AlertDialog(
-        containerColor = MaterialTheme.colorScheme.surface,
-        onDismissRequest = onDismiss,
-        title = { Text("Timezone") },
-        text = {
-            Column {
-                // ── Search box ── the one shared settings field (§13, §2⑥).
-                SettingsSearchField(
-                    query = query,
-                    placeholder = "Search a city or region",
-                    onQueryChange = { query = it }
-                )
-                Spacer(Modifier.height(8.dp))
-
-                LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
-                    if (q.isNotBlank()) {
-                        if (filtered.isEmpty()) {
-                            item("empty") {
-                                Text(
-                                    "No timezone matches “$q”.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = muted,
-                                    modifier = Modifier.padding(vertical = 16.dp)
-                                )
-                            }
-                        } else {
-                            items(filtered, key = { it.id }) { e ->
-                                TimezoneOption(
-                                    e.label, selected = current == e.id,
-                                    isFavorite = e.id in favorites,
-                                    onToggleFavorite = { onToggleFavorite(e.id) }
-                                ) { onPick(e.id) }
-                            }
-                        }
-                    } else {
-                        // The current pick, only when it isn't already shown under Favorites/Common.
-                        if (current !in favorites && current !in commonIds) {
-                            item("cur-label") { TzSectionLabel("Current") }
-                            item("cur") {
-                                TimezoneOption(
-                                    labelFor(current), selected = true,
-                                    isFavorite = false,
-                                    onToggleFavorite = { onToggleFavorite(current) }
-                                ) { onPick(current) }
-                            }
-                        }
-                        if (favorites.isNotEmpty()) {
-                            item("fav-label") { TzSectionLabel("Favorites") }
-                            items(favorites.sortedBy { labelFor(it) }, key = { "fav-$it" }) { id ->
-                                TimezoneOption(
-                                    labelFor(id), selected = current == id,
-                                    isFavorite = true,
-                                    onToggleFavorite = { onToggleFavorite(id) }
-                                ) { onPick(id) }
-                            }
-                        }
-                        item("common-label") { TzSectionLabel("Common") }
-                        items(TIMEZONE_OPTIONS, key = { "common-${it.first}" }) { (id, label) ->
-                            TimezoneOption(
-                                label, selected = current == id,
-                                isFavorite = id in favorites,
-                                onToggleFavorite = { onToggleFavorite(id) }
-                            ) { onPick(id) }
-                        }
-                        item("all-label") { TzSectionLabel("All timezones") }
-                        items(all, key = { it.id }) { e ->
-                            TimezoneOption(
-                                e.label, selected = current == e.id,
-                                isFavorite = e.id in favorites,
-                                onToggleFavorite = { onToggleFavorite(e.id) }
-                            ) { onPick(e.id) }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } }
-    )
-}
-
-/** Uses the shared anchor so the picker's groups rank BY SIZE against their rows (§6), rather than
- *  sitting at the same 10sp as the timezone labels beneath them. */
-@Composable
-private fun TzSectionLabel(text: String) = SettingsSectionHeader(text, top = 14.dp)
-
-@Composable
-private fun TimezoneOption(
-    label: String,
-    selected: Boolean,
-    isFavorite: Boolean,
-    onToggleFavorite: () -> Unit,
-    onClick: () -> Unit
-) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickableLabeled(label, onClick = onClick)
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // No maxLines: a zone label is content and must wrap at 200% rather than truncate (§14).
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (selected) onBg else muted,
-            modifier = Modifier.weight(1f)
-        )
-        if (selected) {
-            Box(Modifier.padding(start = 8.dp)) { StatusDot(active = true, size = 7.dp) }
-        }
-        // GlyphButton: the star was a bodyLarge Text with 2dp of vertical padding — a ~24dp target
-        // sitting inside a full-width clickable row (§14, §2③).
-        GlyphButton(
-            if (isFavorite) "★" else "☆",
-            if (isFavorite) "Remove favorite" else "Add favorite",
-            if (isFavorite) onBg else muted,
-            onToggleFavorite,
-            style = MaterialTheme.typography.bodyMedium
-        )
-    }
 }
 
 private val COMPOUND_REST = listOf(120, 150, 180, 210, 240, 300)

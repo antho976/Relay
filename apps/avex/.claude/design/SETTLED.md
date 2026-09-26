@@ -10,6 +10,18 @@ Also lists what may not be touched, and the known defects to fix opportunistical
 
 ---
 
+## Date format, Timezone and Compact set logging removed from Settings (2026-09-26)
+
+Three controls that saved a preference nothing read are gone (2026-09-26 audit, "Settings that do
+nothing"). **Date format** (Format page): dates are drawn by ~45 fixed patterns across screens other
+work owns, so honouring it is a redesign, not a wiring job. **Timezone** (Format page row and its
+searchable picker with favourites): every clock, week and day boundary follows the phone's zone
+(`ZoneId.systemDefault()`), and a second zone would split them. **Compact set logging** (Appearance):
+the set rows never had a compact variant. The pref keys, repository API and backup fields stay, so a
+restore and a section reset still round-trip. Do not re-add a row until the app reads the value; a
+control that changes nothing is worse than no control. Time format (12h/24h) and Week starts were
+wired instead, and stay.
+
 ## Session detail's page-end actions removed (2026-09-26)
 
 "Log again today" (re-log a finished session as today's freestyle session, GYMAP-36) and "Session

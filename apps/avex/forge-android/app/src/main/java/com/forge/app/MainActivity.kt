@@ -468,26 +468,24 @@ class MainActivity : FragmentActivity() {
 
         setContent {
             val uiSettingsFlow = remember {
+                // Date format and Compact set logging are no longer plumbed: nothing read them, and
+                // their controls left Settings (2026-09-26 audit, `design/SETTLED.md`).
                 combine(
                     settingsRepo.amoledMode,
                     settingsRepo.weightUnit,
-                    settingsRepo.dateFormat,
                     settingsRepo.timeFormat24h,
                     settingsRepo.firstDayMonday,
                     settingsRepo.hapticStrength
-                ) { values ->
+                ) { amoled, weightUnit, timeFormat24h, firstDayMonday, haptic ->
                     ForgeUiSettings(
-                        amoledMode = values[0] as Boolean,
-                        weightUnit = values[1] as com.forge.app.domain.units.WeightUnit,
-                        dateFormat = values[2] as String,
-                        timeFormat24h = values[3] as Boolean,
-                        firstDayMonday = values[4] as Boolean,
-                        hapticStrength = values[5] as String
+                        amoledMode = amoled,
+                        weightUnit = weightUnit,
+                        timeFormat24h = timeFormat24h,
+                        firstDayMonday = firstDayMonday,
+                        hapticStrength = haptic
                     )
                 }.combine(settingsRepo.hiddenOverviewTiles) { s, hidden ->
                     s.copy(hiddenOverviewTiles = hidden)
-                }.combine(settingsRepo.compactSetLogging) { s, v ->
-                    s.copy(compactSetLogging = v)
                 }.combine(settingsRepo.keepScreenOn) { s, v ->
                     s.copy(keepScreenOn = v)
                 }.combine(settingsRepo.overviewTileOrder) { s, order ->

@@ -2,6 +2,7 @@ package com.forge.app.core.time
 
 import java.time.DayOfWeek
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
@@ -13,6 +14,30 @@ import java.time.temporal.ChronoUnit
 fun mondayStartMs(nowMs: Long, zone: ZoneId = ZoneId.systemDefault()): Long =
     Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
         .with(DayOfWeek.MONDAY).atStartOfDay(zone).toInstant().toEpochMilli()
+
+/**
+ * The first day of the week containing [date] in the USER's week: Monday when [firstDayMonday],
+ * otherwise Sunday.
+ *
+ * The Home week strip and the weekly counts it sits above follow Settings → Format → Week starts;
+ * [mondayStartMs] stays ISO for everything that must not move when the preference does — the
+ * coach's volume weeks, the deload window and every stored week id. Home used to be Monday-first
+ * whatever the setting said (2026-09-26 audit, "Settings that do nothing").
+ */
+fun userWeekStart(date: LocalDate, firstDayMonday: Boolean): LocalDate =
+    date.minusDays(userWeekDayIndex(date, firstDayMonday).toLong())
+
+/** Epoch-ms of local midnight on [userWeekStart] for the day containing [nowMs], in [zone]. */
+fun userWeekStartMs(nowMs: Long, zone: ZoneId = ZoneId.systemDefault(), firstDayMonday: Boolean): Long =
+    userWeekStart(Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate(), firstDayMonday)
+        .atStartOfDay(zone).toInstant().toEpochMilli()
+
+/**
+ * [date]'s 0-based position in the user's week: 0=Mon..6=Sun when [firstDayMonday], otherwise
+ * 0=Sun..6=Sat (`DayOfWeek.value` is 1=Mon..7=Sun, so `% 7` puts Sunday at 0).
+ */
+fun userWeekDayIndex(date: LocalDate, firstDayMonday: Boolean): Int =
+    if (firstDayMonday) date.dayOfWeek.value - 1 else date.dayOfWeek.value % 7
 
 /**
  * Epoch-ms of the start (00:00 on the 1st) of the calendar month containing [nowMs], in [zone].

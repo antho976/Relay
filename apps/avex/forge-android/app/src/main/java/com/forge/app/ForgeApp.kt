@@ -146,7 +146,7 @@ class ForgeApp : Application(), Configuration.Provider {
     }
 
     private fun writeCrashLog(t: Throwable) {
-        val dir = File(filesDir, "crashes").apply { mkdirs() }
+        val dir = File(filesDir, com.forge.app.data.repo.BackupRepository.CRASH_LOG_DIR).apply { mkdirs() }
         val trace = StringWriter().also { t.printStackTrace(PrintWriter(it)) }.toString()
         File(dir, "crash_${System.currentTimeMillis()}.txt")
             .writeText("Avex crash @ ${Date()}\n\n$trace")

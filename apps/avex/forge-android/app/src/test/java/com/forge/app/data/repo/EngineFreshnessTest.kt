@@ -123,4 +123,41 @@ class EngineFreshnessTest {
         } finally { java.util.TimeZone.setDefault(oldZone) }
     }
 
+    /**
+     * Settings → Format → Week starts reaches Home's numbers (2026-09-26 audit). A Sunday session
+     * seen on Monday is THIS week, in cell 0, for a Sunday-first user and last week for a
+     * Monday-first one; the count and the lit dot move together because they share one anchor.
+     */
+    @Test fun `weekly count and dots follow the week-start setting`() = runBlocking {
+        val oldZone = java.util.TimeZone.getDefault()
+        try {
+            java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("UTC"))
+            val zone = java.time.ZoneId.of("UTC")
+            val sunday = java.time.LocalDate.of(2026, 3, 8).atStartOfDay(zone)
+            now = sunday.plusDays(1).plusHours(10).toInstant().toEpochMilli() // Monday 10:00
+            val sid = db.sessionDao().insert(session(
+                startedAt = sunday.plusHours(9).toInstant().toEpochMilli(),
+                finishedAt = sunday.plusHours(10).toInstant().toEpochMilli()
+            ).copy(totalVolumeLb = 500.0))
+            fun stats() = StatsRepository(db.sessionDao(), db.cardioDao(), db.loggedExerciseDao(), db.loggedSetDao(),
+                db.vacationDao(), BodyweightRepository(db.bodyweightDao(), clock, HealthConnectManager(context), settings),
+                settings, TimeSignals(clock), clock, program, custom).observeWeeklyStats()
+
+            settings.setFirstDayMonday(false)
+            val sundayFirst = stats().first()
+            assertEquals(1, sundayFirst.workouts)
+            assertEquals(setOf(0), sundayFirst.weekDaysTrained)
+
+            settings.setFirstDayMonday(true)
+            val mondayFirst = stats().first()
+            assertEquals(0, mondayFirst.workouts)
+            assertTrue(mondayFirst.weekDaysTrained.isEmpty())
+
+            db.sessionDao().delete(db.sessionDao().get(sid)!!)
+        } finally {
+            settings.setFirstDayMonday(true)
+            java.util.TimeZone.setDefault(oldZone)
+        }
+    }
+
 }

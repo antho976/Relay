@@ -56,7 +56,11 @@ class SettingsSectionResetTest {
         assertTrue("distance follows lb again", repo.useMiles.first())
         assertFalse("length follows lb again", repo.useCm.first())
         assertEquals("MMM d, yyyy", repo.dateFormat.first())
-        assertFalse(repo.timeFormat24h.first())
+        // Unset follows the phone's own 12/24h setting, not a hard 12h (2026-09-26 audit).
+        assertEquals(
+            android.text.format.DateFormat.is24HourFormat(ApplicationProvider.getApplicationContext()),
+            repo.timeFormat24h.first()
+        )
         assertTrue(repo.firstDayMonday.first())
         assertEquals(java.util.TimeZone.getDefault().id, repo.timezone.first())
         assertEquals("", repo.userSex.first())

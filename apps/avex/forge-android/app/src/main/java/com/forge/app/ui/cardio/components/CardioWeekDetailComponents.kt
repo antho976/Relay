@@ -26,9 +26,12 @@ import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.cardioDetailParts
+import com.forge.app.domain.units.clockPattern
+import com.forge.app.domain.units.formatClockHourShort
 import com.forge.app.ui.cardio.LocalCardioTypes
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -53,8 +56,9 @@ internal fun SessionTimelineRow(
         Instant.ofEpochMilli(entry.date).atZone(zone).dayOfWeek
             .getDisplayName(TextStyle.SHORT, Locale.getDefault()).uppercase().take(3)
     }
-    val timeLabel = remember(entry.date, entry.durationMin) {
-        sessionTimeLabel(entry.date, if (type.isRest) 0 else entry.durationMin, zone)
+    val use24h = LocalForgeSettings.current.timeFormat24h
+    val timeLabel = remember(entry.date, entry.durationMin, use24h) {
+        sessionTimeLabel(entry.date, if (type.isRest) 0 else entry.durationMin, zone, use24h)
     }
     val detail = if (type.isRest) {
         CardioRestReason.fromCode(entry.restReason)?.displayName ?: "Rest day"
@@ -154,15 +158,18 @@ private fun HourlyStepsBars(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "${"%,d".format(wearable.totalSteps)} steps · busiest ${hourRangeLabel(peakHour)}",
+            "${"%,d".format(wearable.totalSteps)} steps · busiest ${hourRangeLabel(peakHour, LocalForgeSettings.current.timeFormat24h)}",
             style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
         )
     }
 }
 
-/** "6:30 AM – 7:10 AM" for a timed session, "6:30 AM" when there's no duration, "" for rest. */
-private fun sessionTimeLabel(startMs: Long, durationMin: Int, zone: ZoneId): String {
-    val fmt = DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault())
+/**
+ * "6:30 AM – 7:10 AM" (or "06:30 – 07:10" on a 24h clock) for a timed session, the start alone when
+ * there's no duration. Follows Settings → Format → Clock, which it ignored until the 2026-09-26 audit.
+ */
+private fun sessionTimeLabel(startMs: Long, durationMin: Int, zone: ZoneId, use24h: Boolean): String {
+    val fmt = DateTimeFormatter.ofPattern(clockPattern(use24h), Locale.getDefault())
     val start = Instant.ofEpochMilli(startMs).atZone(zone)
     val startStr = start.format(fmt)
     if (durationMin <= 0) return startStr
@@ -170,12 +177,6 @@ private fun sessionTimeLabel(startMs: Long, durationMin: Int, zone: ZoneId): Str
     return "$startStr – ${end.format(fmt)}"
 }
 
-/** "4–5am" style label for the peak step hour. */
-private fun hourRangeLabel(hour: Int): String {
-    fun fmt(h: Int): String {
-        val period = if (h < 12) "am" else "pm"
-        val h12 = when (h % 12) { 0 -> 12; else -> h % 12 }
-        return "$h12$period"
-    }
-    return "${fmt(hour)}–${fmt((hour + 1) % 24)}"
-}
+/** "4am–5am" (or "04:00–05:00" on a 24h clock) for the peak step hour. */
+private fun hourRangeLabel(hour: Int, use24h: Boolean): String =
+    "${formatClockHourShort(hour, use24h)}–${formatClockHourShort((hour + 1) % 24, use24h)}"
