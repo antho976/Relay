@@ -618,7 +618,7 @@ class WorkoutRepository @Inject constructor(
         // users never pass. A clock that moved backwards lands before the window and matches
         // neither branch, leaving the program alone.
         if (deloadRange != null && clock.nowMs() > deloadRange.last) {
-            programRepository.restoreAfterDeload()
+            programRepository.restoreAfterDeload(unlessWorkoutOpen = true)
             return
         }
         if (settingsRepo.rotationCadence.first() != "every_n") return
@@ -632,7 +632,7 @@ class WorkoutRepository @Inject constructor(
         if (!settingsRepo.countSessionTowardRotation(n)) return
         // Use the user's full saved generation profile (goal/experience/emphasis/problem-areas/
         // priority-muscles/pinned), not a near-empty GenerationParams that dropped them all.
-        programRepository.rerollAll()
+        programRepository.rerollAll(unlessWorkoutOpen = true)
     }
 
     /** Persists the comma-separated tag list for a finished session (#107). */

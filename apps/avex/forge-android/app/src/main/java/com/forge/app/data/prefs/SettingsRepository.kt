@@ -833,6 +833,10 @@ class SettingsRepository @Inject constructor(
     suspend fun setDeloadWeekStartMs(ms: Long) =
         context.forgePreferences.edit { it[PreferenceKeys.DELOAD_WEEK_START_MS] = ms }
 
+    val blockDeloadOwed: Flow<Boolean> = pref { it[PreferenceKeys.BLOCK_DELOAD_OWED] ?: false }
+    suspend fun setBlockDeloadOwed(owed: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.BLOCK_DELOAD_OWED] = owed }
+
     /**
      * The regeneration currently in flight, or null (M-06). Written before the program transaction
      * and cleared once the deload marker beside it has been brought into agreement, so a boot that

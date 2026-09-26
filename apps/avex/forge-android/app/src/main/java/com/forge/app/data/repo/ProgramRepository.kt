@@ -194,6 +194,14 @@ class ProgramRepository @Inject constructor(
      * restore after it need: they used to draw a fresh seed, so the deload week replaced the whole
      * program and the restore replaced it again (3 of 30 slots survived; 2026-09-21). A program
      * from before the seed was recorded falls back to a fresh draw.
+     *
+     * [unlessWorkoutOpen] is for the regenerations nobody confirmed (a block's scheduled deload,
+     * autopilot, rotation and the end of a deload week). A regenerate discards the in-progress
+     * workout, and those callers check for one first, but a workout started between that check
+     * and the write was still deleted: a cold start from the gym-day widget runs the resume pass
+     * and the session start side by side. The check is repeated inside the program transaction,
+     * which the session start can't interleave with, and the regenerate backs out. Returns whether
+     * the program was replaced.
      */
     suspend fun generate(
         params: GenerationParams,
@@ -202,8 +210,9 @@ class ProgramRepository @Inject constructor(
         disliked: Set<String>,
         recent: Set<String> = emptySet(),
         seed: Long = System.nanoTime(),
-        keepPicks: Boolean = false
-    ): Unit = mutationMutex.withLock {
+        keepPicks: Boolean = false,
+        unlessWorkoutOpen: Boolean = false
+    ): Boolean = mutationMutex.withLock {
         val effectiveSeed = if (keepPicks) settings.programGenerationSeed.first() ?: seed else seed
         // The regenerate is about to clear the customization overlay (reconcile below) — fold the
         // coach's learned adjustments into the new BASELINE so they survive the refresh. volumeBias
@@ -240,7 +249,8 @@ class ProgramRepository @Inject constructor(
         // coach-applied swaps (their learning is already folded into the baseline above — see
         // [reconcileCustomizations]); retire the cleared coach deltas to 'folded' so per-change undo
         // can't replay stale state onto the new program (findings 0/1); discard the in-progress session.
-        database.withTransaction {
+        val replaced = database.withTransaction {
+            if (unlessWorkoutOpen && sessionDao.getActiveSession() != null) return@withTransaction false
             dao.replaceProgram(days, slots)
             reconcileCustomizations(days)
             // The weekly cap can shave off sets the coach's bias just added. Retire the decisions
@@ -249,6 +259,12 @@ class ProgramRepository @Inject constructor(
             retireTrimmedVolumeBias(bias.volumeBias, ProgramGenerator.effectiveVolumeBias(genParams))
             coachDao.foldAllAppliedDeltas()
             discardActiveSession()
+            true
+        }
+        if (!replaced) {
+            // Nothing was written, so there is nothing for the boot to finish.
+            settings.clearProgramGenerationIntent()
+            return@withLock false
         }
         // The deload marker is settled HERE, after the rows are committed, and by this method alone
         // (M-06). It used to be written by AdaptationRepository BEFORE calling in, so a generate
@@ -261,6 +277,7 @@ class ProgramRepository @Inject constructor(
         settings.setProgramGenerationSeed(effectiveSeed)
         settings.clearProgramGenerationIntent()
         loadIntoFacade(refreshWidget = true)
+        true
     }
 
     /**
@@ -367,19 +384,19 @@ class ProgramRepository @Inject constructor(
      * volume, because [currentParams] leaves `deload` unset and [generate] clears the deload marker
      * for any non-deload regenerate.
      */
-    suspend fun restoreAfterDeload() {
+    suspend fun restoreAfterDeload(unlessWorkoutOpen: Boolean = false): Boolean =
         generate(
             currentParams(), currentEquipment(),
             settings.likedExercises.first(), settings.dislikedExercises.first(),
-            keepPicks = true
+            keepPicks = true, unlessWorkoutOpen = unlessWorkoutOpen
         )
-    }
 
-    suspend fun rerollAll() {
+    suspend fun rerollAll(unlessWorkoutOpen: Boolean = false): Boolean {
         val recent = Program.days.flatMap { it.exercises }.map { it.id }.toSet()
-        generate(
+        return generate(
             currentParams(), currentEquipment(),
-            settings.likedExercises.first(), settings.dislikedExercises.first(), recent
+            settings.likedExercises.first(), settings.dislikedExercises.first(), recent,
+            unlessWorkoutOpen = unlessWorkoutOpen
         )
     }
 

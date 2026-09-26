@@ -47,7 +47,8 @@ class ResetRepository @Inject constructor(
     private val avatarRepo: AvatarRepository,
     private val health: HealthConnectManager,
     private val clock: com.forge.app.core.time.Clock,
-    private val db: ForgeDatabase
+    private val db: ForgeDatabase,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context
 ) {
     /**
      * "Deletes all sessions, sets, and exercises logged. Cannot be undone." — and the tables that
@@ -98,6 +99,8 @@ class ResetRepository @Inject constructor(
      * routes the user back through onboarding, which regenerates the program.
      */
     suspend fun factoryReset() {
+        // Marked first, cleared last: see [finishInterruptedFactoryReset].
+        withContext(Dispatchers.IO) { pendingResetMarker().createNewFile() }
         withContext(Dispatchers.IO) { db.clearAllTables() }
         photoRepo.deleteAll() // progress photos live as files outside the DB — clear them too (#138).
         avatarRepo.clear()    // the avatar is an app-private file too.
@@ -107,5 +110,32 @@ class ResetRepository @Inject constructor(
         // wipe so the reset's external half runs while the grants and opt-ins still describe it.
         health.deleteAllAvexRecords(clock.nowMs())
         settingsRepo.resetAll()
+        withContext(Dispatchers.IO) { pendingResetMarker().delete() }
+    }
+
+    /**
+     * Finish a factory reset the process died in the middle of. Called once at boot, before any
+     * screen reads the database.
+     *
+     * The tables are wiped before the preferences, so a process killed in between (the app swiped
+     * away right after confirming; there is no progress screen) came back with onboarding marked
+     * done over an empty database: the full app, with no program and none of the history. The
+     * user confirmed a clean slate, so the boot completes it. One attempt only: the marker goes
+     * whatever happens, so a reset that fails here can never wipe what is logged afterwards.
+     */
+    suspend fun finishInterruptedFactoryReset() {
+        val marker = pendingResetMarker()
+        if (!withContext(Dispatchers.IO) { marker.exists() }) return
+        try {
+            factoryReset()
+        } finally {
+            withContext(Dispatchers.IO) { marker.delete() }
+        }
+    }
+
+    private fun pendingResetMarker() = java.io.File(context.filesDir, PENDING_FACTORY_RESET)
+
+    private companion object {
+        const val PENDING_FACTORY_RESET = "factory_reset_pending"
     }
 }

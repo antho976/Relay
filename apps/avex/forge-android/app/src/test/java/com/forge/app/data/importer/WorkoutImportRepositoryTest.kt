@@ -468,4 +468,85 @@ class WorkoutImportRepositoryTest {
         assertTrue("got $result", result is ImportResult.NoReadableRows)
         assertEquals(1, (result as ImportResult.NoReadableRows).skippedRows)
     }
+
+    // ── Re-imports after a fix or a move (audit 2026-09-26 follow-up) ───────────────────────────
+
+    private fun midnight(date: String) =
+        java.time.LocalDate.parse(date).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+    /** A workout as an earlier build's importer stored it: [sets] of (weight, reps, hold seconds). */
+    private suspend fun storeOldImport(startedAt: Long, vararg exercises: Pair<String, List<Triple<Double?, Int, Int?>>>): Long {
+        val sessionId = db.sessionDao().insert(session(startedAt = startedAt, finishedAt = startedAt + 3_600_000L, dayKey = "freestyle"))
+        exercises.forEachIndexed { i, (name, sets) ->
+            val leId = db.loggedExerciseDao().insert(
+                loggedExercise(sessionId = sessionId, exerciseId = "ext-${name.lowercase()}", orderIndex = i)
+                    .copy(swappedName = name, note = if (i == 0) "felt strong" else null)
+            )
+            db.loggedSetDao().insertAll(sets.mapIndexed { j, (w, r, hold) ->
+                loggedSet(loggedExerciseId = leId, setIndex = j, weightLb = w, reps = r, durationSeconds = hold)
+            })
+        }
+        return sessionId
+    }
+
+    @Test
+    fun aWeightlessOldImportIsFilledInNotDuplicated() = runTest {
+        // A Hevy lb export read by the old parser: the right sets, no loads.
+        val id = storeOldImport(midnight("2026-01-05"), "Bench Press" to listOf(Triple(null, 3, null), Triple(null, 3, null)))
+
+        val result = repo.import(
+            fitNotesFile("fixed.csv", row("2026-01-05", "Bench Press", 225, 3), row("2026-01-05", "Bench Press", 225, 3))
+        ) as ImportResult.Success
+
+        assertEquals(0, result.sessions)
+        assertEquals(1, result.workoutsCorrected)
+        assertEquals(1, storedSessionCount())
+        val sets = db.loggedSetDao().allForSession(id)
+        assertEquals(listOf(225.0, 225.0), sets.map { it.weightLb })
+        assertEquals("the user's note survives", "felt strong", db.loggedExerciseDao().forSession(id).single().note)
+    }
+
+    @Test
+    fun aPhantomCardioHoldInAnOldImportIsDropped() = runTest {
+        val id = storeOldImport(
+            midnight("2026-01-05"),
+            "Bench Press" to listOf(Triple(225.0, 3, null)),
+            "Running" to listOf(Triple(null, 1800, 1800))
+        )
+
+        val result = repo.import(fitNotesFile("fixed.csv", row("2026-01-05", "Bench Press", 225, 3))) as ImportResult.Success
+
+        assertEquals(1, result.workoutsCorrected)
+        assertEquals(1, storedSessionCount())
+        assertEquals(1, db.loggedExerciseDao().forSession(id).size)
+    }
+
+    @Test
+    fun aDifferentWorkoutIsNotMistakenForALossyCopy() = runTest {
+        storeOldImport(midnight("2026-01-05"), "Bench Press" to listOf(Triple(null, 5, null)))
+
+        val result = repo.import(fitNotesFile("other.csv", row("2026-01-05", "Bench Press", 225, 3))) as ImportResult.Success
+
+        assertEquals("different reps: a new workout", 1, result.sessions)
+        assertEquals(0, result.workoutsCorrected)
+        assertEquals(2, storedSessionCount())
+    }
+
+    @Test
+    fun reImportingAfterAZoneChangeAddsNothing() = runTest {
+        val original = java.util.TimeZone.getDefault()
+        try {
+            java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("America/New_York"))
+            val uri = strongFile("strong.csv", strongRow("2026-01-05 18:00:00", "Push", "Bench Press", 225, 5))
+            repo.import(uri)
+            java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Europe/Berlin"))
+
+            val second = repo.import(uri)
+
+            assertTrue("got $second", second is ImportResult.NothingToImport)
+            assertEquals(1, storedSessionCount())
+        } finally {
+            java.util.TimeZone.setDefault(original)
+        }
+    }
 }

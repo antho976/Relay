@@ -74,4 +74,34 @@ internal data class WorkoutIdentity(val exercises: List<ExerciseIdentity>) {
             a.sets == b.sets && a.keys.any { it in b.keys }
         }
     }
+
+    /**
+     * Whether this incoming workout is a fuller read of [stored], a copy an earlier build's importer
+     * wrote with less in it. Re-importing is exactly what a user does once an importer is fixed, and
+     * those copies no longer matched, so every one was added a second time. Three losses are
+     * recognised:
+     *
+     * - a set stored with no load where this read has one (Hevy lb exports read only `weight_kg`);
+     * - a hold-only exercise stored that this read doesn't have (Strong and Hevy cardio rows, and
+     *   Strong's Rest Timer, came in as timed holds);
+     * - a hold-only exercise this read has that wasn't stored (FitNotes dropped timed holds).
+     *
+     * Everything else must agree exactly, and at least one of those must differ.
+     */
+    fun repairs(stored: WorkoutIdentity): Boolean {
+        if (sameWorkoutAs(stored)) return false
+        val theirsAll = stored.performed
+        val mineAll = performed
+        val mine = mineAll.filterNot { it.holdOnly && theirsAll.none { s -> s.sharesKeyWith(it) } }
+        val theirs = theirsAll.filterNot { it.holdOnly && mineAll.none { m -> m.sharesKeyWith(it) } }
+        return mine.isNotEmpty() && mine.size == theirs.size && mine.zip(theirs).all { (a, b) ->
+            a.sharesKeyWith(b) && a.sets.size == b.sets.size && a.sets.zip(b.sets).all { (x, y) ->
+                x == y || (y.weightTenthsLb == null && x.copy(weightTenthsLb = null) == y)
+            }
+        }
+    }
+
+    private val ExerciseIdentity.holdOnly: Boolean get() = sets.all { it.durationSeconds != null }
+
+    private fun ExerciseIdentity.sharesKeyWith(other: ExerciseIdentity) = keys.any { it in other.keys }
 }

@@ -388,8 +388,12 @@ class AdaptationRepository @Inject constructor(
      * One-tap apply for [Recommendation.DeloadSuggestion]: regenerate the current split at
      * deload volume — the same operation as Settings → "Generate deload week". The params
      * mirror SettingsViewModel.buildParams; keep the two in sync.
+     *
+     * [unlessWorkoutOpen] backs out rather than discard an open workout (see
+     * [ProgramRepository.generate]); the unconfirmed callers pass it. Returns whether the deload
+     * was generated.
      */
-    suspend fun applyDeloadWeek() {
+    suspend fun applyDeloadWeek(unlessWorkoutOpen: Boolean = false): Boolean {
         val params = GenerationParams(
             daysPerWeek = settingsRepository.daysPerWeek.first(),
             emphasis = settingsRepository.programEmphasis.first(),
@@ -415,7 +419,7 @@ class AdaptationRepository @Inject constructor(
         // that threw — an ordinary failure, not a race — left "you are in a deload week" standing
         // over the untouched full-volume plan with nothing to clear it. `generate` now settles the
         // marker itself, after its rows are committed, for this path and Settings' alike.
-        programRepository.generate(
+        val generated = programRepository.generate(
             params,
             settingsRepository.availableEquipment.first()
                 .mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
@@ -423,11 +427,14 @@ class AdaptationRepository @Inject constructor(
             settingsRepository.dislikedExercises.first(),
             // Same seed as the program being deloaded: lighter volume on the SAME movements, not a
             // new program (2026-09-21).
-            keepPicks = true
+            keepPicks = true,
+            unlessWorkoutOpen = unlessWorkoutOpen
         )
+        if (!generated) return false
         // A deload regenerates a real plan, so a freestyle user who reached this is now following one —
         // flip freestyle off (mirrors SettingsViewModel.generateDeloadWeek) so the plan actually surfaces.
         if (settingsRepository.freestyleMode.first()) settingsRepository.setFreestyleMode(false)
         logAdviceApplied("deload.suggest")
+        return true
     }
 }

@@ -321,6 +321,9 @@ object PreferenceKeys {
      * deload so auto-rotation pauses and DeloadAdvisor suppression fires (auto-coach seam, finding 18).
      */
     val DELOAD_WEEK_START_MS = longPreferencesKey("deload_week_start_ms")
+    /** The block entered its deload week while a workout was open, so the deload is still to be
+     *  served once it closes (BlockRepository.serveOwedDeload). */
+    val BLOCK_DELOAD_OWED = booleanPreferencesKey("block_deload_owed")
 
     /** A program regeneration currently in flight, as JSON — see
      *  [com.forge.app.domain.program.ProgramGenerationIntent]. Absent when none is. */
@@ -443,7 +446,7 @@ object PreferenceKeys {
         DAYS_PER_WEEK, PROGRAM_EMPHASIS, PROGRAM_EXPERIENCE, PROBLEM_AREAS, PRIORITY_MUSCLES,
         AVAILABLE_EQUIPMENT, FROZEN_EXERCISE_IDS, MAX_DB_WEIGHT_LB, SCHEDULE_MODE, SCHEDULE_WEEKLY,
         PINNED_EXERCISES, FAVORITE_EXERCISES, LIKED_EXERCISES, DISLIKED_EXERCISES,
-        DELOAD_WEEK_START_MS, PROGRAM_GENERATION_INTENT, PROGRAM_GENERATION_SEED, ROTATION_COUNTER,
+        DELOAD_WEEK_START_MS, BLOCK_DELOAD_OWED, PROGRAM_GENERATION_INTENT, PROGRAM_GENERATION_SEED, ROTATION_COUNTER,
         COACH_OFF_PASS_WEEK,
         // A rest timer running right now.
         REST_TIMER_END_AT, REST_TIMER_TOTAL, REST_TIMER_PAUSED_REMAINING,
