@@ -371,4 +371,101 @@ class WorkoutImportRepositoryTest {
             0.001
         )
     }
+
+    // ── Re-imports that used to duplicate history (audit 2026-09-26, 09 P2) ──────────────────────
+
+    @Test
+    fun reImportingAfterEditingTheImportedWorkoutAddsNothing() = runTest {
+        val uri = strongFile("strong.csv", strongRow("2026-01-05 10:00:00", "Push", "Bench Press", 225, 5))
+        repo.import(uri)
+        // The user marks it untracked and annotates the exercise on this device.
+        val stored = db.sessionDao().allFinished().single()
+        db.sessionDao().update(stored.copy(isUntracked = true, journal = "travel gym"))
+        val ex = db.loggedExerciseDao().forSession(stored.id).single()
+        db.loggedExerciseDao().update(ex.copy(note = "paused reps"))
+
+        val again = repo.import(
+            strongFile("strong-next.csv", strongRow("2026-01-05 10:00:00", "Push", "Bench Press", 225, 5))
+        )
+
+        assertTrue("got $again", again is ImportResult.NothingToImport)
+        assertEquals(1, db.sessionDao().allFinished().size)
+    }
+
+    @Test
+    fun aMovementTheMatcherNowKnowsDoesNotDuplicateTheOlderImport() = runTest {
+        // Written by an earlier build whose matcher did not know "Cable Fly": synthetic id + label.
+        val start = java.time.LocalDateTime.of(2026, 1, 5, 10, 0)
+            .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val sessionId = db.sessionDao().insert(session(startedAt = start, finishedAt = start + 3_600_000L, dayKey = "freestyle"))
+        val leId = db.loggedExerciseDao().insert(
+            com.forge.app.data.db.entities.LoggedExercise(
+                sessionId = sessionId, exerciseId = "ext-cable-fly", orderIndex = 0, swappedName = "Cable Fly"
+            )
+        )
+        db.loggedSetDao().insert(loggedSet(loggedExerciseId = leId, weightLb = 40.0, reps = 12))
+        assertEquals("the premise: today's matcher resolves it", "cable-fly", ExerciseNameMatcher.match("Cable Fly"))
+
+        val result = repo.import(strongFile("fly.csv", strongRow("2026-01-05 10:00:00", "Chest", "Cable Fly", 40, 12)))
+
+        assertTrue("got $result", result is ImportResult.NothingToImport)
+        assertEquals(1, storedSessionCount())
+    }
+
+    @Test
+    fun strongRunsImportAsCardioAndOnlyOnce() = runTest {
+        fun runs(name: String): Uri {
+            val file = temporaryFolder.newFile(name)
+            file.writeText(
+                "Date,Workout Name,Duration,Exercise Name,Set Order,Weight,Weight Unit,Reps,Distance,Distance Unit,Seconds\n" +
+                    "2026-01-05 07:00:00,Run,30m,Running,1,0,kg,0,5,km,1800\n" +
+                    // A second, identical run in the same file is a second run.
+                    "2026-01-06 07:00:00,Run,30m,Running,1,0,kg,0,5,km,1800\n" +
+                    "2026-01-06 07:00:00,Run,30m,Running,2,0,kg,0,5,km,1800\n"
+            )
+            return Uri.fromFile(file)
+        }
+
+        val first = repo.import(runs("runs.csv")) as ImportResult.Success
+        val again = repo.import(runs("runs-again.csv"))
+
+        assertEquals(0, first.sessions)
+        assertEquals(3, first.cardioEntries)
+        assertTrue("got $again", again is ImportResult.NothingToImport)
+        assertEquals("no phantom lifting sessions", 0, storedSessionCount())
+        assertEquals(3, db.cardioDao().since(0L).size)
+    }
+
+    @Test
+    fun aLongNameAnEarlierImportFiledUnderTheTruncatedIdKeepsThatId() = runTest {
+        val name = "Incline Dumbbell Bench Press (Neutral Grip)"
+        // What the old 40-character cut produced.
+        val legacy = "ext-incline-dumbbell-bench-press-neutral-gri"
+        val start = java.time.LocalDateTime.of(2026, 1, 5, 10, 0)
+            .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val sessionId = db.sessionDao().insert(session(startedAt = start, finishedAt = start + 3_600_000L, dayKey = "freestyle"))
+        db.loggedExerciseDao().insert(
+            com.forge.app.data.db.entities.LoggedExercise(
+                sessionId = sessionId, exerciseId = legacy, orderIndex = 0, swappedName = name
+            )
+        )
+
+        repo.import(strongFile("later.csv", strongRow("2026-02-05 10:00:00", "Push", name, 60, 8)))
+        repo.import(
+            strongFile("paused.csv", strongRow("2026-02-06 10:00:00", "Push", "\"$name, Paused\"", 50, 8))
+        )
+
+        val ids = db.sessionDao().allFinished().filter { it.id != sessionId }
+            .map { s -> db.loggedExerciseDao().forSession(s.id).single().exerciseId }.toSet()
+        assertTrue("the old id is reused for the same name: $ids", legacy in ids)
+        assertEquals("and the paused variant gets its own", 2, ids.size)
+    }
+
+    @Test
+    fun aFileWhoseRowsAreAllUnreadableSaysSo() = runTest {
+        val result = repo.import(strongFile("bad.csv", strongRow("someday", "Push", "Bench Press", 100, 5)))
+
+        assertTrue("got $result", result is ImportResult.NoReadableRows)
+        assertEquals(1, (result as ImportResult.NoReadableRows).skippedRows)
+    }
 }

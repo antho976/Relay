@@ -26,7 +26,7 @@ class ForgeBodyweightCsvImporter : GymImporter {
     /** No workouts in this file — the weigh-ins come back through [parseExtras]. */
     override fun parse(text: String, assumeKg: Boolean): List<ImportedSession> = emptyList()
 
-    override fun parseExtras(text: String): ImportedExtras {
+    override fun parseExtras(text: String, assumeKg: Boolean): ImportedExtras {
         val rows = CsvParser.parse(text)
         if (rows.size < 2) return ImportedExtras()
         val idx = ImportParsing.headerIndex(rows.first())
