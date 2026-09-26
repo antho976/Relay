@@ -33,7 +33,8 @@ class WidgetMidnightWorker(
 
     override suspend fun doWork(): Result {
         // Re-arm FIRST: a redraw that throws must not end the chain, or the widget stops rolling
-        // over for the life of the install with nothing to show that it did.
+        // over for the life of the install with nothing to show that it did. The successor is named
+        // for the NEXT midnight, so arming it no longer cancels this run mid-redraw.
         schedule(applicationContext)
         refreshForgeWidgets(applicationContext)
         return Result.success()
@@ -42,12 +43,19 @@ class WidgetMidnightWorker(
     companion object {
         private const val TAG = "forge_widget_midnight"
 
-        /** (Re)arm the next-midnight redraw, replacing any already-queued one. */
+        /**
+         * Arm the redraw for the next local midnight, keeping one already armed for it.
+         *
+         * This used to REPLACE one unique name, and [doWork] calls it before its own redraw, so the
+         * run that armed its successor was the unfinished work REPLACE cancels: the midnight redraw
+         * could be cut off inside `refreshForgeWidgets` (2026-09-26 audit, 11 / domain D3). Each
+         * midnight now has its own name, enqueued with KEEP: a launch in the same zone is a no-op,
+         * and a flight or a clock change arms its new midnight beside the old one, which then costs
+         * one spare redraw and re-arms onto the same name the new chain already holds.
+         */
         fun schedule(context: Context) {
-            val zone = ZoneId.systemDefault()
             val now = System.currentTimeMillis()
-            val nextMidnight = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
-                .plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+            val nextMidnight = nextMidnightMs(now, ZoneId.systemDefault())
             // A floor of one minute keeps a wrong-clock device from queueing a zero/negative delay
             // in a tight loop; the ceiling of a day bounds a clock that reads far in the past.
             val delayMs = (nextMidnight - now).coerceIn(60_000L, TimeUnit.DAYS.toMillis(1))
@@ -57,8 +65,16 @@ class WidgetMidnightWorker(
                 .build()
             runCatching {
                 WorkManager.getInstance(context)
-                    .enqueueUniqueWork(TAG, ExistingWorkPolicy.REPLACE, request)
+                    .enqueueUniqueWork(workNameFor(nextMidnight), ExistingWorkPolicy.KEEP, request)
             }
         }
+
+        /** Epoch-ms of the first local midnight strictly after [nowMs] in [zone]. */
+        internal fun nextMidnightMs(nowMs: Long, zone: ZoneId): Long =
+            Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+                .plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+
+        /** One unique name per midnight instant. */
+        internal fun workNameFor(midnightMs: Long): String = "$TAG@$midnightMs"
     }
 }

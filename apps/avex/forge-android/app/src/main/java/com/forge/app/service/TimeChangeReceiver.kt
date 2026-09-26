@@ -35,6 +35,10 @@ class TimeChangeReceiver : BroadcastReceiver() {
     @Inject lateinit var timeSignals: TimeSignals
     @Inject lateinit var reminderScheduler: ReminderScheduler
 
+    // No `super.onReceive` call, and none is missing: the 2026-09-26 audit (11) read its absence as
+    // "never injected", but BroadcastReceiver.onReceive is abstract, so Kotlin cannot call it. The
+    // Hilt Gradle plugin rewrites this class onto Hilt_TimeChangeReceiver and inserts the call that
+    // injects the fields above as this method's first instruction. TimeChangeReceiverTest pins that.
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             Intent.ACTION_TIMEZONE_CHANGED,

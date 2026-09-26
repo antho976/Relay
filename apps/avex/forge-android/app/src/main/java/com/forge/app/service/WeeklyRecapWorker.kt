@@ -6,8 +6,8 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.forge.app.Features
@@ -36,8 +36,8 @@ import java.util.concurrent.TimeUnit
  *  - a gentle, non-guilt-y "come back" when a whole week passed with no sessions (suppressed on holiday).
  *
  * Weekly cadence keeps re-engagement from nagging. Anchored to Monday, the day the week's numbers
- * are complete and the Week Brief is published; re-anchored on every app open, which is idempotent
- * because the delay targets the next Monday rather than a fixed interval from now.
+ * are complete and the Week Brief is published: a one-shot per Monday that arms the next one, and
+ * re-arming on every app open is idempotent because each Monday has its own unique work name.
  * All three honour quiet hours; only the recap honours the "Weekly recap" per-type opt-out (the
  * coach-brief and come-back nudges are separate features with their own channels).
  */
@@ -55,6 +55,10 @@ class WeeklyRecapWorker @AssistedInject constructor(
 ) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result {
+        // Arm next Monday FIRST, under its own name, so a batch that throws or retries can't end
+        // the chain and this run is never the unfinished work a re-arm cancels. Not schedule():
+        // on an upgraded install this run can still BE the legacy periodic that schedule() cancels.
+        armNext(ctx)
         if (!com.forge.app.program.Program.isLoaded) programRepo.ensureLoaded()
         // Quiet hours: defer (retry) the whole batch rather than dropping it. Each nudge below has
         // its own opt-out: the coach-brief push and the come-back nudge are SEPARATE features with
@@ -171,54 +175,60 @@ class WeeklyRecapWorker @AssistedInject constructor(
         private const val COACH_CHANNEL_ID = "forge_coach_brief"
         private const val REENGAGE_CHANNEL_ID = "forge_reengage"
         private const val DELOAD_CHANNEL_ID = "forge_deload"
-        private const val WORK_NAME = "forge_weekly_recap"
+        /** The periodic this used to be, cancelled on sight so an upgraded install doesn't run both. */
+        private const val LEGACY_PERIODIC_WORK_NAME = "forge_weekly_recap"
+        private const val WORK_NAME_PREFIX = "forge_weekly_recap_"
         private const val NOTIF_ID = 2001
         private const val COACH_NOTIF_ID = 2003
         private const val REENGAGE_NOTIF_ID = 2004
         private const val DELOAD_NOTIF_ID = 2005
 
-        /** The recap's period boundary: Monday noon local, with the 6 h flex below putting the run
-         *  somewhere in Monday morning. Quiet hours defer anything too early. */
+        /** The recap's run time: Monday noon local. Quiet hours and the battery constraint can only
+         *  push it later. */
         private const val RECAP_HOUR = 12
 
+        /**
+         * Arm the recap for the next Monday [RECAP_HOUR]:00, keeping one already armed for it.
+         *
+         * This was a 7-day PERIODIC re-enqueued with UPDATE and a to-next-Monday initial delay on
+         * every app open, and that never pinned Monday (2026-09-26 audit, 11 / W08): the first
+         * period also adds interval minus flex, so an install on Saturday first ran the Monday
+         * after next, and UPDATE keeps the original enqueue time while swapping in the new delay,
+         * so reopening on Sunday moved the run to a Sunday. A one-shot per Monday, named for that
+         * Monday and enqueued with KEEP, lands on the day it names however often the app opens.
+         */
         fun schedule(context: Context) {
-            val constraints = Constraints.Builder()
-                .setRequiresBatteryNotLow(true)
-                .build()
-            // Flex window: let WorkManager fire anywhere in the last 6h of each 7-day period so it can
-            // batch with other jobs / pick a low-power moment, instead of pinning the exact 7-day mark.
-            //
-            // The initial delay anchors that period to Monday, the day the week's numbers are
-            // complete and the day the coach's Week Brief is published. Without it the first run was
-            // ~7 days after the user's first-ever launch, on whatever weekday and hour that happened
-            // to be, and KEEP meant it stayed on that phase forever — so a Wednesday-anchored user's
-            // "week in numbers" described Monday to Wednesday, and the coach-brief push could land
-            // six days after the brief was ready. UPDATE re-anchors installs already running on an
-            // arbitrary phase; because the delay targets the NEXT Monday rather than "7 days from
-            // now", re-running this on every app open can't starve the worker.
-            val request = PeriodicWorkRequestBuilder<WeeklyRecapWorker>(7, TimeUnit.DAYS, 6, TimeUnit.HOURS)
-                .setConstraints(constraints)
-                .setInitialDelay(minutesUntilNextMonday(), TimeUnit.MINUTES)
+            WorkManager.getInstance(context).cancelUniqueWork(LEGACY_PERIODIC_WORK_NAME)
+            armNext(context)
+        }
+
+        private fun armNext(context: Context) {
+            val zone = ZoneId.systemDefault()
+            val now = ZonedDateTime.now(zone)
+            val runAt = nextRecapAt(now)
+            val request = OneTimeWorkRequestBuilder<WeeklyRecapWorker>()
+                .setConstraints(Constraints.Builder().setRequiresBatteryNotLow(true).build())
+                // ZonedDateTime, not LocalDateTime, so the delay spans real elapsed time across a
+                // DST transition.
+                .setInitialDelay(Duration.between(now, runAt).toMinutes().coerceAtLeast(1), TimeUnit.MINUTES)
                 // Quiet-hours / transient failures return Result.retry(); back off instead of
                 // hammering the default ~30s-then-immediate cadence.
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.MINUTES)
                 .build()
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                WORK_NAME,
-                ExistingPeriodicWorkPolicy.UPDATE,
-                request
-            )
+            WorkManager.getInstance(context)
+                .enqueueUniqueWork(workNameFor(runAt), ExistingWorkPolicy.KEEP, request)
         }
 
-        /** Minutes until the next Monday [RECAP_HOUR]:00 (always >= 1). ZonedDateTime, not
-         *  LocalDateTime, so the delay spans real elapsed time across a DST transition. */
-        private fun minutesUntilNextMonday(): Long {
-            val zone = ZoneId.systemDefault()
-            val now = ZonedDateTime.now(zone)
+        /** The next Monday [RECAP_HOUR]:00 strictly after [now], in [now]'s zone. */
+        internal fun nextRecapAt(now: ZonedDateTime): ZonedDateTime {
             var next = now.with(TemporalAdjusters.nextOrSame(DayOfWeek.MONDAY))
                 .withHour(RECAP_HOUR).withMinute(0).withSecond(0).withNano(0)
             if (!next.isAfter(now)) next = next.plusWeeks(1)
-            return Duration.between(now, next).toMinutes().coerceAtLeast(1)
+            return next
         }
+
+        /** One unique name per recap Monday, so re-arming for the same Monday is a no-op and arming
+         *  the next one from inside a run never touches the run itself. */
+        internal fun workNameFor(runAt: ZonedDateTime): String = WORK_NAME_PREFIX + runAt.toLocalDate()
     }
 }

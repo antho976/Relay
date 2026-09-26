@@ -49,10 +49,13 @@ class WearStatePublisher @Inject constructor(
     private val dataClient by lazy { Wearable.getDataClient(context) }
 
     /**
-     * `endAtMs` of the running timer as last published to the wrist, or 0 when none is running.
+     * `endAtMs` of the rest as last published RUNNING to the wrist, or 0 when there is none.
      *
      * [com.forge.app.service.WorkoutSessionService] compares the wrist's haptic ack against this so
-     * an ack for a finished rest cannot silence the next one.
+     * an ack for a finished rest cannot silence the next one. It outlives the rest's expiry on
+     * purpose: the wrist acks with the instant it counted down to, and the service reads this only
+     * after the expiry has been published, so clearing it there meant no ack ever matched (see
+     * [hapticIdentityAfter]). A stop, a manual pause or the next start replaces it.
      */
     @Volatile
     var lastPublishedTimerEndAtMs: Long = 0L
@@ -98,7 +101,7 @@ class WearStatePublisher @Inject constructor(
                     // The identity the wrist will quote back in its haptic ack. Held here because
                     // this is the only place that knows what was actually PUBLISHED — the
                     // controller's own state is recomputed every tick and would not match.
-                    lastPublishedTimerEndAtMs = if (dto == null || dto.paused) 0L else dto.endAtMs
+                    lastPublishedTimerEndAtMs = hapticIdentityAfter(lastPublishedTimerEndAtMs, dto)
                     if (dto == null) deleteItem(WearProtocol.PATH_TIMER_STATE)
                     else putItem(WearProtocol.PATH_TIMER_STATE, WearCodec.encode(dto))
                 }
@@ -261,10 +264,29 @@ class WearStatePublisher @Inject constructor(
         }
     }
 
-    private companion object {
+    internal companion object {
+        /**
+         * The haptic-ack identity to hold once [dto] has been published, given the one held before.
+         *
+         * A rest that runs out is republished as paused-at-zero, and that publish used to clear the
+         * identity to 0. It lands within milliseconds on this collector, while the service only reads
+         * the identity after the day screen's `notifyTimerDone` and two Main-thread hops, so it
+         * almost always read 0, `hapticAckedFor(0, …)` never matched, and the phone buzzed and posted
+         * a heads-up on top of the wrist at every rest (2026-09-26 audit, 11-domain-services-core).
+         * The expired rest's end instant is what the wrist quotes back, so it is kept until the next
+         * start (a new instant) or stop (0). A manual pause still clears it: a paused timer cannot
+         * expire, and resuming publishes a fresh instant.
+         */
+        fun hapticIdentityAfter(previous: Long, dto: TimerStateDto?): Long = when {
+            dto == null -> 0L
+            !dto.paused -> dto.endAtMs
+            dto.pausedRemainingSeconds <= 0 -> previous
+            else -> 0L
+        }
+
         /** endAtMs jitter tolerated between tick-derived recomputes before it counts as a restart. */
-        const val TIMER_REPUBLISH_SLOP_MS = 1_500L
+        private const val TIMER_REPUBLISH_SLOP_MS = 1_500L
         /** How many per-command acks stay live before the oldest is deleted. */
-        const val ACK_HISTORY = 10
+        private const val ACK_HISTORY = 10
     }
 }
