@@ -14,7 +14,7 @@ import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import androidx.compose.material3.AlertDialog
+import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -46,6 +46,7 @@ import com.forge.app.data.importer.userMessage
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.security.AppLockManager
 import com.forge.app.security.LocalAppLock
+import com.forge.app.security.LocalAppLockActive
 import com.forge.app.service.AutoBackupWorker
 import com.forge.app.ui.common.AvexIntro
 import com.forge.app.ui.common.ProvideTouchExploration
@@ -522,6 +523,11 @@ class MainActivity : FragmentActivity() {
                         // REPLACES its screen rather than covering it.
                         val locked by appLock.appLocked.collectAsState()
                         val lockActive = onboardingDone == true && locked
+                        // Hiding the nav host's semantics does nothing for a dialog, sheet or popup:
+                        // each is its own window ABOVE this one, so the lock overlay below can't
+                        // cover it. The lock-aware versions in ui.common.window read this and draw no
+                        // window while it holds (R1).
+                        CompositionLocalProvider(LocalAppLockActive provides lockActive) {
                         Box(Modifier.fillMaxSize()) {
                             when (onboardingDone) {
                                 false -> OnboardingScreen(onFinished = {})
@@ -555,7 +561,10 @@ class MainActivity : FragmentActivity() {
                             if (showIntro) AvexIntro(iconKey = introIconKey, themed = themedIntro, onDone = { showIntro = false })
                             // The app's one Undo snackbar (§13) — hosted here so a "deleted · Undo"
                             // message rides over any screen, including one popped back to after a delete.
-                            com.forge.app.ui.common.SnackbarControllerHost()
+                            // Not while locked: it is drawn after the gate, so its Undo stayed live over
+                            // it. Leaving composition is not an outcome for the controller, so an event
+                            // still inside its window is shown again after unlock (R1).
+                            if (!lockActive) com.forge.app.ui.common.SnackbarControllerHost()
                             val showImportConfirmation = shouldShowImportConfirmation(
                                 onboardingDone = onboardingDone,
                                 appLocked = locked,
@@ -568,6 +577,7 @@ class MainActivity : FragmentActivity() {
                                     onDismiss = { pendingImportUri = null },
                                 )
                             }
+                        }
                         }
                         }
                     }

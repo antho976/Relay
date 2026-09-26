@@ -336,6 +336,27 @@ class AutoCoachPlannerTest {
     }
 
     @Test
+    fun repShift_landsOnTheDayItsRangeWasReadFrom() {
+        // Audit 2026-09-26: Goblet Squat is lower-a 10-12 and lower-b 12-15. The shift was read off
+        // lower-a ("from 10-12") but written to lower-b, so the heavy and light days swapped ranges.
+        val heavy = slot(swaps = emptyList()).copy(repsText = "10-12")
+        val light = slot(swaps = emptyList()).copy(repsText = "12-15")
+        val snap = AdaptationSnapshot(
+            nowMs = now,
+            program = listOf(
+                ProgramDaySnap("lower-a", "Lower A", listOf(heavy)),
+                ProgramDaySnap("lower-b", "Lower B", listOf(light))
+            ),
+            sessions = baseSessions(),
+            exerciseHistory = mapOf("ua1" to stalledBouts(6)),
+            prefs = PrefsSnap()
+        )
+        val shift = AutoCoachPlanner.evaluate(snap, beginner()).decisions.single { it.type == "rep_shift" }
+        assertEquals("lower-a", shift.dayKey)
+        assertTrue(shift.summary, "from 10-12" in shift.summary)
+    }
+
+    @Test
     fun deloadWeek_withNoDeloadRunning_proposesTheDeloadItself() {
         // The block advanced into its deload week but nothing regenerated the program: the pass
         // must serve the week rather than propose more sets during it (the audit's repro).

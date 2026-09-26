@@ -63,7 +63,13 @@ sealed interface Recommendation {
         val fromReps: String,
         val toReps: String,
         override val reason: String,
-        override val confidence: Confidence
+        override val confidence: Confidence,
+        /**
+         * The program day whose slot [fromReps] was read from, so the shift lands on that slot. A
+         * lift on two days can carry two different ranges (a heavy 10-12 day and a light 12-15
+         * day); null only for recommendations built outside the program pass.
+         */
+        val dayKey: String? = null
     ) : Recommendation {
         override val id: String get() = "progression.reprange.$exerciseId"
         override val system: AdviceSystem get() = AdviceSystem.PROGRESSION

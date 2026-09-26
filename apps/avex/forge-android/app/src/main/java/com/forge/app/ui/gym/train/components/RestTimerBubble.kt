@@ -52,7 +52,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.forge.app.ui.common.window.Dialog
 import com.forge.app.domain.timer.RestTimerState
 import com.forge.app.ui.theme.ForgeMotion
 

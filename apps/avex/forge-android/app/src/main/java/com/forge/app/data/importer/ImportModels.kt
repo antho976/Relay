@@ -75,7 +75,21 @@ data class ImportedExercise(
     val difficulty: String? = null,
     /** The user marked this exercise skipped. Skipped exercises are excluded from the engine's
      *  population, so importing one as "performed" silently rewrites the training history. */
-    val skipped: Boolean = false
+    val skipped: Boolean = false,
+    /**
+     * The id the source itself stored this movement under, when it has one (Avex JSON). Never
+     * written: [catalogueId] decides the stored id. It lets the duplicate guard recognise a custom
+     * or retired id that no longer resolves to the catalogue as the same movement.
+     */
+    val sourceExerciseId: String? = null,
+    /** A per-session swap label the source recorded on a library movement (Avex JSON). */
+    val swappedName: String? = null,
+    /** The source marked this exercise a PR in this workout. Feeds recent PRs, trophies, milestones. */
+    val wasPr: Boolean = false,
+    /** Every prescribed set hit its target. */
+    val hitFullTarget: Boolean = false,
+    /** Superset group; exercises sharing a non-null value were done back to back. */
+    val supersetGroup: String? = null
 )
 
 /**
@@ -116,7 +130,8 @@ data class ImportedSession(
 )
 
 /**
- * The non-workout rows an Avex JSON export also carries. They were written by every export and read
+ * The non-workout rows an export also carries: Avex JSON's cardio, goals and weigh-ins, and the
+ * cardio rows Strong and Hevy log as exercises. They were written by every export and read
  * by nothing, so a device-to-device migration lost every cardio entry and every coach goal without
  * saying so. [GymImporter.parseExtras] defaults to empty, so no other app's parser has to care.
  */
@@ -131,7 +146,8 @@ data class ImportedExtras(
 /** One weigh-in. [dateKey] is the `yyyy-MM-dd` the entry is filed under; weight is canonical lb. */
 data class ImportedBodyweight(val dateKey: String, val weightLb: Double)
 
-/** One cardio / rest-day entry. [dateMs] is the entry's own date column, verbatim. */
+/** One cardio / rest-day entry. [dateMs] is the entry's own date column, verbatim; for a Strong or
+ *  Hevy row, the workout's start. */
 data class ImportedCardio(
     val dateMs: Long,
     val type: String,
@@ -142,7 +158,11 @@ data class ImportedCardio(
     val note: String? = null,
     val inclinePct: Double? = null,
     val laps: Int? = null,
-    val elevationM: Double? = null
+    val elevationM: Double? = null,
+    val intervalCount: Int? = null,
+    val hrZone: String? = null,
+    /** Comma-joined condition codes, as `CardioEntry.conditions` stores them. */
+    val conditions: String? = null
 )
 
 /** One coach goal. */
@@ -156,6 +176,18 @@ data class ImportedCoachGoal(
     val archivedAt: Long? = null,
     val source: String = "user",
     val note: String = ""
+)
+
+/**
+ * Everything one parse of a file yields. [skippedRows] counts source rows that were neither a set,
+ * nor cardio, nor something the format says to ignore: an unreadable date, a missing exercise name,
+ * or no reps, load or time at all. They used to vanish silently, so a file whose dates the parser
+ * could not read reported "No new workouts found", which reads as an empty export.
+ */
+data class ParsedImport(
+    val sessions: List<ImportedSession>,
+    val extras: ImportedExtras = ImportedExtras(),
+    val skippedRows: Int = 0
 )
 
 /** Which app a file was recognised as — drives the confirmation copy and the result summary. */
@@ -184,7 +216,7 @@ sealed interface ImportResult {
         val skippedRows: Int,
         /** Workouts already present (same start time) that were skipped to avoid double-importing. */
         val duplicatesSkipped: Int = 0,
-        /** Cardio entries written (Avex JSON export only). */
+        /** Cardio entries written (Avex JSON, and Strong/Hevy cardio rows). */
         val cardioEntries: Int = 0,
         /** Coach goals written (Avex JSON export only). */
         val coachGoals: Int = 0,
@@ -196,8 +228,15 @@ sealed interface ImportResult {
      *  Reading it with the current parser would silently mis-import it, so we refuse instead. */
     data class UnsupportedExportVersion(val version: Int) : ImportResult
 
-    /** File was read but nothing usable was found in it (empty, or no rows we could parse). */
+    /** File was read but nothing usable was found in it (empty, or everything already imported). */
     data object NothingToImport : ImportResult
+
+    /** The file has rows, but not one of them could be read: usually a date or column the parser
+     *  does not understand. Distinct from [NothingToImport] so the user is not told it was empty. */
+    data class NoReadableRows(val source: ImportSource, val skippedRows: Int) : ImportResult
+
+    /** The parser failed on the file itself (a damaged or truncated export), not on single rows. */
+    data class ParseFailed(val source: ImportSource) : ImportResult
 
     /** File format wasn't recognised as any supported gym app export. */
     data object UnrecognisedFormat : ImportResult
@@ -248,7 +287,17 @@ fun ImportResult.userMessage(): String = when (this) {
             append(if (unmatchedExercises == 1) "exercise wasn't" else "exercises weren't")
             append(" in the library — kept under their original names.")
         }
+        if (skippedRows > 0) {
+            append(" $skippedRows ")
+            append(if (skippedRows == 1) "row couldn't be read and was" else "rows couldn't be read and were")
+            append(" skipped.")
+        }
     }
+    is ImportResult.NoReadableRows ->
+        "None of the $skippedRows ${if (skippedRows == 1) "row" else "rows"} in that ${source.displayName} file could be read. " +
+            "Check that it has a date and an exercise on every row."
+    is ImportResult.ParseFailed ->
+        "Couldn't read that ${source.displayName} file. It may be damaged; try exporting it again."
     is ImportResult.UnsupportedExportVersion ->
         "That Avex export was written by a newer version of the app (format $version). Update Avex, then import it again."
     ImportResult.NothingToImport -> "No new workouts found in that file."

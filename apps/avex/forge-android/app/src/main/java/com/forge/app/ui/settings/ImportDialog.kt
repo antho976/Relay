@@ -20,7 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.forge.app.ui.common.window.Dialog
 import com.forge.app.data.importer.FoundImport
 import com.forge.app.data.importer.foundImportSummary
 import com.forge.app.ui.common.clickableLabeled

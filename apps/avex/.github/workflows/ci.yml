@@ -51,22 +51,10 @@ on:
       - "README.md"
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "backups/**"
-      - ".design-backups/**"
-      - ".impeccable/**"
-      - "remotion-*/**"
-      # Repository-root marketing images only. `*` does not match `/`, so this is the top level and
-      # nothing else — deliberately NOT `**/*.png`, which used to be here and which also matched the
-      # 44 Roborazzi goldens and all 137 tracked images under forge-android/. A pull request that
-      # changed only goldens therefore ran no CI whatsoever, and merged green on the strength of no
-      # check having run: precisely the change :app:verifyRoborazziDebug exists to police.
-      - "*.png"
-      - "*.jpg"
-      - "*.mp4"
-      - "PRODUCT.md"
-      - "README.md"
+    # No paths-ignore here, unlike push. Guard, Verify and Instrumented are required checks on main,
+    # and a workflow that paths-ignore skips never reports them, so a docs-only PR would wait
+    # forever. Guard runs on every PR and decides (ci_scope.py, same list as above) whether the two
+    # build jobs have anything to do; a job skipped by its own `if:` reports as passed.
   merge_group:
   workflow_dispatch:
   # Callable so release.yml gates a tag on this exact pipeline rather than on a copy that drifts.
@@ -100,9 +88,13 @@ jobs:
     name: Guard
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      build: ${{ steps.scope.outputs.build || 'true' }}
     steps:
       - uses: actions/checkout@v7
         with:
+          # Two commits so ci_scope.py can diff the PR's merge commit against its base parent.
+          fetch-depth: 2
           # Pin the RUN's immutable commit. On pull_request this is its synthetic merge commit.
           # The PR object's merge_commit_sha can still name the previous revision during a push:
           # run 34670747736 executed a new workflow over the old PR tree and missed its new files.
@@ -164,10 +156,20 @@ jobs:
         run: |
           python3 .github/scripts/emulator_ready_test.py
           python3 .github/scripts/verify_ci_revision_test.py
+          python3 .github/scripts/ci_scope_test.py
+
+      - name: Decide whether this PR changes anything the build reads
+        id: scope
+        # Only a PR can be docs-only here: push has its own paths-ignore, and a release call, a
+        # merge queue or a manual run always builds (the output defaults to true above).
+        if: github.event_name == 'pull_request'
+        run: python3 .github/scripts/ci_scope.py "$GITHUB_OUTPUT"
 
   verify:
     name: Verify (JVM)
     needs: guard
+    # Skipped (and so passed) only for a PR that touches nothing but docs and root media.
+    if: needs.guard.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

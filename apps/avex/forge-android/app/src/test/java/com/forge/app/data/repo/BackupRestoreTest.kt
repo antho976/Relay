@@ -11,10 +11,13 @@ import com.forge.app.data.db.inMemoryForgeDb
 import com.forge.app.data.db.loggedExercise
 import com.forge.app.data.db.loggedSet
 import com.forge.app.data.db.session
+import com.forge.app.data.prefs.PreferenceKeys
 import com.forge.app.data.prefs.SettingsRepository
 import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -300,5 +303,91 @@ class BackupRestoreTest {
             assertEquals("drop", set.setType)
             assertEquals("20/4", set.dropAnnotation)
         }
+    }
+
+    // ── Protections (Data D1) ───────────────────────────────────────────────────────────────────
+
+    /** Run [block] against a DataStore over [file], the way the next boot will open it. */
+    private suspend fun <T> withPreferencesFile(
+        file: File,
+        block: suspend (androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences>) -> T
+    ): T {
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.SupervisorJob())
+        return try {
+            block(androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(scope = scope) { file })
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    /** [archive] with its settings entry replaced by a blob holding exactly [write]. Built by hand
+     *  because the app's DataStore is a process singleton: once an earlier test has opened it, it no
+     *  longer lives in this test's files dir, and backupToUri would find no settings to include. */
+    private suspend fun withSettings(
+        archive: File,
+        write: (androidx.datastore.preferences.core.MutablePreferences) -> Unit
+    ): File {
+        val blob = File(temporaryFolder.newFolder(), "backup.preferences_pb")
+        withPreferencesFile(blob) { it.updateData { p -> p.toMutablePreferences().apply(write) } }
+        val out = outFile("with-settings.zip")
+        java.util.zip.ZipFile(archive).use { zin ->
+            ZipOutputStream(out.outputStream()).use { zout ->
+                zin.entries().toList().filter { it.name != "settings.preferences_pb" }.forEach { e ->
+                    zout.putNextEntry(ZipEntry(e.name))
+                    zin.getInputStream(e).use { it.copyTo(zout) }
+                    zout.closeEntry()
+                }
+                zout.putNextEntry(ZipEntry("settings.preferences_pb"))
+                blob.inputStream().use { it.copyTo(zout) }
+                zout.closeEntry()
+            }
+        }
+        return out
+    }
+
+    @Test
+    fun aRestoreKeepsThisPhonesLocksAndTakesEverythingElseFromTheBackup() = runTest {
+        // The backup was made with every protection off...
+        seedOneWorkout()
+        val plain = outFile()
+        repo.backupToUri(Uri.fromFile(plain))
+        val archive = withSettings(plain) {
+            it[PreferenceKeys.PRIVACY_MODE] = false
+            it[PreferenceKeys.APP_LOCK_ENABLED] = false
+            it[PreferenceKeys.GALLERY_LOCK_ENABLED] = false
+            it[PreferenceKeys.APP_LOCK_TIMEOUT_SEC] = 300
+            it[PreferenceKeys.USER_NAME] = "From the backup"
+        }
+
+        // ...and this phone has every one of them on. Restoring must not quietly undo that.
+        settings.setPrivacyMode(true)
+        settings.setAppLockEnabled(true)
+        settings.setGalleryLockEnabled(true)
+        settings.setAppLockTimeoutSec(0)
+
+        assertEquals(BackupRepository.RestoreOutcome.SUCCESS, repo.restoreFromUri(Uri.fromFile(archive)))
+
+        val copy = File(temporaryFolder.newFolder(), "staged.preferences_pb")
+        File(context.filesDir, "pending_restore_prefs.pb").copyTo(copy)
+        val staged = withPreferencesFile(copy) { it.data.first() }
+        assertEquals(true, staged[PreferenceKeys.PRIVACY_MODE])
+        assertEquals(true, staged[PreferenceKeys.APP_LOCK_ENABLED])
+        assertEquals(true, staged[PreferenceKeys.GALLERY_LOCK_ENABLED])
+        assertEquals(0, staged[PreferenceKeys.APP_LOCK_TIMEOUT_SEC])
+        assertEquals("the rest of the settings still come from the backup", "From the backup", staged[PreferenceKeys.USER_NAME])
+    }
+
+    @Test
+    fun anUnreadableSettingsBlobIsDeclinedAndStagesNothing() = runTest {
+        val blob = temporaryFolder.newFile("settings.bin").apply { writeBytes(ByteArray(64) { 0x7F }) }
+        val dest = File(temporaryFolder.newFolder(), "pending.pb")
+
+        val staged = stageRestoredPreferences(
+            blob, dest, temporaryFolder.newFolder(),
+            KeptProtections(privacyMode = true, appLockEnabled = true, galleryLockEnabled = true, appLockTimeoutSec = 0)
+        )
+
+        assertFalse(staged)
+        assertFalse("nothing may be left for the next boot to swap in", dest.exists())
     }
 }

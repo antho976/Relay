@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -161,13 +161,14 @@ internal fun authenticateSettingsAction(
     context: android.content.Context,
     vm: SettingsViewModel,
     subtitle: String,
+    onDenied: () -> Unit = {},
     action: () -> Unit
 ) {
     var host = context
     while (host is android.content.ContextWrapper && host !is androidx.fragment.app.FragmentActivity) {
         host = host.baseContext
     }
-    val activity = host as? androidx.fragment.app.FragmentActivity ?: return
+    val activity = host as? androidx.fragment.app.FragmentActivity ?: return onDenied()
     BiometricAuthenticator.authenticate(activity, subtitle,
-        onSuccess = { vm.protectionAuthenticated(); action() }, onError = { _, _ -> })
+        onSuccess = { vm.protectionAuthenticated(); action() }, onError = { _, _ -> onDenied() })
 }

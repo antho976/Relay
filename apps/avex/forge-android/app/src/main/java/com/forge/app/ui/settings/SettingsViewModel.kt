@@ -706,6 +706,13 @@ class SettingsViewModel @Inject constructor(
     val restoreSucceeded: StateFlow<Boolean> = _restoreSucceeded.asStateFlow()
 
     fun backupDatabase(uri: android.net.Uri) = viewModelScope.launch {
+        // Rechecked here as well as at the button, like backupNow and setBackupFolder: this was the
+        // one path to a ZIP of the whole gallery that skipped the gallery lock.
+        if (!protectedSettings.canExportPhotos()) {
+            backupRepo.discardBackupTarget(uri)
+            _statusMessage.value = "Unlock your photo gallery before backing up photos."
+            return@launch
+        }
         runCatching { backupRepo.backupToUri(uri) }
             .onSuccess {
                 _statusMessage.value = "Backup saved."
@@ -715,6 +722,10 @@ class SettingsViewModel @Inject constructor(
             }
             .onFailure { _statusMessage.value = "Backup failed: ${it.message}" }
     }
+
+    /** The unlock for a backup was refused: remove the empty file the picker created for it, so an
+     *  "avex_backup" with nothing in it isn't left in Downloads looking like a real backup. */
+    fun discardBackupTarget(uri: android.net.Uri) = viewModelScope.launch { backupRepo.discardBackupTarget(uri) }
 
     fun restoreDatabase(uri: android.net.Uri) = restore { backupRepo.restoreFromUri(uri) }
 

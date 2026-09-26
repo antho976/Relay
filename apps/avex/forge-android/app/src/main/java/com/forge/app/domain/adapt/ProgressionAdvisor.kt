@@ -3,6 +3,7 @@ package com.forge.app.domain.adapt
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.coach.WeightPhase
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.program.ExerciseUnit
 import kotlin.math.roundToInt
 
@@ -78,13 +79,15 @@ object ProgressionAdvisor {
      * no defensible suggestion (cold start, bodyweight, mid-range progress, HARD-but-not-
      * brutal effort — the silent cases are deliberate).
      *
-     * Unit-aware: DUMBBELL moves in [AdaptThresholds.dumbbellStepLb] steps (scaled);
-     * PLATES moves in whole plates and ignores fine scaling (a 15 lb plate is too coarse —
-     * any down-scale just suppresses increases); BODYWEIGHT never gets a weight suggestion.
+     * Unit-aware: DUMBBELL and WEIGHT move in steps of [AdaptThresholds.loadStepLb] for the
+     * user's [weightUnit] (2.5 lb, 2.5 kg or half a stone), scaled; PLATES moves in whole plates
+     * and ignores fine scaling (a 15 lb plate is too coarse — any down-scale just suppresses
+     * increases); BODYWEIGHT never gets a weight suggestion.
      *
      * Scaling: an explicit pre-session [intensity] pick always wins (user intent is not
      * second-guessed); on a NORMAL day, [readiness] (System 6) fills in — a bounded ±few-%
-     * autoregulation nudge whose reason is carried into the chip.
+     * autoregulation nudge whose reason is carried into the chip. Every branch that names a
+     * weight is scaled, including the same-weight "keep going" and "consolidate" cues.
      */
     fun suggestNextLoad(
         exerciseId: String,
@@ -110,9 +113,12 @@ object ProgressionAdvisor {
          * Peak and Deload. Composed with today's scale by [BlockPhase.composedLoadScale].
          */
         phase: com.forge.app.domain.coach.BlockPhase? = null,
+        /** The unit the user lifts in: targets snap to its grid, not a pound grid. */
+        weightUnit: WeightUnit = WeightUnit.LB,
         t: AdaptThresholds = AdaptThresholds()
     ): Recommendation.WeightChange? {
         if (unit == ExerciseUnit.BODYWEIGHT) return null
+        val step = t.loadStepLb(weightUnit)
         val working = prevSets.filter { !it.isAssisted && it.weightLb != null }
         val prevMax = working.maxOfOrNull { it.weightLb!! } ?: return null
 
@@ -152,20 +158,18 @@ object ProgressionAdvisor {
         val range = RepRange.parse(repsText)
         val topSets = working.filter { it.weightLb == prevMax }
         val hitTopOnAllTopSets = range != null && topSets.all { it.reps >= range.max }
-        // Both same-weight cues (consolidate, keep-going) render prevMax identically — derive once.
-        val sameWeightInput = if (unit == ExerciseUnit.PLATES) inputTextFor(prevMax, unit, plateLb) else trim(prevMax)
 
         return when {
-            backOff -> backOffSuggestion(exerciseId, exerciseName, prevMax, unit, plateLb, scale, scaleNote, backOffReason, t)
+            backOff -> backOffSuggestion(exerciseId, exerciseName, prevMax, unit, plateLb, step, scale, scaleNote, backOffReason)
             // Calibration says recent taken jumps failed — earn this weight before the next one.
             hitTopOnAllTopSets && okToProgress && consolidate ->
-                weightChange(
-                    exerciseId, exerciseName, prevMax, prevMax,
-                    inputText = sameWeightInput,
-                    reason = "calibrated to you — recent jumps haven't stuck, consolidate this weight first"
+                sameWeightSuggestion(
+                    exerciseId, exerciseName, prevMax, unit, plateLb, step, scale, scaleNote,
+                    reason = "calibrated to you — recent jumps haven't stuck, consolidate this weight first",
+                    scaledReason = "calibrated to you · recent jumps haven't stuck, so earn this load before the next jump"
                 )
             hitTopOnAllTopSets && okToProgress ->
-                progressSuggestion(exerciseId, exerciseName, prevMax, unit, plateLb, scale, scaleNote, dbMaxLb, fastStep, t)
+                progressSuggestion(exerciseId, exerciseName, prevMax, unit, plateLb, step, scale, scaleNote, dbMaxLb, fastStep)
             // Worked at this weight last time but hasn't filled the rep range yet — surface an explicit
             // same-weight "keep going" cue instead of vanishing, so the missing chip never reads as
             // broken. This teaches double-progression (earn the reps here before the weight moves) and
@@ -173,13 +177,51 @@ object ProgressionAdvisor {
             // sessions" (that read lives on the coach/snapshot path). BODYWEIGHT already returned above;
             // a null range (AMRAP / timed holds) has no top to reach, so it stays silent.
             range != null && !hitTopOnAllTopSets ->
-                weightChange(
-                    exerciseId, exerciseName, prevMax, prevMax,
-                    inputText = sameWeightInput,
-                    reason = "keep this weight — reach ${range.max} reps on every set before adding load"
+                sameWeightSuggestion(
+                    exerciseId, exerciseName, prevMax, unit, plateLb, step, scale, scaleNote,
+                    reason = "keep this weight — reach ${range.max} reps on every set before adding load",
+                    scaledReason = "reach ${range.max} reps on every set before adding load"
                 )
             else -> null
         }
+    }
+
+    /**
+     * The two same-weight cues (keep going, consolidate), scaled like every other branch.
+     *
+     * They used to return prevMax untouched and drop [scaleNote], so the most common chip — every
+     * set below the top of its range lands here — kept full load on a low-readiness day, a LIGHT
+     * pick and the whole deload week. An unscaled day returns prevMax verbatim: it's a weight they
+     * actually lifted, and snapping it to the grid would move it for no reason. A scaled day floors
+     * prevMax × scale to the unit's grid, never past prevMax in the direction the scale didn't ask
+     * for. PLATES can't take a few-percent ease (a whole plate is a far bigger cut), so a
+     * down-scaled plate lift stays silent, exactly as its progress branch does.
+     */
+    private fun sameWeightSuggestion(
+        exerciseId: String,
+        exerciseName: String,
+        prevMax: Double,
+        unit: ExerciseUnit,
+        plateLb: Double,
+        step: Double,
+        scale: Double,
+        scaleNote: String?,
+        reason: String,
+        scaledReason: String
+    ): Recommendation.WeightChange? {
+        val scaled = kotlin.math.abs(scale - 1.0) > SCALE_EPSILON
+        val target = when {
+            !scaled -> prevMax
+            unit == ExerciseUnit.PLATES -> if (scale < 1.0) return null else prevMax
+            scale < 1.0 -> floorToGrid(prevMax * scale, step).takeIf { it > 0.0 }?.let { minOf(it, prevMax) } ?: prevMax
+            else -> maxOf(prevMax, floorToGrid(prevMax * scale, step))
+        }
+        return weightChange(
+            exerciseId, exerciseName, prevMax, target,
+            inputText = inputTextFor(target, unit, plateLb),
+            reason = if (target == prevMax) withNote(reason, if (scaled) scaleNote else null)
+            else withNote(scaledReason, scaleNote)
+        )
     }
 
     /**
@@ -232,15 +274,15 @@ object ProgressionAdvisor {
         prevMax: Double,
         unit: ExerciseUnit,
         plateLb: Double,
+        step: Double,
         scale: Double,
         scaleNote: String?,
         dbMaxLb: Double?,
-        fastStep: Boolean,
-        t: AdaptThresholds
+        fastStep: Boolean
     ): Recommendation.WeightChange? = when (unit) {
         ExerciseUnit.DUMBBELL, ExerciseUnit.WEIGHT -> {
-            val step = if (fastStep) t.dumbbellStepLb * 2 else t.dumbbellStepLb
-            val target = floorToGrid((prevMax + step) * scale, t.dumbbellStepLb)
+            val increment = if (fastStep) step * 2 else step
+            val target = floorToGrid((prevMax + increment) * scale, step)
             // The heaviest-dumbbell ceiling applies ONLY to dumbbells (a barbell/machine keeps
             // loading). Trust it only while history doesn't contradict it — a heavier logged set
             // means the setting is stale, and progress shouldn't be capped on bad data.
@@ -248,7 +290,7 @@ object ProgressionAdvisor {
             when {
                 target <= 0.0 -> null
                 ceiling != null && target > ceiling -> {
-                    val capped = floorToGrid(ceiling, t.dumbbellStepLb)
+                    val capped = floorToGrid(ceiling, step)
                     if (capped > prevMax) weightChange(
                         exerciseId, exerciseName, prevMax, capped,
                         inputText = trim(capped),
@@ -284,13 +326,13 @@ object ProgressionAdvisor {
         prevMax: Double,
         unit: ExerciseUnit,
         plateLb: Double,
+        step: Double,
         scale: Double,
         scaleNote: String?,
-        reason: String,
-        t: AdaptThresholds
+        reason: String
     ): Recommendation.WeightChange? = when (unit) {
         ExerciseUnit.DUMBBELL, ExerciseUnit.WEIGHT -> {
-            val target = floorToGrid((prevMax - t.dumbbellStepLb) * scale, t.dumbbellStepLb)
+            val target = floorToGrid((prevMax - step) * scale, step)
             if (target <= 0.0) null
             else weightChange(
                 exerciseId, exerciseName, prevMax, target,
@@ -338,43 +380,20 @@ object ProgressionAdvisor {
         for (day in s.program) {
             for (slot in day.slots) {
                 if (!seen.add(slot.exerciseId)) continue
-                if (slot.unit == ExerciseUnit.BODYWEIGHT) continue
-                val bouts = (s.exerciseHistory[slot.exerciseId] ?: continue)
-                    // A1: test / technique / first-back bouts are not ordinary training — a top
-                    // single on a test day would anchor the weight, and a deliberately light
-                    // technique day reads as a stall. Filtering here removes them from the e1RM
-                    // series, the stall counter AND the prevMax anchor in one place.
-                    .filter { b -> b.countsForProgression }
-                    .filter { b -> !b.skipped && b.sets.any { it.weightLb != null && !it.isAssisted } }
-                    // A swap changes what the series MEASURES. Rotating a barbell row (e1RM ~160) to
-                    // a dumbbell row (e1RM ~62) left `best` pinned to the pre-swap lift, so no bout on
-                    // the new exercise could ever beat it and the stall counter grew by one every
-                    // session — forever. The coach then re-proposed the same rotation every week, and
-                    // the outcome watcher, which judges swaps on attendance alone, walked it to
-                    // autopilot. The series restarts at the boundary instead.
-                    .let { history -> sinceLastSwap(history) }
-                if (bouts.size <= t.plateauMinBouts) continue
-
-                val e1rms = bouts.map { bestE1rm(it.sets) }
-                var best = e1rms.first()
-                var lastImprovedIdx = 0
-                for (i in 1 until e1rms.size) {
-                    if (e1rms[i] > best * (1 + t.stallTolerance)) {
-                        best = e1rms[i]
-                        lastImprovedIdx = i
-                    }
-                }
-                val stall = e1rms.lastIndex - lastImprovedIdx
-                if (stall < t.plateauMinBouts) continue
+                val read = stallRead(slot, s, t) ?: continue
 
                 // A2: holding strength in a deficit is the expected — and good — outcome, so a flat
                 // line while cutting is not a plateau to fix. Escalating it would tell a lifter who
                 // is doing everything right to reset their weights. Regression still speaks: this
                 // only suppresses a HOLD, never a decline (`e1rms.last() >= best`).
-                if (weightPhase == WeightPhase.CUT && e1rms.last() >= best * (1 - t.stallTolerance)) continue
+                if (weightPhase == WeightPhase.CUT && read.isHold(t)) continue
 
+                val stall = read.stall
                 val confidence = if (stall >= t.highConfidenceStall) Confidence.HIGH else Confidence.MEDIUM
-                out += plateauSuggestion(slot, bouts, stall, confidence, s.prefs.plateLb, s.prefs.maxDbLb, t)
+                out += plateauSuggestion(
+                    day.dayKey, slot, read.bouts, stall, confidence, s.prefs.plateLb, s.prefs.maxDbLb,
+                    t.loadStepLb(s.prefs.weightUnit), t
+                )
             }
         }
         return out
@@ -393,40 +412,76 @@ object ProgressionAdvisor {
         for (day in s.program) {
             for (slot in day.slots) {
                 if (!seen.add(slot.exerciseId)) continue
-                if (slot.unit == ExerciseUnit.BODYWEIGHT) continue
-                val bouts = (s.exerciseHistory[slot.exerciseId] ?: continue)
-                    .filter { b -> b.countsForProgression }
-                    .filter { b -> !b.skipped && b.sets.any { it.weightLb != null && !it.isAssisted } }
-                if (bouts.size <= t.plateauMinBouts) continue
-                val e1rms = bouts.map { bestE1rm(it.sets) }
-                var best = e1rms.first()
-                var lastImprovedIdx = 0
-                for (i in 1 until e1rms.size) {
-                    if (e1rms[i] > best * (1 + t.stallTolerance)) {
-                        best = e1rms[i]
-                        lastImprovedIdx = i
-                    }
-                }
-                val stall = e1rms.lastIndex - lastImprovedIdx
-                if (stall < t.plateauMinBouts) continue
-                if (e1rms.last() >= best * (1 - t.stallTolerance)) out += slot.exerciseId
+                val read = stallRead(slot, s, t) ?: continue
+                if (read.isHold(t)) out += slot.exerciseId
             }
         }
         return out
     }
 
+    /** One slot's stall, as [evaluate] and [cutSuppressedStalls] both read it. */
+    private class StallRead(val bouts: List<ExerciseBout>, val e1rms: List<Double>, val best: Double, val stall: Int) {
+        /** A flat line rather than a decline: the last bout is within tolerance of the best. */
+        fun isHold(t: AdaptThresholds): Boolean = e1rms.last() >= best * (1 - t.stallTolerance)
+    }
+
+    /**
+     * The slot's stall, or null when it has no stall worth reading: bodyweight, too little
+     * history, or fewer than [AdaptThresholds.plateauMinBouts] bouts since the last improvement.
+     *
+     * One definition for both callers. [cutSuppressedStalls] used to carry its own copy of this
+     * loop, which had drifted: it skipped [sinceLastSwap], so after a swap it reported a stall
+     * [evaluate] didn't count and the Academy unlocked cut lessons for a lift the coach didn't
+     * consider stalled.
+     */
+    private fun stallRead(slot: ProgramSlotSnap, s: AdaptationSnapshot, t: AdaptThresholds): StallRead? {
+        if (slot.unit == ExerciseUnit.BODYWEIGHT) return null
+        val bouts = (s.exerciseHistory[slot.exerciseId] ?: return null)
+            // A1: test / technique / first-back bouts are not ordinary training — a top
+            // single on a test day would anchor the weight, and a deliberately light
+            // technique day reads as a stall. Filtering here removes them from the e1RM
+            // series, the stall counter AND the prevMax anchor in one place.
+            .filter { b -> b.countsForProgression }
+            // A bout counts only if it has a set an e1RM can be read from. "Any weighted,
+            // unassisted set" also admitted weighted timed holds (imported weighted planks, loaded
+            // carries), which have no e1RM, and the series then crashed on the missing value.
+            .filter { b -> !b.skipped && b.sets.any { it.isWorkingStrengthSet() } }
+            // A swap changes what the series MEASURES. Rotating a barbell row (e1RM ~160) to
+            // a dumbbell row (e1RM ~62) left `best` pinned to the pre-swap lift, so no bout on
+            // the new exercise could ever beat it and the stall counter grew by one every
+            // session — forever. The coach then re-proposed the same rotation every week, and
+            // the outcome watcher, which judges swaps on attendance alone, walked it to
+            // autopilot. The series restarts at the boundary instead.
+            .let { history -> sinceLastSwap(history) }
+        if (bouts.size <= t.plateauMinBouts) return null
+
+        val e1rms = bouts.mapNotNull { bestWorkingE1rm(it.sets) }
+        var best = e1rms.first()
+        var lastImprovedIdx = 0
+        for (i in 1 until e1rms.size) {
+            if (e1rms[i] > best * (1 + t.stallTolerance)) {
+                best = e1rms[i]
+                lastImprovedIdx = i
+            }
+        }
+        val stall = e1rms.lastIndex - lastImprovedIdx
+        if (stall < t.plateauMinBouts) return null
+        return StallRead(bouts, e1rms, best, stall)
+    }
+
     private fun plateauSuggestion(
+        dayKey: String,
         slot: ProgramSlotSnap,
         bouts: List<ExerciseBout>,
         stall: Int,
         confidence: Confidence,
         plateLb: Double,
         maxDbLb: Double?,
+        step: Double,
         t: AdaptThresholds
     ): Recommendation {
-        val prevMax = bouts.last().sets
-            .filter { it.weightLb != null && !it.isAssisted }
-            .maxOf { it.weightLb!! }
+        // stallRead only keeps bouts with a working strength set, so this always has one.
+        val prevMax = bouts.last().sets.workingStrengthSets().maxOf { it.weightLb!! }
 
         if (stall >= t.swapAfterStalledBouts && slot.swapCandidateIds.isNotEmpty()) {
             return Recommendation.VariationSwap(
@@ -446,7 +501,8 @@ object ProgressionAdvisor {
                 fromReps = slot.repsText,
                 toReps = to,
                 reason = "${slot.name} has stalled for $stall sessions — changing the rep range changes the stimulus",
-                confidence = confidence
+                confidence = confidence,
+                dayKey = dayKey
             )
         }
 
@@ -461,8 +517,8 @@ object ProgressionAdvisor {
         // front raises was told, in Stats and in the Overview coach feed, to drop to 0.
         val resetTarget = when (slot.unit) {
             ExerciseUnit.PLATES -> (prevMax - plateLb).coerceAtLeast(plateLb)
-            else -> floorToGrid(prevMax * (1 - t.resetFraction), t.dumbbellStepLb)
-                .coerceAtLeast(t.dumbbellStepLb)
+            else -> floorToGrid(prevMax * (1 - t.resetFraction), step)
+                .coerceAtLeast(step)
         }
         // Coercing can land the "reset" at or above where the lifter already is on a light load.
         // That isn't a reset, so it falls through to the micro-load branch rather than proposing a
@@ -481,13 +537,13 @@ object ProgressionAdvisor {
         } else {
             val raw = when (slot.unit) {
                 ExerciseUnit.PLATES -> prevMax + plateLb
-                else -> floorToGrid(prevMax + t.dumbbellStepLb, t.dumbbellStepLb)
+                else -> floorToGrid(prevMax + step, step)
             }
             // A DB target can't exceed the heaviest dumbbell the user owns (ceiling trusted only
             // while history doesn't contradict it). At the ceiling, anchor the weight and push
             // reps instead — the next ladder rung shifts the rep range anyway.
             val ceiling = maxDbLb?.takeIf { slot.unit == ExerciseUnit.DUMBBELL && prevMax <= it }
-            val target = if (ceiling != null) minOf(raw, floorToGrid(ceiling, t.dumbbellStepLb)) else raw
+            val target = if (ceiling != null) minOf(raw, floorToGrid(ceiling, step)) else raw
             if (target <= prevMax) weightChange(
                 slot.exerciseId, slot.name, prevMax, prevMax,
                 inputText = inputTextFor(prevMax, slot.unit, plateLb),
@@ -501,10 +557,6 @@ object ProgressionAdvisor {
             )
         }
     }
-
-    // Callers only reach this with at least one working set; the shared helper returns null only when
-    // there are none, so !! preserves the original "must have a working set" contract.
-    private fun bestE1rm(sets: List<LoggedSet>): Double = bestWorkingE1rm(sets)!!
 
     // ── Shared helpers ─────────────────────────────────────────────────────────
 
@@ -577,8 +629,23 @@ object ProgressionAdvisor {
         return bouts.subList(boundary, bouts.size)
     }
 
-    /** Floor to the increment grid — matches the old suggestion's rounding exactly. */
-    private fun floorToGrid(weight: Double, grid: Double): Double = (weight / grid).toInt() * grid
+    /**
+     * Floor to the increment grid, forgiving a hair under a grid line.
+     *
+     * Two things land a value just below the line it means. Floating point: `312.5 * 0.816` is
+     * 254.99999999999997, which floored to 252.5. And storage: a kg set is stored as one-decimal
+     * lb text, so 22.5 kg is kept as 49.6 lb (22.498 kg), and "one step up" floored back to
+     * 22.5 kg. [GRID_EPSILON] of a step (0.05 lb on the 2.5 lb grid, 0.05 kg on the 2.5 kg one)
+     * covers both without ever rounding a real shortfall up.
+     */
+    private fun floorToGrid(weight: Double, grid: Double): Double =
+        kotlin.math.floor(weight / grid + GRID_EPSILON) * grid
+
+    /** Fraction of a grid step [floorToGrid] forgives. */
+    private const val GRID_EPSILON = 0.02
+
+    /** A scale closer to 1 than this is "unscaled": the weight is returned as lifted. */
+    private const val SCALE_EPSILON = 1e-6
 
     /**
      * One decimal, never a raw Double. `"$v"` printed the full binary expansion, so a target
