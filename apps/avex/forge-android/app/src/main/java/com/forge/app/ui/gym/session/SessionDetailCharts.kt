@@ -25,6 +25,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -105,12 +107,12 @@ internal fun PerExerciseSetChart(
         return
     }
 
-    when {
-        style != SessionChartStyle.LINE -> SetBars(values, metric, accent)
-        values.size >= 2 -> PerSetLine(values, metric, accent, pageBg)
-        // A single-set exercise can't draw a line — show one endpoint dot so Line mode stays
-        // visually uniform instead of silently flipping back to a bar.
-        else -> SinglePointMark(accent)
+    // One set is a row, not a chart (§12): a lone bar stretched to the full width read as a solid
+    // accent slab, and the set table right below already says everything a single point could.
+    if (values.size < 2) return
+    when (style) {
+        SessionChartStyle.LINE -> PerSetLine(values, metric, accent, pageBg)
+        else -> SetBars(values, metric, accent)
     }
 }
 
@@ -198,39 +200,43 @@ private fun smoothCurve(pts: List<Offset>, minY: Float, maxY: Float): Path {
     return path
 }
 
-/** One centred dot — the Line-mode stand-in for an exercise with a single logged set. */
-@Composable
-private fun SinglePointMark(accent: Color) {
-    Box(modifier = Modifier.fillMaxWidth().height(64.dp), contentAlignment = Alignment.Center) {
-        Box(modifier = Modifier.size(8.dp).clip(RoundedCornerShape(50)).background(accent))
-    }
-}
-
-/** Vertical per-set bars, growing from the baseline with a staggered reveal; last (latest) set bold. */
+/**
+ * Vertical per-set bars, growing from the baseline with a staggered reveal; the latest set full
+ * accent, earlier ones the 0.6 rung. Each bar is capped at [SET_BAR_MAX_W] and the run starts at the
+ * page edge, so two or three sets read as bars rather than as blocks filling the whole width.
+ */
 @Composable
 private fun SetBars(values: List<Double>, metric: SessionMetric, accent: Color) {
     val max = (values.maxOrNull() ?: 0.0).coerceAtLeast(1.0)
-    // §5: earlier sets take the accent-0.6 rung (secondary), the latest set full accent.
     val secondary = MaterialTheme.colorScheme.secondary
-    // Keyed by metric so the first draw animates in. The play-once motion kit doesn't replay on a
-    // later metric switch, so BARS (like the LINE branch) just snap to the new values — matching Stats.
-    // The slow draw curve grows the bars in gently rather than snapping them to height.
+    val weightUnit = com.forge.app.ui.theme.LocalForgeSettings.current.weightUnit
+    // Keyed by metric so the first draw animates in; the play-once kit snaps on a later switch.
     val progress = rememberDrawProgress(metric, ForgeMotion.drawTween())
-    Row(
-        modifier = Modifier.fillMaxWidth().height(56.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.Bottom
+    val desc = "Per set: " + values.joinToString(", ") { formatMetricValue(it, metric, weightUnit) }
+    Canvas(
+        Modifier.fillMaxWidth().height(56.dp).semantics { contentDescription = desc }
     ) {
+        val n = values.size
+        val gap = 6.dp.toPx()
+        val barW = ((size.width - gap * (n - 1)) / n).coerceAtMost(SET_BAR_MAX_W.toPx())
+        val radius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx())
         values.forEachIndexed { i, v ->
-            val frac = ((v / max).toFloat() * staggeredProgress(progress, i, values.size)).coerceIn(0.03f, 1f)
-            Box(
-                modifier = Modifier.weight(1f).fillMaxHeight(frac)
-                    .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
-                    .background(if (i == values.lastIndex) accent else secondary)
+            val frac = ((v / max).toFloat() * staggeredProgress(progress, i, n)).coerceIn(0.03f, 1f)
+            val h = size.height * frac
+            val x = i * (barW + gap)
+            val left = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Rtl) size.width - x - barW else x
+            drawRoundRect(
+                color = if (i == values.lastIndex) accent else secondary,
+                topLeft = Offset(left, size.height - h),
+                size = androidx.compose.ui.geometry.Size(barW, h),
+                cornerRadius = radius
             )
         }
     }
 }
+
+/** The widest a per-set bar may draw — a set is a thin mark, never a slab. */
+private val SET_BAR_MAX_W = 28.dp
 
 /**
  * The watch's heart rate over the session (W3): an open line (stroke `primary`, §10) with the

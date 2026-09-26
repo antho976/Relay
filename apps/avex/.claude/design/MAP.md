@@ -395,11 +395,10 @@ any activity, `buildYearActivity` in `ProfileRepository`), filmstrip.
   always drawn: it used to appear only once a user had tagged a session, so everyone else could turn
   a filter on with no drawn way off. `SessionRow`/`CardioHistoryRow` are shared with the Stats day
   sheet, which supplies its own day line — hence rows carry no date of their own)
-- `SESSION_DETAIL` (one finished workout's breakdown; a page-end "Log again today" capsule (§8 ①)
-  re-logs it verbatim as today's freestyle session — a full-fidelity data-layer copy incl. set
-  type/RPE/holds, no editor, with an Undo — GYMAP-36. Lives here, NOT as a history-row button: a
-  history row already owns its whole-surface tap for navigation, so a per-row action would be a banned
-  nested tap (§8); an in-list long-press shortcut is a deliberate deferred follow-up)
+- `SESSION_DETAIL` (one finished workout's breakdown, read only: header figures + muscle map, metric
+  pills, per-exercise rows that expand in place. The page-end "Log again today" / "Session type"
+  capsules were removed 2026-09-26, see `SETTLED.md`. A single-set exercise draws no per-set chart,
+  its set row is the whole read, §12 "one")
 - `CARDIO_SESSION`
 - `GOALS`/`GOAL_EDITOR` (List archetype. ONE ranked ladder, closest-first, both goal kinds
   interleaved and each carrying its own glyph; `Live`/`Reached` lens pills instead of

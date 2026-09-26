@@ -34,11 +34,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.adapt.E1rm
 import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.gym.stats.components.LineChart
@@ -126,24 +126,23 @@ private fun E1rmDrillRow(
             expanded = true
         }
     }
-    val current = toDisplayWeight(lift.currentE1rm, weightUnit).roundToInt()
-    val unit = unitLabel(weightUnit)
+    val current = formatWeight(lift.currentE1rm, weightUnit)
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 2.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // No inset and no wash: the row's text sits on the page gutter like every header above it
+        // (an 8dp inner pad used to push it off that line), and an open row is told by its weight
+        // and caret rather than by an accent block with accent text on it.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                // Open rows get an accent wash so it's obvious which one is expanded.
-                .background(if (expanded) c.accent.copy(alpha = 0.10f) else androidx.compose.ui.graphics.Color.Transparent)
                 .then(
                     if (expandable) Modifier.clickable(
                         onClickLabel = if (expanded) "Collapse ${lift.exerciseName}" else "Expand ${lift.exerciseName}",
                         role = Role.Button
                     ) { expanded = !expanded } else Modifier
                 )
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -152,24 +151,29 @@ private fun E1rmDrillRow(
             ) {
                 Text(
                     lift.exerciseName, style = MaterialTheme.typography.bodyMedium,
-                    color = if (expanded) c.accent else c.onBg,
+                    color = c.onBg,
                     fontWeight = if (expanded) FontWeight.SemiBold else FontWeight.Normal,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f)
                 )
+                if (!expandable) {
+                    Text("1 SESSION", style = MaterialTheme.typography.labelSmall, color = c.muted.copy(alpha = 0.65f), fontSize = 9.sp)
+                }
                 Text(
-                    "$current $unit",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (expanded) c.accent else c.muted
+                    current,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (expanded) c.onBg else c.muted
                 )
-                if (expandable) {
-                    Text(if (expanded) "▾" else "▸", style = MaterialTheme.typography.labelMedium, color = c.accent)
-                } else {
-                    Text("1 SESSION", style = MaterialTheme.typography.labelSmall, color = c.muted.copy(alpha = 0.7f), fontSize = 8.sp)
+                // The caret slot is always reserved, so a one-session row's value lines up with the
+                // expandable rows' values instead of sitting a caret's width further right.
+                Box(Modifier.width(12.dp), contentAlignment = Alignment.CenterEnd) {
+                    if (expandable) {
+                        Text(if (expanded) "▾" else "▸", style = MaterialTheme.typography.labelMedium, color = c.muted)
+                    }
                 }
             }
             Box(
-                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50))
-                    .background(c.outline.copy(alpha = 0.18f))
+                modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(50))
+                    .background(c.outline.copy(alpha = 0.25f))
             ) {
                 Box(
                     modifier = Modifier.fillMaxWidth((frac * barProgress).coerceIn(0f, 1f)).fillMaxHeight()
@@ -182,7 +186,7 @@ private fun E1rmDrillRow(
             enter = expandVertically() + fadeIn(),
             exit = shrinkVertically() + fadeOut()
         ) {
-            Box(Modifier.padding(horizontal = 8.dp)) {
+            Box(Modifier.padding(bottom = 8.dp)) {
                 LiftDetailBody(lift, display, prsForLift, curve, weightUnit, c)
             }
         }
@@ -241,7 +245,7 @@ private fun LiftDetailBody(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        "${toDisplayWeight(pr.weightLb, weightUnit).roundToInt()} $unit × ${pr.reps}",
+                        "${formatWeight(pr.weightLb, weightUnit)} × ${pr.reps}",
                         style = MaterialTheme.typography.bodySmall, color = c.onBg
                     )
                     Text(fmt.format(Date(pr.date)), style = MaterialTheme.typography.labelSmall, color = c.muted)

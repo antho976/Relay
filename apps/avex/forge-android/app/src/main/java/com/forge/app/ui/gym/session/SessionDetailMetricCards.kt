@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -33,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.session.state.ExerciseDetail
 import com.forge.app.ui.gym.session.state.SessionChartStyle
@@ -69,19 +71,13 @@ private fun MetricCardShell(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                title.uppercase(),
-                style = MaterialTheme.typography.labelMedium,
-                color = muted,
-                letterSpacing = 1.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
+            // The shared anchor, the same size as Stats' and Home's section headers.
+            EditorialHeader(label = title, muted = muted, accent = accent, modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
             StyleToggle(style, onStyle, onBg, muted, accent, outline)
         }
-        Spacer(Modifier.height(12.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Spacer(Modifier.height(10.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             content()
         }
     }
@@ -176,18 +172,18 @@ private fun ExerciseDrillRow(
     // [defaultExpanded]; rememberSaveable keeps it closed once collapsed, reopening only on a fresh visit.
     var expanded by rememberSaveable(ex.name) { mutableStateOf(defaultExpanded) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Same row as Stats' Strength lens: text on the page gutter (no inner inset), and an open
+        // row told by its weight and caret instead of an accent wash under accent text, which read
+        // as a solid red block.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                // Open rows get an accent wash so it's obvious which one is expanded (§5 primaryContainer rung).
-                .background(if (expanded) accent.copy(alpha = 0.15f) else Color.Transparent)
                 .clickable(
                     onClickLabel = if (expanded) "Collapse ${ex.name}" else "Expand ${ex.name}",
                     role = Role.Button
                 ) { expanded = !expanded }
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+                .padding(vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -196,20 +192,20 @@ private fun ExerciseDrillRow(
             ) {
                 Text(
                     ex.name, style = MaterialTheme.typography.bodyMedium,
-                    color = if (expanded) accent else onBg,
+                    color = onBg,
                     fontWeight = if (expanded) FontWeight.SemiBold else FontWeight.Normal,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f)
                 )
                 Text(
                     formatMetricValue(value, metric, weightUnit),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (expanded) accent else muted
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (expanded) onBg else muted
                 )
-                Text(if (expanded) "▾" else "▸", style = MaterialTheme.typography.labelMedium, color = accent)
+                Text(if (expanded) "▾" else "▸", style = MaterialTheme.typography.labelMedium, color = muted)
             }
             val frac = if (rawMax > 0) (value / rawMax).toFloat() * barProgress else 0f
             Box(
-                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50))
+                modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(50))
                     .background(outline.copy(alpha = 0.25f))
             ) {
                 Box(
@@ -219,7 +215,7 @@ private fun ExerciseDrillRow(
             }
         }
         if (expanded) {
-            Box(Modifier.padding(horizontal = 8.dp)) {
+            Box(Modifier.padding(bottom = 12.dp)) {
                 ExerciseDetailBody(ex, metric, style, onBg, muted, accent, outline)
             }
         }

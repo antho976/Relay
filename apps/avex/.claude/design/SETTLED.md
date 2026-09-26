@@ -10,6 +10,14 @@ Also lists what may not be touched, and the known defects to fix opportunistical
 
 ---
 
+## Session detail's page-end actions removed (2026-09-26)
+
+"Log again today" (re-log a finished session as today's freestyle session, GYMAP-36) and "Session
+type" (retro-tag test / technique / deload) are gone from the session detail screen, at Antho's
+request. The screen is read only. Do not put either back as capsules at the page end. The
+data-layer copy `WorkoutRepository.reLogSession` is left in place but has no caller; the in-session
+type tag (`DaySessionHandlers`) is unaffected.
+
 ## Daily check-in lives behind the bell, not at launch (2026-09-01)
 
 The check-in never opens when the app launches. A small non-blocking arrival banner flies to Home's

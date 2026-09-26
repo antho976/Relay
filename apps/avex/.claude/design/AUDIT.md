@@ -111,8 +111,8 @@ another branch's UI. Worth a pass when Coach v3 is next touched.
 |---|---|
 | `font-size` ×2 | `ui/academy/AcademyScreen.kt` |
 | `font-size` ×2 | `ui/checkin/CheckinSheet.kt` |
-| `font-size` | `ui/academy/LessonBlocks.kt` · `ui/coach/CoachBlockSection.kt` · `ui/coach/CoachProjectSection.kt` · `ui/coach/GoalPickerDialog.kt` · `ui/gym/session/SessionTypeDialog.kt` |
-| `screen-name-title` | `ui/coach/GoalPickerDialog.kt` · `ui/gym/session/SessionTypeDialog.kt` |
+| `font-size` | `ui/academy/LessonBlocks.kt` · `ui/coach/CoachBlockSection.kt` · `ui/coach/CoachProjectSection.kt` · `ui/coach/GoalPickerDialog.kt` |
+| `screen-name-title` | `ui/coach/GoalPickerDialog.kt` |
 | `em-dash` | `domain/coach/GoalPortfolio.kt` · `domain/engine/ZoneCoach.kt` |
 | `bang` | `ui/overview/OverviewScreen.kt` |
 | `max-lines` | `ui/coach/CoachGoalsSection.kt` |

@@ -12,10 +12,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.statsEntrance
 
@@ -28,8 +26,12 @@ data class StatsColors(
 )
 
 // ── One spacing/size scale so every tier lines up and nothing reads as "too big / too small" ──
-/** The screen's horizontal gutter — one place so every section lines up. */
-internal val STATS_GUTTER = 16.dp
+/**
+ * The screen's horizontal gutter — one place so every section lines up. 24dp, the app-wide page
+ * gutter Home, History and the session screen all sit on (it was 16, which made Stats alone read
+ * as pushed to the edges when you moved between them).
+ */
+internal val STATS_GUTTER = 24.dp
 /** The standard full-width chart height — used by every line/scatter/gauge so they're visually peers. */
 internal val STATS_CHART_H = 132.dp
 /** A taller chart for the headline/hero visual. */
@@ -59,24 +61,18 @@ internal fun StatsCard(
             .statsEntrance(index)
     ) {
         // §7 air rhythm: the previous section's trailing 18dp + this 10dp ≈ the 28dp section gap.
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(14.dp))
         Column(
             Modifier
                 .padding(horizontal = STATS_GUTTER)
                 .then(if (onClick != null) Modifier.bounceClick { onClick() } else Modifier)
         ) {
-            if (title != null) {
-                Text(
-                    title.uppercase(),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = c.muted,
-                    letterSpacing = 1.sp,
-                    modifier = Modifier.semantics { heading() }
-                )
-            }
+            // The shared section anchor, so a Stats header is the same size as Home's THIS WEEK /
+            // RECENT rather than a smaller one-off (it was 11sp against Home's 15sp).
+            if (title != null) EditorialHeader(label = title, muted = c.muted, accent = c.accent)
             if (caption != null) {
-                if (title != null) Spacer(Modifier.height(2.dp))
-                Text(caption, style = MaterialTheme.typography.bodySmall, color = c.muted)
+                if (title != null) Spacer(Modifier.height(4.dp))
+                Text(caption, style = MaterialTheme.typography.bodySmall, color = c.muted.copy(alpha = 0.65f))
             }
             if (title != null || caption != null) Spacer(Modifier.height(14.dp))
             content()
