@@ -27,6 +27,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!--
+          The cold-launch intro, on demand: any icon with any mascot. The real intro plays once per
+          cold launch with a random mascot, so a given combination cannot be reviewed by opening
+          the app.
+        -->
+        <activity
+            android:name="com.forge.app.ui.introlab.IntroLabActivity"
+            android:exported="true"
+            android:label="Avex Intros"
+            android:theme="@style/Theme.Forge">
+            <intent-filter android:priority="-100">
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
     </application>
 
 </manifest>

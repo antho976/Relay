@@ -13,26 +13,29 @@ import javax.inject.Singleton
 /** The effect/style family a launcher icon belongs to. Typed (not a raw string) so every `when` over
  *  it is exhaustive — adding a family is a compile error at each dispatch site instead of a silent
  *  fall-through to the plain wordmark / no scene. The name doubles as the picker's family header. */
-enum class IconFamily { Forge, Solid, Metal, Stealth, Molten, Nebula, Aurora, Gem }
+enum class IconFamily { Avex, Solid, Metal, Stealth, Molten, Nebula, Aurora, Gem, Gym }
 
 /**
  * A selectable home-screen launcher icon.
  *
+ * Every icon is the same Avex mark in its own colour, material and backdrop. The art is GENERATED
+ * (`forge-android/tools/app-icons`): each icon is a real adaptive icon with a backdrop layer, a
+ * floating mark layer and the shared monochrome mark, plus a flattened [previewRes] for the picker.
+ *
  * Each entry maps 1:1 to an `<activity-alias android:name=".icon.<enum name>">` in the manifest —
  * the enum's own [name] IS the alias suffix, so the two can never drift. Exactly one alias is
  * enabled at a time (see [AppIconManager]); [Default] is the alias shipped enabled and reuses the
- * stock `@mipmap/ic_launcher` emblem, so a user who never picks keeps today's icon.
+ * app's own `@mipmap/ic_launcher`, so a user who never picks keeps the house icon.
  *
  * Persisted by enum [name] (a stable string) rather than an R id — resource ids aren't stable
  * across builds, the same reason [PreferenceKeys.AVATAR_DEFAULT_ID] stores a name.
  */
 enum class AppIcon(
-    /** Short variant name shown under the tile ("Gold", "Rose gold"). */
+    /** Short variant name shown under the tile ("Gold", "Chalk"). */
     val label: String,
     /** Family the tile groups under; also the effect family the launch wordmark dispatches on. */
     val family: IconFamily,
-    /** Full-bleed 512² preview art. [Default] instead composites the emblem foreground over its
-     *  background colour in the picker (there's no flat bitmap of the adaptive default). */
+    /** The flattened icon as a launcher shows it (both layers, the visible 72dp square). */
     @param:DrawableRes val previewRes: Int,
     val isDefault: Boolean = false,
     /** The icon's full colour story, as `0xAARRGGBB` sky→horizon, for the cold-launch effect (see
@@ -43,71 +46,55 @@ enum class AppIcon(
 ) {
     // Declaration order IS the picker order: the family headers come from
     // `entries.map { it.family }.distinct()` and each family's tiles keep their declaration order.
-    // Kept in the design-reference order (Solid, Metal, Stealth, Molten, Nebula, Aurora, Gem), with
-    // Default first so the revert-to-stock option always leads. Persistence is by [name], so this
-    // order is free to change without migrating anyone's pick.
-    Default("Default", IconFamily.Forge, R.drawable.ic_launcher_foreground, isDefault = true),
+    // Kept in step with tools/app-icons/icons.mjs. Persistence is by [name], so this order is free to
+    // change without migrating anyone's pick.
+    Default("Pearl", IconFamily.Avex, R.drawable.app_icon_default, isDefault = true),
+    AvexSignal("Signal", IconFamily.Avex, R.drawable.app_icon_avex_signal),
+    SolidRed("Red", IconFamily.Solid, R.drawable.app_icon_solid_red,
+        launchPalette = listOf(0xFF6E1414, 0xFFD93636, 0xFFFF8A8A)),
+    SolidEmber("Ember", IconFamily.Solid, R.drawable.app_icon_solid_ember,
+        launchPalette = listOf(0xFF5A2E0A, 0xFFD4761F, 0xFFF5B266)),
+    SolidGold("Gold", IconFamily.Solid, R.drawable.app_icon_solid_gold,
+        launchPalette = listOf(0xFF3A2E14, 0xFF8C7340, 0xFFE6CD8F)),
+    SolidOlive("Olive", IconFamily.Solid, R.drawable.app_icon_solid_olive,
+        launchPalette = listOf(0xFF1F2A19, 0xFF4D6040, 0xFFA9BE95)),
     SolidNavy("Navy", IconFamily.Solid, R.drawable.app_icon_solid_navy,
         launchPalette = listOf(0xFF283349, 0xFF3D4F73, 0xFF6B84AD)),
-    SolidAmber("Amber", IconFamily.Solid, R.drawable.app_icon_solid_amber,
-        launchPalette = listOf(0xFF9C6F20, 0xFFE6A532, 0xFFF5C562)),
     SolidPaper("Paper", IconFamily.Solid, R.drawable.app_icon_solid_paper,
         launchPalette = listOf(0xFFB8B4A8, 0xFFFAF9F6, 0xFFFFFFFF)),
-    SolidEmber("Ember", IconFamily.Solid, R.drawable.app_icon_solid_ember,
-        launchPalette = listOf(0xFF141414, 0xFFE6A532, 0xFFF5C562)),
-    SolidPrism("Prism", IconFamily.Solid, R.drawable.app_icon_solid_prism,
-        launchPalette = listOf(0xFF384867, 0xFFFAF9F6, 0xFFFFFFFF)),
     MetalGold("Gold", IconFamily.Metal, R.drawable.app_icon_metal_gold,
         launchPalette = listOf(0xFF342D1F, 0xFFD4AF57, 0xFFFFF7DC)),
     MetalChrome("Chrome", IconFamily.Metal, R.drawable.app_icon_metal_chrome,
         launchPalette = listOf(0xFF212631, 0xFF8E9AAC, 0xFFFFFFFF)),
-    MetalRosegold("Rose gold", IconFamily.Metal, R.drawable.app_icon_metal_rosegold,
-        launchPalette = listOf(0xFF2B2529, 0xFFD8A090, 0xFFFFFBF3)),
     MetalCopper("Copper", IconFamily.Metal, R.drawable.app_icon_metal_copper,
         launchPalette = listOf(0xFF2B231F, 0xFFC8845A, 0xFFFFE4B1)),
-    MetalGunmetal("Gunmetal", IconFamily.Metal, R.drawable.app_icon_metal_gunmetal,
-        launchPalette = listOf(0xFF21252B, 0xFF6E7A88, 0xFFEEF7FF)),
-    StealthAmber("Amber", IconFamily.Stealth, R.drawable.app_icon_stealth_amber,
-        launchPalette = listOf(0xFF171208, 0xFFD9A032, 0xFFFFDC6B)),
     StealthCrimson("Crimson", IconFamily.Stealth, R.drawable.app_icon_stealth_crimson,
         launchPalette = listOf(0xFF170A0E, 0xFFE0405E, 0xFFFF8BA3)),
     StealthCyan("Cyan", IconFamily.Stealth, R.drawable.app_icon_stealth_cyan,
         launchPalette = listOf(0xFF081517, 0xFF38C4DC, 0xFF90FFFF)),
-    StealthViolet("Violet", IconFamily.Stealth, R.drawable.app_icon_stealth_violet,
-        launchPalette = listOf(0xFF130A1A, 0xFFA85CE0, 0xFFF3C1FF)),
     MoltenEmber("Ember", IconFamily.Molten, R.drawable.app_icon_molten_ember,
         launchPalette = listOf(0xFF47220C, 0xFFE07820, 0xFFFFD98C)),
     MoltenPlasma("Plasma", IconFamily.Molten, R.drawable.app_icon_molten_plasma,
         launchPalette = listOf(0xFF331A4D, 0xFFA855E8, 0xFFEFCBFF)),
-    MoltenCrimson("Crimson", IconFamily.Molten, R.drawable.app_icon_molten_crimson,
-        launchPalette = listOf(0xFF451318, 0xFFC93038, 0xFFFFC9CB)),
-    MoltenOcean("Ocean", IconFamily.Molten, R.drawable.app_icon_molten_ocean,
-        launchPalette = listOf(0xFF122C48, 0xFF3E8FD6, 0xFFC8ECFB)),
     NebulaViolet("Violet", IconFamily.Nebula, R.drawable.app_icon_nebula_violet,
         launchPalette = listOf(0xFF301650, 0xFF7938B8, 0xFFF2E6FF)),
     NebulaTeal("Teal", IconFamily.Nebula, R.drawable.app_icon_nebula_teal,
         launchPalette = listOf(0xFF0C3C40, 0xFF209C99, 0xFFE2FFFB)),
-    NebulaCrimson("Crimson", IconFamily.Nebula, R.drawable.app_icon_nebula_crimson,
-        launchPalette = listOf(0xFF4A101E, 0xFFB62846, 0xFFFFE3E8)),
-    NebulaAmber("Amber", IconFamily.Nebula, R.drawable.app_icon_nebula_amber,
-        launchPalette = listOf(0xFF4D2F0B, 0xFFC07C22, 0xFFFFF3D8)),
-    AuroraClassic("Classic", IconFamily.Aurora, R.drawable.app_icon_aurora_classic,
-        launchPalette = listOf(0xFF6E63A8, 0xFF9A8FD0, 0xFFE0A34A)),
     AuroraNorthern("Northern", IconFamily.Aurora, R.drawable.app_icon_aurora_northern,
         launchPalette = listOf(0xFF145247, 0xFF2FA57E, 0xFF8FE0AC)),
     AuroraDusk("Dusk", IconFamily.Aurora, R.drawable.app_icon_aurora_dusk,
         launchPalette = listOf(0xFF6B3F7E, 0xFFC0619B, 0xFFE2743C)),
-    AuroraDawn("Dawn", IconFamily.Aurora, R.drawable.app_icon_aurora_dawn,
-        launchPalette = listOf(0xFF574B7E, 0xFFE87F9E, 0xFFE9C75F)),
     GemEmerald("Emerald", IconFamily.Gem, R.drawable.app_icon_gem_emerald,
         launchPalette = listOf(0xFF143325, 0xFF35B57A, 0xFFB9F0D4)),
-    GemFrost("Frost", IconFamily.Gem, R.drawable.app_icon_gem_frost,
-        launchPalette = listOf(0xFF1A3440, 0xFF6FC4E0, 0xFFF4FCFF)),
     GemHolo("Holo", IconFamily.Gem, R.drawable.app_icon_gem_holo,
-        launchPalette = listOf(0xFF241A3D, 0xFFA060F0, 0xFFFFA8D8));
+        launchPalette = listOf(0xFF241A3D, 0xFFA060F0, 0xFFFFA8D8)),
+    GymChalk("Chalk", IconFamily.Gym, R.drawable.app_icon_gym_chalk,
+        launchPalette = listOf(0xFF1C1F22, 0xFFD8D4CB, 0xFFFFFFFF)),
+    GymIron("Iron", IconFamily.Gym, R.drawable.app_icon_gym_iron,
+        launchPalette = listOf(0xFF161719, 0xFF8A8C91, 0xFFEDEAE3));
 
-    /** Human name for the current-selection row: "Default", else "Nebula Violet". */
-    val displayName: String get() = if (isDefault) label else "$family $label"
+    /** Human name for the current-selection row: "Avex Pearl", "Nebula Violet". */
+    val displayName: String get() = "$family $label"
 
     companion object {
         /**
@@ -118,10 +105,34 @@ enum class AppIcon(
          */
         const val NAMESPACE: String = "com.forge.app"
 
-        /** Persisted key → enum. Empty/unknown ⇒ [Default]. */
-        fun fromKey(key: String): AppIcon = entries.firstOrNull { it.name == key } ?: Default
+        /**
+         * Icons cut in the 2026-09-26 redesign, each mapped to the nearest survivor. Their manifest
+         * aliases stay (disabled, drawn with the survivor's art): a user whose ENABLED alias vanished
+         * from the manifest would have no launcher entry at all after updating, so the old alias keeps
+         * the app on the home screen until the next background swap moves them to the survivor.
+         * Never delete a name from here or its alias from the manifest.
+         */
+        val RETIRED: Map<String, AppIcon> = mapOf(
+            "SolidAmber" to SolidEmber,
+            "SolidPrism" to SolidNavy,
+            "MetalRosegold" to MetalCopper,
+            "MetalGunmetal" to MetalChrome,
+            "StealthAmber" to StealthCrimson,
+            "StealthViolet" to StealthCyan,
+            "MoltenCrimson" to MoltenEmber,
+            "MoltenOcean" to MoltenPlasma,
+            "NebulaCrimson" to NebulaViolet,
+            "NebulaAmber" to NebulaViolet,
+            "AuroraClassic" to AuroraDusk,
+            "AuroraDawn" to AuroraDusk,
+            "GemFrost" to GemEmerald,
+        )
 
-        /** Family headers in declaration order (Forge, Solid, Metal, Stealth, …), de-duped. */
+        /** Persisted key → enum. A retired key resolves to its survivor; empty/unknown ⇒ [Default]. */
+        fun fromKey(key: String): AppIcon =
+            entries.firstOrNull { it.name == key } ?: RETIRED[key] ?: Default
+
+        /** Family headers in declaration order (Avex, Solid, Metal, Stealth, …), de-duped. */
         val families: List<IconFamily> = entries.map { it.family }.distinct()
     }
 }
@@ -157,10 +168,20 @@ class AppIconManager @Inject constructor(
      *  default ([AppIcon.Default]), so a user who never picked reads back as [AppIcon.Default]. */
     fun currentIcon(): AppIcon {
         val pm = context.packageManager
-        return AppIcon.entries.firstOrNull {
-            pm.getComponentEnabledSetting(componentFor(it)) ==
-                PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-        } ?: AppIcon.Default
+        val enabled = { alias: String ->
+            pm.getComponentEnabledSetting(componentFor(alias)) == PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+        }
+        return AppIcon.entries.firstOrNull { enabled(it.name) }
+            ?: AppIcon.RETIRED.entries.firstOrNull { enabled(it.key) }?.value
+            ?: AppIcon.Default
+    }
+
+    /** True while a retired alias is still the enabled launcher entry (a pick from before a redesign). */
+    private fun retiredAliasEnabled(): Boolean {
+        val pm = context.packageManager
+        return AppIcon.RETIRED.keys.any {
+            pm.getComponentEnabledSetting(componentFor(it)) == PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+        }
     }
 
     /**
@@ -172,7 +193,9 @@ class AppIconManager @Inject constructor(
      */
     fun reconcileTo(desired: AppIcon) {
         if (appliedIcon == desired) return          // already applied this process — cheap no-op
-        if (currentIcon() != desired) applyIcon(desired)
+        // A retired alias reads back as its survivor, so check it explicitly: it must still be swapped
+        // off for the survivor's own alias even when the two "match".
+        if (currentIcon() != desired || retiredAliasEnabled()) applyIcon(desired)
         appliedIcon = desired
     }
 
@@ -182,10 +205,10 @@ class AppIconManager @Inject constructor(
         // no window with zero enabled launcher components, no 30-IPC storm on the background transition).
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             pm.setComponentEnabledSettings(
-                AppIcon.entries.map { entry ->
+                allAliases().map { alias ->
                     PackageManager.ComponentEnabledSetting(
-                        componentFor(entry),
-                        if (entry == icon) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                        componentFor(alias),
+                        if (alias == icon.name) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
                         else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
                         PackageManager.DONT_KILL_APP,
                     )
@@ -194,12 +217,12 @@ class AppIconManager @Inject constructor(
         } else {
             // Legacy: enable the target FIRST so there's never an instant with zero enabled.
             pm.setComponentEnabledSetting(
-                componentFor(icon),
+                componentFor(icon.name),
                 PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
                 PackageManager.DONT_KILL_APP,
             )
-            AppIcon.entries.forEach { other ->
-                if (other != icon) pm.setComponentEnabledSetting(
+            allAliases().forEach { other ->
+                if (other != icon.name) pm.setComponentEnabledSetting(
                     componentFor(other),
                     PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
                     PackageManager.DONT_KILL_APP,
@@ -209,7 +232,10 @@ class AppIconManager @Inject constructor(
         appliedIcon = icon
     }
 
-    private fun componentFor(icon: AppIcon): ComponentName =
+    /** Every launcher alias in the manifest: the live icons, then the retired ones (always disabled). */
+    private fun allAliases(): List<String> = AppIcon.entries.map { it.name } + AppIcon.RETIRED.keys
+
+    private fun componentFor(alias: String): ComponentName =
         // package = running applicationId (via context), class = namespace-qualified alias name.
-        ComponentName(context, "${AppIcon.NAMESPACE}.icon.${icon.name}")
+        ComponentName(context, "${AppIcon.NAMESPACE}.icon.$alias")
 }

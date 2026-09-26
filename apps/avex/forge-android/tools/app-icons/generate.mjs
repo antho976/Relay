@@ -1,0 +1,148 @@
+// Renders the launcher icon set. See README.md.
+//
+//   node generate.mjs --preview <dir>   write a contact sheet + per-icon previews to <dir> only
+//   node generate.mjs                   write the Android resources into app/src/main/res
+//
+// Needs `rsvg-convert` (librsvg) and ImageMagick `magick` on PATH.
+
+import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { ICONS } from './icons.mjs';
+import { emblemPaths, tipPaths, STROKE, MITER } from './emblem.mjs';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const RES = path.resolve(here, '../../app/src/main/res');
+const args = process.argv.slice(2);
+const previewDir = args[0] === '--preview' ? path.resolve(args[1]) : null;
+const LAYER_PX = 432; // 108dp at xxxhdpi
+const PREVIEW_PX = 256;
+
+const svg = (body, viewBox = '0 0 108 108') =>
+  `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="${viewBox}">${body}</svg>`;
+
+function rasterize(svgText, outPng, px) {
+  const tmp = `${outPng}.svg`;
+  fs.writeFileSync(tmp, svgText);
+  execFileSync('rsvg-convert', ['-w', String(px), '-h', String(px), tmp, '-o', outPng]);
+  fs.unlinkSync(tmp);
+}
+
+function toWebp(png, out, { lossless = false } = {}) {
+  const q = lossless ? ['-define', 'webp:lossless=true'] : ['-quality', '92', '-define', 'webp:method=6'];
+  execFileSync('magick', [png, ...q, out]);
+}
+
+const written = new Map(); // layer PNG hash -> drawable name already written
+function writeLayer(png, dir, res, opts) {
+  const hash = crypto.createHash('sha256').update(fs.readFileSync(png)).digest('hex');
+  if (written.has(hash)) return written.get(hash);
+  toWebp(png, path.join(dir, `${res}.webp`), opts);
+  written.set(hash, res);
+  return res;
+}
+
+const work = fs.mkdtempSync(path.join(previewDir ?? here, '.render-'));
+const snake = (key) => key.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+
+const previews = [];
+for (const icon of ICONS) {
+  const name = snake(icon.key);
+  const bgPng = path.join(work, `${name}_bg.png`);
+  const fgPng = path.join(work, `${name}_fg.png`);
+  rasterize(svg(icon.bg), bgPng, LAYER_PX);
+  rasterize(svg(icon.fg), fgPng, LAYER_PX);
+
+  // What a launcher shows: both layers, the outer 18dp trimmed off each side (the 72dp viewport).
+  const flat = path.join(work, `${name}.png`);
+  const crop = Math.round(LAYER_PX * 72 / 108), off = Math.round(LAYER_PX * 18 / 108);
+  execFileSync('magick', [bgPng, fgPng, '-composite', '-crop', `${crop}x${crop}+${off}+${off}`, '+repage',
+    '-filter', 'Lanczos', '-resize', `${PREVIEW_PX}x${PREVIEW_PX}`, flat]);
+  const p = { icon, flat, bgPng, fgPng, name };
+  previews.push(p);
+
+  if (!previewDir) {
+    const nodpi = path.join(RES, 'drawable-nodpi');
+    // Icons that share a layer byte-for-byte (the plain marks, the Avex plate) share one file.
+    p.bgRes = writeLayer(bgPng, nodpi, `app_icon_${name}_bg`);
+    p.fgRes = writeLayer(fgPng, nodpi, `app_icon_${name}_fg`, { lossless: true });
+    toWebp(flat, path.join(nodpi, `app_icon_${name}.webp`));
+  }
+}
+
+// Contact sheet: every icon under a squircle mask and a circle mask, at hero and 48px sizes.
+if (previewDir) {
+  const tiles = [];
+  for (const p of previews) {
+    const sq = path.join(work, `${p.name}_sq.png`), ci = path.join(work, `${p.name}_ci.png`), sm = path.join(work, `${p.name}_sm.png`);
+    execFileSync('magick', [p.flat, '(', '-size', `${PREVIEW_PX}x${PREVIEW_PX}`, 'xc:none', '-fill', 'white', '-draw',
+      `roundrectangle 0,0 ${PREVIEW_PX - 1},${PREVIEW_PX - 1} 64,64`, ')', '-compose', 'DstIn', '-composite', '-resize', '150x150', sq]);
+    execFileSync('magick', [p.flat, '(', '-size', `${PREVIEW_PX}x${PREVIEW_PX}`, 'xc:none', '-fill', 'white', '-draw',
+      `circle 128,128 128,0`, ')', '-compose', 'DstIn', '-composite', '-resize', '150x150', ci]);
+    execFileSync('magick', [ci, '-resize', '48x48', sm]);
+    const tile = path.join(work, `${p.name}_tile.png`);
+    execFileSync('magick', ['-size', '340x196', 'xc:#1b1a18', sq, '-geometry', '+8+8', '-composite', ci, '-geometry', '+166+8', '-composite',
+      sm, '-geometry', '+290+118', '-composite',
+      '-fill', '#e8e4dc', '-font', 'DejaVu-Sans', '-pointsize', '14', '-annotate', '+10+184', `${p.icon.family} · ${p.icon.label}`, tile]);
+    tiles.push(tile);
+  }
+  execFileSync('magick', ['montage', ...tiles, '-tile', '4x', '-geometry', '+6+6', '-background', '#0e0d0c', path.join(previewDir, 'sheet.png')]);
+  for (const p of previews) fs.copyFileSync(p.flat, path.join(previewDir, `${p.name}.png`));
+}
+
+// The shared vector layers: the house foreground and the monochrome (themed-icon) layer.
+if (!previewDir) {
+  const { main, tail } = emblemPaths();
+  const vec = (color, comment) => `<?xml version="1.0" encoding="utf-8"?>
+<!-- ${comment}
+     Generated by forge-android/tools/app-icons; edit emblem.mjs and re-run, not this file. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+${[main, tail].filter(Boolean).map((d) => `    <path
+        android:pathData="${d.replace(/ L/g, ' L').trim()}"
+        android:strokeColor="${color}"
+        android:strokeWidth="${STROKE}"
+        android:strokeLineJoin="miter"
+        android:strokeMiterLimit="${MITER}"
+        android:strokeLineCap="butt" />`).join('\n')}
+${tipPaths().map((d) => `    <path
+        android:pathData="${d}"
+        android:fillColor="${color}" />`).join('\n')}
+</vector>
+`;
+  fs.writeFileSync(path.join(RES, 'drawable', 'ic_launcher_monochrome.xml'),
+    vec('#FFFFFFFF', 'The Avex mark as a single-colour silhouette: the themed-icon (monochrome) layer of every launcher icon.'));
+
+  // One adaptive icon per entry. Default is the app's own @mipmap/ic_launcher (+ _round).
+  const adaptive = (p) => `<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated by forge-android/tools/app-icons. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/${p.bgRes}" />
+    <foreground android:drawable="@drawable/${p.fgRes}" />
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome" />
+</adaptive-icon>
+`;
+  const mipmap = path.join(RES, 'mipmap-anydpi-v26');
+  for (const p of previews) {
+    if (p.icon.key === 'Default') {
+      fs.writeFileSync(path.join(mipmap, 'ic_launcher.xml'), adaptive(p));
+      fs.writeFileSync(path.join(mipmap, 'ic_launcher_round.xml'), adaptive(p));
+    } else {
+      fs.writeFileSync(path.join(mipmap, `ic_launcher_${p.name}.xml`), adaptive(p));
+    }
+  }
+
+  // The Play Store listing icon: the default icon's visible square at 512 (Play applies its own mask).
+  const def = previews.find((p) => p.icon.key === 'Default');
+  const crop = Math.round(LAYER_PX * 72 / 108), off = Math.round(LAYER_PX * 18 / 108);
+  execFileSync('magick', [def.bgPng, def.fgPng, '-composite', '-crop', `${crop}x${crop}+${off}+${off}`, '+repage',
+    '-filter', 'Lanczos', '-resize', '512x512', path.resolve(here, '../../../play-store-icon-512.png')]);
+}
+
+fs.rmSync(work, { recursive: true, force: true });
+console.log(`${ICONS.length} icons ${previewDir ? `previewed in ${previewDir}` : `written to ${RES}`}`);

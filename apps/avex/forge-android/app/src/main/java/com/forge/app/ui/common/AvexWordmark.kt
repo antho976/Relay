@@ -26,7 +26,14 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.toSize
+import com.forge.app.ui.launch.WordFrame
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -44,7 +51,7 @@ private const val WORD = "Avex"
 fun wordmarkExitChoreographed(icon: AppIcon): Boolean {
     if (icon.launchPalette == null) return false
     return when (icon.family) {
-        IconFamily.Solid, IconFamily.Nebula -> true
+        IconFamily.Solid, IconFamily.Gym, IconFamily.Nebula -> true
         IconFamily.Molten -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
         else -> false
     }
@@ -63,7 +70,7 @@ fun wordmarkExitChoreographed(icon: AppIcon): Boolean {
  * - Nebula — floats weightless · then DRAGGED INTO A BLACK HOLE (vortex RenderEffect, 33+)
  * - Molten — lit white-hot, heat-shimmering · then MELTS decelerating — the word slumps and thin
  *   drip streams run ahead (33+)
- * - Solid — the plate colour wipes in · wipes back out
+ * - Solid, Gym — the plate colour wipes in · wipes back out (Gym: chalk or paint drawn across)
  * - Stealth — flickers in like a HUD · fades
  * - Default / no palette — today's plain settle and fade, untouched
  *
@@ -71,6 +78,10 @@ fun wordmarkExitChoreographed(icon: AppIcon): Boolean {
  * are DEFERRED reads (`() -> Float`) so the caller's snapshot state is read in the draw phase — the
  * plain path never recomposes per frame, and neither does the caller.
  * Reduce-motion: settled, still, plain plate fade ([exit] never leaves 0).
+ *
+ * A launch mascot (`ui/launch`) acts on the name: [clockDelay] holds the family effect back while it
+ * arrives, [drop] lowers the name (px, deferred) for Gym's press, and [onFrame] reports where the
+ * name sits, in root coordinates and untransformed, so the mascot can stand on it.
  */
 @Composable
 fun AvexWordmark(
@@ -79,23 +90,59 @@ fun AvexWordmark(
     exit: () -> Float,
     reduceMotion: Boolean,
     modifier: Modifier = Modifier,
+    clockDelay: Float = 0f,
+    drop: () -> Float = { 0f },
+    onFrame: ((WordFrame) -> Unit)? = null,
 ) {
     val base = MaterialTheme.typography.displayLarge
     val onBg = MaterialTheme.colorScheme.onBackground
     val palette = remember(icon) { icon.launchPalette.orEmpty().map { Color(it) } }
+    val capPx = with(LocalDensity.current) { base.fontSize.toPx() } * CAP_HEIGHT
+    // Position and baseline arrive from two callbacks in either order; emit once both are known.
+    val probe = remember { FrameProbe() }
+    fun emit() {
+        val cb = onFrame ?: return
+        val layer = probe.layer ?: return
+        if (probe.baseline <= 0f) return
+        val i = probe.inset
+        val text = Rect(layer.left + i.x, layer.top + i.y, layer.right - i.x, layer.bottom - i.y)
+        cb(
+            WordFrame(
+                text, text.top + probe.baseline, text.top + probe.baseline - capPx, layer,
+                aLeft = text.left + probe.aLeft, aRight = text.left + probe.aRight,
+            )
+        )
+    }
+    fun report(coords: LayoutCoordinates, inset: Offset) {
+        probe.layer = Rect(coords.positionInRoot(), coords.size.toSize())
+        probe.inset = inset
+        emit()
+    }
+    fun laidOut(layout: androidx.compose.ui.text.TextLayoutResult) {
+        probe.baseline = layout.firstBaseline
+        // The "A": where the Avex mascot lands and slides.
+        val a = layout.getBoundingBox(0)
+        probe.aLeft = a.left
+        probe.aRight = a.right
+        emit()
+    }
 
     if (palette.size < 3) {
         // Default (and any icon without a palette): the plain wordmark, exactly as before. Reading
         // reveal() inside graphicsLayer keeps this in the draw phase — no per-frame recomposition.
         Text(
             WORD, style = base, color = onBg,
-            modifier = modifier.graphicsLayer {
-                val r = reveal()
-                alpha = r
-                val s = 0.94f + 0.06f * r
-                scaleX = s
-                scaleY = s
-            }
+            onTextLayout = { laidOut(it) },
+            modifier = modifier
+                .onGloballyPositioned { report(it, Offset.Zero) }
+                .graphicsLayer {
+                    val r = reveal()
+                    alpha = r
+                    val s = 0.94f + 0.06f * r
+                    scaleX = s
+                    scaleY = s
+                    translationY = drop()
+                }
         )
         return
     }
@@ -106,7 +153,7 @@ fun AvexWordmark(
     val c0 = palette[0]
     val c1 = palette[1]
     val c2 = palette[2]
-    val t = wordmarkClock(reduceMotion)
+    val t = (wordmarkClock(reduceMotion) - clockDelay).coerceAtLeast(0f)
     var size by remember { mutableStateOf(IntSize.Zero) }
     val w = size.width.toFloat()
     val h = size.height.toFloat()
@@ -133,10 +180,10 @@ fun AvexWordmark(
         IconFamily.Molten -> remember(palette) {
             Brush.verticalGradient(0f to lerp(c1, c0, 0.35f), 0.55f to c1, 1f to c2)
         }
-        IconFamily.Solid ->
+        IconFamily.Solid, IconFamily.Gym ->
             if (exit > 0f) solidWipeOut(exit, w, plate = lerp(c1, c2, 0.30f))
             else solidWipe(t, w, dim = onBg.copy(alpha = 0.35f), plate = lerp(c1, c2, 0.30f))
-        IconFamily.Forge -> remember(onBg) { Brush.verticalGradient(0f to onBg, 1f to onBg) }
+        IconFamily.Avex -> remember(onBg) { Brush.verticalGradient(0f to onBg, 1f to onBg) }
     }
 
     // One travelling highlight pass over the fill (Metal's sheen, Gem's glint); null once finished.
@@ -177,17 +224,21 @@ fun AvexWordmark(
     val warped = icon.family == IconFamily.Molten || icon.family == IconFamily.Nebula ||
         icon.family == IconFamily.Gem || icon.family == IconFamily.Aurora
 
+    val density = LocalDensity.current
+    val inset = if (warped) with(density) { Offset(32.dp.toPx(), 44.dp.toPx()) } else Offset.Zero
     Box(
         modifier = modifier
             .onSizeChanged { size = it }
+            .onGloballyPositioned { report(it, inset) }
             .graphicsLayer {
+                translationY = drop()
                 alpha = entry * flicker
                 val s = 0.94f + 0.06f * reveal
                 scaleX = s
                 scaleY = s
                 if (icon.family == IconFamily.Nebula && !reduceMotion) {
                     // Weightless: a slow bob with a slower sideways drift.
-                    translationY = 3.dp.toPx() * sin(t * 1.1f)
+                    translationY += 3.dp.toPx() * sin(t * 1.1f)
                     translationX = 2.dp.toPx() * sin(t * 0.7f + 1.3f)
                 }
                 if (icon.family == IconFamily.Nebula && warpShader == null && exit > 0f) {
@@ -211,13 +262,25 @@ fun AvexWordmark(
     ) {
         val room = if (warped) Modifier.padding(horizontal = 32.dp, vertical = 44.dp) else Modifier
         Box(room) {
-            Text(WORD, style = base.merge(TextStyle(brush = fill)))
+            Text(WORD, style = base.merge(TextStyle(brush = fill)), onTextLayout = { laidOut(it) })
             if (sheen != null) {
                 Text(WORD, style = base.merge(TextStyle(brush = sheen)))
             }
         }
     }
 }
+
+/** Where the name was last laid out; plain fields, read only to build a [WordFrame]. */
+private class FrameProbe {
+    var layer: Rect? = null
+    var inset: Offset = Offset.Zero
+    var baseline: Float = 0f
+    var aLeft: Float = 0f
+    var aRight: Float = 0f
+}
+
+/** Cap height as a share of the font size, for the serif display face (where a mascot stands). */
+private const val CAP_HEIGHT = 0.68f
 
 /** Seconds since the wordmark mounted (120s ramp, never loops in-shot); frozen under reduce-motion. */
 @Composable
