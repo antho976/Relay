@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.Flow
 
 /**
  * The Library's append-only read ledger. Nothing here is ever updated — read state is recomputed
- * from the events by `ArticleRegistry`, the same rule `LessonEventDao` follows.
+ * from the events, the same rule `LessonEventDao` follows. Retired with the Library, 2026-09-26.
  */
 @Dao
 interface ArticleEventDao {

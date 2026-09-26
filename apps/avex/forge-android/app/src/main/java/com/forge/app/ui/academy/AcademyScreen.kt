@@ -1,15 +1,33 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class
+)
 
 package com.forge.app.ui.academy
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
@@ -20,218 +38,142 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.domain.academy.ArticleTopic
+import com.forge.app.domain.academy.AcademyRegistry
 import com.forge.app.domain.academy.LessonTrack
+import com.forge.app.domain.academy.readMinutes
 import com.forge.app.ui.common.LocalTouchExplorationEnabled
-import com.forge.app.ui.common.statsEntrance
+import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.ForgeMotion
+import kotlinx.coroutines.delay
 
 /**
- * The Academy — one page holding everything the coach knows, browsable end to end.
+ * # The Academy — a contents page taught by drawings (2026-09-26)
  *
- * ## What changed, 2026-08-20
+ * Antho, on the page this replaced: *"I hate it ... the knowledge given, the UX the UI the design I
+ * hate everything"*, and *"it's too many"*. The gallery before it held 35 pieces in nine sections
+ * (31 lessons, four articles), each behind a greyscaled stock-style photograph that set a mood and
+ * explained nothing, in a five-beat plate rhythm that made you scroll six screens to see what was
+ * there.
  *
- * The 2026-08-16 rebuild fixed the gate (everything is readable from install) and the nesting
- * (tracks are chapters, not sub-screens). What it did not fix, in Antho's words: it still *reads as
- * blocks*, there is *no sense of where to start*, and *the reading itself is plain*.
+ * ## What it is now
  *
- * Three answers, one per complaint:
+ * **Twelve lessons in three chapters**, mostly about lifting itself (getting stronger, effort,
+ * volume, form, recovery, soreness, protein), then the coach, then cardio. The old ids live on as
+ * aliases in `AcademyRegistry`, so coach links and the read history still land.
  *
- * 1. **The blocks were the cards.** Every piece was a filled, hairlined tile from the Home
- *    experiment's kit, which §1 bans around passive content for exactly this reason. Pieces are
- *    plates on the page now — see `AcademyGallery`.
- * 2. **The page opens by pointing.** A masthead, then ONE piece named as the thing to read next
- *    ([startHere]): the coach's poke if one fired, otherwise the next unread Fundamentals lesson,
- *    which is the only track authored in a reading order. Each chapter then prints the blurb it was
- *    authored with, and Fundamentals numbers its pieces, so "where do I start" is answered three
- *    times on the way down the page without a single progress bar.
- * 3. **The reading moved out of a sheet.** A lesson is a screen now (`LessonScreen`), the same one
- *    an article gets, so the two halves of the Academy finally read alike. `LessonSheet` is gone.
+ * **Every lesson is a drawing that teaches its idea** (`AcademySketches`): the staircase of double
+ * progression, the two reps left in reserve, the volume curve's sweet spot. The picture is the
+ * lesson's answer, so a reader can get it before reading a word.
  *
- * ## Chapter order
- *
- * The five lesson tracks in reading order, then the Library's articles grouped by topic. Lesson
- * tracks lead because they are the coach's own curriculum; the Library is the wider reading beside
- * it, and neither is hidden from the other. There is no separate FOR YOU shelf: the pokes are the
- * page's opening block, which turns through them one at a time ([StartHereRotator]), and each one
- * drops back into its own chapter the moment it is read.
- *
- * ## What changed, 2026-08-23
- *
- * The opening block got its picture back and started turning. Both were the same request — from
- * Antho: *"can you add pictures here and make it rotate ... so we know which could we look and
- * cycle between them, and when there's one he read we remove it from the cycle"*. A fired coach
- * moment is the app's own notification about a lesson, several can be outstanding at once, and the
- * page was naming the newest and hiding the others. See [startHere] for what enters the cycle and
- * [StartHereRotator] for how it turns.
+ * **The page opens on one large drawing assembling itself**, and it turns through a few lessons
+ * ([FEATURE_CAP]): what the coach has flagged for you first, then what you have not read yet in
+ * reading order. Antho asked for this directly: *"the big sketch should rotate like the big one does
+ * today, don't have just one"*. Under it, the whole Academy as one contents list that fits in about
+ * a screen and a half, each line with its drawing in miniature. Read lessons step back to the muted
+ * tone; nothing is scored.
  */
 @Composable
 fun AcademyScreen(
     onBack: (() -> Unit)? = null,
     onOpenLesson: (String) -> Unit = {},
-    onOpenArticle: (String) -> Unit = {},
-    viewModel: AcademyViewModel = hiltViewModel(),
-    libraryViewModel: LibraryViewModel = hiltViewModel()
+    viewModel: AcademyViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val libraryState by libraryViewModel.state.collectAsStateWithLifecycle()
-    AcademyContent(
-        state = state,
-        library = libraryState,
-        onBack = onBack,
-        onOpenLesson = onOpenLesson,
-        onOpenArticle = onOpenArticle
-    )
+    AcademyContent(state = state, onBack = onBack, onOpenLesson = onOpenLesson)
 }
 
 /**
- * The page itself, with its state passed in.
- *
- * Split out from [AcademyScreen] so the gallery can be rendered without Hilt — by a screenshot
- * test, by a preview, and by anything that wants to see the chapters at a state the database is not
- * currently in (an empty shelf, everything read, a poke that fired).
+ * The page with its state passed in, so it renders without Hilt in a preview or screenshot test.
  */
 @Composable
 fun AcademyContent(
     state: AcademyViewModel.UiState,
-    library: LibraryViewModel.UiState,
     onBack: (() -> Unit)? = null,
-    onOpenLesson: (String) -> Unit = {},
-    onOpenArticle: (String) -> Unit = {}
+    onOpenLesson: (String) -> Unit = {}
 ) {
-    val libraryState = library
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
 
-    val pointers = remember(state.all, libraryState.articles) { startHere(state, libraryState) }
-
-    // Decided here rather than inside the block, because it governs the chapters too. When the
-    // opening slot turns, every poke it will show has to come OUT of the chapters below or the
-    // same photograph prints twice. When it cannot turn — animations off, or TalkBack exploring —
-    // only the piece actually on screen comes out, and the rest stay in their chapters with their
-    // accent dots, which is the only thing keeping them reachable once nothing is rotating.
-    val turns = pointers.size > 1 &&
+    val featured = remember(state.all) { featured(state) }
+    val turns = featured.size > 1 &&
         !ForgeMotion.animationsOff &&
         !LocalTouchExplorationEnabled.current
-    val sections = remember(state.all, libraryState.articles, pointers, turns) {
-        val promoted = if (turns) pointers.map { it.item.id } else pointers.take(1).map { it.item.id }
-        buildSections(state, libraryState, promoted = promoted.toSet())
-    }
-    val open: (GalleryItem) -> Unit = { item ->
-        when (item) {
-            is GalleryItem.LessonTile -> onOpenLesson(item.id)
-            is GalleryItem.ArticleTile -> onOpenArticle(item.id)
-        }
-    }
 
+    // Transparent while the page sits at the top, so the drawing reads as the head of the page; solid
+    // the moment anything scrolls under it. Without that, lesson text slid under the clock and the
+    // battery in the status bar (Antho, 2026-09-26).
+    val bar = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(bar.nestedScrollConnection),
         topBar = {
-            TopAppBar(
-                title = {},
-                navigationIcon = {
-                    if (onBack != null) IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            if (onBack != null) {
+                TopAppBar(
+                    title = {},
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Transparent,
+                        scrolledContainerColor = MaterialTheme.colorScheme.background
+                    ),
+                    scrollBehavior = bar
+                )
+            }
         },
         containerColor = Color.Transparent
     ) { inner ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(inner),
-            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 4.dp)
+            contentPadding = PaddingValues(horizontal = GUTTER, vertical = 12.dp)
         ) {
             item("masthead") {
-                // Counted from the shelf, not from the rendered chapters: the pieces the opening
-                // block names are lifted out of their chapters, and the Academy does not shrink by
-                // one piece every time one of them is being pointed at.
-                val pieces = state.all.map { GalleryItem.LessonTile(it) } +
-                    libraryState.articles.map { GalleryItem.ArticleTile(it) }
-                Masthead(
-                    pieces = pieces.size,
-                    minutes = pieces.sumOf { it.minutes },
-                    onBg = onBg,
-                    muted = muted
-                )
+                Masthead(state, onBg, muted)
             }
 
-            if (pointers.isNotEmpty()) {
-                item("start") {
-                    Spacer(Modifier.height(28.dp))
-                    StartHereRotator(
-                        pointers = pointers,
+            if (featured.isNotEmpty()) {
+                item("featured") {
+                    Spacer(Modifier.height(20.dp))
+                    FeaturedRotator(
+                        featured = featured,
                         turns = turns,
                         onBg = onBg,
                         muted = muted,
                         accent = accent,
-                        modifier = Modifier.statsEntrance(1),
-                        onOpen = open
+                        onOpen = onOpenLesson
                     )
                 }
             }
 
-            sections.forEachIndexed { sectionIndex, section ->
-                item("h-${section.label}") {
-                    Spacer(Modifier.height(CHAPTER_GAP))
-                    ChapterHeader(
-                        label = section.label,
-                        blurb = section.blurb,
-                        muted = muted,
-                        accent = accent,
-                        modifier = Modifier.statsEntrance(sectionIndex + 2)
-                    )
-                    Spacer(Modifier.height(18.dp))
+            LessonTrack.entries.forEach { track ->
+                val lessons = state.lessonsIn(track)
+                if (lessons.isEmpty()) return@forEach
+                item("chapter-${track.code}") {
+                    Spacer(Modifier.height(44.dp))
+                    ChapterHeading(track, onBg, muted)
+                    Spacer(Modifier.height(8.dp))
                 }
-
-                // Walk the chapter in the plate rhythm: a lead, then two-up posters until the next
-                // lead. Grouping here rather than inside the entry keeps the shape decision in one
-                // place — `isLeadSlot` is the only thing that knows the beat.
-                var i = 0
-                while (i < section.items.size) {
-                    // A two-piece chapter renders as one poster row rather than a lead plus a
-                    // widow: a lead with a single half-width piece under it reads as a mistake.
-                    val leadSlot = isLeadSlot(i) && section.items.size != 2
-                    if (leadSlot) {
-                        val piece = section.items[i]
-                        val index = i
-                        item("l-${section.label}-$i") {
-                            if (index > 0) Spacer(Modifier.height(ENTRY_GAP))
-                            PieceEntry(
-                                item = piece,
-                                shape = PlateShape.LEAD,
-                                onBg = onBg,
-                                muted = muted,
-                                accent = accent,
-                                modifier = Modifier.fillMaxWidth(),
-                                numeral = section.numerals.getOrNull(index)
-                            ) { open(piece) }
-                        }
-                        i += 1
-                    } else {
-                        val at = i
-                        val pair = section.items.subList(at, minOf(at + 2, section.items.size))
-                        item("p-${section.label}-$i") {
-                            Spacer(Modifier.height(if (at > 0) ENTRY_GAP else 0.dp))
-                            PosterRow(
-                                pair = pair,
-                                onBg = onBg,
-                                muted = muted,
-                                accent = accent,
-                                numerals = pair.indices.map { section.numerals.getOrNull(at + it) },
-                                onOpen = open
-                            )
-                        }
-                        i += pair.size
+                lessons.forEach { lesson ->
+                    item(lesson.lesson.id) {
+                        ContentsRow(lesson, onBg, muted, accent) { onOpenLesson(lesson.lesson.id) }
                     }
                 }
             }
@@ -241,175 +183,224 @@ fun AcademyContent(
     }
 }
 
-/**
- * The page's own name and what is behind it.
- *
- * The count used to read "4 OF 31 UNLOCKED", which is a score, and a score is the exact thing this
- * page must not open with. It states the size of the shelf and how long it would take to read, both
- * of which are facts about the content rather than about the reader.
- */
+/** The page's name, and one line of what is behind it. */
 @Composable
-private fun Masthead(pieces: Int, minutes: Int, onBg: Color, muted: Color) {
-    Column(Modifier.fillMaxWidth().statsEntrance(0).padding(vertical = 8.dp)) {
+private fun Masthead(state: AcademyViewModel.UiState, onBg: Color, muted: Color) {
+    val minutes = state.all.sumOf { it.lesson.blocks.readMinutes() }
+    val fresh = state.forYou.size
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Text(
-            "$pieces pieces · ${readingSpan(minutes)}".uppercase(),
-            style = MaterialTheme.typography.labelMedium,
-            color = muted
+            "Academy",
+            style = MaterialTheme.typography.headlineLarge,
+            color = onBg,
+            modifier = Modifier.semantics { heading() }
         )
-        Spacer(Modifier.height(4.dp))
-        Text("Academy", style = MaterialTheme.typography.headlineLarge, color = onBg)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Everything the coach knows, open from the start.",
-            style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
+            buildString {
+                append("${state.all.size} lessons · $minutes min of reading")
+                if (fresh > 0) append(" · $fresh new for you")
+            },
+            style = MaterialTheme.typography.bodyMedium,
             color = muted
         )
     }
 }
 
-/** "40 min" under the hour, "3 hr" over it. Never "0 hr", and never a decimal hour. */
-private fun readingSpan(minutes: Int): String = when {
-    minutes < 60 -> "$minutes min"
-    else -> "${(minutes + 30) / 60} hr"
+/** How many lessons the opening drawing turns through. */
+private const val FEATURE_CAP = 4
+
+/**
+ * How long one lesson holds the opening slot. The drawing takes about three seconds to assemble,
+ * and the title and answer under it are about twenty words, so ten seconds leaves time to watch the
+ * one and read the other.
+ */
+private const val FEATURE_HOLD_MS = 10_000L
+
+/**
+ * The lessons the page opens on, in order.
+ *
+ * 1. What the coach flagged for you and you have not opened, newest first.
+ * 2. Then what you have not read, in page order (Training is written to be read in order).
+ * 3. With everything read, the first lesson of each chapter, to read again.
+ */
+internal fun featured(state: AcademyViewModel.UiState): List<AcademyRegistry.LessonState> {
+    val picked = LinkedHashMap<String, AcademyRegistry.LessonState>()
+    state.forYou.forEach { picked[it.lesson.id] = it }
+    state.all.filter { !it.opened }.forEach { if (picked.size < FEATURE_CAP) picked.putIfAbsent(it.lesson.id, it) }
+    if (picked.isEmpty()) {
+        LessonTrack.entries.mapNotNull { state.lessonsIn(it).firstOrNull() }.forEach { picked[it.lesson.id] = it }
+    }
+    return picked.values.take(FEATURE_CAP)
 }
 
 /**
- * The air between one piece and the next, and between one chapter and the next.
+ * The opening block: one large drawing assembling itself, its title and its answer, turning to the
+ * next lesson every [FEATURE_HOLD_MS].
  *
- * These two numbers and `CAPTION_GAP` (8dp) are the only thing binding a caption to its picture:
- * there is no box and no rule to do it, so the gaps have to say it. 8dp up, 44dp down — a caption
- * is more than five times closer to its own plate than to the next piece, which is past the point
- * where the eye can read it either way.
+ * No swipe, because the Academy is a page of the hub pager and a horizontal drag belongs to the
+ * tabs. The whole block is one tap target. When animations are off or TalkBack is exploring, it
+ * holds still on the first lesson; everything it would have shown is in the contents below anyway.
  */
-private val ENTRY_GAP = 44.dp
-private val CHAPTER_GAP = 52.dp
+@Composable
+private fun FeaturedRotator(
+    featured: List<AcademyRegistry.LessonState>,
+    turns: Boolean,
+    onBg: Color,
+    muted: Color,
+    accent: Color,
+    onOpen: (String) -> Unit
+) {
+    var shownId by rememberSaveable { mutableStateOf(featured.first().lesson.id) }
+    val at = featured.indexOfFirst { it.lesson.id == shownId }.coerceAtLeast(0)
+    val current = featured[at]
 
-/** Where the page points first, and the word above it. */
-data class Pointer(
-    val kicker: String,
-    val item: GalleryItem,
-    val chapter: String,
-    val numeral: String?
-)
-
-/**
- * The most pokes the opening block will hold at once.
- *
- * A cap rather than the whole of `forYou`, because a cycle you cannot get to the end of is the
- * backlog `forYou`'s own doc warns about, wearing a different shape — nine dots under the block
- * would be a queue drawn as a queue. Four is what a row of dots reads as a *count* at rather than
- * as a bar, and the ones past it are not lost: every piece keeps its accent dot in its own chapter,
- * and one of them moves up here as soon as something ahead of it is read.
- */
-private const val POKE_CAP = 4
-
-/**
- * Pick the pieces the page opens by naming — newest poke first, and everything still unread behind
- * it.
- *
- * The order of preference is the order of how much the app actually knows about the reader:
- *
- * 1. **Coach moments fired** whose lessons are unread. Those are the pokes, and they are the only
- *    pointers grounded in something that just happened to this reader. All of them, up to
- *    [POKE_CAP] — the block turns through them ([StartHereRotator]) rather than naming the newest
- *    and dropping the rest on the floor.
- * 2. **The next unread Fundamentals lesson.** Fundamentals is the one track authored in a reading
- *    order, so it is the only place a "next" exists without inventing a ranking.
- * 3. **Anything else unread**, lessons before articles, in registry order.
- * 4. **Nothing left** — the shelf is read end to end, so the pointer says so and offers the top of
- *    the curriculum again. §12: the finished state is drawn, not hidden.
- *
- * Only case 1 ever returns more than one: the other three are the page reasoning about a shelf it
- * has no personal signal on, and a cycle through *those* would be an invented ranking turning
- * itself over every few seconds. The fallbacks stay one still piece, as they were.
- *
- * Everything returned here is lifted out of the chapters below by [buildSections], so no
- * photograph is printed twice.
- */
-fun startHere(
-    state: AcademyViewModel.UiState,
-    library: LibraryViewModel.UiState
-): List<Pointer> {
-    val fundamentals = state.lessonsIn(LessonTrack.FUNDAMENTALS)
-
-    fun lessonPointer(kicker: String, lesson: com.forge.app.domain.academy.AcademyRegistry.LessonState): Pointer {
-        val at = fundamentals.indexOfFirst { it.lesson.id == lesson.lesson.id }
-        return Pointer(
-            kicker = kicker,
-            item = GalleryItem.LessonTile(lesson),
-            chapter = lesson.lesson.track.displayName,
-            numeral = if (at >= 0) numeralOf(at) else null
-        )
+    LaunchedEffect(featured, at, turns) {
+        shownId = featured[at].lesson.id
+        if (!turns) return@LaunchedEffect
+        delay(FEATURE_HOLD_MS)
+        shownId = featured[(at + 1) % featured.size].lesson.id
     }
 
-    val pokes = state.forYou.take(POKE_CAP).map { lessonPointer("For you", it) }
-    if (pokes.isNotEmpty()) return pokes
-
-    fundamentals.firstOrNull { !it.opened }?.let {
-        val started = fundamentals.any { f -> f.opened }
-        return listOf(lessonPointer(if (started) "Continue" else "Start here", it))
-    }
-
-    state.all.firstOrNull { !it.opened }?.let { return listOf(lessonPointer("Next", it)) }
-
-    library.articles.firstOrNull { !it.finished }?.let {
-        return listOf(Pointer("Next", GalleryItem.ArticleTile(it), it.article.topic.displayName, null))
-    }
-
-    return listOfNotNull(fundamentals.firstOrNull()?.let { lessonPointer("Read again", it) })
-}
-
-/** "01", "02" — the position of a piece inside an ordered chapter, never a total. */
-private fun numeralOf(index: Int): String = (index + 1).toString().padStart(2, '0')
-
-/**
- * Assemble the chapters.
- *
- * [promoted] is the set of pieces the page already names at the top, and they are lifted OUT of
- * their chapters here. Leaving one in printed the same serif title and the same deck twice within a
- * screen and a half, which is the "one card rendered twice" bug the previous pass hit from the
- * other direction. It is a set rather than a single id because the opening block turns through
- * every unread poke: a piece that is only shown seven seconds from now is still shown here, so all
- * of them come out, and each returns to its chapter — in the read tone — as soon as it is opened.
- * Nothing is lost meanwhile: the pointer states which chapter the piece belongs to and, in
- * Fundamentals, its position — and the numerals are computed BEFORE the lift, so the chapter opens
- * at 02 rather than silently renumbering itself and claiming a piece is the first when it is not.
- *
- * Articles group by their own topic rather than being forced into a lesson track: the two
- * taxonomies are genuinely different, and mapping one onto the other would file articles under
- * headings they were not written for. Only topics holding an article appear (§12) — eight empty
- * shelves against four articles would open the Library as a promise nothing keeps.
- */
-private fun buildSections(
-    state: AcademyViewModel.UiState,
-    library: LibraryViewModel.UiState,
-    promoted: Set<String>
-): List<GallerySection> = buildList {
-    LessonTrack.entries.forEach { track ->
-        val all = state.lessonsIn(track).map { GalleryItem.LessonTile(it) }
-        // Fundamentals is the only track authored in a reading order, so it is the only one whose
-        // pieces carry a position.
-        val numerals = all.indices.map {
-            if (track == LessonTrack.FUNDAMENTALS) numeralOf(it) else null
-        }
-        val kept = all.indices.filter { all[it].id !in promoted }
-        if (kept.isNotEmpty()) {
-            add(
-                GallerySection(
-                    label = track.displayName,
-                    items = kept.map { all[it] },
-                    numerals = kept.map { numerals[it] },
-                    blurb = track.blurb
+    val turn = ForgeMotion.standardTween<Float>(ForgeMotion.DurationEmphasized)
+    AnimatedContent(
+        targetState = current,
+        contentKey = { it.lesson.id },
+        transitionSpec = {
+            (fadeIn(turn) togetherWith fadeOut(turn))
+                .using(SizeTransform(clip = false) { _, _ -> ForgeMotion.standardTween(ForgeMotion.DurationEmphasized) })
+        },
+        label = "academy_featured"
+    ) { lesson ->
+        val position = featured.indexOfFirst { it.lesson.id == lesson.lesson.id }
+        Column(Modifier.fillMaxWidth().bounceClick { onOpen(lesson.lesson.id) }) {
+            LessonSketch(lessonId = lesson.lesson.id, replayKey = lesson.lesson.id)
+            Spacer(Modifier.height(18.dp))
+            Text(lesson.lesson.title, style = MaterialTheme.typography.headlineMedium, color = onBg)
+            Spacer(Modifier.height(8.dp))
+            Text(lesson.lesson.summary, style = MaterialTheme.typography.bodyLarge, color = muted)
+            Spacer(Modifier.height(14.dp))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                itemVerticalAlignment = Alignment.CenterVertically
+            ) {
+                if (lesson.isNew) ForYouMark(accent, muted)
+                Text(
+                    listOfNotNull(
+                        if (featured.size > 1 && position >= 0) "${position + 1} of ${featured.size}" else null,
+                        "${lesson.lesson.blocks.readMinutes()} min"
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = muted.copy(alpha = 0.65f)
                 )
-            )
+                Text("read →", style = MaterialTheme.typography.labelMedium, color = accent)
+            }
         }
     }
+}
 
-    ArticleTopic.entries.forEach { topic ->
-        val items = library.articles
-            .filter { it.article.topic == topic }
-            .map { GalleryItem.ArticleTile(it) }
-            .filter { it.id !in promoted }
-        if (items.isNotEmpty()) add(GallerySection(label = topic.displayName, items = items))
+/** A chapter's name as a real heading, and the one line it was written with. */
+@Composable
+private fun ChapterHeading(track: LessonTrack, onBg: Color, muted: Color) {
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            track.displayName,
+            style = MaterialTheme.typography.headlineSmall,
+            color = onBg,
+            modifier = Modifier.semantics { heading() }
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(chapterLine(track), style = MaterialTheme.typography.bodySmall, color = muted)
     }
 }
+
+private fun chapterLine(track: LessonTrack): String = when (track) {
+    LessonTrack.TRAINING -> "How lifting works. Best read in order."
+    LessonTrack.COACH -> "What the coach decides, and how to overrule it."
+    LessonTrack.CARDIO -> "Conditioning that helps your lifting."
+}
+
+/**
+ * One line of the contents: the lesson's drawing in miniature, its title and its answer.
+ *
+ * The whole row is the tap target. A read lesson steps its title back to muted, the visited-link
+ * convention, so what you have not read stands out without a tick or a count.
+ */
+@Composable
+private fun ContentsRow(
+    state: AcademyRegistry.LessonState,
+    onBg: Color,
+    muted: Color,
+    accent: Color,
+    onClick: () -> Unit
+) {
+    val lesson = state.lesson
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .bounceClick { onClick() }
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        ThumbTile(lesson.id, Modifier.width(THUMB_WIDTH).padding(top = 2.dp))
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                lesson.title,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (state.opened) muted else onBg
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                lesson.summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (state.opened) muted.copy(alpha = 0.65f) else muted
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (state.isNew) {
+                    ForYouMark(accent, muted)
+                    Spacer(Modifier.width(10.dp))
+                }
+                Text(
+                    "${lesson.blocks.readMinutes()} min",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted.copy(alpha = 0.65f)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A lesson's miniature on its tile. The tile is the row's cover: it gives every miniature the same
+ * frame and ground, so twelve different drawings read as one set rather than as loose marks.
+ */
+@Composable
+internal fun ThumbTile(lessonId: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 6.dp, vertical = 8.dp)
+    ) {
+        LessonSketch(lessonId = lessonId, labels = false, animate = false)
+    }
+}
+
+/** The one place colour marks a lesson: the coach flagged it and you have not opened it. */
+@Composable
+private fun ForYouMark(accent: Color, muted: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(6.dp).clip(CircleShape).background(accent))
+        Spacer(Modifier.width(6.dp))
+        Text("For you", style = MaterialTheme.typography.labelMedium, color = muted)
+    }
+}
+
+private val GUTTER = 24.dp
+
+/** Wide enough that the miniature still shows its shape; the page gutter holds the rest. */
+private val THUMB_WIDTH = 84.dp

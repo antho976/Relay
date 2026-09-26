@@ -102,107 +102,24 @@ denied-state of the controls directly beneath it (§12) rather than a notice.
 
 ### Academy — `ui/academy`
 
-The knowledge half of the coach, and a hub tab since 2026-07-27. **Rebuilt as one open gallery
-2026-08-16** (`AcademyScreen` + `AcademyGallery`), replacing the gated hub → track-screen → lesson
-structure. Antho: *"too crowded and behind 50 sub menus, and the worst thing is it feels like
-achievement, not a hub to knowledge. You should be able to see everything."*
+The knowledge half of the coach, and a hub tab since 2026-07-27. **Rebuilt 2026-09-26 as a contents
+page taught by drawings**, replacing the plates-and-chapters gallery. Antho: *"I hate it ... the
+knowledge given, the UX the UI the design"* and *"it's too many"*.
 
-**Three causes, all removed.** (1) It was **87% locked** — 27 of 31 lessons gated on coach moments,
-and a mostly-locked inventory can only read as an achievement tree. (2) It reported progress **twice
-per track**, a `LessonDotRail` *and* an "n OF m", making score the loudest thing on a reading page.
-(3) **Three levels** to reach a lesson.
-
-**Rebuilt again 2026-08-20 — plates and chapters, and one reader.** The 08-16 gallery put every
-piece in a filled, hairlined card from the Home experiment's `SurfaceKit`, with the title printed
-over the picture under a scrim. Antho's three complaints: it still *"reads as blocks"*, there is
-*"no sense of where to start"*, and *"the reading itself is plain"*.
-
-**The blocks were the cards.** Thirty-five identical filled rectangles with a hairline round each is
-a wall whatever is printed inside them — §1's central ban, arrived at from the other direction. A
-piece is now a **plate and its caption, straight on the page**: the cover clipped to 16dp (§7),
-greyscaled at render time so a colour asset cannot break the one-accent rule, and the words UNDER it
-in the page's own type. Nothing is printed over a photograph, which fixes contrast by construction,
-frees the art from being composed for its slot (one 3:4 master crops to every shape — see
-`docs/ACADEMY_ART.md`), and turns a piece with no cover yet into an index line rather than a hole.
-**Rhythm is a five-beat**: a full-width 3:2 lead, then two-up 3:4 posters until the next lead
-(`isLeadSlot`). In a row where one piece has art and its neighbour does not, the unplated one holds
-the plate's space open (empty air, never a filled placeholder) so both captions sit on one line and
-the pair still reads left to right — without it, Fundamentals read 04 before 03.
-
-**Where to start is answered three times.** (1) The page opens on ONE named piece (`startHere`): the
-coach's poke if a moment fired, else the next unread Fundamentals lesson ("Start here" / "Continue"),
-else anything unread, else "Read again". It is typographic — kicker, serif title, deck, `read →` —
-and carries NO plate, because the piece it names also appears in its chapter with its own picture.
-(2) It is then **lifted out of that chapter**, with the chapter's numerals computed BEFORE the lift,
-so Fundamentals opens at 02 rather than renumbering itself. (3) Each chapter prints the blurb its
-track was authored with (`LessonTrack.blurb`, written since B3 and never rendered until now), and
-Fundamentals numbers its pieces 01-10 — the only track with an authored order, so the only one that
-earns a numeral.
-
-**Read is a tone, not a word.** An opened piece prints its title in `muted` instead of `onBg`, the
-visited-link convention; the meta line dropped the word "read" with it (§4.3, one home).
-
-**One reader** (`ReaderScreen`, shared by `LessonScreen` and `ArticleScreen`). The lesson
-`ModalBottomSheet` is deleted: it capped a lesson at a sheet's height, could not carry a cover, and
-recorded completion from a DISMISSAL, so a bounce counted as a read and corrupted the only signal
-the ledger keeps. Both halves now record opened-on-resolve and completed-on-reaching-the-end, and
-both open from `Routes.LESSON` / `Routes.ARTICLE`. The reader's cover bleeds full width under the
-transparent top bar and **dissolves into the page** by masking its own alpha (`Plate(dissolve =
-true)`), so it fades into whatever ground is actually behind it, AMOLED included. Prose is
-`bodyLarge`; a `Heading` block is a real `EditorialHeader` (and therefore a TalkBack heading); a
-`Callout` is a serif pull-quote instead of a `primaryContainer`-washed box (which was §1's ban
-sitting in the middle of the reading page); an `Example`'s value is a serif figure (§2①). Every
-piece ends with a named next piece where one honestly exists — "Next in Fundamentals" in the ordered
-track, "More in Conditioning"/"More in Recovery" on a shelf, "Next chapter" at a track's end — and
-reading on REPLACES the current piece on the back stack, so Back returns to the gallery rather than
-walking the chain in reverse.
-
-Now: masthead (`35 PIECES · 40 MIN` + serif name + aside) → the opening pointer → the five lesson
-tracks as chapters → the Library's articles grouped by `ArticleTopic`. `AcademyTrackScreen`,
-`Routes.academyTrack`, `academyLessonsPane`, `libraryPane`, `LessonDotRail`, `LessonRow`,
-`LessonSheet`, `AcademyComponents.kt`, the separate FOR YOU shelf and the `academy?lesson=`
-argument are all **deleted**.
-
-**The gate became a poke, with zero domain change.** `LessonState.unlocked` already meant "a coach
-moment fired for this reader" — a statement about RELEVANCE, not entitlement. The UI stopped
-treating it as permission: every lesson is readable from install, and a fired moment now only marks
-a piece FOR YOU (an accent dot, and first claim on the page's opening pointer). The ledger, `ArrivalController`, the notifications feed and the tab badge are
-untouched and still count `isNew`. `LessonUnlock.label/detail` are no longer rendered anywhere; they
-stay on the model as the authoring record `orphanLessons()` audits against.
-
-**One page, labelled differently** (Antho's words) — the `AcademyLens` `SegmentPill` row is gone.
-Lessons and articles share the gallery and are told apart by a word in each piece's meta line
-(`ARTICLE · 6 MIN` on the minority; lessons say only their length), with reading time for both derived by the same
-`List<LessonBlock>.readMinutes()` (lifted out of `Article` so two neighbouring tiles cannot state
-their length by two different rules). The Library's search field and topic pills went with the
-merge; tracks and topics are the browsing structure now.
-
-**Still true:** no XP, no streaks, no percentage, no course index. `docs/ACADEMY_LESSONS.md`'s
-"just-in-time, not curriculum-first" now holds more literally than before, since nothing is
-sequenced at all — only Fundamentals is authored in a reading order, and the gallery preserves it.
-
-**Library** — `domain/academy/Article.kt` + `ArticleRegistry`, listed in the gallery above and read
-in `ArticleScreen`, ledgered in `article_event` (v36) via `LibraryRepository`. A deliberate sibling of
-`Lesson`, not an extension: folding articles in would force `Lesson.unlock` to be a lie on every
-row. They share the block renderer (`BlockBody`), so both halves read in one voice.
-
-- **Topic groups, never difficulty.** "What is this about" is answerable before opening something;
-  "how hard is it" is not, so difficulty never sorted or gated anything. Since the 2026-08-16 merge
-  the topic pills are gone too — each topic is a gallery section, and **only topics holding an
-  article appear** (§12: eight empty shelves against four articles would open the Library as a
-  promise nothing keeps).
-- **Read time is derived from word count**, never authored, so it cannot drift when a paragraph is
-  edited. Ceiling ~30 minutes: past that it is a book, not a lesson.
-- **Every article is sourced**, and `ArticleRegistryTest` fails the build on an empty source list —
-  the only mechanical guard on the Library being research rather than opinion. Sources render as
-  plain text at the end, never links: no INTERNET permission, so a tappable citation would be an
-  affordance that cannot run (§2③).
-- **`AcademyLink`** resolves an id to whichever half holds it. Articles are namespaced `library.*`,
-  lessons are not, so the coach's existing nullable `lessonId` slots (`Recommendation`,
-  `TodayDirective`, `CoachSignal`, `ConditioningPlanner`, `GoalPortfolio`) can point at an article
-  with no schema change and no call-site churn. The test pins the two id spaces disjoint.
-- **No XP, no streaks, no percentage.** The plan's ban on gamifying the Academy applies here at
-  least as hard as to lessons: a library that scores you is a course wearing a disguise.
+- **12 lessons, three chapters** (`LessonTrack`: Training 7, Your coach 3, Cardio 2), cut from 35
+  pieces (31 lessons + 4 Library articles). About three quarters is lifting knowledge; articles folded
+  into lessons with their `Source` lists. `AcademyRegistry.aliases` maps every retired id to the
+  lesson that absorbed it, so coach reasons, notices and the ledger keep resolving; `stateFrom` folds
+  old events onto the new ids. The Library (`Article`, `ArticleRegistry`, `LibraryRepository`,
+  `ArticleScreen`, `Routes.ARTICLE`) is deleted; the `article_event` table stays as schema only.
+- **Every lesson is a drawing** (`AcademySketches`): a crisp Canvas diagram of its one idea in a
+  160x110 box, three inks (guide, ink, one accent on the answer), mono labels for measured values,
+  drawing itself over two draw-ins. Thumbnails drop labels and guides. The 35 photo covers are gone.
+- **Page**: serif "Academy" + one meta line, then a large featured drawing that turns every 8s
+  through up to four lessons (coach pokes, then unread in order; holds still under reduced motion or
+  TalkBack), then the whole contents list (thumbnail, title, summary, minutes). Read = muted title.
+- **Reader** (`ReaderScreen`): the drawing, title, italic answer, meta, body, sources, next lesson.
+- Still true: no XP, no streaks, no percentage.
 
 **The Academy never interrupts** (2026-08-15). A newly unlocked lesson is knowledge that became
 relevant, not a decision waiting on you, so it goes to the feed as `NoticeKind.ACADEMY` and waits.

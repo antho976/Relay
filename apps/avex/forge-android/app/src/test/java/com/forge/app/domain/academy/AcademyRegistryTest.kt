@@ -17,7 +17,7 @@ class AcademyRegistryTest {
     private fun event(id: String, kind: LessonEventKind, at: Long) =
         LessonEvent(lessonId = id, kind = kind.code, atMs = at)
 
-    private val cut = "coach.strength_on_a_cut"
+    private val cut = "training.protein"
 
     // ── The audit ──────────────────────────────────────────────────────────────
 
@@ -74,6 +74,7 @@ class AcademyRegistryTest {
                         is LessonBlock.Callout -> add(b.text)
                         is LessonBlock.Bullets -> addAll(b.items)
                         is LessonBlock.Example -> { add(b.label); add(b.fallback) }
+                        is LessonBlock.Figure -> add(b.caption)
                     }
                 }
             }.joinToString(" ")
@@ -142,7 +143,7 @@ class AcademyRegistryTest {
     }
 
     @Test
-    fun theCutLessonIsWiredToTheSuppressionMoment() {
+    fun theProteinLessonIsWiredToTheCutSuppressionMoment() {
         assertEquals(
             AcademyRegistry.UNLOCK_CUT_STALL_SUPPRESSED,
             AcademyRegistry.unlockKeyFor(cut)
@@ -150,14 +151,69 @@ class AcademyRegistryTest {
         assertNotNull(AcademyRegistry.lesson(cut))
     }
 
-    // ── The Fundamentals track (B3) ────────────────────────────────────────────
+    // ── The 2026-09-26 cut: 35 pieces to 12 ────────────────────────────────────
 
     @Test
-    fun theColdStartTrackIsTheFundamentals_inReadingOrder() {
-        assertEquals(10, AcademyRegistry.coldStartTrack.size)
-        assertTrue(AcademyRegistry.coldStartTrack.all { it.track == LessonTrack.FUNDAMENTALS })
-        assertEquals("fundamentals.what_a_program_is", AcademyRegistry.coldStartTrack.first().id)
-        assertEquals("fundamentals.log_honestly", AcademyRegistry.coldStartTrack.last().id)
+    fun theAcademyShipsTwelveLessonsInThreeChapters() {
+        assertEquals(12, AcademyRegistry.lessons.size)
+        assertEquals(7, AcademyRegistry.byTrack(LessonTrack.TRAINING).size)
+        assertEquals(3, AcademyRegistry.byTrack(LessonTrack.COACH).size)
+        assertEquals(2, AcademyRegistry.byTrack(LessonTrack.CARDIO).size)
+    }
+
+    @Test
+    fun idsCarryTheirChapterAndStayRouteSafe() {
+        AcademyRegistry.lessons.forEach {
+            assertTrue("${it.id} must start with ${it.track.code}.", it.id.startsWith("${it.track.code}."))
+            assertTrue("${it.id} must be lowercase, dots and underscores", it.id.matches(Regex("[a-z0-9_.]+")))
+        }
+    }
+
+    @Test
+    fun everyRetiredIdResolvesToAShippedLesson() {
+        val shipped = AcademyRegistry.lessons.map { it.id }.toSet()
+        AcademyRegistry.aliases.forEach { (old, new) ->
+            assertTrue("$old points at $new, which does not ship", new in shipped)
+            assertFalse("$old is both retired and shipped", old in shipped)
+            assertEquals(new, AcademyRegistry.lesson(old)?.id)
+        }
+        // The ids the coach's own reasons still carry.
+        listOf(
+            "coach.readiness_built_from", "fundamentals.how_the_coach_works", "coach.why_goals_fight",
+            "signals.stress_hrv", "coach.strength_on_a_cut", "programming.imbalances",
+            "coach.what_a_project_is", "programming.what_a_block_is", "engine.what_zone2_is",
+            "engine.intervals"
+        ).forEach { assertNotNull("$it no longer resolves", AcademyRegistry.lesson(it)) }
+    }
+
+    @Test
+    fun aReadUnderARetiredIdCountsForTheLessonThatAbsorbedIt() {
+        val events = listOf(
+            event("fundamentals.warmups", LessonEventKind.UNLOCKED, 10),
+            event("fundamentals.warmups", LessonEventKind.OPENED, 20)
+        )
+        val form = AcademyRegistry.stateOf("training.form", events)!!
+        assertTrue(form.unlocked)
+        assertTrue(form.opened)
+        assertFalse("a lesson read under its old id is not new again", form.isNew)
+    }
+
+    @Test
+    fun lessonsThatCiteResearchNameEverySource() {
+        AcademyRegistry.lessons.flatMap { l -> l.sources.map { l.id to it } }.forEach { (id, src) ->
+            assertTrue("$id: source needs authors", src.authors.isNotBlank())
+            assertTrue("$id: source needs a title", src.title.isNotBlank())
+            assertTrue("$id: implausible year ${src.year}", src.year in 1950..2030)
+        }
+    }
+
+    // ── The Training chapter is the cold-start curriculum (B3) ─────────────────
+
+    @Test
+    fun theColdStartTrackIsTraining_inReadingOrder() {
+        assertEquals(7, AcademyRegistry.coldStartTrack.size)
+        assertTrue(AcademyRegistry.coldStartTrack.all { it.track == LessonTrack.TRAINING })
+        assertEquals("training.getting_stronger", AcademyRegistry.coldStartTrack.first().id)
     }
 
     @Test
@@ -182,16 +238,8 @@ class AcademyRegistryTest {
     }
 
     @Test
-    fun everyTrackWithContentIsReachable() {
-        // Each shipped lesson belongs to a track the user can actually reach a moment for.
-        val tracks = AcademyRegistry.lessons.map { it.track }.toSet()
-        assertTrue(LessonTrack.FUNDAMENTALS in tracks)
-        assertTrue(LessonTrack.COACH in tracks)
-    }
-
-    @Test
     fun summariesAreShortEnoughToRead() {
-        // A summary is a card line, not a paragraph: if it needs more, it belongs in the body.
+        // A summary is a line in the contents, not a paragraph: if it needs more, it belongs in the body.
         AcademyRegistry.lessons.forEach {
             assertTrue("${it.id} summary is too long", it.summary.length <= 140)
         }

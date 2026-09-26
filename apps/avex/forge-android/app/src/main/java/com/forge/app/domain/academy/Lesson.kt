@@ -3,14 +3,13 @@ package com.forge.app.domain.academy
 /**
  * A lesson's content model (Coach v3 A2 / plan Mechanics M5).
  *
- * Structured blocks, not markdown: the app has no markdown renderer and 33 short lessons don't
+ * Structured blocks, not markdown: the app has no markdown renderer and 12 short lessons don't
  * justify adding one. Blocks also give the design system real control over each voice, and let an
  * [LessonBlock.Example] interpolate the reader's OWN numbers — which is the entire point of the
  * later "your numbers" track.
  *
- * Content ships in-app and offline like everything else. Lessons cite nothing and link nowhere
- * (there is no internet permission); the sources behind each one live in `docs/ACADEMY_LESSONS.md`
- * for the author, not the reader.
+ * Content ships in-app and offline like everything else. Lessons link nowhere (there is no
+ * internet permission); a lesson built on research carries its [Lesson.sources] as plain text.
  */
 data class Lesson(
     /** Stable id, e.g. "coach.strength_on_a_cut" — also what `reason.lessonId` points at. */
@@ -22,7 +21,12 @@ data class Lesson(
     val summary: String,
     /** What opens this lesson — see [LessonUnlock]. */
     val unlock: LessonUnlock,
-    val blocks: List<LessonBlock>
+    val blocks: List<LessonBlock>,
+    /**
+     * The research a lesson leans on, printed as plain text at the end of the reader. Empty for the
+     * lessons that explain what the coach does rather than what the literature says.
+     */
+    val sources: List<Source> = emptyList()
 )
 
 /**
@@ -49,18 +53,30 @@ data class LessonUnlock(
 )
 
 /**
- * The five tracks the plan groups lessons into. Order here is the reading order the Academy shows,
- * which is NOT a course index: only [FUNDAMENTALS] is sequential (it doubles as the cold-start
- * directive), and everything else unlocks the first time its coach moment fires. The tracks exist
- * to group, not to march through — `docs/ACADEMY_LESSONS.md`, "just-in-time, not curriculum-first".
+ * The Academy's three chapters, in the order the page shows them (2026-09-26).
+ *
+ * Nine sections of 35 pieces became three chapters of 12 lessons. [TRAINING] is the only chapter
+ * written to be read in order, and it doubles as the cold-start curriculum.
  */
-enum class LessonTrack(val code: String, val displayName: String, val blurb: String) {
-    FUNDAMENTALS("fundamentals", "Fundamentals", "What training is made of. Read in order, start to finish."),
-    COACH("coach", "How the coach works", "What it decides, and how to overrule any of it."),
-    PROGRAMMING("programming", "Programming", "Blocks, phases, and the numbers it learns about you."),
-    SIGNALS("signals", "Signals", "What your body is telling it, and how much that counts."),
-    ENGINE("engine", "Conditioning", "Cardio in service of lifting, never instead of it.")
+enum class LessonTrack(val code: String, val displayName: String) {
+    TRAINING("training", "Training"),
+    COACH("coach", "Your coach"),
+    CARDIO("cardio", "Cardio")
 }
+
+/**
+ * One reference behind a lesson.
+ *
+ * Structured rather than a pre-formatted string so the reader owns the typography. [journal] is
+ * null for books. Rendered as plain text, never a link: the app holds no INTERNET permission.
+ */
+data class Source(
+    /** "Refalo M, et al.": surname, initial, and `et al.` past two authors. */
+    val authors: String,
+    val title: String,
+    val journal: String?,
+    val year: Int
+)
 
 sealed interface LessonBlock {
     /** A short section anchor inside a lesson. */
@@ -79,6 +95,13 @@ sealed interface LessonBlock {
      * available yet, so a lesson is never blocked on data.
      */
     data class Example(val key: String, val label: String, val fallback: String) : LessonBlock
+
+    /**
+     * A figure: an animated or interactive diagram of the idea the paragraph around it explains,
+     * drawn by the UI layer from [key] (`AcademyFigures`). [caption] is the one line under it, and
+     * the only part of the figure the domain owns, so it goes through the same voice rules as prose.
+     */
+    data class Figure(val key: String, val caption: String) : LessonBlock
 }
 
 /**
@@ -88,9 +111,6 @@ sealed interface LessonBlock {
  * number. 200 words per minute is the usual estimate for adult non-fiction; it rounds to the nearest
  * minute with a floor of one, so the shortest piece reads "1 MIN" rather than "0 MIN".
  *
- * Lifted out of `Article` (2026-08-16) when the gallery started showing lessons and articles side by
- * side: two pieces of content next to each other cannot state their length by two different rules.
- * `Article.readMinutes` delegates here, so its output is unchanged.
  */
 fun List<LessonBlock>.readMinutes(): Int {
     fun String.words(): Int = split(' ', '\n').count { it.isNotBlank() }
@@ -102,6 +122,8 @@ fun List<LessonBlock>.readMinutes(): Int {
             is LessonBlock.Callout -> block.text.words()
             // An Example renders a number and its label, not prose worth timing.
             is LessonBlock.Example -> 0
+            // A figure takes about as long to take in as a short paragraph.
+            is LessonBlock.Figure -> 40 + block.caption.words()
         }
     }
     return ((words + WORDS_PER_MINUTE / 2) / WORDS_PER_MINUTE).coerceAtLeast(1)

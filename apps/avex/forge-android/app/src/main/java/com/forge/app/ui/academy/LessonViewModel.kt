@@ -7,7 +7,6 @@ import com.forge.app.data.repo.AcademyRepository
 import com.forge.app.data.repo.AdaptationRepository
 import com.forge.app.domain.academy.AcademyRegistry
 import com.forge.app.domain.academy.Lesson
-import com.forge.app.domain.academy.LessonTrack
 import com.forge.app.domain.academy.readMinutes
 import com.forge.app.ui.nav.Routes
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -21,7 +20,7 @@ import javax.inject.Inject
 /**
  * One lesson, read on its own page.
  *
- * The mirror of [ArticleViewModel], deliberately: opening is recorded as soon as the screen
+ * Opening is recorded as soon as the screen
  * resolves its id, and finishing waits for the reader to actually reach the end. The sheet this
  * replaced recorded completion from its DISMISSAL, which counted a bounce as a read and so
  * corrupted the one signal the ledger keeps. Both writes are idempotent in the repository, so a
@@ -68,24 +67,17 @@ class LessonViewModel @Inject constructor(
     }
 
     /**
-     * Where a reader goes from the end of this lesson.
-     *
-     * Within a track, the registry's order IS the authoring order, so the following lesson is a
-     * real "next" in Fundamentals (the one track written to be read start to finish) and honestly
-     * only "more" anywhere else. At the end of a track it steps to the head of the following one,
-     * so no lesson is a dead end — the last one in the last track is, and that is the truth.
+     * Where a reader goes from the end of this lesson: the next one on the page. Inside a chapter
+     * that is "Next in Training"; at a chapter's end it steps into the next chapter. The last lesson
+     * has nowhere to go, and says nothing.
      */
     private fun nextAfter(lesson: Lesson): NextPiece? {
-        val siblings = AcademyRegistry.byTrack(lesson.track)
-        val at = siblings.indexOfFirst { it.id == lesson.id }
-        val ordered = lesson.track == LessonTrack.FUNDAMENTALS
-
-        siblings.getOrNull(at + 1)?.let {
-            return it.piece(if (ordered) "Next in ${lesson.track.displayName}" else "More in ${lesson.track.displayName}")
-        }
-
-        val nextTrack = LessonTrack.entries.getOrNull(lesson.track.ordinal + 1) ?: return null
-        return AcademyRegistry.byTrack(nextTrack).firstOrNull()?.piece("Next chapter")
+        val all = AcademyRegistry.lessons
+        val next = all.getOrNull(all.indexOfFirst { it.id == lesson.id } + 1) ?: return null
+        return next.piece(
+            if (next.track == lesson.track) "Next in ${lesson.track.displayName}"
+            else "Next chapter: ${next.track.displayName}"
+        )
     }
 
     private fun Lesson.piece(lead: String) = NextPiece(

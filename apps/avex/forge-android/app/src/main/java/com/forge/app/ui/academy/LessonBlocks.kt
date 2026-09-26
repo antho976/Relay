@@ -100,6 +100,12 @@ internal fun BlockBody(
                     Spacer(Modifier.height(24.dp))
                 }
 
+                is LessonBlock.Figure -> {
+                    Spacer(Modifier.height(10.dp))
+                    LessonFigure(block.key, block.caption)
+                    Spacer(Modifier.height(28.dp))
+                }
+
                 is LessonBlock.Example -> {
                     val value = examples[block.key]
                     Spacer(Modifier.height(6.dp))
