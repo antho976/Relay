@@ -1,36 +1,17 @@
 package com.forge.app.ui.onboarding
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.forge.app.program.DayArchetype
 import com.forge.app.program.GeneratedDay
-import com.forge.app.ui.common.bounceClick
-import com.forge.app.ui.theme.ForgeMotion
+import com.forge.app.ui.common.WeekBarRail
 
 /**
  * The plan under construction — onboarding's one persistent mark, and the reason the rebuilt flow
@@ -85,121 +66,21 @@ internal fun PlanLedger(
     val sets = archetypes.indices.map { i ->
         days?.getOrNull(i)?.exercises?.sumOf { it.sets } ?: plannedSets.getOrElse(i) { 0 }
     }
-    val peak = (sets.maxOrNull() ?: 0).coerceAtLeast(1)
 
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         StepSectionLabel(label, meta = "${sets.sum()} sets")
-        Row(
+        // The bars themselves live in ui/common so Your program draws the same week (2026-09-25).
+        WeekBarRail(
+            names = archetypes.map { it.name },
+            sets = sets,
             // When the bars are tappable each one announces itself, so a readout on the parent would
             // talk over its own children; the whole-week reading only stands in for the passive mark.
-            Modifier
-                .fillMaxWidth()
-                .then(
-                    if (onSelect == null) {
-                        Modifier.semantics { contentDescription = weekReadout(archetypes, sets) }
-                    } else Modifier
-                ),
-            horizontalArrangement = Arrangement.spacedBy(BAR_GAP),
-            // Top, not bottom: every track is the same height, so aligning their TOPS keeps the
-            // whole row of bars on one baseline even when one day's name wraps to two lines. Bottom
-            // alignment measured the label into the column and floated that day's bar above its
-            // neighbours (the 7-day split's "Arms & Delts" did exactly this).
-            verticalAlignment = Alignment.Top
-        ) {
-            archetypes.forEachIndexed { i, archetype ->
-                DayBar(
-                    name = archetype.name,
-                    // A day that trains at all keeps a visible stub, so a light day reads as light
-                    // rather than as missing.
-                    fraction = if (sets[i] <= 0) 0f else (sets[i].toFloat() / peak).coerceAtLeast(0.15f),
-                    lit = sets[i] > 0,
-                    // No selection = every bar reads as data. With one, accent marks the day being
-                    // read and the rest step down to muted, so the accent means "you are here"
-                    // rather than being spent on all seven at once (§5).
-                    selected = selectedIndex == null || selectedIndex == i,
-                    onClick = onSelect?.let { select -> { select(i) } },
-                    readout = "${archetype.name}, ${sets[i]} sets",
-                    trackHeight = trackHeight,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-    }
-}
-
-private val BAR_GAP = 8.dp
-
-/**
- * One day's bar in its track, with the day's mono name beneath. The WHOLE column is the tap target
- * when it has one — bar plus label, never a nested tap (§2③) — which is also what gets it near
- * §14's 48dp at seven days across a phone gutter.
- */
-@Composable
-private fun DayBar(
-    name: String,
-    fraction: Float,
-    lit: Boolean,
-    selected: Boolean,
-    onClick: (() -> Unit)?,
-    readout: String,
-    trackHeight: Dp,
-    modifier: Modifier = Modifier
-) {
-    val animated by animateFloatAsState(fraction, ForgeMotion.standardTween(), label = "day_sets")
-    // Muted at the 0.7 rung, not at full: six near-white slabs beside one accent bar out-shout the
-    // accent (muted 1.0 measures 9.56:1 on Pearl, Ember 5.84:1), which inverts what the colour is
-    // for. 0.7 is 5.18:1 — comfortably past §14's 3:1 floor for a mark that carries meaning, and
-    // visibly a step below the day being read.
-    val fill by animateColorAsState(
-        if (selected) MaterialTheme.colorScheme.primary
-        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-        ForgeMotion.standardTween(ForgeMotion.DurationFast),
-        label = "day_fill"
-    )
-    Column(
-        modifier
-            .then(
-                if (onClick == null) Modifier
-                else Modifier
-                    .minimumInteractiveComponentSize()
-                    .bounceClick(onClick = onClick)
-                    .semantics {
-                        contentDescription = readout
-                        this.selected = selected
-                    }
-            ),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Box(
-            Modifier
-                // Capped so four days read as bars rather than as slabs of accent, and seven still
-                // fit the gutter. No text inside, so a fixed height is safe at any font scale (§14).
-                .widthIn(max = 28.dp)
-                .fillMaxWidth()
-                .height(trackHeight)
-                .clip(RoundedCornerShape(4.dp))
-                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)),
-            contentAlignment = Alignment.BottomCenter
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(animated.coerceIn(0f, 1f))
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(fill)
-            )
-        }
-        Text(
-            // The same name the week page's day sections use, so the mark and the list can't read
-            // as two different weeks.
-            name.uppercase(),
-            style = MaterialTheme.typography.labelSmall,
-            color = if (lit && selected) MaterialTheme.colorScheme.onBackground
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
+            modifier = if (onSelect == null) {
+                Modifier.semantics { contentDescription = weekReadout(archetypes, sets) }
+            } else Modifier,
+            trackHeight = trackHeight,
+            selectedIndex = selectedIndex,
+            onSelect = onSelect
         )
     }
 }
