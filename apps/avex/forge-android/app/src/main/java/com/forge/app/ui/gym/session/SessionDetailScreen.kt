@@ -2,9 +2,6 @@ package com.forge.app.ui.gym.session
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,10 +15,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -29,11 +22,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import com.forge.app.ui.common.ForgeOutlineCapsule
-import com.forge.app.ui.common.ForgePrimaryCapsule
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -51,7 +41,8 @@ import com.forge.app.ui.common.statsEntrance
  * compact muscle map, then a global Metric picker (weight / volume / reps / RPE) and a single card
  * for that metric. Weight/Volume/Reps render a tappable per-exercise comparison — tap a row to expand
  * that exercise's full detail; RPE merges into one chart with an exercise selector. The bars/line
- * style is now per-card (held here so each metric keeps its own choice but resets on leave).
+ * style is now per-card (held here so each metric keeps its own choice but resets on leave). Read
+ * only: the page-end "Log again today" / "Session type" capsules were removed (2026-09-26).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,8 +52,6 @@ fun SessionDetailScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val exportPath by viewModel.exportPath.collectAsStateWithLifecycle()
-    val reLoggedSessionId by viewModel.reLoggedSessionId.collectAsStateWithLifecycle()
-    val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -96,36 +85,12 @@ fun SessionDetailScreen(
         }
     }
 
-    // "Log again today" (GYMAP-36): confirm the freshly duplicated session with an Undo (§13 —
-    // reversible act, no confirm dialog). Undo discards the copy; the source is untouched either way.
-    reLoggedSessionId?.let { newId ->
-        LaunchedEffect(newId) {
-            val result = snackbarHostState.showSnackbar(
-                message = "Logged again today", actionLabel = "Undo", duration = SnackbarDuration.Short
-            )
-            if (result == SnackbarResult.ActionPerformed) viewModel.undoReLog(newId)
-            viewModel.clearReLoggedSessionId()
-        }
-    }
-
     var metric by rememberSaveable { mutableStateOf(SessionMetric.WEIGHT) }
-    /** A1: the session-type picker (tiny-input dialog), opened from the page-end sidekick capsule. */
-    var showTypePicker by rememberSaveable { mutableStateOf(false) }
     // Bars/line is per-stat now — each metric carries its own style instead of one page-wide switch.
     var weightStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
     var volumeStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
     var repsStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
     var rpeStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
-
-    if (showTypePicker) {
-        state.data?.let { data ->
-            SessionTypeDialog(
-                current = data.sessionType,
-                onPick = { viewModel.setSessionType(it) },
-                onDismiss = { showTypePicker = false }
-            )
-        }
-    }
 
     Scaffold(
         topBar = {
@@ -147,7 +112,6 @@ fun SessionDetailScreen(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = Color.Transparent
     ) { inner ->
         val data = state.data
@@ -230,27 +194,6 @@ fun SessionDetailScreen(
                         item("heart-rate") {
                             Box(Modifier.statsEntrance(3).padding(top = 20.dp)) {
                                 SessionHrSection(hrView, onBg, muted, accent, outline)
-                            }
-                        }
-                    }
-                    // "Log again today" (GYMAP-36): one-tap re-log of this exact workout as today's
-                    // session — a page-end do-it-now capsule (§8 ①), shown only when there's something
-                    // to copy (the exercises-empty branch never reaches here).
-                    item("relog") {
-                        Box(
-                            Modifier
-                                .statsEntrance(3)
-                                .fillMaxWidth()
-                                .padding(top = 8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                ForgePrimaryCapsule("Log again today", onClick = { viewModel.reLogToday() })
-                                Spacer(Modifier.height(10.dp))
-                                // Sidekick (§8 ②) to the filled capsule: tag what kind of session this
-                                // was. The current tag renders in the header eyebrow, so this says the
-                                // action alone — state is never drawn twice.
-                                ForgeOutlineCapsule("Session type", onClick = { showTypePicker = true })
                             }
                         }
                     }

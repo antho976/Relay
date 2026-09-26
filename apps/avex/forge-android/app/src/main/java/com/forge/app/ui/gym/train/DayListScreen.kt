@@ -80,7 +80,15 @@ fun DayListScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(title, style = MaterialTheme.typography.headlineLarge) },
+                // The bar insets its title 16dp; the extra 8 lands it on the 24dp page gutter the
+                // content below (and every other screen) sits on, so the name and the page line up.
+                title = {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.headlineLarge,
+                        modifier = Modifier.padding(start = if (onBack == null) 8.dp else 0.dp)
+                    )
+                },
                 navigationIcon = {
                     if (onBack != null) IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
