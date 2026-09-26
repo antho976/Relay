@@ -14,8 +14,8 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The plan-shaping questions, in the order the generator needs them: the plan-mode fork first (it
- * decides how much of the flow even runs), then goal, experience and day-count. From the day-count
- * on, the [PlanLedger] under the question is live — see [OnboardingScreen] for the page order and
+ * decides how much of the flow even runs), then goal, experience and day-count. The day-count page
+ * draws the [PlanLedger] under its question — see [OnboardingScreen] for the page order and
  * `OnboardingGymSteps.kt` for the gym half.
  *
  * Every page is `serif question → one caption → content`. Nothing here asks for a setting: the
