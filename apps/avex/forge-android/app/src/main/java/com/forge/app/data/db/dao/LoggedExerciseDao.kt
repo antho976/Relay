@@ -6,7 +6,6 @@ import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Update
 import com.forge.app.data.db.entities.LoggedExercise
-import com.forge.app.data.db.projections.HeatmapTimestamp
 import com.forge.app.data.db.projections.RecentPrRow
 import com.forge.app.data.db.types.EffortRating
 import kotlinx.coroutines.flow.Flow
@@ -95,24 +94,6 @@ interface LoggedExerciseDao {
     """)
     suspend fun lastLoggedBefore(exerciseId: String, excludeSessionId: Long): LoggedExercise?
 
-    /**
-     * Trophy and lifetime counts.
-     *
-     * All of these join `session` for the same reason: they are permanent progression counters, and
-     * `Session.isUntracked` promises that an untracked session is "excluded from streak, trophies,
-     * suggestions". Counting the bare `logged_exercise` table meant a workout the user explicitly
-     * marked as not counting still unlocked trophies, raised the lifetime PR total and inflated the
-     * ratings histogram — on the very screens that hide untracked rows, so the number and the list
-     * it was supposedly counting disagreed with each other. The `finished_at` half keeps the LIVE
-     * session out for the same reason every maximum in LoggedSetDao does.
-     */
-    @Query("""
-        SELECT COUNT(*) FROM logged_exercise le
-        INNER JOIN session s ON le.session_id = s.id
-        WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL AND s.is_untracked = 0
-    """)
-    fun observePrCount(): Flow<Int>
-
     @Query("""
         SELECT COUNT(*) FROM logged_exercise le
         INNER JOIN session s ON le.session_id = s.id
@@ -149,21 +130,6 @@ interface LoggedExerciseDao {
     """)
     suspend fun totalLogged(): Int
 
-    @Query("""
-        SELECT COUNT(*) FROM logged_exercise le
-        INNER JOIN session s ON le.session_id = s.id
-        WHERE s.finished_at IS NOT NULL AND s.is_untracked = 0
-    """)
-    fun observeTotalLogged(): Flow<Int>
-
-    /** For the frequency heatmap. One row per LoggedExercise; aggregated to per-day counts in Kotlin. */
-    @Query("""
-        SELECT s.started_at FROM logged_exercise le
-        INNER JOIN session s ON le.session_id = s.id
-        WHERE s.started_at >= :sinceEpochMs
-    """)
-    fun observeHeatmapTimestamps(sinceEpochMs: Long): Flow<List<HeatmapTimestamp>>
-
     /** PR timeline — 30 most recent PR-marked exercises, joined to session date. */
     @Query("""
         SELECT le.exercise_id, le.swapped_name, s.started_at, le.id AS logged_exercise_id
@@ -174,16 +140,6 @@ interface LoggedExerciseDao {
         LIMIT 30
     """)
     fun observeRecentPrs(): Flow<List<RecentPrRow>>
-
-    /** All PRs with session date — for the PRs subtab (#39). */
-    @Query("""
-        SELECT le.exercise_id, le.swapped_name, s.started_at, le.id AS logged_exercise_id
-        FROM logged_exercise le
-        INNER JOIN session s ON le.session_id = s.id
-        WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL AND s.is_untracked = 0
-        ORDER BY s.started_at DESC
-    """)
-    fun observeAllPrs(): Flow<List<RecentPrRow>>
 
     /**
      * Exercise frequency in past N weeks — distinct sessions containing each exercise (#73).
@@ -224,33 +180,8 @@ interface LoggedExerciseDao {
     """)
     suspend fun sessionExerciseRowsSince(sinceMs: Long): List<SessionExerciseRow>
 
-    /** All PR dates per exercise ordered chronologically — used to compute time-to-next-PR (#74). */
-    @Query("""
-        SELECT le.exercise_id, s.started_at AS session_date
-        FROM logged_exercise le
-        INNER JOIN session s ON le.session_id = s.id
-        WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL AND s.is_untracked = 0
-        ORDER BY le.exercise_id, s.started_at ASC
-    """)
-    suspend fun prDatesPerExercise(): List<ExercisePrDate>
-
     data class ExercisePrDate(
         @androidx.room.ColumnInfo(name = "exercise_id") val exerciseId: String,
-        @androidx.room.ColumnInfo(name = "session_date") val sessionDate: Long
-    )
-
-    /** Effort ratings with session dates — used for the weekly effort distribution chart (#75). */
-    @Query("""
-        SELECT le.difficulty, s.started_at AS session_date
-        FROM logged_exercise le
-        INNER JOIN session s ON le.session_id = s.id
-        WHERE s.finished_at IS NOT NULL AND s.started_at >= :sinceMs AND le.difficulty IS NOT NULL
-          AND s.is_untracked = 0 AND le.skipped = 0
-    """)
-    suspend fun effortRatingsSince(sinceMs: Long): List<EffortWithDate>
-
-    data class EffortWithDate(
-        @androidx.room.ColumnInfo(name = "difficulty") val difficulty: String?,
         @androidx.room.ColumnInfo(name = "session_date") val sessionDate: Long
     )
 

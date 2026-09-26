@@ -28,8 +28,6 @@ class BodyweightRepository @Inject constructor(
     private fun today(zone: ZoneId = ZoneId.systemDefault()): LocalDate =
         Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
 
-    suspend fun latestWeightLb(): Double? = dao.latest()?.weightLb
-
     /**
      * Record a weigh-in for [date] (defaults to today) with an optional [note] (GYMAP-54). One entry
      * per day: the `date_key` upsert replaces that day's row, so re-saving edits it and backdating

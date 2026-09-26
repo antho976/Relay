@@ -82,10 +82,7 @@ data class CoachDecision(
 ) {
     companion object {
         const val SCOPE_WEEK = "week"
-        const val SCOPE_DAY = "day"
-        const val SCOPE_SESSION = "session"
 
-        const val OUTCOME_PENDING = "pending"
         const val OUTCOME_OK = "ok"
         const val OUTCOME_FAILED = "failed"
 

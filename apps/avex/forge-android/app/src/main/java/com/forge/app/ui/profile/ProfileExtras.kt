@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -27,20 +26,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.sp
-import com.forge.app.data.repo.ExtendedGoalRepository
-import com.forge.app.data.repo.GoalRepository
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.domain.photo.PhotoPose
-import com.forge.app.domain.units.unitLabel
-import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.experiment.CardShape
-import com.forge.app.ui.goals.GoalProgressLine
-import com.forge.app.ui.goals.customGoalTitle
-import com.forge.app.ui.goals.customGoalValueLine
-import com.forge.app.ui.goals.goalCaption
-import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.theme.MonoSectionAnchor
 import java.io.File
 import java.text.SimpleDateFormat
@@ -65,115 +55,6 @@ private val GHOST_DEPTH = floatArrayOf(1f, 0.62f, 0.34f)
  * the margin is the only thing giving the words a place to be.
  */
 private val GHOST_PADDING = 14.dp
-
-/** A goal tile — a lift target or an auto-tracked custom goal, unified for previewing. */
-private sealed interface GoalTile {
-    val fraction: Float
-    val achieved: Boolean
-
-    data class Lift(val g: GoalRepository.GoalProgress) : GoalTile {
-        override val fraction get() = g.fraction
-        override val achieved get() = g.achieved
-    }
-
-    data class Custom(val g: ExtendedGoalRepository.Progress) : GoalTile {
-        override val fraction get() = g.fraction
-        override val achieved get() = g.achieved
-    }
-}
-
-/**
- * GOALS — the top goals as a stack of open progress lines (achieved-first / closest-first), mixing
- * lift targets and auto-tracked custom goals, each bar sweeping in on entrance. Home's teaser
- * (dropped from the Profile 2026-07-03) — capped at three; the header action opens the full Goals
- * screen, where goals are added and edited.
- */
-@Composable
-internal fun GoalLinesSection(
-    goals: List<GoalRepository.GoalProgress>,
-    customGoals: List<ExtendedGoalRepository.Progress>,
-    onOpenGoals: () -> Unit,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color
-) {
-    val total = goals.size + customGoals.size
-    SectionHeader(
-        "GOALS", muted,
-        action = when {
-            total == 0 -> null
-            total > 3 -> "all $total →"
-            else -> "view all →"
-        },
-        onAction = if (total > 0) onOpenGoals else null
-    )
-    if (total == 0) {
-        Row(
-            Modifier.fillMaxWidth().bounceClick { onOpenGoals() },
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("Set targets, track your lifts", style = MaterialTheme.typography.bodyMedium, color = onBg)
-            Text("→", style = MaterialTheme.typography.bodyMedium, color = accent)
-        }
-        return
-    }
-    // In-progress goals lead (closest-first), then achieved ones — so a full slate of reached goals
-    // can't bury the active target you're actually working toward.
-    val preview = (goals.map { GoalTile.Lift(it) } + customGoals.map { GoalTile.Custom(it) })
-        .sortedWith(compareBy<GoalTile> { it.achieved }.thenByDescending { it.fraction })
-        .take(3)
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        preview.forEachIndexed { i, tile -> GoalLine(tile, i, onOpenGoals, onBg, muted, accent, outline) }
-    }
-}
-
-@Composable
-private fun GoalLine(
-    tile: GoalTile,
-    index: Int,
-    onClick: () -> Unit,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color
-) {
-    val settings = LocalForgeSettings.current
-    val name: String
-    val valueLine: String
-    val caption: String?
-    when (tile) {
-        is GoalTile.Lift -> {
-            name = tile.g.name
-            valueLine = "${weightInputValue(tile.g.currentBestLb, settings.weightUnit)} / " +
-                "${weightInputValue(tile.g.targetLb, settings.weightUnit)} ${unitLabel(settings.weightUnit)}"
-            // A lift target has neither a window nor a baseline: it is done or it is not.
-            caption = if (tile.g.achieved) "Reached" else null
-        }
-        is GoalTile.Custom -> {
-            name = customGoalTitle(tile.g)
-            valueLine = customGoalValueLine(tile.g, settings.weightUnit, settings.useMiles)
-            caption = goalCaption(
-                achieved = tile.g.achieved,
-                metric = tile.g.metric,
-                period = tile.g.period,
-                baselineValue = tile.g.baselineValue,
-                weightUnit = settings.weightUnit,
-                nowMs = System.currentTimeMillis(),
-            )
-        }
-    }
-    // The shared goal line (ui/goals) — one visual language whether a goal shows here or on the
-    // Goals screen; the sweep-in animation lives in the shared component.
-    GoalProgressLine(
-        title = name, valueLine = valueLine,
-        fraction = tile.fraction, achieved = tile.achieved,
-        onBg = onBg, muted = muted, accent = accent, outline = outline,
-        caption = caption,
-        onClick = onClick
-    )
-}
 
 /**
  * GALLERY — a full-bleed horizontal filmstrip of the latest photos, echoing the cover photo's

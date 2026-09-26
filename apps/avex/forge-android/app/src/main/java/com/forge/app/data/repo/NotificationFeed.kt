@@ -309,13 +309,6 @@ class NotificationFeed @Inject constructor(
         if (disabled.isEmpty()) rows else rows.filterNot { it.kind.key in disabled }
     }
 
-    /** How many notices are waiting — the bell's unread count. */
-    val unreadCount: Flow<Int> = notices.map { it.size }
-
-    /** How many of those are lessons — the Academy tab's badge. Reads from the same list as the
-     *  bell, so a kind switched off in Settings drops out of both at once. */
-    val academyUnreadCount: Flow<Int> = notices.map { rows -> rows.count { it.kind == NoticeKind.ACADEMY } }
-
     /** Notices whose small arrival banner has not played yet. The feed row and banner have separate
      * lifetimes so an unanswered check-in or unread lesson does not pop up again on every launch. */
     val pendingAnnouncements: Flow<List<AppNotice>> = combine(

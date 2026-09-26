@@ -24,8 +24,6 @@ class LeanMassRepository @Inject constructor(
 ) {
     fun observeRecent(limit: Int = 90): Flow<List<LeanMassEntry>> = dao.observeRecent(limit)
 
-    suspend fun latestLb(): Double? = dao.latest()?.weightLb
-
     /** Whether an "Import from Health Connect" affordance should be offered (read granted). */
     suspend fun canImportFromHealthConnect(): Boolean = health.canReadLeanMass()
 

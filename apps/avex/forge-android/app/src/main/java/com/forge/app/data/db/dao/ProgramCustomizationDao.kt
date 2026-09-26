@@ -34,9 +34,6 @@ interface ProgramCustomizationDao {
     @Query("DELETE FROM program_customization WHERE day_key = :dayKey AND exercise_id = :exerciseId")
     suspend fun delete(dayKey: String, exerciseId: String)
 
-    @Query("DELETE FROM program_customization WHERE day_key = :dayKey")
-    suspend fun clearDay(dayKey: String)
-
     @Query("DELETE FROM program_customization")
     suspend fun deleteAll()
 }

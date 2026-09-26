@@ -308,24 +308,7 @@ class ProfileViewModel @Inject constructor(
         _state.update { it.copy(name = trimmed) }
     }
 
-    /** Save a caption for a progress photo (edited in the viewer dialog). */
-    fun setPhotoNote(photo: ProgressPhoto, note: String) = viewModelScope.launch {
-        val trimmed = note.trim()
-        photoRepo.setNote(photo, trimmed)
-        // Patch the one edited caption in place rather than re-reading + re-decoding the whole index.
-        _state.update { st ->
-            st.copy(
-                photos = st.photos.map { if (it.fileName == photo.fileName) it.copy(note = trimmed) else it }
-            )
-        }
-    }
-
     fun fileFor(photo: ProgressPhoto) = photoRepo.fileFor(photo)
-
-    fun addPhoto(uri: Uri) = viewModelScope.launch {
-        // Dated by EXIF capture time inside the repo; the revision collector refreshes the strip.
-        photoRepo.add(uri)
-    }
 
     fun deletePhoto(photo: ProgressPhoto) = viewModelScope.launch {
         photoRepo.delete(photo)

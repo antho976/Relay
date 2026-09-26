@@ -197,7 +197,7 @@ class DoctrineParityTest {
 
         // Deprecated ones are excluded: §12 records their status and they are on the way out,
         // not part of the inventory.
-        val deprecated = setOf("EmptyState", "FirstTouchTip")
+        val deprecated = setOf("FirstTouchTip")
         val unmentioned = exported - mentioned - deprecated
         assertTrue(
             "\n\nThese composables live in ui/common/ but DESIGN.md never names them, so nobody " +

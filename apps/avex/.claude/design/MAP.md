@@ -321,7 +321,8 @@ it is the **LIFETIME VOLUME** section's own serif reading sitting over its cumul
 session-by-session curve, so the number has one home (§4.3, 2026-07-24; the old 2×2 grid of 36sp
 figures and its local `StatCell` copy of `EditorialFigure` are both retired) — then the merged
 **BODY** section (2026-07-13, Antho — bodyweight, body fat and measurements folded from three
-separate sections into ONE compact stack, `BodyMetricsSection` in `ProfileBody.kt`): one mono `BODY`
+separate sections into ONE compact stack, `BodyMetricsSection` in `ProfileBody.kt`, since replaced by
+`ProfileBodyRows` in `ProfileSurfaceSections.kt` and deleted): one mono `BODY`
 header over a row per metric built on exactly TWO RAILS and nothing between them (rebuilt
 2026-07-24, Antho — the old row was a fixed 84dp label column, a figure floating loose in the
 middle, and a bare accent `+ log` / `open →` text link stranded at the far edge): LEFT = the mono

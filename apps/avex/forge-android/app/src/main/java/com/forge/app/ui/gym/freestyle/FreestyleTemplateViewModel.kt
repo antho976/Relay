@@ -78,9 +78,6 @@ class FreestyleTemplateViewModel @Inject constructor(
     private val loggedSetDao: LoggedSetDao
 ) : ViewModel() {
 
-    val hasTemplates = sessionDao.observeHasReusableWorkout()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
-
     /**
      * Every finished workout as a template row, newest first. Joins each session to its (non-skipped)
      * exercise names off the main thread; sessions that logged nothing are dropped (nothing to reuse).

@@ -2,20 +2,6 @@ package com.forge.app.ui.gym.stats.state
 
 import com.forge.app.program.MuscleGroup
 
-/** One day row in the "What I did this week" editorial section. */
-data class WeekActivityRow(
-    val dayOfWeek: Int,            // 0=Mon .. 6=Sun
-    val dayLabel: String,          // "MON", "TUE", etc.
-    val sessionName: String? = null,
-    val muscleWord: String? = null, // "PUSH", "HAMS", etc.
-    val durationMin: Int? = null,
-    val setCount: Int = 0,
-    val hasPr: Boolean = false,
-    val cardioType: String? = null, // "Run", "Walk", etc. — null if not cardio
-    val cardioDurationMin: Int? = null,
-    val cardioDistanceKm: Double? = null
-)
-
 /**
  * State for the rebuilt Gym → Stats screen. Trimmed to exactly what the four tabs render
  * (Strength / Volume / Body / Trends) — fields the old long-scroll screen carried but no current
@@ -124,11 +110,6 @@ data class MuscleSetCount(val muscle: MuscleGroup, val sets: Int) {
     val high: Int get() = 20
 }
 
-/** How logged sets split across rep ranges (Phase 2). */
-data class RepRangeDist(val strength: Int, val hypertrophy: Int, val endurance: Int) {
-    val total: Int get() = strength + hypertrophy + endurance
-}
-
 /** Number of sets logged at a given RPE value (Phase 3). */
 data class RpeBucket(val rpe: Double, val count: Int)
 
@@ -147,18 +128,6 @@ data class E1rmLift(
     /** Change from first recorded e1RM to current. */
     val delta: Double get() = if (history.size >= 2) currentE1rm - history.first() else 0.0
 }
-
-/** Best weight achieved at a given rep count. */
-data class RepMaxEntry(val reps: Int, val weightLb: Double)
-
-/** Rep-max table for a single exercise. */
-data class RepMaxSet(val exerciseName: String, val entries: List<RepMaxEntry>)
-
-/** Per-muscle weekly volume, sorted descending by volume in the repository. */
-data class MuscleVolume(
-    val muscle: MuscleGroup,
-    val volumeLb: Double
-)
 
 data class PrEntry(
     val date: Long,
@@ -179,54 +148,12 @@ data class PrRecord(
     val relativeStrength: Double? = null
 )
 
-/** One data point in the per-exercise weight history (#27). */
-data class HistoryPoint(
-    val sessionDate: Long,
-    val maxWeightLb: Double
-)
-
-/** How many sessions in past 8 weeks included a given exercise (#73). */
-data class ExerciseFrequency(
-    val exerciseId: String,
-    val exerciseName: String,
-    val sessionCount: Int,
-    val outOf: Int
-)
-
-/** Average days between consecutive PRs for an exercise (#74). */
-data class TimeToPrEntry(
-    val exerciseId: String,
-    val exerciseName: String,
-    val avgDaysBetween: Int,
-    val prCount: Int
-)
-
-/** EASY/JUST_RIGHT/HARD/BRUTAL counts for a single ISO-week (#75). */
-data class WeeklyEffortCounts(
-    val weekLabel: String,
-    val easy: Int,
-    val justRight: Int,
-    val hard: Int,
-    val brutal: Int
-) {
-    val total: Int get() = easy + justRight + hard + brutal
-}
-
 /** One point on the volume trend chart, with a deload marker (#126). */
 data class VolumeDeloadPoint(
     val sessionDate: Long,
     val dayKey: String,
     val totalVolumeLb: Double,
     val isDeload: Boolean
-)
-
-/** Best-ever vs average volume for a day type (#132). */
-data class DayTypeVolumeStats(
-    val dayKey: String,
-    val dayName: String,
-    val avgVolumeLb: Double,
-    val maxVolumeLb: Double,
-    val sessionCount: Int
 )
 
 /** Stats for a time window (week or month) used for period-over-period comparison (#34, #130). */
@@ -245,15 +172,7 @@ data class PeriodComparison(
 ) {
     val volumeDelta: Double get() = current.volumeLb - previous.volumeLb
     val sessionsDelta: Int get() = current.sessions - previous.sessions
-    val prsDelta: Int get() = current.prs - previous.prs
 }
-
-/** Behavioral insight flag — shown in the Stats/Overview screen (#41, #80). */
-data class InsightFlag(
-    val emoji: String,
-    val title: String,
-    val body: String
-)
 
 /** Session efficiency / lifetime metrics row (#40). */
 data class LifetimeMetrics(

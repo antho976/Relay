@@ -1114,54 +1114,6 @@ class HealthConnectManager @Inject constructor(
         }
     }
 
-    /**
-     * The most recent valid sleep session before [nowMs] as a standalone data point — gated on the
-     * sleep read permission alone (independent of resting-HR), fail-soft to null. Distinct from
-     * [readRecovery], which bundles a window of nights for the coach; this exposes just the latest.
-     */
-    suspend fun latestSleep(nowMs: Long): SleepNight? = withContext(Dispatchers.IO) {
-        val client = clientOrNull() ?: return@withContext null
-        if (!grantedPermissions().contains(HealthPermission.getReadPermission(SleepSessionRecord::class))) return@withContext null
-        hcCatching {
-            client.readRecords(
-                ReadRecordsRequest(
-                    SleepSessionRecord::class,
-                    timeRangeFilter = TimeRangeFilter.before(Instant.ofEpochMilli(nowMs)),
-                    ascendingOrder = false,
-                    pageSize = 1
-                )
-            ).records.firstOrNull()?.let {
-                val min = Duration.between(it.startTime, it.endTime).toMinutes()
-                if (min <= 0) null else SleepNight(
-                    endedAtMs = it.endTime.toEpochMilli(),
-                    durationMin = min.coerceAtMost(MAX_SLEEP_MIN).toInt()
-                )
-            }
-        }
-    }
-
-    /**
-     * The most recent physiologically valid resting-HR reading before [nowMs] as a standalone data
-     * point — gated on the resting-HR read permission alone, fail-soft to null.
-     */
-    suspend fun latestRestingHr(nowMs: Long): RestingHrSample? = withContext(Dispatchers.IO) {
-        val client = clientOrNull() ?: return@withContext null
-        if (!grantedPermissions().contains(HealthPermission.getReadPermission(RestingHeartRateRecord::class))) return@withContext null
-        hcCatching {
-            client.readRecords(
-                ReadRecordsRequest(
-                    RestingHeartRateRecord::class,
-                    timeRangeFilter = TimeRangeFilter.before(Instant.ofEpochMilli(nowMs)),
-                    ascendingOrder = false,
-                    pageSize = 1
-                )
-            ).records.firstOrNull()?.let {
-                val bpm = it.beatsPerMinute.toInt()
-                if (bpm in MIN_BPM..MAX_BPM) RestingHrSample(timeMs = it.time.toEpochMilli(), bpm = bpm) else null
-            }
-        }
-    }
-
     private companion object {
         /** Cap a single sleep record at 16h so a stuck/forgotten wearable session can't read as great rest. */
         const val MAX_SLEEP_MIN = 16L * 60

@@ -122,10 +122,4 @@ class CustomizationRepository @Inject constructor(
     fun observeAllDayNames(): Flow<List<DayNameOverride>> = dayNameDao.observeAll()
 
     suspend fun getDayName(dayKey: String): DayNameOverride? = dayNameDao.get(dayKey)
-
-    suspend fun setDayName(dayKey: String, customName: String) {
-        dayNameDao.upsert(DayNameOverride(dayKey, customName))
-    }
-
-    suspend fun clearDayName(dayKey: String) = dayNameDao.clear(dayKey)
 }

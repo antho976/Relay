@@ -18,9 +18,6 @@ object ConditioningPlanner {
     /** Weekly load may climb by about this much — the standard conservative ramp. */
     const val MAX_RAMP = 1.1
 
-    /** Hard intervals need this much clearance before a lower-body session. */
-    const val INTERVAL_CLEARANCE_HOURS = 24
-
     /** WHO's 150 min/week, the reference the cardio hub already draws against. */
     const val HEALTH_FLOOR_MINUTES = 150
 

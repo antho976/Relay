@@ -41,7 +41,7 @@ class CheckinRepositoryMidnightTest {
     private val samples = ArrayDeque(listOf(beforeMidnightMs, midnightMs, afterMidnightMs))
     private val clock = Clock { samples.removeFirstOrNull() ?: afterMidnightMs }
 
-    private val repo = CheckinRepository(db.checkinDao(), db.injuryRestrictionDao(), clock)
+    private val repo = CheckinRepository(db.checkinDao(), clock)
 
     @After
     fun tearDown() = db.close()

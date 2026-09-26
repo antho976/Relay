@@ -87,7 +87,6 @@ import java.time.LocalDate
  *
  * This is [CellShape] itself rather than a matching literal, so the two can never drift apart.
  * The cost is real and accepted: Home's capsules are now the only non-pill buttons in the app.
- * 56dp is `SurfaceCta`'s height.
  */
 private val HomeCapsuleShape = CellShape
 
