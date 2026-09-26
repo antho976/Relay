@@ -36,7 +36,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -182,10 +181,12 @@ fun CardioLogSheet(
         val date = SimpleDateFormat(if (sameYear) "MMM d" else "MMM d, yyyy", Locale.getDefault()).format(d).uppercase()
         "$day · $date"
     }
-    // "7:24 AM" (GYMAP-33) — honors the device's 12/24-hour format, matching the time picker.
-    val context = LocalContext.current
-    val timeHeader = remember(dateMs, context) {
-        android.text.format.DateFormat.getTimeFormat(context).format(Date(dateMs)).uppercase()
+    // "7:24 AM" (GYMAP-33): the app's own 12/24-hour setting, matching the time picker below. It
+    // followed the phone's setting, so with "Clock" set in Settings the header and picker disagreed.
+    val use24h = com.forge.app.ui.theme.LocalForgeSettings.current.timeFormat24h
+    val timeHeader = remember(dateMs, use24h) {
+        SimpleDateFormat(com.forge.app.domain.units.clockPattern(use24h), Locale.getDefault())
+            .format(Date(dateMs)).uppercase()
     }
 
     Scaffold(
