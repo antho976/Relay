@@ -262,22 +262,6 @@ internal suspend fun DayViewModel.buildExerciseUi(
 }
 
 /**
- * Second-pass annotation: surface each exercise's suggested weight delta on the *previous*
- * card (the "UP NEXT  +5 ↑" pill). Reads the lb delta the advisor computed — the old
- * version re-derived it from the suggestion *string*, which broke on PLATES exercises
- * (a plate-count text compared against pounds).
- */
-internal fun annotateNextExerciseDeltas(exercises: List<ExerciseUiState>): List<ExerciseUiState> =
-    exercises.mapIndexed { idx, ex ->
-        val delta = exercises.getOrNull(idx + 1)?.suggestedDeltaLb ?: return@mapIndexed ex
-        if (kotlin.math.abs(delta) < 0.5) return@mapIndexed ex
-        val sign = if (delta > 0) "+" else "−"
-        val abs = kotlin.math.abs(delta)
-        val deltaStr = if (abs % 1.0 == 0.0) "$sign${abs.toInt()}" else "$sign$abs"
-        ex.copy(nextSuggestedWeightDelta = deltaStr)
-    }
-
-/**
  * Rest duration + explanation for the timer started after a set. Delegates to the
  * adaptation engine's RestAdvisor: manual override → canonical SessionEstimate base
  * (+30s after brutal) → personal tuning from realized rest behavior ([DayViewModel.restTuning]).

@@ -1,6 +1,6 @@
 # Avex Privacy Policy
 
-_Last updated: September 1, 2026_
+_Last updated: September 26, 2026_
 
 Avex is an offline, single-user fitness tracker. It has no account, servers, analytics,
 advertising, or `INTERNET` permission. Your data stays on your devices unless you export or
@@ -11,6 +11,10 @@ share it.
 Avex stores workouts, sets, cardio, programs, goals, notes, moods, trophies, personal records,
 body measurements, settings, coach history, Academy progress, crash logs, your profile, avatar,
 and progress photos in private app storage.
+
+With auto-backup on, Avex also keeps a weekly backup copy of this data, including progress photos,
+in the same private storage. Files you export are written there too before you choose where to
+send them.
 
 ## Health Connect
 
@@ -70,9 +74,13 @@ Layer. Avex does not send that data to an Avex or Quiet Software server.
 ## Retention and deletion
 
 Data remains on your device until you delete it, reset Avex, clear app storage, or uninstall. You
-can delete individual records in the app, erase all Avex data from Settings, and delete exported
-files from the destination where you saved them. Health Connect records are managed separately in
-Health Connect, including records Avex wrote there.
+can delete individual records in the app. Factory reset in Settings erases all Avex data stored in
+the app, including its backup copy, exports, and crash logs.
+
+Backups or exports you saved to a folder you picked, such as Downloads, a cloud drive, or the
+auto-backup folder, are outside the app and are not erased by a factory reset or an uninstall.
+Delete them there. Health Connect records are managed separately in Health Connect, including
+records Avex wrote there.
 
 ## Children
 

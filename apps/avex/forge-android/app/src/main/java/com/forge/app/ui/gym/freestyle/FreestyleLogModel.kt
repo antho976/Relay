@@ -8,8 +8,10 @@ import com.forge.app.domain.units.parseToLb
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.program.CustomExerciseRegistry
 import com.forge.app.program.ExerciseLibrary
+import com.forge.app.program.ExercisePlan
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.program.MuscleGroup
+import com.forge.app.program.Program
 import com.forge.app.ui.common.rpeLabel
 import java.util.Locale
 
@@ -45,7 +47,12 @@ internal data class FsSet(
 internal data class FsExercise(
     val libId: String,
     val name: String,
-    val muscle: MuscleGroup,
+    /**
+     * Null only for a non-library, non-custom id (an importer `ext-…` row) whose muscle nothing
+     * knows. It used to fall back to the first muscle, so those moves were logged as Chest and the
+     * label was then written into the custom registry on save (audit 2026-09-26, 02).
+     */
+    val muscle: MuscleGroup?,
     val bodyweight: Boolean,
     /** Timed-hold exercise (GYMAP-51): sets log a held duration (mm:ss) instead of reps. */
     val timed: Boolean = false,
@@ -204,6 +211,25 @@ internal fun fsExerciseFor(libId: String): FsExercise? {
     )
 }
 
+/**
+ * A non-library id's program slot: the active program first, then the seed split, so a seed move
+ * (ua1…lb6) that a regenerate rotated out keeps its real muscle and unit. Deliberately NOT
+ * [Program.exercise], whose last fallback is the custom registry, where earlier builds registered
+ * imported and seed moves as Chest (audit 2026-09-26, 02).
+ */
+internal fun nonLibraryPlan(libId: String): ExercisePlan? =
+    Program.days.firstNotNullOfOrNull { d -> d.exercises.firstOrNull { it.id == libId } }
+        ?: Program.seedDays.firstNotNullOfOrNull { d -> d.exercises.firstOrNull { it.id == libId } }
+
+/**
+ * The muscle of a move with no library entry. A user-created move's muscle lives in the registry
+ * (first muscle only when even that was lost, as before); any other id takes its program slot's, or
+ * stays null rather than guessing: a guessed Chest is what fed imported rows into chest volume.
+ */
+internal fun nonLibraryMuscle(libId: String): MuscleGroup? =
+    if (isCustomExerciseId(libId)) CustomExerciseRegistry.muscle(libId) ?: MuscleGroup.entries.first()
+    else nonLibraryPlan(libId)?.muscle
+
 /** Snapshot the current log into a resumable draft (raw typed text is preserved verbatim, stamped
  *  with the unit it was typed in, see [FreestyleDraft.unitLabel]). */
 internal fun draftFrom(
@@ -223,7 +249,7 @@ internal fun draftFrom(
                     FreestyleDraftSet(it.weight, it.reps, it.setType, it.isAmrap, it.toFailure, it.rpe, it.hold)
                 },
                 name = ex.name,
-                muscleCode = ex.muscle.code,
+                muscleCode = ex.muscle?.code,
                 bodyweight = ex.bodyweight,
                 timed = ex.timed
             )
@@ -252,9 +278,11 @@ internal fun draftToItems(draft: FreestyleDraft, weightUnit: WeightUnit): List<F
             FsExercise(
                 libId = de.libId,
                 name = de.name?.takeIf { it.isNotBlank() } ?: de.libId,
-                muscle = de.muscleCode?.let { MuscleGroup.fromCode(it) }
-                    ?: CustomExerciseRegistry.muscle(de.libId)
-                    ?: MuscleGroup.entries.first(),
+                // Only a user-created move's drafted muscle is its own; any other id is re-derived,
+                // since a draft from an earlier build carries the Chest it was wrongly given.
+                muscle = if (isCustomExerciseId(de.libId)) {
+                    de.muscleCode?.let { MuscleGroup.fromCode(it) } ?: nonLibraryMuscle(de.libId)
+                } else nonLibraryMuscle(de.libId),
                 bodyweight = de.bodyweight ?: false,
                 timed = de.timed ?: de.sets.any { it.hold.isNotBlank() },
                 custom = true
@@ -283,12 +311,15 @@ internal fun List<FreestyleTemplateExercise>.toItems(weightUnit: WeightUnit): Li
             // A custom move has no catalogue entry, so its shape comes off the rows it was logged on.
             // Assuming "weighted rep exercise" brought a bodyweight movement back with a weight field
             // and a timed hold back as reps.
+            // Imported (`ext-…`) and seed-split ids land here too: they take their program slot's
+            // muscle and unit, or no muscle at all, never a guessed Chest (audit 2026-09-26, 02).
             val name = te.customName?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val unit = te.unitCode?.let { ExerciseUnit.fromCode(it) } ?: nonLibraryPlan(te.libId)?.unit
             FsExercise(
                 libId = te.libId,
                 name = name,
-                muscle = te.muscleCode?.let { MuscleGroup.fromCode(it) } ?: MuscleGroup.entries.first(),
-                bodyweight = te.unitCode?.let { ExerciseUnit.fromCode(it) } == ExerciseUnit.BODYWEIGHT,
+                muscle = te.muscleCode?.let { MuscleGroup.fromCode(it) } ?: nonLibraryMuscle(te.libId),
+                bodyweight = unit == ExerciseUnit.BODYWEIGHT,
                 timed = te.sets.any { it.durationSeconds != null },
                 custom = true
             )

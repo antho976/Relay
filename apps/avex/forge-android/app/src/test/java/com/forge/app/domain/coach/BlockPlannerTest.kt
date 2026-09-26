@@ -229,4 +229,27 @@ class BlockPlannerTest {
         // Inside the band both signals still count.
         assertEquals(0.85 * 1.05, BlockPhase.composedLoadScale(BlockPhase.DELOAD, 1.05), 1e-9)
     }
+
+    // ── Locale digits (audit 2026-09-26, 10) ───────────────────────────────────
+
+    @Test
+    fun weekIdsAreAsciiInEveryLocale() {
+        val saved = java.util.Locale.getDefault()
+        try {
+            for (tag in listOf("ar-EG", "fa-IR", "bn-BD", "mr-IN", "hi-IN-u-nu-deva")) {
+                java.util.Locale.setDefault(java.util.Locale.forLanguageTag(tag))
+                assertEquals(tag, "2026-W27", BlockPlanner.weekIdOf(java.time.LocalDate.of(2026, 6, 29)))
+            }
+        } finally {
+            java.util.Locale.setDefault(saved)
+        }
+    }
+
+    @Test
+    fun aBlockStoredWithLocaleDigitsStillAdvances() {
+        // What an ar-EG build wrote: "٢٠٢٦-W٠١". It used to parse as nothing, so no week ever elapsed.
+        val stored = BlockPlanner.start(nowMs = now, weekId = "\u0662\u0660\u0662\u0666-W\u0660\u0661")
+        val b = BlockPlanner.advance(stored, "2026-W03", now + 1)
+        assertEquals(3, b.weekIndex)
+    }
 }

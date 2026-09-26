@@ -17,10 +17,13 @@ data class ForgeUiSettings(
     val hiddenOverviewTiles: Set<String> = emptySet(),
     /** Goals pinned to Home, in pin order. Empty = Home falls back to closest-first. */
     val pinnedGoalKeys: List<String> = emptyList(),
-    val compactSetLogging: Boolean = false,
     val overviewTileOrder: List<String> = listOf("gym", "cardio", "trophies"),
-    val dateFormat: String = "MMM d, yyyy",
+    /**
+     * 12h/24h for every clock the app draws; read through `clockPattern`. Seeded from the phone's own
+     * setting until the user picks one (SettingsRepository.timeFormat24h).
+     */
     val timeFormat24h: Boolean = false,
+    /** Week starts Monday (true) or Sunday: orders Home's week strip and its weekly counts. */
     val firstDayMonday: Boolean = true,
     val hapticStrength: String = "strong",   // "off" | "light" | "medium" | "strong"
     val keepScreenOn: Boolean = true,        // hold the display awake while logging (GYMAP-74)

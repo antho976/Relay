@@ -585,7 +585,13 @@ class SettingsRepository @Inject constructor(
     suspend fun setDateFormat(pattern: String) =
         context.forgePreferences.edit { it[PreferenceKeys.DATE_FORMAT] = pattern }
 
-    val timeFormat24h: Flow<Boolean> = pref { it[PreferenceKeys.TIME_FORMAT_24H] ?: false }
+    /**
+     * 12h/24h for every clock the app draws (`clockPattern`). Unset follows the PHONE's own
+     * setting rather than a hard 12h: the toggle did nothing until the 2026-09-26 audit wired it,
+     * so a 24h-phone user who never opened it would otherwise have flipped to AM/PM overnight.
+     */
+    val timeFormat24h: Flow<Boolean> =
+        pref { it[PreferenceKeys.TIME_FORMAT_24H] ?: android.text.format.DateFormat.is24HourFormat(context) }
     suspend fun setTimeFormat24h(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.TIME_FORMAT_24H] = value }
 

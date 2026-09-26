@@ -50,4 +50,26 @@ class DecimalInputTest {
         assertEquals("", filterDecimalInput("abc"))
         assertEquals(".", filterDecimalInput(","))
     }
+
+    // ── Seeded edit fields (audit 2026-09-26, 05 and 06) ─────────────────────
+
+    @Test
+    fun anUntouchedSeedKeepsTheStoredValue() {
+        // A 10.047 km cardio distance seeds as "10.0"; a note-only edit must not store 10.0.
+        val km = 10.047
+        val seed = distanceInputValue(km, useMiles = false)
+        assertEquals(km, storedUnlessEdited(seed, seed, km) { parseToKm(it, false) }!!, 0.0)
+        // A 225 lb goal seeds as "102.1" kg; re-saving it untouched keeps 225, not 225.09.
+        val lb = 225.0
+        val kgSeed = weightInputValue(lb, WeightUnit.KG)
+        assertEquals(lb, storedUnlessEdited(kgSeed, kgSeed, lb) { parseToLb(it, WeightUnit.KG) }!!, 0.0)
+    }
+
+    @Test
+    fun anEditedFieldIsParsed() {
+        assertEquals(5.0, storedUnlessEdited("5", "10.0", 10.047) { parseToKm(it, false) }!!, 1e-9)
+        assertEquals(null, storedUnlessEdited("", "10.0", 10.047) { parseToKm(it, false) })
+        // No stored value (a new entry): the text is all there is.
+        assertEquals(82.5, storedUnlessEdited(filterDecimalInput("82,5"), null, null) { it.toDoubleOrNull() }!!, 1e-9)
+    }
 }

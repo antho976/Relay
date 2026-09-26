@@ -71,13 +71,18 @@ class CustomizationRepository @Inject constructor(
      *
      * Also nulls [ExerciseCustomization.swappedExerciseId] (#11): a surviving row must not keep the
      * re-attribution id, or every PR/stats read would still key on the now-removed swap's exercise.
+     *
+     * A surviving row goes back to [OverlaySource.USER]: what is left on it is the user's, and a
+     * coach undo left it coach-owned, so the next regenerate deleted it (audit 2026-09-26, 08).
      */
     suspend fun clearSwap(exerciseId: String) {
         val existing = customizationDao.get(exerciseId) ?: return
         if (existing.restTimerOverrideSeconds == null && existing.pinnedNote.isBlank()) {
             customizationDao.clear(exerciseId)
         } else {
-            customizationDao.upsert(existing.copy(swappedName = "", swappedUnit = "", swappedExerciseId = null))
+            customizationDao.upsert(
+                existing.copy(swappedName = "", swappedUnit = "", swappedExerciseId = null, source = OverlaySource.USER)
+            )
         }
     }
 

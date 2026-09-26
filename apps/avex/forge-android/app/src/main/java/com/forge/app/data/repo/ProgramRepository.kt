@@ -340,9 +340,15 @@ class ProgramRepository @Inject constructor(
         generate(params, available, liked, disliked, recent, System.nanoTime())
     }
 
-    /** Current generation inputs read from prefs — the single source for per-day re-roll (Phase 6). */
-    private suspend fun currentParams(): GenerationParams = GenerationParams(
-        daysPerWeek = settings.daysPerWeek.first(),
+    /**
+     * Current generation inputs read from prefs — the ONE builder for every generate path: per-day
+     * re-roll (Phase 6), rotation, the coach/Overview deload and Settings' generate, re-roll and
+     * deload. There used to be three copies that drifted: Settings' left out [personalCaps], so a
+     * program it generated came back from deload→restore with different per-muscle sets (audit
+     * 2026-09-26, 08). [daysPerWeek] overrides the saved split size (Settings passes the staged one).
+     */
+    suspend fun currentParams(daysPerWeek: Int? = null): GenerationParams = GenerationParams(
+        daysPerWeek = daysPerWeek ?: settings.daysPerWeek.first(),
         emphasis = settings.programEmphasis.first(),
         goal = settings.userGoal.first().ifBlank { "build_muscle" },
         experience = settings.programExperience.first(),

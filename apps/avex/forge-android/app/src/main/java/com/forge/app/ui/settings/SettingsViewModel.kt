@@ -448,20 +448,10 @@ class SettingsViewModel @Inject constructor(
     fun setCoachEnabled(v: Boolean) = write { settingsRepo.setCoachEnabled(v) }
     /** Weekly cardio-minutes goal for the cardio tab (no effect on the lifting plan). */
     fun setCardioWeeklyTargetMin(min: Int) = write { settingsRepo.setCardioWeeklyTargetMin(min) }
-    /** All generation inputs read from prefs — keeps the three generate paths in sync (Phase 2 / 3). */
-    private suspend fun buildParams(days: Int) = com.forge.app.program.GenerationParams(
-        daysPerWeek = days,
-        emphasis = settingsRepo.programEmphasis.first(),
-        goal = settingsRepo.userGoal.first().ifBlank { "build_muscle" },
-        experience = settingsRepo.programExperience.first(),
-        problemAreas = settingsRepo.problemAreas.first()
-            .mapNotNull { com.forge.app.program.ProblemArea.fromCode(it) }.toSet(),
-        priorityMuscles = settingsRepo.priorityMuscles.first()
-            .mapNotNull { runCatching { com.forge.app.program.MuscleGroup.fromCode(it) }.getOrNull() }.toSet(),
-        pinned = settingsRepo.pinnedExercises.first(),
-        dbMaxLb = settingsRepo.maxDbWeightLb.first(),
-        frozenIds = settingsRepo.frozenExerciseIds.first()
-    )
+    /** All generation inputs read from prefs, through the one shared builder: a copy here left out
+     *  personal caps, so Settings generated a different program than rotation and deload (audit
+     *  2026-09-26, 08). */
+    private suspend fun buildParams(days: Int) = programRepository.currentParams(days)
     private suspend fun currentEquipment(): Set<com.forge.app.program.Equipment> =
         settingsRepo.availableEquipment.first()
             .mapNotNull { runCatching { com.forge.app.program.Equipment.valueOf(it) }.getOrNull() }.toSet()
@@ -584,18 +574,24 @@ class SettingsViewModel @Inject constructor(
     fun setThemedLaunchIntro(v: Boolean) = write { settingsRepo.setThemedLaunchIntro(v) }
     fun setTimezone(id: String) = write { settingsRepo.setTimezone(id) }
     fun toggleFavoriteTimezone(id: String) = write { settingsRepo.toggleFavoriteTimezone(id) }
-    fun exportLastSessionPdf() = viewModelScope.launch {
-        val file = pdfExport.exportLastSessionPdf()
-        if (file != null) _exportPath.value = file.absolutePath
+    fun exportLastSessionPdf() = export { pdfExport.exportLastSessionPdf() }
+
+    /** Run one export and report it: the file to share, "nothing to export", or a failure on the
+     *  snackbar. A full disk used to crash the app from here (2026-09-26 audit, 04). */
+    private fun export(block: suspend () -> java.io.File?) = viewModelScope.launch { report(attemptExport(block)) }
+
+    private fun report(attempt: ExportAttempt) {
+        when (attempt) {
+            is ExportAttempt.Written -> _exportPath.value = attempt.file.absolutePath
+            ExportAttempt.NothingToExport -> _statusMessage.value = "Nothing to export yet. Finish a session first."
+            ExportAttempt.Failed -> _statusMessage.value = "Export failed. Check your free storage and try again."
+        }
     }
 
     private val _exportPath = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     val exportPath: kotlinx.coroutines.flow.StateFlow<String?> = _exportPath.asStateFlow()
 
-    fun exportWeeklyJson() = viewModelScope.launch {
-        val file = backupRepo.exportWeeklyJson()
-        _exportPath.value = file.absolutePath
-    }
+    fun exportWeeklyJson() = export { backupRepo.exportWeeklyJson() }
     /**
      * How far the full JSON export has got, as `done / total` sessions — null when none is running
      * (P-01). A whole training history is minutes of work on an old phone, and it used to report
@@ -616,10 +612,9 @@ class SettingsViewModel @Inject constructor(
         exportJob = viewModelScope.launch {
             _exportProgress.value = 0 to 0
             try {
-                val file = backupRepo.exportFullDataJson { done, total ->
-                    _exportProgress.value = done to total
-                }
-                _exportPath.value = file.absolutePath
+                report(attemptExport {
+                    backupRepo.exportFullDataJson { done, total -> _exportProgress.value = done to total }
+                })
             } finally {
                 _exportProgress.value = null
             }
@@ -631,22 +626,10 @@ class SettingsViewModel @Inject constructor(
         exportJob?.cancel()
         exportJob = null
     }
-    fun exportSessionsCsv() = viewModelScope.launch {
-        val file = backupRepo.exportSessionsCsv()
-        _exportPath.value = file.absolutePath
-    }
-    fun exportPrsCsv() = viewModelScope.launch {
-        val file = backupRepo.exportPrsCsv()
-        _exportPath.value = file.absolutePath
-    }
-    fun exportBodyweightCsv() = viewModelScope.launch {
-        val file = backupRepo.exportBodyweightCsv()
-        _exportPath.value = file.absolutePath
-    }
-    fun exportCardioCsv() = viewModelScope.launch {
-        val file = backupRepo.exportCardioCsv()
-        _exportPath.value = file.absolutePath
-    }
+    fun exportSessionsCsv() = export { backupRepo.exportSessionsCsv() }
+    fun exportPrsCsv() = export { backupRepo.exportPrsCsv() }
+    fun exportBodyweightCsv() = export { backupRepo.exportBodyweightCsv() }
+    fun exportCardioCsv() = export { backupRepo.exportCardioCsv() }
     fun clearExportPath() { _exportPath.value = null }
 
     // ── Import from another gym app (#GYMAP-17) ────────────────────────────────

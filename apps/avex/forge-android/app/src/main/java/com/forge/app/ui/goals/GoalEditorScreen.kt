@@ -52,8 +52,11 @@ import com.forge.app.domain.goal.liftPinKey
 import com.forge.app.domain.goal.GoalPeriod
 import com.forge.app.domain.units.distanceInputValue
 import com.forge.app.domain.units.distanceUnitLabel
+import com.forge.app.domain.units.filterDecimalInput
+import com.forge.app.domain.units.normalizeDecimalInput
 import com.forge.app.domain.units.parseToKm
 import com.forge.app.domain.units.parseToLb
+import com.forge.app.domain.units.storedUnlessEdited
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.ExerciseIcons
@@ -379,14 +382,18 @@ private fun LiftWeightStep(
     val weightUnit = LocalForgeSettings.current.weightUnit
     // Keyed on weightUnit (like BodyweightLogSheet) so a unit flip re-seeds in the new unit instead of
     // parsing the old unit's digits as the new unit; saveable so a typed target survives rotation.
-    var weightText by rememberSaveable(step, weightUnit) {
-        mutableStateOf(step.currentTargetLb?.let { weightInputValue(it, weightUnit) } ?: "")
-    }
-    val weightLb = parseToLb(weightText, weightUnit)
+    val seed = step.currentTargetLb?.let { weightInputValue(it, weightUnit) }
+    var weightText by rememberSaveable(step, weightUnit) { mutableStateOf(seed ?: "") }
+    // An untouched field saves the stored target: its seed is rounded to 0.1 in the display unit,
+    // so 225 lb came back as "102.1" kg, saved as 225.09 lb, and a reached goal read unreached
+    // (audit 2026-09-26, 06). Same rule CustomEditStep applies.
+    val weightLb = storedUnlessEdited(weightText, seed, step.currentTargetLb) { parseToLb(it, weightUnit) }
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
         OutlinedTextField(
             value = weightText,
-            onValueChange = { weightText = it.filter { c -> c.isDigit() || c == '.' } },
+            // filterDecimalInput keeps a comma-keyboard's "82,5" as 82.5; dropping the comma made
+            // it an 825 kg target (audit 2026-09-26, 06).
+            onValueChange = { weightText = filterDecimalInput(it) },
             label = { Text("Target (${unitLabel(weightUnit)})") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
@@ -539,7 +546,9 @@ private fun CustomTargetField(metric: GoalMetric, valueText: String, onValueChan
     val decimal = metric.acceptsDecimals
     OutlinedTextField(
         value = valueText,
-        onValueChange = { new -> onValueChange(new.filter { it.isDigit() || (decimal && it == '.') }) },
+        // A comma-decimal keyboard's "82,5" is kept as 82.5 rather than filtered to 825 (audit
+        // 2026-09-26, 06).
+        onValueChange = { new -> onValueChange(if (decimal) filterDecimalInput(new) else new.filter { it.isDigit() }) },
         label = { Text("Target (${customGoalUnitLabel(metric, settings.weightUnit, settings.useMiles)})") },
         singleLine = true,
         keyboardOptions = KeyboardOptions(
@@ -559,8 +568,8 @@ private fun customGoalUnitLabel(metric: GoalMetric, weightUnit: com.forge.app.do
 /** Parse the target field (display unit) into the metric's canonical unit; null if blank/invalid. */
 private fun parseCustomTarget(metric: GoalMetric, text: String, weightUnit: com.forge.app.domain.units.WeightUnit, useMiles: Boolean): Double? =
     when (metric) {
-        GoalMetric.CARDIO_DISTANCE -> parseToKm(text, useMiles)
-        GoalMetric.CARDIO_MINUTES, GoalMetric.SESSIONS -> text.trim().toDoubleOrNull()
+        GoalMetric.CARDIO_DISTANCE -> parseToKm(normalizeDecimalInput(text), useMiles)
+        GoalMetric.CARDIO_MINUTES, GoalMetric.SESSIONS -> normalizeDecimalInput(text).toDoubleOrNull()
         GoalMetric.VOLUME, GoalMetric.BODYWEIGHT -> parseToLb(text, weightUnit)
     }
 

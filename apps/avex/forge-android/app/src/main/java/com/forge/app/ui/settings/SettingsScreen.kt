@@ -83,8 +83,8 @@ internal val ACTION_ENTRIES = listOf(
 internal data class SettingsPageEntry(val page: SettingsPage, val tags: String)
 
 internal val PAGE_ENTRIES = listOf(
-    SettingsPageEntry(SettingsPage.Appearance, "appearance amoled dark theme accent color compact logging display privacy look app icon launcher home screen"),
-    SettingsPageEntry(SettingsPage.Format, "units format kg lb weight date time week timezone locale distance strength standards sex"),
+    SettingsPageEntry(SettingsPage.Appearance, "appearance amoled dark theme accent color display privacy look app icon launcher home screen"),
+    SettingsPageEntry(SettingsPage.Format, "units format kg lb weight time clock 12h 24h week distance strength standards sex"),
     SettingsPageEntry(SettingsPage.Session, "session haptic feedback vibration notes templates rest timer between sets compound isolation"),
     SettingsPageEntry(SettingsPage.Notifications, "notifications reminders quiet hours recap timer alerts notify suppress daily check-in morning sleep soreness stress drive weight"),
     SettingsPageEntry(SettingsPage.Security, "security lock app lock gallery lock biometric fingerprint face pin passcode privacy photos protect unlock"),
@@ -101,16 +101,13 @@ internal val PAGE_ENTRIES = listOf(
 
 internal val ALL_ITEMS = listOf(
     SettingsItem("AMOLED mode", "amoled black dark theme display", SettingsPage.Appearance),
-    SettingsItem("Compact set logging", "compact logging display density", SettingsPage.Appearance),
     SettingsItem("Accent color", "color accent theme tint", SettingsPage.Appearance),
     SettingsItem("App icon", "app icon launcher home screen change alternate", SettingsPage.Appearance),
     SettingsItem("Weight unit", "kg lb weight unit pounds kilograms", SettingsPage.Format),
     SettingsItem("Distance unit", "km mi miles kilometers distance cardio pace", SettingsPage.Format),
     SettingsItem("Length unit", "cm in inches centimeters length body measurements waist chest", SettingsPage.Format),
-    SettingsItem("Date format", "date format dd mm yyyy", SettingsPage.Format),
     SettingsItem("Time format", "time 12h 24h clock hour", SettingsPage.Format),
     SettingsItem("First day of week", "week start monday sunday", SettingsPage.Format),
-    SettingsItem("Timezone", "timezone locale region", SettingsPage.Format),
     SettingsItem("Haptic feedback", "haptic vibration strength", SettingsPage.Session),
     SettingsItem("Keep screen on", "keep screen on awake display lock timeout sleep session logging", SettingsPage.Session),
     SettingsItem("Rest times", "rest timer seconds between sets compound isolation default", SettingsPage.Session),
@@ -149,7 +146,12 @@ enum class ResetTarget(val label: String, val message: String) {
     TROPHIES("Reset trophies", "Clears all earned trophies. Cannot be undone."),
     CARDIO("Reset cardio", "Deletes all cardio entries. Cannot be undone."),
     SETTINGS("Reset app settings", "Restores all settings to defaults. Does not delete your data."),
-    FACTORY("Factory reset", "Deletes ALL data and resets all settings. This cannot be undone.")
+    // Names the copies it takes and the ones it cannot: "Deletes ALL data" kept the backup ZIP,
+    // exports and crash logs (2026-09-26 audit, D2), and a folder the user picked is not the app's.
+    FACTORY(
+        "Factory reset",
+        "Deletes all data stored in the app, including its backup copy, exports and crash logs, and resets all settings. Backups saved outside the app are kept. This cannot be undone."
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

@@ -28,6 +28,7 @@ import androidx.compose.material3.TextFieldColors
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,6 +74,9 @@ internal fun BodyweightLogSheet(
     entries: List<BodyweightEntry>,
     canImport: Boolean,
     message: String?,
+    /** The stored weigh-in for any day; [entries] only covers the recent window. */
+    lookupDay: suspend (LocalDate) -> BodyweightEntry?,
+    /** [note] is null when the note field was never touched: the day keeps its stored note. */
     onSave: (weightLb: Double, date: LocalDate, note: String?) -> Unit,
     onImport: () -> Unit,
     onDismiss: () -> Unit
@@ -91,7 +95,16 @@ internal fun BodyweightLogSheet(
     var showDatePicker by remember { mutableStateOf(false) }
 
     // The weigh-in already on the selected day (if any) — editing a past day shows what's there.
-    val entryForDate = remember(entries, date) { entries.lastOrNull { it.dateKey == date.toString() } }
+    // [entries] is only the recent window and the date picker reaches any past day, so a day outside
+    // it is read directly: it used to look empty, seed the latest weight and a blank note, and Save
+    // overwrote that day and erased its note (audit 2026-09-26, 03).
+    var lookedUp by remember(date) { mutableStateOf<BodyweightEntry?>(null) }
+    LaunchedEffect(date) {
+        if (entries.none { it.dateKey == date.toString() }) lookedUp = lookupDay(date)
+    }
+    val entryForDate = remember(entries, date, lookedUp) {
+        entries.lastOrNull { it.dateKey == date.toString() } ?: lookedUp?.takeIf { it.dateKey == date.toString() }
+    }
     // Seed the field from that day's entry, falling back to the latest weight (entries are oldest→newest).
     val seedLb = entryForDate?.weightLb ?: entries.lastOrNull()?.weightLb
 
@@ -111,6 +124,8 @@ internal fun BodyweightLogSheet(
     // sheet is open — re-seeds the note like the weight field above, rather than leaving it blank and
     // then blanking the stored note on Save.
     var note by remember(entryForDate, date) { mutableStateOf(entryForDate?.note ?: "") }
+    // Untouched, Save leaves the day's note alone rather than trusting the seed to have landed.
+    var noteTouched by remember(entryForDate, date) { mutableStateOf(false) }
 
     // Parsed lb — stones sums the two fields, kg/lb parse the single field; both clamp to the sane range.
     val parsed: Double? = if (stones) {
@@ -220,7 +235,7 @@ internal fun BodyweightLogSheet(
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(
                 value = note,
-                onValueChange = { note = it.take(140) },
+                onValueChange = { note = it.take(140); noteTouched = true },
                 label = { Text("Note (optional)") },
                 singleLine = true,
                 shape = BodyLogFieldShape,
@@ -232,7 +247,7 @@ internal fun BodyweightLogSheet(
             Spacer(Modifier.height(20.dp))
             ForgePrimaryCapsule(
                 label = "Save",
-                onClick = { parsed?.let { onSave(it, date, note) } },
+                onClick = { parsed?.let { onSave(it, date, note.takeIf { noteTouched }) } },
                 enabled = parsed != null,
                 modifier = Modifier.fillMaxWidth()
             )

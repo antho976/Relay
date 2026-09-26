@@ -24,7 +24,7 @@ internal fun PrivacyPolicyPage(modifier: Modifier = Modifier) {
     ) {
         SettingsSectionHeader("Privacy policy", top = 12.dp)
         SettingsExplainer(
-            "Last updated September 1, 2026",
+            "Last updated September 26, 2026",
             Modifier.padding(horizontal = SETTINGS_GUTTER)
         )
 
@@ -34,7 +34,8 @@ internal fun PrivacyPolicyPage(modifier: Modifier = Modifier) {
         )
         PolicySection(
             "Data stored on your device",
-            "Avex stores workouts, sets, cardio, programs, goals, notes, moods, trophies, personal records, body measurements, settings, coach history, Academy progress, crash logs, your profile, avatar, and progress photos in private app storage."
+            "Avex stores workouts, sets, cardio, programs, goals, notes, moods, trophies, personal records, body measurements, settings, coach history, Academy progress, crash logs, your profile, avatar, and progress photos in private app storage.",
+            "With auto-backup on, Avex also keeps a weekly backup copy of this data, including progress photos, in the same private storage. Files you export are written there too before you choose where to send them."
         )
         PolicySection(
             "Health Connect",
@@ -48,7 +49,11 @@ internal fun PrivacyPolicyPage(modifier: Modifier = Modifier) {
         PolicySection(
             "Sharing and retention",
             "Avex does not sell or share your data. Exports, backups, PDFs, images, and support files leave the app only when you choose a destination through Android. Files you share are then governed by that destination's privacy practices.",
-            "Data remains on your device until you delete it, reset Avex, clear app storage, or uninstall. You can delete individual records in the app, erase all Avex data from Settings, and delete exported files from the destination where you saved them."
+            // Kept in step with .claude/PRIVACY.md. This said Settings could "erase all Avex data"
+            // while factory reset kept the backup ZIP, exports and crash logs (2026-09-26 audit, D2);
+            // the reset now erases them, and what it cannot reach is named.
+            "Data remains on your device until you delete it, reset Avex, clear app storage, or uninstall. You can delete individual records in the app. Factory reset in Settings erases all Avex data stored in the app, including its backup copy, exports, and crash logs.",
+            "Backups or exports you saved to a folder you picked, such as Downloads, a cloud drive, or the auto-backup folder, are outside the app and are not erased by a factory reset or an uninstall. Delete them there."
         )
         PolicySection(
             "Children and contact",

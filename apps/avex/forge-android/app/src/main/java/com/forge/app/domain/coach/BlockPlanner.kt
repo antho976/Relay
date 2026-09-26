@@ -5,6 +5,8 @@ import com.forge.app.domain.adapt.AdaptThresholds
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
+import java.time.temporal.IsoFields
+import java.util.Locale
 
 /**
  * Periodization as a state machine (Coach v3 C).
@@ -121,16 +123,33 @@ object BlockPlanner {
         return ChronoUnit.WEEKS.between(a, b).toInt()
     }
 
-    /** The Monday of an ISO week id, or null when it isn't one. */
+    /**
+     * The ISO week id ("2026-W27") for [date] — the one builder, always in ASCII digits.
+     *
+     * A bare `"%d-W%02d".format(…)` uses the default locale, which writes Arabic-Indic or Devanagari
+     * digits under ar/fa/bn/mr; [weekStart] couldn't read those back, so [advance] saw zero weeks
+     * elapsed every week and the block never left week 1 (audit 2026-09-26, 10).
+     */
+    fun weekIdOf(date: LocalDate): String = String.format(
+        Locale.ROOT, "%d-W%02d",
+        date.get(IsoFields.WEEK_BASED_YEAR), date.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR)
+    )
+
+    /**
+     * The Monday of an ISO week id, or null when it isn't one. Digits are read in any script, so a
+     * block whose last week was stored in locale digits by an earlier build still advances.
+     */
     private fun weekStart(weekId: String): LocalDate? {
-        val m = WEEK_ID.matchEntire(weekId) ?: return null
+        val ascii = weekId.map { c -> Character.digit(c, 10).takeIf { it >= 0 }?.let { '0' + it } ?: c }
+            .joinToString("")
+        val m = WEEK_ID.matchEntire(ascii) ?: return null
         val year = m.groupValues[1].toIntOrNull() ?: return null
         val week = m.groupValues[2].toIntOrNull() ?: return null
         // Jan 4 is always in ISO week 1 of its week-based year.
         return LocalDate.of(year, 1, 4).with(DayOfWeek.MONDAY).plusWeeks((week - 1).toLong())
     }
 
-    private val WEEK_ID = Regex("""(\d{4})-W(\d{2})""")
+    private val WEEK_ID = Regex("""([0-9]{4})-W([0-9]{2})""")
 
     /** How many weeks until this block's deload week, or 0 when it is the deload week. */
     fun weeksToDeload(block: TrainingBlock): Int =

@@ -58,12 +58,33 @@ import com.forge.app.ui.gym.train.components.UpNextBubble
 import com.forge.app.ui.gym.train.components.WarmupFlow
 import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.DayUiState
+import com.forge.app.ui.gym.train.state.ExerciseUiState
 import com.forge.app.ui.theme.ForgeLastGreen
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+/**
+ * Every exercise still needing work other than [currentId] (not complete, not skipped), later ones
+ * first, then wrapping to the ones earlier in the list — paired with each one's list index. The
+ * first entry is where MOVE TO NEXT goes; an empty list means the workout is done.
+ *
+ * One ordering for the Up Next list AND the advance target. The advance used to look only at later,
+ * non-skipped exercises and ignore completion, so jumping to the last slot and logging it offered
+ * FINISH WORKOUT with earlier exercises untouched, and MOVE TO NEXT could land on a finished one
+ * (audit 2026-09-26, still open from gym-ui.md G1).
+ */
+internal fun upcomingExercises(
+    exercises: List<ExerciseUiState>,
+    currentId: String?
+): List<Pair<Int, ExerciseUiState>> {
+    val at = exercises.indexOfFirst { it.plan.id == currentId }
+    val remaining = exercises.withIndex().filter { (_, ex) -> ex.plan.id != currentId && !ex.isComplete }
+    return (remaining.filter { it.index > at } + remaining.filter { it.index < at })
+        .map { it.index to it.value }
+}
 
 @Composable
 internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
@@ -206,16 +227,11 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
             }
 
             if (shownExercise != null) {
-                val idx = state.exercises.indexOf(shownExercise)
                 // "Up next" = every OTHER exercise still needing work (not the shown one, not
                 // skipped, not yet at target). Ordered next-after-current first, then any that sit
                 // earlier in the list — so jumping back to a finished exercise can't orphan an
                 // incomplete one (it lands here, not nowhere). Completed/skipped ones go to DONE.
-                val remaining = state.exercises.withIndex().filter { (_, ex) ->
-                    ex.plan.id != shownExercise.plan.id && !ex.isComplete
-                }
-                val upcoming = (remaining.filter { it.index > idx } + remaining.filter { it.index < idx })
-                    .map { it.index to it.value }
+                val upcoming = upcomingExercises(state.exercises, shownExercise.plan.id)
                 val nextEx = upcoming.firstOrNull()?.second
 
                 item(key = "current-exercise", contentType = "exercise") {
@@ -239,10 +255,10 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                         if (ex != null) {
                             val exIdx = state.exercises.indexOfFirst { it.plan.id == id }
                             val exIsNow = id == firstIncompleteId
-                            val exNextId = state.exercises
-                                .withIndex()
-                                .firstOrNull { it.index > exIdx && !it.value.skipped }
-                                ?.value?.plan?.id
+                            // The same wrapping order as Up Next, so FINISH WORKOUT shows only once
+                            // nothing else needs work. The header's finish control stays the
+                            // deliberate finish-anyway.
+                            val exNextId = upcomingExercises(state.exercises, id).firstOrNull()?.second?.plan?.id
                             ExerciseCard(
                                 exerciseIndex = exIdx,
                                 // Force-expand: the focused view always shows the full ledger.
@@ -291,11 +307,8 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                     // exercise drops into the DONE / SKIPPED section below. Un-skipping
                                     // leaves you on it.
                                     if (!ex.skipped) {
-                                        val advanceTo = exNextId
-                                            ?: state.exercises.firstOrNull {
-                                                it.plan.id != id && !it.isComplete
-                                            }?.plan?.id
-                                        if (advanceTo != null) shownExerciseId = advanceTo
+                                        // exNextId already wraps to earlier incomplete exercises.
+                                        if (exNextId != null) shownExerciseId = exNextId
                                     }
                                 },
                                 onOpenSwapPicker = { onEvent(DayUiEvent.OpenSwapPicker(id)) },
@@ -319,7 +332,10 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                     UpNextBubble(
                         nextName = nextEx?.effectiveName,
                         nextTarget = nextEx?.let { "${it.plan.sets} × ${it.plan.reps}" },
-                        nextDelta = shownExercise.nextSuggestedWeightDelta,
+                        // The delta of the exercise the pill NAMES: it used to come from the next
+                        // list item, which diverged from nextEx once that item was done.
+                        nextDeltaLb = nextEx?.suggestedDeltaLb,
+                        nextIsPlates = nextEx?.effectiveUnit == ExerciseUnit.PLATES,
                         upcoming = upcoming,
                         onSelectExercise = { id -> shownExerciseId = id },
                         onOpenSwapPicker = { id -> onEvent(DayUiEvent.OpenSwapPicker(id)) },

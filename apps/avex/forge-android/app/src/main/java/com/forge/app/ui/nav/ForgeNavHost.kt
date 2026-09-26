@@ -38,6 +38,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontStyle
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -311,7 +313,9 @@ fun ForgeNavHost(
             )
         ) { entry ->
             val dayKey = entry.arguments?.getString(Routes.ARG_DAY_KEY).orEmpty()
-            DayScreen(dayKey = dayKey, onBack = { nav.popBackStack() })
+            // Pop only while the day screen is still on top: a second PopBack from a double-tapped
+            // exit would otherwise pop the hub and leave nothing to render (audit 2026-09-26).
+            DayScreen(dayKey = dayKey, onBack = { nav.popIfCurrent(entry) })
         }
         // Profile left the bottom bar for the Home top bar (2026-07-27), so it is a pushed route
         // now and brings its own back arrow.
@@ -555,3 +559,13 @@ private fun NutritionPlaceholderScreen(onBack: () -> Unit) {
         }
     }
 }
+
+/**
+ * Pop [entry] only while it is still the top of the back stack; a no-op (false) once it is not.
+ *
+ * A screen's own exit can fire twice (a double tap lands before the first pop animates out), and a
+ * plain popBackStack() pops whatever is on top, so the second call took the hub with it and the
+ * NavHost rendered nothing (audit 2026-09-26, live session).
+ */
+internal fun NavController.popIfCurrent(entry: NavBackStackEntry): Boolean =
+    if (currentBackStackEntry?.id == entry.id) popBackStack() else false

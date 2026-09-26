@@ -23,9 +23,6 @@ import com.forge.app.domain.adapt.RestingHrTrend
 import com.forge.app.domain.adapt.SnapshotAssembler
 import com.forge.app.program.Equipment
 import com.forge.app.program.ExerciseLibrary
-import com.forge.app.program.GenerationParams
-import com.forge.app.program.MuscleGroup
-import com.forge.app.program.ProblemArea
 import com.forge.app.program.Program
 import com.forge.app.program.ProgramGenerator
 import kotlinx.coroutines.flow.first
@@ -386,35 +383,17 @@ class AdaptationRepository @Inject constructor(
 
     /**
      * One-tap apply for [Recommendation.DeloadSuggestion]: regenerate the current split at
-     * deload volume — the same operation as Settings → "Generate deload week". The params
-     * mirror SettingsViewModel.buildParams; keep the two in sync.
+     * deload volume — the same operation as Settings → "Generate deload week", built from the same
+     * [ProgramRepository.currentParams].
      *
      * [unlessWorkoutOpen] backs out rather than discard an open workout (see
      * [ProgramRepository.generate]); the unconfirmed callers pass it. Returns whether the deload
      * was generated.
      */
     suspend fun applyDeloadWeek(unlessWorkoutOpen: Boolean = false): Boolean {
-        val params = GenerationParams(
-            daysPerWeek = settingsRepository.daysPerWeek.first(),
-            emphasis = settingsRepository.programEmphasis.first(),
-            goal = settingsRepository.userGoal.first().ifBlank { "build_muscle" },
-            experience = settingsRepository.programExperience.first(),
-            problemAreas = settingsRepository.problemAreas.first()
-                .mapNotNull { ProblemArea.fromCode(it) }.toSet(),
-            priorityMuscles = settingsRepository.priorityMuscles.first()
-                .mapNotNull { runCatching { MuscleGroup.fromCode(it) }.getOrNull() }.toSet(),
-            pinned = settingsRepository.pinnedExercises.first(),
-            // Mirror buildParams: without this a deload generated from the coach card could
-            // prescribe dumbbell movements above the user's heaviest available dumbbell.
-            dbMaxLb = settingsRepository.maxDbWeightLb.first(),
-            deload = true,
-            frozenIds = settingsRepository.frozenExerciseIds.first(),
-            // D: the learning loop, closed — generation now uses the caps measured from this
-            // athlete's own weeks rather than the population defaults, where they've been earned.
-            personalCaps = runCatching {
-                com.forge.app.domain.coach.PersonalProfile.build(snapshotOrEmpty()).volumeCaps
-            }.getOrDefault(emptyMap())
-        )
+        // The shared builder (audit 2026-09-26, 08), so this deload and Settings' use the same caps,
+        // pins and dumbbell ceiling as the program being deloaded.
+        val params = programRepository.currentParams().copy(deload = true)
         // The deload marker is NOT written here any more (M-06). Writing it first meant a generate
         // that threw — an ordinary failure, not a race — left "you are in a deload week" standing
         // over the untouched full-volume plan with nothing to clear it. `generate` now settles the
