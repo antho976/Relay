@@ -134,7 +134,7 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Steps", "steps recovery health connect cardio wearable daily", SettingsPage.Recovery),
     SettingsItem("Bodyweight sync", "bodyweight weight sync health connect log recovery", SettingsPage.Recovery),
     SettingsItem("Exercise preferences", "exercise likes dislikes preferred hidden movements favourite heart", SettingsPage.ExercisePrefs),
-    SettingsItem("Ask to dislike after swap", "swap dislike prompt hide exercise default", SettingsPage.ExercisePrefs),
+    SettingsItem("Ask to hide after swapping", "swap dislike prompt hide exercise default", SettingsPage.ExercisePrefs),
     SettingsItem("Holiday mode", "holiday vacation pause streak break away travel", SettingsPage.Vacation),
     SettingsItem("Coach mode", "coach mode suggest auto apply autopilot earn", SettingsPage.Coach),
     SettingsItem("Daily check-ins", "morning sleep soreness stress drive weight readiness", SettingsPage.Notifications),

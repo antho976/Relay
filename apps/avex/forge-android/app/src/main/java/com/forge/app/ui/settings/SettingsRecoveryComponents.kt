@@ -120,6 +120,23 @@ internal fun RecoveryRow(
     }
 }
 
+/**
+ * What hangs off one connected signal — its write-back switch, import links and their result lines
+ * — inset under the row it belongs to. Flush with the signal list, these read as five more signals;
+ * the inset says "this is part of Bodyweight sync" with air alone, no line (§1).
+ */
+@Composable
+internal fun SignalDetail(content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(start = 16.dp, bottom = 4.dp)) { content() }
+}
+
+/** The device segment's short label; the explainer under it names the companion app in full. */
+internal fun brandShortLabel(brand: com.forge.app.domain.health.WearableBrand): String = when (brand) {
+    com.forge.app.domain.health.WearableBrand.GALAXY -> "Galaxy"
+    com.forge.app.domain.health.WearableBrand.PIXEL -> "Pixel"
+    com.forge.app.domain.health.WearableBrand.NONE -> "Other"
+}
+
 /** Compact label + switch row for a connected integration's write-back toggle (no subtitle line).
  *  Same contract as [ToggleRow]: the WHOLE ROW is the ≥48dp tap target and the switch is drawn, so
  *  the write-backs aren't 24dp targets and never nest a tap inside the row (§14, §2③). */

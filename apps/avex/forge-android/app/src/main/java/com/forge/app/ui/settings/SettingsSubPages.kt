@@ -137,56 +137,36 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
             .verticalScroll(rememberScrollState())
             .padding(bottom = 32.dp)
     ) {
-        // Grouped by quiet mono anchors + air, no per-row hairlines (DESIGN §1/§7) —
-        // the same rhythm the Appearance page already migrated to.
-        SettingsSectionHeader("Units", top = 12.dp)
-        InlineChipRow(
-            "Weight",
-            listOf("lb" to "lb", "kg" to "kg", "st" to "st"),
-            state.weightUnit.label
-        ) { vm.setWeightUnit(com.forge.app.domain.units.WeightUnit.fromKey(it)) }
-        InlineChipRow(
-            "Distance",
-            listOf("km" to "km", "mi" to "mi"),
-            if (state.useMiles) "mi" else "km"
-        ) { vm.setUseMiles(it == "mi") }
-        InlineChipRow(
-            "Length",
-            listOf("cm" to "cm", "in" to "in"),
-            if (state.useCm) "cm" else "in"
-        ) { vm.setUseCm(it == "cm") }
-        // Live preview — updates the moment a unit is switched.
-        CardFootnote(
-            "e.g. ${com.forge.app.domain.units.formatWeight(135.0, state.weightUnit)} · " +
-                "${com.forge.app.domain.units.formatDistance(5.0, state.useMiles)} · " +
-                com.forge.app.domain.units.formatLength(90.0, state.useCm)
-        )
+        // The title's line IS the live preview: it re-renders the moment any unit below flips, so
+        // the page answers "what will my numbers look like" before a single tap (one home, §4.3).
+        SettingsPageTitle("Units & format", formatPreview(state))
+
+        SettingsSectionHeader("Units")
+        val weightUnits = listOf("lb", "kg", "st")
+        SettingsSegmentRow("Weight", weightUnits, weightUnits.indexOf(state.weightUnit.label).coerceAtLeast(0)) {
+            vm.setWeightUnit(com.forge.app.domain.units.WeightUnit.fromKey(weightUnits[it]))
+        }
+        SettingsSegmentRow("Distance", listOf("km", "mi"), if (state.useMiles) 1 else 0) { vm.setUseMiles(it == 1) }
+        SettingsSegmentRow("Length", listOf("cm", "in"), if (state.useCm) 0 else 1) { vm.setUseCm(it == 0) }
 
         SettingsSectionHeader("Date & time")
-        InlineChipRow(
-            "Date",
-            listOf("MMM d, yyyy" to "Jan 5", "dd/MM/yyyy" to "05/01", "MM/dd/yyyy" to "01/05"),
-            state.dateFormat, vm::setDateFormat
-        )
-        InlineChipRow(
-            "Time",
-            listOf("12h" to "12h", "24h" to "24h"),
-            if (state.timeFormat24h) "24h" else "12h"
-        ) { vm.setTimeFormat24h(it == "24h") }
-        InlineChipRow(
-            "Week starts",
-            listOf("Mon" to "Mon", "Sun" to "Sun"),
-            if (state.firstDayMonday) "Mon" else "Sun"
-        ) { vm.setFirstDayMonday(it == "Mon") }
-        TimezoneRow(state.timezone) { showTzPicker = true }
+        val dateFormats = listOf("MMM d, yyyy", "dd/MM/yyyy", "MM/dd/yyyy")
+        SettingsSegmentRow("Date", listOf("Jan 5", "05/01", "01/05"), dateFormats.indexOf(state.dateFormat).coerceAtLeast(0)) {
+            vm.setDateFormat(dateFormats[it])
+        }
+        SettingsSegmentRow("Time", listOf("12h", "24h"), if (state.timeFormat24h) 1 else 0) { vm.setTimeFormat24h(it == 1) }
+        SettingsSegmentRow("Week starts", listOf("Mon", "Sun"), if (state.firstDayMonday) 0 else 1) { vm.setFirstDayMonday(it == 0) }
+        // A nav row like every other drill-in on Settings: the live zone is its value, → opens the picker.
+        SettingsNavRow("Timezone", timezoneLabel(state.timezone)) { showTzPicker = true }
 
         SettingsSectionHeader("Strength standards")
-        InlineChipRow(
+        val sexes = listOf("male", "female")
+        SettingsSegmentRow(
             "Sex",
-            listOf("male" to "Male", "female" to "Female"),
-            state.userSex, vm::setUserSex
-        )
-        CardFootnote("Only scales the bodyweight-relative strength standards on the Stats tab.")
+            listOf("Male", "Female"),
+            sexes.indexOf(state.userSex).coerceAtLeast(0),
+            explainer = "Scales only the bodyweight standards on Stats."
+        ) { vm.setUserSex(sexes[it]) }
 
         SectionResetRow(com.forge.app.data.prefs.SettingsSection.FORMAT, vm)
     }
@@ -204,78 +184,27 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
 
 // ─── Format-page building blocks ─────────────────────────────────────────────
 
-/** A muted italic note — live previews and scope annotations sitting openly on the page. */
-@Composable
-private fun CardFootnote(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontStyle = FontStyle.Italic,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)
-    )
+/** "135 lb · 5.0 km · 90 cm · Jan 5, 2026 · 6:30 PM": one sample of every format on the page. */
+private fun formatPreview(state: SettingsUiState): String {
+    val date = runCatching {
+        java.time.LocalDate.of(2026, 1, 5).format(java.time.format.DateTimeFormatter.ofPattern(state.dateFormat))
+    }.getOrDefault("Jan 5")
+    val time = java.time.LocalTime.of(18, 30)
+        .format(java.time.format.DateTimeFormatter.ofPattern(if (state.timeFormat24h) "HH:mm" else "h:mm a"))
+    return listOf(
+        com.forge.app.domain.units.formatWeight(135.0, state.weightUnit),
+        com.forge.app.domain.units.formatDistance(5.0, state.useMiles),
+        com.forge.app.domain.units.formatLength(90.0, state.useCm),
+        date,
+        time
+    ).joinToString(" · ")
 }
 
-/** Label on the left, a chip group on the right — one setting per open row. */
-@Composable
-private fun InlineChipRow(
-    label: String,
-    options: List<Pair<String, String>>,
-    selected: String,
-    onSelect: (String) -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.weight(1f)
-        )
-        Spacer(Modifier.width(12.dp))
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            options.forEach { (value, display) ->
-                PillChip(display.uppercase(), selected == value) { onSelect(value) }
-            }
-        }
-    }
-}
-
-/** Collapsed timezone selector — shows the current zone and opens [TimezonePickerDialog] on tap. */
-@Composable
-private fun TimezoneRow(timezone: String, onClick: () -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val label = when {
-        timezone.isBlank() -> "${java.util.TimeZone.getDefault().id} · device"
-        else -> TIMEZONE_OPTIONS.firstOrNull { it.first == timezone }?.second
-            ?: timezone.substringAfterLast('/').replace('_', ' ')
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickableLabeled("Timezone", onClick = onClick)
-            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text("Timezone", style = MaterialTheme.typography.bodyMedium, color = onBg)
-        Spacer(Modifier.weight(1f))
-        // Wraps rather than ellipsising: the zone label is the row's live VALUE, and truncating
-        // "Los Angeles (PST −8)" to "Los Angeles (PST…" at 200% hides the part that disambiguates.
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = muted,
-            textAlign = TextAlign.End,
-            modifier = Modifier.widthIn(max = 200.dp)
-        )
-        Text(" ▾", style = MaterialTheme.typography.bodyMedium, color = muted)
-    }
+/** The timezone row's value: a friendly preset label, the city of any other zone, or the device's. */
+private fun timezoneLabel(timezone: String): String = when {
+    timezone.isBlank() -> "${java.util.TimeZone.getDefault().id.substringAfterLast('/').replace('_', ' ')} · device"
+    else -> TIMEZONE_OPTIONS.firstOrNull { it.first == timezone }?.second
+        ?: timezone.substringAfterLast('/').replace('_', ' ')
 }
 
 /** One row in the searchable "all timezones" list. [label] is the friendly, offset-stamped display. */
@@ -462,6 +391,9 @@ private fun TimezoneOption(
     }
 }
 
+private val COMPOUND_REST = listOf(120, 150, 180, 210, 240, 300)
+private val ISOLATION_REST = listOf(45, 60, 90, 120, 150)
+
 @Composable
 internal fun SessionPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
     Column(
@@ -470,79 +402,71 @@ internal fun SessionPage(state: SettingsUiState, vm: SettingsViewModel, modifier
             .verticalScroll(rememberScrollState())
             .padding(bottom = 24.dp)
     ) {
-        // Grouped by quiet mono anchors + air, no per-row hairlines (DESIGN §1/§7) — the rhythm
-        // Appearance/Format/Notifications already migrated to.
-        SettingsSectionHeader("Haptics", top = 12.dp)
-        ChipField(
-            label = "Feedback strength",
-            explainer = "Buzzes when you log a set, hit a PR, or rest runs out.",
-            options = listOf("off" to "Off", "light" to "Light", "medium" to "Medium", "strong" to "Strong"),
-            selected = state.hapticStrength,
-            onSelect = vm::setHapticStrength
-        )
+        SettingsPageTitle("Session", "Applies while you log a workout.")
 
-        SettingsSectionHeader("Screen")
+        SettingsSectionHeader("Feel")
+        val haptics = listOf("off", "light", "medium", "strong")
+        SettingsSegmentRow(
+            "Haptic feedback",
+            listOf("Off", "Light", "Medium", "Strong"),
+            haptics.indexOf(state.hapticStrength).coerceAtLeast(0),
+            explainer = "Set logged, PR hit, rest over.",
+            fill = true
+        ) { vm.setHapticStrength(haptics[it]) }
         ToggleRow(
             "Keep screen on",
-            "Keeps the display awake while logging so it won't lock between sets.",
+            "The display stays awake between sets.",
             state.keepScreenOn,
             vm::setKeepScreenOn
         )
 
         SettingsSectionHeader("Rest timer")
-        ChipField(
+        SettingsCaption("Starting points. Hard sets add time, and the timer learns your pace.")
+        RestStepper(
             label = "Compound lifts",
-            explainer = "Multi-joint lifts like squat, bench, deadlift, and rows.",
-            options = listOf("120" to "2:00", "150" to "2:30", "180" to "3:00", "210" to "3:30", "240" to "4:00", "300" to "5:00"),
-            selected = state.restCompoundSeconds.toString(),
-            onSelect = { vm.setRestCompoundSeconds(it.toInt()) }
+            explainer = "Squat, bench, deadlift, rows",
+            seconds = state.restCompoundSeconds,
+            steps = COMPOUND_REST,
+            onChange = vm::setRestCompoundSeconds
         )
-        ChipField(
+        RestStepper(
             label = "Isolation lifts",
-            explainer = "Single-muscle lifts like curls, raises, and extensions.",
-            options = listOf("45" to "0:45", "60" to "1:00", "90" to "1:30", "120" to "2:00", "150" to "2:30"),
-            selected = state.restIsolationSeconds.toString(),
-            onSelect = { vm.setRestIsolationSeconds(it.toInt()) }
+            explainer = "Curls, raises, extensions",
+            seconds = state.restIsolationSeconds,
+            steps = ISOLATION_REST,
+            onChange = vm::setRestIsolationSeconds
         )
-        CardFootnote("Starting points · hard sets add time, and the timer learns your pace.")
 
         SettingsSectionHeader("Note templates")
+        SettingsCaption("One-tap starters under the note field when you log a set.")
         NoteTemplatesEditor(state.noteTemplates, vm::addNoteTemplate, vm::removeNoteTemplate)
 
-        Spacer(Modifier.height(8.dp))
         SectionResetRow(com.forge.app.data.prefs.SettingsSection.SESSION, vm)
     }
 }
 
-/** A chip-group control: sans label (+ optional one-line explainer) over its option pills —
- *  the label sits above because these option rows are too wide for the label-left layout. */
+/** A rest time walked along its fixed [steps]; an off-list stored value snaps to the nearest step. */
 @Composable
-private fun ChipField(
-    label: String,
-    explainer: String?,
-    options: List<Pair<String, String>>,
-    selected: String,
-    onSelect: (String) -> Unit
-) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
-        if (explainer != null) {
-            Spacer(Modifier.height(2.dp))
-            SettingsExplainer(explainer)
-        }
-        Spacer(Modifier.height(10.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            options.forEach { (value, display) ->
-                PillChip(display.uppercase(), selected == value) { onSelect(value) }
-            }
-        }
-    }
+private fun RestStepper(label: String, explainer: String, seconds: Int, steps: List<Int>, onChange: (Int) -> Unit) {
+    val i = steps.indexOf(seconds).takeIf { it >= 0 }
+        ?: steps.indices.minBy { kotlin.math.abs(steps[it] - seconds) }
+    SettingsStepperRow(
+        label = label,
+        explainer = explainer,
+        value = "${steps[i] / 60}:${(steps[i] % 60).toString().padStart(2, '0')}",
+        canDecrease = i > 0,
+        canIncrease = i < steps.lastIndex,
+        onDecrease = { onChange(steps[i - 1]) },
+        onIncrease = { onChange(steps[i + 1]) }
+    )
 }
 
 /**
  * Edit the tap-to-insert note starters shown under the set note field (#540). Each template drops
  * onto its own line in the note with the cursor parked after it, so prompt-style entries
  * ("energy:", "tempo:") are the useful shape. Removing every template just leaves the field bare.
+ * A template is drawn as a removable capsule in the selectable family's weight (bodyMedium, 14×9),
+ * the whole capsule its ≥48dp remove target.
  */
 @Composable
 private fun NoteTemplatesEditor(
@@ -557,33 +481,27 @@ private fun NoteTemplatesEditor(
     val sorted = remember(templates) {
         templates.filter { it.isNotBlank() }.sortedBy { it.trim().lowercase() }
     }
-    Column(Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)) {
-        SettingsExplainer("One-tap starters under the note field when you log a set.")
-        Spacer(Modifier.height(10.dp))
+    Column(Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER)) {
         if (sorted.isEmpty()) {
-            Text(
-                "No templates · the note field starts blank.",
-                style = MaterialTheme.typography.bodySmall,
-                color = muted,
-                fontStyle = FontStyle.Italic
-            )
+            SettingsExplainer("None yet, so the note field starts blank.")
         } else {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
                 sorted.forEach { t ->
                     Box(
                         Modifier
                             .minimumInteractiveComponentSize()
+                            .clip(RoundedCornerShape(50))
                             .clickableLabeled("Remove ${t.trim()}") { onRemove(t) },
                         contentAlignment = Alignment.Center
                     ) {
                         Row(
                             Modifier
                                 .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
-                                .padding(start = 12.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
+                                .padding(start = 14.dp, end = 12.dp, top = 9.dp, bottom = 9.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text(t.trim(), style = MaterialTheme.typography.bodySmall, color = onBg)
+                            Text(t.trim(), style = MaterialTheme.typography.bodyMedium, color = onBg)
                             Text("✕", style = MaterialTheme.typography.bodySmall, color = muted)
                         }
                     }
@@ -596,6 +514,7 @@ private fun NoteTemplatesEditor(
                 value = input,
                 onValueChange = { input = it },
                 singleLine = true,
+                shape = RoundedCornerShape(12.dp),
                 textStyle = MaterialTheme.typography.bodyMedium,
                 placeholder = {
                     Text(
@@ -767,84 +686,91 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
     }
     val nothingMatches = visibleByMuscle.isEmpty() && visibleCustom.isEmpty()
 
-    Column(modifier.fillMaxSize()) {
-        // The top bar never names the screen (§2) — the page opens with its own mono anchor.
-        SettingsSectionHeader("Exercise likes", top = 12.dp)
-        PrefSearchField(query, onQuery = { query = it })
-        // Two compact selectors — WHERE (muscle / custom) and STATUS (preferred / hidden). A chip
-        // per muscle turned into a wall that scrolled off screen; dropdowns keep both dimensions
-        // one tap deep and always fully visible.
-        val muscles = remember(allByMuscle) { allByMuscle.keys.toList() }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            PrefSelector(
-                value = when (val s = scope) {
-                    PrefScope.All -> "All exercises"
-                    PrefScope.Gear -> "Your gear"
-                    is PrefScope.Muscle -> s.m.displayName
-                    PrefScope.Custom -> "Custom"
-                },
-                isDefault = scope == PrefScope.All,
-                options = buildList {
-                    add("All exercises")
-                    add("Your gear")
-                    addAll(muscles.map { it.displayName })
-                    if (state.customExercises.isNotEmpty()) add("Custom")
-                },
-                selectedIndex = when (val s = scope) {
-                    PrefScope.All -> 0
-                    PrefScope.Gear -> 1
-                    is PrefScope.Muscle -> muscles.indexOf(s.m) + 2
-                    PrefScope.Custom -> muscles.size + 2
-                },
-                modifier = Modifier.weight(1f)
-            ) { i ->
-                scope = when {
-                    i == 0 -> PrefScope.All
-                    i == 1 -> PrefScope.Gear
-                    i <= muscles.size + 1 -> PrefScope.Muscle(muscles[i - 2])
-                    else -> PrefScope.Custom
+    val muscles = remember(allByMuscle) { allByMuscle.keys.toList() }
+
+    // ONE scrolling list, header included. The title, search, filters and the page toggle used to sit
+    // pinned above the list and took roughly a third of the screen from the rows they filter; they now
+    // scroll away like every other settings page's top does.
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
+        item("title") {
+            SettingsPageTitle(
+                "Exercise likes",
+                if (state.liked.isEmpty() && state.disliked.isEmpty()) "Preferred moves come up more. Hidden ones never do."
+                else "${state.liked.size} preferred · ${state.disliked.size} hidden"
+            )
+        }
+        item("search") { PrefSearchField(query, onQuery = { query = it }) }
+        item("filters") {
+            // Two compact selectors — WHERE (muscle / custom) and STATUS (preferred / hidden). A chip
+            // per muscle turned into a wall that scrolled off screen; dropdowns keep both dimensions
+            // one tap deep and always fully visible.
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                PrefSelector(
+                    value = when (val s = scope) {
+                        PrefScope.All -> "All exercises"
+                        PrefScope.Gear -> "Your gear"
+                        is PrefScope.Muscle -> s.m.displayName
+                        PrefScope.Custom -> "Custom"
+                    },
+                    isDefault = scope == PrefScope.All,
+                    options = buildList {
+                        add("All exercises")
+                        add("Your gear")
+                        addAll(muscles.map { it.displayName })
+                        if (state.customExercises.isNotEmpty()) add("Custom")
+                    },
+                    selectedIndex = when (val s = scope) {
+                        PrefScope.All -> 0
+                        PrefScope.Gear -> 1
+                        is PrefScope.Muscle -> muscles.indexOf(s.m) + 2
+                        PrefScope.Custom -> muscles.size + 2
+                    },
+                    modifier = Modifier.weight(1f)
+                ) { i ->
+                    scope = when {
+                        i == 0 -> PrefScope.All
+                        i == 1 -> PrefScope.Gear
+                        i <= muscles.size + 1 -> PrefScope.Muscle(muscles[i - 2])
+                        else -> PrefScope.Custom
+                    }
                 }
-            }
-            PrefSelector(
-                value = when (status) {
-                    Pref.PREFERRED -> "Preferred"
-                    Pref.HIDDEN -> "Hidden"
-                    else -> "Any status"
-                },
-                isDefault = status == null,
-                options = listOf("Any status", "Preferred", "Hidden"),
-                selectedIndex = when (status) {
-                    Pref.PREFERRED -> 1
-                    Pref.HIDDEN -> 2
-                    else -> 0
-                },
-                modifier = Modifier.weight(1f)
-            ) { i ->
-                status = when (i) {
-                    1 -> Pref.PREFERRED
-                    2 -> Pref.HIDDEN
-                    else -> null
+                PrefSelector(
+                    value = when (status) {
+                        Pref.PREFERRED -> "Preferred"
+                        Pref.HIDDEN -> "Hidden"
+                        else -> "Any status"
+                    },
+                    isDefault = status == null,
+                    options = listOf("Any status", "Preferred", "Hidden"),
+                    selectedIndex = when (status) {
+                        Pref.PREFERRED -> 1
+                        Pref.HIDDEN -> 2
+                        else -> 0
+                    },
+                    modifier = Modifier.weight(1f)
+                ) { i ->
+                    status = when (i) {
+                        1 -> Pref.PREFERRED
+                        2 -> Pref.HIDDEN
+                        else -> null
+                    }
                 }
             }
         }
-        SettingsExplainer(
-            "Preferred movements appear more often in generated programs · Hidden ones are never picked.",
-            Modifier.padding(start = SETTINGS_GUTTER, end = SETTINGS_GUTTER, top = 4.dp, bottom = 4.dp)
-        )
-        // A page-level preference, so it sits WITH the page's other controls. It used to be the
-        // last item of a LazyColumn that can hold several hundred exercise rows, i.e. reachable
-        // only by scrolling past every movement in the library.
-        ToggleRow(
-            label = "Ask to dislike after swapping",
-            subtitle = "After a \"Make default\" swap, offer to hide the old exercise.",
-            checked = state.swapDislikePromptEnabled,
-            onCheckedChange = { vm.setSwapDislikePromptEnabled(it) }
-        )
-
-        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 32.dp)) {
+        item("swap-prompt") {
+            // A page-level preference, so it sits WITH the page's other controls. It used to be the
+            // last item of a list that can hold several hundred exercise rows.
+            Spacer(Modifier.height(4.dp))
+            ToggleRow(
+                label = "Ask to hide after swapping",
+                subtitle = "After a \"Make default\" swap, offer to hide the old exercise.",
+                checked = state.swapDislikePromptEnabled,
+                onCheckedChange = { vm.setSwapDislikePromptEnabled(it) }
+            )
+        }
             visibleByMuscle.forEach { (m, defs) ->
                 item("hdr-${m.code}") {
                     val likedN = defs.count { it.id in state.liked }
@@ -902,7 +828,6 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
                     )
                 }
             }
-        }
     }
 }
 
@@ -1024,10 +949,10 @@ private fun PrefSearchField(query: String, onQuery: (String) -> Unit) =
     )
 
 /**
- * One filter dimension as a compact dropdown — a bordered field (same rounded-8 language as the
- * search box above it) showing the current pick, opening the [options] menu. [isDefault] = the
- * dimension is not filtering; the value renders muted and the border stays quiet, so an ACTIVE
- * filter is the visible exception (onBg text + border).
+ * One filter dimension as a compact dropdown capsule showing the current pick. It shares the
+ * selectable formula (§3): [isDefault] = not filtering, so it draws the quiet outline@0.35 border
+ * and a muted label; an ACTIVE filter takes the accent border + accent@0.15 wash, the same
+ * "this is on" every chip and tile in the app says.
  */
 @Composable
 private fun PrefSelector(
@@ -1040,26 +965,28 @@ private fun PrefSelector(
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val outline = MaterialTheme.colorScheme.outline
+    val (border, fill) = com.forge.app.ui.common.selectableColors(selected = !isDefault)
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .border(1.dp, if (isDefault) outline.copy(alpha = 0.35f) else onBg, RoundedCornerShape(8.dp))
-                .clickableLabeled("Change filter") { open = true }
-                .padding(horizontal = 12.dp, vertical = 9.dp),
+                .minimumInteractiveComponentSize()
+                .clip(RoundedCornerShape(50))
+                .border(1.dp, border, RoundedCornerShape(50))
+                .background(fill)
+                .clickableLabeled("Filter: $value. Change") { open = true }
+                .padding(horizontal = 14.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
                 value,
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodyMedium,
                 color = if (isDefault) muted else onBg,
                 modifier = Modifier.weight(1f)
             )
-            Text("▾", style = MaterialTheme.typography.labelMedium, color = muted.copy(alpha = 0.65f))
+            Text("▾", style = MaterialTheme.typography.labelMedium, color = muted)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             options.forEachIndexed { i, label ->
