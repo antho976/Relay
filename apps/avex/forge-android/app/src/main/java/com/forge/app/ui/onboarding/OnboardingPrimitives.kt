@@ -32,7 +32,13 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.ForgeChoiceChip
+import com.forge.app.ui.common.ForgeDayChip
+import com.forge.app.ui.common.ForgeIconTile
+import com.forge.app.ui.common.ForgeOptionCard
 import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgePresetTile
+import com.forge.app.ui.common.ForgeSegmentedChoice
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.ForgeSwitch
 import com.forge.app.ui.common.bounceClick
@@ -92,26 +98,10 @@ internal fun StepSectionLabel(text: String, meta: String? = null) {
     }
 }
 
-/** Selected/unselected tile colors — one formula for every selectable in the flow. */
-@Composable
-private fun selectableColors(selected: Boolean): Pair<Color, Color> {
-    val border by animateColorAsState(
-        if (selected) MaterialTheme.colorScheme.primary
-        else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-        ForgeMotion.standardTween(ForgeMotion.DurationFast),
-        label = "sel_border"
-    )
-    val fill by animateColorAsState(
-        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else Color.Transparent,
-        ForgeMotion.standardTween(ForgeMotion.DurationFast),
-        label = "sel_fill"
-    )
-    return border to fill
-}
-
 /**
- * A full-width option card: optional leading glyph, label + one-line description, optional mono
- * right meta, and an optional slot above the text row (the plan-mode vignettes).
+ * The selectables live in `ui/common/Selectables.kt` since 2026-09-25 — promoted on their third
+ * screen (Settings → Program, Units, Session, Coach, Wearable). These names stay so the steps read
+ * in onboarding's own vocabulary; each is the shared drawing, not a copy of it.
  */
 @Composable
 internal fun OptionCard(
@@ -122,191 +112,31 @@ internal fun OptionCard(
     icon: ImageVector? = null,
     meta: String? = null,
     topContent: (@Composable () -> Unit)? = null
-) {
-    val (border, fill) = selectableColors(selected)
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, border, RoundedCornerShape(12.dp))
-            .background(fill)
-            .bounceClick(onClick = onClick)
-            .semantics { this.selected = selected }
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        topContent?.invoke()
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (icon != null) {
-                Icon(icon, contentDescription = null, tint = muted, modifier = Modifier.size(22.dp))
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-                if (description != null) {
-                    Text(description, style = MaterialTheme.typography.bodySmall, color = muted)
-                }
-            }
-            if (meta != null) {
-                Text(
-                    meta.uppercase(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (selected) MaterialTheme.colorScheme.primary else muted
-                )
-            }
-        }
-    }
-}
+) = ForgeOptionCard(label, selected, onClick, description = description, icon = icon, meta = meta, topContent = topContent)
 
 /** A capsule choice chip (plates, refresh cadence, sore spots, sex, watch). */
 @Composable
-internal fun ChoiceChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val (border, fill) = selectableColors(selected)
-    Box(
-        modifier = modifier
-            // §14 — the target is 48dp even though the capsule is trimmer than that; the extra comes
-            // from the interaction box, not from padding the visual out of proportion.
-            .minimumInteractiveComponentSize()
-            .clip(RoundedCornerShape(50))
-            .border(1.dp, border, RoundedCornerShape(50))
-            .background(fill)
-            .bounceClick(onClick = onClick)
-            .semantics { this.selected = selected }
-            .padding(horizontal = 14.dp, vertical = 9.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (selected) MaterialTheme.colorScheme.onBackground
-            else MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
+internal fun ChoiceChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) =
+    ForgeChoiceChip(label, selected, onClick, modifier)
 
 /** A two-option unit selector — equal-width capsule cells (lb | kg, mi | km). */
 @Composable
-internal fun UnitSegment(
-    first: String,
-    second: String,
-    secondSelected: Boolean,
-    onSelect: (Boolean) -> Unit
-) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ChoiceChip(first, !secondSelected, { onSelect(false) }, Modifier.weight(1f))
-        ChoiceChip(second, secondSelected, { onSelect(true) }, Modifier.weight(1f))
-    }
-}
+internal fun UnitSegment(first: String, second: String, secondSelected: Boolean, onSelect: (Boolean) -> Unit) =
+    ForgeSegmentedChoice(listOf(first, second), if (secondSelected) 1 else 0, { onSelect(it == 1) }, Modifier.fillMaxWidth())
 
 /** A square-ish icon tile for the equipment fine-tune grid. */
 @Composable
-internal fun EquipmentTile(
-    icon: ImageVector,
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val (border, fill) = selectableColors(selected)
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, border, RoundedCornerShape(12.dp))
-            .background(fill)
-            .bounceClick(onClick = onClick)
-            .semantics { this.selected = selected }
-            .padding(horizontal = 6.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Icon(
-            icon, contentDescription = null,
-            tint = if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(26.dp)
-        )
-        Text(
-            label,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            minLines = 2,
-            maxLines = 2
-        )
-    }
-}
+internal fun EquipmentTile(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) =
+    ForgeIconTile(icon, label, selected, onClick, modifier)
 
 /** A preset tile: glyph, name, and a mono piece-count meta line. */
 @Composable
-internal fun PresetTile(
-    icon: ImageVector,
-    label: String,
-    meta: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val (border, fill) = selectableColors(selected)
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, border, RoundedCornerShape(12.dp))
-            .background(fill)
-            .bounceClick(onClick = onClick)
-            .semantics { this.selected = selected }
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Icon(
-            icon, contentDescription = null,
-            tint = if (selected) MaterialTheme.colorScheme.onBackground else muted,
-            modifier = Modifier.size(24.dp)
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                label,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onBackground,
-                minLines = 2,
-                maxLines = 2
-            )
-            Text(
-                meta.uppercase(),
-                style = MaterialTheme.typography.labelSmall,
-                color = if (selected) MaterialTheme.colorScheme.primary else muted
-            )
-        }
-    }
-}
+internal fun PresetTile(icon: ImageVector, label: String, meta: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) =
+    ForgePresetTile(icon, label, meta, selected, onClick, modifier)
 
 /** The 40dp round day-count chip. */
 @Composable
-internal fun DayChip(n: Int, selected: Boolean, onClick: () -> Unit) {
-    val (border, fill) = selectableColors(selected)
-    Box(
-        modifier = Modifier
-            .minimumInteractiveComponentSize()
-            .size(40.dp)
-            .clip(RoundedCornerShape(50))
-            .border(1.dp, border, RoundedCornerShape(50))
-            .background(fill)
-            .bounceClick(onClick = onClick)
-            .semantics { this.selected = selected },
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            "$n",
-            style = MaterialTheme.typography.titleMedium,
-            color = if (selected) MaterialTheme.colorScheme.onBackground
-            else MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
+internal fun DayChip(n: Int, selected: Boolean, onClick: () -> Unit) = ForgeDayChip(n, selected, onClick)
 
 /**
  * The step rail: one cell per step of the path you are actually on, accent behind you, hollow ahead

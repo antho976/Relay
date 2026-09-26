@@ -24,7 +24,7 @@ import androidx.compose.ui.unit.dp
  */
 
 /** Goal options: key, label, what it changes, and the mono rep-range meta. */
-private val GOAL_DETAILS = listOf(
+internal val GOAL_DETAILS = listOf(
     listOf("build_muscle", "Build muscle", "Balanced for size. The default pick.", "8-12 reps"),
     listOf("get_stronger", "Get stronger", "Heavier work on the big lifts.", "4-6 reps"),
     listOf("lose_weight", "Lose weight", "Higher reps with more conditioning.", "12-20 reps"),
@@ -32,7 +32,7 @@ private val GOAL_DETAILS = listOf(
 )
 
 /** Experience bands — non-overlapping, mapped to the generator's level keys. */
-private val EXPERIENCE_DETAILS = listOf(
+internal val EXPERIENCE_DETAILS = listOf(
     listOf("beginner", "New to lifting", "A bit less volume, no advanced lifts yet.", "Under 6 mo"),
     listOf("intermediate", "Got the basics down", "Standard volume.", "6 mo to 2 yr"),
     listOf("advanced", "Experienced", "A touch more volume.", "2+ yr")

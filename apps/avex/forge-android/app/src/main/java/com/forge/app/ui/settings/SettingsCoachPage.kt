@@ -24,10 +24,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.ForgeOptionCard
 import com.forge.app.ui.common.clickableLabeled
+import androidx.compose.foundation.layout.Arrangement
 
 /**
  * Coach settings — configuration ONLY. The coach's content (this week's brief, the trust ledger,
@@ -51,61 +52,57 @@ internal fun CoachSettingsPage(
     LaunchedEffect(Unit) { vm.loadCoachData() }
 
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        // The top bar never names the screen (§2) — the page opens with its own mono anchor.
-        SettingsSectionHeader("Your coach", top = 12.dp)
+        // The title line is a reading, not a restatement of the switch below it: how many of the
+        // coach's inputs are actually coming in (§4.9). Off, it names what "off" means for the plan.
+        SettingsPageTitle(
+            "Your coach",
+            when {
+                !state.coachEnabled -> "Off. Your plan stays exactly as you set it."
+                signals.isEmpty() -> "Weekly calls on your training, each one yours to apply."
+                else -> "Reads ${signals.count { it.active }} of ${signals.size} feeds"
+            }
+        )
         ToggleRow(
             "Coach",
-            "When on, the coach gets its own tab and suggests weekly tweaks.",
+            "Its own tab, and a weekly call on your training.",
             state.coachEnabled
         ) { vm.setCoachEnabled(it) }
 
         // The feeds and mode only mean something while the coach is on. Feeds lead (the live
-        // on/off truth); mode — a preference, not a state — sits last.
+        // on/off truth); mode — a preference, not a state — follows.
         if (state.coachEnabled) {
-            // The feeds glance (§12 filled-disc/muted-ring idiom, same drawing as Wearable's rail):
-            // which of the coach's inputs are coming in. States and labels come verbatim from
-            // CoachRepository.coachLab() — the same feed list the Coach tab's Signals lens reads;
-            // there it carries readings and charts, here only the on/off config truth. The Health
+            // The feeds glance (§12 filled-disc/muted-ring idiom, same drawing as Wearable's rail).
+            // States and labels come verbatim from CoachRepository.coachLab() — the same feed list
+            // the Coach tab's Signals lens reads; here only the on/off config truth. The Health
             // Connect feeds are the fixable ones, so a silent one taps through to Wearable.
             if (signals.isNotEmpty()) {
-                ProgramBlock("What it reads", "Filled feeds sharpen the weekly call; check-ins and flags come from your logging.") {
-                    signals.forEach { sig ->
-                        CoachFeedRow(
-                            label = sig.label,
-                            active = sig.active,
-                            onConnect = if (sig.label in HC_FEEDS) onOpenRecovery else null
-                        )
-                    }
-                }
-            }
-
-            ProgramBlock("Coach mode", "Suggest asks every time; earn auto-apply lets trusted change types self-apply.") {
-                ChipFlow {
-                    PillChip("Suggest", state.coachMode != "auto") { vm.setCoachMode("suggest") }
-                    PillChip("Earn auto-apply", state.coachMode == "auto") { vm.setCoachMode("auto") }
-                }
-                // "Earn auto-apply" is a TARGET, not an on-switch: until a change type builds its
-                // accepted streak, nothing self-applies. Say so explicitly so the user never believes
-                // they've handed over control prematurely. trust.isNotEmpty() gates out the load
-                // window (coachTrust starts empty, so without it the note would flash until
-                // loadCoachData populates it).
-                if (state.coachMode == "auto" && trust.isNotEmpty() && trust.none { it.earned }) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Nothing self-applies yet. Every proposal waits for your tap until a change type earns its streak, tracked on the Coach tab.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontStyle = FontStyle.Italic,
-                        modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
+                SettingsSectionHeader("What it reads")
+                SettingsCaption("Filled feeds sharpen the weekly call. Check-ins and flags come from your logging.")
+                signals.forEach { sig ->
+                    CoachFeedRow(
+                        label = sig.label,
+                        active = sig.active,
+                        onConnect = if (sig.label in HC_FEEDS) onOpenRecovery else null
                     )
                 }
             }
 
+            SettingsSectionHeader("Mode")
+            // "Earn auto-apply" is a TARGET, not an on-switch: until a change type builds its accepted
+            // streak, nothing self-applies. Its card carries that as a READING — how many change types
+            // have earned it — instead of the paragraph that used to explain it (§4.9). The count
+            // waits for loadCoachData (trust starts empty) so it never flashes a false "0".
+            val earned = trust.count { it.earned }
+            CoachModeCards(
+                auto = state.coachMode == "auto",
+                autoMeta = if (trust.isNotEmpty()) "$earned of ${trust.size} earned" else null,
+                onSelect = { vm.setCoachMode(if (it) "auto" else "suggest") }
+            )
+
             // How much of the Coach page to draw. Off, the page is the account alone: the calls and
-            // what became of them, which is all most people open it for. On, the readings behind
-            // the calls come back: signals, the block, the inputs with their charts, and what the
-            // coach has learned. Nothing about the coach's behaviour changes either way. The Coach
-            // page closes on the same switch, so this is its second home, not its only one.
+            // what became of them. On, the readings behind the calls come back: signals, the block,
+            // the inputs with their charts, and what the coach has learned. Nothing about the coach's
+            // behaviour changes either way. The Coach page closes on the same switch.
             SettingsSectionHeader("Coach page")
             ToggleRow(
                 "Advanced tracking",
@@ -113,7 +110,30 @@ internal fun CoachSettingsPage(
                 state.coachAdvanced
             ) { vm.setCoachAdvanced(it) }
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(32.dp))
+    }
+}
+
+/** The two coach modes as option cards, each carrying what it means in one line. */
+@Composable
+private fun CoachModeCards(auto: Boolean, autoMeta: String?, onSelect: (Boolean) -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        ForgeOptionCard(
+            label = "Suggest",
+            description = "Every change waits for your tap.",
+            selected = !auto,
+            onClick = { onSelect(false) }
+        )
+        ForgeOptionCard(
+            label = "Earn auto-apply",
+            description = "A change type applies itself once you've accepted it enough times in a row.",
+            meta = autoMeta,
+            selected = auto,
+            onClick = { onSelect(true) }
+        )
     }
 }
 

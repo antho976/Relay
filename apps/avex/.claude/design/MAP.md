@@ -624,12 +624,30 @@ hides recents/screenshots). The unlock screen is the modal archetype: opaque the
 the credential entry). Offered as one onboarding opt-in step (shared "about you" block). Settings →
 Appearance keeps the separate **Privacy mode** FLAG_SECURE toggle.
 
+### Settings sub-pages redesign (2026-09-25)
+
+Program & equipment (and its Plan · Goal & experience · Emphasis & priorities · Equipment drill-ins),
+Session, Units & format, Exercise likes, Your coach and Wearable each open on `SettingsPageTitle`
+(serif `headlineSmall` + one muted line: Units & format's line is its live format preview, Coach's
+the feeds it reads, Exercise likes' its preferred/hidden tally). Settings' own `PillChip` (4dp,
+10sp UPPERCASE mono, no 48dp target) is gone: every choice is the shared selectable family in
+`ui/common/Selectables.kt`, promoted out of onboarding, so Settings → Program → Goal is the same
+option card, words and rep-range meta onboarding asked with (`GOAL_DETAILS` / `EXPERIENCE_DETAILS`
+are shared), Equipment is onboarding's preset + gear tile grid, and days per week the round day
+chips. 2–4-way values are `SettingsSegmentRow` (label + `ForgeSegmentedChoice`, wrapping under the
+label at large font); rest times are −/+ `SettingsStepperRow`s; the fixed weekly plan is one
+`WeekdayRow` per day opening a menu (it was seven chip walls). Coach mode is two option cards, the
+auto card's meta the count of change types that earned it. Wearable's per-signal extras (write-back,
+imports, their results) sit in a `SignalDetail` inset under their signal.
+
 ### Exercise likes — `ui/settings/SettingsSubPages.kt`
 
 The preference list opens on **All exercises**: every public library movement plus the user's custom
 moves, regardless of configured equipment. Its first scope selector adds **Your gear**, which alone
 uses `ExerciseLibrary.availablePool` (including a frozen preset); muscle and Custom scopes remain
 available beside it. Custom moves stay out of Your gear because they store no equipment metadata.
+The title, search, scope/status capsules and the swap-prompt toggle scroll WITH the list (they were
+pinned and took about a third of the screen); an active filter capsule takes the selectable wash.
 
 ### Sheets
 

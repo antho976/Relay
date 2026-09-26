@@ -24,6 +24,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.health.BodyweightSync
 import com.forge.app.domain.health.WearableBrand
+import com.forge.app.ui.common.ForgeSegmentedChoice
 
 /**
  * Settings → Wearable. Connects Health Connect so the coach and cardio screen can read what your
@@ -92,47 +93,30 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             .verticalScroll(rememberScrollState())
             .padding(bottom = 40.dp)
     ) {
-        // The top bar never names the screen (§4.6), so the page names itself with its own mono
-        // anchor before anything else — this page used to open on a bare dot rail with no title.
-        SettingsSectionHeader("Wearable", top = 12.dp)
+        SettingsPageTitle("Wearable", "Opt-in and on-device. Avex has no internet permission.")
         // Then the mark (§12): the page's whole state in one glance, honest at zero.
+        Spacer(Modifier.height(10.dp))
         RecoveryConnectionRail(railStates)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Opt-in and on-device. Avex has no Internet permission.",
-            style = MaterialTheme.typography.bodySmall, color = muted,
-            modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
-        )
 
         // The brand pick tailors the pointers below (which companion app feeds Health Connect, and
         // which signals vary by its version). Advisory only — every read works for any wearable.
         SettingsSectionHeader("Your device")
-        Spacer(Modifier.height(4.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            WearableBrand.entries.forEach { brand ->
-                PillChip(
-                    brand.label,
-                    state.wearableBrand == brand.key,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    viewModel.setWearableBrand(brand.key)
-                }
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(
+        val brands = WearableBrand.entries
+        ForgeSegmentedChoice(
+            options = brands.map { brandShortLabel(it) },
+            selectedIndex = brands.indexOfFirst { it.key == state.wearableBrand },
+            onSelect = { viewModel.setWearableBrand(brands[it].key) },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER)
+        )
+        Spacer(Modifier.height(6.dp))
+        SettingsExplainer(
             when (WearableBrand.fromKey(state.wearableBrand)) {
                 WearableBrand.GALAXY -> "Syncs through Samsung Health. Turn on its Health Connect sharing first."
                 WearableBrand.PIXEL -> "Syncs through the Fitbit app. Turn on its Health Connect sharing first."
                 WearableBrand.NONE -> "Any watch or ring that feeds Health Connect works."
                 null -> "Pick what you wear. Avex tailors the setup pointers to it."
             },
-            style = MaterialTheme.typography.bodySmall, color = muted,
-            modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
+            Modifier.padding(horizontal = SETTINGS_GUTTER)
         )
 
         // One list, one rhythm — each explainer names what its signal feeds, so no per-feature headers.
@@ -170,7 +154,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             },
             receiving = state.signalFlow?.weight
         )
-        if (state.weightGranted) {
+        if (state.weightGranted) SignalDetail {
             if (state.weightWriteGranted) {
                 RecoveryToggleRow(
                     label = "Write my weigh-ins to Health Connect",
@@ -217,7 +201,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             connectable = connectable,
             onConnect = { bodyFatLauncher.launch(viewModel.bodyFatPermissions) }
         )
-        if (state.bodyFatGranted) {
+        if (state.bodyFatGranted) SignalDetail {
             if (state.bodyFatWriteGranted) {
                 RecoveryToggleRow(
                     label = "Write my body fat to Health Connect",
@@ -242,7 +226,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             connectable = connectable,
             onConnect = { leanMassLauncher.launch(viewModel.leanMassPermissions) }
         )
-        if (state.leanMassGranted) {
+        if (state.leanMassGranted) SignalDetail {
             SettingsActionLink("Import latest muscle mass →") { viewModel.importLeanMassNow() }
             state.leanMassImportMessage?.let {
                 Text(
@@ -258,7 +242,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             connectable = connectable,
             onConnect = { calorieLauncher.launch(viewModel.caloriePermissions) }
         )
-        if (state.calorieGranted) {
+        if (state.calorieGranted) SignalDetail {
             RecoveryToggleRow(
                 label = "Write my session calories to Health Connect",
                 checked = state.writeCalories,
@@ -272,7 +256,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             connectable = connectable,
             onConnect = { sessionLauncher.launch(viewModel.sessionWritePermissions) }
         )
-        if (state.sessionGranted) {
+        if (state.sessionGranted) SignalDetail {
             RecoveryToggleRow(
                 label = "Write my workouts to Health Connect",
                 checked = state.writeSessions,

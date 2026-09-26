@@ -12,6 +12,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import com.forge.app.ui.common.ForgeSegmentedChoice
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -156,35 +164,127 @@ internal fun ToggleRow(
     }
 }
 
+/**
+ * A settings sub-page's title: the serif `headlineSmall` PAGE-TITLE voice onboarding asks its
+ * questions in (§3), not a hero — no figure, no verdict, no terminal period — over at most one muted
+ * line carrying the page's live value or its one standing fact. The top bar never names the screen
+ * (§4.6), and a 15sp mono anchor naming the page read as just another section header, so the pages
+ * opened without a title at all. Added 2026-09-25 with the sub-page redesign.
+ */
 @Composable
-internal fun PillChip(
-    label: String,
-    selected: Boolean,
-    enabled: Boolean = true,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val accent = MaterialTheme.colorScheme.primary
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val outline = MaterialTheme.colorScheme.outline
-    val alpha = if (enabled) 1f else 0.35f
-    // §5 ladder: selected = accent border + accent@0.15 wash (one tile formula with
-    // onboarding's selectables) — never a white fill, which read as the do-it-now capsule.
-    Box(
-        modifier = modifier
-            .border(1.dp, (if (selected) accent else outline.copy(alpha = 0.35f)).copy(alpha = alpha), RoundedCornerShape(4.dp))
-            .background((if (selected) accent.copy(alpha = 0.15f) else Color.Transparent).copy(alpha = alpha), RoundedCornerShape(4.dp))
-            .then(if (enabled) Modifier.bounceClick(onClick = onClick) else Modifier)
-            .padding(horizontal = 12.dp, vertical = 9.dp),
-        contentAlignment = Alignment.Center
+internal fun SettingsPageTitle(title: String, summary: String? = null) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = SETTINGS_GUTTER, end = SETTINGS_GUTTER, top = 8.dp, bottom = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            color = (if (selected) onBg else muted.copy(alpha = 0.65f)).copy(alpha = alpha),
-            letterSpacing = 0.5.sp
+            title,
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.semantics { heading() }
         )
+        if (summary != null) SettingsExplainer(summary)
+    }
+}
+
+/** The one caption a section may carry (§4.3, §7: header → 2 → caption → 10 → content). */
+@Composable
+internal fun SettingsCaption(text: String) {
+    SettingsExplainer(text, Modifier.padding(start = SETTINGS_GUTTER, end = SETTINGS_GUTTER, bottom = 10.dp))
+}
+
+/**
+ * A group label INSIDE a section (FREE WEIGHTS inside EQUIPMENT): mono `labelMedium`, a size under
+ * the section anchor so the two rank by size (§6), with an optional right-hand count.
+ */
+@Composable
+internal fun SettingsGroupLabel(text: String, meta: String? = null) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        Modifier.fillMaxWidth().padding(start = SETTINGS_GUTTER, end = SETTINGS_GUTTER, top = 14.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text.uppercase(), style = MaterialTheme.typography.labelMedium, color = muted, letterSpacing = 1.sp)
+        if (meta != null) Text(meta.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted)
+    }
+}
+
+/**
+ * One setting with 2–4 short values: label (+ ≤1-line explainer) and a [ForgeSegmentedChoice].
+ * A FlowRow, so the segment (cells as wide as its widest value) sits beside the label while it
+ * fits and drops under it when it doesn't — at 200% font — instead of squeezing the label.
+ */
+@Composable
+internal fun SettingsSegmentRow(
+    label: String,
+    options: List<String>,
+    selectedIndex: Int,
+    explainer: String? = null,
+    /** Full width under the label (a four-way choice), instead of sized to its widest cell. */
+    fill: Boolean = false,
+    onSelect: (Int) -> Unit
+) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Column(
+            Modifier.align(Alignment.CenterVertically).padding(end = 16.dp, top = 6.dp, bottom = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+            if (explainer != null) SettingsExplainer(explainer)
+        }
+        ForgeSegmentedChoice(
+            options = options,
+            selectedIndex = selectedIndex,
+            onSelect = onSelect,
+            modifier = Modifier
+                .align(Alignment.CenterVertically)
+                .then(if (fill) Modifier.fillMaxWidth() else Modifier.width(IntrinsicSize.Max))
+        )
+    }
+}
+
+/**
+ * Label + explainer on the left, the current value between −/+ steppers on the right, for a value
+ * that walks an ordered list (rest times). The steppers are [GlyphButton]s (≥48dp, §14) and dim to
+ * inert at either end of the list, so nothing looks tappable while doing nothing (§4.5).
+ */
+@Composable
+internal fun SettingsStepperRow(
+    label: String,
+    explainer: String?,
+    value: String,
+    canDecrease: Boolean,
+    canIncrease: Boolean,
+    onDecrease: () -> Unit,
+    onIncrease: () -> Unit
+) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = SETTINGS_GUTTER, end = 12.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium, color = onBg)
+            if (explainer != null) SettingsExplainer(explainer)
+        }
+        GlyphButton("−", "Less $label", muted, onDecrease, enabled = canDecrease)
+        Text(
+            value,
+            style = MaterialTheme.typography.titleMedium,
+            color = onBg,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.widthIn(min = 48.dp).semantics { contentDescription = "$label $value" }
+        )
+        GlyphButton("+", "More $label", muted, onIncrease, enabled = canIncrease)
     }
 }
 
