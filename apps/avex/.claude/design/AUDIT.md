@@ -42,7 +42,7 @@ The genuine 200% risk lives somewhere else entirely — in clamped content and t
   rows of text. Worth a look.
 
 Cleared on inspection (drawn marks with an adjacent, not enclosed, label — leave them alone):
-`ExerciseBrowserScreen.kt:278/304/330` and `FreestyleLogScreen.kt:608` are `BodyAnatomy` figure
+`ExerciseBrowserScreen.kt:278/304/330` and the `MuscleFigure` thumbnails in `FreestyleLogParts.kt` / `FreestyleStartParts.kt` are `BodyAnatomy` figure
 glyphs; `OverviewTiles.kt:72` is a week-dot `Box`; `CardioPaceTrendSection.kt:91`,
 `ExerciseChartSheet.kt:117` and `BodyMeasurementsScreen.kt:191` are charts and ghost lines.
 
