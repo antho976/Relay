@@ -319,7 +319,7 @@ data (bars/meters/sparklines/dot rows), never a list of status words.
 - **n-of-m meters** measure only a real unlock threshold, and m is the REAL gate (a bar filling to the wrong gate unlocks nothing); stacked gates → show the unfilled one. Never "data availability" jargon ("lifts with a trend: 3 of 8" promises a chart it doesn't show) — render items that HAVE data with their real trend, ghost-collapse the rest.
 - **A mark needs visual mass at the data's REAL size**: a strip of tiny cells below ~a row reads as debris; at small counts use list rows. Design each section at its emptiest realistic state, not its fullest.
 - **Figures show honest zeros** ("0 WORKOUTS"), never a dash, never hidden.
-- **`InlineEmptyHint` is the last resort**, ≤1 per lens, only where there's no zero-shape; it REPLACES the caption (never both); terse, no em dashes. Boxed `EmptyState`/`FirstTouchTip` deprecated.
+- **`InlineEmptyHint` is the last resort**, ≤1 per lens, only where there's no zero-shape; it REPLACES the caption (never both); terse, no em dashes. Boxed `FirstTouchTip` deprecated (the boxed `EmptyState` card is deleted).
 - **Feedback: undo over confirm** — reversible acts get a short Undo snackbar via `SnackbarController` ("Set logged · Undo"); dialogs only for destructive/irreversible acts (wording the consequence); no success toasts for what the UI already shows.
 
 ## 13. Inputs

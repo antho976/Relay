@@ -42,29 +42,6 @@ data class OverviewRecentItem(
     val cardioTypeCode: String? = null,
 )
 
-/**
- * One actionable adaptation-engine recommendation on the Overview coach feed.
- * [applyLabel] non-null = a one-tap apply exists (e.g. "Generate deload week").
- */
-data class CoachItem(
-    val id: String,
-    val title: String,
-    val body: String,
-    val applyLabel: String? = null
-)
-
-/**
- * Sub-gate "still learning" nudge (CD-1): shown only when the coach has nothing actionable yet
- * AND is below its activation session gate, so a quiet coach reads as "warming up", not absent.
- */
-data class CoachLearningHint(val sessionsLogged: Int, val sessionsToGo: Int)
-
-/**
- * Sub-threshold fatigue nudge (Tier 3): the coach is active but holding, and recovery signals are
- * building toward — but not yet at — a deload. Surfaces the otherwise-invisible System 5 pulse.
- */
-data class FatigueHint(val score: Int, val threshold: Int, val topDriver: String?)
-
 @Immutable
 data class OverviewUiState(
     /**
@@ -111,19 +88,8 @@ data class OverviewUiState(
     val recentItems: List<OverviewRecentItem> = emptyList(),
     /** Day key of an in-progress (unfinished) workout, if any — drives the resume banner + CTA. */
     val activeSessionDayKey: String? = null,
-    /**
-     * Actionable adaptation-engine recommendations (deload, plateau ladder), arbitrated and
-     * capped. Replaces the old fixed-counter deload / comeback / 3-days-straight flags.
-     */
-    val coach: List<CoachItem> = emptyList(),
-    /** Non-null only when [coach] is empty and the coach hasn't activated yet (CD-1). */
-    val coachLearning: CoachLearningHint? = null,
-    /** Non-null only when [coach] is empty, the coach IS active, and fatigue is building (Tier 3). */
-    val coachFatigue: FatigueHint? = null,
     /** Lift-target goals + auto-tracked custom goals (achieved-first/closest-first). Home previews the
      *  top few as progress lines — the ambient motivator that replaced the generic coach entry. */
     val goals: List<com.forge.app.data.repo.GoalRepository.GoalProgress> = emptyList(),
     val customGoals: List<com.forge.app.data.repo.ExtendedGoalRepository.Progress> = emptyList()
-) {
-    val hasActiveSession: Boolean get() = activeSessionDayKey != null
-}
+)

@@ -148,34 +148,11 @@ data class DayUiState(
             !it.note.isNullOrBlank() || it.difficulty != null || it.skipped
         }
 
-    val canSkipWarmup: Boolean
-        get() = !isWarmupComplete
-
     /** Exercise currently targeted by the swap picker, if any. */
     val swapPickerExercise: ExerciseUiState?
         get() = swapPickerForExerciseId?.let { id ->
             exercises.firstOrNull { it.plan.id == id }
         }
-
-    /** First untouched exercise name — shown on the rest timer bubble while resting (#99). */
-    val nextUpExerciseName: String?
-        get() {
-            if (restTimer == null) return null
-            return exercises.firstOrNull { !it.skipped && it.loggedSets.isEmpty() }?.effectiveName
-        }
-
-    /** "X / Y exercises" progress string for the top bar (#102). Empty while loading. */
-    val sessionProgressText: String
-        get() {
-            if (exercises.isEmpty()) return ""
-            val done = exercises.count { it.isComplete }
-            return "$done / ${exercises.size}"
-        }
-
-    /** Remaining planned sets across all non-skipped exercises; used to estimate end time (#103). */
-    val remainingSetsCount: Int
-        get() = exercises.filter { !it.isComplete }
-            .sumOf { maxOf(0, it.targetSets - it.loggedSets.size) }
 
     /** "Beat the ghost": logged sets that surpassed the same-position set from last session. */
     val ghostBeats: Int
@@ -311,14 +288,6 @@ data class ExerciseUiState(
      * finished it early. The one predicate for "done" everywhere (progress, up-next, done list).
      */
     val isComplete: Boolean get() = skipped || loggedSets.size >= targetSets || finishedEarly
-
-    /** 0f–1f progress toward [goalWeightLb] based on all-time PB. Null if either is absent. */
-    val goalProgressFraction: Float?
-        get() {
-            val pb = allTimePbLb ?: return null
-            val goal = goalWeightLb?.takeIf { it > 0 } ?: return null
-            return (pb / goal).toFloat().coerceIn(0f, 1f)
-        }
 
     /** Display name preferring session-swap, then persistent-swap, then the static plan name. */
     val effectiveName: String

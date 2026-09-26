@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -18,8 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -40,12 +37,10 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -142,41 +137,6 @@ fun surfacePalette(): SurfacePalette {
 /** Radius near 18dp — deliberately off `Shape.kt`'s 4/8/12/16/24 scale (§7). */
 val CardShape = RoundedCornerShape(18.dp)
 
-/** The page gutter a [PeekCardRow] sits on, and the gap between its cards. */
-private val PEEK_GUTTER = 24.dp
-private val PEEK_GAP = 10.dp
-
-/**
- * How much of the third card must stay on screen. The peek IS the affordance — there is no chevron
- * and no "swipe" instruction — so it has to read as a card that continues, not as a seam.
- *
- * 58dp was measured against the alternative: a fixed 168dp card left **13dp** showing on a 393dp
- * screen, which is a sliver you register as an edge rather than as more content. Antho could not
- * tell the BODY strip scrolled (2026-08-15), and the third card there is WAIST — a metric that was
- * therefore invisible.
- */
-private val PEEK_MIN = 58.dp
-
-/**
- * The width one card takes in a [PeekCardRow], derived from the screen so the peek survives.
- *
- * Two rules fight here and the order matters. §14 says a pinned width plus a long name is how text
- * gets truncated at 200%, which argues for growing the card with the font scale. The peek argues
- * for keeping it narrow. So: derive the base from the real screen width with [PEEK_MIN] reserved,
- * let it grow with the font scale, and then clamp it back so at least 32dp of the next card is
- * always showing. Legibility wins the middle ground; discoverability holds the floor.
- */
-@Composable
-fun peekCardWidth(): Dp {
-    val screen = LocalConfiguration.current.screenWidthDp.dp
-    // Two cards, one gutter, two gaps, and the peek — whatever is left is split between the cards.
-    val base = ((screen - PEEK_GUTTER - PEEK_MIN - PEEK_GAP * 2) / 2).coerceIn(132.dp, 190.dp)
-    val scaled = base * LocalDensity.current.fontScale.coerceIn(1f, 1.6f)
-    // The hard floor: never let a grown card swallow the affordance entirely.
-    val widest = (screen - PEEK_GUTTER - PEEK_GAP * 2 - 32.dp) / 2
-    return minOf(scaled, widest.coerceAtLeast(132.dp))
-}
-
 // ── The card ──────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -208,39 +168,6 @@ fun SurfaceCard(
             .padding(padding),
         content = content
     )
-}
-
-/** The card's mono eyebrow: a small-caps label, optionally with a right-aligned reading. */
-@Composable
-fun CardEyebrow(
-    label: String,
-    muted: Color,
-    trailing: String? = null,
-    trailingColor: Color = muted
-) {
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            label.uppercase(),
-            style = MaterialTheme.typography.labelMedium,
-            color = muted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false)
-        )
-        if (trailing != null) {
-            Spacer(Modifier.width(8.dp))
-            Text(
-                trailing.uppercase(),
-                style = MaterialTheme.typography.labelSmall,
-                color = trailingColor,
-                maxLines = 1
-            )
-        }
-    }
 }
 
 /**
@@ -294,43 +221,6 @@ fun CardMark(
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, contentDescription = null, tint = hue, modifier = Modifier.size(glyphSize))
-    }
-}
-
-/**
- * Colour as data: a signed percentage as ↑/↓ + magnitude, tinted positive/negative.
- *
- * The glyph carries the direction on its own, so this still reads with the accent switched off and
- * for a red-green-blind reader — the tint is a second channel, never the only one.
- */
-@Composable
-fun DeltaBadge(
-    percent: Int,
-    palette: SurfacePalette,
-    muted: Color,
-    modifier: Modifier = Modifier
-) {
-    val tone = when {
-        percent == 0 -> muted
-        percent > 0 -> palette.positive
-        else -> palette.negative
-    }
-    Box(
-        modifier
-            .clip(RoundedCornerShape(50))
-            .background(tone.copy(alpha = 0.15f))
-            .padding(horizontal = 8.dp, vertical = 3.dp)
-    ) {
-        Text(
-            when {
-                percent == 0 -> "· 0%"
-                percent > 0 -> "↑ $percent%"
-                else -> "↓ ${-percent}%"
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = tone,
-            maxLines = 1
-        )
     }
 }
 
@@ -445,79 +335,11 @@ private class SparklineGeometry {
 }
 
 /**
- * One value against a target: a thin filled track. Honest at zero — an empty track, never hidden.
- * A fixed 4dp height is fine here: it holds no text, so §14's "container sizes to its content" does
- * not apply to it.
- */
-@Composable
-fun SurfaceMeter(
-    fraction: Float,
-    color: Color,
-    track: Color,
-    reading: String,
-    modifier: Modifier = Modifier
-) {
-    val f = fraction.coerceIn(0f, 1f)
-    Box(
-        modifier
-            .height(4.dp)
-            .clip(RoundedCornerShape(50))
-            .background(track)
-            .semantics { contentDescription = reading }
-    ) {
-        if (f > 0f) {
-            Box(
-                Modifier
-                    .fillMaxWidth(f)
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(50))
-                    .background(color)
-            )
-        }
-    }
-}
-
-/**
- * The week as seven cells: filled where trained, ringed for today, hollow otherwise. Works at zero
- * — all-hollow is a real reading, so the mark never disappears on a fresh week (§12).
- */
-@Composable
-fun WeekRail(
-    trained: Set<Int>,
-    todayIndex: Int,
-    fill: Color,
-    track: Color,
-    reading: String,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier.semantics(mergeDescendants = true) { contentDescription = reading },
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        repeat(7) { i ->
-            Box(
-                Modifier
-                    .weight(1f)
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(50))
-                    .then(
-                        when {
-                            i in trained -> Modifier.background(fill)
-                            i == todayIndex -> Modifier.border(1.dp, fill, RoundedCornerShape(50))
-                            else -> Modifier.background(track)
-                        }
-                    )
-            )
-        }
-    }
-}
-
-/**
  * The week as seven day cells with real mass — the mark that replaced Home's WORKOUTS tile.
  *
  * ## Why this exists
  *
- * Home already carried this exact data as [WeekRail]: seven 6dp dashes under a "1 OF 7" figure.
+ * Home already carried this exact data as a week rail: seven 6dp dashes under a "1 OF 7" figure.
  * Antho picked the same element out of a reference app as one of the two things he liked on it, and
  * could not see it in his own — because at 6dp it is debris, not a mark. Same information, given a
  * day letter and a 26dp cell, becomes the most legible thing on the page, and it answers "how is the
@@ -673,198 +495,7 @@ fun SurfaceListRow(
 
 // ── Horizontal section ────────────────────────────────────────────────────────────────────────
 
-/**
- * A scrollable row of cards that PEEKS the next one at the end edge, so the scroll is discoverable
- * without a chevron or a "swipe" instruction. The peek IS the affordance.
- *
- * The gutter is carried as content padding so the first card lands on the same rail as everything
- * above it while the strip itself runs to the screen edge.
- */
-@Composable
-fun PeekCardRow(
-    modifier: Modifier = Modifier,
-    gutter: Dp = 24.dp,
-    content: LazyListScope.() -> Unit
-) {
-    LazyRow(
-        modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(start = gutter, end = gutter),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        content = content
-    )
-}
-
-/**
- * A ghost card: the zero-shape for a [PeekCardRow]. Drawn, not written (§12) — the strip keeps its
- * rhythm with nothing in it, and only the LEAD cell is tappable.
- *
- * ## Two rounds of getting this wrong
- *
- * **v1 was a hollow outline.** Right on a bare page, where an outline is the only way to show an
- * empty slot; wrong beside filled cards, where a row of empty rectangles reads as unstyled.
- *
- * **v2 was a flat filled slab.** The colour was right and it still read badly — "stark and seeable"
- * (Antho, 2026-08-15) — because three identical blocks of solid fill are *louder* than the real
- * content they stand in for. An empty state should recede.
- *
- * **v3, this one, does three things instead.** The fill becomes a vertical gradient that dissolves
- * toward the page, borrowing the profile cover's own trick so an empty cell fades out rather than
- * ending on a hard edge. Each successive cell drops in opacity, so the strip reads as *continuing*
- * rather than as N equal boxes. And the lead cell carries real structure via [content] — its
- * section's own mark at zero, in the vocabulary it will use with data (§12) — instead of a bare
- * prompt floating in the middle of a blank.
- */
-@Composable
-fun GhostCard(
-    palette: SurfacePalette,
-    index: Int,
-    muted: Color,
-    onBg: Color,
-    minHeight: Dp,
-    modifier: Modifier = Modifier,
-    prompt: String? = null,
-    caption: String? = null,
-    onClick: (() -> Unit)? = null,
-    clickLabel: String = "",
-    content: @Composable ColumnScope.() -> Unit = {}
-) {
-    val lead = index == 0
-    // The recede ramp. A gradient/scrim interpolates freely between rungs (§5's named exception),
-    // which is what lets the trailing cells fade instead of snapping to the next alpha down.
-    val depth = when (index) {
-        0 -> 1f
-        1 -> 0.62f
-        else -> 0.34f
-    }
-    Column(
-        modifier
-            .width(peekCardWidth())
-            .heightIn(min = minHeight)
-            .clip(CardShape)
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        palette.card.copy(alpha = depth),
-                        palette.card.copy(alpha = depth * 0.25f)
-                    )
-                )
-            )
-            .border(
-                1.dp,
-                if (lead) muted.copy(alpha = 0.25f) else palette.hairline.copy(alpha = depth),
-                CardShape
-            )
-            .then(
-                if (lead && onClick != null) {
-                    Modifier.bounceCombinedClick(onClickLabel = clickLabel, onClick = onClick)
-                } else Modifier
-            )
-            .padding(14.dp)
-    ) {
-        if (lead && prompt != null) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // §14: the accent carries the glyph, the words stay on onBg — accent text measures
-                // 2.35:1, so it never carries meaning on its own.
-                Text("+ ", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                Text(prompt, style = MaterialTheme.typography.labelMedium, color = onBg)
-            }
-            if (caption != null) {
-                Spacer(Modifier.height(5.dp))
-                Text(
-                    caption,
-                    style = MaterialTheme.typography.bodySmall,
-                    // The on-card floor exactly, not a shade under it. `mutedOnCard.copy(alpha = …)`
-                    // REPLACES the alpha rather than scaling it, so dimming this "slightly" landed
-                    // at 0.595 — below the 0.70 the fill already forces. An empty cell's caption is
-                    // still text.
-                    color = palette.mutedOnCard
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-        }
-        // No weighted spacer pushing [content] to the bottom: a LazyRow measures its items with an
-        // unbounded height, so a weight in here resolves to zero and the mark would silently
-        // collapse against the prompt. The cell's min height carries the presence instead.
-        content()
-    }
-}
-
-/**
- * The empty track a meter leaves behind — the zero-shape for anything measured against a target
- * (§2②: "empty track, honest 0"). Dimmed by its cell's depth so it recedes with the rest.
- */
-@Composable
-fun GhostTrack(muted: Color, depth: Float = 1f, modifier: Modifier = Modifier) {
-    Box(
-        modifier
-            .fillMaxWidth()
-            .height(4.dp)
-            .clip(RoundedCornerShape(50))
-            .background(muted.copy(alpha = 0.25f * depth))
-    )
-}
-
 // ── Controls ──────────────────────────────────────────────────────────────────────────────────
-
-/**
- * The hero CTA: a full-width filled capsule, bounce press, no ripple (§8/§9). `heightIn(min=)` +
- * padding, never a fixed height (§14).
- *
- * **It is the accent now, not white** (2026-08-16). White is temperature-neutral, and this is the
- * single largest piece of colour on Home — the one place the app is allowed to be loud. Taking the
- * fill from `primary` means the whole page's heat follows the accent picker instead of being
- * hardcoded, and the ember default measures 4.94:1 against `onPrimary`, better than the 3.9:1 a
- * near-white content colour would have given.
- */
-@Composable
-fun SurfaceCta(
-    text: String,
-    label: String,
-    modifier: Modifier = Modifier,
-    /**
-     * False renders the same capsule OUTLINED instead of filled.
-     *
-     * Home uses it when the day's answer is *not* to train: on a rest day the action still exists
-     * (you may train anyway) but it is not the recommendation, and a filled ember capsule is this
-     * app's one "do this now" signal. Shouting "Start session" under a headline reading "Done for
-     * today" was the page contradicting itself (Antho, 2026-08-16).
-     */
-    filled: Boolean = true,
-    onLongClick: (() -> Unit)? = null,
-    longClickLabel: String? = null,
-    onClick: () -> Unit
-) {
-    val accent = MaterialTheme.colorScheme.primary
-    Box(
-        modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(50))
-            .then(
-                if (filled) Modifier.background(accent)
-                else Modifier.border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(50))
-            )
-            .bounceCombinedClick(
-                onClickLabel = label,
-                onLongClickLabel = longClickLabel,
-                onLongClick = onLongClick,
-                onClick = onClick
-            )
-            .heightIn(min = 56.dp)
-            .padding(horizontal = 24.dp, vertical = 16.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.bodyLarge,
-            // Outlined takes onBackground, not the accent: accent-as-text clears AA on the Ember
-            // default but not on the four alternate presets (§14), and this label must stay legible
-            // whichever accent is picked.
-            color = if (filled) MaterialTheme.colorScheme.onPrimary
-            else MaterialTheme.colorScheme.onBackground,
-            textAlign = TextAlign.Center
-        )
-    }
-}
 
 // The accent bloom behind Home's hero was REMOVED (Antho, 2026-08-16). It was an attempt to buy
 // atmosphere without a photograph, and it worked — but a tinted wash across the top of the page is

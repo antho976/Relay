@@ -109,10 +109,6 @@ class MirrorTestViewModel @Inject constructor(
     fun renameAlbum(old: String, new: String) = viewModelScope.launch { photoRepo.renameAlbum(old, new) }
     fun deleteAlbum(name: String) = viewModelScope.launch { photoRepo.deleteAlbum(name) }
 
-    fun addPhoto(uri: Uri, album: String, pose: String = "") = viewModelScope.launch {
-        photoRepo.add(uri, album = album, pose = pose)
-    }
-
     /**
      * Import a whole selection in one go. Sequential on purpose: each add copies bytes and rewrites
      * the shared JSON index under the repository's write lock, so running them concurrently would

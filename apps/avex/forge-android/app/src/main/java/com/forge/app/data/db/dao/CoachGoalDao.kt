@@ -4,7 +4,6 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import androidx.room.Update
 import com.forge.app.data.db.entities.CoachGoal
 import kotlinx.coroutines.flow.Flow
 
@@ -14,9 +13,6 @@ interface CoachGoalDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(goal: CoachGoal): Long
-
-    @Update
-    suspend fun update(goal: CoachGoal)
 
     @Query("SELECT * FROM coach_goal ORDER BY priority ASC, created_at ASC")
     suspend fun all(): List<CoachGoal>
@@ -33,17 +29,11 @@ interface CoachGoalDao {
     )
     fun observeActive(): Flow<List<CoachGoal>>
 
-    @Query("SELECT * FROM coach_goal WHERE id = :id")
-    suspend fun byId(id: Long): CoachGoal?
-
     @Query("UPDATE coach_goal SET completed_at = :atMs WHERE id = :id")
     suspend fun markCompleted(id: Long, atMs: Long)
 
     @Query("UPDATE coach_goal SET archived_at = :atMs WHERE id = :id")
     suspend fun markArchived(id: Long, atMs: Long)
-
-    @Query("UPDATE coach_goal SET priority = :priority WHERE id = :id")
-    suspend fun setPriority(id: Long, priority: Int)
 
     /** Duplicate guard for the importer: a goal is identified by what it targets and when it was set. */
     @Query("SELECT EXISTS(SELECT 1 FROM coach_goal WHERE kind = :kind AND target_key = :targetKey AND created_at = :createdAt)")

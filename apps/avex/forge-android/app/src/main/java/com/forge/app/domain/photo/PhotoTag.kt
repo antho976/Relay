@@ -55,9 +55,3 @@ object PhotoTag {
 /** Resolve stored muscle codes to their enum values, in enum order, dropping anything unknown. */
 fun musclesFromCodes(codes: List<String>): List<MuscleGroup> =
     MuscleGroup.entries.filter { it.code in codes }
-
-/** The muscle groups actually used across [all], in enum order — the muscle filter rail's contents. */
-fun musclesPresent(all: List<List<String>>): List<MuscleGroup> {
-    val used = all.flatten().toSet()
-    return MuscleGroup.entries.filter { it.code in used }
-}

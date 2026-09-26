@@ -76,8 +76,8 @@ import kotlinx.coroutines.withContext
  * and what it bought is written up on [ProfileAllTime].
  *
  * **THIS YEAR became ACTIVITY.** The 12-row year grid is replaced by [ProfileActivityMonth], a
- * GitHub-style contribution grid over the current month. The year is still in the package
- * ([YearConsistencySection]) and no longer called.
+ * GitHub-style contribution grid over the current month. The year grid was later deleted as dead
+ * code; git history has it.
  *
  * ## The colour rule (2026-08-24)
  *
@@ -108,8 +108,8 @@ import kotlinx.coroutines.withContext
  *
  * The open-editorial original is in git history, not in a snapshot directory beside the live file
  * (`git log -- app/src/main/java/com/forge/app/ui/profile/` finds the commit that replaced it).
- * Every shipped section (`AllTimeSection`, `BodyMetricsSection`, `LifetimeVolumeGraph`,
- * `SectionHeader`, `ChartCaption`) is still in the package, untouched and simply no longer called.
+ * The sections it shipped with (`AllTimeSection`, `BodyMetricsSection`, `LifetimeVolumeGraph`,
+ * `ChartCaption`) were later deleted as dead code; git history has them.
  *
  * The rank / standing / trophy sections are still boxed. They are behind `Features
  * .SHOW_GAMIFICATION`, which is `false`, so nothing renders — unboxing UI no one can see would be

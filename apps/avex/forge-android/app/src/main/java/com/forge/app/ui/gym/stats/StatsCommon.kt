@@ -34,8 +34,6 @@ data class StatsColors(
 internal val STATS_GUTTER = 24.dp
 /** The standard full-width chart height — used by every line/scatter/gauge so they're visually peers. */
 internal val STATS_CHART_H = 132.dp
-/** A taller chart for the headline/hero visual. */
-internal val STATS_HERO_CHART_H = 116.dp
 
 /**
  * Open editorial section — content sits directly on the near-black page (no card shell, no

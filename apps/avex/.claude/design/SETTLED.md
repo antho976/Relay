@@ -318,9 +318,9 @@ Its data plumbing survives unused: `AcademyRepository.coldStartLesson()` →
 `DirectiveRepository.TodayAnswer.coldStartLesson` → `OverviewUiState.coldStartLesson`. Nothing
 renders it. Remove the chain or give it a home; do not re-add the strip.
 
-**Still open on Home, deliberately not touched:** `HomeHero` has no call sites — the hero is still
-assembled inline because the page's CTA row is `[action][Plan]` and `HomeHero` owns a full-width
-CTA. MOVEMENT is listed as REMOVED from Home by the 2026-08-16 cut-down above and is rendering
+**Still open on Home, deliberately not touched:** the hero is assembled inline because the page's
+CTA row is `[action][Plan]`; the full-width-CTA `HomeHero` it could have used had no call sites
+and was deleted as dead code (2026-09-26). MOVEMENT is listed as REMOVED from Home by the 2026-08-16 cut-down above and is rendering
 again; that is a content call, not a craft one. The weekly volume line was the other half of this
 note and is **closed now** — the 2026-08-16 removal was tested against its alternative and held.
 See below.

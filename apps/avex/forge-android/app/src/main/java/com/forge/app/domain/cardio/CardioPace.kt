@@ -24,7 +24,3 @@ fun formatPaceSec(sec: Int): String = String.format(Locale.US, "%d:%02d", sec / 
  */
 fun pacePerUnit(durationMin: Int, distanceKm: Double?, useMiles: Boolean): String? =
     paceSecPerUnit(durationMin, distanceKm, useMiles)?.let(::formatPaceSec)
-
-/** Pace per kilometre — the [pacePerUnit] specialisation kept for the not-yet-converted callers. */
-fun pacePerKm(durationMin: Int, distanceKm: Double?): String? =
-    pacePerUnit(durationMin, distanceKm, useMiles = false)

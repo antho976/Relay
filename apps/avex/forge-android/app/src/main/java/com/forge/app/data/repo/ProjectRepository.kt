@@ -84,17 +84,4 @@ class ProjectRepository @Inject constructor(
         }
         return project.copy(id = id)
     }
-
-    suspend fun complete(id: Long) = projectDao.markCompleted(id, clock.nowMs())
-
-    suspend fun abandon(id: Long) = projectDao.markAbandoned(id, clock.nowMs())
-
-    /**
-     * Has the running project run its course? Time-based rather than metric-based on purpose: the
-     * finish line is stated in the user's terms and they are the ones who judge it, so the coach
-     * asks rather than silently deciding it succeeded.
-     */
-    suspend fun dueForReview(): CoachProject? = active()?.takeIf {
-        clock.nowMs() - it.startedAt >= it.weeks * 7L * 24 * 60 * 60 * 1000
-    }
 }

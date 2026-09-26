@@ -359,6 +359,6 @@ private fun monoDate(entry: BodyMeasurementEntry, today: LocalDate): String {
     return date.format(DateTimeFormatter.ofPattern(pattern, Locale.getDefault())).uppercase()
 }
 
-// The Profile-hub trim of this screen lives in the merged BODY section ([BodyMetricsSection] in
-// ProfileBody.kt) as the "SIZES" row — a coverage rail plus its "n of 5" and an Open pill. The values,
-// the trends and the logging are this screen's alone (§4.2).
+// The Profile-hub trim of this screen lives in the BODY section ([ProfileBodyRows] in
+// ProfileSurfaceSections.kt) as the "SIZES" row: the featured circumference and an Open action. The
+// values, the trends and the logging are this screen's alone (§4.2).

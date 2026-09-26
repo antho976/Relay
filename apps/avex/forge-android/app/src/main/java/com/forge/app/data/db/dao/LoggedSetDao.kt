@@ -264,15 +264,6 @@ interface LoggedSetDao {
     """)
     suspend fun bestE1rmLbSince(sinceMs: Long): Double?
 
-    /** Max reps in any single logged set of a tracked session. */
-    @Query("""
-        SELECT MAX(s.reps) FROM logged_set s
-        INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
-        INNER JOIN session sess ON le.session_id = sess.id
-        WHERE sess.is_untracked = 0 AND sess.finished_at IS NOT NULL
-    """)
-    suspend fun maxRepsAnySet(): Int?
-
     /** Max reps summed across one exercise's sets (per logged exercise) — the "Rep Machine" trophy (#105). */
     @Query("""
         SELECT MAX(total_reps) FROM (

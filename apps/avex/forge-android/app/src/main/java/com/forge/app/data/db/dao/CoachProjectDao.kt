@@ -22,10 +22,4 @@ interface CoachProjectDao {
 
     @Query("SELECT * FROM coach_project ORDER BY started_at DESC")
     suspend fun all(): List<CoachProject>
-
-    @Query("UPDATE coach_project SET completed_at = :atMs WHERE id = :id")
-    suspend fun markCompleted(id: Long, atMs: Long)
-
-    @Query("UPDATE coach_project SET abandoned_at = :atMs WHERE id = :id")
-    suspend fun markAbandoned(id: Long, atMs: Long)
 }

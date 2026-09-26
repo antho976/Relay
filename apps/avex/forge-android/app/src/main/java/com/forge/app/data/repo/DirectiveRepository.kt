@@ -29,7 +29,6 @@ class DirectiveRepository @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val coachGoalRepository: CoachGoalRepository,
     private val academyRepository: AcademyRepository,
-    private val workoutRepository: WorkoutRepository,
     private val blockRepository: BlockRepository,
     private val clock: Clock
 ) {

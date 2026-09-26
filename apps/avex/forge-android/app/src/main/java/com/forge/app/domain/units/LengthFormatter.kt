@@ -12,9 +12,6 @@ private const val CM_PER_INCH = 2.54
 /** The value in the display unit, UNformatted — for driving figures / raw math. */
 fun toDisplayLength(cm: Double, useCm: Boolean): Double = if (useCm) cm else cm / CM_PER_INCH
 
-/** Inverse of [toDisplayLength]: a value the user picked in their display unit, back to stored cm. */
-fun fromDisplayLength(value: Double, useCm: Boolean): Double = if (useCm) value else value * CM_PER_INCH
-
 /** "cm" / "in" — the display unit label (uppercased at the call site for mono captions). */
 fun lengthUnitLabel(useCm: Boolean): String = if (useCm) "cm" else "in"
 
@@ -32,13 +29,6 @@ fun formatLength(cm: Double, useCm: Boolean): String {
 fun lengthInputValue(cm: Double, useCm: Boolean): String {
     val v = toDisplayLength(cm, useCm)
     return if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(Locale.US, "%.1f", v)
-}
-
-/** A length *difference* (in cm) formatted in the display unit with a unit label, e.g. "1.5 in". */
-fun formatLengthDelta(cmDiff: Double, useCm: Boolean): String {
-    val v = toDisplayLength(cmDiff, useCm)
-    val num = if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(Locale.US, "%.1f", v)
-    return "$num ${lengthUnitLabel(useCm)}"
 }
 
 /**

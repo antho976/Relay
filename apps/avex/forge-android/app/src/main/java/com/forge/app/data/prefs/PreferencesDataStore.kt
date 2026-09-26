@@ -314,11 +314,8 @@ object PreferenceKeys {
     val SCHEDULE_WEEKLY = stringPreferencesKey("schedule_weekly")
     /** N for the "every_n" cadence. */
     val ROTATION_EVERY_N = intPreferencesKey("rotation_every_n")
-    /** Unit for ROTATION_EVERY_N: "sessions" | "weeks". */
-    val ROTATION_UNIT = stringPreferencesKey("rotation_unit")
     /** Progress toward the next rotation. */
     val ROTATION_COUNTER = intPreferencesKey("rotation_counter")
-    val LAST_ROTATED_AT_MS = longPreferencesKey("last_rotated_at_ms")
     /**
      * When the current deload week was applied (epoch-ms). 0 = not in a deload week. Persists the
      * deload so auto-rotation pauses and DeloadAdvisor suppression fires (auto-coach seam, finding 18).

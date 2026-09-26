@@ -29,8 +29,6 @@ class BodyFatRepository @Inject constructor(
 ) {
     fun observeRecent(limit: Int = 90): Flow<List<BodyFatEntry>> = dao.observeRecent(limit)
 
-    suspend fun latestPercent(): Double? = dao.latest()?.percent
-
     /** Today, from the injected clock — the default for a reading with no explicit date. */
     private fun today(zone: ZoneId = ZoneId.systemDefault()): LocalDate =
         Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
