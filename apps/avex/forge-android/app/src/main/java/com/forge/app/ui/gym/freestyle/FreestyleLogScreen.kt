@@ -357,8 +357,9 @@ fun FreestyleLogScreen(
                     if (draft != null) {
                         val restored = remember(draft, weightUnit) { draftToItems(draft, weightUnit) }
                         FsResumePrompt(
-                            exerciseCount = restored.size,
-                            setCount = restored.sumOf { it.sets.size },
+                            items = restored,
+                            unitLabel = unitLabel,
+                            weightUnit = weightUnit,
                             onResume = {
                                 items = restored
                                 // Rewind to the original open time so a quick navigate-away keeps the
@@ -462,7 +463,6 @@ fun FreestyleLogScreen(
                         } else {
                             FsAddFooter(
                                 recent = recentMoves.take(RAIL_RECENT_LIMIT),
-                                libraryCount = libraryCount,
                                 onSearch = { showBrowser = true },
                                 onAdd = { id -> fsExerciseFor(id)?.let { addExercises(listOf(it)) } }
                             )

@@ -56,6 +56,7 @@ import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.ForgeChoiceChip
+import com.forge.app.ui.common.ForgeHeroAction
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.ForgeRowPill
@@ -131,18 +132,36 @@ private fun FsFigure(value: String, label: String, modifier: Modifier = Modifier
 
 /** An unsaved log is waiting: pick it up or start over. Nothing else renders until this is settled. */
 @Composable
-internal fun FsResumePrompt(exerciseCount: Int, setCount: Int, onResume: () -> Unit, onStartFresh: () -> Unit) {
+internal fun FsResumePrompt(
+    items: List<FsExercise>,
+    unitLabel: String,
+    weightUnit: WeightUnit,
+    onResume: () -> Unit,
+    onStartFresh: () -> Unit
+) {
     val cs = MaterialTheme.colorScheme
+    val setCount = items.sumOf { it.sets.size }
     Column(Modifier.fillMaxWidth()) {
-        Text("UNSAVED", style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
+        Text("UNSAVED", style = MaterialTheme.typography.labelMedium, color = cs.primary, letterSpacing = 1.sp)
         Spacer(Modifier.height(10.dp))
         Text("Unfinished workout", style = MaterialTheme.typography.headlineMedium, color = cs.onSurface)
         Spacer(Modifier.height(6.dp))
-        val ex = "$exerciseCount ${if (exerciseCount == 1) "exercise" else "exercises"}"
+        val ex = "${items.size} ${if (items.size == 1) "exercise" else "exercises"}"
         val sets = "$setCount ${if (setCount == 1) "set" else "sets"}"
         Text("$ex and $sets, logged and not saved.", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+        Spacer(Modifier.height(12.dp))
+        // What is in it, so the choice is made on the contents rather than on a count.
+        items.forEach { exercise ->
+            val n = exercise.sets.size
+            val meta = buildString {
+                append(exercise.muscle.displayName.uppercase())
+                append(" · $n ${if (n == 1) "SET" else "SETS"}")
+                exercise.topSet(weightUnit)?.let { append(" · TOP ${exercise.setReading(it, unitLabel)}") }
+            }
+            FsExerciseTitle(exercise, meta)
+        }
         Spacer(Modifier.height(20.dp))
-        ForgePrimaryCapsule("Resume log", onClick = onResume, modifier = Modifier.fillMaxWidth())
+        ForgeHeroAction("Resume log", onClick = onResume, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
         ForgeOutlineCapsule("Start fresh", onClick = onStartFresh, modifier = Modifier.fillMaxWidth())
     }

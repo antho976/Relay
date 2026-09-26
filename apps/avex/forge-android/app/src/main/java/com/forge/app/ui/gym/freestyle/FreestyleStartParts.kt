@@ -18,6 +18,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -33,7 +36,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.circle
 import com.forge.app.ui.common.icon
 import com.forge.app.ui.common.strokePath
 import com.forge.app.ui.experiment.CardMark
@@ -73,16 +75,8 @@ internal fun lastDoneLabel(atMs: Long, nowMs: Long, zone: ZoneId = ZoneId.system
     }
 }
 
-/** The two glyphs this page adds, drawn like the app's other families (24dp viewport, 1.8 strokes). */
+/** The glyph this page adds, drawn like the app's other families (24dp viewport, 1.8 strokes). */
 private object FsIcons {
-    /** Search: a lens with its handle running to the lower end corner. */
-    val Search: ImageVector by lazy {
-        icon("FsSearch") {
-            strokePath(1.8f) { circle(10.6f, 10.6f, 6.2f) }
-            strokePath(1.8f) { moveTo(15.2f, 15.2f); lineTo(19.8f, 19.8f) }
-        }
-    }
-
     /** Repeat: two arrows chasing each other round a loop. */
     val Repeat: ImageVector by lazy {
         icon("FsRepeat") {
@@ -110,11 +104,11 @@ private fun FsSection(label: String, action: String? = null, onAction: (() -> Un
     )
 }
 
-/** An accent mark in a fixed 40dp lane, so rows with a mark line up with rows with a muscle figure. */
+/** A neutral mark in a fixed 40dp lane, so rows with a mark line up with rows with a muscle figure. */
 @Composable
 private fun FsMark(icon: ImageVector) {
     Box(Modifier.width(40.dp), contentAlignment = Alignment.Center) {
-        CardMark(icon, MaterialTheme.colorScheme.primary, size = 36.dp, glyphSize = 18.dp)
+        CardMark(icon, MaterialTheme.colorScheme.onSurfaceVariant, size = 36.dp, glyphSize = 18.dp)
     }
 }
 
@@ -171,9 +165,9 @@ private fun FsRow(
 }
 
 /**
- * The empty log. Fastest way in first: a move you already do (one tap adds it with last time's
- * numbers waiting), then the library for anything else, then a whole past workout. Someone with no
- * history gets the search row and the three-step flow instead of empty sections.
+ * The empty log: search at the top where the eye expects it, then a move you already do (one tap
+ * adds it with last time's numbers waiting), then a whole past workout. Someone with no history gets
+ * the three-step flow instead of empty sections.
  */
 @Composable
 internal fun FsStartPage(
@@ -187,15 +181,15 @@ internal fun FsStartPage(
     onAllTemplates: () -> Unit
 ) {
     Column(Modifier.fillMaxWidth()) {
-        Spacer(Modifier.height(16.dp))
-        FsSection(if (recent.isEmpty()) "Exercises" else "Your moves")
-        Spacer(Modifier.height(6.dp))
-        recent.forEach { move -> FsRecentRow(move, onClick = { onAdd(move.libId) }) }
-        FsSearchRow(
-            title = if (recent.isEmpty()) "Browse exercises" else "Find another exercise",
-            meta = "SEARCH $libraryCount · OR NAME YOUR OWN",
-            onClick = onSearch
-        )
+        Spacer(Modifier.height(4.dp))
+        FsSearchLauncher("Search $libraryCount exercises", onClick = onSearch)
+
+        if (recent.isNotEmpty()) {
+            Spacer(Modifier.height(28.dp))
+            FsSection("Your moves")
+            Spacer(Modifier.height(6.dp))
+            recent.forEach { move -> FsRecentRow(move, onClick = { onAdd(move.libId) }) }
+        }
 
         if (templates.isNotEmpty()) {
             Spacer(Modifier.height(28.dp))
@@ -236,19 +230,28 @@ private fun FsRecentRow(move: FsRecentMove, onClick: () -> Unit) {
     )
 }
 
-/** The library door, in the same row shape as the moves above it. */
+/**
+ * A search field that is really a door: tapping it opens the full exercise browser. It sits where
+ * the eye expects search, so "find a move" never needs explaining.
+ */
 @Composable
-private fun FsSearchRow(title: String, meta: String, onClick: () -> Unit) {
-    FsRow(
-        title = title,
-        meta = meta,
-        clickLabel = title,
-        onClick = onClick,
-        leading = { FsMark(FsIcons.Search) },
-        trailing = {
-            Text("\u2192", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-        }
-    )
+private fun FsSearchLauncher(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(cs.surfaceVariant)
+            .bounceCombinedClick(pressedScale = 0.98f, onClickLabel = label, onClick = onClick)
+            .semantics { role = Role.Button }
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Filled.Search, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(12.dp))
+        Text(label, style = MaterialTheme.typography.bodyLarge, color = cs.onSurfaceVariant)
+    }
 }
 
 /** One past workout: when, how big, what it held. The whole row brings every set back. */
@@ -266,10 +269,7 @@ private fun FsTemplateRow(template: FreestyleTemplateSummary, nowMs: Long, onCli
         detail = moves.joinToString(" · "),
         clickLabel = "Repeat ${template.title}",
         onClick = onClick,
-        leading = { FsMark(FsIcons.Repeat) },
-        trailing = {
-            Text("Repeat", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-        }
+        leading = { FsMark(FsIcons.Repeat) }
     )
 }
 
@@ -302,15 +302,15 @@ private fun FsHowItWorks() {
 }
 
 /**
- * Under a log in progress: the library door, then recent moves as a sideways rail of tiles, so the
+ * Under a log in progress: the search door, then recent moves as a sideways rail of tiles, so the
  * next move is one tap away without a list pushing the page down.
  */
 @Composable
-internal fun FsAddFooter(recent: List<FsRecentMove>, libraryCount: Int, onSearch: () -> Unit, onAdd: (String) -> Unit) {
+internal fun FsAddFooter(recent: List<FsRecentMove>, onSearch: () -> Unit, onAdd: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 16.dp)) {
-        FsSearchRow(title = "Add an exercise", meta = "SEARCH $libraryCount · OR NAME YOUR OWN", onClick = onSearch)
+        FsSearchLauncher("Add an exercise", onClick = onSearch)
         if (recent.isNotEmpty()) {
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(20.dp))
             FsSection("Recent")
             Spacer(Modifier.height(10.dp))
             // Intrinsic height so every tile matches the tallest (a two-line name), not a fixed guess.
