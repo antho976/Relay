@@ -55,9 +55,30 @@ None of this can be committed — it is repository settings, and it needs an adm
 **2026-09-26:** `main` was red from 09-21 to 09-26 (CI runs 308–325,
 `DesignDoctrineTest.noEmDashesInRenderedStrings`) while PRs #187–#194 merged, so the migration and
 smoke-launch job was skipped for five days (release audit 2026-09-26, `docs/audits/2026-09-26/12`).
-That day `main` was protected with 1–4 above: `Guard`, `Verify (JVM)` and
-`Instrumented (emulator)` required and strict (up to date). Admins are not included in
-enforcement, so an emergency merge stays possible, but only as an explicit
-`gh pr merge --admin` or the bypass box in the web UI; an ordinary merge waits for green.
+Item 4 is done in the workflow (`310ef05`). Items 1–3 are NOT yet applied: at the end of that day
+`GET /repos/antho976/Avex/branches/main/protection` still returned 404. An earlier version of this
+section said `main` was protected; it was not.
 
-Check it with `gh api repos/antho976/Avex/branches/main/protection/required_status_checks`.
+The intended settings, applied by a repository admin:
+
+```sh
+gh api -X PUT repos/antho976/Avex/branches/main/protection --input - <<'EOF'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": ["Guard", "Verify (JVM)", "Instrumented (emulator)"]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": null,
+  "restrictions": null
+}
+EOF
+```
+
+Admins are not included in enforcement, so an emergency merge stays possible, but only as an
+explicit `gh pr merge --admin` or the bypass box in the web UI; an ordinary merge waits for green.
+The emulator job fails now and then on runner flakes (an install racing the launch), so expect
+the occasional re-run.
+
+Check it with `gh api repos/antho976/Avex/branches/main/protection/required_status_checks`, and
+update this section once it answers.
