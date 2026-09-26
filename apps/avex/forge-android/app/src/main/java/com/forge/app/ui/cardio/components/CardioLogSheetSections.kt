@@ -1,6 +1,5 @@
 package com.forge.app.ui.cardio.components
 
-import android.text.format.DateFormat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -26,7 +25,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.cardio.CardioActivity
@@ -296,7 +294,9 @@ private fun combineDay(pickedUtcMidnightMs: Long, keepTimeFromMs: Long): Long {
 /**
  * The cardio start-time picker (GYMAP-33) — sets the time-of-day of the entry's timestamp (there is
  * no separate start-time column; the entry's [dateMs] already carries the clock). [onPicked] returns
- * the same calendar day with the chosen time. Honors the device's 12/24-hour format.
+ * the same calendar day with the chosen time. Honors Settings → Format → Clock, which defaults to
+ * the phone's own 12/24-hour setting; it read the phone's setting directly until the 2026-09-26
+ * audit, so a user who picked 24h in Avex still got an AM/PM dial here.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -305,7 +305,7 @@ internal fun CardioTimePickerDialog(dateMs: Long, onPicked: (Long) -> Unit, onDi
     val tpState = rememberTimePickerState(
         initialHour = time.hour,
         initialMinute = time.minute,
-        is24Hour = DateFormat.is24HourFormat(LocalContext.current)
+        is24Hour = com.forge.app.ui.theme.LocalForgeSettings.current.timeFormat24h
     )
     AlertDialog(
         onDismissRequest = onDismiss,

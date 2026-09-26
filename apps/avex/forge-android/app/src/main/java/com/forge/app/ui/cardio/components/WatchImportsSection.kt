@@ -18,9 +18,11 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.health.HcExerciseTypes
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.health.WatchWorkout
+import com.forge.app.domain.units.clockPattern
 import com.forge.app.domain.units.formatDistance
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.theme.LocalForgeSettings
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -63,11 +65,13 @@ internal fun WatchImportsSection(
             )
         }
         Spacer(Modifier.height(8.dp))
+        val use24h = LocalForgeSettings.current.timeFormat24h
         suggestions.forEach { w ->
             val type = CardioType.entries
                 .firstOrNull { it.code == HcExerciseTypes.toCardioCode(w.exerciseType) }
-            val dayLabel = remember(w.startMs) {
-                SimpleDateFormat("EEE h:mm a", Locale.getDefault()).format(Date(w.startMs))
+            // Follows Settings → Format → Clock rather than always 12h (2026-09-26 audit).
+            val dayLabel = remember(w.startMs, use24h) {
+                SimpleDateFormat("EEE ${clockPattern(use24h)}", Locale.getDefault()).format(Date(w.startMs))
             }
             val meta = buildList {
                 add(dayLabel)

@@ -45,6 +45,7 @@ class ResetRepository @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val photoRepo: ProgressPhotoRepository,
     private val avatarRepo: AvatarRepository,
+    private val backupRepo: BackupRepository,
     private val health: HealthConnectManager,
     private val clock: com.forge.app.core.time.Clock,
     private val db: ForgeDatabase,
@@ -97,6 +98,10 @@ class ResetRepository @Inject constructor(
      * True clean slate: wipe EVERY database table (via [ForgeDatabase.clearAllTables], so no table
      * is ever forgotten as the schema grows) plus all preferences. Clearing the onboarding flag
      * routes the user back through onboarding, which regenerates the program.
+     *
+     * Also every copy of that data the app keeps in its own storage: the auto-backup ZIP, exports,
+     * crash logs and any staged restore ([BackupRepository.deleteLocalCopies]). Backups the user
+     * saved to a folder they picked are outside the app and stay theirs.
      */
     suspend fun factoryReset() {
         // Marked first, cleared last: see [finishInterruptedFactoryReset].
@@ -104,6 +109,11 @@ class ResetRepository @Inject constructor(
         withContext(Dispatchers.IO) { db.clearAllTables() }
         photoRepo.deleteAll() // progress photos live as files outside the DB — clear them too (#138).
         avatarRepo.clear()    // the avatar is an app-private file too.
+        // The auto-backup ZIP (database, preferences AND photos), exports, crash logs and a staged
+        // restore all survived "Deletes ALL data" (2026-09-26 audit, D2). Inside the marker, so an
+        // interrupted reset finishes this at boot too, and a weekly backup racing the reset cannot
+        // land a copy of the old data after this sweep (BackupRepository.autoBackup checks it).
+        backupRepo.deleteLocalCopies()
         // Every record Avex ever wrote to Health Connect, of every type, by time range rather than
         // by key: the tables are already gone, and a range delete is scoped by the provider to
         // this app's own records, so nothing of another app's is touched. Before the preference
@@ -135,7 +145,11 @@ class ResetRepository @Inject constructor(
 
     private fun pendingResetMarker() = java.io.File(context.filesDir, PENDING_FACTORY_RESET)
 
-    private companion object {
-        const val PENDING_FACTORY_RESET = "factory_reset_pending"
+    internal companion object {
+        /**
+         * filesDir marker held for the whole of [factoryReset]. Internal so the auto-backup can
+         * refuse to publish a snapshot while a reset is erasing the data it copied.
+         */
+        internal const val PENDING_FACTORY_RESET = "factory_reset_pending"
     }
 }

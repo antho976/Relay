@@ -1,7 +1,8 @@
 package com.forge.app.data.repo
 
 import com.forge.app.core.time.Clock
-import com.forge.app.core.time.mondayStartMs
+import com.forge.app.core.time.userWeekDayIndex
+import com.forge.app.core.time.userWeekStartMs
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
@@ -48,8 +49,8 @@ import javax.inject.Singleton
 /**
  * Aggregates the rolling-window stats that feed the Overview screen.
  *
- * "This week" means the current ISO calendar week (Mon 00:00), matching the day-dot grid — its
- * start is fixed when the flow is subscribed, so reopen the screen after a week rollover. The
+ * "This week" means the current calendar week in the user's week order (Settings → Format → Week
+ * starts), matching the day-dot grid, re-anchored on every day boundary. The
  * rolling-7-day volume window in [observeGymStats], by contrast, is recomputed on each emission
  * so it slides while the screen stays open.
  *
@@ -80,9 +81,12 @@ class StatsRepository @Inject constructor(
         val totalFinishedSessions: Int = 0,
         val streakDays: Int = 0,
         val firstFinishedSessionMs: Long? = null,
-        /** Highest single-session volume (lb) in the current ISO week; null when none logged yet. */
+        /** Highest single-session volume (lb) in the current user week; null when none logged yet. */
         val bestSessionThisWeekLb: Double? = null,
-        /** 0=Mon..6=Sun indices that had a finished gym session in the current ISO week. */
+        /**
+         * Day indices in the USER's week order ([userWeekDayIndex]: 0=Mon..6=Sun, or 0=Sun..6=Sat
+         * when the week starts on Sunday) that had a finished gym session this week.
+         */
         val weekDaysTrained: Set<Int> = emptySet(),
         /** Next gym day key in the rotation (Upper A → Lower A → Upper B → Lower B). */
         val nextUpDayKey: String = Program.UPPER_A,
@@ -91,9 +95,14 @@ class StatsRepository @Inject constructor(
     )
 
     /**
-     * "This week" = the current ISO calendar week (Mon 00:00), so the workout/volume/cardio counts
-     * match the Mon–Sun day-dot grid and buildWeekComparison. Was a rolling 7×24h window
-     * (now − WEEK_MS), which disagreed with the dots on early weekdays.
+     * "This week" = the current calendar week starting on the user's first day (Settings → Format →
+     * Week starts), so the workout/volume/cardio counts match the day-dot grid. Was a rolling 7×24h
+     * window (now − WEEK_MS), which disagreed with the dots on early weekdays.
+     *
+     * The preference is part of the anchor. Home used to be Monday-first whatever it said, so a
+     * Sunday-first user saw Sunday's session land at the END of a strip labelled M..S and counted
+     * into the week they thought had just finished (2026-09-26 audit). The watch reads this same
+     * flow, so its week count follows the setting too.
      *
      * Re-anchored on every day boundary, timezone change and clock change rather than frozen when
      * the Flow is BUILT. The anchor used to be a `val` captured at subscription while `todayDate`
@@ -105,7 +114,9 @@ class StatsRepository @Inject constructor(
      */
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun observeWeeklyStats(): Flow<WeeklyStats> =
-        timeSignals.dayStarts().flatMapLatest { weeklyStatsForNow() }
+        timeSignals.dayStarts()
+            .combine(settingsRepo.firstDayMonday) { _, firstDayMonday -> firstDayMonday }
+            .flatMapLatest { firstDayMonday -> weeklyStatsForNow(firstDayMonday) }
 
     /** The four session/preference signals the weekly fan-out folds together in one inner combine. */
     private data class RecentSignals(
@@ -118,9 +129,9 @@ class StatsRepository @Inject constructor(
         val allFinishedAts: List<Long>
     )
 
-    private fun weeklyStatsForNow(): Flow<WeeklyStats> {
+    private fun weeklyStatsForNow(firstDayMonday: Boolean): Flow<WeeklyStats> {
         val zone = ZoneId.systemDefault()
-        val weekStartMs = mondayStartMs(clock.nowMs(), zone)
+        val weekStartMs = userWeekStartMs(clock.nowMs(), zone, firstDayMonday)
         val baseFlow = combine(
             sessionDao.observeFinishedCountSince(weekStartMs),
             sessionDao.observeVolumeSince(weekStartMs),
@@ -157,7 +168,7 @@ class StatsRepository @Inject constructor(
             val weekDaysTrained = thisWeekSessions
                 .map {
                     val d = Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate()
-                    d.dayOfWeek.value - 1 // 0=Mon..6=Sun
+                    userWeekDayIndex(d, firstDayMonday)
                 }
                 .toSet()
             val lastFinished = recentSessions.filter { it.finishedAt != null }.maxByOrNull { it.finishedAt!! }
@@ -176,7 +187,7 @@ class StatsRepository @Inject constructor(
                     }, todayDate
                 )
             ) ?: (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
-            // Best single session this ISO week — the heaviest tonnage day, for the StatsTile.
+            // Best single session this week — the heaviest tonnage day, for the StatsTile.
             val bestSessionThisWeekLb = thisWeekSessions.mapNotNull { it.totalVolumeLb }.maxOrNull()
             // streakDays is finalized below, once the vacation ranges are known (#135).
             WeeklyStats(

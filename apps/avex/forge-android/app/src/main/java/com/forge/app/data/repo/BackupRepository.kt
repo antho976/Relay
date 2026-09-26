@@ -470,11 +470,23 @@ class BackupRepository @Inject constructor(
             // slot now only ever holds a complete zip.
             tmp.delete()
             tmp.outputStream().use { out -> writeBackupZip(out, snap) }
+            // A factory reset is running (or was interrupted and will finish at boot). This backup
+            // snapshotted the data the user just asked to erase, and landing it in the slot would
+            // bring a copy of it back after [deleteLocalCopies] ran (2026-09-26 audit, D2). The
+            // worker retries later, by which time the reset is done and the snapshot is the new,
+            // empty state.
+            if (factoryResetPending()) throw java.io.IOException("factory reset in progress")
             if (!tmp.renameTo(file)) {
                 // Same-directory rename should not fail on Android. If it somehow does, keep the
                 // previous backup instead of truncating it for a copy we cannot guarantee; the
                 // worker retries, and records a failure the user can see once retries run out.
                 throw java.io.IOException("could not replace $AUTO_BACKUP_NAME")
+            }
+            // The reset may have started between the check and the rename; if it has, its sweep
+            // may already be past this file, so take the copy back out ourselves.
+            if (factoryResetPending()) {
+                file.delete()
+                throw java.io.IOException("factory reset in progress")
             }
             // Also mirror into a user-picked folder so the backup survives an uninstall (GYMAP-67). A
             // folder write must not fail the whole backup — the internal copy already succeeded.
@@ -484,7 +496,7 @@ class BackupRepository @Inject constructor(
             snap.delete()
         }
         // Drop the stale lossy JSON slot from earlier builds so it can't mislead a future restore.
-        File(context.filesDir, "forge_auto_backup.json").delete()
+        File(context.filesDir, LEGACY_AUTO_BACKUP_JSON).delete()
         // A successful write clears any prior "last backup failed" marker.
         File(context.filesDir, AUTO_BACKUP_FAILED_MARKER).delete()
         file
@@ -555,6 +567,44 @@ class BackupRepository @Inject constructor(
         // leaves access nothing in Settings names — exactly the invisible retained grant this
         // finding is about, reached from the other end.
         previous?.let { grants.releaseUnlessSharedWith(it, PersistedTreeGrants.Owner.BACKUP) } ?: true
+    }
+
+    /** True while a factory reset holds its marker; see [ResetRepository.PENDING_FACTORY_RESET]. */
+    private fun factoryResetPending(): Boolean =
+        File(context.filesDir, ResetRepository.PENDING_FACTORY_RESET).exists()
+
+    /**
+     * Delete every copy of the user's data that backup, export and crash logging keep INSIDE the
+     * app, for a factory reset.
+     *
+     * The reset wiped the tables, photos and preferences and left all of this behind (2026-09-26
+     * audit, D2, open since 2026-09-12): the weekly auto-backup ZIP, which holds the whole database,
+     * the preferences and every progress photo, so Settings offered "Restore last auto-backup" right
+     * after "Deletes ALL data"; the CSV/JSON/PDF exports under `exports/`; and the crash logs under
+     * `crashes/`. The privacy policy promised the lot was erased.
+     *
+     * Also the markers ("last backup failed", "you have a backup"), which would otherwise describe a
+     * backup that no longer exists; a staged restore, which the next boot would otherwise swap in
+     * over the fresh install; and any snapshot or restore scratch in `cacheDir`.
+     *
+     * Copies the user saved to a folder they picked (Downloads, a cloud drive, the auto-backup
+     * folder) are outside the app and are left alone: those are theirs to delete, and the policy
+     * says so. Best effort throughout: a file that won't delete must not stop the rest.
+     */
+    suspend fun deleteLocalCopies() = withContext(Dispatchers.IO) {
+        listOf(
+            AUTO_BACKUP_NAME, AUTO_BACKUP_TMP_NAME, LEGACY_AUTO_BACKUP_JSON,
+            AUTO_BACKUP_FAILED_MARKER, MANUAL_BACKUP_MARKER
+        ).forEach { name -> runCatching { File(context.filesDir, name).delete() } }
+        clearPendingRestore()
+        runCatching { File(context.filesDir, com.forge.app.core.io.EXPORTS_DIR).deleteRecursively() }
+        runCatching { File(context.filesDir, CRASH_LOG_DIR).deleteRecursively() }
+        runCatching {
+            context.cacheDir.listFiles()?.forEach { f ->
+                if (TEMP_PREFIXES.any { f.name.startsWith(it) }) f.deleteRecursively()
+            }
+        }
+        Unit
     }
 
     /** When the auto-backup slot was last written, or null if none exists yet (#86 restore affordance). */
@@ -1113,7 +1163,7 @@ class BackupRepository @Inject constructor(
      * Each file's text is truncated to 20 KB so the UI string stays sane.
      */
     suspend fun readRecentCrashLogs(limit: Int = 10): List<Pair<String, String>> = withContext(Dispatchers.IO) {
-        val dir = File(context.filesDir, "crashes")
+        val dir = File(context.filesDir, CRASH_LOG_DIR)
         val files = dir.listFiles()
             ?.filter { it.isFile }
             ?.sortedByDescending { it.lastModified() }
@@ -1140,7 +1190,7 @@ class BackupRepository @Inject constructor(
      * Returns how many logs were included (0 = none yet).
      */
     suspend fun exportCrashLogsToUri(uri: Uri): Int = withContext(Dispatchers.IO) {
-        val dir = File(context.filesDir, "crashes")
+        val dir = File(context.filesDir, CRASH_LOG_DIR)
         val files = dir.listFiles()?.filter { it.isFile }?.sortedByDescending { it.lastModified() } ?: emptyList()
         context.contentResolver.openOutputStream(uri)?.use { out ->
             java.util.zip.ZipOutputStream(out).use { zip ->
@@ -1192,6 +1242,10 @@ class BackupRepository @Inject constructor(
          *  the previous good backup. Internal storage and the user-picked SAF folder each need one. */
         private const val AUTO_BACKUP_TMP_NAME = "forge_auto_backup.zip.tmp"
         private const val FOLDER_TMP_NAME = "forge_auto_backup.zip.part"
+        /** The lossy JSON slot earlier builds wrote; [autoBackup] and [deleteLocalCopies] remove it. */
+        private const val LEGACY_AUTO_BACKUP_JSON = "forge_auto_backup.json"
+        /** Where ForgeApp's uncaught-exception logger writes, under filesDir. One name for all readers. */
+        internal const val CRASH_LOG_DIR = "crashes"
         /** Marker written when the auto-backup worker gives up (storage full / corrupt) — see [recordAutoBackupFailure]. */
         private const val AUTO_BACKUP_FAILED_MARKER = "auto_backup_failed"
         /** Marker written after a successful user-initiated backup ([backupToUri]) — see [hasAnyBackup]. */

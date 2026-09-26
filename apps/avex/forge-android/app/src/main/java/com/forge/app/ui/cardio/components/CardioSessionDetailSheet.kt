@@ -103,8 +103,11 @@ fun CardioSessionDetailSheet(
     val outline = MaterialTheme.colorScheme.outline
     val accent = MaterialTheme.colorScheme.primary
 
-    val dateLine = remember(entry.date) {
-        SimpleDateFormat("EEE, MMM d, yyyy · h:mm a", Locale.getDefault()).format(Date(entry.date))
+    // The clock half follows Settings → Format → Clock (2026-09-26 audit: it was always 12h).
+    val use24h = com.forge.app.ui.theme.LocalForgeSettings.current.timeFormat24h
+    val dateLine = remember(entry.date, use24h) {
+        SimpleDateFormat("EEE, MMM d, yyyy · ${com.forge.app.domain.units.clockPattern(use24h)}", Locale.getDefault())
+            .format(Date(entry.date))
     }
     // How this session stands against its own activity type — null for rest days / a first session.
     val compare = remember(entry, allEntries) { compareCardioSession(entry, allEntries) }

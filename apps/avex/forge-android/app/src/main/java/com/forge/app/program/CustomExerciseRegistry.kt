@@ -63,6 +63,9 @@ data class CustomExerciseDef(
  * custom id without threading a repository through every aggregation.
  */
 object CustomExerciseRegistry {
+    /** The id prefix every user-created move carries (see `isCustomExerciseId` in the freestyle UI). */
+    private const val CUSTOM_ID_PREFIX = "custom-"
+
     @Volatile
     private var byId: Map<String, CustomExerciseDef> = emptyMap()
 
@@ -88,8 +91,14 @@ object CustomExerciseRegistry {
      * The custom move as an [ExercisePlan], so everything that folds sets onto a muscle through
      * [Program.exercise] counts it. Null when the id is unknown or its muscle code no longer parses.
      * Sets/reps/unit are nominal: a custom move has no prescription, only an identity.
+     *
+     * Only a user-created (`custom-`) id resolves. Earlier builds' freestyle "repeat workout" saved
+     * imported `ext-…` and seed ids here as Chest, and through [Program.exercise] every past and
+     * future set of those ids then counted as chest volume (audit 2026-09-26, 02). Ignoring them
+     * here heals that for anyone it already happened to, without rewriting the stored list.
      */
     fun plan(id: String): ExercisePlan? {
+        if (!id.startsWith(CUSTOM_ID_PREFIX)) return null
         val def = byId[id] ?: return null
         val muscle = def.muscle ?: return null
         return ExercisePlan(

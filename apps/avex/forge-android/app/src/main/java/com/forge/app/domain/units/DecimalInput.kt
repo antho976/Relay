@@ -56,3 +56,14 @@ fun filterDecimalInput(raw: String): String {
     val dot = f.indexOf('.')
     return if (dot < 0) f else f.substring(0, dot + 1) + f.substring(dot + 1).replace(".", "")
 }
+
+/**
+ * The stored value when a field seeded from it comes back untouched, else [parse] of the typed text.
+ *
+ * An edit form seeds its fields with ROUNDED display text ("10.0" for 10.047 km, "102.1" kg for a
+ * 225 lb target), and parsing that back on save quietly replaced the stored number with the rounded
+ * one on an edit that never touched the field, moving records, pace and goal completion (audit
+ * 2026-09-26, 05 and 06). Only text the user actually changed is re-parsed.
+ */
+fun <T : Any> storedUnlessEdited(text: String, seed: String?, stored: T?, parse: (String) -> T?): T? =
+    if (seed != null && stored != null && text == seed) stored else parse(text)

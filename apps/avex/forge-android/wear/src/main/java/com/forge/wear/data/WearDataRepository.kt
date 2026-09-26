@@ -130,6 +130,62 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
         editStore.clear()
     }
 
+    /**
+     * The Log set the phone has not answered, on disk (W01). See [PendingLogSetStore] for why its
+     * identity can't live in the screen's `remember`. Written before the send, cleared by the
+     * phone's answer, or by [dropStalePendingLog] once the watch has moved on to another set.
+     */
+    private val logStore = PendingLogSetStore(File(appContext.filesDir, PendingLogSetStore.FILE_NAME))
+    private val _pendingLog = MutableStateFlow(logStore.load())
+    val pendingLog: StateFlow<PendingLogSet?> = _pendingLog
+
+    /**
+     * Log a set, as the one tap on the wrist. A re-tap of the SAME set with the SAME values while the
+     * phone hasn't answered reuses the recorded id, so the phone's deduper sees a replay instead of
+     * a second set, however many times the screen or the process was rebuilt in between. Anything
+     * edited since is a genuinely different set and gets a fresh id.
+     */
+    fun logSet(
+        sessionId: Long,
+        setKey: String,
+        exerciseId: String?,
+        weightText: String?,
+        reps: Int?,
+        confirmedJump: Boolean
+    ): String {
+        val payload = "$weightText|$reps|$confirmedJump"
+        val id = _pendingLog.value
+            ?.takeIf { it.sessionId == sessionId && it.setKey == setKey && it.payload == payload }
+            ?.commandId
+            ?: newId()
+        val pending = PendingLogSet(id, sessionId, setKey, payload)
+        // Durable before the send: the window between the tap and the answer is the one to survive.
+        logStore.save(pending)
+        _pendingLog.value = pending
+        return sendLogSet(sessionId, exerciseId, weightText, reps, confirmedJump, commandId = id)
+    }
+
+    /**
+     * Drop a pending Log set that no longer describes what the watch shows. The mirror moving on to
+     * another set (or session) means the command landed, and its id must never be reused for a
+     * different set.
+     */
+    fun dropStalePendingLog(sessionId: Long, setKey: String) {
+        val pending = _pendingLog.value ?: return
+        if (pending.sessionId != sessionId || pending.setKey != setKey) forgetPendingLog()
+    }
+
+    /** The screen has resolved the phone's answer to [commandId]; nothing is left to resend. Live
+     *  acks are settled here rather than on arrival so SetView can still match the one it awaited. */
+    fun settlePendingLog(commandId: String) {
+        if (_pendingLog.value?.commandId == commandId) forgetPendingLog()
+    }
+
+    private fun forgetPendingLog() {
+        _pendingLog.value = null
+        logStore.clear()
+    }
+
     /** Re-send the edit that could not be delivered, under its original id. No-op when there is none. */
     fun retryFailedSend() {
         val failed = _failedSend.value ?: return
@@ -219,7 +275,16 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
             // A DELETED item says nothing about what protocol the phone speaks, so it must not
             // leave this path latched as newer — see [clearLatchOnDelete].
             if (deleted) return clearLatchOnDelete(WearProtocol.PATH_CMD_ACK)
-            if (!seeded) decodeInto<CmdAckDto>(bytes, WearProtocol.PATH_CMD_ACK) { ack ->
+            // An answer to the pending Log set settles it, even one that arrived while this process
+            // was gone: the phone has decided, so there is nothing left to resend (W01). Only that;
+            // a seeded ack is still not an event (see [start]).
+            if (seeded) {
+                decodeInto<CmdAckDto>(bytes, WearProtocol.PATH_CMD_ACK) { ack ->
+                    if (_pendingLog.value?.commandId == ack.commandId) forgetPendingLog()
+                }
+                return
+            }
+            decodeInto<CmdAckDto>(bytes, WearProtocol.PATH_CMD_ACK) { ack ->
                 _lastAck.value = ack
                 // The phone has answered THIS command: the edit is no longer pending, so the
                 // durable record and any retry offer for it both go. Delivery alone never does

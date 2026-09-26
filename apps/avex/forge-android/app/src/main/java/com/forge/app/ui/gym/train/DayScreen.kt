@@ -27,7 +27,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -73,23 +72,19 @@ fun DayScreen(
     val view = LocalView.current
     val totalSets by remember { derivedStateOf { state.exercises.sumOf { it.loggedSets.size } } }
     val totalPrSets by remember { derivedStateOf { state.exercises.sumOf { it.prSetIds.size } } }
-    var prevTotalSets = remember { mutableIntStateOf(-1) }
-    var prevTotalPrs = remember { mutableIntStateOf(-1) }
+    // Arms only once the session has loaded, so a reopened session's existing PR sets are the
+    // baseline rather than a replayed celebration (audit 2026-09-26); see SetLogHapticCues.
+    val setLogCues = remember { SetLogHapticCues() }
     var showPrBurst by remember { mutableStateOf(false) }
-    LaunchedEffect(totalSets, totalPrSets) {
-        when {
-            prevTotalPrs.intValue >= 0 && totalPrSets > prevTotalPrs.intValue -> {
-                view.forgeHaptic(ForgeHapticType.PR_OR_FINISH, hapticStrength)
-                // A PR plays confetti + leaves the gold set-row text; the full-screen takeover was removed.
-                showPrBurst = true
-                // A4: announce to TalkBack (phone is often face-down mid-set). No-op without a screen reader.
-                view.announceForAccessibility("New personal record!")
-            }
-            prevTotalSets.intValue >= 0 && totalSets > prevTotalSets.intValue ->
-                view.forgeHaptic(ForgeHapticType.SET_LOGGED, hapticStrength)
+    LaunchedEffect(state.isLoading, totalSets, totalPrSets) {
+        val cue = setLogCues.advance(state.isLoading, totalSets, totalPrSets) ?: return@LaunchedEffect
+        view.forgeHaptic(cue, hapticStrength)
+        if (cue == ForgeHapticType.PR_OR_FINISH) {
+            // A PR plays confetti + leaves the gold set-row text; the full-screen takeover was removed.
+            showPrBurst = true
+            // A4: announce to TalkBack (phone is often face-down mid-set). No-op without a screen reader.
+            view.announceForAccessibility("New personal record")
         }
-        prevTotalSets.intValue = totalSets
-        prevTotalPrs.intValue = totalPrSets
     }
 
     // Keep the screen awake while a session is in progress so the phone doesn't lock mid-rest and

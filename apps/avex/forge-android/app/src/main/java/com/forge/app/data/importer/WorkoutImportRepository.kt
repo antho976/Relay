@@ -408,6 +408,7 @@ class WorkoutImportRepository @Inject constructor(
             skippedRows = skippedRows,
             duplicatesSkipped = duplicates,
             workoutsCorrected = corrected,
+            phantomWorkoutsRemoved = extrasWritten.phantomsRemoved,
             cardioEntries = extrasWritten.cardio,
             coachGoals = extrasWritten.goals,
             bodyweightEntries = extrasWritten.bodyweight
@@ -423,11 +424,20 @@ class WorkoutImportRepository @Inject constructor(
         var cardioWritten = 0
         var goalsWritten = 0
         var weighInsWritten = 0
+        var phantomsRemoved = 0
         db.withTransaction {
             // Counted like workouts: a stored entry stands in for exactly one incoming entry, so
             // two identical runs in one file both land, and a re-import adds neither.
             val claimedCardio = HashSet<Long>()
+            val claimedPhantoms = HashSet<Long>()
             for (c in extras.cardio) {
+                // The same row as an earlier build stored it: a lifting session of one timed hold.
+                // This read is the correct one, so that session goes (see [phantomSessionFor]).
+                phantomSessionFor(c, claimedPhantoms)?.let { sessionId ->
+                    claimedPhantoms += sessionId
+                    sessionDao.get(sessionId)?.let { sessionDao.delete(it) }
+                    phantomsRemoved++
+                }
                 val stored = cardioDao.idsLike(c.dateMs, c.type, c.durationMin, c.distanceKm)
                     .firstOrNull { it !in claimedCardio }
                 if (stored != null) {
@@ -484,12 +494,50 @@ class WorkoutImportRepository @Inject constructor(
                 weighInsWritten++
             }
         }
-        return ExtrasWritten(cardioWritten, goalsWritten, weighInsWritten)
+        return ExtrasWritten(cardioWritten, goalsWritten, weighInsWritten, phantomsRemoved)
     }
 
     /** What [insertExtras] actually wrote. */
-    private data class ExtrasWritten(val cardio: Int = 0, val goals: Int = 0, val bodyweight: Int = 0) {
-        val none: Boolean get() = cardio == 0 && goals == 0 && bodyweight == 0
+    private data class ExtrasWritten(
+        val cardio: Int = 0,
+        val goals: Int = 0,
+        val bodyweight: Int = 0,
+        val phantomsRemoved: Int = 0
+    ) {
+        val none: Boolean get() = cardio == 0 && goals == 0 && bodyweight == 0 && phantomsRemoved == 0
+    }
+
+    /**
+     * The stored session an earlier build made out of [cardio]'s row, or null.
+     *
+     * Before the cardio fix, Strong and Hevy runs, rides and rows came in as a lifting session of
+     * one weightless timed hold, and a workout that was only cardio produced nothing else. The
+     * repair in [WorkoutIdentity.repairs] only reaches workouts the file still has sets for, so
+     * these stayed in the history as finished strength sessions (inflating workout counts, streaks
+     * and trophies) beside the real cardio entry a re-import now adds.
+     *
+     * Deliberately narrow, since it deletes: an imported freestyle session with no note or tags, at
+     * this row's start slot (or a zone offset from it), holding one exercise whose every set is a
+     * weightless hold, named as this activity, lasting this long to within a minute. A plank never
+     * names an activity, and nothing the user wrote is on the row.
+     */
+    private suspend fun phantomSessionFor(cardio: ImportedCardio, claimed: Set<Long>): Long? {
+        val windowEndMs = cardio.dateMs + MAX_START_NUDGES * 1000L
+        val refs = sessionDao.startRefsInRange(cardio.dateMs, windowEndMs) + zoneShiftedRefs(cardio.dateMs, windowEndMs)
+        return refs.firstOrNull { it.id !in claimed && isPhantomOf(it.id, cardio) }?.id
+    }
+
+    private suspend fun isPhantomOf(sessionId: Long, cardio: ImportedCardio): Boolean {
+        val session = sessionDao.get(sessionId) ?: return false
+        if (session.dayKey != Program.FREESTYLE_DAY_KEY || session.finishedAt == null) return false
+        if (session.journal.isNotBlank() || session.tags.isNotBlank()) return false
+        val exercise = loggedExerciseDao.forSession(sessionId).filterNot { it.skipped }.singleOrNull() ?: return false
+        if (!exercise.note.isNullOrBlank()) return false
+        val sets = loggedSetDao.allForSession(sessionId)
+        if (sets.isEmpty() || sets.any { it.durationSeconds == null || (it.weightLb ?: 0.0) > 0.0 }) return false
+        val name = exercise.swappedName ?: Program.exerciseDisplayName(exercise.exerciseId, null)
+        if ((ImportParsing.cardioTypeFor(name) ?: "other") != cardio.type) return false
+        return kotlin.math.abs(sets.sumOf { it.durationSeconds ?: 0 } - cardio.durationMin * 60) <= 60
     }
 
     /** Local midnight of a `yyyy-MM-dd` key — the entry's own date is authoritative, and `date_key`

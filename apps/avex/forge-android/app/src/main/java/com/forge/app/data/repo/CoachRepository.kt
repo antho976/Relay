@@ -18,6 +18,7 @@ import com.forge.app.domain.adapt.DeloadAdvisor
 import com.forge.app.domain.adapt.ProgressionAdvisor
 import com.forge.app.domain.adapt.Recommendation
 import com.forge.app.domain.coach.AutoCoachPlanner
+import com.forge.app.domain.coach.BlockPlanner
 import com.forge.app.domain.coach.CoachGenBias
 import com.forge.app.domain.coach.CoachPassInputs
 import com.forge.app.domain.coach.CoachPassStatus
@@ -37,7 +38,6 @@ import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.temporal.IsoFields
 import java.time.temporal.TemporalAdjusters
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -1040,9 +1040,8 @@ class CoachRepository @Inject constructor(
     /** Mark a week's brief as seen — clears the Overview banner (opened or dismissed). */
     suspend fun markSeen(weekId: String) = settings.setLastSeenCoachWeekId(weekId)
 
-    private fun weekId(date: LocalDate): String = "%d-W%02d".format(
-        date.get(IsoFields.WEEK_BASED_YEAR), date.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR)
-    )
+    /** ASCII digits in every locale; see [BlockPlanner.weekIdOf] (audit 2026-09-26, 10). */
+    private fun weekId(date: LocalDate): String = BlockPlanner.weekIdOf(date)
 
     private fun weekStartMs(): Long {
         val zone = ZoneId.systemDefault()

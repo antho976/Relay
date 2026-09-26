@@ -549,4 +549,48 @@ class WorkoutImportRepositoryTest {
             java.util.TimeZone.setDefault(original)
         }
     }
+
+    private fun strongCardioFile(name: String, vararg rows: String): Uri {
+        val file = temporaryFolder.newFile(name)
+        file.writeText(
+            buildString {
+                appendLine("Date,Workout Name,Duration,Exercise Name,Set Order,Weight,Weight Unit,Reps,Distance,Seconds")
+                rows.forEach { appendLine(it) }
+            }
+        )
+        return Uri.fromFile(file)
+    }
+
+    /** The phantom rule leaves anything the user wrote alone, so these start from a bare import. */
+    private suspend fun clearNotes(sessionId: Long) =
+        db.loggedExerciseDao().forSession(sessionId).forEach { db.loggedExerciseDao().update(it.copy(note = null)) }
+
+    private fun localTime(dateTime: String) = java.time.LocalDateTime.parse(dateTime)
+        .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+    @Test
+    fun aRunAnOldImportStoredAsAWorkoutBecomesCardio() = runTest {
+        // What the old parser made of a 30-minute Strong run: a lifting session of one timed hold.
+        clearNotes(storeOldImport(localTime("2026-01-05T07:00:00"), "Running" to listOf(Triple(null, 1800, 1800))))
+
+        val result = repo.import(
+            strongCardioFile("run.csv", "2026-01-05 07:00:00,Morning run,30m,Running,1,0,kg,0,5,1800")
+        ) as ImportResult.Success
+
+        assertEquals(1, result.phantomWorkoutsRemoved)
+        assertEquals(1, result.cardioEntries)
+        assertEquals("the phantom workout is gone", 0, storedSessionCount())
+    }
+
+    @Test
+    fun aRealPlankIsNeverTakenForAPhantomRun() = runTest {
+        clearNotes(storeOldImport(localTime("2026-01-05T07:00:00"), "Plank" to listOf(Triple(null, 60, 60))))
+
+        val result = repo.import(
+            strongCardioFile("run.csv", "2026-01-05 07:00:00,Morning run,30m,Running,1,0,kg,0,5,1800")
+        ) as ImportResult.Success
+
+        assertEquals(0, result.phantomWorkoutsRemoved)
+        assertEquals(1, storedSessionCount())
+    }
 }
