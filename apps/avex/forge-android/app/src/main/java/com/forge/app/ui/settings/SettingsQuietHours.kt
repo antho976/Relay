@@ -19,7 +19,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.notify.QuietWindow
+import com.forge.app.domain.units.formatClockHour
 import com.forge.app.ui.common.currentLocale
+import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.DayOfWeek
 import java.time.format.TextStyle
 
@@ -72,7 +74,7 @@ private fun QuietDayRow(label: String, window: QuietWindow, expanded: Boolean, o
         Text(label, style = MaterialTheme.typography.bodyMedium, color = muted)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                windowLabel(window),
+                windowLabel(window, LocalForgeSettings.current.timeFormat24h),
                 style = MaterialTheme.typography.bodyMedium,
                 // An "off" day (a zero-length window) reads dim — it's the inactive state.
                 color = if (window.isOff) muted else onBg
@@ -82,10 +84,9 @@ private fun QuietDayRow(label: String, window: QuietWindow, expanded: Boolean, o
     }
 }
 
-private fun hourText(h: Int) = "${h.toString().padStart(2, '0')}:00"
-
-private fun windowLabel(w: QuietWindow) =
-    if (w.isOff) "Off" else "${hourText(w.start)}–${hourText(w.end)}"
+/** "22:00–07:00", or "10 PM–7 AM" on a 12h clock (Settings → Format → Clock, 2026-09-26 audit). */
+internal fun windowLabel(w: QuietWindow, use24h: Boolean) =
+    if (w.isOff) "Off" else "${formatClockHour(w.start, use24h)}–${formatClockHour(w.end, use24h)}"
 
 /** Weekday order for display only; when Sunday leads, storage still indexes Monday-first. */
 private fun orderedDays(mondayFirst: Boolean): List<DayOfWeek> =

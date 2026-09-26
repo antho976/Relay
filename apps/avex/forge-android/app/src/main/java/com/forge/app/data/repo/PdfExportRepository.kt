@@ -44,7 +44,6 @@ class PdfExportRepository @Inject constructor(
 ) {
     private val zone = ZoneId.systemDefault()
     private val dateFmt = DateTimeFormatter.ofPattern("MMMM d, yyyy")
-    private val timeFmt = DateTimeFormatter.ofPattern("h:mm a")
 
     suspend fun exportLastSessionPdf(): File? {
         // Most recently finished by finish time — don't rely on the allFinished() list order.
@@ -61,6 +60,10 @@ class PdfExportRepository @Inject constructor(
         val session = sessionDao.get(sessionId) ?: return@withContext null
         val weightUnit = settingsRepo.weightUnit.first()
         val useMiles = settingsRepo.useMiles.first()
+        // Settings → Format → Clock; the PDF printed "h:mm a" whatever it said (2026-09-26 audit).
+        val timeFmt = DateTimeFormatter.ofPattern(
+            com.forge.app.domain.units.clockPattern(settingsRepo.timeFormat24h.first())
+        )
         val exercises = loggedExerciseDao.forSession(sessionId)
         val dayName = Program.dayDisplayName(session.dayKey)
         val dateStr = Instant.ofEpochMilli(session.startedAt).atZone(zone).format(dateFmt)

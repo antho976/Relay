@@ -324,7 +324,7 @@ data (bars/meters/sparklines/dot rows), never a list of status words.
 
 ## 13. Inputs
 
-- **Text inputs** (interactive → bordered): `OutlinedTextField`, unfocused = outline rung, focused = accent, muted placeholder (a ghost affordance — it may dim below the §5 muted floor); search = leading magnifier + trailing clear, either bordered (History `SearchField`) or a filled rounded field (surfaceVariant — the standard phone-search look, Settings + timezone picker).
+- **Text inputs** (interactive → bordered): `OutlinedTextField`, unfocused = outline rung, focused = accent, muted placeholder (a ghost affordance — it may dim below the §5 muted floor); search = leading magnifier + trailing clear, either bordered (History `SearchField`) or a filled rounded field (surfaceVariant — the standard phone-search look, Settings).
 - Hot-path numbers = steppers + inline edit, never keyboard-first.
 - An explainer belongs beside a non-obvious control only (§4.3), ≤1 line.
 

@@ -112,6 +112,68 @@ class WeekMathTest {
         assertEquals(169L, (nextWeek - thisWeek) / 3_600_000L)
     }
 
+    // ── The user's week (Settings → Format → Week starts) ──────────────────────────────────────
+
+    @Test
+    fun aMondayFirstUserWeekIsTheIsoWeek() {
+        // Monday-first is the default, and Home must not move for anyone who never touched it.
+        var date = LocalDate.parse("2026-08-17")
+        while (date < LocalDate.parse("2026-09-07")) {
+            val noon = at(date.toString())
+            assertEquals("$date", mondayStartMs(noon, utc), userWeekStartMs(noon, utc, firstDayMonday = true))
+            assertEquals("$date", date.dayOfWeek.value - 1, userWeekDayIndex(date, firstDayMonday = true))
+            date = date.plusDays(1)
+        }
+    }
+
+    @Test
+    fun aSundayFirstWeekStartsOnTheSundayBefore() {
+        // 2026-08-27 is a Thursday; a Sunday-first week holding it started Sunday 2026-08-23.
+        assertEquals(startOfDay("2026-08-23"), userWeekStartMs(at("2026-08-27"), utc, firstDayMonday = false))
+        assertEquals(LocalDate.parse("2026-08-23"), userWeekStart(LocalDate.parse("2026-08-27"), firstDayMonday = false))
+    }
+
+    @Test
+    fun aSundayIsDayOneOfItsSundayFirstWeek_notTheLastDayOfTheIsoOne() {
+        // The whole point of the setting. Sunday 2026-08-30 is the LAST day of ISO week 08-24, and
+        // the FIRST day of the Sunday-first week that runs to Saturday 09-05.
+        val sunday = LocalDate.parse("2026-08-30")
+        assertEquals(startOfDay("2026-08-30"), userWeekStartMs(at("2026-08-30", "23:59"), utc, firstDayMonday = false))
+        assertEquals(0, userWeekDayIndex(sunday, firstDayMonday = false))
+        assertEquals(6, userWeekDayIndex(sunday, firstDayMonday = true))
+        // And Saturday closes it.
+        assertEquals(6, userWeekDayIndex(LocalDate.parse("2026-09-05"), firstDayMonday = false))
+        assertEquals(startOfDay("2026-08-30"), userWeekStartMs(at("2026-09-05", "23:59"), utc, firstDayMonday = false))
+    }
+
+    @Test
+    fun theSundayFirstIndexWalksZeroToSixAcrossItsWeek() {
+        // The strip draws cell i for index i, so the seven days of one week must map onto 0..6
+        // exactly once, in calendar order, starting at the week start.
+        for (firstDayMonday in listOf(true, false)) {
+            val start = userWeekStart(LocalDate.parse("2026-08-27"), firstDayMonday)
+            val indices = (0L until 7L).map { userWeekDayIndex(start.plusDays(it), firstDayMonday) }
+            assertEquals("firstDayMonday=$firstDayMonday", (0..6).toList(), indices)
+        }
+    }
+
+    @Test
+    fun theUserWeekStartIsLocalMidnightOnItsFirstDayAcrossAYear() {
+        var date = LocalDate.parse("2026-01-01")
+        val end = LocalDate.parse("2027-01-01")
+        while (date < end) {
+            for (zone in listOf(utc, london, ZoneId.of("Australia/Sydney"))) {
+                val now = at(date.toString(), "13:45", zone)
+                val start = java.time.Instant.ofEpochMilli(userWeekStartMs(now, zone, firstDayMonday = false)).atZone(zone)
+                assertEquals("$date in $zone", DayOfWeek.SUNDAY, start.dayOfWeek)
+                assertEquals("$date in $zone", 0, start.hour)
+                assertTrue("$date in $zone", start.toInstant().toEpochMilli() <= now)
+                assertTrue("$date in $zone", date.toEpochDay() - start.toLocalDate().toEpochDay() in 0..6)
+            }
+            date = date.plusDays(1)
+        }
+    }
+
     // ── monthStartMs ───────────────────────────────────────────────────────────────────────────
 
     @Test

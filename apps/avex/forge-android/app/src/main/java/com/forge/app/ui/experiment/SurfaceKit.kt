@@ -357,10 +357,10 @@ private class SparklineGeometry {
  */
 @Composable
 fun WeekStrip(
-    /** 0=Mon..6=Sun indices that carry a finished session. */
+    /** Day indices (0 = the user's first day of the week) that carry a finished session. */
     trained: Set<Int>,
     todayIndex: Int,
-    /** Mon-first day initials, supplied by the caller so the locale/first-day setting stays its call. */
+    /** Day initials in the same order as [trained], supplied by the caller so the first-day setting stays its call. */
     dayLabels: List<String>,
     reading: String,
     modifier: Modifier = Modifier

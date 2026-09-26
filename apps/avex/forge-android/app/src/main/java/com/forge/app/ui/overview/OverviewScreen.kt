@@ -39,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontStyle
+import com.forge.app.core.time.userWeekDayIndex
 import com.forge.app.ui.settings.SettingsIcons
 import com.forge.app.ui.common.NotificationBell
 import com.forge.app.ui.nav.NavIcons
@@ -135,7 +136,11 @@ private fun HomePlanAction(text: String, onClick: () -> Unit) {
 /** Home shows at most three goals and three recent sessions, matching the second backup. */
 private const val HOME_LIST_CAP = 3
 
-private val WEEK_INITIALS = listOf("M", "T", "W", "T", "F", "S", "S")
+// Two orders, one per Settings → Format → Week starts. The strip's cells are indexed in the user's
+// week (StatsRepository.weekDaysTrained, userWeekDayIndex), so the letters have to rotate with
+// them; a Sunday-first user saw an M..S strip with Sunday's session lit in the last cell.
+private val WEEK_INITIALS_MONDAY = listOf("M", "T", "W", "T", "F", "S", "S")
+private val WEEK_INITIALS_SUNDAY = listOf("S", "M", "T", "W", "T", "F", "S")
 
 @Composable
 private fun PromptLine(text: String, label: String, onClick: () -> Unit) {
@@ -382,13 +387,15 @@ fun OverviewScreen(
         }
     }
 
+    val settings = LocalForgeSettings.current
     val today = LocalDate.now()
-    val todayDow = today.dayOfWeek.value - 1
+    // Indexed in the user's week, the same order StatsRepository lit weekDaysTrained in, so "today"
+    // in the strip and "trained today" in the hero both follow Week starts (2026-09-26 audit).
+    val todayDow = userWeekDayIndex(today, settings.firstDayMonday)
 
     val nextDay = Program.days.firstOrNull { it.key == state.nextUpDayKey }
 
     val baseColors = MaterialTheme.colorScheme
-    val settings = LocalForgeSettings.current
     val palette = surfacePalette()
     val onBg = baseColors.onBackground
     val muted = baseColors.onSurfaceVariant
@@ -611,7 +618,7 @@ fun OverviewScreen(
             WeekStrip(
                 trained = state.weekDaysTrained,
                 todayIndex = todayDow,
-                dayLabels = WEEK_INITIALS,
+                dayLabels = if (settings.firstDayMonday) WEEK_INITIALS_MONDAY else WEEK_INITIALS_SUNDAY,
                 reading = "This week, ${state.weekDaysTrained.size} of 7 days trained",
                 modifier = Modifier.fillMaxWidth()
             )

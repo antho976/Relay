@@ -414,7 +414,13 @@ internal fun HourPickerRow(label: String, hour: Int, onHourChange: (Int) -> Unit
             verticalAlignment = Alignment.CenterVertically
         ) {
             GlyphButton("−", "Earlier hour", muted, { onHourChange((hour - 1 + 24) % 24) })
-            Text("${hour.toString().padStart(2, '0')}:00", style = MaterialTheme.typography.bodyMedium, color = onBg)
+            // Follows Settings → Format → Clock; it was always "07:00" whatever the user picked
+            // (2026-09-26 audit, "Settings that do nothing").
+            Text(
+                com.forge.app.domain.units.formatClockHour(hour, com.forge.app.ui.theme.LocalForgeSettings.current.timeFormat24h),
+                style = MaterialTheme.typography.bodyMedium,
+                color = onBg
+            )
             GlyphButton("+", "Later hour", muted, { onHourChange((hour + 1) % 24) })
         }
     }
@@ -440,13 +446,13 @@ internal fun DestructiveRow(label: String, isFactory: Boolean = false, onClick: 
 
 /**
  * The Settings search field (DESIGN §13: "a filled rounded field (surfaceVariant — the standard
- * phone-search look, Settings + timezone picker)"). Interactive, so the fill and the rounded corners
- * are earned (§1).
+ * phone-search look, Settings)"). Interactive, so the fill and the rounded corners are earned (§1).
  *
  * There were three of these — the main list's (filled, rounded-12, Material magnifier), the timezone
- * picker's (filled, rounded-10, no magnifier at all) and Exercise-likes' (BORDERED, rounded-8, with
- * a `Text("⌕")` standing in for the icon). Same control, three drawings, and the odd one out made
- * Exercise-likes read as a different app. One drawing now, per §2⑥.
+ * picker's (filled, rounded-10, no magnifier at all; the picker itself left with the Timezone row,
+ * 2026-09-26) and Exercise-likes' (BORDERED, rounded-8, with a `Text("⌕")` standing in for the icon).
+ * Same control, three drawings, and the odd one out made Exercise-likes read as a different app. One
+ * drawing now, per §2⑥.
  */
 @Composable
 internal fun SettingsSearchField(

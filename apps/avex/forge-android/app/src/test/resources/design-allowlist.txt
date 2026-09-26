@@ -270,7 +270,6 @@
 2 screen-name-title ui/settings/SettingsDialogs.kt title={Text(
 1 screen-name-title ui/settings/SettingsScreen.kt title={Text(
 1 screen-name-title ui/settings/SettingsSecurityPage.kt title={Text(
-1 screen-name-title ui/settings/SettingsSubPages.kt title={Text(
 1 screen-name-title ui/settings/SettingsVacationPage.kt title={Text(
 2 snackbar-host ui/gym/train/DayScreen.kt SnackbarHostState
 2 snackbar-host ui/programbuilder/ProgramBuilderDayDetail.kt SnackbarHostState

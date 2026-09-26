@@ -302,8 +302,10 @@ private fun NoSearchResults(query: String) {
 }
 
 internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when (page) {
-    SettingsPage.Appearance -> "AMOLED ${if (s.amoledMode) "on" else "off"} · compact ${if (s.compactSetLogging) "on" else "off"}"
-    SettingsPage.Format -> "${s.weightUnit.label} · ${if (s.useMiles) "mi" else "km"} · ${if (s.useCm) "cm" else "in"} · ${dateShort(s.dateFormat)} · ${if (s.timeFormat24h) "24h" else "12h"} · ${tzShort(s.timezone)}"
+    // Compact set logging, Date format and Timezone left their pages (2026-09-26 audit: saved, never
+    // read), so the rows stop advertising them.
+    SettingsPage.Appearance -> "AMOLED ${if (s.amoledMode) "on" else "off"} · accent ${if (s.accentEnabled) "on" else "off"}"
+    SettingsPage.Format -> "${s.weightUnit.label} · ${if (s.useMiles) "mi" else "km"} · ${if (s.useCm) "cm" else "in"} · ${if (s.timeFormat24h) "24h" else "12h"} · week from ${if (s.firstDayMonday) "Mon" else "Sun"}"
     SettingsPage.Session -> "Haptic: ${s.hapticStrength}"
     SettingsPage.Notifications -> {
         // Live preview of which notification types are on (was just quiet-hours / "Off").
@@ -316,8 +318,7 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
             // One window shared by every day reads as a time range; a per-day schedule just reads "per day".
             val w = s.quietHoursSchedule.windows[0]
             val quiet =
-                if (s.quietHoursSchedule.isUniform && !w.isOff)
-                    "quiet ${w.start.toString().padStart(2, '0')}:00–${w.end.toString().padStart(2, '0')}:00"
+                if (s.quietHoursSchedule.isUniform && !w.isOff) "quiet ${windowLabel(w, s.timeFormat24h)}"
                 else "quiet per day"
             "$on · $quiet"
         } else on
@@ -343,18 +344,4 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
     SettingsPage.WhatsNew -> "Version ${com.forge.app.BuildConfig.VERSION_NAME}"
     SettingsPage.PrivacyPolicy -> "Offline use · permissions · deletion"
     SettingsPage.About -> "Version · privacy · what's stored"
-}
-
-internal fun dateShort(f: String) = when (f) {
-    "dd/MM/yyyy" -> "05/01"
-    "MM/dd/yyyy" -> "01/05"
-    else -> "Jan 5"
-}
-
-internal fun tzShort(id: String) = when (id) {
-    "America/Los_Angeles" -> "PST"; "America/Denver" -> "MST"; "America/Chicago" -> "CST"
-    "America/New_York" -> "EST"; "America/Sao_Paulo" -> "BRT"; "UTC" -> "UTC"
-    "Europe/London" -> "GMT"; "Europe/Paris" -> "CET"; "Europe/Moscow" -> "MSK"
-    "Asia/Kolkata" -> "IST"; "Asia/Tokyo" -> "JST"; "Australia/Sydney" -> "AEST"
-    else -> id.substringAfterLast("/")
 }
