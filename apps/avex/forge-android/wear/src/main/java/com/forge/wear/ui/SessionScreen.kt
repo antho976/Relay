@@ -55,6 +55,7 @@ fun SetView(
     val lastAck by repo.lastAck.collectAsStateWithLifecycle()
     val lastLog by repo.lastLog.collectAsStateWithLifecycle()
     val failedSend by repo.failedSend.collectAsStateWithLifecycle()
+    val pendingLog by repo.pendingLog.collectAsStateWithLifecycle()
 
     // Adjusted values, reseeded whenever the mirror advances to a new set/exercise.
     val seedKey = "${session.exerciseId}:${session.setIndex}:${session.targetWeightText}"
@@ -70,15 +71,20 @@ fun SetView(
 
     // Pending command lifecycle: LOG → pending until the matching ack (or a quiet timeout line).
     var pendingId by remember { mutableStateOf<String?>(null) }
-    // A command that timed out without an ack. It may still have landed, so a re-tap must RESEND
-    // it under the same id rather than mint a new one — the phone's deduper keys on the id, and a
-    // fresh UUID is a second set. Held with the exact payload it was sent for: if the user adjusts
-    // the weight or reps before tapping again, that is a different set and earns a new id.
-    // Keyed on seedKey: if the mirror advances to the next set, the command DID land, so any
-    // remembered retry is stale and must not be reused against a different set.
-    var timedOutId by remember(seedKey) { mutableStateOf<String?>(null) }
-    var timedOutPayload by remember(seedKey) { mutableStateOf<String?>(null) }
-    var statusLine by remember { mutableStateOf<String?>(null) }
+    // A command sent without an answer yet. It may still have landed, so a re-tap must RESEND it
+    // under the same id rather than mint a new one — the phone's deduper keys on the id, and a
+    // fresh UUID is a second set. The id and the exact payload it went with are the repository's,
+    // on disk (W01): held here in `remember`, a recreated screen or a reclaimed process forgot
+    // them, and the re-tap logged the set twice.
+    val timedOutId = pendingLog
+        ?.takeIf { pendingId == null && it.sessionId == session.sessionId && it.setKey == seedKey }
+        ?.commandId
+    var statusLine by remember {
+        // Back to a set whose Log never got an answer: say so, rather than a clean "Log set".
+        mutableStateOf(if (timedOutId != null) "Not logged · reconnecting" else null)
+    }
+    // The mirror moving to another set means the command landed; its id must not follow.
+    LaunchedEffect(session.sessionId, seedKey) { repo.dropStalePendingLog(session.sessionId, seedKey) }
     var confirmJump by remember(seedKey) { mutableStateOf(false) }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
@@ -96,10 +102,9 @@ fun SetView(
     LaunchedEffect(lastAck, pendingId, timedOutId) {
         val outcome = resolveAck(lastAck, pendingId, timedOutId)
         if (outcome == AckOutcome.Unrelated) return@LaunchedEffect
-        pendingId = null
         // Resolved either way, so there is nothing left to resend under this id.
-        timedOutId = null
-        timedOutPayload = null
+        pendingId = null
+        lastAck?.commandId?.let(repo::settlePendingLog)
         when (outcome) {
             AckOutcome.Logged -> statusLine = null
             AckOutcome.NeedsConfirm -> { confirmJump = true; statusLine = "Big jump, tap to confirm" }
@@ -114,7 +119,6 @@ fun SetView(
         delay(4_000)
         if (pendingId != null) {
             statusLine = "Not logged · reconnecting"
-            timedOutId = pendingId
             pendingId = null
         }
     }
@@ -244,21 +248,16 @@ fun SetView(
                     onClick = {
                         statusLine = null
                         val text = weightValue?.let { formatAdjusted(it) } ?: session.targetWeightText
-                        val payload = "$text|$reps|$confirmJump"
-                        // Same set, tapped again after a timeout → resend the SAME command id so
-                        // the phone can recognise it as a replay. Anything edited since makes it a
-                        // genuinely different set, which gets a fresh id.
-                        val reuseId = timedOutId?.takeIf { timedOutPayload == payload }
-                        pendingId = repo.sendLogSet(
+                        // Same set, same values, still unanswered → the repository resends under
+                        // the SAME command id so the phone can recognise it as a replay.
+                        pendingId = repo.logSet(
                             sessionId = session.sessionId,
+                            setKey = seedKey,
                             exerciseId = session.exerciseId,
                             weightText = text,
                             reps = reps,
-                            confirmedJump = confirmJump,
-                            commandId = reuseId
+                            confirmedJump = confirmJump
                         )
-                        timedOutId = null
-                        timedOutPayload = payload
                         confirmJump = false
                     }
                 )
