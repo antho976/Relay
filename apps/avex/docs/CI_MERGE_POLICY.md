@@ -42,9 +42,22 @@ None of this can be committed — it is repository settings, and it needs an adm
    - `Instrumented (emulator)`
 3. **Require branches to be up to date before merging**, so a green run describes the tree that
    actually lands.
-4. **Do not allow a skipped required job to count as passed.** A required check that is `skipped`
-   satisfies protection by default; the three jobs above run on every ordinary pull request, so a
-   skip means the workflow did not run and the merge should wait.
+4. **Do not let a skipped job stand in for a build.** GitHub counts a required check skipped by its
+   own `if:` as passed, and has no setting to change that. So the only skip is a deliberate one:
+   `pull_request` has no `paths-ignore` (a workflow that never starts never reports, and a
+   docs-only PR would wait forever for its checks), and `Guard` runs `.github/scripts/ci_scope.py`
+   on every PR. `Verify (JVM)` and `Instrumented (emulator)` are skipped only when the PR's merge
+   commit changes nothing but the paths the push trigger ignores (docs, root media, `PRODUCT.md`,
+   `README.md`). Any other file, an empty diff or a helper error builds.
 
-Until 1–4 exist, the workflow is a report rather than a gate, and this document is the record of
-which of the two it currently is.
+## Status
+
+**2026-09-26:** `main` was red from 09-21 to 09-26 (CI runs 308–325,
+`DesignDoctrineTest.noEmDashesInRenderedStrings`) while PRs #187–#194 merged, so the migration and
+smoke-launch job was skipped for five days (release audit 2026-09-26, `docs/audits/2026-09-26/12`).
+That day `main` was protected with 1–4 above: `Guard`, `Verify (JVM)` and
+`Instrumented (emulator)` required and strict (up to date). Admins are not included in
+enforcement, so an emergency merge stays possible, but only as an explicit
+`gh pr merge --admin` or the bypass box in the web UI; an ordinary merge waits for green.
+
+Check it with `gh api repos/antho976/Avex/branches/main/protection/required_status_checks`.
