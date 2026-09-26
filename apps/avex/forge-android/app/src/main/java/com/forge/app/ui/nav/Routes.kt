@@ -25,8 +25,9 @@ object Routes {
 
     /**
      * One lesson, read on its own screen (2026-08-20). It used to be a `?lesson=` argument on the
-     * Academy route that opened a sheet over the gallery; a lesson is a page now, the same one an
-     * article gets, so it is a route of its own and a feed row lands directly on it.
+     * Academy route that opened a sheet over the gallery; a lesson is a page now, so it is a route
+     * of its own and a feed row lands directly on it. A retired id still works: it resolves to the
+     * lesson that absorbed it.
      *
      * [lessonId] is a registry id: lowercase, dots and underscores only, which is why it can sit in
      * the path un-encoded. `AcademyRegistryTest` pins that id grammar.
@@ -39,15 +40,8 @@ object Routes {
     // The per-track Academy route was removed 2026-08-16. Tracks are section headers in the one
     // gallery now, so there is no track screen to route to and one level of nesting is gone.
 
-    /**
-     * One Library article. [articleId] is a `library.*` id: lowercase, dots and underscores only,
-     * which is why it can sit in the path un-encoded. `ArticleRegistryTest` pins that id grammar,
-     * so a future article cannot quietly introduce a slash and break this route.
-     */
-    const val ARTICLE = "academy/article/{articleId}"
-    const val ARG_ARTICLE_ID = "articleId"
-
-    fun article(articleId: String) = "academy/article/$articleId"
+    // The Library's article route was removed 2026-09-26, when its four articles folded into the
+    // Academy's lessons. Their old ids resolve through `AcademyRegistry.aliases` on the lesson route.
     const val COACH_TIMELINE = "coach-timeline"
     const val PROFILE = "profile"
     const val GOALS = "goals"

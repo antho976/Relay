@@ -56,17 +56,14 @@ class AcademyViewModel @Inject constructor(
         /**
          * What the coach has flagged as relevant and the reader has not opened, newest first.
          *
-         * The page shows the first of these as its opening pointer, beside the same count the bell
-         * and the tab badge already carry. It is never shown as a shelf: a "for you" queue holding
-         * nine things is a backlog, and a backlog is the achievement feeling coming back in through
-         * the side door.
+         * They lead the page's opening drawing, which turns through them before anything unread.
          */
         val forYou: List<AcademyRegistry.LessonState>
             get() = all.filter { it.isNew }.sortedByDescending { it.unlockedAtMs ?: 0L }
 
         fun lessonsIn(track: LessonTrack): List<AcademyRegistry.LessonState> =
-            // Registry order, which for Fundamentals IS its reading order. No sort by state: putting
-            // "yours" first would re-impose the ranking this rework removed.
+            // Registry order, which for Training IS its reading order. No sort by state: putting
+            // "yours" first would re-impose a ranking the page does not claim.
             all.filter { it.lesson.track == track }
     }
 

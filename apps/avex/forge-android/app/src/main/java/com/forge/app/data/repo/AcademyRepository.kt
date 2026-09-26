@@ -52,10 +52,12 @@ class AcademyRepository @Inject constructor(
     suspend fun markCompleted(lessonId: String) = record(lessonId, LessonEventKind.COMPLETED, once = true)
 
     private suspend fun record(lessonId: String, kind: LessonEventKind, once: Boolean) {
-        if (AcademyRegistry.lesson(lessonId) == null) return
-        if (once && lessonEventDao.has(lessonId, kind.code)) return
+        // A retired id (a coach reason written before the 2026-09-26 cut) records against the lesson
+        // that absorbed it, so the ledger only ever grows under ids that still ship.
+        val id = AcademyRegistry.lesson(lessonId)?.id ?: return
+        if (once && lessonEventDao.has(id, kind.code)) return
         lessonEventDao.insert(
-            LessonEvent(lessonId = lessonId, kind = kind.code, atMs = clock.nowMs())
+            LessonEvent(lessonId = id, kind = kind.code, atMs = clock.nowMs())
         )
     }
 
@@ -76,69 +78,40 @@ class AcademyRepository @Inject constructor(
             if (it is kotlinx.coroutines.CancellationException) throw it else null
         } ?: return
 
-        // Cold start: the curriculum's first lesson exists from the moment there's a program.
-        if (snapshot.program.isNotEmpty()) unlock("fundamentals.what_a_program_is")
-
+        // Training: the chapter unlocks as the reader meets each idea in their own sessions.
+        if (snapshot.program.isNotEmpty()) unlock(LESSON_GETTING_STRONGER)
         val anySets = snapshot.exerciseHistory.values.any { bouts -> bouts.any { it.sets.isNotEmpty() } }
         if (anySets) {
-            unlock("fundamentals.sets_reps_rpe")
-            unlock("fundamentals.warmups")
+            unlock(LESSON_EFFORT)
+            unlock(LESSON_FORM)
         }
-        // Two sessions in and progression suggestions become real, so does their lesson.
-        if (snapshot.sessions.size >= 2) unlock("fundamentals.progressive_overload")
-        if (snapshot.sessions.isNotEmpty()) unlock("fundamentals.rest_and_recovery")
-        if (snapshot.sessions.size >= 3) {
-            unlock("fundamentals.how_the_coach_works")
-            unlock("fundamentals.what_readiness_means")
-            unlock("coach.readiness_built_from")
-        }
-        // A technique-tagged session means the athlete has met the idea; F3 explains why it's kept
-        // out of the coach's progress reads.
+        if (snapshot.sessions.isNotEmpty()) unlock(LESSON_RECOVERY)
         if (snapshot.exerciseHistory.values.any { bouts -> bouts.any { !it.countsForProgression } }) {
-            unlock("fundamentals.form_vs_load")
+            unlock(LESSON_FORM)
         }
-        // Soreness or illness ever flagged — from either the check-in or the older rest-day reason.
+        // Soreness or illness ever flagged, from either the check-in or the older rest-day reason.
         if (snapshot.cardio.any { it.restReason == "sore" || it.restReason == "sick" }) {
-            unlock("fundamentals.soreness_vs_injury")
+            unlock(LESSON_SORENESS)
         }
-        // Finishing the track earns the closing lesson about the price of all of it.
-        val events = lessonEventDao.all()
-        val readTrack = AcademyRegistry.coldStartTrack.count { lesson ->
-            events.any { it.lessonId == lesson.id && it.kind == LessonEventKind.OPENED.code }
-        }
-        if (readTrack >= AcademyRegistry.coldStartTrack.size - 1) unlock("fundamentals.log_honestly")
-
-        // D: the learning loop's moments — a personal number that has started changing decisions.
         val profile = com.forge.app.domain.coach.PersonalProfile.build(snapshot)
-        if (profile.volumeCaps.isNotEmpty()) unlock("programming.your_volume_landmarks")
-        if (profile.recoveryDays != null) unlock("programming.your_recovery_curve")
-        if (profile.sweetSpotReps.isNotEmpty()) unlock("programming.sweet_spot_reps")
+        if (profile.volumeCaps.isNotEmpty()) unlock(LESSON_VOLUME)
+        if (ProgressionAdvisor.cutSuppressedStalls(snapshot).isNotEmpty()) unlock(LESSON_PROTEIN)
 
-        // E: the ladder itself becomes a concept the moment the coach has any standing on it, and
-        // "how to take it back" the moment it has ever applied something without being asked twice.
-        if (snapshot.sessions.size >= 12) unlock("coach.trust_tiers")
-        if (autoAppliedEver()) unlock("coach.taking_decisions_back")
-        // F: HRV becomes a concept once there's enough of it to read a trend from.
-        if (snapshot.health.hrv.size >= 6) unlock("signals.stress_hrv")
+        // Your coach: once it has enough sessions to speak, or has acted under its own authority.
+        if (snapshot.sessions.size >= 3) {
+            unlock(LESSON_HOW_IT_DECIDES)
+            unlock(LESSON_READINESS)
+        }
+        if (autoAppliedEver()) unlock(LESSON_HOW_IT_DECIDES)
+        if (snapshot.health.hrv.size >= 6) unlock(LESSON_READINESS)
 
-        // Engine: conditioning concepts unlock from the athlete's own cardio, not from a phase flag.
+        // Cardio: from the athlete's own conditioning, not from a phase flag.
         val activeCardio = snapshot.cardio.filter { it.restReason == null }
-        if (activeCardio.isNotEmpty()) {
-            unlock("engine.why_aerobic_base")
-            unlock("engine.what_zone2_is")
-        }
-        if (com.forge.app.domain.engine.ConditioningLoad.interferencePenalty(snapshot.cardio, snapshot.nowMs) > 0) {
-            unlock("engine.interference")
-        }
-        if (activeCardio.any { it.intervalCount != null && it.intervalCount > 0 }) {
-            unlock("engine.intervals")
-        }
-        if (activeCardio.any { it.hrZone != null }) unlock("engine.reading_hr")
-        if (activeCardio.count { it.distanceKm != null } >= 8) unlock("engine.base_without_a_lab")
-
-        // The coach's own counterintuitive moment: a stall it deliberately did not escalate.
-        if (ProgressionAdvisor.cutSuppressedStalls(snapshot).isNotEmpty()) {
-            unlock(LESSON_STRENGTH_ON_A_CUT)
+        if (activeCardio.isNotEmpty()) unlock(LESSON_ZONE2)
+        if (activeCardio.any { it.intervalCount != null && it.intervalCount > 0 } ||
+            com.forge.app.domain.engine.ConditioningLoad.interferencePenalty(snapshot.cardio, snapshot.nowMs) > 0
+        ) {
+            unlock(LESSON_INTERVALS)
         }
     }
 
@@ -148,7 +121,7 @@ class AcademyRepository @Inject constructor(
     }.getOrDefault(false)
 
     /** Fired when the goal portfolio flags a real conflict — C2's moment. */
-    suspend fun onGoalConflict() = unlock("coach.why_goals_fight")
+    suspend fun onGoalConflict() = unlock(LESSON_BLOCKS)
 
     /**
      * The cold-start lesson to carry on today's directive, or null once the track is read. Below
@@ -158,6 +131,17 @@ class AcademyRepository @Inject constructor(
         runCatching { AcademyRegistry.nextColdStartLesson(lessonEventDao.all()) }.getOrNull()
 
     companion object {
-        const val LESSON_STRENGTH_ON_A_CUT = "coach.strength_on_a_cut"
+        const val LESSON_GETTING_STRONGER = "training.getting_stronger"
+        const val LESSON_EFFORT = "training.effort"
+        const val LESSON_VOLUME = "training.volume"
+        const val LESSON_FORM = "training.form"
+        const val LESSON_RECOVERY = "training.recovery"
+        const val LESSON_SORENESS = "training.soreness"
+        const val LESSON_PROTEIN = "training.protein"
+        const val LESSON_HOW_IT_DECIDES = "coach.how_it_decides"
+        const val LESSON_READINESS = "coach.readiness"
+        const val LESSON_BLOCKS = "coach.blocks"
+        const val LESSON_ZONE2 = "cardio.zone2"
+        const val LESSON_INTERVALS = "cardio.intervals"
     }
 }

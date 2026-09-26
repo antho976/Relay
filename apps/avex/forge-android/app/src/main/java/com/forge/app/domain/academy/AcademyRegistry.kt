@@ -13,35 +13,81 @@ import com.forge.app.data.db.entities.LessonEvent
  *    `lesson_event` ledger, the same idempotent pattern as `CoachGenBias.from(decisions)`, so
  *    read state can't drift or double-count.
  *
- * Content arrives per phase, never ahead of the machinery it describes (`docs/ACADEMY_LESSONS.md`
- * is the authoring order). A2 ships exactly one lesson, because A2 ships exactly one new coach
- * concept a user can see: phase-aware stall interpretation.
+ * Since 2026-09-26 the Academy ships 12 lessons in three chapters, cut down from 35 pieces. The
+ * retired ids live on in [aliases], because the ledger and the coach's reasons still carry them.
  */
 object AcademyRegistry {
 
-    /** Every lesson that currently ships. Ordered by track, then authoring order. */
-    val lessons: List<Lesson> = AcademyFundamentals.ordered + listOf(
-        AcademyContent.readinessBuiltFrom,
-        AcademyContent.whyGoalsFight,
-        AcademyContent.strengthOnACut
-    ) + AcademyProgramming.all + AcademyYourNumbers.all + AcademyAutonomy.all + AcademySignals.all + AcademyEngine.all
+    /** Every lesson that currently ships, in page order: Training, then Your coach, then Cardio. */
+    val lessons: List<Lesson> =
+        AcademyTraining.ordered + AcademyCoachLessons.ordered + AcademyCardio.ordered
+
+    /**
+     * Retired ids and the lesson that absorbed each one (2026-09-26, 35 pieces cut to 12).
+     *
+     * Coach reasons, notices and the append-only ledger still carry the old ids, and the ledger can
+     * never be rewritten. So an old id is resolved here instead: opening it opens the lesson that
+     * replaced it, and an old unlock or read counts toward that lesson.
+     */
+    val aliases: Map<String, String> = mapOf(
+        "fundamentals.what_a_program_is" to AcademyTraining.gettingStronger.id,
+        "fundamentals.progressive_overload" to AcademyTraining.gettingStronger.id,
+        "fundamentals.sets_reps_rpe" to AcademyTraining.effort.id,
+        "programming.sweet_spot_reps" to AcademyTraining.effort.id,
+        "library.proximity_to_failure" to AcademyTraining.effort.id,
+        "programming.your_volume_landmarks" to AcademyTraining.volume.id,
+        "programming.imbalances" to AcademyTraining.volume.id,
+        "library.how_much_volume" to AcademyTraining.volume.id,
+        "fundamentals.form_vs_load" to AcademyTraining.form.id,
+        "fundamentals.warmups" to AcademyTraining.form.id,
+        "fundamentals.rest_and_recovery" to AcademyTraining.recovery.id,
+        "programming.your_recovery_curve" to AcademyTraining.recovery.id,
+        "library.sleep_and_training" to AcademyTraining.recovery.id,
+        "fundamentals.soreness_vs_injury" to AcademyTraining.soreness.id,
+        "coach.strength_on_a_cut" to AcademyTraining.protein.id,
+        "library.protein_intake" to AcademyTraining.protein.id,
+        "fundamentals.how_the_coach_works" to AcademyCoachLessons.howItDecides.id,
+        "fundamentals.log_honestly" to AcademyCoachLessons.howItDecides.id,
+        "coach.trust_tiers" to AcademyCoachLessons.howItDecides.id,
+        "coach.taking_decisions_back" to AcademyCoachLessons.howItDecides.id,
+        "fundamentals.what_readiness_means" to AcademyCoachLessons.readiness.id,
+        "coach.readiness_built_from" to AcademyCoachLessons.readiness.id,
+        "signals.stress_hrv" to AcademyCoachLessons.readiness.id,
+        "programming.what_a_block_is" to AcademyCoachLessons.blocks.id,
+        "programming.four_phases" to AcademyCoachLessons.blocks.id,
+        "programming.deloads_are_earned" to AcademyCoachLessons.blocks.id,
+        "programming.reading_your_block_card" to AcademyCoachLessons.blocks.id,
+        "coach.why_goals_fight" to AcademyCoachLessons.blocks.id,
+        "coach.what_a_project_is" to AcademyCoachLessons.blocks.id,
+        "engine.why_aerobic_base" to AcademyCardio.zone2.id,
+        "engine.what_zone2_is" to AcademyCardio.zone2.id,
+        "engine.reading_hr" to AcademyCardio.zone2.id,
+        "engine.base_without_a_lab" to AcademyCardio.zone2.id,
+        "engine.intervals" to AcademyCardio.intervals.id,
+        "engine.interference" to AcademyCardio.intervals.id
+    )
+
+    /** The id a lesson ships under today, for a current or a retired id. */
+    fun canonical(id: String): String = aliases[id] ?: id
 
     /**
      * The cold-start curriculum, in reading order (B3). Below the coach's data gates these lessons
      * ARE the Today Directive: the card degrades from personalised to principled, never to silence.
      */
-    val coldStartTrack: List<Lesson> = AcademyFundamentals.ordered
+    val coldStartTrack: List<Lesson> = AcademyTraining.ordered
 
     /**
      * The next cold-start lesson for a reader — the one the directive should carry today. Null once
      * the track is finished, at which point the coach has enough data to speak for itself.
      */
     fun nextColdStartLesson(events: List<com.forge.app.data.db.entities.LessonEvent>): Lesson? {
-        val opened = events.filter { it.kind == LessonEventKind.OPENED.code }.map { it.lessonId }.toSet()
+        val opened = events.filter { it.kind == LessonEventKind.OPENED.code }
+            .map { canonical(it.lessonId) }
+            .toSet()
         return coldStartTrack.firstOrNull { it.id !in opened }
     }
 
-    fun lesson(id: String): Lesson? = lessons.firstOrNull { it.id == id }
+    fun lesson(id: String): Lesson? = canonical(id).let { c -> lessons.firstOrNull { it.id == c } }
 
     fun byTrack(track: LessonTrack): List<Lesson> = lessons.filter { it.track == track }
 
@@ -62,7 +108,7 @@ object AcademyRegistry {
      * than dropped from history: content can be renamed or retired without corrupting the record.
      */
     fun stateFrom(events: List<LessonEvent>): List<LessonState> {
-        val byLesson = events.groupBy { it.lessonId }
+        val byLesson = events.groupBy { canonical(it.lessonId) }
         return lessons.map { lesson ->
             val own = byLesson[lesson.id].orEmpty()
             val unlockedAt = own.filter { it.kind == LessonEventKind.UNLOCKED.code }.minOfOrNull { it.atMs }
@@ -77,7 +123,7 @@ object AcademyRegistry {
     }
 
     fun stateOf(lessonId: String, events: List<LessonEvent>): LessonState? =
-        stateFrom(events).firstOrNull { it.lesson.id == lessonId }
+        canonical(lessonId).let { id -> stateFrom(events).firstOrNull { it.lesson.id == id } }
 
     /** Lessons the reader has unlocked, newest unlock first — the Academy section's live list. */
     fun unlocked(events: List<LessonEvent>): List<LessonState> =
@@ -101,38 +147,19 @@ object AcademyRegistry {
      * The machine-side trigger for a lesson: the coach/app moment that unlocks it. Kept beside the
      * content so adding a lesson without wiring its moment is a visible omission, not a silent one.
      */
-    fun unlockKeyFor(lessonId: String): String? = when (lessonId) {
-        AcademyContent.strengthOnACut.id -> UNLOCK_CUT_STALL_SUPPRESSED
-        AcademyContent.readinessBuiltFrom.id -> UNLOCK_READINESS_SHOWN
-        AcademyContent.whyGoalsFight.id -> UNLOCK_GOAL_CONFLICT
-        AcademyFundamentals.whatAProgramIs.id -> UNLOCK_COLD_START
-        AcademyFundamentals.setsRepsRpe.id -> UNLOCK_FIRST_SET
-        AcademyFundamentals.formVsLoad.id -> UNLOCK_TECHNIQUE_SESSION
-        AcademyFundamentals.progressiveOverload.id -> UNLOCK_FIRST_PROGRESSION
-        AcademyFundamentals.restAndRecovery.id -> UNLOCK_REST_TIMER
-        AcademyFundamentals.sorenessVsInjury.id -> UNLOCK_SORENESS_FLAG
-        AcademyFundamentals.warmups.id -> UNLOCK_WARMUP_SHOWN
-        AcademyFundamentals.howTheCoachWorks.id -> UNLOCK_WEEK_BRIEF
-        AcademyFundamentals.whatReadinessMeans.id -> UNLOCK_READINESS_SHOWN
-        AcademyFundamentals.logHonestly.id -> UNLOCK_COLD_START_DONE
-        AcademyProgramming.whatABlockIs.id -> UNLOCK_BLOCK_STARTED
-        AcademyProgramming.fourPhases.id -> UNLOCK_PHASE_CHANGE
-        AcademyProgramming.deloadsAreEarned.id -> UNLOCK_SCHEDULED_DELOAD
-        AcademyProgramming.readingYourBlock.id -> UNLOCK_BLOCK_STARTED
-        AcademyYourNumbers.volumeLandmarks.id -> UNLOCK_PERSONAL_CAP
-        AcademyYourNumbers.recoveryCurve.id -> UNLOCK_PERSONAL_SPACING
-        AcademyYourNumbers.sweetSpotReps.id -> UNLOCK_PERSONAL_REPS
-        AcademyYourNumbers.imbalances.id -> UNLOCK_IMBALANCE_PROJECT
-        AcademyYourNumbers.whatAProjectIs.id -> UNLOCK_PROJECT_PROPOSED
-        AcademyAutonomy.trustTiers.id -> UNLOCK_TIER_CHANGE
-        AcademyAutonomy.takingDecisionsBack.id -> UNLOCK_AUTONOMOUS_ACT
-        AcademySignals.stressHrv.id -> UNLOCK_HRV_TREND
-        AcademyEngine.whyAerobicBase.id -> UNLOCK_CARDIO_PRESCRIPTION
-        AcademyEngine.whatZone2Is.id -> UNLOCK_CARDIO_PRESCRIPTION
-        AcademyEngine.interference.id -> UNLOCK_INTERFERENCE
-        AcademyEngine.readingHr.id -> UNLOCK_LIVE_HR
-        AcademyEngine.intervals.id -> UNLOCK_INTERVAL_PRESCRIPTION
-        AcademyEngine.baseWithoutALab.id -> UNLOCK_BASE_TREND
+    fun unlockKeyFor(lessonId: String): String? = when (canonical(lessonId)) {
+        AcademyTraining.gettingStronger.id -> UNLOCK_COLD_START
+        AcademyTraining.effort.id -> UNLOCK_FIRST_SET
+        AcademyTraining.volume.id -> UNLOCK_PERSONAL_CAP
+        AcademyTraining.form.id -> UNLOCK_WARMUP_SHOWN
+        AcademyTraining.recovery.id -> UNLOCK_REST_TIMER
+        AcademyTraining.soreness.id -> UNLOCK_SORENESS_FLAG
+        AcademyTraining.protein.id -> UNLOCK_CUT_STALL_SUPPRESSED
+        AcademyCoachLessons.howItDecides.id -> UNLOCK_WEEK_BRIEF
+        AcademyCoachLessons.readiness.id -> UNLOCK_READINESS_SHOWN
+        AcademyCoachLessons.blocks.id -> UNLOCK_BLOCK_STARTED
+        AcademyCardio.zone2.id -> UNLOCK_CARDIO_PRESCRIPTION
+        AcademyCardio.intervals.id -> UNLOCK_INTERVAL_PRESCRIPTION
         else -> null
     }
 

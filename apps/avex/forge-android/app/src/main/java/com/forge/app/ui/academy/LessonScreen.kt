@@ -12,18 +12,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.domain.academy.AcademyRegistry
-import com.forge.app.domain.academy.LessonTrack
 import com.forge.app.domain.academy.readMinutes
 import com.forge.app.ui.common.InlineEmptyHint
 
 /**
- * One lesson, on the same page an article gets.
- *
- * Until 2026-08-20 this was a `ModalBottomSheet` over whichever surface opened it. The sheet is
- * gone: it capped a lesson at a sheet's height, could not carry a cover, and counted a dismissal as
- * a completed read. See [ReaderScreen] for what replaced it and why the two halves of the Academy
- * now share one reader.
+ * One lesson, on its own page. A retired id (from a coach reason written before the 2026-09-26
+ * cut) resolves to the lesson that absorbed it, so old links still land somewhere true.
  */
 @Composable
 fun LessonScreen(
@@ -47,32 +41,15 @@ fun LessonScreen(
 
     ReaderScreen(
         onBack = onBack,
-        cover = AcademyCovers.forId(lesson.id),
-        kicker = lessonKicker(lesson.track, lesson.id, lesson.blocks.readMinutes()),
+        lessonId = lesson.id,
+        meta = "${lesson.track.displayName} · ${lesson.blocks.readMinutes()} min",
         title = lesson.title,
         deck = lesson.summary,
         blocks = lesson.blocks,
         examples = state.examples,
+        sources = lesson.sources,
         next = state.next,
         onReachedEnd = viewModel::onReachedEnd,
         onOpenNext = onOpenLesson
     )
-}
-
-/**
- * "FUNDAMENTALS · 03 · 4 MIN".
- *
- * The numeral rides Fundamentals only — the one track authored as a sequence — so a position never
- * implies an order that was never written. Everywhere else the line is the chapter and the length.
- */
-private fun lessonKicker(track: LessonTrack, lessonId: String, minutes: Int): String {
-    val numeral = if (track == LessonTrack.FUNDAMENTALS) {
-        AcademyRegistry.byTrack(track)
-            .indexOfFirst { it.id == lessonId }
-            .takeIf { it >= 0 }
-            ?.let { (it + 1).toString().padStart(2, '0') }
-    } else {
-        null
-    }
-    return listOfNotNull(track.displayName, numeral, "$minutes min").joinToString(" · ")
 }

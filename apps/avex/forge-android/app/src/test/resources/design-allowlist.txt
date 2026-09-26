@@ -199,6 +199,10 @@
 2 em-dash wear/ui/SessionScreen.kt em dash in string
 1 em-dash wear/ui/WearRoot.kt em dash in string
 2 em-dash widget/ForgeWidget.kt em dash in string
+# Sanctioned 2026-09-26: Academy diagram labels are sized in the drawing's own design units so a
+# diagram scales as one picture; at 200% font the words would outgrow the geometry they label.
+# The lesson prose carries the same facts at the reader's size, and the canvas reads them to TalkBack.
+1 font-size ui/academy/AcademySketches.kt fontSize=
 2 font-size ui/cardio/components/CardioEntryRow.kt fontSize=
 3 font-size ui/cardio/components/CardioLogComponents.kt fontSize=
 1 font-size ui/cardio/components/CardioLogSheet.kt fontSize=
