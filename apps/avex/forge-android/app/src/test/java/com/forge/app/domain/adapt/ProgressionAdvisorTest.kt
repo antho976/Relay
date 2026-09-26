@@ -2,6 +2,8 @@ package com.forge.app.domain.adapt
 
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.types.EffortRating
+import com.forge.app.domain.coach.BlockPhase
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.program.MuscleGroup
 import org.junit.Assert.assertEquals
@@ -38,13 +40,16 @@ class ProgressionAdvisorTest {
         readiness: Recommendation.ReadinessScale? = null,
         dbMaxLb: Double? = null,
         fastStep: Boolean = false,
-        consolidate: Boolean = false
+        consolidate: Boolean = false,
+        phase: BlockPhase? = null,
+        weightUnit: WeightUnit = WeightUnit.LB
     ) = ProgressionAdvisor.suggestNextLoad(
         exerciseId = "ua1", exerciseName = "DB Bench Press",
         prevSets = sets, prevEffort = effort,
         repsText = reps, unit = unit, plateLb = 15.0,
         intensity = intensity, readiness = readiness, dbMaxLb = dbMaxLb,
-        fastStep = fastStep, consolidate = consolidate
+        fastStep = fastStep, consolidate = consolidate,
+        phase = phase, weightUnit = weightUnit
     )
 
     private fun lowReadiness(percent: Int = -4) =
@@ -340,12 +345,16 @@ class ProgressionAdvisorTest {
             skipped = false, swappedName = null, sets = listOf(set(weight, reps))
         )
 
-    private fun snapshot(bouts: List<ExerciseBout>, s: ProgramSlotSnap = slot()) = AdaptationSnapshot(
+    private fun snapshot(
+        bouts: List<ExerciseBout>,
+        s: ProgramSlotSnap = slot(),
+        prefs: PrefsSnap = PrefsSnap()
+    ) = AdaptationSnapshot(
         nowMs = 0L,
         program = listOf(ProgramDaySnap("upper-a", "Upper A", listOf(s))),
         sessions = emptyList(),
         exerciseHistory = mapOf(s.exerciseId to bouts),
-        prefs = PrefsSnap()
+        prefs = prefs
     )
 
     /** [n] flat bouts after an improving baseline → stall length of exactly [n]. */
@@ -623,5 +632,180 @@ class ProgressionAdvisorTest {
         }
         val r = ProgressionAdvisor.evaluate(snapshot(bouts)).single() as Recommendation.WeightChange
         assertTrue("grinding to failure at a stall should reset down", r.deltaLb < 0)
+    }
+
+    // ── Unit grid (audit 2026-09-26, P1 #7) ────────────────────────────────────
+
+    /** A kg weight as the log path stores it: converted to lb and kept to one decimal. */
+    private fun storedKg(kg: Double) = Math.round(kg / 0.45359237 * 10) / 10.0
+
+    private fun asKg(lb: Double) = lb * 0.45359237
+
+    @Test
+    fun kgUser_topOfRange_progressesByAWholeKgStep() {
+        // 60 kg × 10 at the top of 8-10 used to suggest "60.1 kg" (a 2.5 lb grid read in kilos).
+        val s = suggest(listOf(set(storedKg(60.0), 10)), EffortRating.JUST_RIGHT, weightUnit = WeightUnit.KG)
+        assertNotNull(s)
+        assertEquals(62.5, asKg(s!!.targetWeightLb), 0.001)
+        assertTrue(s.reason.startsWith("hit top of range"))
+    }
+
+    @Test
+    fun kgUser_progressionIsLoadableAcrossTheRange() {
+        for (kg in listOf(20.0, 22.5, 40.0, 57.5, 100.0, 140.0)) {
+            val s = suggest(listOf(set(storedKg(kg), 10)), EffortRating.JUST_RIGHT, weightUnit = WeightUnit.KG)
+            assertEquals("next after $kg kg", kg + 2.5, asKg(s!!.targetWeightLb), 0.001)
+        }
+    }
+
+    @Test
+    fun kgUser_backOff_dropsOneKgStep() {
+        val s = suggest(listOf(set(storedKg(60.0), 10, rpe = 10.0)), weightUnit = WeightUnit.KG)
+        assertNotNull(s)
+        assertEquals(57.5, asKg(s!!.targetWeightLb), 0.001)
+    }
+
+    @Test
+    fun stonesUser_progressesByHalfAStone() {
+        val s = suggest(listOf(set(140.0, 10)), EffortRating.JUST_RIGHT, weightUnit = WeightUnit.ST)
+        assertNotNull(s)
+        assertEquals(147.0, s!!.targetWeightLb, 0.001)
+    }
+
+    @Test
+    fun kgUser_plateauMicroLoad_movesOnTheKgGrid() {
+        val lb = storedKg(60.0)
+        val bouts = listOf(bout(lb, 8, at = 0)) + (1..4).map { i -> bout(lb, 8, at = i.toLong()) }
+        val r = ProgressionAdvisor.evaluate(snapshot(bouts, prefs = PrefsSnap(weightUnit = WeightUnit.KG)))
+            .single() as Recommendation.WeightChange
+        assertEquals(62.5, asKg(r.targetWeightLb), 0.001)
+    }
+
+    @Test
+    fun kgUser_plateauReset_movesOnTheKgGrid() {
+        val lb = storedKg(60.0)
+        val bouts = listOf(bout(lb, 8, at = 0)) +
+            (1..4).map { i -> bout(lb, 8, EffortRating.BRUTAL, at = i.toLong()) }
+        val r = ProgressionAdvisor.evaluate(snapshot(bouts, prefs = PrefsSnap(weightUnit = WeightUnit.KG)))
+            .single() as Recommendation.WeightChange
+        // 60 × 0.9 = 54 → floored to 52.5 kg, not 53.9 kg.
+        assertEquals(52.5, asKg(r.targetWeightLb), 0.001)
+    }
+
+    // ── Same-weight cues are scaled (audit 2026-09-26, P1 #8) ──────────────────
+
+    @Test
+    fun keepWeight_lowReadiness_easesTheLoadAndSaysWhy() {
+        val s = suggest(listOf(set(100.0, 8)), EffortRating.JUST_RIGHT, reps = "8-12", readiness = lowReadiness(-5))
+        assertNotNull(s)
+        assertEquals(95.0, s!!.targetWeightLb, 0.0001)
+        assertTrue(s.reason, "readiness low" in s.reason)
+        assertTrue("the weight moved, so it can't say keep: ${s.reason}", !s.reason.startsWith("keep this weight"))
+    }
+
+    @Test
+    fun keepWeight_deloadWeek_dropsTheLoad() {
+        val s = suggest(listOf(set(100.0, 8)), EffortRating.JUST_RIGHT, reps = "8-12", phase = BlockPhase.DELOAD)
+        assertNotNull(s)
+        assertEquals(85.0, s!!.targetWeightLb, 0.0001)
+        assertTrue(s.reason, "deload phase" in s.reason)
+    }
+
+    @Test
+    fun consolidate_deloadWeek_dropsTheLoad() {
+        val s = suggest(listOf(set(100.0, 10)), EffortRating.JUST_RIGHT, consolidate = true, phase = BlockPhase.DELOAD)
+        assertNotNull(s)
+        assertEquals(85.0, s!!.targetWeightLb, 0.0001)
+        assertTrue(s.reason, "deload phase" in s.reason)
+    }
+
+    @Test
+    fun keepWeight_unscaledDay_keepsTheExactWeightLifted() {
+        // 21 kg is off the 2.5 kg grid; an unscaled day must not snap it down to 20 kg.
+        val lb = storedKg(21.0)
+        val s = suggest(listOf(set(lb, 8)), EffortRating.JUST_RIGHT, weightUnit = WeightUnit.KG)
+        assertEquals(lb, s!!.targetWeightLb, 0.0001)
+        assertTrue(s.reason.startsWith("keep this weight"))
+    }
+
+    @Test
+    fun keepWeight_hardDay_neverDropsBelowTheWeightLifted() {
+        // 21 kg × 1.05 = 22.05 floors to 20 kg on the grid; a HARD pick must not become a cut.
+        val lb = storedKg(21.0)
+        val s = suggest(listOf(set(lb, 8)), EffortRating.JUST_RIGHT, intensity = IntensityIntent.HARD, weightUnit = WeightUnit.KG)
+        assertEquals(lb, s!!.targetWeightLb, 0.0001)
+    }
+
+    @Test
+    fun keepWeight_plates_lowReadiness_staysSilent() {
+        // A whole plate is far more than a few-percent ease, so a plate lift says nothing rather
+        // than keep full load.
+        assertNull(
+            suggest(
+                listOf(set(45.0, 8)), EffortRating.JUST_RIGHT,
+                reps = "10-12", unit = ExerciseUnit.PLATES, readiness = lowReadiness(-3)
+            )
+        )
+    }
+
+    // ── Weighted timed history (D5) and the shared stall read ──────────────────
+
+    private fun timedBout(at: Long) = ExerciseBout(
+        sessionStartedAt = at, effort = EffortRating.JUST_RIGHT, hitFullTarget = false,
+        skipped = false, swappedName = null,
+        sets = listOf(
+            LoggedSet(loggedExerciseId = 1L, setIndex = 0, weightText = "45", weightLb = 45.0,
+                reps = 60, completedAt = 0L, durationSeconds = 60)
+        )
+    )
+
+    @Test
+    fun weightedTimedOnlyHistory_doesNotCrashTheLadder() {
+        // An imported weighted plank: every set is a weighted hold with no e1RM. This used to NPE.
+        val bouts = (0..6).map { timedBout(it.toLong()) }
+        assertTrue(ProgressionAdvisor.evaluate(snapshot(bouts)).isEmpty())
+        val cutting = snapshotWithWeight(bouts, weighIns(perWeek = -1.0))
+        assertTrue(ProgressionAdvisor.cutSuppressedStalls(cutting).isEmpty())
+    }
+
+    @Test
+    fun timedBoutsMixedIntoAStall_areIgnoredNotFatal() {
+        val bouts = stalledBouts(4) + timedBout(99L)
+        assertEquals(1, ProgressionAdvisor.evaluate(snapshot(bouts)).size)
+    }
+
+    @Test
+    fun cutSuppressedStalls_restartsAtASwap_likeEvaluate() {
+        // Five flat bouts on the base lift, then two on a swapped-in lift. evaluate reads only the
+        // two since the swap (no stall); the cut reading used to count all seven and report one.
+        val before = (0..4).map { i -> bout(45.0, 8, at = i.toLong()) }
+        val after = (5..6).map { i ->
+            ExerciseBout(sessionStartedAt = i.toLong(), effort = EffortRating.JUST_RIGHT, hitFullTarget = false,
+                skipped = false, swappedName = "Cable Fly", sets = listOf(set(45.0, 8)))
+        }
+        val cutting = snapshotWithWeight(before + after, weighIns(perWeek = -1.0))
+        assertTrue(ProgressionAdvisor.evaluate(cutting).isEmpty())
+        assertTrue(ProgressionAdvisor.cutSuppressedStalls(cutting).isEmpty())
+    }
+
+    // ── Rep-range shift names its day (audit 2026-09-26) ───────────────────────
+
+    @Test
+    fun repShift_carriesTheDayItsRangeWasReadFrom() {
+        val heavy = slot(reps = "10-12", swaps = emptyList())
+        val light = slot(reps = "12-15", swaps = emptyList())
+        val snap = AdaptationSnapshot(
+            nowMs = 0L,
+            program = listOf(
+                ProgramDaySnap("lower-a", "Lower A", listOf(heavy)),
+                ProgramDaySnap("lower-b", "Lower B", listOf(light))
+            ),
+            sessions = emptyList(),
+            exerciseHistory = mapOf(heavy.exerciseId to stalledBouts(6)),
+            prefs = PrefsSnap()
+        )
+        val shift = ProgressionAdvisor.evaluate(snap).single() as Recommendation.RepRangeShift
+        assertEquals("10-12", shift.fromReps)
+        assertEquals("lower-a", shift.dayKey)
     }
 }

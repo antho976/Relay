@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.JsonWriter
 import android.net.Uri
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
 import androidx.documentfile.provider.DocumentFile
 import com.forge.app.RestoreManifest
 import com.forge.app.core.io.exportFile
@@ -14,6 +15,7 @@ import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.prefs.PreferenceKeys
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioCondition
@@ -69,21 +71,16 @@ class BackupRepository @Inject constructor(
     /** The outcome of a restore attempt — distinct reasons so the UI can explain a failure (E6). */
     enum class RestoreOutcome { SUCCESS, NOT_A_BACKUP, NEWER_VERSION, TOO_OLD, CORRUPT, TOO_LARGE, IO_ERROR, NO_BACKUP_FILE }
 
-    /**
-     * Write [value] under [key], or leave the key out entirely when it is null.
-     *
-     * A nullable NUMBER used to be written as the empty string ("elevationM": ""), which makes the
-     * same field a number on one row and a string on the next — any reader using optDouble/optLong
-     * on the empty form silently gets the default instead of a signal that the value was absent.
-     * Omission is the JSON way to say "not recorded": our own importer already reads every one of
-     * these through opt*(key, default), so a missing key lands on exactly the same default, and an
-     * outside reader sees one type per field.
-     *
-     * Deliberately not JSONObject.NULL: org.json renders that back through optString as the literal
-     * text "null", which would be worse than the empty string it replaced.
-     */
-    private fun JSONObject.putOrOmit(key: String, value: Any?) {
-        if (value != null) put(key, value)
+    /** Stream one of the shared field maps (`exportSessionFields` and friends) into [JsonWriter]. */
+    private fun JsonWriter.fields(fields: Map<String, Any>) {
+        fields.forEach { (key, v) ->
+            name(key)
+            when (v) {
+                is Number -> value(v)
+                is Boolean -> value(v)
+                else -> value(v.toString())
+            }
+        }
     }
 
     /**
@@ -151,40 +148,19 @@ class BackupRepository @Inject constructor(
             sessions.forEach { s ->
                 currentCoroutineContext().ensureActive()
                 val exercises = exercisesBySession[s.id].orEmpty()
-                val sObj = JSONObject().apply {
-                    put("id", s.id)
-                    put("dayKey", s.dayKey)
+                // The exact `startedAt` is in the shared fields, alongside the human date. Without
+                // it a weekly export re-read at local midnight described a DIFFERENT session start
+                // from the full export's, so importing both files inserted every recent workout twice.
+                val sObj = JSONObject(exportSessionFields(s, activeSecondsOf(s), moodBySession[s.id]?.mood ?: "")).apply {
                     put("date", dateFmt.format(Instant.ofEpochMilli(s.startedAt).atZone(zone)))
-                    // The exact instant, alongside the human date. Without it a weekly export
-                    // re-read at local midnight described a DIFFERENT session start from the full
-                    // export's, so importing both files inserted every recent workout twice.
-                    put("startedAt", s.startedAt)
-                    put("finishedAt", s.finishedAt ?: 0)
                     put("activeMin", activeMinutesOf(s))
-                    put("activeSeconds", activeSecondsOf(s))
-                    put("totalVolumeLb", s.totalVolumeLb ?: 0)
-                    put("prCount", s.prCount)
-                    put("setCount", s.setCount)
-                    put("intensity", s.intensity)
-                    put("tags", s.tags)
-                    put("journal", s.journal)
-                    put("mood", moodBySession[s.id]?.mood ?: "")
                     put("segments", segmentsJson(segmentsBySession[s.id].orEmpty()))
                     val exArr = JSONArray()
                     exercises.forEach { ex ->
                         val sets = setsByExercise[ex.id].orEmpty()
-                        exArr.put(JSONObject().apply {
-                            put("exerciseId", ex.exerciseId)
-                            // The DISPLAY name, the same resolution exportSessionJson uses. Falling
-                            // back to the raw id wrote "ua1" as the human name for the seed-split
-                            // ids, which resolve only on the display path and are deliberately not
-                            // in ExerciseLibrary: re-importing the file matched nothing, so years of
-                            // bench-press history came back as a movement called "Ua1", de-linked
-                            // from its own stats. The AI reading this file saw the id too.
-                            put("name", com.forge.app.program.Program.exerciseDisplayName(ex.exerciseId, ex.swappedName))
+                        exArr.put(JSONObject(exportExerciseFields(ex)).apply {
+                            // The weekly file's original spelling, kept for readers of this file.
                             put("effort", ex.difficulty?.name ?: "")
-                            put("note", ex.note ?: "")
-                            put("skipped", ex.skipped)
                             val setArr = JSONArray()
                             sets.forEach { set ->
                                 setArr.put(JSONObject(exportSetFields(set)))
@@ -199,12 +175,9 @@ class BackupRepository @Inject constructor(
             put("sessions", sessArr)
             val cardioArr = JSONArray()
             cardioEntries.forEach { c ->
-                cardioArr.put(JSONObject().apply {
-                    put("date", dateFmt.format(Instant.ofEpochMilli(c.date).atZone(zone)))
-                    put("type", c.type)
-                    put("durationMin", c.durationMin)
-                    putOrOmit("distanceKm", c.distanceKm)
-                    put("effort", c.effort ?: "")
+                cardioArr.put(JSONObject(exportCardioFields(c)).apply {
+                    // The human day beside the exact `date` instant.
+                    put("day", dateFmt.format(Instant.ofEpochMilli(c.date).atZone(zone)))
                 })
             }
             put("cardio", cardioArr)
@@ -217,10 +190,11 @@ class BackupRepository @Inject constructor(
     }
 
     /**
-     * Full data dump as JSON — every session + exercise + set + cardio entry + a snapshot of key
-     * settings. This is a *lossy, human/AI-readable export*, NOT a restore source: nothing reads it
-     * back in. The real restore path is the whole-DB backup ([backupToUri] / [restoreFromUri]).
-     * Named so it doesn't imply recoverability (#70).
+     * Full data dump as JSON — every session + exercise + set + cardio entry + coach goal + a
+     * snapshot of key settings. It is human/AI-readable and `ForgeJsonImporter` MERGES it back in,
+     * so every field written here should be read there (round trip covered by
+     * `ExportImportRoundTripTest`). It is still not a restore source: the whole-DB backup
+     * ([backupToUri] / [restoreFromUri]) is. Named so it doesn't imply recoverability (#70).
      */
     suspend fun exportFullDataJson(onProgress: (done: Int, total: Int) -> Unit = { _, _ -> }): File =
         withContext(Dispatchers.IO) {
@@ -279,20 +253,7 @@ class BackupRepository @Inject constructor(
                         // a user who navigates away from a long export was previously waited on.
                         currentCoroutineContext().ensureActive()
                         w.beginObject()
-                        w.name("id").value(s.id)
-                        w.name("dayKey").value(s.dayKey)
-                        w.name("startedAt").value(s.startedAt)
-                        w.name("finishedAt").value(s.finishedAt ?: 0L)
-                        w.name("activeSeconds").value(activeSecondsOf(s).toLong())
-                        w.name("totalVolumeLb").value(s.totalVolumeLb ?: 0.0)
-                        w.name("prCount").value(s.prCount.toLong())
-                        w.name("setCount").value(s.setCount.toLong())
-                        w.name("sessionType").value(s.sessionType)
-                        w.name("intensity").value(s.intensity)
-                        w.name("isUntracked").value(s.isUntracked)
-                        w.name("tags").value(s.tags)
-                        w.name("journal").value(s.journal)
-                        w.name("mood").value(moodBySession[s.id]?.mood ?: "")
+                        w.fields(exportSessionFields(s, activeSecondsOf(s), moodBySession[s.id]?.mood ?: ""))
                         w.name("segments").beginArray()
                         segmentsBySession[s.id].orEmpty().forEach { seg ->
                             w.beginObject()
@@ -305,23 +266,11 @@ class BackupRepository @Inject constructor(
                         w.name("exercises").beginArray()
                         exercisesBySession[s.id].orEmpty().forEach { ex ->
                             w.beginObject()
-                            w.name("exerciseId").value(ex.exerciseId)
-                            w.name("swappedName").value(ex.swappedName ?: "")
-                            w.name("orderIndex").value(ex.orderIndex.toLong())
-                            w.name("difficulty").value(ex.difficulty?.name ?: "")
-                            w.name("skipped").value(ex.skipped)
-                            w.name("note").value(ex.note ?: "")
+                            w.fields(exportExerciseFields(ex))
                             w.name("sets").beginArray()
                             setsByExercise[ex.id].orEmpty().forEach { set ->
                                 w.beginObject()
-                                exportSetFields(set).forEach { (key, value) ->
-                                    w.name(key)
-                                    when (value) {
-                                        is Number -> w.value(value)
-                                        is Boolean -> w.value(value)
-                                        else -> w.value(value.toString())
-                                    }
-                                }
+                                w.fields(exportSetFields(set))
                                 w.endObject()
                             }
                             w.endArray()
@@ -336,17 +285,7 @@ class BackupRepository @Inject constructor(
                     w.name("cardio").beginArray()
                     allCardio.forEach { c ->
                         w.beginObject()
-                        w.name("date").value(c.date)
-                        w.name("type").value(c.type)
-                        w.name("durationMin").value(c.durationMin.toLong())
-                        c.distanceKm?.let { w.name("distanceKm").value(it) }
-                        w.name("effort").value(c.effort ?: "")
-                        w.name("restReason").value(c.restReason ?: "")
-                        w.name("note").value(c.note ?: "")
-                        // Per-type fields (GYMAP-38); elevation stays canonical metres like distance is km.
-                        c.inclinePct?.let { w.name("inclinePct").value(it) }
-                        c.laps?.let { w.name("laps").value(it.toLong()) }
-                        c.elevationM?.let { w.name("elevationM").value(it) }
+                        w.fields(exportCardioFields(c))
                         w.endObject()
                     }
                     w.endArray()
@@ -397,32 +336,13 @@ class BackupRepository @Inject constructor(
             put("exportVersion", 1)
             put("exportedAt", dateFmt.format(Instant.now().atZone(zone)))
             put("appVersion", com.forge.app.BuildConfig.VERSION_NAME)
-            put("session", JSONObject().apply {
-                put("id", s.id)
-                put("dayKey", s.dayKey)
+            put("session", JSONObject(exportSessionFields(s, activeSecondsOf(s), db.moodDao().forSession(s.id)?.mood ?: "")).apply {
                 put("date", dateFmt.format(Instant.ofEpochMilli(s.startedAt).atZone(zone)))
-                put("startedAt", s.startedAt)
-                put("finishedAt", s.finishedAt ?: 0)
-                put("activeSeconds", activeSecondsOf(s))
-                put("totalVolumeLb", s.totalVolumeLb ?: 0.0)
-                put("prCount", s.prCount)
-                put("setCount", s.setCount)
-                put("sessionType", s.sessionType)
-                put("intensity", s.intensity)
-                put("tags", s.tags)
-                put("journal", s.journal)
-                put("mood", db.moodDao().forSession(s.id)?.mood ?: "")
                 put("segments", segmentsJson(db.sessionSegmentDao().forSession(s.id)))
                 val exArr = JSONArray()
                 exercises.forEach { ex ->
                     val sets = loggedSetDao.forLoggedExercise(ex.id)
-                    exArr.put(JSONObject().apply {
-                        put("exerciseId", ex.exerciseId)
-                        put("name", com.forge.app.program.Program.exerciseDisplayName(ex.exerciseId, ex.swappedName))
-                        put("orderIndex", ex.orderIndex)
-                        put("difficulty", ex.difficulty?.name ?: "")
-                        put("skipped", ex.skipped)
-                        put("note", ex.note ?: "")
+                    exArr.put(JSONObject(exportExerciseFields(ex)).apply {
                         val setArr = JSONArray()
                         sets.forEach { set ->
                             setArr.put(JSONObject(exportSetFields(set)))
@@ -732,6 +652,13 @@ class BackupRepository @Inject constructor(
         runCatching { File(context.filesDir, MANUAL_BACKUP_MARKER).writeText("1") }
     }
 
+    /** Delete the document a picker created for a backup that is not going ahead (the unlock for it
+     *  was refused). Best effort: a provider that can't delete leaves an empty file, nothing worse. */
+    suspend fun discardBackupTarget(uri: Uri) = withContext(Dispatchers.IO) {
+        runCatching { android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri) }
+        Unit
+    }
+
     /**
      * Writes the backup archive to [out]: the DB snapshot, the DataStore prefs (if present), and
      * every progress-photo file (under [PHOTOS_PREFIX]). Shared by [backupToUri] and [autoBackup]
@@ -965,9 +892,14 @@ class BackupRepository @Inject constructor(
             // will, and simply skip a blob that doesn't parse: the restore proceeds with the
             // database (the part that holds the training history) and the user keeps their current
             // settings, instead of the app failing to start.
+            //
+            // The protections are then put back to what this phone has now. Copied verbatim, a
+            // backup made with the gallery lock off switched it off here, behind nothing but an
+            // unauthenticated confirm (Data D1). A restore brings back training data and
+            // preferences; whether this phone is locked stays this phone's decision.
             val pendingPrefs = File(context.filesDir, PENDING_PREFS_NAME)
             if (pendingPrefs.exists()) pendingPrefs.delete()
-            prefsFile?.takeIf { isPreferencesBlob(it) }?.copyTo(pendingPrefs, overwrite = true)
+            prefsFile?.let { stageRestoredPreferences(it, pendingPrefs, context.cacheDir, currentProtections()) }
 
             // Photos passed validation alongside the DB — stage them as a pending folder rather than
             // touching the live one. ForgeApp.applyPendingRestore swaps it in at boot in the SAME pass
@@ -1149,28 +1081,14 @@ class BackupRepository @Inject constructor(
         }
     }.getOrDefault(false)
 
-    /**
-     * True when [file] parses as the Preferences protobuf DataStore stores — the prefs-side
-     * counterpart to [isForgeDatabase]. Read through DataStore itself over a throwaway copy, so
-     * "this file reads" here means "this file reads" at boot.
-     */
-    private suspend fun isPreferencesBlob(file: File): Boolean {
-        val probe = File(context.cacheDir, "restore_prefs_probe.preferences_pb")
-        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        return try {
-            runCatching {
-                file.copyTo(probe, overwrite = true)
-                // No corruptionHandler on purpose: an unreadable blob must THROW here, where the
-                // restore can decline it, rather than be quietly replaced with defaults at boot.
-                PreferenceDataStoreFactory.create(scope = scope) { probe }
-                    .data.first()
-                true
-            }.getOrDefault(false)
-        } finally {
-            scope.cancel()
-            probe.delete()
-        }
-    }
+    /** This phone's protections as they stand, read through the same sentinel-backed flows as the
+     *  lock itself, so a store that can't be read keeps what the user last chose. */
+    private suspend fun currentProtections() = KeptProtections(
+        privacyMode = settingsRepo.privacyMode.first(),
+        appLockEnabled = settingsRepo.appLockEnabled.first(),
+        galleryLockEnabled = settingsRepo.galleryLockEnabled.first(),
+        appLockTimeoutSec = settingsRepo.appLockTimeoutSec.first(),
+    )
 
     /** The SQLite user_version (Room schema version) of a candidate DB file; MAX if unreadable (→ rejected). */
     private fun databaseUserVersion(file: File): Int = runCatching {
@@ -1359,4 +1277,54 @@ internal class ExtractionBudget(private val maxTotalBytes: Long, private val max
 
     /** Record one more photo entry; false once too many have been seen. */
     fun countPhoto(): Boolean = ++photos <= maxPhotos
+}
+
+/** The settings a restore never takes from the backup: the same four "Reset app settings" keeps. */
+internal data class KeptProtections(
+    val privacyMode: Boolean,
+    val appLockEnabled: Boolean,
+    val galleryLockEnabled: Boolean,
+    val appLockTimeoutSec: Int,
+)
+
+/**
+ * Stage the backup's settings blob [incoming] as [dest], with [keep] written over its protection
+ * keys. Returns false, leaving no [dest], when [incoming] is not a Preferences protobuf.
+ *
+ * The blob is opened through DataStore itself over a throwaway copy in [scratch], so "this file
+ * reads" here means "this file reads" at boot, and the file staged is one DataStore wrote. No
+ * corruptionHandler on purpose: an unreadable blob must THROW here, where the restore can decline
+ * it, rather than be quietly replaced with defaults at boot. Top-level and internal so the rule can
+ * be tested without a ZIP, a Context or a database.
+ */
+internal suspend fun stageRestoredPreferences(
+    incoming: File,
+    dest: File,
+    scratch: File,
+    keep: KeptProtections,
+): Boolean {
+    // DataStore refuses a file that doesn't end in `.preferences_pb`.
+    val probe = File(scratch, "restore_prefs_stage.preferences_pb")
+    val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    return try {
+        runCatching {
+            incoming.copyTo(probe, overwrite = true)
+            PreferenceDataStoreFactory.create(scope = scope) { probe }.edit { prefs ->
+                prefs[PreferenceKeys.PRIVACY_MODE] = keep.privacyMode
+                prefs[PreferenceKeys.APP_LOCK_ENABLED] = keep.appLockEnabled
+                prefs[PreferenceKeys.GALLERY_LOCK_ENABLED] = keep.galleryLockEnabled
+                prefs[PreferenceKeys.APP_LOCK_TIMEOUT_SEC] = keep.appLockTimeoutSec
+            }
+            probe.copyTo(dest, overwrite = true)
+            true
+        }.getOrElse {
+            // A half-copied dest would be swapped in at boot and read as corrupt, i.e. every
+            // setting at its default: keep the current settings instead, as for an unreadable blob.
+            dest.delete()
+            false
+        }
+    } finally {
+        scope.cancel()
+        probe.delete()
+    }
 }

@@ -20,22 +20,42 @@ class GenericCsvImporter : GymImporter {
     override fun canParse(text: String): Boolean =
         CsvParser.parseHeader(text)?.let { columnsFrom(it) } != null
 
-    override fun parse(text: String, assumeKg: Boolean): List<ImportedSession> {
+    override fun parse(text: String, assumeKg: Boolean): List<ImportedSession> = read(text, assumeKg).sessions
+
+    override fun parseExtras(text: String, assumeKg: Boolean): ImportedExtras = read(text, assumeKg).extras
+
+    override fun read(text: String, assumeKg: Boolean): ParsedImport {
         // Parse the file ONCE and share the rows with column resolution — resolve() used to re-parse,
         // so a generic import scanned the whole file three times (canParse + here + resolve).
         val rows = CsvParser.parse(text)
-        val cols = resolve(rows) ?: return emptyList()
+        val cols = resolve(rows) ?: return ParsedImport(emptyList())
+        val dateOf = ImportParsing.dateReader(rows.asSequence().drop(1).map { ImportParsing.at(it, cols.date) })
 
         val sessions = LinkedHashMap<String, WorkingSession>()
+        val cardio = ArrayList<ImportedCardio>()
+        var skipped = 0
         for (row in rows.drop(1)) {
             val dateRaw = ImportParsing.at(row, cols.date)
-            val startedAt = ImportParsing.parseEpochMillis(dateRaw) ?: continue
+            val startedAt = dateOf(dateRaw)
+            if (startedAt == null) { skipped++; continue }
             val exerciseName = ImportParsing.at(row, cols.exercise)
-            if (exerciseName.isBlank()) continue
+            if (exerciseName.isBlank()) { skipped++; continue }
 
             val reps = ImportParsing.parseReps(ImportParsing.at(row, cols.reps))
             val weightRaw = ImportParsing.parseWeight(ImportParsing.at(row, cols.weight))
-            if (reps == null && (weightRaw == null || weightRaw == 0.0)) continue
+            val seconds = ImportParsing.parseClockOrSeconds(ImportParsing.at(row, cols.seconds))
+            val distanceKm = cols.distance?.let { (col, headerUnit) ->
+                val unit = ImportParsing.at(row, cols.distanceUnit).ifBlank { headerUnit }
+                ImportParsing.distanceKm(ImportParsing.at(row, col), unit, assumeKg)
+            }
+            ImportParsing.cardioRowType(exerciseName, reps, weightRaw, seconds, distanceKm)?.let { type ->
+                cardio.add(ImportedCardio(
+                    dateMs = startedAt, type = type,
+                    durationMin = ImportParsing.cardioMinutes(seconds), distanceKm = distanceKm
+                ))
+                continue
+            }
+            if (reps == null && (weightRaw == null || weightRaw == 0.0) && seconds == null) { skipped++; continue }
 
             val kg = ImportParsing.rowIsKg(row, cols.unit, cols.weightHeaderKg, cols.weightHeaderLb, assumeKg)
             val weightLb = weightRaw?.takeIf { it > 0.0 }
@@ -47,14 +67,19 @@ class GenericCsvImporter : GymImporter {
                 WorkingSession(startedAt = startedAt, durationMs = null, title = workout.ifBlank { null })
             }
             session.exercises.getOrPut(exerciseName) { mutableListOf() }
-                .add(ImportedSet(weightLb = weightLb, reps = reps ?: 0))
+                .add(ImportedSet(weightLb = weightLb, reps = reps ?: 0, durationSeconds = seconds))
         }
-        return sessions.values.map { it.toImported() }
+        return ParsedImport(sessions.values.map { it.toImported() }, ImportedExtras(cardio = cardio), skipped)
     }
 
     private data class Columns(
         val date: Int, val exercise: Int, val weight: Int?, val reps: Int?,
-        val workout: Int?, val unit: Int?, val weightHeaderKg: Boolean, val weightHeaderLb: Boolean
+        val workout: Int?, val unit: Int?, val weightHeaderKg: Boolean, val weightHeaderLb: Boolean,
+        /** A per-set hold time, only from a header that says it is in seconds. */
+        val seconds: Int? = null,
+        /** The distance column and the unit its header states ("" when it states none). */
+        val distance: Pair<Int, String>? = null,
+        val distanceUnit: Int? = null
     )
 
     /** Resolve the required columns from already-parsed rows, or null if this isn't a workout CSV. */
@@ -86,7 +111,19 @@ class GenericCsvImporter : GymImporter {
             workout = ImportParsing.findCol(idx, "workout", "session", "routine", "title", "day"),
             unit = idx["weight unit"] ?: idx["unit"],
             weightHeaderKg = idx.keys.any { it.contains("weight") && it.contains("kg") && !it.contains("bodyweight") },
-            weightHeaderLb = idx.keys.any { it.contains("weight") && it.contains("lb") && !it.contains("bodyweight") }
+            weightHeaderLb = idx.keys.any { it.contains("weight") && it.contains("lb") && !it.contains("bodyweight") },
+            // Only a header that says seconds: a bare "Duration" or "Time" is as likely the whole
+            // workout's length, which read per set would turn every set into a hold.
+            seconds = idx.entries.firstOrNull { SECONDS_HEADER.matches(it.key) }?.value,
+            distance = idx.entries.firstOrNull { it.key.startsWith("distance") && it.key != "distance unit" }
+                ?.let { e -> e.value to DISTANCE_UNIT_IN_HEADER.find(e.key)?.groupValues?.get(1).orEmpty() },
+            distanceUnit = idx["distance unit"]
         )
+    }
+
+    private companion object {
+        val SECONDS_HEADER = Regex("""^(seconds|secs|hold|hold time|duration[ _]?(\(s\)|seconds|secs)|time[ _]?(\(s\)|seconds|secs)|hold[ _]?\(s\))$""")
+        /** "Distance (km)", "distance_mi", "Distance [m]". */
+        val DISTANCE_UNIT_IN_HEADER = Regex("""distance[ _]*[\(\[]?\s*(km|mi|miles|m|meters|metres)\b""")
     }
 }

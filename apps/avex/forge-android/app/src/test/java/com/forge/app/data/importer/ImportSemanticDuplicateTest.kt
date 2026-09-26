@@ -18,12 +18,13 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * M-03 end to end: a corrected re-export must land, and an unchanged one must not.
+ * What a re-import of an Avex JSON export counts as new work (audit 2026-09-26, 09 P2).
  *
- * The Avex JSON export is the source that actually carries the semantic fields, and the migration
- * path it exists to serve is exactly where the loss hurt: fix an assisted flag in the source app,
- * export again, import — and the corrected workout was discarded as a duplicate of the one it was
- * correcting, silently, leaving an assisted pull-up PR-eligible.
+ * The guard used to print every field the row holds (M-03), so a copy that differed in an
+ * annotation, an end time or a mood landed BESIDE the original: the same pull-up twice in the log.
+ * An import merges and never overwrites, so an annotation-only difference is now the same workout
+ * and is skipped. A difference in what the source states about the work itself (reps, load, hold,
+ * RPE, warm-up) is still a different workout.
  */
 @RunWith(RobolectricTestRunner::class)
 class ImportSemanticDuplicateTest {
@@ -98,78 +99,54 @@ class ImportSemanticDuplicateTest {
     }
 
     @Test
-    fun aCorrectedAssistedFlagIsNotADuplicate() = runTest {
-        repo.import(avexExport("before.json"))
+    fun anAnnotationOnlyDifferenceIsTheSameWorkout() = runTest {
+        repo.import(avexExport("plain.json"))
 
-        val corrected = repo.import(
-            avexExport("after.json", setExtras = ""","isAssisted":true""")
-        ) as ImportResult.Success
+        val copies = listOf(
+            avexExport("assisted.json", setExtras = ""","isAssisted":true"""),
+            avexExport("failure.json", setExtras = ""","toFailure":true"""),
+            avexExport("note.json", exerciseExtras = """"note":"left side only","""),
+            avexExport("end.json", sessionOverrides = mapOf("finishedAt" to "${startedAt + 4_500_000L}")),
+            avexExport("pr.json", sessionOverrides = mapOf("prCount" to "2")),
+            avexExport("mood.json", sessionOverrides = mapOf("mood" to "\"strong\"")),
+            avexExport("untracked.json", sessionOverrides = mapOf("isUntracked" to "true"))
+        ).map { repo.import(it) }
 
-        assertEquals("the corrected copy is different work", 0, corrected.duplicatesSkipped)
-        assertEquals(1, corrected.sessions)
-        assertEquals(2, storedSessions().size)
+        copies.forEach { assertTrue("got $it", it is ImportResult.NothingToImport) }
+        assertEquals("one workout, however it was annotated", 1, storedSessions().size)
     }
 
     @Test
-    fun aCorrectedSetTypeRpeOrFailureFlagIsNotADuplicate() = runTest {
+    fun aDifferentRpeOrWarmUpIsDifferentWork() = runTest {
         repo.import(avexExport("plain.json"))
 
-        val warmup = repo.import(avexExport("warmup.json", ""","setType":"warmup""""))
         val rpe = repo.import(avexExport("rpe.json", ""","rpe":9.0"""))
-        val failure = repo.import(avexExport("failure.json", ""","toFailure":true"""))
+        val warmup = repo.import(avexExport("warmup.json", ""","setType":"warmup""""))
 
-        listOf(warmup, rpe, failure).forEach {
+        listOf(rpe, warmup).forEach {
             assertEquals("got $it", 1, (it as ImportResult.Success).sessions)
         }
-        assertEquals("each correction is its own workout", 4, storedSessions().size)
+        assertEquals(3, storedSessions().size)
     }
 
     @Test
-    fun aSkippedExerciseIsNotTheSameAsAPerformedOne() = runTest {
-        repo.import(avexExport("performed.json"))
+    fun aSkippedExerciseIsImportedAndKeptSkipped() = runTest {
+        val file = temporaryFolder.newFile("skip.json")
+        file.writeText(
+            """
+            {"exportVersion":1,"sessions":[{"startedAt":$startedAt,"finishedAt":${startedAt + 3_600_000L},
+              "exercises":[
+                {"name":"Pull Up","orderIndex":0,"sets":[{"weightLb":0,"reps":8}]},
+                {"name":"Dip","orderIndex":1,"skipped":true,"sets":[]}
+              ]}]}
+            """.trimIndent()
+        )
 
-        val skipped = repo.import(
-            avexExport("skipped.json", exerciseExtras = """"skipped":true,""")
-        ) as ImportResult.Success
+        repo.import(Uri.fromFile(file))
 
-        assertEquals(0, skipped.duplicatesSkipped)
-        assertEquals(2, storedSessions().size)
+        val session = storedSessions().single()
+        val exercises = db.loggedExerciseDao().forSession(session.id)
+        assertEquals(2, exercises.size)
+        assertTrue("the skip survives the migration", exercises.single { it.orderIndex == 1 }.skipped)
     }
-
-    // ── M-03: the session's own timing, counts and mood ──────────────────────
-
-    /**
-     * The five fields the print still could not see. Each is parsed, persisted, and something a
-     * user can correct — so an export whose ONLY change was one of them printed identically and
-     * was discarded, on the one path whose promise is that it does not lose anything.
-     *
-     * These prove the correction is no longer SILENTLY DROPPED. They do not prove it is stored as
-     * a correction: without a source identity on the session row there is nothing to replace by,
-     * and the corrected copy lands beside the original — see `docs/AUDIT_DEFERRED.md`.
-     */
-    @Test
-    fun aCorrectedEndTimeIsNotADuplicate() = runTest {
-        repo.import(avexExport("before.json"))
-
-        // A quarter of an hour later than the default this fixture writes — expressed against that
-        // default rather than as a literal, so it cannot silently become the same instant again.
-        val correctedEnd = startedAt + 3_600_000L + 900_000L
-        val corrected = repo.import(avexExport("after.json", sessionOverrides = mapOf("finishedAt" to "$correctedEnd")))
-            as ImportResult.Success
-
-        assertEquals("the corrected copy is different work", 0, corrected.duplicatesSkipped)
-        assertEquals(1, corrected.sessions)
-    }
-
-    @Test
-    fun aCorrectedPrCountOrMoodIsNotADuplicate() = runTest {
-        repo.import(avexExport("plain.json"))
-
-        val pr = repo.import(avexExport("pr.json", sessionOverrides = mapOf("prCount" to "2"))) as ImportResult.Success
-        val mood = repo.import(avexExport("mood.json", sessionOverrides = mapOf("mood" to "\"strong\""))) as ImportResult.Success
-
-        assertEquals(0, pr.duplicatesSkipped)
-        assertEquals(0, mood.duplicatesSkipped)
-    }
-
 }

@@ -38,6 +38,11 @@ interface LoggedExerciseDao {
     @Query("SELECT * FROM logged_exercise WHERE session_id IN (:sessionIds) ORDER BY session_id, order_index")
     suspend fun forSessions(sessionIds: List<Long>): List<LoggedExercise>
 
+    /** Whether any row stores [exerciseId] labelled [swappedName]: the importer's check for an
+     *  unmatched name an earlier import already filed under an older synthetic id. */
+    @Query("SELECT EXISTS(SELECT 1 FROM logged_exercise WHERE exercise_id = :exerciseId AND swapped_name = :swappedName)")
+    suspend fun hasEntryNamed(exerciseId: String, swappedName: String): Boolean
+
     /**
      * This session's row for one program SLOT, matching [LoggedExercise.effectiveSlotId]
      * (`slot_id` when swapped, else `exercise_id`).

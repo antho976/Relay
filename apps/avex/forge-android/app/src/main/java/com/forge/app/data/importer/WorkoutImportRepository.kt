@@ -81,28 +81,26 @@ class WorkoutImportRepository @Inject constructor(
         val assumeKg = settingsRepo.useKg.first()
         // An OOM building a huge JSON tree is not "nothing to import". runCatching catches Throwable,
         // so a power user's multi-year export that couldn't fit in memory used to be reported as "No
-        // new workouts found in that file" — they concluded the export was empty and gave up.
+        // new workouts found in that file" — they concluded the export was empty and gave up. A
+        // parser that throws on the file is not an empty file either, and says so.
         val parsed = try {
-            importer.parse(text, assumeKg)
+            importer.read(text, assumeKg)
         } catch (e: OutOfMemoryError) {
             return@withContext ImportResult.TooLarge
         } catch (e: Exception) {
-            emptyList()
+            return@withContext ImportResult.ParseFailed(importer.source)
         }
-        val sessions = parsed.filter { it.exercises.isNotEmpty() }
+        val sessions = parsed.sessions.filter { it.exercises.isNotEmpty() }
         // Cardio and coach goals are carried by our own export and used to be read by nobody, so a
         // JSON migration lost them all silently. A file with no workouts but 400 cardio entries is
         // not "nothing to import".
-        val extras = try {
-            importer.parseExtras(text)
-        } catch (e: OutOfMemoryError) {
-            return@withContext ImportResult.TooLarge
-        } catch (e: Exception) {
-            ImportedExtras()
+        val extras = parsed.extras
+        if (sessions.isEmpty() && extras.isEmpty) {
+            return@withContext if (parsed.skippedRows > 0) ImportResult.NoReadableRows(importer.source, parsed.skippedRows)
+            else ImportResult.NothingToImport
         }
-        if (sessions.isEmpty() && extras.isEmpty) return@withContext ImportResult.NothingToImport
 
-        insert(importer.source, sessions, extras)
+        insert(importer.source, sessions, extras, parsed.skippedRows)
     }
 
     /**
@@ -145,24 +143,20 @@ class WorkoutImportRepository @Inject constructor(
             if (text == null) { scanCache[key] = stamp to null; continue }
             // A file too big to parse is skipped rather than listed — and never allowed to take the
             // whole scan down with it.
-            val count = try {
-                importer.parse(text, assumeKg).count { it.exercises.isNotEmpty() }
-            } catch (e: OutOfMemoryError) {
-                0
-            } catch (e: Exception) {
-                0
-            }
+            //
             // The non-workout rows count too (L-01). The scanner asked only how many WORKOUTS a
             // file held, so a bodyweight CSV — which returns its data through parseExtras by
             // design — was cached as "nothing here", and so was a cardio- or goals-only Avex JSON.
             // The same file picked directly imported perfectly, which is what made it a quiet one.
-            val extras = try {
-                importer.parseExtras(text)
+            val parsed = try {
+                importer.read(text, assumeKg)
             } catch (e: OutOfMemoryError) {
-                ImportedExtras()
+                ParsedImport(emptyList())
             } catch (e: Exception) {
-                ImportedExtras()
+                ParsedImport(emptyList())
             }
+            val count = parsed.sessions.count { it.exercises.isNotEmpty() }
+            val extras = parsed.extras
             val entry = if (count == 0 && extras.isEmpty) null
             else FoundImport(
                 uri = doc.uri,
@@ -207,7 +201,8 @@ class WorkoutImportRepository @Inject constructor(
     private suspend fun insert(
         source: ImportSource,
         sessions: List<ImportedSession>,
-        extras: ImportedExtras = ImportedExtras()
+        extras: ImportedExtras = ImportedExtras(),
+        skippedRows: Int = 0
     ): ImportResult {
         val matchedNames = HashSet<String>()
         val unmatchedNames = HashSet<String>()
@@ -225,6 +220,8 @@ class WorkoutImportRepository @Inject constructor(
         // Memoise name→catalogue-id for this import: the same movement recurs across many sessions and
         // ExerciseNameMatcher.match scans the whole library, so resolve each distinct name only once.
         val matchCache = HashMap<String, String?>()
+        // Unmatched name → the id its rows are stored under; see storedSyntheticId.
+        val syntheticCache = HashMap<String, String>()
         // A stored session stands in for exactly ONE incoming workout.
         //
         // Without this the guard asks "does a session with this content exist?", which cannot tell
@@ -238,6 +235,9 @@ class WorkoutImportRepository @Inject constructor(
         // holds, and only the surplus is new. Ids this run inserts are claimed too, so the first of
         // two identical workouts cannot make the second look like a duplicate of itself.
         val claimedStoredIds = HashSet<Long>()
+        // A stored workout's identity does not depend on the incoming one, so read each at most once
+        // per run however many incoming workouts share its window.
+        val storedIdentities = HashMap<Long, WorkoutIdentity?>()
 
         db.withTransaction {
             for (session in sessions) {
@@ -256,7 +256,7 @@ class WorkoutImportRepository @Inject constructor(
                 // SAME CONTENT is a re-import of the same data — skip it so scanning/importing twice
                 // doesn't double-count. A different workout at the same instant takes the next slot.
                 //
-                // The content test is a per-exercise fingerprint, not set count plus total volume.
+                // The content test compares exercise by exercise, not set count plus total volume.
                 // Those two agree for workouts that share nothing but arithmetic — Bench 3×10×100
                 // and Row 3×10×100 are three sets and 3,000 lb either way — and a great many sources
                 // record a DATE rather than a time, so every workout they carry starts at midnight
@@ -279,14 +279,12 @@ class WorkoutImportRepository @Inject constructor(
                 // the one source that cannot disagree with itself.
                 val windowEndMs = session.startedAtMs + MAX_START_NUDGES * 1000L
                 val occupied = sessionDao.startRefsInRange(session.startedAtMs, windowEndMs)
-                // Printed AGAINST EACH CANDIDATE SLOT, because the print now covers values the
-                // insert derives from the slot — the end time and active duration a source may not
-                // state, and each set's completion stamp (M-03). A single slot-free print could not
-                // include them, which is why an export corrected in one of those fields alone was
-                // discarded as identical.
+                // Compared on what the SOURCE states, not on everything the row holds: see
+                // WorkoutIdentity for the re-imports an exact print duplicated.
+                val incoming = incomingIdentityOf(session, matchCache)
                 val alreadyStored = occupied.firstOrNull {
                     it.id !in claimedStoredIds &&
-                        storedPrintOf(it.id) == incomingPrintOf(session, it.startedAt, matchCache)
+                        storedIdentities.getOrPut(it.id) { storedIdentityOf(it.id) }?.sameWorkoutAs(incoming) == true
                 }
                 if (alreadyStored != null) {
                     claimedStoredIds += alreadyStored.id
@@ -364,12 +362,17 @@ class WorkoutImportRepository @Inject constructor(
                             sessionId = sessionId,
                             // Matched → canonical catalogue id (stats attribute correctly). Unmatched →
                             // a stable synthetic id keyed on the name, kept readable via swappedName.
-                            exerciseId = matchedId ?: syntheticId(ex.name),
+                            exerciseId = matchedId ?: syntheticCache.getOrPut(ex.name) { storedSyntheticId(ex.name) },
                             orderIndex = ex.orderIndex ?: orderIndex,
-                            swappedName = if (matchedId == null) ex.name else null,
+                            swappedName = if (matchedId == null) ex.name else ex.swappedName,
                             difficulty = effortRating(ex.difficulty),
                             skipped = ex.skipped,
-                            note = ex.note
+                            note = ex.note,
+                            // Our own export carries these; without them every imported PR read 0
+                            // in recent PRs, trophies and milestones while the session said N.
+                            wasPr = ex.wasPr,
+                            hitFullTarget = ex.hitFullTarget,
+                            supersetGroup = ex.supersetGroup
                         )
                     )
                     // One bulk insert per exercise instead of a DB round-trip per set — a multi-year
@@ -403,7 +406,7 @@ class WorkoutImportRepository @Inject constructor(
                             )
                         }
                     )
-                    exerciseCount++
+                    if (ex.sets.isNotEmpty()) exerciseCount++
                     setCount += ex.sets.size
                 }
                 importedSessions++
@@ -422,7 +425,7 @@ class WorkoutImportRepository @Inject constructor(
             sets = setCount,
             matchedExercises = matchedNames.size,
             unmatchedExercises = unmatchedNames.size,
-            skippedRows = 0,
+            skippedRows = skippedRows,
             duplicatesSkipped = duplicates,
             cardioEntries = extrasWritten.cardio,
             coachGoals = extrasWritten.goals,
@@ -440,9 +443,17 @@ class WorkoutImportRepository @Inject constructor(
         var goalsWritten = 0
         var weighInsWritten = 0
         db.withTransaction {
+            // Counted like workouts: a stored entry stands in for exactly one incoming entry, so
+            // two identical runs in one file both land, and a re-import adds neither.
+            val claimedCardio = HashSet<Long>()
             for (c in extras.cardio) {
-                if (cardioDao.existsAt(c.dateMs, c.type, c.durationMin)) continue
-                cardioDao.insert(
+                val stored = cardioDao.idsLike(c.dateMs, c.type, c.durationMin, c.distanceKm)
+                    .firstOrNull { it !in claimedCardio }
+                if (stored != null) {
+                    claimedCardio += stored
+                    continue
+                }
+                claimedCardio += cardioDao.insert(
                     CardioEntry(
                         date = c.dateMs,
                         type = c.type,
@@ -453,7 +464,10 @@ class WorkoutImportRepository @Inject constructor(
                         note = c.note,
                         inclinePct = c.inclinePct,
                         laps = c.laps,
-                        elevationM = c.elevationM
+                        elevationM = c.elevationM,
+                        intervalCount = c.intervalCount,
+                        hrZone = c.hrZone,
+                        conditions = c.conditions
                     )
                 )
                 cardioWritten++
@@ -520,13 +534,6 @@ class WorkoutImportRepository @Inject constructor(
             .firstOrNull { it.name.equals(v, ignoreCase = true) || it.code.equals(v, ignoreCase = true) }
     }
 
-    /**
-     * The incoming workout as the duplicate guard sees it (M-03): every field the insert below
-     * writes and a user could change, in the same shape [storedPrintOf] reads back out.
-     *
-     * Exercise ids resolve through the SAME [matchCache] the insert uses, so the id compared here is
-     * the id that would be written — an unmatched name folds to its synthetic id on both sides.
-     */
     /** What the insert would store for a session's end time and active duration, at [startedAt]. */
     private data class ImportTiming(val finishedAtMs: Long, val activeSeconds: Int)
 
@@ -540,9 +547,6 @@ class WorkoutImportRepository @Inject constructor(
      * session into a claimed six-hour one, and clamped a 45-second finisher UP to a minute. Only a
      * SYNTHESISED duration — for a source that records no end time at all — is clamped, and only
      * into a plausible session length.
-     *
-     * One function, because the duplicate print now compares these values too (M-03) and a second
-     * copy of this derivation would eventually disagree with the one that writes the rows.
      */
     private fun timingFor(session: ImportedSession, totalSets: Int, startedAt: Long): ImportTiming {
         val sourceActive = session.activeSeconds?.takeIf { it > 0 }
@@ -561,111 +565,68 @@ class WorkoutImportRepository @Inject constructor(
         return ImportTiming(finishedAt, activeSec)
     }
 
-    private fun incomingPrintOf(
-        session: ImportedSession,
-        startedAt: Long,
-        matchCache: HashMap<String, String?>
-    ): String {
-        val totalSets = session.exercises.sumOf { it.sets.size }
-        val timing = timingFor(session, totalSets, startedAt)
-        return fingerprintOf(
-        FingerprintSession(
-            dayKey = session.dayKey ?: Program.FREESTYLE_DAY_KEY,
-            sessionType = session.sessionType ?: "normal",
-            intensity = session.intensity ?: "normal",
-            isUntracked = session.isUntracked,
-            tags = session.tags ?: "",
-            journal = session.note ?: "",
-            finishedAt = timing.finishedAtMs,
-            activeSeconds = timing.activeSeconds,
-            prCount = session.prCount ?: 0,
-            mood = session.mood ?: "",
-            exercises = session.exercises.mapIndexed { position, ex ->
-                val matched = ex.catalogueId ?: matchCache.getOrPut(ex.name) { ExerciseNameMatcher.match(ex.name) }
-                FingerprintExercise(
+    /**
+     * The incoming workout as the duplicate guard sees it: see [WorkoutIdentity].
+     *
+     * A movement's keys are every id and name it could have been stored under: the id pinned by the
+     * source, the id the matcher resolves today, the synthetic id an unmatched name folds to, and the
+     * source's own name. An update that changes what the matcher resolves therefore still recognises
+     * the rows an earlier import wrote.
+     */
+    private fun incomingIdentityOf(session: ImportedSession, matchCache: HashMap<String, String?>) =
+        WorkoutIdentity(
+            session.exercises.mapIndexed { position, ex ->
+                val matched = matchCache.getOrPut(ex.name) { ExerciseNameMatcher.match(ex.name) }
+                ExerciseIdentity(
                     orderIndex = ex.orderIndex ?: position,
-                    exerciseId = matched ?: syntheticId(ex.name),
-                    swappedName = if (matched == null) ex.name else null,
-                    difficulty = effortRating(ex.difficulty)?.name,
-                    skipped = ex.skipped,
-                    note = ex.note,
-                    sets = ex.sets.map { s ->
-                        FingerprintSet(
-                            reps = s.reps,
-                            weightLb = s.weightLb,
-                            weightText = s.weightText ?: weightText(s.weightLb),
-                            durationSeconds = s.durationSeconds,
-                            rpe = s.rpe,
-                            isAssisted = s.isAssisted,
-                            isAmrap = s.isAmrap,
-                            toFailure = s.toFailure,
-                            setType = s.setType ?: if (s.isWarmup) "warmup" else null,
-                            difficultyTag = s.difficultyTag,
-                            dropAnnotation = s.dropAnnotation,
-                            completedAt = s.completedAtMs ?: timing.finishedAtMs
-                        )
+                    keys = ExerciseIdentity.keysOf(
+                        ids = listOf(ex.catalogueId, ex.sourceExerciseId, matched, syntheticId(ex.name), legacySyntheticId(ex.name)),
+                        names = listOf(ex.name, ex.swappedName)
+                    ),
+                    sets = if (ex.skipped) emptyList() else ex.sets.map { s ->
+                        SetIdentity.of(s.reps, s.weightLb, s.durationSeconds, s.rpe, s.isWarmup || s.setType == "warmup")
                     }
                 )
             }
         )
-        )
-    }
 
-    /** [incomingPrintOf] for a session already in the database. Null when the row has gone. */
-    private suspend fun storedPrintOf(sessionId: Long): String? {
-        val stored = sessionDao.get(sessionId) ?: return null
+    /** [incomingIdentityOf] for a session already in the database. Null when the row has gone. */
+    private suspend fun storedIdentityOf(sessionId: Long): WorkoutIdentity? {
+        sessionDao.get(sessionId) ?: return null
         val setsByExercise = loggedSetDao.allForSession(sessionId).groupBy { it.loggedExerciseId }
-        return fingerprintOf(
-            FingerprintSession(
-                dayKey = stored.dayKey,
-                sessionType = stored.sessionType,
-                intensity = stored.intensity,
-                isUntracked = stored.isUntracked,
-                tags = stored.tags,
-                journal = stored.journal,
-                finishedAt = stored.finishedAt ?: 0L,
-                activeSeconds = stored.activeSeconds,
-                prCount = stored.prCount,
-                mood = moodDao.forSession(sessionId)?.mood ?: "",
-                exercises = loggedExerciseDao.forSession(sessionId).map { le ->
-                    FingerprintExercise(
-                        orderIndex = le.orderIndex,
-                        exerciseId = le.exerciseId,
-                        swappedName = le.swappedName,
-                        difficulty = le.difficulty?.name,
-                        skipped = le.skipped,
-                        note = le.note,
-                        sets = setsByExercise[le.id].orEmpty().sortedBy { it.setIndex }.map { s ->
-                            FingerprintSet(
-                                reps = s.reps,
-                                weightLb = s.weightLb,
-                                weightText = s.weightText,
-                                durationSeconds = s.durationSeconds,
-                                rpe = s.rpe,
-                                isAssisted = s.isAssisted,
-                                isAmrap = s.isAmrap,
-                                toFailure = s.toFailure,
-                                setType = s.setType,
-                                difficultyTag = s.difficultyTag,
-                                dropAnnotation = s.dropAnnotation,
-                                completedAt = s.completedAt
-                            )
-                        }
-                    )
-                }
-            )
+        return WorkoutIdentity(
+            loggedExerciseDao.forSession(sessionId).map { le ->
+                ExerciseIdentity(
+                    orderIndex = le.orderIndex,
+                    keys = ExerciseIdentity.keysOf(
+                        ids = listOf(le.exerciseId),
+                        names = listOf(le.swappedName, Program.exerciseDisplayName(le.exerciseId, null))
+                    ),
+                    sets = if (le.skipped) emptyList()
+                    else setsByExercise[le.id].orEmpty().sortedBy { it.setIndex }.map { s ->
+                        SetIdentity.of(s.reps, s.weightLb, s.durationSeconds, s.rpe, s.setType == "warmup")
+                    }
+                )
+            }
         )
     }
 
-    private fun syntheticId(name: String): String {
-        val slug = name.trim().lowercase()
-            .map { if (it.isLetterOrDigit()) it else '-' }
-            .joinToString("")
-            .trim('-')
-            .replace(Regex("-+"), "-")
-            .take(40)
-        return "ext-" + slug.ifBlank { "exercise" }
+    /**
+     * The id for rows of an unmatched [name]: [syntheticId], unless earlier imports already stored
+     * this exact name under its [legacySyntheticId]. Those rows keep their id, so an old import and
+     * a new one of the same long name stay one movement in stats, PRs and prefill.
+     */
+    private suspend fun storedSyntheticId(name: String): String {
+        val id = syntheticId(name)
+        val legacy = legacySyntheticId(name)
+        return if (legacy != id && loggedExerciseDao.hasEntryNamed(legacy, name)) legacy else id
     }
+
+    private fun syntheticId(name: String): String = syntheticIdOf(name)
+
+    private fun legacySyntheticId(name: String): String = "ext-" + slugOf(name).take(SYNTHETIC_SLUG_MAX).ifBlank { "exercise" }
+
+
 
     /** Outcome of a bounded file read — separates "too big" from "couldn't read" without a sentinel. */
     private sealed interface Read {
@@ -728,6 +689,38 @@ class WorkoutImportRepository @Inject constructor(
     }.getOrDefault(Read.Error)
 
     companion object {
+        /**
+         * A stable id for an exercise name the catalogue does not know.
+         *
+         * The slug used to be cut at 40 characters, so "Incline Dumbbell Bench Press (Neutral Grip)"
+         * and "Incline Dumbbell Bench Press (Neutral Grip, Paused)" were one id, and their PRs, prefill
+         * and charts merged. A slug that has to be cut now carries a short digest of the whole name,
+         * as the custom-exercise ids do. Names that fit keep exactly the id they always had.
+         */
+        internal fun syntheticIdOf(name: String): String {
+            val slug = slugOf(name)
+            if (slug.length <= SYNTHETIC_SLUG_MAX) return "ext-" + slug.ifBlank { "exercise" }
+            return "ext-" + slug.take(SYNTHETIC_SLUG_MAX).trimEnd('-') + "-" + digestOf(name.trim().lowercase())
+        }
+
+        private fun slugOf(name: String): String = name.trim().lowercase()
+            .map { if (it.isLetterOrDigit()) it else '-' }
+            .joinToString("")
+            .trim('-')
+            .replace(Regex("-+"), "-")
+
+        /** FNV-1a, eight hex digits: stable across runs and devices, unlike String.hashCode's contract. */
+        private fun digestOf(s: String): String {
+            var h = 0x811C9DC5.toInt()
+            for (c in s) {
+                h = h xor c.code
+                h *= 0x01000193
+            }
+            return String.format(java.util.Locale.US, "%08x", h)
+        }
+
+        private const val SYNTHETIC_SLUG_MAX = 40
+
         /** Nominal per-set time when the source records no duration, so the session reads as finished. */
         private const val SECONDS_PER_SET = 150
         /** Ceiling for a duration we INVENTED (a date-only source with no end time) — a made-up
@@ -750,9 +743,6 @@ class WorkoutImportRepository @Inject constructor(
         /** How far the start-instant nudge may walk before giving up and letting the collision stand.
          *  Nobody logs 60 distinct workouts at one midnight; this only bounds a pathological file. */
         private const val MAX_START_NUDGES = 60
-
-        /** Two denormalised volumes describe the same work — tolerant of the 0.1 lb rounding the
-         *  importer applies, and treating a missing volume as "unknown, not equal". */
     }
 }
 

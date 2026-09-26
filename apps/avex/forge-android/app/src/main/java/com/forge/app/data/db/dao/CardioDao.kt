@@ -60,9 +60,17 @@ interface CardioDao {
     @Query("SELECT SUM(duration_min) FROM cardio_entry WHERE type != :excludeType")
     suspend fun totalMinutes(excludeType: String = "rest"): Int?
 
-    /** Duplicate guard for the importer: same instant, same type, same duration is the same entry. */
-    @Query("SELECT EXISTS(SELECT 1 FROM cardio_entry WHERE date = :date AND type = :type AND duration_min = :durationMin)")
-    suspend fun existsAt(date: Long, type: String, durationMin: Int): Boolean
+    /**
+     * Duplicate guard for the importer: entries at the same instant with the same type, duration and
+     * distance. Distance is part of it because a date-only export puts every entry that day at
+     * midnight, and a 30-minute 4 km run then collapsed into a 30-minute 5 km one. Returns ids, not
+     * a yes/no, so the caller can let one stored entry stand in for exactly one incoming one.
+     */
+    @Query(
+        """SELECT id FROM cardio_entry WHERE date = :date AND type = :type AND duration_min = :durationMin
+           AND (distance_km IS :distanceKm OR ABS(distance_km - :distanceKm) < 0.001) ORDER BY id"""
+    )
+    suspend fun idsLike(date: Long, type: String, durationMin: Int, distanceKm: Double?): List<Long>
 
     /** Every entry id, captured by the reset BEFORE [deleteAll] so the Health Connect mirrors keyed
      *  on them can still be addressed once the rows are gone (M-02). */

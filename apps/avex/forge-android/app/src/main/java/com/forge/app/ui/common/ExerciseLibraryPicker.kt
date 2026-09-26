@@ -32,7 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.forge.app.ui.common.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.forge.app.program.ExerciseDef
 import com.forge.app.program.ExerciseLibrary

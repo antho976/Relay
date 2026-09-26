@@ -2,6 +2,7 @@ package com.forge.app.ui.security
 
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.biometric.BiometricPrompt
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -126,6 +127,13 @@ fun AppLockScreen(
             launchPrompt()
         }
     }
+
+    // The app gate covers a nav host that stays composed, and taps stop here but system Back did
+    // not: it reached the screens beneath, popping Settings pages (and with them an in-flight
+    // restore) or opening Program Builder's discard dialog. Back from the gate leaves the app, as it
+    // would from any root screen. The gallery gate REPLACES its screen, so its Back is the nav
+    // host's ordinary pop and is left alone.
+    BackHandler(enabled = onCancel == null) { activity?.moveTaskToBack(true) }
 
     Column(
         modifier = Modifier
