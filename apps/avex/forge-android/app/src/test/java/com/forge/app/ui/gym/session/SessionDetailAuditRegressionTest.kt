@@ -39,7 +39,7 @@ class SessionDetailAuditRegressionTest {
     }
     @Test fun `last exercise can open add exercise action`() {
         compose.setContent { ForgeTheme {
-            UpNextBubble(null,null,null,emptyList(),{}, {}, {})
+            UpNextBubble(null,null,null,false,emptyList(),{}, {}, {})
         } }
         compose.onNodeWithText("UP NEXT", useUnmergedTree=true).performClick()
         compose.onNodeWithText("+ add exercise").assertExists()

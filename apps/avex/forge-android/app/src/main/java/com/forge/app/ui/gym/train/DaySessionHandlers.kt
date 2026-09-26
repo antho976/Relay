@@ -5,9 +5,12 @@ import com.forge.app.domain.volume.VolumeCalculator
 import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.ExerciseHighlight
 import com.forge.app.ui.gym.train.state.SessionSummary
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal fun DayViewModel.handleSessionEvent(event: DayUiEvent) {
     when (event) {
@@ -74,14 +77,15 @@ internal fun DayViewModel.applyOrderedExercises(suggestion: com.forge.app.domain
     val suggested = suggestion.orderedExerciseIds.toSet()
     val reordered = suggestion.orderedExerciseIds.mapNotNull { byId[it] } +
         _state.value.exercises.filter { it.plan.id !in suggested }
-    _state.update { it.copy(exercises = annotateNextExerciseDeltas(reordered), orderingSuggestion = null) }
+    _state.update { it.copy(exercises = reordered, orderingSuggestion = null) }
 }
 
 private fun DayViewModel.finishWorkout() {
     // One finish per session. The FINISH control stays enabled until isFinished lands at the end of
     // ~8 DB round-trips, so a double tap used to run the whole path twice: two finishSession calls,
     // two rotation-counter bumps and the session's calories written to Health Connect twice.
-    if (finishJob?.isActive == true) return
+    // Nor does one start once an exit is under way: the screen is already leaving.
+    if (finishJob?.isActive == true || leaving) return
     finishJob = viewModelScope.launch {
         val sessionId = _state.value.sessionId ?: return@launch
         val exercises = _state.value.exercises
@@ -161,7 +165,8 @@ private fun DayViewModel.finishWorkout() {
 }
 
 private fun DayViewModel.saveAndExit() {
-    if (finishJob?.isActive == true) return
+    if (finishJob?.isActive == true || leaving) return
+    leaving = true
     finishJob = viewModelScope.launch {
         val sessionId = _state.value.sessionId ?: run {
             _navigation.send(DayNavigationEffect.PopBack)
@@ -178,6 +183,10 @@ private fun DayViewModel.saveAndExit() {
 }
 
 private fun DayViewModel.dismissSummary(mood: com.forge.app.domain.mood.Mood?, tags: List<String>, journal: String) {
+    // COMPLETE stays tappable through the journal write: a second tap wrote the journal twice and
+    // sent a second PopBack (audit 2026-09-26).
+    if (leaving) return
+    leaving = true
     viewModelScope.launch {
         val sessionId = _state.value.sessionId
         if (sessionId != null) {
@@ -193,9 +202,32 @@ private fun DayViewModel.dismissSummary(mood: com.forge.app.domain.mood.Mood?, t
 }
 
 private fun DayViewModel.requestBack() {
+    if (leaving || finishJob?.isActive == true) return
+    // Back while "Loading session…": the start is still running and would otherwise finish behind
+    // the closed screen, creating (or resuming) the session and starting its notification with
+    // nothing left to end either (audit 2026-09-26). Stop it, then undo only what it did. Once the
+    // screen has loaded, the normal path below applies (it weighs unsaved work) and the start's
+    // tail skips the notification because `leaving` is set.
+    val start = beginJob
+    if (start?.isActive == true && _state.value.isLoading) {
+        leaving = true
+        viewModelScope.launch {
+            start.cancelAndJoin()
+            startedSession?.let { started ->
+                // A session this start created is empty: drop it. One it resumed holds earlier
+                // sittings' sets: keep it, and bank the segment the start may have opened.
+                if (started.created) workoutRepo.discardSession(started.session.id)
+                else workoutRepo.closeOpenSegments(started.session.id, clock.nowMs())
+            }
+            stopSessionService()
+            _navigation.send(DayNavigationEffect.PopBack)
+        }
+        return
+    }
     if (_state.value.hasUnsavedWork) {
         _state.update { it.copy(showDiscardConfirm = true) }
     } else {
+        leaving = true
         viewModelScope.launch {
             val sessionId = _state.value.sessionId
             if (sessionId != null) workoutRepo.discardSession(sessionId)
@@ -207,13 +239,15 @@ private fun DayViewModel.requestBack() {
 }
 
 private fun DayViewModel.discardAndExit() {
+    if (leaving || finishJob?.isActive == true) return
+    leaving = true
+    // Close the dialog now, not after the delete: it stayed tappable through the write.
+    _state.update { it.copy(showDiscardConfirm = false) }
     viewModelScope.launch {
-        val sessionId = _state.value.sessionId ?: return@launch
-        workoutRepo.discardSession(sessionId)
+        _state.value.sessionId?.let { workoutRepo.discardSession(it) }
         openRestEvent = null
         restTimer.stop()
         stopSessionService()
-        _state.update { it.copy(showDiscardConfirm = false) }
         _navigation.send(DayNavigationEffect.PopBack)
     }
 }
@@ -223,34 +257,46 @@ private fun DayViewModel.discardAndExit() {
  * already persisted, so reopening this day resumes the workout exactly where it was left.
  */
 private fun DayViewModel.leaveAndResume() {
+    if (leaving || finishJob?.isActive == true) return
+    leaving = true
+    _state.update { it.copy(showDiscardConfirm = false) }
     viewModelScope.launch {
         // Close THIS sitting's segment so its active time is banked; reopening the day starts a
         // fresh segment and the live readout resumes from the running total.
         _state.value.sessionId?.let { workoutRepo.closeOpenSegments(it, clock.nowMs()) }
         restTimer.stop()
         stopSessionService()
-        _state.update { it.copy(showDiscardConfirm = false) }
         _navigation.send(DayNavigationEffect.PopBack)
     }
 }
 
 /** Cross-day prompt → discard the other in-progress workout, then start this day fresh. */
 private fun DayViewModel.crossDayDiscardAndStart() {
-    viewModelScope.launch {
+    // One start per tap, and none once the screen is leaving. Held as beginJob so Back during the
+    // start cancels it like the first one (audit 2026-09-26); the dialog closes onto the loading
+    // state now rather than staying tappable through the discard.
+    if (leaving || beginJob?.isActive == true) return
+    _state.update { it.copy(crossDaySession = null, isLoading = true) }
+    beginJob = viewModelScope.launch {
         workoutRepo.activeSession()?.let { workoutRepo.discardSession(it.id) }
-        _state.update { it.copy(crossDaySession = null) }
         beginSessionForThisDay()
     }
 }
 
 /** Cross-day prompt → leave so the other in-progress workout can be resumed from its own day. */
 private fun DayViewModel.crossDayGoBack() {
+    if (leaving) return
+    leaving = true
     viewModelScope.launch { _navigation.send(DayNavigationEffect.PopBack) }
 }
 
 /** Start a new session for this day (or resume this day's existing one) and hydrate the screen. */
 internal suspend fun DayViewModel.beginSessionForThisDay() {
-    val started = workoutRepo.startOrResumeSession(dayKey)
+    // Not cancellable, and recorded inside the block: once the row is written, Back during loading
+    // must know about it to undo it, and withContext can drop its result on a cancelled caller.
+    val started = withContext(NonCancellable) {
+        workoutRepo.startOrResumeSession(dayKey).also { startedSession = it }
+    }
     val sessionId = started.session.id
     // Resuming an existing session (not one freshly created by this call) — you already started this
     // workout, so skip the warmup gate. The in-memory warmup state is lost when the screen is recreated,
@@ -288,5 +334,6 @@ internal suspend fun DayViewModel.beginSessionForThisDay() {
     }
     refreshExercises()
     computeOrderingSuggestion()
-    startSessionService(resolvedName)
+    // The notification belongs to a screen that is still open.
+    if (!leaving) startSessionService(resolvedName)
 }

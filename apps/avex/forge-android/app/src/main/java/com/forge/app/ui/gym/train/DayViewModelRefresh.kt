@@ -70,8 +70,7 @@ internal suspend fun DayViewModel.refreshExercises() {
             { allPlans.indexOfFirst { p -> p.id == it.plan.id } }
         )
     )
-    val annotated = annotateNextExerciseDeltas(exercises)
-    _state.update { it.copy(isLoading = false, exercises = annotated) }
+    _state.update { it.copy(isLoading = false, exercises = exercises) }
     // The warmup is derived from these exercises and their working loads, so it is rebuilt here
     // rather than guessed at construction. No-ops once the user has stepped into it.
     rebuildWarmupProtocol()
@@ -123,7 +122,7 @@ internal suspend fun DayViewModel.refreshExercise(exerciseId: String) {
         if (at < 0) s
         else {
             list[at] = rebuilt
-            s.copy(isLoading = false, exercises = annotateNextExerciseDeltas(list))
+            s.copy(isLoading = false, exercises = list)
         }
     }
 }

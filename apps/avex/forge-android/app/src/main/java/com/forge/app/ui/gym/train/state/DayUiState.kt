@@ -263,11 +263,6 @@ data class ExerciseUiState(
      */
     val sessionHistory: List<ExerciseSessionPoint> = emptyList(),
     /**
-     * Suggested weight delta for the *next* exercise in the session — drives the
-     * "+5 ↑" pill on the UP NEXT row. Already includes sign (e.g. "+5", "−2.5").
-     */
-    val nextSuggestedWeightDelta: String? = null,
-    /**
      * Extra sets added beyond the plan this session via "+ ADD A SET" (in-memory,
      * resets if the VM is recreated). Raises [targetSets] so the card doesn't
      * auto-collapse and the counter reflects the new goal.
