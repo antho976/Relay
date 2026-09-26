@@ -462,6 +462,7 @@ fun FreestyleLogScreen(
                         } else {
                             FsAddFooter(
                                 recent = recentMoves.take(RAIL_RECENT_LIMIT),
+                                libraryCount = libraryCount,
                                 onSearch = { showBrowser = true },
                                 onAdd = { id -> fsExerciseFor(id)?.let { addExercises(listOf(it)) } }
                             )

@@ -136,11 +136,13 @@ internal fun LoggedSet.compactReading(timed: Boolean, weightUnit: WeightUnit): S
     if (timed) formatHold(durationSeconds ?: reps)
     else "${weightLb?.let { weightInputValue(it, weightUnit) } ?: weightText.ifBlank { "BW" }}×$reps"
 
-/** Last time's top set as a compact reading ("60×8", "1:30"), or null with no history. */
+/** Last time's top set as a reading with its unit ("60 kg × 8", "BW × 12", "1:30"), or null with no history. */
 internal fun List<LoggedSet>.topReading(timed: Boolean, weightUnit: WeightUnit): String? {
-    val top = if (timed) maxByOrNull { it.durationSeconds ?: it.reps }
-    else maxWithOrNull(compareBy<LoggedSet> { it.weightLb ?: 0.0 }.thenBy { it.reps })
-    return top?.compactReading(timed, weightUnit)
+    val top = (if (timed) maxByOrNull { it.durationSeconds ?: it.reps }
+    else maxWithOrNull(compareBy<LoggedSet> { it.weightLb ?: 0.0 }.thenBy { it.reps })) ?: return null
+    if (timed) return formatHold(top.durationSeconds ?: top.reps)
+    val load = top.weightLb?.let { "${weightInputValue(it, weightUnit)} ${weightUnit.label}" } ?: "BW"
+    return "$load × ${top.reps}"
 }
 
 /** The heaviest logged set, for a folded card's one-line summary. */

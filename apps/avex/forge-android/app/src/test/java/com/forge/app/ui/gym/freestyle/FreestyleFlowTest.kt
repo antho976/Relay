@@ -96,7 +96,7 @@ class FreestyleFlowTest {
     @Test
     fun theTopSetIsTheHeaviestThenTheMostReps() {
         val sets = listOf(prior(100.0, 12), prior(110.0, 6), prior(110.0, 8))
-        assertEquals("110×8", sets.topReading(timed = false, weightUnit = WeightUnit.LB))
+        assertEquals("110 lb × 8", sets.topReading(timed = false, weightUnit = WeightUnit.LB))
         assertEquals(null, emptyList<LoggedSet>().topReading(timed = false, weightUnit = WeightUnit.LB))
     }
 }
