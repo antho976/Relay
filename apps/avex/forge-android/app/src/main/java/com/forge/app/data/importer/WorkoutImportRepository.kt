@@ -210,6 +210,7 @@ class WorkoutImportRepository @Inject constructor(
         var setCount = 0
         var duplicates = 0
         var importedSessions = 0
+        var corrected = 0
 
         // Date-only sources (FitNotes, a bare spreadsheet, Strong/Generic without a time) stamp every
         // workout that day at midnight, so two DISTINCT same-day workouts would share a start instant.
@@ -282,14 +283,50 @@ class WorkoutImportRepository @Inject constructor(
                 // Compared on what the SOURCE states, not on everything the row holds: see
                 // WorkoutIdentity for the re-imports an exact print duplicated.
                 val incoming = incomingIdentityOf(session, matchCache)
-                val alreadyStored = occupied.firstOrNull {
-                    it.id !in claimedStoredIds &&
-                        storedIdentities.getOrPut(it.id) { storedIdentityOf(it.id) }?.sameWorkoutAs(incoming) == true
+                suspend fun storedIdentity(id: Long) = storedIdentities.getOrPut(id) { storedIdentityOf(id) }
+                // The same workout a whole zone offset away, too. A source with no zone in its times
+                // is read in the device's CURRENT zone, so re-importing the same file after a move or
+                // a trip put every workout hours from its stored copy and added all of it again.
+                // Offsets are whole quarter hours, so only starts that sit on this workout's own
+                // slots shifted by one are considered, nearest first.
+                val candidates = occupied + zoneShiftedRefs(session.startedAtMs, windowEndMs)
+                val alreadyStored = candidates.firstOrNull {
+                    it.id !in claimedStoredIds && storedIdentity(it.id)?.sameWorkoutAs(incoming) == true
                 }
                 if (alreadyStored != null) {
                     claimedStoredIds += alreadyStored.id
                     duplicates++
                     continue
+                }
+                // A copy an earlier build's importer wrote with less in it (see WorkoutIdentity.repairs)
+                // is corrected in place, keeping the session row and what the user added to it.
+                val lossyCopy = candidates.firstOrNull {
+                    it.id !in claimedStoredIds && storedIdentity(it.id)?.let { stored -> incoming.repairs(stored) } == true
+                }
+                if (lossyCopy != null) {
+                    val stored = sessionDao.get(lossyCopy.id)
+                    if (stored != null) {
+                        claimedStoredIds += stored.id
+                        storedIdentities.remove(stored.id)
+                        val oldExercises = loggedExerciseDao.forSession(stored.id)
+                        // By id and by name: the old copy may hold the movement under an id the matcher no
+                        // longer picks.
+                        val notes = buildMap {
+                            oldExercises.forEach { le ->
+                                val note = le.note?.takeIf { it.isNotBlank() } ?: return@forEach
+                                put(le.exerciseId, note)
+                                le.swappedName?.let { put("name:" + it.trim().lowercase(), note) }
+                            }
+                        }
+                        oldExercises.forEach { loggedExerciseDao.delete(it) }
+                        insertExercises(
+                            session, stored.id, stored.finishedAt ?: stored.startedAt,
+                            matchCache, syntheticCache, matchedNames, unmatchedNames, notes
+                        ) // Not counted as imported: the result reports these as filled in.
+                        sessionDao.update(stored.copy(totalVolumeLb = volumeLb, setCount = totalSets))
+                        corrected++
+                        continue
+                    }
                 }
 
                 val taken = occupied.mapTo(HashSet(occupied.size)) { it.startedAt }
@@ -350,65 +387,8 @@ class WorkoutImportRepository @Inject constructor(
                     )
                 }
 
-                session.exercises.forEachIndexed { orderIndex, ex ->
-                    // A source that already knows the catalogue id (our own JSON export) pins it
-                    // directly; everything else resolves by name (memoised across sessions).
-                    val matchedId = ex.catalogueId ?: matchCache.getOrPut(ex.name) { ExerciseNameMatcher.match(ex.name) }
-                    if (matchedId != null) matchedNames.add(ex.name.lowercase())
-                    else unmatchedNames.add(ex.name.lowercase())
-
-                    val loggedExerciseId = loggedExerciseDao.insert(
-                        LoggedExercise(
-                            sessionId = sessionId,
-                            // Matched → canonical catalogue id (stats attribute correctly). Unmatched →
-                            // a stable synthetic id keyed on the name, kept readable via swappedName.
-                            exerciseId = matchedId ?: syntheticCache.getOrPut(ex.name) { storedSyntheticId(ex.name) },
-                            orderIndex = ex.orderIndex ?: orderIndex,
-                            swappedName = if (matchedId == null) ex.name else ex.swappedName,
-                            difficulty = effortRating(ex.difficulty),
-                            skipped = ex.skipped,
-                            note = ex.note,
-                            // Our own export carries these; without them every imported PR read 0
-                            // in recent PRs, trophies and milestones while the session said N.
-                            wasPr = ex.wasPr,
-                            hitFullTarget = ex.hitFullTarget,
-                            supersetGroup = ex.supersetGroup
-                        )
-                    )
-                    // One bulk insert per exercise instead of a DB round-trip per set — a multi-year
-                    // export can carry thousands of sets.
-                    loggedSetDao.insertAll(
-                        ex.sets.mapIndexed { setIndex, s ->
-                            LoggedSet(
-                                loggedExerciseId = loggedExerciseId,
-                                setIndex = setIndex,
-                                // The source's own text when it has one (our JSON export does), so
-                                // "2 plates" survives the round trip instead of coming back "135".
-                                weightText = s.weightText ?: weightText(s.weightLb),
-                                weightLb = s.weightLb,
-                                reps = s.reps,
-                                // The source's own per-set instant when it has one; otherwise the
-                                // session's finish, as before. Stamping every set of a two-hour
-                                // workout at the same millisecond loses the within-session ordering
-                                // that the set detail and HR overlay read.
-                                completedAt = s.completedAtMs ?: finishedAt,
-                                rpe = s.rpe,
-                                // Carried through rather than left at the entity defaults: a timed
-                                // hold whose durationSeconds went missing reads as a rep set, and an
-                                // assisted set that came back as unassisted becomes PR-eligible.
-                                durationSeconds = s.durationSeconds,
-                                isAssisted = s.isAssisted,
-                                isAmrap = s.isAmrap,
-                                toFailure = s.toFailure,
-                                setType = s.setType ?: if (s.isWarmup) "warmup" else null,
-                                difficultyTag = s.difficultyTag,
-                                dropAnnotation = s.dropAnnotation
-                            )
-                        }
-                    )
-                    if (ex.sets.isNotEmpty()) exerciseCount++
-                    setCount += ex.sets.size
-                }
+                insertExercises(session, sessionId, finishedAt, matchCache, syntheticCache, matchedNames, unmatchedNames)
+                    .let { counts -> exerciseCount += counts.first; setCount += counts.second }
                 importedSessions++
             }
         }
@@ -416,7 +396,7 @@ class WorkoutImportRepository @Inject constructor(
         val extrasWritten = insertExtras(extras)
 
         // Everything in the file was already present — say so distinctly, not "imported 0".
-        if (importedSessions == 0 && extrasWritten.none) return ImportResult.NothingToImport
+        if (importedSessions == 0 && corrected == 0 && extrasWritten.none) return ImportResult.NothingToImport
 
         return ImportResult.Success(
             source = source,
@@ -427,6 +407,7 @@ class WorkoutImportRepository @Inject constructor(
             unmatchedExercises = unmatchedNames.size,
             skippedRows = skippedRows,
             duplicatesSkipped = duplicates,
+            workoutsCorrected = corrected,
             cardioEntries = extrasWritten.cardio,
             coachGoals = extrasWritten.goals,
             bodyweightEntries = extrasWritten.bodyweight
@@ -590,6 +571,96 @@ class WorkoutImportRepository @Inject constructor(
             }
         )
 
+    /**
+     * Write [session]'s exercises and sets under [sessionId]; returns (exercises with sets, sets).
+     * [carriedNotes] keeps the exercise notes of a copy being corrected in place, by stored id.
+     */
+    private suspend fun insertExercises(
+        session: ImportedSession,
+        sessionId: Long,
+        finishedAt: Long,
+        matchCache: HashMap<String, String?>,
+        syntheticCache: HashMap<String, String>,
+        matchedNames: HashSet<String>,
+        unmatchedNames: HashSet<String>,
+        carriedNotes: Map<String, String> = emptyMap()
+    ): Pair<Int, Int> {
+        var exercises = 0
+        var sets = 0
+        session.exercises.forEachIndexed { orderIndex, ex ->
+            // A source that already knows the catalogue id (our own JSON export) pins it
+            // directly; everything else resolves by name (memoised across sessions).
+            val matchedId = ex.catalogueId ?: matchCache.getOrPut(ex.name) { ExerciseNameMatcher.match(ex.name) }
+            if (matchedId != null) matchedNames.add(ex.name.lowercase())
+            else unmatchedNames.add(ex.name.lowercase())
+
+            val loggedExerciseId = loggedExerciseDao.insert(
+                LoggedExercise(
+                    sessionId = sessionId,
+                    // Matched → canonical catalogue id (stats attribute correctly). Unmatched →
+                    // a stable synthetic id keyed on the name, kept readable via swappedName.
+                    exerciseId = matchedId ?: syntheticCache.getOrPut(ex.name) { storedSyntheticId(ex.name) },
+                    orderIndex = ex.orderIndex ?: orderIndex,
+                    swappedName = if (matchedId == null) ex.name else ex.swappedName,
+                    difficulty = effortRating(ex.difficulty),
+                    skipped = ex.skipped,
+                    note = ex.note ?: carriedNotes[matchedId ?: syntheticCache[ex.name]]
+                        ?: carriedNotes["name:" + ex.name.trim().lowercase()],
+                    // Our own export carries these; without them every imported PR read 0
+                    // in recent PRs, trophies and milestones while the session said N.
+                    wasPr = ex.wasPr,
+                    hitFullTarget = ex.hitFullTarget,
+                    supersetGroup = ex.supersetGroup
+                )
+            )
+            // One bulk insert per exercise instead of a DB round-trip per set — a multi-year
+            // export can carry thousands of sets.
+            loggedSetDao.insertAll(
+                ex.sets.mapIndexed { setIndex, s ->
+                    LoggedSet(
+                        loggedExerciseId = loggedExerciseId,
+                        setIndex = setIndex,
+                        // The source's own text when it has one (our JSON export does), so
+                        // "2 plates" survives the round trip instead of coming back "135".
+                        weightText = s.weightText ?: weightText(s.weightLb),
+                        weightLb = s.weightLb,
+                        reps = s.reps,
+                        // The source's own per-set instant when it has one; otherwise the
+                        // session's finish, as before. Stamping every set of a two-hour
+                        // workout at the same millisecond loses the within-session ordering
+                        // that the set detail and HR overlay read.
+                        completedAt = s.completedAtMs ?: finishedAt,
+                        rpe = s.rpe,
+                        // Carried through rather than left at the entity defaults: a timed
+                        // hold whose durationSeconds went missing reads as a rep set, and an
+                        // assisted set that came back as unassisted becomes PR-eligible.
+                        durationSeconds = s.durationSeconds,
+                        isAssisted = s.isAssisted,
+                        isAmrap = s.isAmrap,
+                        toFailure = s.toFailure,
+                        setType = s.setType ?: if (s.isWarmup) "warmup" else null,
+                        difficultyTag = s.difficultyTag,
+                        dropAnnotation = s.dropAnnotation
+                    )
+                }
+            )
+            if (ex.sets.isNotEmpty()) exercises++
+            sets += ex.sets.size
+        }
+        return exercises to sets
+    }
+
+    /**
+     * Stored starts a zone offset away from [startMs]: within [ZONE_SHIFT_MS] either side, outside the
+     * workout's own slots [startMs, windowEndMs), and on one of those slots shifted by whole quarter
+     * hours. Nearest first.
+     */
+    private suspend fun zoneShiftedRefs(startMs: Long, windowEndMs: Long) =
+        sessionDao.startRefsInRange(startMs - ZONE_SHIFT_MS, windowEndMs + ZONE_SHIFT_MS)
+            .filter { it.startedAt < startMs || it.startedAt >= windowEndMs }
+            .filter { Math.floorMod(it.startedAt - startMs, QUARTER_HOUR_MS) < MAX_START_NUDGES * 1000L }
+            .sortedBy { kotlin.math.abs(it.startedAt - startMs) }
+
     /** [incomingIdentityOf] for a session already in the database. Null when the row has gone. */
     private suspend fun storedIdentityOf(sessionId: Long): WorkoutIdentity? {
         sessionDao.get(sessionId) ?: return null
@@ -743,6 +814,11 @@ class WorkoutImportRepository @Inject constructor(
         /** How far the start-instant nudge may walk before giving up and letting the collision stand.
          *  Nobody logs 60 distinct workouts at one midnight; this only bounds a pathological file. */
         private const val MAX_START_NUDGES = 60
+
+        /** The widest gap between two zones' offsets the zone-shift search covers. */
+        private const val ZONE_SHIFT_MS = 14L * 60 * 60 * 1000
+
+        private const val QUARTER_HOUR_MS = 15L * 60 * 1000
     }
 }
 

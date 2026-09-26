@@ -216,6 +216,8 @@ sealed interface ImportResult {
         val skippedRows: Int,
         /** Workouts already present (same start time) that were skipped to avoid double-importing. */
         val duplicatesSkipped: Int = 0,
+        /** Workouts an earlier build imported with less in them, corrected in place from this file. */
+        val workoutsCorrected: Int = 0,
         /** Cardio entries written (Avex JSON, and Strong/Hevy cardio rows). */
         val cardioEntries: Int = 0,
         /** Coach goals written (Avex JSON export only). */
@@ -266,6 +268,11 @@ fun ImportResult.userMessage(): String = when (this) {
             append(" $duplicatesSkipped already in your log ")
             append(if (duplicatesSkipped == 1) "was" else "were")
             append(" skipped.")
+        }
+        if (workoutsCorrected > 0) {
+            append(" $workoutsCorrected already in your log ")
+            append(if (workoutsCorrected == 1) "was" else "were")
+            append(" filled in from this file.")
         }
         if (cardioEntries > 0) {
             append(" $cardioEntries cardio ")

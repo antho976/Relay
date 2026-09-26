@@ -132,6 +132,23 @@ class BlockRepository @Inject constructor(
     }
 
     /**
+     * Serve a scheduled deload that an open workout held back (see [serveScheduledDeload]).
+     *
+     * [advanceForWeek] enters the deload once per week, so a deload skipped because a workout was
+     * open was never tried again: the fallback proposal needs a tap, and a pass the next week
+     * marks it skipped, so the block moved on having delivered no deload at all. Called on every
+     * resume, before the weekly pass, while the block is still in its deload phase.
+     */
+    suspend fun serveOwedDeload() = lifecycleMutex.withLock {
+        if (!settingsRepository.blockDeloadOwed.first()) return@withLock
+        if (active()?.phase != BlockPhase.DELOAD.code) {
+            settingsRepository.setBlockDeloadOwed(false)
+            return@withLock
+        }
+        serveScheduledDeload()
+    }
+
+    /**
      * Generate the block's deload week through the existing deload path, unless a deload applied
      * through either of the other entry points is still governing today — regenerating on top of
      * a running deload would reroll the week and push its window out (the same guard the Coach's
@@ -145,11 +162,17 @@ class BlockRepository @Inject constructor(
      * must not change the program at all: the block keeps its clock, but nothing is served.
      */
     private suspend fun serveScheduledDeload() {
-        if (!settingsRepository.coachEnabled.first()) return
-        if (database.sessionDao().getActiveSession() != null) return
         val startedAt = settingsRepository.deloadWeekStartMs.first()
-        if (startedAt > 0L && clock.nowMs() < deloadWeekEndMs(startedAt)) return
-        runCatching { adaptationRepository.applyDeloadWeek() }
+        val alreadyRunning = startedAt > 0L && clock.nowMs() < deloadWeekEndMs(startedAt)
+        if (!settingsRepository.coachEnabled.first() || alreadyRunning) {
+            settingsRepository.setBlockDeloadOwed(false)
+            return
+        }
+        // An open workout (now, or opened before the regenerate's transaction) holds the deload
+        // back; it is owed and served on a later resume once the workout is closed.
+        val served = database.sessionDao().getActiveSession() == null &&
+            runCatching { adaptationRepository.applyDeloadWeek(unlessWorkoutOpen = true) }.getOrDefault(true)
+        settingsRepository.setBlockDeloadOwed(!served)
     }
 
     /**

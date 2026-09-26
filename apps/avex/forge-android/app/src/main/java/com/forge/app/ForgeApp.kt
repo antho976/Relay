@@ -29,6 +29,7 @@ class ForgeApp : Application(), Configuration.Provider {
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var reminderScheduler: ReminderScheduler
     @Inject lateinit var wearStatePublisher: com.forge.app.service.wear.WearStatePublisher
+    @Inject lateinit var resetRepository: com.forge.app.data.repo.ResetRepository
     private val startupGate = StartupGate()
     internal suspend fun awaitStorageReady() = startupGate.await()
 
@@ -45,6 +46,9 @@ class ForgeApp : Application(), Configuration.Provider {
         appScope.launch(Dispatchers.IO) {
             try {
                 applyPendingRestore()
+                // Before the gate opens, so no screen reads a half-wiped database. Fail-soft: a
+                // reset that can't finish must not stop the app from starting.
+                runCatching { resetRepository.finishInterruptedFactoryReset() }
                 startupGate.complete()
                 startAppServices()
             } catch (failure: Exception) {

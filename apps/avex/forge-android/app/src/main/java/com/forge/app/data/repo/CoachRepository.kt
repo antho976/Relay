@@ -185,6 +185,10 @@ class CoachRepository @Inject constructor(
     }
 
     private suspend fun ensureWeeklyPassOnWorker(): CoachPass = weeklyPassMutex.withLock {
+        // Before the once-a-week early return below: a block deload an open workout held back is
+        // retried on every resume until it is served (BlockRepository.serveOwedDeload).
+        runCatching { blockRepository.serveOwedDeload() }
+            .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
         val zone = ZoneId.systemDefault()
         val today = Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
         val weekId = weekId(today)
@@ -319,7 +323,7 @@ class CoachRepository @Inject constructor(
             .forEach { d ->
                 // One bad decision must not stop the rest, but a cancelled scope must unwind — swallowing
                 // CancellationException here would keep auto-applying inside a cancelled coroutine.
-                runCatching { applyDecision(d.id) }
+                runCatching { lifecycleMutex.withLock { applyDecisionLocked(d.id, unconfirmed = true) } }
                     .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
             }
     }
@@ -573,12 +577,13 @@ class CoachRepository @Inject constructor(
         return slot
     }
 
-    private suspend fun applyDecisionLocked(id: Long) {
+    /** [unconfirmed]: autopilot, which must never discard an open workout (see applyDeloadLocked). */
+    private suspend fun applyDecisionLocked(id: Long, unconfirmed: Boolean = false) {
         val d = coachDao.decision(id) ?: return
         if (d.status != STATUS_PROPOSED) return
         // The one cross-store apply (DataStore marker + program regenerate) can't sit inside a Room
         // transaction — see applyDeloadLocked for how its retry is kept from applying twice.
-        if (d.type == "deload") return applyDeloadLocked(d)
+        if (d.type == "deload") return applyDeloadLocked(d, unconfirmed)
         // Revalidate, mutate the overlay and stamp the ledger in ONE Room transaction (audit H-03).
         // These used to be separate autocommits, so a failure, cancellation or process death between
         // the overlay write and markApplied left the row proposed with the overlay already moved: a
@@ -611,10 +616,11 @@ class CoachRepository @Inject constructor(
      * over an un-regenerated program (closing that needs a durable pending state reconciled at boot,
      * out of scope here), and a proposal retried after such a crash reads "skipped", not "applied".
      */
-    private suspend fun applyDeloadLocked(d: CoachDecision) {
+    private suspend fun applyDeloadLocked(d: CoachDecision, unconfirmed: Boolean = false) {
         if (deloadAlreadyRunning()) { coachDao.setStatus(d.id, STATUS_SKIPPED); return }
         // Not undoable — regenerating again is the way back; its reconcile also clears overlay rows.
-        adaptationRepository.applyDeloadWeek()
+        // Autopilot backs out if a workout opened after its check; the deload stays proposed.
+        if (!adaptationRepository.applyDeloadWeek(unlessWorkoutOpen = unconfirmed)) return
         // A new week's pass expires stale proposals outside lifecycleMutex, so re-check before stamping.
         database.withTransaction {
             if (coachDao.decision(d.id)?.status == STATUS_PROPOSED) markAppliedNow(d.id, null)
