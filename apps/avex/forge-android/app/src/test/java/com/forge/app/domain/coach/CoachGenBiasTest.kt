@@ -16,11 +16,12 @@ class CoachGenBiasTest {
         targetKey: String,
         status: String = "applied",
         outcome: String = "pending",
-        payload: String? = null
+        payload: String? = null,
+        dayKey: String = "upper-a"
     ) = CoachDecision(
         id = nextId++, weekId = "2026-W01", type = type, targetKey = targetKey,
         targetName = targetKey, summary = "s", reason = "r", status = status,
-        dayKey = "upper-a", payload = payload, appliedAt = nextId, outcome = outcome
+        dayKey = dayKey, payload = payload, appliedAt = nextId, outcome = outcome
     )
 
     @Test
@@ -134,7 +135,26 @@ class CoachGenBiasTest {
             )
         )
         // Latest non-failed wins for bench; the failed db-row shift is excluded entirely.
-        assertEquals(mapOf("db-bench-press" to "5-7"), bias.repBias)
+        assertEquals(mapOf("upper-a|db-bench-press" to "5-7"), bias.repBias)
+    }
+
+    @Test
+    fun repShiftStaysOnTheDayItWasReadFrom() {
+        // A heavy-day shift must not rewrite the same lift's light day on the next regenerate.
+        val bias = CoachGenBias.from(
+            listOf(decision("rep_shift", "db-bench-press", payload = "8-10", dayKey = "upper-heavy"))
+        )
+        assertEquals("8-10", bias.repsFor("upper-heavy", "db-bench-press"))
+        assertEquals(null, bias.repsFor("upper-light", "db-bench-press"))
+    }
+
+    @Test
+    fun legacyRepShiftWithNoDay_appliesEverywhere() {
+        val bias = CoachGenBias.from(
+            listOf(decision("rep_shift", "db-bench-press", payload = "8-10", dayKey = ""))
+        )
+        assertEquals("8-10", bias.repsFor("upper-heavy", "db-bench-press"))
+        assertEquals("8-10", bias.repsFor("upper-light", "db-bench-press"))
     }
 
     @Test

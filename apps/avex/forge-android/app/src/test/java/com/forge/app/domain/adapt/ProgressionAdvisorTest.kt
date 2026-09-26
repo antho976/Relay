@@ -737,6 +737,30 @@ class ProgressionAdvisorTest {
     }
 
     @Test
+    fun keepWeight_upScaledDay_keepsTheWeight() {
+        // "Reach 12 reps before adding load" must not add load: a HARD pick used to lift 100 → 105.
+        val s = suggest(listOf(set(100.0, 8)), EffortRating.JUST_RIGHT, reps = "8-12", intensity = IntensityIntent.HARD)
+        assertEquals(100.0, s!!.targetWeightLb, 0.0001)
+        assertTrue(s.reason, s.reason.startsWith("keep this weight"))
+    }
+
+    @Test
+    fun keepWeight_smallEaseOnALightDumbbell_keepsTheWeightAndEasesReps() {
+        // A 3% ease floored to the 2.5 lb grid turned 10 lb into 7.5 lb, a 25% cut.
+        val s = suggest(listOf(set(10.0, 8)), EffortRating.JUST_RIGHT, reps = "8-12", readiness = lowReadiness(-3))
+        assertEquals(10.0, s!!.targetWeightLb, 0.0001)
+        assertTrue(s.reason, "ease the reps" in s.reason)
+    }
+
+    @Test
+    fun kgUser_atHeaviestDumbbell_saysAddReps_notCapped() {
+        // 22.5 kg is stored as 49.6 lb, a hair under its grid line; the capped target read as heavier.
+        val lb = storedKg(22.5)
+        val s = suggest(listOf(set(lb, 10)), EffortRating.JUST_RIGHT, dbMaxLb = 50.0, weightUnit = WeightUnit.KG)
+        assertTrue(s!!.reason, s.reason.startsWith("at your heaviest dumbbell"))
+    }
+
+    @Test
     fun keepWeight_plates_lowReadiness_staysSilent() {
         // A whole plate is far more than a few-percent ease, so a plate lift says nothing rather
         // than keep full load.

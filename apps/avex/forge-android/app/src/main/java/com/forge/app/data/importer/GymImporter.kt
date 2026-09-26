@@ -6,6 +6,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeFormatterBuilder
+import java.time.temporal.ChronoField
 
 /**
  * A parser for one gym app's export format (#GYMAP-17). Each recognises its own file cheaply
@@ -101,8 +102,9 @@ object ImportParsing {
      */
     private fun slashFormats(monthFirst: Boolean): Pair<List<DateTimeFormatter>, List<DateTimeFormatter>> {
         val date = if (monthFirst) "M/d" else "d/M"
-        val dates = listOf("$date/yyyy", "$date/yy")
-        val times = listOf("H:mm:ss", "H:mm", "h:mm:ss a", "h:mm a")
+        // Dotted dates (the German, Polish and Russian spreadsheet default) are always day-first.
+        val dates = listOf("$date/yyyy", "$date/yy", "d.M.yyyy", "d.M.yy")
+        val times = listOf("H:mm:ss", "H:mm", "h:mm:ss a", "h:mm a", "h:mma")
         val withTime = dates.flatMap { d -> times.flatMap { t -> listOf("$d $t", "$d, $t") } }
         return patterns(*withTime.toTypedArray()) to patterns(*dates.toTypedArray())
     }
@@ -110,8 +112,20 @@ object ImportParsing {
     private val MONTH_FIRST_SLASH = slashFormats(monthFirst = true)
     private val DAY_FIRST_SLASH = slashFormats(monthFirst = false)
 
-    private fun patterns(vararg p: String): List<DateTimeFormatter> = p.map {
-        DateTimeFormatterBuilder().parseCaseInsensitive().appendPattern(it).toFormatter(java.util.Locale.ENGLISH)
+    /**
+     * A two-digit `yy` reads within the last 80 years and next 20, not 2000–2099: `appendPattern`'s
+     * fixed base put "5/4/99" in 2099, a session dated 73 years in the future.
+     */
+    private fun patterns(vararg p: String): List<DateTimeFormatter> = p.map { pattern ->
+        val b = DateTimeFormatterBuilder().parseCaseInsensitive()
+        val yy = Regex("""(?<!y)yy(?!y)""").find(pattern)
+        if (yy == null) b.appendPattern(pattern)
+        else {
+            if (yy.range.first > 0) b.appendPattern(pattern.substring(0, yy.range.first))
+            b.appendValueReduced(ChronoField.YEAR, 2, 2, LocalDate.now().minusYears(80))
+            if (yy.range.last + 1 < pattern.length) b.appendPattern(pattern.substring(yy.range.last + 1))
+        }
+        b.toFormatter(java.util.Locale.ENGLISH)
     }
 
     // Month-first is US + its Pacific territories and the Philippines; everywhere else is day-first.
@@ -321,6 +335,7 @@ object ImportParsing {
      */
     fun cardioTypeFor(exerciseName: String): String? {
         val n = exerciseName.lowercase()
+        if (LOADED_CARRY.containsMatchIn(n)) return null
         return CARDIO_KEYWORDS.firstOrNull { (re, _) -> re.containsMatchIn(n) }?.second
     }
 
@@ -333,8 +348,13 @@ object ImportParsing {
         Regex("""\b(walk|walking)\b""") to "walk",
         Regex("""\b(hike|hiking)\b""") to "hike",
         Regex("""\bswim(ming)?\b""") to "swim",
-        Regex("""\bhiit\b""") to "hiit"
+        Regex("""\bhiit\b""") to "hiit",
+        // Cardio machines and conditioning with no activity of their own.
+        Regex("""\b(stair\w*|step\s?mill|stepper|jump\s?rope|skipping|boxing|shadow\s?box\w*)\b""") to "other"
     )
+
+    /** Strength moves whose names say "walk": a timed "Walking Lunge" or "Farmer's Walk" is a hold. */
+    private val LOADED_CARRY = Regex("""\b(lunges?|farmers?'?s?|carry|carries|suitcase|yoke)\b""")
 
     /**
      * Whether a Strong or Hevy row is cardio rather than a set, and if so which activity.
