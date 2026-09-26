@@ -382,6 +382,12 @@ object PreferenceKeys {
     /** Whether the Coach page shows its readings (signals, block, inputs, learned). Off = calls only. */
     val COACH_ADVANCED = booleanPreferencesKey("coach_advanced")
 
+    /**
+     * Epoch millis before which the Coach page does not offer advanced tracking in its pop-up.
+     * Absent/0 = offer it now; "Remind me later" pushes it a week out; "Ignore" sets Long.MAX_VALUE.
+     */
+    val COACH_ADVANCED_PROMPT_AFTER = longPreferencesKey("coach_advanced_prompt_after")
+
     /** Whether the one-time "how your coach learns" intro card has been dismissed (CO6). */
     val COACH_BRIEF_INTRO_SEEN = booleanPreferencesKey("coach_brief_intro_seen")
 
