@@ -53,6 +53,8 @@ import com.forge.app.ui.common.ProvideTouchExploration
 import com.forge.app.ui.nav.ForgeNavHost
 import com.forge.app.ui.onboarding.OnboardingScreen
 import com.forge.app.ui.security.AppLockScreen
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import com.forge.app.ui.theme.ForgeMotion
@@ -65,6 +67,8 @@ import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
@@ -312,6 +316,13 @@ class MainActivity : FragmentActivity() {
         splash.setKeepOnScreenCondition { !contentReady }
         setContent { StartupMessage("Preparing Avex…") }
         lifecycleScope.launch { delay(2000); contentReady = true }
+        // A staged restore restarts the app as soon as it is in the foreground, from any screen.
+        lifecycleScope.launch {
+            repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                com.forge.app.ui.settings.RestoreRestart.pending.first { it }
+                com.forge.app.ui.settings.RestoreRestart.relaunch(this@MainActivity)
+            }
+        }
         lifecycleScope.launch {
             try {
                 applicationContext.awaitStorageReady()
@@ -538,7 +549,18 @@ class MainActivity : FragmentActivity() {
                                             // Keeping it composed preserves the back stack and the
                                             // screens' state; clearing its semantics keeps it unread.
                                             .then(if (lockActive) Modifier.clearAndSetSemantics {} else Modifier)
+                                            // The gate swallows touches only. A field or button that
+                                            // held focus before locking still took hardware-key input,
+                                            // so keys are dropped here too (Back excepted: it belongs
+                                            // to the lock screen) and focus is cleared as it locks.
+                                            .then(
+                                                if (lockActive) Modifier.onPreviewKeyEvent {
+                                                    it.key != androidx.compose.ui.input.key.Key.Back
+                                                } else Modifier
+                                            )
                                     ) {
+                                        val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+                                        LaunchedEffect(lockActive) { if (lockActive) focusManager.clearFocus(force = true) }
                                         ForgeNavHost(
                                             widgetOpen = widgetOpenRequest,
                                             onWidgetOpenHandled = ::widgetOpenHandled,

@@ -59,8 +59,9 @@ fun SessionDetailScreen(
     val outline = MaterialTheme.colorScheme.outline
 
     // When the per-session JSON has been written, open the system share sheet on it (Save to Files /
-    // Drive / send) — the same path Settings' exports use. Mirror of SettingsScreen's export effect.
-    exportPath?.let { path ->
+    // Drive / send) — the same path Settings' exports use. Mirror of SettingsScreen's export effect,
+    // held back while the app lock is up for the same reason.
+    if (!com.forge.app.security.LocalAppLockActive.current) exportPath?.let { path ->
         LaunchedEffect(path) {
             val shared = runCatching {
                 val file = java.io.File(path)

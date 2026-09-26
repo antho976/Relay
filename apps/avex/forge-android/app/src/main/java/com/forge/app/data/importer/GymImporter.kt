@@ -118,12 +118,12 @@ object ImportParsing {
      */
     private fun patterns(vararg p: String): List<DateTimeFormatter> = p.map { pattern ->
         val b = DateTimeFormatterBuilder().parseCaseInsensitive()
-        val yy = Regex("""(?<!y)yy(?!y)""").find(pattern)
-        if (yy == null) b.appendPattern(pattern)
+        val yy = if ("yyyy" in pattern) -1 else pattern.indexOf("yy")
+        if (yy < 0) b.appendPattern(pattern)
         else {
-            if (yy.range.first > 0) b.appendPattern(pattern.substring(0, yy.range.first))
+            if (yy > 0) b.appendPattern(pattern.substring(0, yy))
             b.appendValueReduced(ChronoField.YEAR, 2, 2, LocalDate.now().minusYears(80))
-            if (yy.range.last + 1 < pattern.length) b.appendPattern(pattern.substring(yy.range.last + 1))
+            if (yy + 2 < pattern.length) b.appendPattern(pattern.substring(yy + 2))
         }
         b.toFormatter(java.util.Locale.ENGLISH)
     }

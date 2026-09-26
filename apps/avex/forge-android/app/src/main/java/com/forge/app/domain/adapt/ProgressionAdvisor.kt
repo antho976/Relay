@@ -226,7 +226,7 @@ object ProgressionAdvisor {
         if (tooDeep) return weightChange(
             exerciseId, exerciseName, prevMax, prevMax,
             inputText = inputTextFor(prevMax, unit, plateLb),
-            reason = withNote("no lower weight close enough — keep the weight and ease the reps", scaleNote)
+            reason = withNote("no lower weight close enough, so keep the weight and ease the reps", scaleNote)
         )
         return weightChange(
             exerciseId, exerciseName, prevMax, target,
