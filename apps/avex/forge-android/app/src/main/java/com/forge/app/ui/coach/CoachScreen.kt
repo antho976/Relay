@@ -89,8 +89,8 @@ enum class CoachEntryPoint { ACCOUNT, WHERE_YOU_STAND }
  * How much of that column is drawn is the ONE preference the page reads (Settings → Coach →
  * Advanced tracking). Off, which is the default, it is the account and what is next: the calls
  * and what became of them, which is all most people open it for. On, the readings behind the
- * calls come back. The coach itself behaves the same either way, and the page closes on the
- * switch so nobody has to find it in Settings first.
+ * calls come back. The coach itself behaves the same either way. While it is off the page offers
+ * it once in a pop-up ([CoachAdvancedPrompt]) so nobody has to find it in Settings first.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -125,62 +125,74 @@ fun CoachScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            // The top bar never names the screen — just, on a routed entry, the back arrow. Hosted
-            // as a hub pager page there is no back arrow and no action, so the bar has NO content
-            // and is not drawn at all: an empty app bar above the account is a void to scroll past.
-            if (onBack != null) {
-                TopAppBar(
-                    title = {},
-                    navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = c.muted
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
+    Box(Modifier.fillMaxSize()) {
+        Scaffold(
+            topBar = {
+                // The top bar never names the screen — just, on a routed entry, the back arrow. Hosted
+                // as a hub pager page there is no back arrow and no action, so the bar has NO content
+                // and is not drawn at all: an empty app bar above the account is a void to scroll past.
+                if (onBack != null) {
+                    TopAppBar(
+                        title = {},
+                        navigationIcon = {
+                            IconButton(onClick = onBack) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                    tint = c.muted
+                                )
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
+                    )
+                }
+            },
+            containerColor = Color.Transparent
+        ) { inner ->
+            when {
+                // No spinners: the local read is instant, so the page appears with its entrance cascade.
+                state.loading -> Box(Modifier.fillMaxSize().padding(inner))
+                state.freestyle -> CoachMessage(
+                    "Freestyle logging leaves the coach no plan to watch. Build or generate one and it " +
+                        "starts from your first session.",
+                    c,
+                    Modifier.padding(inner)
+                )
+                // Both reads failed: a load error, not a fresh account.
+                state.brief == null && state.watch == null -> CoachMessage(
+                    "Couldn't read the coach's notes right now. Come back in a bit.",
+                    c,
+                    Modifier.padding(inner)
+                )
+                else -> CoachLedger(
+                    state = state,
+                    weightUnit = weightUnit,
+                    now = now,
+                    actions = CoachActions(
+                        apply = viewModel::apply,
+                        skip = viewModel::skip,
+                        undo = viewModel::undo,
+                        applyAll = viewModel::applyAll,
+                        startBlock = viewModel::startBlock,
+                        endBlock = viewModel::endBlock,
+                        connectHealth = onConnectHealth,
+                        setAdvanced = viewModel::setAdvanced
+                    ),
+                    listState = listState,
+                    modifier = Modifier.padding(inner)
                 )
             }
-        },
-        containerColor = Color.Transparent
-    ) { inner ->
-        when {
-            // No spinners: the local read is instant, so the page appears with its entrance cascade.
-            state.loading -> Box(Modifier.fillMaxSize().padding(inner))
-            state.freestyle -> CoachMessage(
-                "Freestyle logging leaves the coach no plan to watch. Build or generate one and it " +
-                    "starts from your first session.",
-                c,
-                Modifier.padding(inner)
-            )
-            // Both reads failed: a load error, not a fresh account.
-            state.brief == null && state.watch == null -> CoachMessage(
-                "Couldn't read the coach's notes right now. Come back in a bit.",
-                c,
-                Modifier.padding(inner)
-            )
-            else -> CoachLedger(
-                state = state,
-                weightUnit = weightUnit,
-                now = now,
-                actions = CoachActions(
-                    apply = viewModel::apply,
-                    skip = viewModel::skip,
-                    undo = viewModel::undo,
-                    applyAll = viewModel::applyAll,
-                    startBlock = viewModel::startBlock,
-                    endBlock = viewModel::endBlock,
-                    connectHealth = onConnectHealth,
-                    setAdvanced = viewModel::setAdvanced
-                ),
-                listState = listState,
-                modifier = Modifier.padding(inner)
-            )
         }
+        // The offer rides OVER the account, never in it, so the page below does not move (§4.6). It
+        // waits for a page that has an account to read, and for the hub to be showing this page.
+        CoachAdvancedPrompt(
+            visible = isVisible && !state.loading && !state.freestyle && !state.advanced &&
+                (state.brief != null || state.watch != null) &&
+                System.currentTimeMillis() >= state.advancedPromptAfter,
+            onTurnOn = { viewModel.setAdvanced(true) },
+            onRemindLater = viewModel::remindAdvancedLater,
+            onIgnore = viewModel::ignoreAdvancedPrompt
+        )
     }
 }
 
@@ -262,37 +274,26 @@ internal fun CoachLedger(
 }
 
 /**
- * THE FOOT — the one place the page says how much of itself it is drawing.
+ * THE FOOT — the way back out of advanced tracking.
  *
- * Advanced tracking is a Settings switch, and a switch nobody has seen is a feature nobody has.
- * So the account closes on it: with the readings off, one muted line names what is off and the
- * action turns it on in place, so the page grows under the tap rather than sending the reader
- * through Settings to find out what they were missing. With them on, the same rung offers the
- * way back. It is the same preference either way, with Settings as its other home.
+ * Turning it ON is offered by the pop-up ([CoachAdvancedPrompt]), which the reader can put off or
+ * ignore; with it off the page simply ends. With it on, the account closes on one action that turns
+ * the readings off again in place. Settings → Coach is the same preference's other home.
  */
 private fun LazyListScope.coachTracking(
     state: CoachViewModel.UiState,
     c: CoachColors,
     onSetAdvanced: (Boolean) -> Unit
 ) {
+    if (!state.advanced) return
     item("tracking") {
         Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(6)) {
             Spacer(Modifier.height(30.dp))
-            if (!state.advanced) {
-                Text(
-                    "The readings behind the calls are off: signals, block, inputs, learned.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = c.muted
-                )
-                Spacer(Modifier.height(2.dp))
-            }
             // onBg, not accent: accent-as-text clears AA on two of the five accents only (§14),
             // and the arrow already marks the line as the action.
-            CoachAction(
-                if (state.advanced) "Hide advanced tracking →" else "Show advanced tracking →",
-                c.onBg,
-                if (state.advanced) "Hide advanced tracking" else "Show advanced tracking"
-            ) { onSetAdvanced(!state.advanced) }
+            CoachAction("Hide advanced tracking →", c.onBg, "Hide advanced tracking") {
+                onSetAdvanced(false)
+            }
         }
     }
 }

@@ -2,14 +2,13 @@
 package com.forge.app.ui.programbuilder
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.background
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,12 +16,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
@@ -42,6 +37,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -49,30 +45,31 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.ui.common.DraggableItem
+import com.forge.app.program.ExerciseLibrary
+import com.forge.app.ui.common.ExerciseIcons
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.common.WeekBarRail
 import com.forge.app.ui.common.bounceCombinedClick
-import com.forge.app.ui.common.dragContainer
-import com.forge.app.ui.common.parseAccentHex
-import com.forge.app.ui.common.rememberDragDropState
 import com.forge.app.ui.theme.ForgeMotion
 import kotlinx.coroutines.launch
 
 /**
- * The program screen — viewer and editor in ONE layout (GYMAP-28). The whole plan renders
- * editorially (mono day anchors + set-count meta, an exercise row per slot — the same vocabulary as
- * the onboarding week preview). Opened with [startInView] it is read-only until the top-bar pencil;
- * as an editor, day sections tap into [ProgramBuilderDayDetail] and long-press-drag to reorder.
- * Nothing persists until Save. Opens blank for build-your-own (from onboarding).
+ * The program screen — viewer and editor in ONE layout (GYMAP-28), drawn the way onboarding's
+ * "Here's your week" page draws the plan it deals (2026-09-25): serif title, one caption, then the
+ * week as one bar per day carrying its sets ([WeekBarRail], the same implementation onboarding uses,
+ * so the approved week and the saved one can't read as two different weeks). Tapping a bar swaps
+ * the day shown in full underneath: its movements, each with its equipment glyph and sets × reps.
+ *
+ * Opened with [startInView] it is read-only until the top-bar pencil. As an editor the open day is
+ * the tap target into [ProgramBuilderDayDetail], and holding a bar drags it along the week to
+ * reorder. Nothing persists until Save. Opens blank for build-your-own (from onboarding).
  */
 @Composable
 fun ProgramBuilderScreen(
@@ -156,9 +153,22 @@ fun ProgramBuilderScreen(
     BackHandler { attemptClose() }
 
     val days = viewModel.days
-    val listState = rememberLazyListState()
-    // One leading item (title + summary + caption) sits above the draggable day sections.
-    val dragState = rememberDragDropState(listState, firstDraggableIndex = 1) { from, to -> viewModel.moveDay(from, to) }
+    // Which day is open, by uid so a reorder keeps the user on the day they were reading. The index
+    // is the fallback for when that uid is gone (removed, or a reload minted fresh uids): the
+    // neighbour that slid into its place opens instead of jumping back to the first day.
+    var pickedUid by rememberSaveable { mutableStateOf<String?>(null) }
+    var pickedIndex by rememberSaveable { mutableIntStateOf(0) }
+    val index = days.indexOfFirst { it.uid == pickedUid }.takeIf { it >= 0 }
+        ?: pickedIndex.coerceIn(0, (days.size - 1).coerceAtLeast(0))
+    val openDay = days.getOrNull(index)
+    // Reads the live list, not this composition's snapshot: Add day picks the day it just appended.
+    fun pick(i: Int) { pickedIndex = i; pickedUid = viewModel.days.getOrNull(i)?.uid }
+    // A one-day week has nothing to move between, so it gets no tap affordance and no line telling
+    // the user to use one; its day also drops its set count, since at one day that and the week
+    // total are the same fact.
+    val many = days.size > 1
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val editing = !viewing && viewModel.loadComplete
 
     Scaffold(
         topBar = {
@@ -186,7 +196,7 @@ fun ProgramBuilderScreen(
                 // EMPTY list while loadDays() was still in flight: an edit made in that window was
                 // overwritten wholesale by the late result, and Save over the empty list does not
                 // save nothing — it writes an empty program over the real one.
-                visible = !viewing && viewModel.loadComplete,
+                visible = editing,
                 enter = fadeIn(ForgeMotion.enterTween()),
                 exit = fadeOut(ForgeMotion.exitTween())
             ) {
@@ -194,7 +204,12 @@ fun ProgramBuilderScreen(
                     Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    ForgeOutlineCapsule("+ Add day", onClick = { viewModel.addDay() }, modifier = Modifier.weight(1f))
+                    ForgeOutlineCapsule(
+                        "+ Add day",
+                        // The new day opens in the rail straight away, so the user sees where it went.
+                        onClick = { viewModel.addDay(); pick(viewModel.days.lastIndex) },
+                        modifier = Modifier.weight(1f)
+                    )
                     ForgePrimaryCapsule(
                         "Save",
                         onClick = { attemptSave() },
@@ -208,32 +223,68 @@ fun ProgramBuilderScreen(
         },
         containerColor = Color.Transparent
     ) { inner ->
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize().padding(inner)
-                .then(if (viewing) Modifier else Modifier.dragContainer(dragState)),
-            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(28.dp)
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(inner)
+                .verticalScroll(rememberScrollState())
+                .padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item(key = "header") {
-                ProgramHeader(
-                    dayCount = days.size,
-                    setCount = days.sumOf { it.totalSets },
-                    caption = when {
-                        viewing -> null
-                        days.isEmpty() -> null // the hint below carries the empty state
-                        else -> "Tap a day to edit. Hold to reorder."
-                    },
-                    emptyHint = if (!viewing && days.isEmpty()) "Add a day to start your plan." else null
+            Text(
+                "Your program",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            val caption = when {
+                days.isEmpty() -> null // the hint below carries the empty state
+                editing && many -> "Tap the day below to edit it. Hold a bar to reorder."
+                editing -> "Tap the day below to edit it."
+                many -> "Tap a day to read it."
+                else -> null
+            }
+            if (caption != null) {
+                Text(caption, style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.7f))
+            }
+            if (days.isEmpty()) {
+                // Honest zero (§12): the plan has no days yet, so there is no week to draw. Not
+                // before the load lands, or every open would flash "no days" for a frame.
+                if (viewModel.loadComplete) InlineEmptyHint(
+                    if (editing) "Add a day to start your plan." else "No days in this plan yet.",
+                    muted.copy(alpha = 0.7f)
+                )
+                return@Column
+            }
+            Spacer(Modifier.height(6.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // The anchor says days and sets because the page title already said "your program".
+                RailAnchor(
+                    text = if (many) "${days.size} days" else "1 day",
+                    meta = "${days.sumOf { it.totalSets }} sets"
+                )
+                WeekBarRail(
+                    names = days.map { it.name },
+                    sets = days.map { it.totalSets },
+                    trackHeight = 104.dp,
+                    selectedIndex = index,
+                    onSelect = if (many) ({ pick(it) }) else null,
+                    keys = days.map { it.uid },
+                    onMove = if (editing) ({ from, to -> viewModel.moveDay(from, to) }) else null
                 )
             }
-            itemsIndexed(days, key = { _, d -> d.uid }) { index, d ->
-                DraggableItem(dragState, index) { dragging ->
-                    DaySection(
-                        day = d,
-                        editable = !viewing,
-                        dragging = dragging,
-                        onOpen = { viewModel.openDay(d.uid) }
+            Spacer(Modifier.height(8.dp))
+            // Crossfades on both moves the day can make: switching day, and an edit landing in it.
+            AnimatedContent(
+                targetState = openDay,
+                contentKey = { it?.uid },
+                transitionSpec = { fadeIn(ForgeMotion.enterTween()) togetherWith fadeOut(ForgeMotion.exitTween()) },
+                label = "program_day"
+            ) { shown ->
+                if (shown != null) {
+                    OpenDay(
+                        day = shown,
+                        showSets = many,
+                        onEdit = if (editing) ({ viewModel.openDay(shown.uid) }) else null
                     )
                 }
             }
@@ -273,97 +324,84 @@ fun ProgramBuilderScreen(
     }
 }
 
-/** Serif page title + the plan's one summary read; honest zeros when the plan is empty (§12). */
+/** Mono anchor over the rail: the week's day count, with its set total as right meta. */
 @Composable
-private fun ProgramHeader(dayCount: Int, setCount: Int, caption: String?, emptyHint: String?) {
+private fun RailAnchor(text: String, meta: String?) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Column {
-        Text("Your program", style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onBackground)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "$dayCount DAYS · $setCount SETS",
-            style = MaterialTheme.typography.labelMedium, color = muted, letterSpacing = 1.sp
-        )
-        if (caption != null) {
-            Spacer(Modifier.height(10.dp))
-            Text(caption, style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.7f))
-        }
-        if (emptyHint != null) {
-            Spacer(Modifier.height(10.dp))
-            InlineEmptyHint(emptyHint, muted.copy(alpha = 0.7f))
-        }
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text.uppercase(), style = MaterialTheme.typography.labelMedium, color = muted, letterSpacing = 1.sp)
+        if (meta != null) Text(meta.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted)
     }
 }
 
 /**
- * One day, drawn openly (§1): colour-dot + mono name anchor with its set count as right meta, then
- * an exercise row per slot — identical in viewer and editor; the editor only adds tap + drag. The
- * faint wash appears while dragging so the floating section reads as picked up.
+ * The open day, drawn the way onboarding's week page draws it: mono anchor with its own reading as
+ * right meta, then one row per movement — equipment glyph, name, and sets × reps at the quiet mono
+ * rung so the movement names carry the row.
+ *
+ * In the editor the whole block is ONE tap target into the day editor (never a tap per row), and it
+ * closes on a drawn `Edit day →` so the affordance is visible rather than implied.
  */
 @Composable
-private fun DaySection(
-    day: BuilderDay,
-    editable: Boolean,
-    dragging: Boolean,
-    onOpen: () -> Unit
-) {
+private fun OpenDay(day: BuilderDay, showSets: Boolean, onEdit: (() -> Unit)?) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val exercises = day.exercises
     Column(
-        Modifier.fillMaxWidth()
-            // Clip + wash ONLY while dragging — an always-on rounded clip shaved the colour dot
-            // sitting in the corner arc.
+        Modifier
+            .fillMaxWidth()
             .then(
-                if (dragging) Modifier.clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                if (onEdit != null) Modifier.bounceCombinedClick(onClickLabel = "Edit ${day.name}", onClick = onEdit)
                 else Modifier
-            )
-            .then(
-                if (editable) Modifier.bounceCombinedClick(onClickLabel = "Edit ${day.name}", onClick = onOpen)
-                else Modifier
-            )
+            ),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.size(8.dp).clip(CircleShape).background(parseAccentHex(day.accentHex)))
-                Text(
-                    day.name.uppercase(),
-                    // labelLarge 13sp — §7 anchors read as present; the small anchor let sections merge.
-                    style = MaterialTheme.typography.labelLarge,
-                    color = muted,
-                    letterSpacing = 1.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+        RailAnchor(
+            text = day.name,
+            meta = when {
+                exercises.isEmpty() -> null
+                showSets -> "${exercises.size} moves · ${day.totalSets} sets"
+                else -> "${exercises.size} moves"
             }
-            Text("${day.totalSets} SETS", style = MaterialTheme.typography.labelSmall, color = muted)
+        )
+        if (exercises.isEmpty()) {
+            Text("No exercises yet", style = MaterialTheme.typography.bodyMedium, color = muted)
         }
-        Spacer(Modifier.height(10.dp))
-        day.exercises.forEach { ex ->
-            // Hanging indent: rows align under the day NAME (dot 8 + gap 8), so the outdented dot
-            // column groups each day the way an outline would — without drawing one. The reps meta
-            // sits at the quiet caption rung so the movement names carry the row.
-            Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, top = 5.dp, bottom = 5.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    ex.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                Spacer(Modifier.width(12.dp))
-                Text("${ex.sets} × ${ex.reps}", style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.7f))
+        Column {
+            exercises.forEach { ex ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        ExerciseIcons.forEquipment(ExerciseLibrary.byId(ex.libId)?.equipment.orEmpty()),
+                        contentDescription = null,
+                        tint = muted,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        ex.name,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text("${ex.sets} × ${ex.reps}", style = MaterialTheme.typography.labelMedium, color = muted)
+                }
             }
+        }
+        if (onEdit != null) {
+            // Drawn, not separately clickable: the block above is the one tap target (§2③).
+            Text(
+                "Edit day →",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                letterSpacing = 0.3.sp,
+                modifier = Modifier.padding(top = 4.dp)
+            )
         }
     }
 }

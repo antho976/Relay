@@ -1,0 +1,133 @@
+{
+  "audited_sha": "96378095238dcc8b4ae7cab150098e2f26a1f36c",
+  "date": "2026-09-12",
+  "production_files_changed": false,
+  "gradle_gate": ":app:testDebugUnitTest :wear:testDebugUnitTest :shared:test :app:verifyRoborazziDebug :app:lintRelease :wear:lintRelease :app:bundleRelease :wear:bundleRelease :app:compileDebugAndroidTestKotlin",
+  "gradle_result": "BUILD SUCCESSFUL in 2m 38s; 182 tasks, 100 executed, 82 from cache",
+  "unit_tests": {
+    "app": {
+      "suites": 205,
+      "tests": 1694,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "wear": {
+      "suites": 7,
+      "tests": 50,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "shared": {
+      "suites": 4,
+      "tests": 30,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "lint": {
+    "app": {
+      "severity_counts": {
+        "Warning": 103,
+        "Hint": 11
+      },
+      "issue_counts": {
+        "InlinedApi": 1,
+        "OldTargetApi": 1,
+        "UnusedAttribute": 1,
+        "RedundantLabel": 1,
+        "AndroidGradlePluginVersion": 2,
+        "GradleDependency": 20,
+        "NewerVersionAvailable": 19,
+        "ConfigurationScreenWidthHeight": 1,
+        "LocalContextResourcesRead": 2,
+        "ModifierFactoryExtensionFunction": 1,
+        "ModifierParameter": 13,
+        "ObsoleteSdkInt": 1,
+        "AutoboxingStateCreation": 11,
+        "Overdraw": 1,
+        "UseOfNonLambdaOffsetOverload": 2,
+        "UseKtx": 24,
+        "UseTomlInstead": 3,
+        "ConstantLocale": 9,
+        "HardcodedText": 1
+      }
+    },
+    "wear": {
+      "severity_counts": {
+        "Hint": 4,
+        "Warning": 6
+      },
+      "issue_counts": {
+        "AutoboxingStateCreation": 3,
+        "UnusedResources": 1,
+        "SquareAndRoundTilePreviews": 2,
+        "UseKtx": 2,
+        "KtxExtensionAvailable": 1,
+        "UseTomlInstead": 1
+      }
+    }
+  },
+  "bundles": {
+    "app": {
+      "path": "forge-android/app/build/outputs/bundle/release/app-release.aab",
+      "bytes": 20885875,
+      "jar_signature_entries": [],
+      "signed_release_validation": false
+    },
+    "wear": {
+      "path": "forge-android/wear/build/outputs/bundle/release/wear-release.aab",
+      "bytes": 3865278,
+      "jar_signature_entries": [],
+      "signed_release_validation": false
+    }
+  },
+  "roborazzi_verification": "passed",
+  "committed_screenshot_pngs": 46,
+  "android_test_compilation": "passed, not executed",
+  "ci_script_tests": "10 unittest discovery tests + 5 separately invoked summary-script tests passed",
+  "adb_inventory": "no attached devices/emulators",
+  "runtime_device_tests": "not executed",
+  "dependency_vulnerability_scan": "not executed",
+  "scientific_content_fact_check": "not executed",
+  "production_probe_stdout": [
+    "below-top readiness=-5 phase=null target=100.0 reason=keep this weight \u2014 reach 12 reps on every set before adding load",
+    "below-top readiness=-5 phase=DELOAD target=100.0 reason=keep this weight \u2014 reach 12 reps on every set before adding load",
+    "weighted hold evaluation threw java.lang.NullPointerException",
+    "java.lang.NullPointerException",
+    "\tat com.forge.app.domain.adapt.ProgressionAdvisor.bestE1rm(ProgressionAdvisor.kt:507)",
+    "\tat com.forge.app.domain.adapt.ProgressionAdvisor.evaluate(ProgressionAdvisor.kt:358)",
+    "\tat AvexDomainProbe.main(AvexDomainProbe.java:20)",
+    "swap sets=0 performed=db-row requested=db-row outcome=[WatchVerdict(decisionId=1, outcome=ok, failReason=null)]",
+    "swap sets=1 performed=barbell-row requested=db-row outcome=[WatchVerdict(decisionId=1, outcome=ok, failReason=null)]",
+    "not-followed outcome=still watching",
+    "Enqueued: 2026-09-12T12:00-04:00[America/Toronto]; configured initial-delay target: 2026-09-14T12:00-04:00[America/Toronto]",
+    "WorkManager 2.10.1 calculated first eligible run: 2026-09-21T06:00-04:00[America/Toronto]",
+    "Reopening Sunday, UPDATE preserving original enqueue time: 2026-09-20T06:00-04:00[America/Toronto]"
+  ],
+  "production_probe_stderr": [
+    "warning: unknown enum constant Scope.LIBRARY_GROUP",
+    "  reason: class file for androidx.annotation.RestrictTo$Scope not found",
+    "1 warning"
+  ],
+  "source_inventory": {
+    "app": {
+      "kotlin_files": 594,
+      "lines": 105414
+    },
+    "wear": {
+      "kotlin_files": 22,
+      "lines": 2708
+    },
+    "shared": {
+      "kotlin_files": 6,
+      "lines": 681
+    },
+    "baselineprofile": {
+      "kotlin_files": 3,
+      "lines": 87
+    }
+  }
+}

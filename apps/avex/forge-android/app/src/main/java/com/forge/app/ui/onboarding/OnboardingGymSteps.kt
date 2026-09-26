@@ -35,10 +35,9 @@ import com.forge.app.ui.common.ExerciseIcons
 import com.forge.app.ui.theme.ForgeMotion
 
 /**
- * The gym half of the generated path — the two steps where the [PlanLedger] under the question stops
- * being an empty shape and starts filling. Picking a preset deals the week; toggling one piece of
- * gear moves the meters while you watch. Then the week page, where that same mark stops being a
- * readout and becomes the way you read the week.
+ * The gym half of the generated path: pick a setup, fine-tune the gear, then the week page. The
+ * [PlanLedger] no longer sits under the gym and gear questions (2026-09-25): it pushed the tiles
+ * down on the two pages with the most to tap. The week page is where the week is read.
  */
 
 /** GYMAP-20 step 1 of 2: pick the closest gym preset. */

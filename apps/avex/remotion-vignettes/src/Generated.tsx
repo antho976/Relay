@@ -1,83 +1,119 @@
 import React from 'react';
-import {AbsoluteFill, useCurrentFrame, useVideoConfig} from 'remotion';
-import {LABEL_SIZE, MonoLabel, SET_H, SetRow, setsWidth} from './Marks';
-import {heldOut, smoothstep} from './theme';
+import {AbsoluteFill, useCurrentFrame} from 'remotion';
+import {ACCENT, DP, hash01, heldOut, MONO, MUTED, mix, ON_BG, OUTLINE, settle, smoothstep} from './theme';
 
 /**
- * "Build me a plan" — your week, named and dated, handed to you.
+ * "Build me a plan" — the app decides your week.
  *
- * Three rows, and the text is what does the work: MON · WED · FRI says WEEK, and PUSH · PULL · LEGS
- * says what each day is for. They are ALIGNED into a table, because being ordered is the whole
- * argument for the option — set the same rows loose and you have the freestyle card.
+ * It is drawn in the mark this path is about to show you for real: `PlanLedger`, one bar per day
+ * carrying that day's sets. So the first thing a new user sees of the generated path is the thing
+ * the next pages build, not a diagram of it.
  *
- * Two beats, and the pair of them is what makes this read as generated rather than assembled. The
- * three day rows snap in almost together (the plan is decided in one go, not deliberated), then the
- * blocks TALLY out left to right straight across the week without pausing at the row breaks, like a
- * count being run. Custom.tsx lands one row at a time instead, and that difference in rhythm is what
- * separates the two cards.
+ * The motion is the argument. All seven tracks start SHUFFLING in a muted grey, like a solver trying
+ * candidate weeks, then lock left to right: the training days land in accent at their volume and the
+ * rest days drop to empty. Resting is part of the decision, so rest days go through the same shuffle
+ * and are seen to be chosen. Custom lands one tile per tap and freestyle fills in over weeks; this one
+ * is the only card where nothing you do is shown, because on this path you don't do it.
  *
- * The loop is seamless: frame 0 and the final frame are both the finished week, held still. The card
- * plays it twice then FREEZES on that week — the answer to the question, not the machinery.
+ * Frame 0 and the last frame are the same finished week, held still, so the loop seam and the freeze
+ * both land on it.
  */
 
-/** A real 3-day Push/Pull/Legs week. The blocks are that day's exercises. */
+/** A four-day upper/lower week. The value is that day's sets, 0 = rest. */
 const WEEK = [
-  {day: 'MON', split: 'PUSH', work: 5},
-  {day: 'WED', split: 'PULL', work: 4},
-  {day: 'FRI', split: 'LEGS', work: 5},
+  {day: 'M', sets: 22},
+  {day: 'T', sets: 18},
+  {day: 'W', sets: 0},
+  {day: 'T', sets: 24},
+  {day: 'F', sets: 16},
+  {day: 'S', sets: 0},
+  {day: 'S', sets: 0},
 ];
+const PEAK = Math.max(...WEEK.map((d) => d.sets));
 
-const ROWS_IN = 40; // the three day rows arrive…
-const ROW_STAGGER = 10; // …almost on top of each other
-const TALLY_IN = 66; // then the exercises count out across the whole week
-const TALLY_STEP = 3.4;
+// Geometry, in dp on the 282×72 strip.
+const BAR_W = 16 * DP;
+const PITCH = 36 * DP;
+const TRACK_TOP = 5 * DP;
+const TRACK_H = 45 * DP;
+const LABEL_GAP = 7 * DP;
+const LABEL_SIZE = 10 * DP; // labelS
+const RADIUS = 4 * DP; // PlanLedger's bar corner
 
-const ROW_PITCH = 84;
-const COL_SPLIT = 170; // x of the split name, relative to the row
-const COL_WORK = 380; // x of the first exercise block
+// Timeline, in frames.
+const SHUFFLE_IN = 36; // column 0 starts trying heights…
+const SHUFFLE_STAGGER = 2;
+const LOCK_IN = 58; // …and locks here
+const LOCK_STAGGER = 7; // one column per ~quarter second, left to right
+const LOCK_LEN = 18;
+const STEP = 3; // frames each candidate height is held while shuffling
+
+/** Candidate height while a column shuffles: 0.2..1, a new value every [STEP] frames, eased between. */
+export const shuffleAt = (col: number, frame: number): number => {
+  const k = Math.floor(frame / STEP);
+  const a = hash01(col, k);
+  const b = hash01(col, k + 1);
+  return 0.2 + 0.8 * (a + (b - a) * smoothstep(frame - k * STEP, 0, STEP));
+};
 
 export const Generated: React.FC = () => {
   const frame = useCurrentFrame();
-  const {width, height} = useVideoConfig();
   const held = heldOut(frame);
-
-  const blockW = COL_WORK + setsWidth(Math.max(...WEEK.map((r) => r.work)));
-  const left = (width - blockW) / 2;
-  const top = (height - (LABEL_SIZE + (WEEK.length - 1) * ROW_PITCH)) / 2;
-
-  // Running index across the WHOLE week, so the tally never resets at a row break.
-  let tallied = 0;
+  const left = (1128 - (6 * PITCH + BAR_W)) / 2;
 
   return (
     <AbsoluteFill>
-      {WEEK.map((row, r) => {
-        const rowAppear = Math.min(1, held + smoothstep(frame, ROWS_IN + r * ROW_STAGGER, ROWS_IN + r * ROW_STAGGER + 12));
-        const first = tallied;
-        tallied += row.work;
-        if (rowAppear <= 0) return null;
-        const y = top + r * ROW_PITCH;
+      {WEEK.map((d, i) => {
+        const target = d.sets / PEAK;
+        const lockAt = LOCK_IN + i * LOCK_STAGGER;
+        const trying = smoothstep(frame, SHUFFLE_IN + i * SHUFFLE_STAGGER, SHUFFLE_IN + i * SHUFFLE_STAGGER + 8);
+        const from = shuffleAt(i, lockAt);
+        const built = frame < lockAt ? trying * shuffleAt(i, frame) : from + (target - from) * settle(frame, lockAt, LOCK_LEN);
+        const height = Math.max(0, held * target + built);
+        // How far this day has turned from "being considered" (muted) to "decided" (accent).
+        const decided = d.sets > 0 ? Math.max(held, smoothstep(frame, lockAt, lockAt + 6)) : 0;
+        const x = left + i * PITCH;
         return (
-          <React.Fragment key={row.day}>
+          <React.Fragment key={i}>
             <div
               style={{
                 position: 'absolute',
-                left,
-                top: y,
-                display: 'flex',
-                opacity: rowAppear,
-                transform: `translateY(${(1 - rowAppear) * 10}px)`,
+                left: x,
+                top: TRACK_TOP,
+                width: BAR_W,
+                height: TRACK_H,
+                borderRadius: RADIUS,
+                background: OUTLINE,
+              }}
+            />
+            {height > 0.001 && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: x,
+                  top: TRACK_TOP + TRACK_H * (1 - Math.min(1.06, height)),
+                  width: BAR_W,
+                  height: TRACK_H * Math.min(1.06, height),
+                  borderRadius: RADIUS,
+                  background: mix(MUTED, ACCENT, decided),
+                  opacity: 0.35 + 0.65 * decided,
+                }}
+              />
+            )}
+            <div
+              style={{
+                position: 'absolute',
+                left: x,
+                width: BAR_W,
+                top: TRACK_TOP + TRACK_H + LABEL_GAP,
+                textAlign: 'center',
+                fontFamily: MONO,
+                fontSize: LABEL_SIZE,
+                lineHeight: `${LABEL_SIZE}px`,
+                color: mix(MUTED, ON_BG, decided),
               }}
             >
-              <MonoLabel opacity={1}>{row.day}</MonoLabel>
-              <div style={{position: 'absolute', left: COL_SPLIT}}>
-                <MonoLabel opacity={1}>{row.split}</MonoLabel>
-              </div>
-            </div>
-            <div style={{position: 'absolute', left: left + COL_WORK, top: y + (LABEL_SIZE - SET_H) / 2}}>
-              <SetRow
-                sets={row.work}
-                alphaAt={(i) => Math.min(1, held + smoothstep(frame, TALLY_IN + (first + i) * TALLY_STEP, TALLY_IN + (first + i) * TALLY_STEP + 7))}
-              />
+              {d.day}
             </div>
           </React.Fragment>
         );

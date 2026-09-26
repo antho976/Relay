@@ -2,6 +2,7 @@ package com.forge.app.ui.onboarding
 
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathBuilder
 import com.forge.app.program.Equipment
 import com.forge.app.ui.common.circle
 import com.forge.app.ui.common.fillPath
@@ -38,278 +39,351 @@ object OnboardingIcons {
      */
     private const val LIMB = 1.8f
 
-    /** The few lines that carry a body rather than an edge — a raised back pad, a torso. */
-    private const val LIMB_BOLD = 2.4f
+    /** The lines that carry a body rather than an edge — a torso, an arm, a strap, a handle. */
+    private const val LIMB_BOLD = 2.2f
 
-    /** Dumbbell — two deep bells on a thick handle. The bells are wider than the handle is tall,
-     *  which is the whole difference between a dumbbell and the letter H. */
+    /** Pads, grips, tyres: a mass drawn as a thick stroke so it keeps round ends at any angle. */
+    private const val MASS_THIN = 3.2f
+
+    /** Dumbbell heads — the heaviest mass in the family. */
+    private const val MASS = 4.6f
+
+    /** A mass drawn as a stroke — a stadium from ([x1],[y1]) to ([x2],[y2]), [w] thick. Heads, pads
+     *  and grips are built this way so a rotated mass keeps its rounded ends. */
+    private fun PathBuilder.seg(x1: Float, y1: Float, x2: Float, y2: Float) {
+        moveTo(x1, y1); lineTo(x2, y2)
+    }
+
+    /** Dumbbell — tilted 45°, two fat heads on a short handle. The tilt is the whole trick: level,
+     *  a dumbbell at 24dp is the letter H, and it sits too close to the [Barbell] beside it. */
     val Dumbbell: ImageVector by lazy {
         icon("OnbDumbbell") {
-            fillPath {
-                roundRect(7.6f, 11.0f, 16.4f, 13.0f, 1.0f)   // handle
-                roundRect(4.2f, 5.8f, 8.2f, 18.2f, 1.8f)     // left bell
-                roundRect(15.8f, 5.8f, 19.8f, 18.2f, 1.8f)   // right bell
+            strokePath(LIMB_BOLD) { seg(9.2f, 14.8f, 14.8f, 9.2f) }                     // handle
+            strokePath(MASS) {
+                seg(5.5f, 14.3f, 9.7f, 18.5f)                                           // lower head
+                seg(14.3f, 5.5f, 18.5f, 9.7f)                                           // upper head
             }
         }
     }
 
-    /** Barbell — a full-width bar with a plate and a collar out each side. Longer bar and four
-     *  masses instead of two is what separates it from the dumbbell at this size. */
+    /** Barbell — a full-width bar loaded with a big and a small plate each side, and a collar. */
     val Barbell: ImageVector by lazy {
         icon("OnbBarbell") {
+            strokePath(LIMB) { seg(1.6f, 12f, 22.4f, 12f) }
             fillPath {
-                roundRect(1.4f, 10.8f, 22.6f, 13.2f, 1.2f)   // bar
-                roundRect(5.4f, 6.2f, 8.4f, 17.8f, 1.3f)     // left plate
-                roundRect(15.6f, 6.2f, 18.6f, 17.8f, 1.3f)   // right plate
-                roundRect(2.8f, 8.6f, 5.0f, 15.4f, 1.0f)     // left collar
-                roundRect(19.0f, 8.6f, 21.2f, 15.4f, 1.0f)   // right collar
+                roundRect(6.2f, 5.0f, 8.6f, 19.0f, 1.2f)     // big plates
+                roundRect(15.4f, 5.0f, 17.8f, 19.0f, 1.2f)
+                roundRect(3.6f, 7.8f, 5.6f, 16.2f, 1.0f)     // small plates
+                roundRect(18.4f, 7.8f, 20.4f, 16.2f, 1.0f)
+                roundRect(9.0f, 10.2f, 10.2f, 13.8f, 0.5f)   // collars
+                roundRect(13.8f, 10.2f, 15.0f, 13.8f, 0.5f)
             }
         }
     }
 
-    /** Squat / power rack — two uprights on a base, holding a bar in their J-hooks. Bottom-heavy,
-     *  which is what tells it apart from the top-hung [Smith] at 24dp. */
+    /** Squat rack — two uprights on their feet with a loaded bar sitting in the hooks. The plates
+     *  outside the uprights are what make it a rack you squat in rather than a doorway. */
     val SquatRack: ImageVector by lazy {
         icon("OnbRack") {
+            strokePath(LIMB) { seg(1.6f, 8.6f, 22.4f, 8.6f) }                           // racked bar
             fillPath {
-                roundRect(5.6f, 5.0f, 7.4f, 19.2f, 0.9f)     // left upright
-                roundRect(16.6f, 5.0f, 18.4f, 19.2f, 0.9f)   // right upright
-                roundRect(3.4f, 19.2f, 9.6f, 20.8f, 0.8f)    // left foot
-                roundRect(14.4f, 19.2f, 20.6f, 20.8f, 0.8f)  // right foot
-                roundRect(2.2f, 8.2f, 21.8f, 10.0f, 0.9f)    // racked bar
-                roundRect(7.4f, 10.0f, 9.2f, 11.8f, 0.7f)    // left hook
-                roundRect(14.8f, 10.0f, 16.6f, 11.8f, 0.7f)  // right hook
+                roundRect(6.0f, 3.2f, 8.0f, 20.4f, 1.0f)     // uprights
+                roundRect(16.0f, 3.2f, 18.0f, 20.4f, 1.0f)
+                roundRect(3.6f, 19.2f, 10.4f, 21.0f, 0.9f)   // feet
+                roundRect(13.6f, 19.2f, 20.4f, 21.0f, 0.9f)
+                roundRect(2.2f, 4.6f, 4.4f, 12.6f, 1.0f)     // plates
+                roundRect(19.6f, 4.6f, 21.8f, 12.6f, 1.0f)
             }
         }
     }
 
-    /** Smith machine — the same frame with the bar captured on the rails, running the full width.
-     *  Hooks say rack, a bar through the uprights says Smith. */
+    /** Smith machine — a closed frame with the bar locked to the rails by two carriages. Closed
+     *  top and carriages say Smith; feet and loaded plates say [SquatRack]. */
     val Smith: ImageVector by lazy {
         icon("OnbSmith") {
+            strokePath(LIMB) { seg(1.8f, 12.2f, 22.2f, 12.2f) }                         // the bar
             fillPath {
-                roundRect(5.2f, 3.8f, 7.0f, 20.2f, 0.9f)     // left rail
-                roundRect(17.0f, 3.8f, 18.8f, 20.2f, 0.9f)   // right rail
-                roundRect(3.4f, 3.8f, 20.6f, 5.6f, 0.9f)     // top beam
-                roundRect(7.0f, 12.6f, 17.0f, 14.4f, 0.9f)   // captured bar, inside the rails
+                roundRect(3.4f, 2.8f, 20.6f, 4.8f, 1.0f)     // top beam
+                roundRect(3.4f, 19.2f, 20.6f, 21.2f, 1.0f)   // base
+                roundRect(5.6f, 4.8f, 7.4f, 19.2f, 0.4f)     // rails
+                roundRect(16.6f, 4.8f, 18.4f, 19.2f, 0.4f)
+                roundRect(4.4f, 10.2f, 8.6f, 14.2f, 1.0f)    // carriages
+                roundRect(15.4f, 10.2f, 19.6f, 14.2f, 1.0f)
             }
         }
     }
 
-    /** Trap / hex bar — the hexagonal frame seen from above, with a loading sleeve out each side. */
+    /** Trap / hex bar — from above: the hexagon with its two handles inside and a sleeve out each
+     *  side. No plates: they turned the hexagon into a coin at 24dp. */
     val TrapBar: ImageVector by lazy {
         icon("OnbTrapBar") {
             strokePath(LIMB) {
-                moveTo(12f, 5.4f); lineTo(18.2f, 9.1f); lineTo(18.2f, 14.9f)
-                lineTo(12f, 18.6f); lineTo(5.8f, 14.9f); lineTo(5.8f, 9.1f); close()
-                moveTo(1.9f, 12f); lineTo(5.8f, 12f)
-                moveTo(18.2f, 12f); lineTo(22.1f, 12f)
+                moveTo(12f, 5.4f); lineTo(17.6f, 8.7f); lineTo(17.6f, 15.3f)
+                lineTo(12f, 18.6f); lineTo(6.4f, 15.3f); lineTo(6.4f, 8.7f); close()
+                seg(1.8f, 12f, 6.4f, 12f)
+                seg(17.6f, 12f, 22.2f, 12f)
+            }
+            strokePath(LIMB) {
+                seg(9.6f, 10.0f, 9.6f, 14.0f)                // handles
+                seg(14.4f, 10.0f, 14.4f, 14.0f)
+            }
+            fillPath {
+                roundRect(1.8f, 9.8f, 3.4f, 14.2f, 0.8f)     // sleeve ends
+                roundRect(20.6f, 9.8f, 22.2f, 14.2f, 0.8f)
             }
         }
     }
 
-    /** EZ-bar — the zig-zag curl bar with a plate on each end. */
+    /** EZ-bar — the barbell's plates on a bar with the curl bend in the middle. */
     val EzBar: ImageVector by lazy {
         icon("OnbEzBar") {
             strokePath(LIMB) {
-                moveTo(4.4f, 12f); lineTo(7.0f, 12f)
-                lineTo(9.6f, 9.3f); lineTo(14.4f, 14.7f); lineTo(17.0f, 12f)
-                lineTo(19.6f, 12f)
+                moveTo(1.6f, 12f); lineTo(7.4f, 12f)
+                lineTo(9.4f, 15.6f); lineTo(12f, 8.4f); lineTo(14.6f, 15.6f)
+                lineTo(16.6f, 12f); lineTo(22.4f, 12f)
             }
             fillPath {
-                roundRect(1.6f, 8.6f, 4.4f, 15.4f, 1.1f)
-                roundRect(19.6f, 8.6f, 22.4f, 15.4f, 1.1f)
+                roundRect(3.6f, 6.8f, 5.8f, 17.2f, 1.1f)
+                roundRect(18.2f, 6.8f, 20.4f, 17.2f, 1.1f)
             }
         }
     }
 
-    /** Kettlebell — a deep filled bell under a stroked handle. */
+    /** Kettlebell — a flat-bottomed bell under a thick arched handle. */
     val Kettlebell: ImageVector by lazy {
         icon("OnbKettlebell") {
-            strokePath(LIMB) {
-                moveTo(8.6f, 10.4f)
-                curveTo(8.6f, 3.6f, 15.4f, 3.6f, 15.4f, 10.4f)
-            }
-            fillPath { circle(12f, 15.2f, 5.9f) }
-        }
-    }
-
-    /** Resistance band — an arch of band under tension down to two grips. Two rings joined by a
-     *  curve is the infinity sign, which is what the first version drew. */
-    val Band: ImageVector by lazy {
-        icon("OnbBand") {
-            strokePath(LIMB) {
-                moveTo(4.4f, 12f)
-                curveTo(7.2f, 3.4f, 10.4f, 20.6f, 13.2f, 12f)  // the band, stretched
-                curveTo(15.0f, 6.6f, 17.4f, 15.8f, 19.2f, 12f)
+            strokePath(LIMB_BOLD) {
+                moveTo(8.6f, 11.2f)
+                curveTo(7.6f, 2.8f, 16.4f, 2.8f, 15.4f, 11.2f)
             }
             fillPath {
-                circle(3.6f, 12f, 2.0f)                        // left grip
-                circle(20.4f, 12f, 2.0f)                       // right grip
+                moveTo(7.8f, 20.6f); lineTo(16.2f, 20.6f)
+                arcTo(6.4f, 6.4f, 0f, true, false, 7.8f, 20.6f)
+                close()
             }
         }
     }
 
-    /**
-     * Cable machine — the classic crossover frame head-on: two uprights under a top beam, the weight
-     * stack on the floor between them, and a handle hanging on a short cable from each top corner.
-     * The handles sit well above the stack on purpose: at tile size the interior only reads if the
-     * parts have air between them. Same frame idiom as [SquatRack] and [Smith], but full and solid
-     * inside where theirs are open.
-     */
+    /** Resistance band — a tube hanging in a loop between two D-handles. The stirrups are the
+     *  read: with plain grips the loop was a horseshoe magnet. */
+    val Band: ImageVector by lazy {
+        icon("OnbBand") {
+            fillPath {
+                roundRect(2.2f, 2.6f, 7.4f, 4.6f, 1.0f)      // grips
+                roundRect(16.6f, 2.6f, 21.8f, 4.6f, 1.0f)
+            }
+            strokePath(LIMB) {
+                moveTo(2.8f, 4.4f); lineTo(4.8f, 8.2f); lineTo(6.8f, 4.4f)       // stirrups
+                moveTo(17.2f, 4.4f); lineTo(19.2f, 8.2f); lineTo(21.2f, 4.4f)
+                moveTo(4.8f, 8.2f)
+                curveTo(4.8f, 23.0f, 19.2f, 23.0f, 19.2f, 8.2f)                  // the tube
+            }
+        }
+    }
+
+    /** Cable machine — a column with its arm out to a pulley, the cable dropping to a stirrup
+     *  handle. The pulley and the hanging handle are the read; the weight stack is [Machine]'s. */
     val Cable: ImageVector by lazy {
         icon("OnbCable") {
             fillPath {
-                roundRect(2.4f, 3.2f, 4.8f, 20.8f, 1.0f)     // left upright
-                roundRect(19.2f, 3.2f, 21.6f, 20.8f, 1.0f)   // right upright
-                roundRect(2.4f, 3.2f, 21.6f, 5.5f, 1.0f)     // top beam
-                roundRect(9.0f, 14.6f, 15.0f, 17.2f, 0.8f)   // weight stack
-                roundRect(9.0f, 18.2f, 15.0f, 20.8f, 0.8f)
-                roundRect(5.3f, 9.8f, 8.5f, 11.8f, 1.0f)     // left handle
-                roundRect(15.5f, 9.8f, 18.7f, 11.8f, 1.0f)   // right handle
+                roundRect(3.2f, 2.8f, 5.6f, 21.0f, 1.0f)     // column
+                roundRect(2.0f, 19.2f, 10.8f, 21.0f, 0.9f)   // foot
+                roundRect(3.2f, 2.8f, 15.6f, 5.0f, 1.0f)     // arm
+                roundRect(14.8f, 18.2f, 22.0f, 20.4f, 1.1f)  // handle grip
             }
-            strokePath(1.8f) {
-                moveTo(6.9f, 5.5f); lineTo(6.9f, 9.8f)       // left cable
-                moveTo(17.1f, 5.5f); lineTo(17.1f, 9.8f)     // right cable
+            strokePath(LIMB) {
+                circle(17.4f, 5.4f, 2.0f)                    // pulley
+                seg(18.4f, 7.2f, 18.4f, 13.8f)               // cable
+                moveTo(16.0f, 18.4f); lineTo(18.4f, 13.8f); lineTo(20.8f, 18.4f)  // stirrup
             }
         }
     }
 
-    /**
-     * Pull-up bar — the bar with someone hanging off it. Drawn as the hang and not as the hardware
-     * on purpose: a beam on two uprights is [SquatRack] and [Smith] already, and uprights flaring
-     * into grips is [DipStation], so the object alone has no silhouette left of its own. It shares
-     * the figure idiom with [Bodyweight] but reads apart from it — arms up into a bar, not splayed.
-     */
+    /** Pull-up bar — somebody hanging from it. The hang is the read: a beam on posts is already
+     *  [SquatRack] and [Smith]. Arms up into a bar, where [DipStation]'s push down onto posts. */
     val PullUpBar: ImageVector by lazy {
         icon("OnbPullUp") {
-            fillPath {
-                roundRect(2.0f, 3.2f, 22.0f, 5.5f, 1.15f)    // the bar
-                circle(6.2f, 5.9f, 1.45f)                    // left hand
-                circle(17.8f, 5.9f, 1.45f)                   // right hand
-                circle(12f, 8.8f, 1.85f)                     // head
-            }
-            strokePath(2.0f) {
-                moveTo(6.2f, 5.9f); lineTo(10.4f, 12.8f)     // left arm
-                moveTo(17.8f, 5.9f); lineTo(13.6f, 12.8f)    // right arm
-                moveTo(12f, 10.5f); lineTo(12f, 15.8f)       // torso
-                moveTo(12f, 15.8f); lineTo(9.5f, 20.4f)      // left leg
-                moveTo(12f, 15.8f); lineTo(14.5f, 20.4f)     // right leg
+            fillPath { circle(12f, 9.0f, 2.2f) }            // head
+            strokePath(LIMB_BOLD) {
+                seg(2.0f, 3.4f, 22.0f, 3.4f)                 // the bar
+                moveTo(6.8f, 3.4f); lineTo(9.8f, 12.4f); lineTo(14.2f, 12.4f); lineTo(17.2f, 3.4f)  // arms
+                seg(12f, 12.4f, 12f, 16.4f)                  // torso
+                moveTo(10.2f, 21.0f); lineTo(12f, 16.4f); lineTo(13.8f, 21.0f)  // legs
             }
         }
     }
 
-    /** Flat bench — side view: one thick pad on two legs. */
+    /** Flat bench — side view: one thick pad, two posts, a foot under each. */
     val Bench: ImageVector by lazy {
         icon("OnbBench") {
+            strokePath(MASS_THIN) {
+                seg(4.2f, 9.6f, 19.8f, 9.6f)                 // pad
+                seg(4.4f, 19.8f, 9.8f, 19.8f)                // feet
+                seg(14.2f, 19.8f, 19.6f, 19.8f)
+            }
             fillPath {
-                roundRect(3.2f, 9.4f, 20.8f, 12.3f, 1.4f)    // pad
-                roundRect(6.2f, 12.3f, 8.6f, 19.4f, 1.0f)    // near leg
-                roundRect(15.4f, 12.3f, 17.8f, 19.4f, 1.0f)  // far leg
+                roundRect(6.2f, 10.8f, 8.0f, 19.0f, 0.6f)    // posts
+                roundRect(16.0f, 10.8f, 17.8f, 19.0f, 0.6f)
             }
         }
     }
 
-    /** Incline bench — the same pad with the back raised, which is the only thing to read here. */
+    /** Incline bench — the same pad and feet with the back raised. The pad weight is shared with
+     *  [Bench] so the two read as one bench in two positions. */
     val InclineBench: ImageVector by lazy {
         icon("OnbIncline") {
-            strokePath(LIMB_BOLD) { moveTo(4.6f, 5.6f); lineTo(10.8f, 13.2f) }   // raised back
+            strokePath(MASS_THIN) {
+                seg(11.2f, 13.0f, 19.8f, 13.0f)              // seat
+                seg(10.0f, 12.2f, 5.2f, 4.2f)                // raised back
+                seg(8.2f, 19.8f, 20.0f, 19.8f)               // base
+            }
+            strokePath(LIMB) { seg(7.6f, 8.2f, 10.2f, 19.8f) }                          // back strut
             fillPath {
-                roundRect(9.6f, 12.4f, 20.8f, 15.3f, 1.4f)   // seat
-                roundRect(11.8f, 15.3f, 14.2f, 19.6f, 1.0f)  // near leg
-                roundRect(17.4f, 15.3f, 19.8f, 19.6f, 1.0f)  // far leg
+                roundRect(12.4f, 14.2f, 14.2f, 19.0f, 0.6f)  // posts
+                roundRect(16.6f, 14.2f, 18.4f, 19.0f, 0.6f)
             }
         }
     }
 
-    /** Bodyweight — a figure with nothing in its hands. Drawn at the bold limb so it carries the
-     *  same weight as the equipment it sits beside rather than reading as wireframe. */
-    val Bodyweight: ImageVector by lazy {
-        icon("OnbBodyweight") {
-            fillPath { circle(12f, 5.0f, 2.4f) }
-            strokePath(LIMB_BOLD) {
-                moveTo(12f, 7.8f); lineTo(12f, 14.2f)          // torso
-                moveTo(12f, 10.0f); lineTo(6.4f, 6.0f)         // left arm, raised
-                moveTo(12f, 10.0f); lineTo(17.6f, 6.0f)        // right arm, raised
-                moveTo(12f, 14.2f); lineTo(8.2f, 20.4f)        // left leg
-                moveTo(12f, 14.2f); lineTo(15.8f, 20.4f)       // right leg
-            }
-        }
-    }
-
-    /** Dip bars — head-on: two posts with the grip bars running out to each side. */
+    /** Dip station — somebody held up on straight arms between two posts. Arms pushing DOWN onto
+     *  the posts, where [PullUpBar]'s reach up into a bar. */
     val DipStation: ImageVector by lazy {
         icon("OnbDip") {
             fillPath {
-                roundRect(8.0f, 9.6f, 10.4f, 20.4f, 1.1f)     // left post
-                roundRect(13.6f, 9.6f, 16.0f, 20.4f, 1.1f)    // right post
-                roundRect(2.0f, 7.2f, 10.4f, 9.6f, 1.1f)      // left grip
-                roundRect(13.6f, 7.2f, 22.0f, 9.6f, 1.1f)     // right grip
+                circle(12f, 4.4f, 2.2f)                      // head
+                roundRect(3.0f, 11.4f, 5.4f, 21.0f, 1.0f)    // posts
+                roundRect(18.6f, 11.4f, 21.0f, 21.0f, 1.0f)
+            }
+            strokePath(LIMB_BOLD) {
+                moveTo(4.2f, 11.6f); lineTo(8.4f, 7.6f); lineTo(15.6f, 7.6f); lineTo(19.8f, 11.6f)  // arms
+                seg(12f, 7.6f, 12f, 13.6f)                   // torso
+                moveTo(10.4f, 18.0f); lineTo(12f, 13.6f); lineTo(13.6f, 18.0f)  // legs, tucked
             }
         }
     }
 
-    /** Suspension trainer — a wide anchor with the straps splaying out to two handles. Straps
-     *  meeting at a point drew the letter A, which is not a thing you hang from. */
+    /** Suspension trainer — anchor ring, two straps, a stirrup handle on each. */
     val Suspension: ImageVector by lazy {
         icon("OnbSuspension") {
-            fillPath { roundRect(9.2f, 2.8f, 14.8f, 5.0f, 1.1f) }     // anchor
             strokePath(LIMB) {
-                moveTo(11.0f, 5.0f); lineTo(6.6f, 13.6f)              // left strap
-                moveTo(13.0f, 5.0f); lineTo(17.4f, 13.6f)             // right strap
-                circle(5.8f, 16.6f, 3.0f)                             // left handle loop
-                circle(18.2f, 16.6f, 3.0f)                            // right handle loop
+                circle(12f, 3.4f, 1.6f)                      // anchor
+                moveTo(4.6f, 18.8f); lineTo(6.8f, 14.6f); lineTo(9.0f, 18.8f)   // left stirrup
+                moveTo(15.0f, 18.8f); lineTo(17.2f, 14.6f); lineTo(19.4f, 18.8f) // right stirrup
+            }
+            strokePath(LIMB_BOLD) {
+                seg(11.0f, 5.0f, 6.8f, 14.6f)                // straps
+                seg(13.0f, 5.0f, 17.2f, 14.6f)
+            }
+            fillPath {
+                roundRect(3.4f, 18.4f, 10.2f, 20.6f, 1.1f)   // grips
+                roundRect(13.8f, 18.4f, 20.6f, 20.6f, 1.1f)
             }
         }
     }
 
-    /** Ab wheel — side view: the wheel with its axle handle out each side. */
+    /** Ab wheel — side view: a thick tyre and hub, a grip out each side of the axle. */
     val AbWheel: ImageVector by lazy {
         icon("OnbAbWheel") {
-            strokePath(LIMB) { circle(12f, 12f, 5.6f) }
-            fillPath { circle(12f, 12f, 1.5f) }
-            strokePath(LIMB) {
-                moveTo(2.2f, 12f); lineTo(6.4f, 12f)
-                moveTo(17.6f, 12f); lineTo(21.8f, 12f)
+            strokePath(MASS_THIN) { circle(12f, 12f, 5.8f) }
+            fillPath { circle(12f, 12f, 1.8f) }
+            strokePath(MASS_THIN) {
+                seg(2.6f, 12f, 4.4f, 12f)
+                seg(19.6f, 12f, 21.4f, 12f)
             }
         }
     }
 
-    /** Machine — a selectorized stack hanging off its top beam. */
+    /** Bodyweight — a push-up, the one movement that needs nothing at all. Side-on and low, so it
+     *  never reads as the upright figures on [PullUpBar] and [DipStation]. */
+    val Bodyweight: ImageVector by lazy {
+        icon("OnbBodyweight") {
+            fillPath { circle(19.4f, 8.2f, 2.2f) }          // head
+            strokePath(LIMB_BOLD) {
+                seg(16.6f, 10.4f, 2.8f, 17.8f)               // body, one straight line
+                seg(16.6f, 10.4f, 16.6f, 17.8f)              // arm
+            }
+            strokePath(LIMB) { seg(1.8f, 20.2f, 22.2f, 20.2f) }                         // floor
+        }
+    }
+
+    /** Machine — a selectorized stack: top cap, guide rods, four plates and the pin. */
     val Machine: ImageVector by lazy {
         icon("OnbMachine") {
-            fillPath {
-                roundRect(5.6f, 3.6f, 18.4f, 5.8f, 1.1f)     // top beam
-                roundRect(10.9f, 5.8f, 13.1f, 9.6f, 0.8f)    // cable
-                roundRect(6.4f, 9.6f, 17.6f, 12.4f, 0.9f)    // plate
-                roundRect(6.4f, 13.4f, 17.6f, 16.2f, 0.9f)   // plate
-                roundRect(6.4f, 17.2f, 17.6f, 20.0f, 0.9f)   // plate
-            }
-        }
-    }
-
-    /** House — the home-gym presets. */
-    val House: ImageVector by lazy {
-        icon("OnbHouse") {
             strokePath(LIMB) {
-                moveTo(3.0f, 11.6f); lineTo(12f, 4.0f); lineTo(21.0f, 11.6f)
-                moveTo(5.4f, 10.4f); lineTo(5.4f, 19.8f); lineTo(18.6f, 19.8f); lineTo(18.6f, 10.4f)
+                seg(7.8f, 4.8f, 7.8f, 20.4f)                 // guide rods
+                seg(16.2f, 4.8f, 16.2f, 20.4f)
+                seg(12f, 4.8f, 12f, 8.4f)                    // lift rod
             }
-            fillPath { roundRect(10.0f, 14.2f, 14.0f, 19.8f, 0.8f) }   // door
+            strokePath(2.0f) { seg(18.2f, 13.0f, 20.6f, 13.0f) }                        // pin
+            fillPath {
+                roundRect(4.4f, 2.6f, 19.6f, 4.8f, 1.0f)     // top cap
+                roundRect(5.4f, 8.4f, 18.6f, 10.8f, 0.8f)    // plates
+                roundRect(5.4f, 11.8f, 18.6f, 14.2f, 0.8f)
+                roundRect(5.4f, 15.2f, 18.6f, 17.6f, 0.8f)
+                roundRect(5.4f, 18.6f, 18.6f, 21.0f, 0.8f)
+                circle(21.0f, 13.0f, 1.3f)                   // pin knob
+            }
         }
     }
 
-    /** Building — the commercial full-gym preset. Four windows, not six: at 24dp the third row
-     *  turned the facade into texture. */
+    // ── Preset glyphs ─────────────────────────────────────────────────────────
+    // Presets are PLACES, so they get their own glyphs rather than borrowing a piece of gear: a
+    // commercial building for the full gym, a house with the defining piece inside for the three
+    // home setups. The single-kit presets (dumbbells, bands, bodyweight) keep their kit's glyph.
+
+    /** Everything gym — a commercial building: flat roof, a dumbbell sign, a wide entrance. */
     val Building: ImageVector by lazy {
         icon("OnbBuilding") {
-            strokePath(LIMB) { roundRect(4.6f, 3.8f, 19.4f, 20.2f, 1.6f) }
+            strokePath(LIMB) {
+                moveTo(4.6f, 5.6f); lineTo(4.6f, 20.4f); lineTo(19.4f, 20.4f); lineTo(19.4f, 5.6f)
+            }
+            strokePath(1.4f) { seg(9.8f, 10.0f, 14.2f, 10.0f) }                         // sign bar
             fillPath {
-                roundRect(7.8f, 7.4f, 10.6f, 10.2f, 0.6f)
-                roundRect(13.4f, 7.4f, 16.2f, 10.2f, 0.6f)
-                roundRect(7.8f, 11.8f, 10.6f, 14.6f, 0.6f)
-                roundRect(13.4f, 11.8f, 16.2f, 14.6f, 0.6f)
-                roundRect(10.0f, 16.2f, 14.0f, 20.2f, 0.7f)  // door
+                roundRect(2.6f, 3.2f, 21.4f, 5.8f, 1.0f)     // roof
+                roundRect(7.8f, 8.0f, 9.8f, 12.0f, 0.8f)     // sign weights
+                roundRect(14.2f, 8.0f, 16.2f, 12.0f, 0.8f)
+                roundRect(8.4f, 14.4f, 15.6f, 20.4f, 0.8f)   // entrance
+            }
+        }
+    }
+
+    private fun ImageVector.Builder.house() = strokePath(LIMB) {
+        moveTo(2.6f, 11.2f); lineTo(12f, 3.4f); lineTo(21.4f, 11.2f)
+        moveTo(5.0f, 9.2f); lineTo(5.0f, 20.6f); lineTo(19.0f, 20.6f); lineTo(19.0f, 9.2f)
+    }
+
+    /** Home gym, big — a house with a loaded barbell inside. */
+    val HouseBarbell: ImageVector by lazy {
+        icon("OnbHouseBarbell") {
+            house()
+            strokePath(1.4f) { seg(7.0f, 15.6f, 17.0f, 15.6f) }
+            fillPath {
+                roundRect(8.4f, 12.2f, 10.2f, 19.0f, 0.8f)
+                roundRect(13.8f, 12.2f, 15.6f, 19.0f, 0.8f)
+            }
+        }
+    }
+
+    /** Home gym, small — a house with a dumbbell inside, tilted like [Dumbbell]. */
+    val HouseDumbbell: ImageVector by lazy {
+        icon("OnbHouseDumbbell") {
+            house()
+            strokePath(1.8f) { seg(10.6f, 16.8f, 13.4f, 14.0f) }
+            strokePath(3.0f) {
+                seg(8.6f, 16.2f, 10.8f, 18.4f)
+                seg(13.2f, 11.6f, 15.4f, 13.8f)
+            }
+        }
+    }
+
+    /** Home machine gym — a house with a weight stack inside. */
+    val HouseMachine: ImageVector by lazy {
+        icon("OnbHouseMachine") {
+            house()
+            fillPath {
+                roundRect(8.4f, 11.6f, 15.6f, 13.4f, 0.6f)
+                roundRect(8.4f, 14.2f, 15.6f, 16.0f, 0.6f)
+                roundRect(8.4f, 16.8f, 15.6f, 18.6f, 0.6f)
             }
         }
     }
@@ -383,9 +457,9 @@ object OnboardingIcons {
     fun forPreset(id: String): ImageVector = when (id) {
         "everything" -> Building
         "basic-gym" -> Machine
-        "home-big" -> SquatRack
-        "home-small" -> Bench
-        "developer" -> House
+        "home-big" -> HouseBarbell
+        "home-small" -> HouseDumbbell
+        "developer" -> HouseMachine
         "dumbbells" -> Dumbbell
         "bands-bw" -> Band
         "bodyweight" -> Bodyweight

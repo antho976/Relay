@@ -164,6 +164,23 @@ read in full, so nothing is hidden by it.
 scattered-tiny-accent §5 forbids, and the mono day name already carries day identity. The Program
 Editor keeps its dot — it lists every day at once, where the colour is doing work.
 
+## Onboarding, the week meter off the gym, gear and spots pages (2026-09-25)
+
+**The `PlanLedger` under the gym, gear and sore-spot questions.** Antho: "remove the your week to
+show in that page, it's in the way". On the three pages with the most tiles to tap it sat between
+the question and the grid and pushed the grid down, and nothing on those pages was decided by
+reading it (on the spots page it did not even move). It now shows only under the day-count
+question, where it IS the answer, and at full size on the week page. The earlier "the week meter
+answers what the preset did" note above no longer holds; the fine-tune page answers that. Do not
+put the meter back under the gym questions to "show progress".
+
+**Onboarding glyphs redrawn the same day.** Every equipment glyph was redrawn to read at 24dp: the
+level dumbbell was the letter H, the flat bench was a table, the dip station was "TT", the band was a
+tilde. Presets stopped borrowing a piece of gear (rack for "home big", bench for "home small") and
+got place glyphs: a building for the full gym, a house with the defining kit inside for the three
+home setups. Sore-spot tiles briefly carried a figure with the flagged joint lit; Antho had them
+removed the same day, so the spot tiles stay text-only.
+
 **Do not re-add:** a welcome screen. The cold-launch `AvexIntro` plays the wordmark moments earlier,
 §3 bans a wordmark pre-app, and the plan-mode fork is a better opening beat than a greeting — it is
 the most consequential question in the flow and the only one with motion in it.
@@ -324,6 +341,13 @@ logic requires somebody to say.
 
 Test for whether a future banner is allowed: **if it can still be there when you come back, it is a
 strip and it is banned.**
+
+**1a. The one dismissible overlay: Coach's advanced-tracking offer (2026-09-25).** Antho asked for
+the offer to be "a pop-up like the notifications ... with a remind me later or ignore", so
+`CoachAdvancedPrompt` is an overlay that carries a decision and stays until one is made. It still
+passes the test above: it displaces nothing, and every answer is a persisted preference (on,
+snoozed a week, or ignored for good), so it is never there when you come back unless you asked it to
+be. It is not a precedent for resident strips; a new offer shaped like it needs the same explicit ask.
 
 **2. A tab may badge its own count. The bell stays Home-only.**
 

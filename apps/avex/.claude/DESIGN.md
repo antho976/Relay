@@ -184,7 +184,7 @@ sheet top 16 — no custom radii. Photos: rounded 16 clips, caption UNDER the pl
 `bounceCombinedClick` · `clickableLabeled` · `GlyphButton` · `ForgeHeroAction` · `ForgePrimaryCapsule` /
 `ForgeOutlineCapsule` · `ForgeRowPill` · `ForgeShimmer` / `ForgeShimmerHost` · `ConfettiOverlay` · `statsEntrance` ·
 `EntranceItem` · `rememberDrawProgress` · `CountUpText` · `ExerciseLibraryPicker` ·
-`ProvideTouchExploration` · `SnackbarController` · `DayLogSheet`. **A pattern used on a 3rd
+`ProvideTouchExploration` · `SnackbarController` · `DayLogSheet` · `WeekBarRail`. **A pattern used on a 3rd
 screen gets promoted here the same turn (§2⑥)** — `DoctrineParityTest` checks this list against the
 package both ways, so it cannot drift.
 

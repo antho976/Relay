@@ -41,8 +41,8 @@ import com.forge.app.ui.theme.ForgeMotion
  * "Shoulders, 0 movements" to somebody whose shoulders are the reason they are on this page.
  *
  * Flagging is a preference, not a ban, and the caption says so rather than promising the movement is
- * gone. The week under it holds steady while you flag, which is true: steering changes WHICH
- * movements get picked, not how much work there is.
+ * gone. The week meter is not drawn here (2026-09-25): it held still while you flagged, so it
+ * answered nothing on this page and pushed the tiles down.
  */
 
 /** Head to toe, split where the body does. The order inside each half is anatomical, not by count. */

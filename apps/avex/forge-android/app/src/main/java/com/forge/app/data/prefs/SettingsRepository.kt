@@ -995,6 +995,16 @@ class SettingsRepository @Inject constructor(
     suspend fun setCoachAdvanced(v: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.COACH_ADVANCED] = v }
 
+    /**
+     * When the Coach page may next offer advanced tracking in its pop-up (epoch millis). 0 = now,
+     * [Long.MAX_VALUE] = never ("Ignore"). Turning the switch on retires the offer by itself, since
+     * the pop-up only shows while advanced tracking is off.
+     */
+    val coachAdvancedPromptAfter: Flow<Long> =
+        pref { it[PreferenceKeys.COACH_ADVANCED_PROMPT_AFTER] ?: 0L }
+    suspend fun setCoachAdvancedPromptAfter(epochMs: Long) =
+        context.forgePreferences.edit { it[PreferenceKeys.COACH_ADVANCED_PROMPT_AFTER] = epochMs }
+
     /** ISO week id of the last Week Brief the user opened/dismissed — gates the Overview banner. */
     val lastSeenCoachWeekId: Flow<String> = pref { it[PreferenceKeys.LAST_SEEN_COACH_WEEK_ID] ?: "" }
     suspend fun setLastSeenCoachWeekId(weekId: String) =

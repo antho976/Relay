@@ -42,6 +42,7 @@ import com.forge.app.program.MuscleGroup
 import com.forge.app.domain.coach.WeeklyReviewData
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.ui.coach.CoachActions
+import com.forge.app.ui.coach.CoachAdvancedPrompt
 import com.forge.app.ui.coach.CoachLedger
 import com.forge.app.ui.coach.CoachViewModel
 import com.forge.app.ui.coach.accountItemCount
@@ -91,6 +92,7 @@ class CoachLedgerScreenshotTest {
         name: String,
         amoled: Boolean = false,
         scrollTo: String? = null,
+        settleMs: Long = 0,
         content: @Composable () -> Unit
     ) {
         compose.setContent {
@@ -104,6 +106,7 @@ class CoachLedgerScreenshotTest {
             compose.onAllNodes(hasScrollAction()).onFirst()
                 .performScrollToNode(hasText(scrollTo, substring = true))
         }
+        if (settleMs > 0) compose.mainClock.advanceTimeBy(settleMs)
         compose.onRoot().captureRoboImage("src/test/screenshots/$name.png", options)
     }
 
@@ -120,8 +123,8 @@ class CoachLedgerScreenshotTest {
     fun ledger() = shoot("coach-ledger") { ledger(activeState())() }
 
     /**
-     * The default page, advanced tracking off: the account and what is next, then the foot that
-     * names what is off and turns it on. Shot at the seam where the record ends and NEXT follows,
+     * The default page, advanced tracking off: the account and what is next, with no readings and
+     * no foot (the offer to turn them on is the pop-up, [advancedPrompt]). Shot at the seam where the record ends and NEXT follows,
      * which is where the difference is. (Scrolling to "NEXT" itself would match the "next brief" meta at
      * the top of the page, so the anchor is the first rung under it.)
      */
@@ -217,24 +220,47 @@ class CoachLedgerScreenshotTest {
         compose.onNodeWithText("SIGNALS").assertIsDisplayed()
     }
 
-    /** The foot of the default page turns the readings on in place, through the one preference. */
+    /**
+     * The default page no longer closes on a "Show advanced tracking" line: the offer moved to the
+     * pop-up. Only the way back ("Hide") stays in the column, and only while the readings are on.
+     */
     @Test
-    fun theFootTurnsAdvancedTrackingOn() {
-        var set: Boolean? = null
+    fun theBasicLedgerHasNoShowFoot() {
+        compose.setContent { ForgeTheme { ledger(activeState().copy(advanced = false))() } }
+        val found = runCatching {
+            compose.onAllNodes(hasScrollAction()).onFirst()
+                .performScrollToNode(hasText("advanced tracking", substring = true))
+        }.isSuccess
+        assertFalse("the basic ledger still draws an advanced-tracking foot", found)
+    }
+
+    /** The pop-up over the account, as the reader first sees it with advanced tracking off. */
+    @Test
+    fun advancedPrompt() = shoot("coach-advanced-prompt", settleMs = 2_000) {
+        ledger(activeState().copy(advanced = false))()
+        CoachAdvancedPrompt(visible = true, onTurnOn = {}, onRemindLater = {}, onIgnore = {})
+    }
+
+    /** Each of the pop-up's three answers reaches its own action. */
+    @Test
+    fun theAdvancedPromptOffersTurnOnRemindAndIgnore() {
+        val tapped = mutableListOf<String>()
         compose.setContent {
             ForgeTheme {
-                CoachLedger(
-                    state = activeState().copy(advanced = false),
-                    weightUnit = WeightUnit.LB,
-                    now = NOW,
-                    actions = CoachActions(setAdvanced = { set = it })
+                CoachAdvancedPrompt(
+                    visible = true,
+                    onTurnOn = { tapped += "on" },
+                    onRemindLater = { tapped += "later" },
+                    onIgnore = { tapped += "ignore" }
                 )
             }
         }
-        compose.onAllNodes(hasScrollAction()).onFirst()
-            .performScrollToNode(hasText("Show advanced tracking", substring = true))
-        compose.onNodeWithText("Show advanced tracking", substring = true).performClick()
-        assertEquals(true, set)
+        // The offer holds back a beat so the page's entrance lands first.
+        compose.mainClock.advanceTimeBy(2_000)
+        compose.onNodeWithText("Turn on").performClick()
+        compose.onNodeWithText("Remind me later").performClick()
+        compose.onNodeWithText("Ignore").performClick()
+        assertEquals(listOf("on", "later", "ignore"), tapped)
     }
 
     /** AMOLED is a shipped ground, not a variant. */

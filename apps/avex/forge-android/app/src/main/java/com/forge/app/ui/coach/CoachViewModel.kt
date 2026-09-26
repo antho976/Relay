@@ -69,6 +69,11 @@ class CoachViewModel @Inject constructor(
          * on, the readings behind the calls are drawn too: signals, block, inputs, learned.
          */
         val advanced: Boolean = false,
+        /**
+         * Epoch millis before which the page does not offer advanced tracking in its pop-up.
+         * Defaults to never, so nothing is offered until the stored preference has been read.
+         */
+        val advancedPromptAfter: Long = Long.MAX_VALUE,
         val brief: CoachBrief? = null,
         val watch: CoachWatch? = null,
         val timeline: CoachTimeline? = null,
@@ -104,6 +109,11 @@ class CoachViewModel @Inject constructor(
         // The advanced-tracking switch is a view preference, not an engine input: it flips which
         // regions the page draws without re-running the weekly pass, so it rides its own collector.
         launch { settingsRepo.coachAdvanced.collect { v -> _state.update { it.copy(advanced = v) } } }
+        launch {
+            settingsRepo.coachAdvancedPromptAfter.collect { v ->
+                _state.update { it.copy(advancedPromptAfter = v) }
+            }
+        }
         inputSignals.changes().collect { load() }
     }
 
@@ -112,7 +122,12 @@ class CoachViewModel @Inject constructor(
         // reached anyway, don't run the weekly pass against an empty program (it would write a
         // coach_pass row and could auto-apply).
         if (settingsRepo.freestyleMode.first()) {
-            _state.value = UiState(loading = false, freestyle = true, advanced = _state.value.advanced)
+            _state.value = UiState(
+                loading = false,
+                freestyle = true,
+                advanced = _state.value.advanced,
+                advancedPromptAfter = _state.value.advancedPromptAfter
+            )
             return@withContext
         }
         val brief = runCatching { coachRepo.brief() }.getOrNull()
@@ -161,6 +176,18 @@ class CoachViewModel @Inject constructor(
      */
     fun setAdvanced(v: Boolean) = viewModelScope.launch {
         runCatching { settingsRepo.setCoachAdvanced(v) }
+    }
+
+    /** The advanced-tracking pop-up's "Remind me later": offer it again in a week. */
+    fun remindAdvancedLater() = viewModelScope.launch {
+        runCatching {
+            settingsRepo.setCoachAdvancedPromptAfter(System.currentTimeMillis() + ADVANCED_PROMPT_SNOOZE_MS)
+        }
+    }
+
+    /** The advanced-tracking pop-up's "Ignore": never offer it again. Settings → Coach still has it. */
+    fun ignoreAdvancedPrompt() = viewModelScope.launch {
+        runCatching { settingsRepo.setCoachAdvancedPromptAfter(Long.MAX_VALUE) }
     }
 
     // ─── Decision lifecycle ────────────────────────────────────────────────────
@@ -351,5 +378,7 @@ class CoachViewModel @Inject constructor(
         const val E1RM_BOUTS_SHOWN = 12
         const val SLEEP_NIGHTS_SHOWN = 14
         const val HR_READINGS_SHOWN = 30
+        /** How long "Remind me later" holds the advanced-tracking pop-up back: one week. */
+        const val ADVANCED_PROMPT_SNOOZE_MS = 7L * 24 * 60 * 60 * 1000
     }
 }

@@ -274,12 +274,17 @@ what became of them, and the one forward line. On, `SIGNALS`, `BLOCK`, `WHAT IT 
 `LEARNED` draw between and after them as before. It is a VIEW preference: the weekly pass, the
 inputs it reads and auto-apply are untouched, and the switch rides its own collector in
 `CoachViewModel.refreshWhileVisible` rather than `EngineInputSignals`. The `WHERE_YOU_STAND` deep
-link opens at the top of the account while it is off. **The page closes on the switch** (`coachTracking`,
-`CoachScreen.kt`): off, one muted line names what is off and a `Show advanced tracking →` action
-flips the preference in place so the page grows under the tap; on, the same rung reads `Hide`. A
-Settings switch nobody has seen is a feature nobody has, so the page is its first home and
-Settings → Coach its second. The action is onBg, not accent (§14). `coach-ledger-basic.png` pins
-the default; every other Coach golden is the advanced page.
+link opens at the top of the account while it is off. **Off, the page OFFERS the switch in a pop-up**
+(`CoachAdvancedPrompt.kt`, 2026-09-25, Antho: "should be a pop-up like the notifications ... with a
+remind me later or ignore"; it replaced a `Show advanced tracking →` foot line). It is shaped like
+the arrival receipt (an overlay under the status bar, surface fill, nothing on the page moves) but
+carries a decision: `Turn on` flips the preference in place, `Remind me later` holds it back a week,
+`Ignore` retires it for good. Both are one preference, `SettingsRepository.coachAdvancedPromptAfter`
+(epoch ms; 0 = now, `Long.MAX_VALUE` = ignored). It waits ~700ms for the entrance cascade, only
+shows on a page with an account to read, and only while the hub is on Coach. On, the account closes
+on `Hide advanced tracking →` (`coachTracking`), onBg not accent (§14). Settings → Coach stays the
+switch's other home. `coach-ledger-basic.png` pins the default, `coach-advanced-prompt.png` the
+pop-up; every other Coach golden is the advanced page.
 
 **The spine** (`Modifier.ledgerSpine`, `CoachUi.kt`) is the one line on the page and it is DATA: the
 time axis, drawn at x=10dp inside the gutter so all four regions keep the one 24dp content column.
@@ -625,18 +630,26 @@ all three plan-mode cards carry short pre-rendered vignette videos (alpha WebP a
 `remotion-vignettes/`, rendered to res/raw) that play twice then FREEZE on the built plan / caught
 log, and REPLAY when you tap that card — the illustration is the answer to the question, so choosing
 an option plays the answer back instead of leaving a frozen frame (`replays` counter, per card, so
-picking one doesn't restart the two you didn't pick). All three are written in one vocabulary — a mono
-UPPERCASE label, then that row's accent blocks, on the warm page — and differ only in what the TEXT
-says, how the rows are ARRANGED and the RHYTHM they land in, which is the step's whole argument:
-generated is `MON PUSH ▪▪▪▪▪` × 3, aligned into a table (a dated week, handed over) that snaps in
-almost at once and then tallies its exercises straight across the week without pausing at row breaks;
-custom is `BENCH ▪▪▪` — the exercises themselves, the level you work at when you build your own —
-landed one per second by a `+ ADD` that is still blinking on the next open line when it freezes,
-because a plan that is yours isn't done until you say so; freestyle drops alignment entirely and
-lands day-stamped rows wherever, out of order and at uneven intervals, so no two share a row or a
-left edge. Redesigned 2026-08-23: the set before it was a dense grid of unlabelled blocks (unreadable
-at 72dp) and before that a wall of 8dp exercise names still keyed to the pre-2026-08-16 cool palette
-and the Navy accent, which made every accent mark on the step a dead pixel. A shared `PlanModeSync` starts
+picking one doesn't restart the two you didn't pick). Each is drawn in a mark the app itself uses,
+so the three read as different SHAPES at a glance and each previews real UI rather than a diagram:
+generated is `PlanLedger`'s bar week, Mon to Sun, whose tracks shuffle in muted grey like a solver
+trying weeks and then lock left to right, training days turning accent at their volume and rest days
+dropping to empty (resting is shown being chosen); custom is the same Mon to Sun week as seven
+dashed empty slots, with a finger DRAGGING accent PUSH · PULL · LEGS tiles in from the side onto
+Mon, Wed and Fri (dragging is the gesture no other card has, and the rest stay dashed so it freezes
+as a week you could keep filling); freestyle is a timeline running up to a live NOW point, with an
+accent check popping on each time something is logged (Squat MON, Run THU, Pull-ups FRI, Bench SUN,
+Row WED): checks read as "logged", and the skipping days, the mixed entries and NOW's uneven pace
+read as "no schedule". Redesigned 2026-09-25:
+the set before it drew all three as the same mono label plus a row of accent dashes in a generic
+monospace, so the cards read as three near-identical tables of morse code. A first pass the same day
+tried custom as grey exercise tiles added by a `+` (read as plain, with no colour beside the other two)
+and freestyle as `CalendarHeatmap`'s grid filling in (read as a stats chart, not as "no plan"); the videos now set type in
+vendored Noto faces (`remotion-vignettes/public/fonts`) standing in for the platform's sans and mono.
+Earlier (2026-08-23) the set was a dense grid of unlabelled blocks, and before that a wall of 8dp
+exercise names keyed to the pre-2026-08-16 Navy accent. Glow/bloom was tried and cut on both the
+generated lock and the first-pass freestyle grid: 3x the file size for nothing visible at 72dp (`render.sh`).
+A shared `PlanModeSync` starts
 the videos together so they loop and freeze in lockstep; the live Canvas vignette
 (`PlanModeVignettes`) is the decode / pre-28 / reduce-motion fallback — reduce-motion being the one
 that matters, since those users never see the video at all — and is a deliberate number-for-number

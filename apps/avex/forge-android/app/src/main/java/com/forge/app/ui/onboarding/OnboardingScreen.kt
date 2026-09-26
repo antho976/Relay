@@ -2,7 +2,6 @@ package com.forge.app.ui.onboarding
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -59,8 +58,8 @@ import kotlin.random.Random
  * - **The fork leads.** Plan mode is the first screen, because it decides how much of the rest runs.
  * - **Only plan-shaping questions are in the path** — goal, experience, days, gym, gear. Every
  *   setting moved to one optional closing step ([StepExtras]) that lands *after* the week exists.
- * - **The week builds under the question** ([PlanLedger]), from the day-count on. It sits outside
- *   the page slider, so questions come and go while the plan stays put and animates its own values.
+ * - **The week is drawn under the day-count question** ([PlanLedger]), outside the page slider. It
+ *   used to stay under gym, gear and sore spots too; it was in the way there and left on 2026-09-25.
  * - **The rail is segmented** ([StepRail]) — one cell per step of the path actually taken, so the
  *   short custom / freestyle path visibly drops the four cells it will never run.
  *
@@ -292,28 +291,22 @@ fun OnboardingScreen(
         onSkip = if (!isLast) ({ showSkipConfirm = true }) else null,
         gateHint = gateHint,
         // The plan under construction — outside the page slider, so it holds still while the
-        // questions move past it. The week page shows the same mark at full size instead.
+        // questions move past it. Only on the day-count step, where it IS the answer: on the gym,
+        // gear and spots pages it sat between the question and the tiles and answered nothing the
+        // user was deciding there (removed 2026-09-25). The week page draws it at full size.
         ledger = {
             AnimatedVisibility(
-                visible = page == PAGE_DAYS || page == PAGE_GYM || page == PAGE_GEAR || page == PAGE_SPOTS,
+                visible = page == PAGE_DAYS,
                 enter = fadeIn(ForgeMotion.enterTween()) + expandVertically(ForgeMotion.enterTween()),
                 exit = fadeOut(ForgeMotion.exitTween()) + shrinkVertically(ForgeMotion.exitTween())
             ) {
                 Column {
                     Spacer(Modifier.height(20.dp))
-                    // The week takes the room the question doesn't need. On the day-count step it IS
-                    // the answer, so it stands tall; the gym and gear steps need their grids, so it
-                    // compacts to make way. Animated, because the same bars are being resized.
-                    val trackHeight by animateDpAsState(
-                        if (page == PAGE_DAYS) 148.dp else 72.dp,
-                        ForgeMotion.standardTween(),
-                        label = "ledger_height"
-                    )
                     PlanLedger(
                         archetypes = archetypes,
                         plannedSets = plannedSets,
                         days = previewDays,
-                        trackHeight = trackHeight
+                        trackHeight = 148.dp
                     )
                 }
             }
