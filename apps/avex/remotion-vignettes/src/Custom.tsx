@@ -1,147 +1,155 @@
 import React from 'react';
-import {AbsoluteFill, spring, useCurrentFrame, useVideoConfig} from 'remotion';
-import {LABEL_SIZE, MonoLabel, SET_H, SetRow, setsWidth} from './Marks';
-import {ACCENT, CLEAR_END, heldOut, HOLD_END, LOOP_FRAMES, MUTED, smoothstep} from './theme';
+import {AbsoluteFill, useCurrentFrame} from 'remotion';
+import {ACCENT, bump, DP, heldOut, mix, MONO, MUTED, ON_BG, settle, smoothstep, withAlpha} from './theme';
 
 /**
- * "I'll make my own" — one day, and you name every exercise in it.
+ * "I'll make my own" — you decide what goes on which day.
  *
- * The text is the tell. Where the generated card is dated days and their splits — a WEEK, handed
- * over — this one is BENCH · INCLINE · DIPS: the actual exercises, which is the level you work at
- * when you build a plan yourself. One day, close up.
+ * The week is laid out empty, seven dashed slots, and a finger DRAGS each training day into the slot
+ * it chose: PUSH onto Monday, PULL onto Wednesday, LEGS onto Friday. Dragging is the one gesture no
+ * other card has, and it is the whole difference between this option and the generated one: the
+ * same week, but every day in it was put there by hand. The days you leave empty stay dashed, so the
+ * frozen frame still reads as a week you could keep filling.
  *
- * And it never finishes. Rows land one at a time, slowly enough to watch a decision get made, and
- * the video freezes with `+ ADD` still blinking on the next open line. That is the honest end state
- * for this option: a plan that is yours isn't done until you say it is.
- *
- * Shares Generated's length and its held-first / held-last shape so the cards stay in lockstep.
+ * Frame 0 and the last frame are the same three placed days, so the seam and the freeze land on it.
  */
 
-/** One hand-built push day. The blocks are that exercise's sets. */
-const ROWS = [
-  {name: 'BENCH', sets: 3},
-  {name: 'INCLINE', sets: 4},
-  {name: 'DIPS', sets: 3},
+const PLACED = [
+  {slot: 0, label: 'PUSH'},
+  {slot: 2, label: 'PULL'},
+  {slot: 4, label: 'LEGS'},
 ];
+const DAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
-/** One row per beat — a full second apart, against the generated card's near-simultaneous snap. */
-const ROW_IN = [46, 76, 106];
-const CURSOR_TAP = -6; // it taps, then drops to the next line just ahead of the row it placed
-const CURSOR_TRAVEL = 9;
+// Geometry, in dp on the 282×72 strip.
+const SLOT_W = 34 * DP;
+const SLOT_H = 40 * DP;
+const PITCH = 38 * DP;
+const TOP = 8.5 * DP;
+const RADIUS = 8 * DP;
+const DASH = 0.75 * DP;
+const DAY_GAP = 5 * DP;
+const DAY_SIZE = 10 * DP; // labelS
+const CHIP_SIZE = 9 * DP;
+const TOUCH_R = 9 * DP;
+const LEFT = (1128 - (6 * PITCH + SLOT_W)) / 2;
+/** Where each drag enters from: just past the right edge, as if from a tray beside the week. */
+const ENTER_X = 1128 + 6 * DP;
 
-const ROW_PITCH = 62;
-const COL_SETS = 300; // x of the first set block, past the longest name
-const CURSOR_R = 19;
+// Timeline, in frames. Each drag slides in over TRAVEL frames, drops, then settles.
+const DRAGS = [42, 68, 94];
+const TRAVEL = 20;
+const DROP_LEN = 14;
+
+/** Drag `i` at `frame`: its x, and its lift (1 carried, 0 settled in the slot). */
+const dragState = (i: number, frame: number) => {
+  const start = DRAGS[i];
+  const t = smoothstep(frame, start, start + TRAVEL);
+  const x = ENTER_X + (LEFT + PLACED[i].slot * PITCH - ENTER_X) * t;
+  const lift = frame < start + TRAVEL ? 1 : 1 - settle(frame, start + TRAVEL, DROP_LEN);
+  return {x, lift};
+};
 
 export const Custom: React.FC = () => {
   const frame = useCurrentFrame();
-  const {fps, width, height} = useVideoConfig();
   const held = heldOut(frame);
 
-  const blockW = COL_SETS + setsWidth(Math.max(...ROWS.map((r) => r.sets)));
-  const left = (width - blockW) / 2;
-  // Rows 0..n-1 plus the open line the `+` waits on.
-  const top = (height - (LABEL_SIZE + ROWS.length * ROW_PITCH)) / 2;
-  const lineY = (line: number) => top + line * ROW_PITCH;
-
-  // Each row: 1 held, 0 cleared, springs back to 1 when you add it, 1 held again — so frame 0 and the
-  // last frame are the same day and the seam never jumps.
-  const placed = ROW_IN.map((t) =>
-    Math.min(1, held + spring({frame: frame - t, fps, config: {damping: 17, stiffness: 170}}))
-  );
-
-  // The cursor waits on the first open line, dropping once a row has landed on the one above it.
-  const stepped = ROW_IN.reduce(
-    (acc, t) => acc + smoothstep(frame, t + CURSOR_TAP, t + CURSOR_TAP + CURSOR_TRAVEL),
-    0
-  );
-  // Before the clear it is already parked on the last line; it is invisible across the clear itself,
-  // so jumping back to the top there costs nothing.
-  const cursorLine = frame < CLEAR_END ? ROWS.length : stepped;
-  const cursorAlpha = Math.max(
-    1 - smoothstep(frame, HOLD_END, HOLD_END + 8),
-    smoothstep(frame, CLEAR_END, CLEAR_END + 10)
-  );
-  // A whole number of cycles across the loop so the blink matches at the seam, phased so BOTH holds —
-  // including the frame the card freezes on — catch it at full strength.
-  const blink = 0.55 + 0.45 * Math.cos((frame / LOOP_FRAMES) * 2 * Math.PI * 5);
-  const press =
-    1 - 0.16 * ROW_IN.reduce((m, t) => Math.max(m, Math.max(0, 1 - Math.abs(frame - (t + CURSOR_TAP)) / 6)), 0);
-
   return (
-    <AbsoluteFill>
-      {ROWS.map((row, i) => {
-        const appear = placed[i];
-        if (appear <= 0) return null;
-        // Fresh placements bloom and settle; neither hold glows.
-        const glow = held > 0 ? 0 : 1 - smoothstep(frame, ROW_IN[i], ROW_IN[i] + 20);
+    <AbsoluteFill style={{overflow: 'hidden'}}>
+      {DAYS.map((day, i) => {
+        const p = PLACED.findIndex((d) => d.slot === i);
+        // A day's letter lights once something has been dropped on it.
+        const filled = p < 0 ? 0 : Math.max(held, smoothstep(frame, DRAGS[p] + TRAVEL, DRAGS[p] + TRAVEL + 4));
+        const x = LEFT + i * PITCH;
         return (
-          <div
-            key={row.name}
-            style={{
-              position: 'absolute',
-              left,
-              top: lineY(i),
-              opacity: appear,
-              transform: `translateX(${(1 - appear) * 18}px)`,
-            }}
-          >
-            <MonoLabel opacity={1}>{row.name}</MonoLabel>
-            <div style={{position: 'absolute', left: COL_SETS, top: (LABEL_SIZE - SET_H) / 2}}>
-              <SetRow sets={row.sets} alphaAt={() => 1} glow={glow} />
+          <React.Fragment key={i}>
+            <div
+              style={{
+                position: 'absolute',
+                left: x,
+                top: TOP,
+                width: SLOT_W,
+                height: SLOT_H,
+                boxSizing: 'border-box',
+                borderRadius: RADIUS,
+                border: `${DASH}px dashed ${withAlpha(MUTED, 0.35)}`,
+              }}
+            />
+            <div
+              style={{
+                position: 'absolute',
+                left: x,
+                width: SLOT_W,
+                top: TOP + SLOT_H + DAY_GAP,
+                textAlign: 'center',
+                fontFamily: MONO,
+                fontSize: DAY_SIZE,
+                lineHeight: `${DAY_SIZE}px`,
+                color: mix(MUTED, ON_BG, filled),
+              }}
+            >
+              {day}
             </div>
-          </div>
+          </React.Fragment>
         );
       })}
 
-      {/* `+ ADD` — you, on the next open line. The one row the generated card hasn't got. */}
-      <div
-        style={{
-          position: 'absolute',
-          left,
-          top: lineY(cursorLine),
-          height: LABEL_SIZE,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 18,
-          opacity: cursorAlpha * blink,
-        }}
-      >
-        <div
-          style={{
-            position: 'relative',
-            width: CURSOR_R * 2,
-            height: CURSOR_R * 2,
-            borderRadius: 999,
-            border: `3px solid ${ACCENT}`,
-            transform: `scale(${press})`,
-          }}
-        >
-          <div style={plusBar(CURSOR_R, false)} />
-          <div style={plusBar(CURSOR_R, true)} />
-        </div>
-        <MonoLabel opacity={1} color={MUTED}>
-          ADD
-        </MonoLabel>
-      </div>
+      {PLACED.map((d, i) => {
+        // Held: sitting in its slot, fading out as the week clears.
+        if (held > 0) return <Chip key={d.label} label={d.label} x={LEFT + d.slot * PITCH} lift={0} alpha={held} />;
+        if (frame < DRAGS[i]) return null;
+        const {x, lift} = dragState(i, frame);
+        return <Chip key={d.label} label={d.label} x={x} lift={lift} alpha={1} />;
+      })}
+
+      {/* The finger: Android's "show taps" dot, riding each tile until it is dropped. */}
+      {PLACED.map((d, i) => {
+        const start = DRAGS[i];
+        const a = Math.min(smoothstep(frame, start, start + 4), 1 - smoothstep(frame, start + TRAVEL + 1, start + TRAVEL + 7));
+        if (a <= 0) return null;
+        const {x} = dragState(i, frame);
+        const r = TOUCH_R * (1 - 0.15 * bump(frame, start + TRAVEL - 2, 8));
+        return (
+          <div
+            key={d.label}
+            style={{
+              position: 'absolute',
+              left: x + SLOT_W / 2 - r,
+              top: TOP + SLOT_H * 0.62 - r,
+              width: r * 2,
+              height: r * 2,
+              borderRadius: '50%',
+              background: withAlpha(ON_BG, 0.35 * a),
+            }}
+          />
+        );
+      })}
     </AbsoluteFill>
   );
 };
 
-/**
- * Bars of length `r`, centred on the ring. Centred by translation rather than by offsetting from the
- * box's edges: absolutely positioned children sit in the PADDING box, which under `border-box` sizing
- * is the ring's 3px stroke smaller than `r * 2` and inset by it — edge maths against `r * 2` put the
- * plus exactly one border-width down and to the right. The padding box is concentric with the ring
- * either way, so centring in it is correct under both.
- */
-const plusBar = (r: number, vertical: boolean): React.CSSProperties => ({
-  position: 'absolute',
-  left: '50%',
-  top: '50%',
-  transform: 'translate(-50%, -50%)',
-  width: vertical ? 4 : r,
-  height: vertical ? r : 4,
-  borderRadius: 2,
-  background: ACCENT,
-});
+/** A training day: an accent tile with its split. [lift] 1 = carried (bigger, tilted), 0 = placed. */
+const Chip: React.FC<{label: string; x: number; lift: number; alpha: number}> = ({label, x, lift, alpha}) => (
+  <div
+    style={{
+      position: 'absolute',
+      left: x,
+      top: TOP,
+      width: SLOT_W,
+      height: SLOT_H,
+      borderRadius: RADIUS,
+      background: ACCENT,
+      opacity: alpha,
+      transform: `scale(${1 + 0.1 * lift}) rotate(${-5 * lift}deg)`,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontFamily: MONO,
+      fontSize: CHIP_SIZE,
+      lineHeight: `${CHIP_SIZE}px`,
+      color: ON_BG,
+    }}
+  >
+    {label}
+  </div>
+);
