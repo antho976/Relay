@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.JsonWriter
 import android.net.Uri
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
 import androidx.documentfile.provider.DocumentFile
 import com.forge.app.RestoreManifest
 import com.forge.app.core.io.exportFile
@@ -14,6 +15,7 @@ import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.prefs.PreferenceKeys
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioCondition
@@ -732,6 +734,13 @@ class BackupRepository @Inject constructor(
         runCatching { File(context.filesDir, MANUAL_BACKUP_MARKER).writeText("1") }
     }
 
+    /** Delete the document a picker created for a backup that is not going ahead (the unlock for it
+     *  was refused). Best effort: a provider that can't delete leaves an empty file, nothing worse. */
+    suspend fun discardBackupTarget(uri: Uri) = withContext(Dispatchers.IO) {
+        runCatching { android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri) }
+        Unit
+    }
+
     /**
      * Writes the backup archive to [out]: the DB snapshot, the DataStore prefs (if present), and
      * every progress-photo file (under [PHOTOS_PREFIX]). Shared by [backupToUri] and [autoBackup]
@@ -965,9 +974,14 @@ class BackupRepository @Inject constructor(
             // will, and simply skip a blob that doesn't parse: the restore proceeds with the
             // database (the part that holds the training history) and the user keeps their current
             // settings, instead of the app failing to start.
+            //
+            // The protections are then put back to what this phone has now. Copied verbatim, a
+            // backup made with the gallery lock off switched it off here, behind nothing but an
+            // unauthenticated confirm (Data D1). A restore brings back training data and
+            // preferences; whether this phone is locked stays this phone's decision.
             val pendingPrefs = File(context.filesDir, PENDING_PREFS_NAME)
             if (pendingPrefs.exists()) pendingPrefs.delete()
-            prefsFile?.takeIf { isPreferencesBlob(it) }?.copyTo(pendingPrefs, overwrite = true)
+            prefsFile?.let { stageRestoredPreferences(it, pendingPrefs, context.cacheDir, currentProtections()) }
 
             // Photos passed validation alongside the DB — stage them as a pending folder rather than
             // touching the live one. ForgeApp.applyPendingRestore swaps it in at boot in the SAME pass
@@ -1149,28 +1163,14 @@ class BackupRepository @Inject constructor(
         }
     }.getOrDefault(false)
 
-    /**
-     * True when [file] parses as the Preferences protobuf DataStore stores — the prefs-side
-     * counterpart to [isForgeDatabase]. Read through DataStore itself over a throwaway copy, so
-     * "this file reads" here means "this file reads" at boot.
-     */
-    private suspend fun isPreferencesBlob(file: File): Boolean {
-        val probe = File(context.cacheDir, "restore_prefs_probe.preferences_pb")
-        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        return try {
-            runCatching {
-                file.copyTo(probe, overwrite = true)
-                // No corruptionHandler on purpose: an unreadable blob must THROW here, where the
-                // restore can decline it, rather than be quietly replaced with defaults at boot.
-                PreferenceDataStoreFactory.create(scope = scope) { probe }
-                    .data.first()
-                true
-            }.getOrDefault(false)
-        } finally {
-            scope.cancel()
-            probe.delete()
-        }
-    }
+    /** This phone's protections as they stand, read through the same sentinel-backed flows as the
+     *  lock itself, so a store that can't be read keeps what the user last chose. */
+    private suspend fun currentProtections() = KeptProtections(
+        privacyMode = settingsRepo.privacyMode.first(),
+        appLockEnabled = settingsRepo.appLockEnabled.first(),
+        galleryLockEnabled = settingsRepo.galleryLockEnabled.first(),
+        appLockTimeoutSec = settingsRepo.appLockTimeoutSec.first(),
+    )
 
     /** The SQLite user_version (Room schema version) of a candidate DB file; MAX if unreadable (→ rejected). */
     private fun databaseUserVersion(file: File): Int = runCatching {
@@ -1359,4 +1359,54 @@ internal class ExtractionBudget(private val maxTotalBytes: Long, private val max
 
     /** Record one more photo entry; false once too many have been seen. */
     fun countPhoto(): Boolean = ++photos <= maxPhotos
+}
+
+/** The settings a restore never takes from the backup: the same four "Reset app settings" keeps. */
+internal data class KeptProtections(
+    val privacyMode: Boolean,
+    val appLockEnabled: Boolean,
+    val galleryLockEnabled: Boolean,
+    val appLockTimeoutSec: Int,
+)
+
+/**
+ * Stage the backup's settings blob [incoming] as [dest], with [keep] written over its protection
+ * keys. Returns false, leaving no [dest], when [incoming] is not a Preferences protobuf.
+ *
+ * The blob is opened through DataStore itself over a throwaway copy in [scratch], so "this file
+ * reads" here means "this file reads" at boot, and the file staged is one DataStore wrote. No
+ * corruptionHandler on purpose: an unreadable blob must THROW here, where the restore can decline
+ * it, rather than be quietly replaced with defaults at boot. Top-level and internal so the rule can
+ * be tested without a ZIP, a Context or a database.
+ */
+internal suspend fun stageRestoredPreferences(
+    incoming: File,
+    dest: File,
+    scratch: File,
+    keep: KeptProtections,
+): Boolean {
+    // DataStore refuses a file that doesn't end in `.preferences_pb`.
+    val probe = File(scratch, "restore_prefs_stage.preferences_pb")
+    val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    return try {
+        runCatching {
+            incoming.copyTo(probe, overwrite = true)
+            PreferenceDataStoreFactory.create(scope = scope) { probe }.edit { prefs ->
+                prefs[PreferenceKeys.PRIVACY_MODE] = keep.privacyMode
+                prefs[PreferenceKeys.APP_LOCK_ENABLED] = keep.appLockEnabled
+                prefs[PreferenceKeys.GALLERY_LOCK_ENABLED] = keep.galleryLockEnabled
+                prefs[PreferenceKeys.APP_LOCK_TIMEOUT_SEC] = keep.appLockTimeoutSec
+            }
+            probe.copyTo(dest, overwrite = true)
+            true
+        }.getOrElse {
+            // A half-copied dest would be swapped in at boot and read as corrupt, i.e. every
+            // setting at its default: keep the current settings instead, as for an unreadable blob.
+            dest.delete()
+            false
+        }
+    } finally {
+        scope.cancel()
+        probe.delete()
+    }
 }

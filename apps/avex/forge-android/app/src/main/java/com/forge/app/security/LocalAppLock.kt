@@ -1,5 +1,6 @@
 package com.forge.app.security
 
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 
 /**
@@ -11,3 +12,11 @@ import androidx.compose.runtime.staticCompositionLocalOf
 val LocalAppLock = staticCompositionLocalOf<AppLockManager> {
     error("LocalAppLock not provided — wrap content in CompositionLocalProvider(LocalAppLock provides ...)")
 }
+
+/**
+ * True while the whole-app lock screen is up. Provided at the app root, and read by the lock-aware
+ * window composables in `ui.common.window`: a dialog, sheet or popup is its own Android window and
+ * would otherwise sit on top of the lock overlay. Defaults to false, so previews, tests and anything
+ * composed outside the root need no provider.
+ */
+val LocalAppLockActive = compositionLocalOf { false }
