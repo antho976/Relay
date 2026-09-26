@@ -67,8 +67,9 @@ import kotlinx.coroutines.launch
  */
 private const val MAX_RESUME_REWIND_MS = 6L * 60 * 60 * 1000
 
-/** How many recently performed moves the footer offers as one-tap adds. */
-private const val QUICK_ADD_LIMIT = 6
+/** How many recently performed moves the empty log lists, and the in-session rail carries. */
+private const val START_RECENT_LIMIT = 6
+private const val RAIL_RECENT_LIMIT = 8
 
 /**
  * The freestyle ("go with the flow") logger: a workout with no fixed plan, logged set by set as it
@@ -91,7 +92,7 @@ fun FreestyleLogScreen(
 ) {
     val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
     val unitLabel = com.forge.app.domain.units.unitLabel(weightUnit)
-    val hasTemplates by templateViewModel.hasTemplates.collectAsStateWithLifecycle()
+    val templates by templateViewModel.templates.collectAsStateWithLifecycle()
     val recentDefs by browserViewModel.recent.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val view = LocalView.current
@@ -142,11 +143,15 @@ fun FreestyleLogScreen(
     // Last time's sets and the pinned cue (#112, GYMAP-49) for every move on the log, loaded once
     // each and kept here rather than in the card so scrolling a card away doesn't drop them.
     LaunchedEffect(items.map { it.libId }) {
-        items.map { it.libId }.filter { it !in lastTime }.forEach { id ->
-            val sets = viewModel.lastSets(id)
-            val note = viewModel.pinnedNote(id)
-            lastTime = lastTime + (id to sets)
-            pinnedNotes = pinnedNotes + (id to note)
+        items.map { it.libId }.forEach { id ->
+            if (id !in lastTime) lastTime = lastTime + (id to viewModel.lastSets(id))
+            if (id !in pinnedNotes) pinnedNotes = pinnedNotes + (id to viewModel.pinnedNote(id))
+        }
+    }
+
+    LaunchedEffect(recentDefs) {
+        recentDefs.map { it.id }.filter { it !in lastTime }.forEach { id ->
+            lastTime = lastTime + (id to viewModel.lastSets(id))
         }
     }
 
@@ -193,6 +198,20 @@ fun FreestyleLogScreen(
         if (fresh.isEmpty()) return
         items = items + fresh
         open(fresh.first().libId)
+    }
+
+    /** Seed the log from a past session (GYMAP-48) and restart the clock from now. */
+    fun repeatWorkout(sessionId: Long) {
+        scope.launch {
+            val seeded = templateViewModel.loadTemplate(sessionId).toItems(weightUnit)
+            if (seeded.isEmpty()) return@launch
+            items = seeded
+            entries = emptyMap()
+            draftId = java.util.UUID.randomUUID().toString()
+            openedAtMs = System.currentTimeMillis()
+            showTemplates = false
+            open(seeded.last().libId)
+        }
     }
 
     fun logSet(ex: FsExercise) {
@@ -282,10 +301,21 @@ fun FreestyleLogScreen(
     }
 
     val imeVisible = WindowInsets.isImeVisible
-    val quickAdd = remember(recentDefs, items) {
-        val onLog = items.map { it.libId }.toSet()
-        recentDefs.filter { it.id !in onLog }.take(QUICK_ADD_LIMIT).map { it.id to it.name }
+    // Recent moves not already on the log, with last time's top set, shared by the empty page's list
+    // and the in-session rail. Their last-time sets are prefetched below, so adding one lands with
+    // the slab already filled.
+    val recentMoves = recentDefs.filter { d -> items.none { it.libId == d.id } }.mapNotNull { d ->
+        val ex = fsExerciseFor(d.id) ?: return@mapNotNull null
+        val last = lastTime[d.id].orEmpty()
+        FsRecentMove(
+            libId = d.id,
+            name = d.name,
+            muscle = d.muscle,
+            lastReading = last.topReading(ex.timed, weightUnit),
+            lastWhen = last.maxOfOrNull { it.completedAt }?.let { lastDoneLabel(it, nowMs) }
+        )
     }
+    val libraryCount = remember { com.forge.app.program.ExerciseLibrary.all.count { !it.curatedOnly } }
 
     Box(Modifier.fillMaxSize()) {
         Scaffold(
@@ -418,38 +448,34 @@ fun FreestyleLogScreen(
                 }
                 if (pendingDraft == null) {
                     item(key = "footer") {
-                        FsAddFooter(
-                            empty = items.isEmpty(),
-                            recent = quickAdd,
-                            // Reuse-a-session only on the empty log, and only when there's history
-                            // to reuse (§12: no dead-end entry into an empty picker).
-                            showTemplates = items.isEmpty() && hasTemplates,
-                            onAdd = { showBrowser = true },
-                            onQuickAdd = { id -> fsExerciseFor(id)?.let { addExercises(listOf(it)) } },
-                            onTemplates = { showTemplates = true }
-                        )
+                        if (items.isEmpty()) {
+                            FsStartPage(
+                                recent = recentMoves.take(START_RECENT_LIMIT),
+                                templates = templates,
+                                libraryCount = libraryCount,
+                                nowMs = nowMs,
+                                onSearch = { showBrowser = true },
+                                onAdd = { id -> fsExerciseFor(id)?.let { addExercises(listOf(it)) } },
+                                onRepeat = { id -> repeatWorkout(id) },
+                                onAllTemplates = { showTemplates = true }
+                            )
+                        } else {
+                            FsAddFooter(
+                                recent = recentMoves.take(RAIL_RECENT_LIMIT),
+                                onSearch = { showBrowser = true },
+                                onAdd = { id -> fsExerciseFor(id)?.let { addExercises(listOf(it)) } }
+                            )
+                        }
                     }
                 }
             }
         }
 
         if (showTemplates) {
-            val templates by templateViewModel.templates.collectAsStateWithLifecycle()
             FreestyleTemplatePicker(
                 templates = templates,
                 onClose = { showTemplates = false },
-                onPick = { sessionId ->
-                    scope.launch {
-                        // Seed the log from the past session and (re)start the clock from now.
-                        val seeded = templateViewModel.loadTemplate(sessionId).toItems(weightUnit)
-                        items = seeded
-                        entries = emptyMap()
-                        draftId = java.util.UUID.randomUUID().toString()
-                        openedAtMs = System.currentTimeMillis()
-                        showTemplates = false
-                        open(seeded.firstOrNull()?.libId)
-                    }
-                }
+                onPick = { sessionId -> repeatWorkout(sessionId) }
             )
         }
 

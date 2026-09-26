@@ -41,7 +41,6 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -62,6 +61,7 @@ import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.ForgeRowPill
 import com.forge.app.ui.common.GlyphButton
 import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.rirLabel
 import com.forge.app.ui.common.rpeLabel
@@ -91,20 +91,14 @@ internal fun FsSessionHeader(
     Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
         val rest = restMs?.let { " · REST ${formatElapsed(it)}" }.orEmpty()
         Text(
-            "FREESTYLE · ${formatElapsed(elapsedMs)}$rest",
+            "OPEN WORKOUT · ${formatElapsed(elapsedMs)}$rest",
             style = MaterialTheme.typography.labelMedium,
             color = cs.onSurfaceVariant,
             letterSpacing = 1.sp
         )
         Spacer(Modifier.height(10.dp))
         if (exerciseCount == 0) {
-            Text("Log as you go", style = MaterialTheme.typography.headlineMedium, color = cs.onSurface)
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Add a move, then log each set as you finish it. Numbers carry over from your last set, so a repeat is one tap.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = cs.onSurfaceVariant
-            )
+            Text("Pick your first move", style = MaterialTheme.typography.headlineMedium, color = cs.onSurface)
         } else {
             Row(Modifier.fillMaxWidth()) {
                 FsFigure(exerciseCount.toString(), if (exerciseCount == 1) "EXERCISE" else "EXERCISES", Modifier.weight(1f))
@@ -210,8 +204,7 @@ internal fun FsFoldedCard(
             .padding(top = 12.dp)
             .clip(RoundedCornerShape(12.dp))
             .then(if (dragging) Modifier.background(cs.surfaceVariant) else Modifier)
-            .bounceClick(onClick = onOpen)
-            .semantics { stateDescription = "Folded. Tap to log sets" }
+            .bounceCombinedClick(onClickLabel = "Log sets for ${exercise.name}", onClick = onOpen)
     ) {
         FsExerciseTitle(exercise, meta) { ForgeRowPill("Log") }
     }
@@ -702,42 +695,6 @@ private fun FsTagTray(set: FsSet, onChange: (FsSet) -> Unit) {
                     selected = selected,
                     onClick = { onChange(set.copy(rpe = if (selected) null else v)) }
                 )
-            }
-        }
-    }
-}
-
-// ── Footer ─────────────────────────────────────────────────────────────────────────────────────
-
-/**
- * Below the exercises: the add action (the page's hero while the log is empty), one-tap chips for
- * recently performed moves, and the reuse-a-workout entry on an empty log.
- */
-@Composable
-internal fun FsAddFooter(
-    empty: Boolean,
-    recent: List<Pair<String, String>>,
-    showTemplates: Boolean,
-    onAdd: () -> Unit,
-    onQuickAdd: (String) -> Unit,
-    onTemplates: () -> Unit
-) {
-    val cs = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 16.dp)) {
-        if (empty) ForgePrimaryCapsule("Add exercise", onClick = onAdd, modifier = Modifier.fillMaxWidth())
-        else ForgeOutlineCapsule("Add exercise", onClick = onAdd, modifier = Modifier.fillMaxWidth())
-        if (showTemplates) {
-            Spacer(Modifier.height(8.dp))
-            ForgeOutlineCapsule("Start from a past workout", onClick = onTemplates, modifier = Modifier.fillMaxWidth())
-        }
-        if (recent.isNotEmpty()) {
-            Spacer(Modifier.height(20.dp))
-            Text("RECENT · TAP TO ADD", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, letterSpacing = 1.sp)
-            Spacer(Modifier.height(4.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                recent.forEach { (id, name) ->
-                    ForgeChoiceChip("+ $name", selected = false, onClick = { onQuickAdd(id) })
-                }
             }
         }
     }

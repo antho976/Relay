@@ -81,4 +81,22 @@ class FreestyleFlowTest {
         val hold = bench.copy(timed = true, bodyweight = true)
         assertEquals("1:30", hold.setReading(FsSet(hold = "90"), "kg"))
     }
+
+    @Test
+    fun lastDoneReadsInDaysThenFallsBackToTheDate() {
+        val zone = java.time.ZoneId.of("UTC")
+        val now = java.time.LocalDate.of(2026, 9, 26).atTime(18, 0).atZone(zone).toInstant().toEpochMilli()
+        val day = 24L * 60 * 60 * 1000
+        assertEquals("TODAY", lastDoneLabel(now - 60_000, now, zone))
+        assertEquals("YESTERDAY", lastDoneLabel(now - day, now, zone))
+        assertEquals("3 DAYS AGO", lastDoneLabel(now - 3 * day, now, zone))
+        assertFalse(lastDoneLabel(now - 10 * day, now, zone).endsWith("AGO"))
+    }
+
+    @Test
+    fun theTopSetIsTheHeaviestThenTheMostReps() {
+        val sets = listOf(prior(100.0, 12), prior(110.0, 6), prior(110.0, 8))
+        assertEquals("110×8", sets.topReading(timed = false, weightUnit = WeightUnit.LB))
+        assertEquals(null, emptyList<LoggedSet>().topReading(timed = false, weightUnit = WeightUnit.LB))
+    }
 }
