@@ -33,7 +33,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.forge.app.ui.common.window.Dialog
 import com.forge.app.domain.cardio.CardioGlyphs
 import com.forge.app.domain.cardio.CustomCardioType
 import com.forge.app.ui.common.ForgeOutlineCapsule

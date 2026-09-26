@@ -44,7 +44,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.forge.app.ui.common.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.domain.photo.PhotoPose

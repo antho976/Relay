@@ -15,7 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.AlertDialog
+import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -200,7 +200,20 @@ fun SettingsScreen(
     }
     val backupLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
-    ) { uri -> uri?.let { viewModel.backupDatabase(it) } }
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        // The ZIP carries every progress photo, so a gallery lock guards this exactly as it guards
+        // "Back up now". Asked AFTER the picker, because the picker round-trip itself re-locks under
+        // "Immediately"; a refusal deletes the empty file the picker already created.
+        if (state.galleryLockEnabled) {
+            authenticateSettingsAction(
+                context, viewModel, "Unlock photos for this backup",
+                onDenied = { viewModel.discardBackupTarget(uri) }
+            ) { viewModel.backupDatabase(uri) }
+        } else {
+            viewModel.backupDatabase(uri)
+        }
+    }
     val restoreLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri -> uri?.let { pendingRestoreUri = it } }
