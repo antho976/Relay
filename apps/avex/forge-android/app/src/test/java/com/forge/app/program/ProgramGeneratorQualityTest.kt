@@ -126,6 +126,23 @@ class ProgramGeneratorQualityTest {
     }
 
     @Test
+    fun aPinIsNeverPlacedTwiceInOneDay() {
+        // Audit 2026-09-26: an isolation pin reserves the muscle's last PUMP slot, but earlier slots
+        // could still draw it, and the pin was then placed again — ~37% of dumbbell-only weeks with
+        // a pinned hammer curl. Both copies share one plan id, which breaks per-exercise logging.
+        val dbBench = setOf(Equipment.DUMBBELLS, Equipment.BENCH)
+        listOf(dbBench to "db-hammer-curl", full to "db-lateral-raise").forEach { (eq, pin) ->
+            (0 until 300).forEach { s ->
+                ProgramGenerator.generate(GenerationParams(5, pinned = setOf(pin)), eq, emptySet(), emptySet(), seed = s.toLong())
+                    .forEach { day ->
+                        val ids = day.exercises.map { it.libId }
+                        assertEquals("seed $s, $pin, ${day.key}: $ids", ids.size, ids.toSet().size)
+                    }
+            }
+        }
+    }
+
+    @Test
     fun pinnedCompoundStillTakesTheHeavySlot() {
         (0 until 20).forEach { s ->
             val legs = ProgramGenerator.generate(GenerationParams(5, pinned = setOf("back-squat")), full, emptySet(), emptySet(), seed = s.toLong())

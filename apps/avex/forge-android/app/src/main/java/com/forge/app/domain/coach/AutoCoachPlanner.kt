@@ -176,7 +176,10 @@ object AutoCoachPlanner {
         // them all back: it is the test week, and a swap or rep shift the week you measure a lift
         // changes what the test measures. The stall is still counted (it gates volume below) and
         // the ladder resumes with the next block.
+        // First occurrence wins, matching ProgressionAdvisor.evaluate, which reads a lift on its
+        // first program day. associateBy kept the LAST day instead.
         val slotByExercise = s.program.flatMap { day -> day.slots.map { day.dayKey to it } }
+            .distinctBy { it.second.exerciseId }
             .associateBy { it.second.exerciseId }
         val structural = if (inputs.blockPhase == BlockPhase.PEAK) emptyList() else ladder.mapNotNull { rec ->
             when (rec) {
@@ -196,7 +199,10 @@ object AutoCoachPlanner {
                 is Recommendation.RepRangeShift -> {
                     if (rec.exerciseId in inputs.lockedExerciseIds) return@mapNotNull null
                     if ("rep_shift:${rec.exerciseId}:${rec.toReps}" in inputs.declinedStructural) return@mapNotNull null
-                    val dayKey = slotByExercise[rec.exerciseId]?.first ?: ""
+                    // The shift's "from" range was read off one day's slot; it must land on that
+                    // slot. Resolving by exercise alone sent a stall read on the heavy day to the
+                    // light day, so the two days swapped ranges and the summary misstated both.
+                    val dayKey = rec.dayKey ?: slotByExercise[rec.exerciseId]?.first ?: ""
                     1 to ShadowDecision(
                         "rep_shift", rec.exerciseId, rec.exerciseName,
                         "Shift ${rec.exerciseName} from ${rec.fromReps} to ${rec.toReps} reps", rec.reason,

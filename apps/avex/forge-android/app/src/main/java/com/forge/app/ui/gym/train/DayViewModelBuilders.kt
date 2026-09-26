@@ -135,6 +135,8 @@ internal suspend fun DayViewModel.buildExerciseUi(
         // The block's phase, composed with today's scale rather than left to shape only the plan's
         // set counts (H-02).
         phase = blockPhase,
+        // Targets snap to the user's own grid; a pound grid read back in kilos is never loadable.
+        weightUnit = weightUnit,
         dbMaxLb = dbMaxLb,
         // Doubling the step only makes sense on the DB grid; PLATES move whole plates anyway.
         fastStep = stepMode == com.forge.app.domain.coach.StepMode.FASTER && effectiveUnit == com.forge.app.program.ExerciseUnit.DUMBBELL,

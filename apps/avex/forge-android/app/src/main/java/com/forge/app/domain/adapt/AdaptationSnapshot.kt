@@ -7,6 +7,7 @@ import com.forge.app.data.db.entities.MoodEntry
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.session.SessionType
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.program.ExerciseTag
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.program.MuscleGroup
@@ -176,5 +177,7 @@ data class PrefsSnap(
      * deload so DeloadAdvisor can suppress repeat proposals immediately after an apply — before any
      * deload-week session exists to scan (seam fix, finding 18).
      */
-    val lastDeloadAppliedMs: Long? = null
+    val lastDeloadAppliedMs: Long? = null,
+    /** The unit the user lifts in: load targets snap to its grid ([AdaptThresholds.loadStepLb]). */
+    val weightUnit: WeightUnit = WeightUnit.LB
 )

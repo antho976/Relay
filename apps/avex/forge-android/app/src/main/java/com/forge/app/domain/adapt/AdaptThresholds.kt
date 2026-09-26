@@ -1,5 +1,8 @@
 package com.forge.app.domain.adapt
 
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.fromDisplayWeight
+
 /**
  * Every tunable for the adaptation engine, in one place. Each advisor takes this as a
  * parameter (defaulting to `AdaptThresholds()`) so tests can tighten or loosen gates
@@ -10,8 +13,15 @@ package com.forge.app.domain.adapt
  */
 data class AdaptThresholds(
     // ── Load steps (System 1: progression) ─────────────────────────────────────
-    /** Smallest meaningful dumbbell increment, and the grid suggestions snap to. */
+    /** Smallest meaningful dumbbell increment, and the grid suggestions snap to, for lb users. */
     val dumbbellStepLb: Double = 2.5,
+    /**
+     * The same step for kg users, in kg. A pound grid read back in kilos is +0.1–0.9 kg — never a
+     * loadable weight — so kg users progress on their own grid ([loadStepLb]).
+     */
+    val loadStepKg: Double = 2.5,
+    /** The same step for stones users, in stones — the ± stepper's half stone (WeightSteps). */
+    val loadStepSt: Double = 0.5,
     /** Per-set RPE at or below this counts as "room to progress" (outranks the exercise rating). */
     val rpeEasyMax: Double = 8.0,
     /** Per-set RPE at or above this counts as brutal → back off. */
@@ -210,4 +220,16 @@ data class AdaptThresholds(
     val orderingMinAdjacencies: Int = 1,
     /** Pairings fixed at which the suggestion reads HIGH confidence (else MEDIUM). */
     val orderingHighConfidenceFix: Int = 2
-)
+) {
+    /**
+     * The progression step, and the grid targets snap to, in stored pounds for a user who lifts in
+     * [unit]: 2.5 lb, 2.5 kg (≈5.51 lb) or half a stone (7 lb). Flooring a stored-lb value on this
+     * grid is the same as flooring it in the display unit, so a kg target always reads as a whole
+     * multiple of 2.5 kg.
+     */
+    fun loadStepLb(unit: WeightUnit): Double = when (unit) {
+        WeightUnit.LB -> dumbbellStepLb
+        WeightUnit.KG -> fromDisplayWeight(loadStepKg, WeightUnit.KG)
+        WeightUnit.ST -> fromDisplayWeight(loadStepSt, WeightUnit.ST)
+    }
+}

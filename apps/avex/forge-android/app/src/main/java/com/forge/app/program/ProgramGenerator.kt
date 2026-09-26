@@ -214,12 +214,17 @@ object ProgramGenerator {
             val usedInDay = HashSet<String>()
             val usedPatterns = HashSet<MovementPattern>()
             val pinnedFor = placePins(day, setsByDay[di], params.pinned, ::candidatesFor)
+            // A pin is placed on a LATER slot of its muscle (an isolation takes the last PUMP slot),
+            // so the slots before it must not draw it too: weightedPick floors every weight above
+            // zero, and a reserved pin picked early was then placed again by its own slot — in ~37%
+            // of dumbbell-only weeks with a pinned curl.
+            val reservedPins = pinnedFor.values.map { it.id }.toSet()
             val exercises = day.targets.mapIndexedNotNull { si, slot ->
                 if (setsByDay[di][si] == 0) return@mapIndexedNotNull null
                 // Never place the same exercise twice in one day: if the (equipment-limited) pool is
                 // exhausted, DROP the slot (a slightly shorter day) rather than repeat a movement —
                 // a duplicate reads as a bug, breaks per-exercise logging, and crashed the session list.
-                val candidates = candidatesFor(slot.muscle).filterNot { it.id in usedInDay }
+                val candidates = candidatesFor(slot.muscle).filterNot { it.id in usedInDay || it.id in reservedPins }
                 // A heavy STRENGTH slot must lead with a compound when one is available — an
                 // isolation (leg curl, fly) may only headline if it's all the equipment allows.
                 val slotPool = if (slot.scheme == RepScheme.STRENGTH)
