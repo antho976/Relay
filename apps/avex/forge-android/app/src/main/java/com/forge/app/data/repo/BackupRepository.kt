@@ -1003,6 +1003,10 @@ class BackupRepository @Inject constructor(
             // published last and atomically. A process killed anywhere above leaves components
             // with no manifest, or ones that no longer match it, and the boot quarantines those
             // instead of renaming a truncated database live.
+            //
+            // Nothing above suspends, so a caller cancelled mid-extraction still ran to here. Checked
+            // now, the throw lands before the manifest and the finally clears the staged files.
+            currentCoroutineContext().ensureActive()
             if (!RestoreManifest.publish(context.filesDir)) return@withContext RestoreOutcome.IO_ERROR
             stagedOk = true
             return@withContext RestoreOutcome.SUCCESS
@@ -1049,6 +1053,12 @@ class BackupRepository @Inject constructor(
             }
         }
     }
+
+    /**
+     * Drop a staged restore so the next boot doesn't apply it: for a caller that was cancelled while
+     * [restoreFromUri] or [restoreFromAutoBackup] ran, and so can't restart the app to apply it now.
+     */
+    suspend fun discardPendingRestore() = withContext(Dispatchers.IO) { clearPendingRestore() }
 
     /**
      * Remove every staged component of a pending restore.

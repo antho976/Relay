@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -409,14 +410,18 @@ class SettingsViewModel @Inject constructor(
     fun setOverviewTileOrder(order: List<String>) =
         write { settingsRepo.setOverviewTileOrder(order) }
 
-    fun resetSessions() = viewModelScope.launch { resetRepo.resetSessions() }
-    fun resetTrophies() = viewModelScope.launch { resetRepo.resetTrophies() }
-    fun resetCardio() = viewModelScope.launch { resetRepo.resetCardio() }
-    fun resetSettings() = viewModelScope.launch { resetRepo.resetAppSettings() }
+    // Resets are shielded like preference writes: the confirm dialog closes with nothing on screen,
+    // so Back straight after it used to cancel a factory reset between `clearAllTables()` and the
+    // preference wipe, leaving an empty database behind ONBOARDING_DONE = true (no program, no
+    // onboarding), or commit a session wipe and skip its Health Connect mirror cleanup.
+    fun resetSessions() = write { resetRepo.resetSessions() }
+    fun resetTrophies() = write { resetRepo.resetTrophies() }
+    fun resetCardio() = write { resetRepo.resetCardio() }
+    fun resetSettings() = write { resetRepo.resetAppSettings() }
     /** Scoped per-section "reset to defaults" (#544) — clears just this page's preferences. */
     fun resetSection(section: com.forge.app.data.prefs.SettingsSection) =
         write { settingsRepo.resetSection(section) }
-    fun factoryReset() = viewModelScope.launch { resetRepo.factoryReset() }
+    fun factoryReset() = write { resetRepo.factoryReset() }
     fun loadSampleData() = viewModelScope.launch { sampleDataSeeder.seed() }
     fun setPrivacyMode(v: Boolean) = write { settingsRepo.setPrivacyMode(v) }
     // App / gallery lock (GYMAP-69). Enabling is gated on an available device credential in the UI
@@ -711,9 +716,28 @@ class SettingsViewModel @Inject constructor(
             .onFailure { _statusMessage.value = "Backup failed: ${it.message}" }
     }
 
-    fun restoreDatabase(uri: android.net.Uri) = viewModelScope.launch {
-        val outcome = runCatching { backupRepo.restoreFromUri(uri) }
-            .getOrDefault(RestoreOutcome.IO_ERROR)
+    fun restoreDatabase(uri: android.net.Uri) = restore { backupRepo.restoreFromUri(uri) }
+
+    /**
+     * Run a restore and report it — and if the user leaves Settings before it finishes, undo it.
+     *
+     * A restore only STAGES files; the swap happens at the next cold start, and it is this screen
+     * that restarts the app on SUCCESS. Leaving mid-restore cancels this ViewModel's scope, so the
+     * outcome can never be shown and the restart never happens. The staging itself doesn't notice
+     * the cancellation and still completes, and `runCatching` used to turn the cancellation into
+     * "Couldn't read that file" while the finished pending set stayed on disk. The next launch,
+     * possibly days later, then replaced everything logged in between with the backup. A restore
+     * the user walked away from is now discarded, and the cancellation is re-thrown.
+     */
+    private fun restore(stage: suspend () -> RestoreOutcome) = viewModelScope.launch {
+        val outcome = try {
+            stage()
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) { backupRepo.discardPendingRestore() }
+            throw e
+        } catch (e: Exception) {
+            RestoreOutcome.IO_ERROR
+        }
         if (outcome == RestoreOutcome.SUCCESS) _restoreSucceeded.value = true
         else _statusMessage.value = restoreFailureMessage(outcome)
     }
@@ -810,12 +834,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     /** In-app restore from the weekly auto-backup slot — the recovery path for the local auto-backup (#86). */
-    fun restoreAutoBackup() = viewModelScope.launch {
-        val outcome = runCatching { backupRepo.restoreFromAutoBackup() }
-            .getOrDefault(RestoreOutcome.IO_ERROR)
-        if (outcome == RestoreOutcome.SUCCESS) _restoreSucceeded.value = true
-        else _statusMessage.value = restoreFailureMessage(outcome)
-    }
+    fun restoreAutoBackup() = restore { backupRepo.restoreFromAutoBackup() }
 
     // ── Auto-backup config + manual "Back up now" (GYMAP-67) ───────────────────
     /** Whether the weekly auto-backup is on (default true) — the Backup page toggle. */

@@ -8,6 +8,7 @@ import com.forge.app.data.db.inMemoryForgeDb
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.service.wear.WearHrIngest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
@@ -67,5 +68,21 @@ class FreestyleSaveRecoveryTest {
         }
         assertEquals(1, db.sessionDao().get(id)!!.setCount)
         assertNotNull(db.sessionDao().get(id)!!.finishedAt)
+    }
+
+    /**
+     * Audit 2026-09-26, P1 #5: saving a freestyle workout could rotate the program, and a
+     * regeneration deletes the in-progress session: here, a program workout left open.
+     */
+    @Test fun `freestyle save leaves the program alone while another workout is in progress`() = runBlocking {
+        settings.setRotationCadence("every_n")
+        settings.setRotationEveryN(2)
+        val open = db.sessionDao().insert(com.forge.app.data.db.entities.Session(dayKey = "upper-a", startedAt = 5_000L))
+
+        repo().saveFreestyleDraft("draft-c", 1000) { }
+
+        assertEquals(open, db.sessionDao().getActiveSession()?.id)
+        // Rotation waited instead of counting toward a regeneration that would delete it.
+        assertEquals(0, settings.rotationCounter.first())
     }
 }
