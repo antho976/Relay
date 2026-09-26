@@ -1,44 +1,11 @@
 package com.forge.app.ui.profile
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.ProgressPhoto
-import com.forge.app.domain.units.WeightUnit
-import com.forge.app.domain.units.formatWeight
-import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.bounceClick
-import com.forge.app.ui.common.currentLocale
-import java.io.File
-import java.text.SimpleDateFormat
 import java.time.ZoneId
-import java.util.Date
 import kotlin.math.abs
 
 // ── Same weight, different body ──────────────────────────────────────────────
+// (Drawn as cards in the compare strip; see [compareSuggestions].)
 
 /**
  * Two shots taken at the SAME bodyweight but far enough apart to show a different physique — the
@@ -109,78 +76,4 @@ internal fun sameWeightPairs(
         used += b.fileName
     }
     return picked
-}
-
-/**
- * The "same weight, different body" strip: each auto-paired shot at a matched bodyweight is two
- * thumbnails with the shared weight + span beneath; tapping opens the slider compare. Drawn only when
- * a pair exists (like the bodyweight sparkline), so it never shows an empty row.
- */
-@Composable
-internal fun SameWeightSection(
-    pairs: List<SameWeightPair>,
-    zone: ZoneId,
-    weightUnit: WeightUnit,
-    fileFor: (ProgressPhoto) -> File,
-    onCompare: (ProgressPhoto, ProgressPhoto) -> Unit,
-    muted: Color,
-    accent: Color
-) {
-    if (pairs.isEmpty()) return
-    // The standard section anchor; the phrase carries the concept, so no caption (§4.3).
-    EditorialHeader("Same weight, different body", muted, accent)
-    Spacer(Modifier.height(10.dp))
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        pairs.forEach { pair -> SameWeightCard(pair, zone, weightUnit, fileFor, onCompare, muted) }
-    }
-}
-
-/** One pair: the two dated thumbnails side by side over the shared weight + span line. */
-@Composable
-private fun SameWeightCard(
-    pair: SameWeightPair,
-    zone: ZoneId,
-    weightUnit: WeightUnit,
-    fileFor: (ProgressPhoto) -> File,
-    onCompare: (ProgressPhoto, ProgressPhoto) -> Unit,
-    muted: Color
-) {
-    val span = remember(pair) { gallerySpanLabel(pair.before.takenAtMs, pair.after.takenAtMs, zone) }
-    Column(Modifier.width(176.dp).bounceClick { onCompare(pair.before, pair.after) }) {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            PairThumb(pair.before, fileFor, Modifier.weight(1f))
-            PairThumb(pair.after, fileFor, Modifier.weight(1f))
-        }
-        Spacer(Modifier.height(7.dp))
-        Text(
-            if (span.isEmpty()) formatWeight(pair.avgWeightLb, weightUnit)
-            else "${formatWeight(pair.avgWeightLb, weightUnit)} · $span",
-            style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
-        )
-    }
-}
-
-/** A portrait thumbnail with a date on a bottom scrim — the bare-photo idiom the progress band uses. */
-@Composable
-private fun PairThumb(
-    photo: ProgressPhoto,
-    fileFor: (ProgressPhoto) -> File,
-    modifier: Modifier = Modifier
-) {
-    Box(modifier.aspectRatio(0.8f).clip(RoundedCornerShape(12.dp))) {
-        ProgressPhotoImage(fileFor(photo), Modifier.fillMaxSize(), reqPx = 400)
-        Box(
-            Modifier.matchParentSize().background(
-                Brush.verticalGradient(0.6f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.55f))
-            )
-        )
-        Text(
-            SimpleDateFormat("MMM d", currentLocale()).format(Date(photo.takenAtMs)).uppercase(),
-            style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.92f), fontSize = 9.sp,
-            modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 7.dp, vertical = 6.dp)
-        )
-    }
 }

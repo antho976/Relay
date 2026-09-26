@@ -21,10 +21,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -52,9 +55,6 @@ import com.forge.app.domain.photo.musclesFromCodes
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.formatWeightDelta
-import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.SegmentPill
-import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.currentLocale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -64,45 +64,6 @@ import java.text.SimpleDateFormat
 import java.time.ZoneId
 import java.util.Date
 import kotlin.math.abs
-
-/**
- * The sticky bar shown at the bottom while compare mode is on: it counts the selection (max 2) and
- * exposes the Compare action once two photos are picked.
- */
-@Composable
-internal fun CompareBar(
-    selectedCount: Int,
-    onClear: () -> Unit,
-    onCompare: () -> Unit,
-    muted: Color,
-    accent: Color
-) {
-    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 3.dp) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                when (selectedCount) {
-                    0 -> "Tap two photos to compare"
-                    1 -> "Pick one more…"
-                    else -> "2 selected"
-                },
-                style = MaterialTheme.typography.bodyMedium, color = muted
-            )
-            Spacer(Modifier.width(16.dp))
-            Spacer(Modifier.weight(1f))
-            if (selectedCount > 0) {
-                Text(
-                    "Clear", style = MaterialTheme.typography.labelMedium, color = accent,
-                    modifier = Modifier.bounceClick { onClear() }.padding(horizontal = 8.dp, vertical = 6.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-            }
-            ForgePrimaryCapsule(label = "Compare", onClick = onCompare, enabled = selectedCount == 2)
-        }
-    }
-}
 
 private enum class CompareMode(val label: String) { SLIDER("Slider"), SPLIT("Split") }
 
@@ -128,7 +89,6 @@ internal fun CompareSheet(
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
-    val outline = MaterialTheme.colorScheme.outline
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -140,7 +100,8 @@ internal fun CompareSheet(
     val accentArgb = accent.toArgb()
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.95f))) {
+        GalleryTheme {
+        Column(Modifier.fillMaxSize().background(Color.Black)) {
             // Top row: close + Slider/Split toggle.
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
@@ -148,9 +109,22 @@ internal fun CompareSheet(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White) }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    CompareMode.entries.forEach { m ->
-                        SegmentPill(m.label, selected = m == mode, onClick = { mode = m }, accent, Color.White, muted, outline)
+                SingleChoiceSegmentedButtonRow {
+                    CompareMode.entries.forEachIndexed { i, m ->
+                        SegmentedButton(
+                            selected = m == mode,
+                            onClick = { mode = m },
+                            shape = SegmentedButtonDefaults.itemShape(i, CompareMode.entries.size),
+                            colors = SegmentedButtonDefaults.colors(
+                                activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                activeContentColor = Color.White,
+                                inactiveContainerColor = Color.Transparent,
+                                inactiveContentColor = Color.White,
+                                activeBorderColor = Color.White.copy(alpha = 0.35f),
+                                inactiveBorderColor = Color.White.copy(alpha = 0.35f)
+                            ),
+                            label = { Text(m.label) }
+                        )
                     }
                 }
                 IconButton(onClick = {
@@ -202,14 +176,15 @@ internal fun CompareSheet(
                 when (mode) {
                     CompareMode.SLIDER -> SliderCompare(before, after, fileFor, accent)
                     CompareMode.SPLIT -> Row(Modifier.fillMaxSize()) {
-                        ComparePane("BEFORE", before, fileFor, accent, muted, Modifier.weight(1f))
+                        ComparePane("Before", before, fileFor, accent, muted, Modifier.weight(1f))
                         Box(Modifier.fillMaxHeight().width(1.dp).background(Color.White.copy(alpha = 0.15f)))
-                        ComparePane("AFTER", after, fileFor, accent, muted, Modifier.weight(1f))
+                        ComparePane("After", after, fileFor, accent, muted, Modifier.weight(1f))
                     }
                 }
             }
 
             CompareReadout(before, after, zone, weightUnit, onBg = Color.White, muted = muted, accent = accent)
+        }
         }
     }
 }
@@ -240,18 +215,28 @@ private fun SliderCompare(
         // Divider + knob.
         Box(Modifier.align(Alignment.CenterStart).offset(x = w * fraction - 1.dp).fillMaxHeight().width(2.dp).background(Color.White.copy(alpha = 0.85f)))
         Box(
-            Modifier.align(Alignment.CenterStart).offset(x = w * fraction - 17.dp).size(34.dp)
-                .clip(CircleShape).background(Color.Black.copy(alpha = 0.55f)),
+            Modifier.align(Alignment.CenterStart).offset(x = w * fraction - 20.dp).size(40.dp)
+                .clip(CircleShape).background(Color.White),
             contentAlignment = Alignment.Center
         ) {
-            Text("↔", style = MaterialTheme.typography.titleMedium, color = Color.White)
+            Icon(Icons.Filled.SwapHoriz, contentDescription = null, tint = Color.Black)
         }
         // Corner tags.
-        Text("BEFORE", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.85f),
-            modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
-        Text("AFTER", style = MaterialTheme.typography.labelSmall, color = accent,
-            modifier = Modifier.align(Alignment.TopEnd).padding(12.dp))
+        CornerTag("Before", Modifier.align(Alignment.TopStart))
+        CornerTag("After", Modifier.align(Alignment.TopEnd))
     }
+}
+
+/** A small "Before" / "After" label on a dark pill, legible over any photo. */
+@Composable
+private fun CornerTag(text: String, modifier: Modifier) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        color = Color.White,
+        modifier = modifier.padding(12.dp).clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.6f)).padding(horizontal = 10.dp, vertical = 4.dp)
+    )
 }
 
 @Composable
@@ -264,10 +249,10 @@ private fun ComparePane(
     modifier: Modifier = Modifier
 ) {
     Column(modifier.padding(horizontal = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(tag, style = MaterialTheme.typography.labelMedium, color = accent)
+        Text(tag, style = MaterialTheme.typography.titleSmall, color = Color.White)
         Text(
             SimpleDateFormat("MMM d, yyyy", currentLocale()).format(Date(photo.takenAtMs)),
-            style = MaterialTheme.typography.labelSmall, color = muted, textAlign = TextAlign.Center
+            style = MaterialTheme.typography.bodySmall, color = muted, textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(8.dp))
         GalleryFullImage(fileFor(photo), Modifier.fillMaxWidth().weight(1f))
@@ -315,13 +300,13 @@ private fun CompareReadout(
         Text(apart, style = MaterialTheme.typography.titleMedium, color = onBg)
         if (weightLine != null) {
             Spacer(Modifier.height(4.dp))
-            Text(weightLine, style = MaterialTheme.typography.labelMedium, color = muted)
+            Text(weightLine, style = MaterialTheme.typography.bodyMedium, color = muted)
         }
         if (tagLine != null) {
             Spacer(Modifier.height(4.dp))
             // §14: the accent carries marks, not meaning-bearing text — four of the five accent
             // choices fail AA as body text, so this line rides onBackground like its siblings.
-            Text(tagLine.uppercase(), style = MaterialTheme.typography.labelSmall, color = onBg)
+            Text(tagLine, style = MaterialTheme.typography.bodySmall, color = onBg)
         }
     }
 }

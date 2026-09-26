@@ -4,98 +4,59 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.AddPhotoAlternate
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.PhotoCamera
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.dp
 import com.forge.app.data.repo.ProgressPhoto
-import com.forge.app.domain.photo.PhotoPose
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.currentLocale
-import com.forge.app.ui.experiment.CardShape
 import com.forge.app.ui.theme.MonoSectionAnchor
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 
-/** Size of one filmstrip photo cell — portrait 3:4, tall enough to actually read as a photo. */
-private val StripCellWidth = 132.dp
-private val StripCellHeight = 176.dp
+/** How many photos the Profile previews. The last tile says how many more the Gallery holds. */
+private const val PREVIEW_COUNT = 3
 
 /**
- * An empty photo slot, on the same rung the calendar draws a rest day — one page-wide answer to
- * "nothing here yet" instead of a second vocabulary for it. See this file's [GalleryStrip] header.
- */
-private const val GHOST_ALPHA = 0.30f
-
-/** Each cell a step fainter, so the strip reads as continuing off the edge rather than ending. */
-private val GHOST_DEPTH = floatArrayOf(1f, 0.62f, 0.34f)
-
-/**
- * The lead ghost's inner margin. Wider than the 8–9dp a filled cell insets its date by, because
- * that caption sits on a photograph and this one sits in an empty frame — with nothing above it,
- * the margin is the only thing giving the words a place to be.
- */
-private val GHOST_PADDING = 14.dp
-
-/**
- * GALLERY — a full-bleed horizontal filmstrip of the latest photos, echoing the cover photo's
- * edge-to-edge treatment instead of boxing thumbnails in a card. Dates sit on the photos over a
- * bottom scrim. The section must be composed OUTSIDE the page's side margins — it applies its own
- * padding to the header and lets the photos run to the screen edge.
+ * GALLERY: the Profile's window onto the progress photos.
  *
- * ## The pictures ARE the link (2026-08-22)
+ * A header row (the page's own section label, the photo count, a chevron) over three portrait
+ * tiles, newest first, filling the page's width. When there are more photos than tiles, the last
+ * tile says how many more. Every part of it, header and tiles alike, opens the Gallery, where
+ * viewing, adding, comparing and albums all live; nothing here behaves differently from its
+ * neighbour.
  *
- * The header used to carry a "view all →" / "gallery →" action, and every cell in the strip had a
- * different job depending on what you had: a photo opened a viewer dialog, the lead empty cell
- * opened the add-photo chooser, the other empty cells did nothing at all. Antho: *"remove the
- * gallery text, you should enter it by clicking the gallery pictures, and nothing in gallery should
- * be gated behind having a picture or not."*
- *
- * So every cell now does the one thing, photos or not: it opens the Gallery. That kills three
- * problems at once. The link is redundant when the thing beside it is already the link. The strip
- * stops being a control panel where adjacent identical-looking cells behave differently (§2③). And
- * the empty state stops being a lesser version of the section — the zero-shape is now the same
- * affordance as the filled one, which is what "not gated" means in layout terms.
- *
- * Viewing a single photo, adding one, albums and the guided camera all live in the Gallery, which
- * is where you now land. One home for each (§4.3).
- *
- * ## The ghost strip stopped being a row of cards (2026-08-24)
- *
- * Its empty state was the last boxed thing on the page: three cells with a card gradient inside a
- * 1dp border, carrying the "+ First photo" line as their contents. That was written down as the one
- * deliberate exception to the de-boxing, and once the ACTIVITY grid went full-width and took the
- * accent it stopped surviving the comparison — Antho: *"looks out of place compared to the new UI
- * in the page."* A bordered slab is a promise of a surface, and this page has no surfaces left.
- *
- * So the ghost cells are drawn the way the calendar draws a rest day: one quiet fill on the
- * `outline` rung, no border, corners on the card radius, each successive cell a step fainter so the
- * strip still reads as continuing into photos not taken yet. The page now has ONE shape for "this
- * slot is empty", used by both sections that have one.
- *
- * The invitation came out of the first cell and became a line under the strip, on the gutter, which
- * is where BODY's "Log your first" already puts the same offer. Text inside a bordered box was the
- * card's last argument for existing; on a line it needs no container, and it is legible against the
- * page instead of against a fill.
+ * With no photos (or with the gallery locked) the tiles are replaced by one tappable row that says
+ * what to do, rather than a strip of empty frames that looked like broken images.
  */
 @Composable
 internal fun GalleryStrip(
@@ -105,143 +66,139 @@ internal fun GalleryStrip(
     muted: Color,
     locked: Boolean = false,
 ) {
-    Box(Modifier.padding(horizontal = 24.dp)) {
-        // Label only. `SectionAnchor` with no action renders exactly the same mono anchor the other
-        // sections use, so GALLERY finally sits on the page's own rung instead of being the one
-        // header with a trailing accent word.
-        Text(
-            "GALLERY",
-            style = MonoSectionAnchor,
-            color = muted,
-            modifier = Modifier.semantics { heading() }
-        )
-    }
-    Spacer(Modifier.height(12.dp))
-    if (locked || photos.isEmpty()) {
-        // Empty is drawn (§12), and the zero-shape is the STRIP — a run of ghost cells that runs off
-        // the edge exactly as the real filmstrip does, not a single boxed frame. One frame alone read
-        // as a lone empty container rather than as this section with nothing in it yet.
-        //
-        // All three are tappable, and all three open the Gallery. Previously only the lead cell did
-        // anything and it opened a different destination, so the strip taught you that two of its
-        // cells were dead — the exact gating Antho called out.
+    // A locked gallery shows nothing derived from the photos, not even how many there are.
+    val shown = if (locked) emptyList() else photos
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         Row(
-            Modifier.padding(start = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Modifier.fillMaxWidth().heightIn(min = 48.dp).bounceClick { onOpenGallery() },
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            repeat(3) { i ->
-                Box(
-                    Modifier.width(StripCellWidth).height(StripCellHeight)
-                        .clip(CardShape)
-                        .background(MaterialTheme.colorScheme.outline.copy(alpha = GHOST_ALPHA * GHOST_DEPTH[i]))
-                        .bounceClick { onOpenGallery() }
-                        .padding(GHOST_PADDING)
-                ) {
-                    if (i == 0) GhostInvitation(muted, locked, Modifier.align(Alignment.BottomStart))
+            Text(
+                "GALLERY",
+                style = MonoSectionAnchor,
+                color = muted,
+                modifier = Modifier.weight(1f).semantics { heading() }
+            )
+            if (shown.isNotEmpty()) {
+                Text(
+                    "${shown.size} photo${if (shown.size == 1) "" else "s"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = muted
+                )
+                Spacer(Modifier.width(4.dp))
+            }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Open gallery", tint = muted)
+        }
+        Spacer(Modifier.height(8.dp))
+        if (shown.isEmpty()) {
+            GalleryInvite(locked, muted, onOpenGallery)
+        } else {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val preview = shown.take(PREVIEW_COUNT)
+                preview.forEachIndexed { i, photo ->
+                    val more = if (i == preview.lastIndex) shown.size - preview.size else 0
+                    PreviewTile(photo, fileFor(photo), more, onOpenGallery, Modifier.weight(1f))
+                }
+                // One or two photos: the next slot is where the next one goes.
+                if (preview.size < PREVIEW_COUNT) {
+                    AddTile(onOpenGallery, Modifier.weight(1f))
+                    repeat(PREVIEW_COUNT - preview.size - 1) { Spacer(Modifier.weight(1f)) }
                 }
             }
         }
-        return
-    }
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = 24.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        items(photos.take(10), key = { it.fileName }) { photo ->
-            StripPhotoCell(photo, fileFor(photo), onOpenGallery)
-        }
     }
 }
 
-/**
- * The offer, written inside the first empty frame.
- *
- * ## Where it goes, and why the bottom
- *
- * A filled cell captions itself at the bottom-left — the date, and the pose chip up in the corner.
- * The empty cell is that same cell with the photograph missing, so its words sit exactly where a
- * filled one's words sit. Anything else (centred, floating, a plus in the middle of the frame)
- * makes the zero-state a different object from the thing it stands in for, which is the failure §12
- * is actually about.
- *
- * ## Why two voices and not one
- *
- * The first line is the action and the second is how to take the shot, and they are different kinds
- * of sentence. Mono uppercase is this app's label voice — it is what the date on the filled cell
- * beside it is set in, and what every anchor down the page is set in — so the action inherits the
- * strip's own lettering. The tip is a spoken instruction, so it stays sans and drops to `muted`:
- * one rung down in tone and one voice over in face, which is the whole hierarchy in two lines.
- *
- * The action is `labelMedium`, not the 9sp the first pass hand-set it at. Against a 12sp sans tip
- * a 9sp label loses — the thing you are being offered read smaller than the note about how to
- * shoot it, which is the hierarchy backwards. On the 11sp rung the uppercase mono and the brighter
- * tone put the offer back on top, and both lines now take their size from the scale rather than
- * from a call site (§6).
- *
- * The previous version put both on the page UNDER the strip, and before that crammed them into a
- * bordered card at `bodySmall` where "Same pose, same light." wrapped mid-phrase against a 104dp
- * measure. At 9sp mono over sans the block is three short lines that break where the comma already
- * breaks, and it occupies the bottom quarter of the frame instead of a third of it.
- *
- * §14: the accent carries the `+` glyph only. Accent text measures 2.35:1 on Pearl, so the words
- * themselves stay on `onBackground` and the mark is never the only thing saying "add".
- */
+/** The zero (or locked) state: one row that says what tapping it does. */
 @Composable
-private fun GhostInvitation(muted: Color, locked: Boolean, modifier: Modifier = Modifier) {
-    Column(modifier) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (!locked) {
-                Text("+", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(5.dp))
-            }
+private fun GalleryInvite(locked: Boolean, muted: Color, onOpenGallery: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(TileShape)
+            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+            .bounceClick { onOpenGallery() }
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier.size(48.dp).clip(CircleShape).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                if (locked) Icons.Outlined.Lock else Icons.Outlined.PhotoCamera,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onBackground
+            )
+        }
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
             Text(
-                if (locked) "UNLOCK PHOTOS" else "FIRST PHOTO",
-                style = MaterialTheme.typography.labelMedium,
+                if (locked) "Progress photos are locked" else "Add your first progress photo",
+                style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onBackground
             )
+            Text(
+                if (locked) "Tap to unlock" else "Same pose, same light, every few weeks.",
+                style = MaterialTheme.typography.bodySmall,
+                color = muted
+            )
         }
-        Spacer(Modifier.height(7.dp))
-        Text(
-            if (locked) "Gallery locked" else "Same pose,\nsame light.",
-            style = MaterialTheme.typography.bodySmall,
-            // Plain muted, not the 0.7 on-card floor: there is no card fill under this any more,
-            // and on the page 0.65 measures 4.54:1 and passes.
-            color = muted
-        )
     }
 }
 
-/** One filmstrip photo — portrait crop, date overlaid on a soft bottom scrim. */
+/** Preview tiles share one corner: smaller than the page's cards, because the tiles are smaller. */
+private val TileShape = RoundedCornerShape(12.dp)
+
+/** One preview photo: a portrait crop with its date, or a "+N" veil on the last tile. */
 @Composable
-private fun StripPhotoCell(photo: ProgressPhoto, file: File, onOpenGallery: () -> Unit) {
+private fun PreviewTile(
+    photo: ProgressPhoto,
+    file: File,
+    more: Int,
+    onOpenGallery: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val locale = currentLocale()
+    val date = remember(photo.takenAtMs, locale) { SimpleDateFormat("MMM d", locale).format(Date(photo.takenAtMs)) }
     Box(
-        Modifier.width(StripCellWidth).height(StripCellHeight)
-            .clip(CardShape)
-            // Opens the Gallery, not an in-place viewer. The strip is a preview of a destination,
-            // and a preview whose cells lead somewhere other than the thing they preview is a trap.
+        modifier.aspectRatio(0.75f)
+            .clip(TileShape)
             .bounceClick { onOpenGallery() }
+            .semantics { contentDescription = if (more > 0) "Photo from $date, and $more more" else "Photo from $date" }
     ) {
-        ProgressPhotoImage(file, Modifier.fillMaxSize(), reqPx = 480)
-        Box(
-            Modifier.matchParentSize().background(
-                Brush.verticalGradient(0.62f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.55f))
+        ProgressPhotoImage(file, Modifier.fillMaxSize(), reqPx = 420)
+        if (more > 0) {
+            Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.6f)), contentAlignment = Alignment.Center) {
+                Text("+$more", style = MaterialTheme.typography.titleLarge, color = Color.White)
+            }
+        } else {
+            Box(
+                Modifier.matchParentSize().background(
+                    Brush.verticalGradient(0.6f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.6f))
+                )
             )
-        )
-        PhotoPose.fromKey(photo.pose)?.let { pose ->
             Text(
-                pose.label.uppercase(),
-                style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.92f), fontSize = 8.sp,
-                modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
-                    .clip(RoundedCornerShape(4.dp)).background(Color.Black.copy(alpha = 0.4f))
-                    .padding(horizontal = 5.dp, vertical = 2.dp)
+                date,
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.White,
+                modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 8.dp, vertical = 6.dp)
             )
         }
-        Text(
-            SimpleDateFormat("MMM d", currentLocale()).format(Date(photo.takenAtMs)).uppercase(),
-            style = MaterialTheme.typography.labelSmall,
-            color = Color.White.copy(alpha = 0.92f), fontSize = 8.sp,
-            modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 9.dp, vertical = 8.dp)
-        )
+    }
+}
+
+/** The empty slot after the last photo, while there are fewer photos than tiles. */
+@Composable
+private fun AddTile(onOpenGallery: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier.aspectRatio(0.75f)
+            .clip(TileShape)
+            .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+            .bounceClick { onOpenGallery() }
+            .semantics { contentDescription = "Add a photo" },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

@@ -31,7 +31,7 @@ class ProfileGalleryLockTest {
             }
         }
 
-        compose.onNodeWithText("UNLOCK PHOTOS").assertIsDisplayed()
-        compose.onNodeWithText("Gallery locked").assertIsDisplayed()
+        compose.onNodeWithText("Progress photos are locked").assertIsDisplayed()
+        compose.onNodeWithText("Tap to unlock").assertIsDisplayed()
     }
 }
