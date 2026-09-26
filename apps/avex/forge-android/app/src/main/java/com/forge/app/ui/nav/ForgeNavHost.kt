@@ -29,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -126,7 +127,13 @@ fun ForgeNavHost(
     // the tap was discarded. Only a LOADED program may reject a key; a load still in flight is
     // waited for, and one that has FAILED leaves the request alone rather than answering it wrongly.
     val programReadiness by com.forge.app.program.Program.readiness.collectAsStateWithLifecycle()
-    LaunchedEffect(widgetOpen, programReadiness) {
+    // Neither deep link acts under the app lock. This host stays composed beneath the gate, so a
+    // widget tap would open the gym day (and start its session) behind it, and the new screen's
+    // BackHandler, registered after the gate's, would take Back from the lock. Both requests wait
+    // for unlock instead: the widget's until it is marked handled, the policy's by count.
+    val locked = com.forge.app.security.LocalAppLockActive.current
+    LaunchedEffect(widgetOpen, programReadiness, locked) {
+        if (locked) return@LaunchedEffect
         val request = widgetOpen ?: return@LaunchedEffect
         val routing = com.forge.app.widget.widgetRoutingFor(
             programReadiness,
@@ -149,8 +156,10 @@ fun ForgeNavHost(
         // behind the launcher) resumes the tap instead of dropping it.
         onWidgetOpenHandled()
     }
-    LaunchedEffect(privacyPolicyRequest) {
-        if (privacyPolicyRequest > 0) {
+    var policyRequestsHandled by remember { mutableIntStateOf(0) }
+    LaunchedEffect(privacyPolicyRequest, locked) {
+        if (!locked && privacyPolicyRequest > policyRequestsHandled) {
+            policyRequestsHandled = privacyPolicyRequest
             nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.PrivacyPolicy.name))
         }
     }

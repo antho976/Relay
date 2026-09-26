@@ -701,9 +701,6 @@ class SettingsViewModel @Inject constructor(
     // ── Complete DB backup & restore (the real safety net) ─────────────────────
     private val _statusMessage = OutcomeSink()
 
-    /** Set true once a restore lands; the UI shows "restarting" and relaunches the app. */
-    private val _restoreSucceeded = kotlinx.coroutines.flow.MutableStateFlow(false)
-    val restoreSucceeded: StateFlow<Boolean> = _restoreSucceeded.asStateFlow()
 
     fun backupDatabase(uri: android.net.Uri) = viewModelScope.launch {
         // Rechecked here as well as at the button, like backupNow and setBackupFolder: this was the
@@ -749,7 +746,8 @@ class SettingsViewModel @Inject constructor(
         } catch (e: Exception) {
             RestoreOutcome.IO_ERROR
         }
-        if (outcome == RestoreOutcome.SUCCESS) _restoreSucceeded.value = true
+        // MainActivity restarts on it, whichever screen the user is on by now (RestoreRestart).
+        if (outcome == RestoreOutcome.SUCCESS) RestoreRestart.request()
         else _statusMessage.value = restoreFailureMessage(outcome)
     }
 

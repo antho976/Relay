@@ -192,7 +192,6 @@ fun SettingsScreen(
 
     // Complete DB backup & restore via the system file picker (survives uninstall).
     val context = LocalContext.current
-    val restoreSucceeded by viewModel.restoreSucceeded.collectAsStateWithLifecycle()
     val restoreImpact by viewModel.restoreImpact.collectAsStateWithLifecycle()
     var pendingRestoreUri by remember { mutableStateOf<Uri?>(null) }
     val dateStamp = remember {
@@ -234,7 +233,6 @@ fun SettingsScreen(
     val folderGrantLauncher = rememberLauncherForActivityResult(
         OpenDownloadsTree()
     ) { uri -> uri?.let { viewModel.grantImportFolder(it) } }
-    LaunchedEffect(restoreSucceeded) { if (restoreSucceeded) restartApp(context) }
 
     BackHandler(enabled = currentPage != null || searchQuery.isNotBlank()) {
         when {
@@ -410,7 +408,10 @@ fun SettingsScreen(
 
     // When an export finishes, open the system share sheet so it can be saved as a real file
     // (Save to Files / Downloads / Drive…) instead of being stranded in app storage.
-    exportPath?.let { path ->
+    // Not while locked: a long export finishing in the background would otherwise open the sheet,
+    // a separate Activity, above the lock with the whole data file attached. The path waits in
+    // the StateFlow until unlock.
+    if (!com.forge.app.security.LocalAppLockActive.current) exportPath?.let { path ->
         LaunchedEffect(path) {
             val file = java.io.File(path)
             runCatching {
@@ -481,10 +482,3 @@ private class OpenDownloadsTree : ActivityResultContracts.OpenDocumentTree() {
         }
 }
 
-/** Relaunch the app — used after a restore, since the database file was swapped underneath Room. */
-private fun restartApp(context: android.content.Context) {
-    val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-    intent?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
-    if (intent != null) context.startActivity(intent)
-    Runtime.getRuntime().exit(0)
-}

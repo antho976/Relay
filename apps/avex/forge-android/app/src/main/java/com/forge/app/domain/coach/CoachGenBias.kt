@@ -13,6 +13,10 @@ data class GenBias(
      * rep_shift wins. Generation applies it to any slot that re-picks that exercise, so a coach
      * rep_shift survives a refresh the way volume does (seam fix, finding 1 — rep_shift previously
      * had no survival channel and was silently discarded on every regenerate).
+     *
+     * Keyed by [GenBias.repKey]: a shift read on one day (the heavy day's 10–12 → 8–10) belongs to
+     * that day, and keying by exercise alone rewrote the same lift's light day too. Read it with
+     * [repsFor].
      */
     val repBias: Map<String, String> = emptyMap(),
     /** Rotations the watcher judged "ok" (or folded into the baseline and not judged failed) — boosted like likes. */
@@ -20,8 +24,14 @@ data class GenBias(
     /** Rotations that failed (skipped after the change / user-reverted) — softly avoided. */
     val avoid: Set<String> = emptySet()
 ) {
+    /** The learned rep range for [libId] on [dayKey]; a legacy shift with no day applies to every day. */
+    fun repsFor(dayKey: String, libId: String): String? = repBias[repKey(dayKey, libId)] ?: repBias[libId]
+
     companion object {
         val NEUTRAL = GenBias()
+
+        /** "dayKey|libId", or the bare libId for a decision recorded before shifts carried a day. */
+        fun repKey(dayKey: String, libId: String): String = if (dayKey.isEmpty()) libId else "$dayKey|$libId"
     }
 }
 
@@ -39,7 +49,7 @@ data class GenBias(
  * (already baked) rows, since a row is exactly one of those once accepted:
  *  - volumeBias: net per muscle of non-failed volume_up/volume_down (reverted/skipped/failed rows
  *    drop out), clamped to ±[VOLUME_CLAMP] — the same bound as the planner's drift cap (hardening 11).
- *  - repBias: latest non-failed rep_shift per exercise.
+ *  - repBias: latest non-failed rep_shift per exercise and day.
  *  - prefer: swap replacements judged "ok", OR folded into the baseline and not (yet) judged failed.
  *    Folding keeps a swap preferred for SURVIVAL — carrying its learning forward is independent of
  *    trust — but an in-window folded swap the watcher later rules failed drops out (CoachDao.pendingOutcome).
@@ -78,7 +88,7 @@ object CoachGenBias {
         val repBias = decisions
             .filter { it.isActive() && it.type == "rep_shift" && it.countsForBias() && it.payload != null }
             .sortedBy { it.id }
-            .associate { it.targetKey to it.payload!! }
+            .associate { GenBias.repKey(it.dayKey, it.targetKey) to it.payload!! }
 
         val swaps = decisions.filter { it.type == "swap" && it.payload != null }
         // A folded swap stays preferred for SURVIVAL (its accepted rotation carries into the new

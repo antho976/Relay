@@ -219,7 +219,7 @@ class ProgramRepository @Inject constructor(
         generated.forEachIndexed { i, gd ->
             days += ProgramDay(gd.key, i, gd.name, gd.word, gd.accentHex, gd.archetype)
             gd.exercises.forEachIndexed { j, ge ->
-                slots += ProgramSlot("${gd.key}-$j", gd.key, j, ge.libId, ge.sets, bias.repBias[ge.libId] ?: ge.reps)
+                slots += ProgramSlot("${gd.key}-$j", gd.key, j, ge.libId, ge.sets, bias.repsFor(gd.key, ge.libId) ?: ge.reps)
             }
         }
         // Recorded BEFORE the transaction, carrying the signature of the program it replaces, so a
@@ -410,7 +410,7 @@ class ProgramRepository @Inject constructor(
         val slots = day.exercises.mapIndexed { j, ge ->
             ProgramSlot(
                 "$dayKey-$j", dayKey, j, ge.libId,
-                if (carrySets) effectiveSets[j] else ge.sets, bias.repBias[ge.libId] ?: ge.reps
+                if (carrySets) effectiveSets[j] else ge.sets, bias.repsFor(dayKey, ge.libId) ?: ge.reps
             )
         }
         // One transaction (seam finding 13). Only THIS day's overlays were cleared, so fold only this

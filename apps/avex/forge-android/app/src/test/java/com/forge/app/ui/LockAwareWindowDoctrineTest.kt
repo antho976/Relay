@@ -20,8 +20,16 @@ class LockAwareWindowDoctrineTest {
     // needs a lock-aware version in ui/common/window first.
     private val banned = Regex(
         """androidx\.compose\.material3\.(AlertDialog|BasicAlertDialog|ModalBottomSheet|DropdownMenu|""" +
-            """ExposedDropdownMenuBox|DatePickerDialog|TimePickerDialog|TooltipBox)\b|""" +
-            """androidx\.compose\.ui\.window\.(Dialog|Popup)\b"""
+            """ExposedDropdownMenuBox|DatePickerDialog|TimePickerDialog|TooltipBox|ModalWideNavigationRail|""" +
+            """ExpandedFullScreenSearchBar|ExpandedDockedSearchBar)\b|""" +
+            """androidx\.compose\.ui\.window\.(Dialog|Popup)\b|""" +
+            """androidx\.compose\.foundation\.BasicTooltipBox\b|""" +
+            // A wildcard import would bring the unguarded names in without naming them.
+            """import androidx\.compose\.(material3|ui\.window)\.\*|""" +
+            // Platform windows: the same problem outside Compose.
+            """android\.app\.(Dialog|AlertDialog|DatePickerDialog|TimePickerDialog)\b|""" +
+            """android\.widget\.PopupWindow\b|androidx\.appcompat\.app\.AlertDialog\b|""" +
+            """androidx\.fragment\.app\.DialogFragment\b"""
     )
 
     @Test

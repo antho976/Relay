@@ -196,6 +196,12 @@ object ProgressionAdvisor {
      * prevMax × scale to the unit's grid, never past prevMax in the direction the scale didn't ask
      * for. PLATES can't take a few-percent ease (a whole plate is a far bigger cut), so a
      * down-scaled plate lift stays silent, exactly as its progress branch does.
+     *
+     * Only easing moves the weight here. These cues say "before adding load", so an up-scale
+     * (a push phase, a HARD pick, high readiness) keeps the weight and carries the note; adding
+     * load mid-range is the progress branch's job. And on a light load the grid is coarse: a 3%
+     * ease floored to it turns 5 kg into 2.5 kg. When the floored cut is more than twice what the
+     * scale asked for, the weight is kept and the reps eased instead.
      */
     private fun sameWeightSuggestion(
         exerciseId: String,
@@ -214,8 +220,14 @@ object ProgressionAdvisor {
             !scaled -> prevMax
             unit == ExerciseUnit.PLATES -> if (scale < 1.0) return null else prevMax
             scale < 1.0 -> floorToGrid(prevMax * scale, step).takeIf { it > 0.0 }?.let { minOf(it, prevMax) } ?: prevMax
-            else -> maxOf(prevMax, floorToGrid(prevMax * scale, step))
+            else -> prevMax
         }
+        val tooDeep = scale < 1.0 && prevMax - target > prevMax * (1.0 - scale) * 2
+        if (tooDeep) return weightChange(
+            exerciseId, exerciseName, prevMax, prevMax,
+            inputText = inputTextFor(prevMax, unit, plateLb),
+            reason = withNote("no lower weight close enough, so keep the weight and ease the reps", scaleNote)
+        )
         return weightChange(
             exerciseId, exerciseName, prevMax, target,
             inputText = inputTextFor(target, unit, plateLb),
@@ -291,7 +303,7 @@ object ProgressionAdvisor {
                 target <= 0.0 -> null
                 ceiling != null && target > ceiling -> {
                     val capped = floorToGrid(ceiling, step)
-                    if (capped > prevMax) weightChange(
+                    if (heavier(capped, prevMax, step)) weightChange(
                         exerciseId, exerciseName, prevMax, capped,
                         inputText = trim(capped),
                         reason = withNote("hit top of range — capped at your heaviest dumbbell", scaleNote)
@@ -544,7 +556,7 @@ object ProgressionAdvisor {
             // reps instead — the next ladder rung shifts the rep range anyway.
             val ceiling = maxDbLb?.takeIf { slot.unit == ExerciseUnit.DUMBBELL && prevMax <= it }
             val target = if (ceiling != null) minOf(raw, floorToGrid(ceiling, step)) else raw
-            if (target <= prevMax) weightChange(
+            if (!heavier(target, prevMax, step)) weightChange(
                 slot.exerciseId, slot.name, prevMax, prevMax,
                 inputText = inputTextFor(prevMax, slot.unit, plateLb),
                 reason = "${slot.name} hasn't gained in $stall sessions and you're at your heaviest dumbbell — add reps",
@@ -640,6 +652,14 @@ object ProgressionAdvisor {
      */
     private fun floorToGrid(weight: Double, grid: Double): Double =
         kotlin.math.floor(weight / grid + GRID_EPSILON) * grid
+
+    /**
+     * True when [target] is a real step above [prevMax], not the same weight read off the grid.
+     * A kg weight is stored as one-decimal lb, a hair off its grid line (22.5 kg is 49.6 lb, the
+     * line is 49.604), so `floorToGrid(prevMax)` can come back 0.004 lb "heavier" than itself.
+     */
+    private fun heavier(target: Double, prevMax: Double, step: Double): Boolean =
+        target > prevMax + step * GRID_EPSILON
 
     /** Fraction of a grid step [floorToGrid] forgives. */
     private const val GRID_EPSILON = 0.02
