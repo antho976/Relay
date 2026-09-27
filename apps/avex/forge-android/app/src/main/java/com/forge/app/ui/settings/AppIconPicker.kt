@@ -44,37 +44,27 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.appicon.AppIcon
-import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.clickableLabeled
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material3.Icon
 
 /**
- * The Appearance-page "App icon" control — a single tappable row that shows the icon you're on now
- * and opens [AppIconPickerSheet] to change it, the same shape as the profile avatar picker. Settings
- * archetype: navigation-in-place, no inline grid crowding the page (DESIGN §3).
+ * The Appearance page's App icon row: the icon you are on now as the row's tile, its name, and a
+ * chevron into [AppIconPickerSheet].
  */
 @Composable
 internal fun AppIconRow(currentKey: String, onOpen: () -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val current = AppIcon.fromKey(currentKey)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .bounceClick(onClick = onOpen)
-            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(current.displayName, style = MaterialTheme.typography.bodyMedium, color = onBg)
-            Text(
-                "Tap to change your home-screen icon",
-                style = MaterialTheme.typography.labelSmall,
-                color = muted,
-            )
-        }
-        // The icon you have now — the tap target that opens the picker (whole row is tappable).
-        AppIconThumb(current, isSelected = false, modifier = Modifier.size(44.dp))
+    SettingsRowContainer(interaction = Modifier.clickableLabeled("App icon, ${current.displayName}. Change", onClick = onOpen)) {
+        AppIconThumb(current, isSelected = false, modifier = Modifier.size(40.dp), corner = 12.dp)
+        SettingsRowText("App icon", current.displayName)
+        Icon(
+            Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -124,7 +114,7 @@ internal fun AppIconPickerSheet(
                         blendMode = BlendMode.DstIn,
                     )
                 },
-            contentPadding = PaddingValues(start = SETTINGS_GUTTER, end = SETTINGS_GUTTER, top = 4.dp, bottom = 32.dp),
+            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 32.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -133,15 +123,20 @@ internal fun AppIconPickerSheet(
                     Text("App icon", style = MaterialTheme.typography.headlineSmall, color = onBg)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Changes your home-screen icon; it updates after a moment.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = muted, fontStyle = FontStyle.Italic,
+                        "Your home screen updates a moment after you pick.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = muted,
                     )
                 }
             }
             AppIcon.families.forEach { family ->
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    EditorialHeader(family.name, muted, accent, Modifier.padding(top = 12.dp, bottom = 2.dp))
+                    Text(
+                        family.name.lowercase().replaceFirstChar { it.uppercase() },
+                        style = MaterialTheme.typography.titleSmall,
+                        color = muted,
+                        modifier = Modifier.padding(top = 16.dp, bottom = 2.dp)
+                    )
                 }
                 items(byFamily.getValue(family), key = { it.name }) { icon ->
                     Column(
@@ -157,9 +152,7 @@ internal fun AppIconPickerSheet(
                         Text(
                             icon.label,
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (icon == current) onBg else muted.copy(alpha = 0.7f),
-                            fontSize = 9.sp,
-
+                            color = if (icon == current) onBg else muted,
                             overflow = TextOverflow.Ellipsis,
                             textAlign = TextAlign.Center,
                         )
@@ -178,10 +171,11 @@ private fun AppIconThumb(
     isSelected: Boolean,
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
+    corner: androidx.compose.ui.unit.Dp = 16.dp,
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val outline = MaterialTheme.colorScheme.outline
-    val shape = RoundedCornerShape(16.dp)
+    val shape = RoundedCornerShape(corner)
     val label = "${icon.family} ${icon.label} icon" + if (isSelected) ", selected" else ""
     Box(
         contentAlignment = Alignment.Center,

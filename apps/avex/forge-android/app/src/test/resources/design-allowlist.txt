@@ -117,9 +117,6 @@
 1 alpha ui/profile/RankSection.kt 0.40
 1 alpha ui/programbuilder/ProgramBuilderDayDetail.kt 0.5
 1 alpha ui/settings/AccentColorPicker.kt 0.22
-1 alpha ui/settings/AccentColorPicker.kt 0.4
-1 alpha ui/settings/SettingsPrimitives.kt 0.55
-1 alpha ui/settings/SettingsSubPages.kt 0.5
 1 alpha ui/trophies/TrophiesComponents.kt 0.18
 1 alpha ui/trophies/TrophiesComponents.kt 0.2
 1 alpha ui/trophies/TrophiesScreen.kt 0.18
@@ -216,9 +213,6 @@
 2 font-size ui/profile/ProfileLedger.kt fontSize=
 8 font-size ui/profile/RankSection.kt fontSize=
 5 font-size ui/profile/TrophyCaseSection.kt fontSize=
-1 font-size ui/settings/AccentColorPicker.kt fontSize=
-1 font-size ui/settings/AppIconPicker.kt fontSize=
-1 font-size ui/settings/ImportDialog.kt fontSize=
 6 font-size ui/trophies/TrophiesComponents.kt fontSize=
 1 hype domain/coach/SessionOpinion.kt "moves the needle"
 2 hype program/ExerciseLibrary.kt "insane"
@@ -255,9 +249,11 @@
 1 screen-name-title ui/programbuilder/ProgramBuilderDayDetail.kt title={Text(
 2 screen-name-title ui/programbuilder/ProgramBuilderScreen.kt title={Text(
 2 screen-name-title ui/settings/SettingsAboutPage.kt title={Text(
-2 screen-name-title ui/settings/SettingsDialogs.kt title={Text(
+1 screen-name-title ui/settings/SettingsDialogs.kt title={Text(
 1 screen-name-title ui/settings/SettingsScreen.kt title={Text(
-1 screen-name-title ui/settings/SettingsSecurityPage.kt title={Text(
+# Sanctioned 2026-09-27: SettingsConfirmDialog's title is a dialog's question ("Factory reset?"), not
+# a screen naming itself in its top bar. One shared confirm serves every irreversible act in Settings.
+1 screen-name-title ui/settings/SettingsKit.kt title={Text(
 1 screen-name-title ui/settings/SettingsVacationPage.kt title={Text(
 2 snackbar-host ui/gym/train/DayScreen.kt SnackbarHostState
 2 snackbar-host ui/programbuilder/ProgramBuilderDayDetail.kt SnackbarHostState

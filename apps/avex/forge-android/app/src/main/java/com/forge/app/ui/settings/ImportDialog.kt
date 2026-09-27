@@ -1,34 +1,26 @@
 package com.forge.app.ui.settings
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.FolderOff
+import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Restore
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.forge.app.ui.common.window.Dialog
 import com.forge.app.data.importer.FoundImport
 import com.forge.app.data.importer.foundImportSummary
 import com.forge.app.ui.common.clickableLabeled
 
 /**
- * Import-from-another-app modal (#GYMAP-17). Leads with the files it FOUND for you: once you've
- * pointed Avex at a folder (Downloads), it lists the recognised exports for a one-tap import. Manual
- * file pick and the share-in route are the fallbacks below. Modal archetype — surface fill, dry copy.
+ * Import from another app (#GYMAP-17), as a sheet. It leads with the files it FOUND: once Avex can
+ * see one folder (Download/Avex), recognised exports are listed for a one-tap import, and Avex
+ * backups found there are offered as restores. Picking a file by hand and sharing in from the other
+ * app are the fallbacks below.
  */
 @Composable
 internal fun ImportDialog(
@@ -39,151 +31,84 @@ internal fun ImportDialog(
     onRestoreFound: (android.net.Uri) -> Unit,
     onDismiss: () -> Unit
 ) {
-    Dialog(onDismissRequest = onDismiss) {
-        val onBg = MaterialTheme.colorScheme.onBackground
-        val muted = MaterialTheme.colorScheme.onSurfaceVariant
-        // §1/§5: a modal keeps its SURFACE — painting it `background` dissolved the sheet into
-        // the page it floats over.
-        val surface = MaterialTheme.colorScheme.surface
+    val granted by viewModel.importFolderGranted.collectAsState()
+    val scanning by viewModel.scanningImports.collectAsState()
+    val found by viewModel.foundImports.collectAsState()
+    val backups by viewModel.foundBackups.collectAsState()
 
-        val granted by viewModel.importFolderGranted.collectAsState()
-        val scanning by viewModel.scanningImports.collectAsState()
-        val found by viewModel.foundImports.collectAsState()
-        val backups by viewModel.foundBackups.collectAsState()
+    // Re-scan whenever the sheet opens with access already granted (new exports may have landed).
+    LaunchedEffect(granted) { if (granted) viewModel.scanImportFolder() }
 
-        // Re-scan whenever the sheet opens with access already granted (new exports may have landed).
-        LaunchedEffect(granted) { if (granted) viewModel.scanImportFolder() }
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(surface, RoundedCornerShape(16.dp))
-                .verticalScroll(rememberScrollState())   // §14 — survives 200% and a long found-file list
-                .padding(vertical = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            SettingsSectionHeader("Import", top = 0.dp)
-            SettingsExplainer(
-                "Add history from Strong, Hevy, FitNotes, or any CSV export. Added to your log, not replacing it.",
-                Modifier.padding(horizontal = SETTINGS_GUTTER)
-            )
-
-            // ── Found files — the headline path ──────────────────────────────────
-            if (!granted) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SettingsActionRow {
-                        SettingsOutlineAction("Find my exports") { onGrantFolder() }
-                    }
-                    SettingsExplainer(
-                        "Opens Download/Avex. Tap Use this folder, then save exports there.",
-                        Modifier.padding(horizontal = SETTINGS_GUTTER)
+    SettingsSheet(
+        "Import",
+        "Bring in history from Strong, Hevy, FitNotes or any CSV. It joins your log; nothing is replaced.",
+        onDismiss
+    ) {
+        if (!granted) {
+            SettingsGroup(footer = "Opens Download/Avex. Tap Use this folder, then save your exports there.") {
+                SettingsActionRow("Find my exports", "Let Avex look in one folder for files to import", Icons.Rounded.FolderOpen) {
+                    onGrantFolder()
+                }
+            }
+        } else {
+            SettingsGroup(
+                "In your folder",
+                headerTrailing = if (!scanning && (found.size + backups.size) > 0) "${found.size + backups.size} found" else null
+            ) {
+                when {
+                    scanning -> SettingsInfoRow("Looking for exports", "Reading the folder", Icons.Rounded.Folder)
+                    found.isEmpty() && backups.isEmpty() -> SettingsEmptyBlock(
+                        Icons.Rounded.FolderOff,
+                        "Nothing found yet",
+                        "Save exports into that folder, or a folder inside it."
                     )
-                }
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    when {
-                        scanning -> SettingsExplainer("Scanning…", Modifier.padding(horizontal = SETTINGS_GUTTER))
-                        found.isEmpty() && backups.isEmpty() -> SettingsExplainer(
-                            "Nothing found yet. Save exports into that folder or one inside it.",
-                            Modifier.padding(horizontal = SETTINGS_GUTTER)
-                        )
-                        else -> {
-                            found.forEach { file ->
-                                FoundFileRow(file, onBg, muted) { onImportFound(file.uri); onDismiss() }
-                            }
-                            // Backups replace everything rather than adding to it, so they say
-                            // RESTORE and go through the usual confirm, never a one-tap swap.
-                            backups.forEach { backup ->
-                                FoundBackupRow(backup, onBg, muted) { onRestoreFound(backup.uri); onDismiss() }
-                            }
-                        }
+                    else -> {
+                        found.forEach { file -> FoundFileRow(file) { onImportFound(file.uri); onDismiss() } }
+                        // Backups replace everything rather than adding to it, so they say Restore and
+                        // go through the usual confirm, never a one-tap swap.
+                        backups.forEach { backup -> FoundBackupRow(backup) { onRestoreFound(backup.uri); onDismiss() } }
                     }
-                    // §8 ③ is the mono accent `action →`, not an accent-coloured sentence (§14).
-                    SettingsActionLink("Choose a different folder →") { onGrantFolder() }
                 }
-            }
-
-            // ── Fallbacks: pick a file, or share in from the other app ────────────
-            Text(
-                "Choose a file",
-                style = MaterialTheme.typography.bodyMedium, color = onBg,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickableLabeled("Choose a file") { onManualPick(); onDismiss() }
-                    .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)
-            )
-            SettingsExplainer(
-                "Or in the other app: Export, then Share to Avex.",
-                Modifier.padding(horizontal = SETTINGS_GUTTER)
-            )
-
-            SettingsActionRow {
-                SettingsOutlineAction("Close", onClick = onDismiss)
+                SettingsNavigationRow("Choose a different folder", icon = Icons.Rounded.Folder, onClick = onGrantFolder)
             }
         }
-    }
-}
 
-/** One recognised export: filename + "app · N workouts · date", tap to import. */
-@Composable
-private fun FoundFileRow(
-    file: FoundImport,
-    onBg: androidx.compose.ui.graphics.Color,
-    muted: androidx.compose.ui.graphics.Color,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickableLabeled("Import ${file.name}", onClick = onClick)
-            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(1.dp), modifier = Modifier.padding(end = 12.dp)) {
-            // No maxLines: a file NAME is user content and wraps rather than truncating (§14).
-            Text(file.name, style = MaterialTheme.typography.bodyMedium, color = onBg)
-            // What the file HOLDS, not just its workout count (L-01): a bodyweight CSV carries
-            // no workouts at all, and describing it as "0 workouts" is why it read as empty.
-            FoundMeta("${foundImportSummary(file)} · ${formatShortDate(file.lastModified)}", muted)
+        SettingsGroup("Other ways") {
+            SettingsActionRow("Choose a file", "Pick a CSV or JSON export yourself", Icons.AutoMirrored.Rounded.InsertDriveFile) {
+                onManualPick(); onDismiss()
+            }
+            SettingsInfoRow("Share from the other app", "In Strong, Hevy or FitNotes: Export, then Share to Avex", Icons.Rounded.Share)
         }
-        Text("IMPORT", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.sp)
     }
 }
 
-/** One Avex backup found in a scanned folder: filename + "Avex backup · date", tap to restore. */
+/** One recognised export: its name, what it holds and when, and an Import button the row answers to. */
 @Composable
-private fun FoundBackupRow(
-    backup: com.forge.app.data.importer.FoundBackup,
-    onBg: androidx.compose.ui.graphics.Color,
-    muted: androidx.compose.ui.graphics.Color,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickableLabeled("Restore ${backup.name}", onClick = onClick)
-            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(1.dp), modifier = Modifier.padding(end = 12.dp)) {
-            Text(backup.name, style = MaterialTheme.typography.bodyMedium, color = onBg)
-            FoundMeta(
-                buildString {
-                    append("Avex backup")
-                    if (backup.passwordProtected) append(" · password")
-                    append(" · ${formatShortDate(backup.lastModified)}")
-                },
-                muted
-            )
-        }
-        Text("RESTORE", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.sp)
+private fun FoundFileRow(file: FoundImport, onClick: () -> Unit) {
+    // What the file HOLDS, not just a workout count (L-01): a bodyweight CSV carries no workouts,
+    // and "0 workouts" is why it used to read as empty. The name is user content, so it wraps.
+    SettingsRowContainer(interaction = Modifier.clickableLabeled("Import ${file.name}", onClick = onClick)) {
+        SettingsIconTile(Icons.AutoMirrored.Rounded.InsertDriveFile)
+        SettingsRowText(file.name, "${foundImportSummary(file)} · ${formatShortDate(file.lastModified)}")
+        SettingsCompactButton("Import")
     }
 }
 
-/** A found file's caption line: §6's sanctioned 9sp figure-caption size, shared by both row kinds. */
+/** One Avex backup found in the folder: its name and date, and a Restore button. */
 @Composable
-private fun FoundMeta(text: String, muted: androidx.compose.ui.graphics.Color) {
-    Text(text, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+private fun FoundBackupRow(backup: com.forge.app.data.importer.FoundBackup, onClick: () -> Unit) {
+    // A file name has no spaces to wrap at, so the button stays beside it and the name breaks where
+    // it must; the adaptive stacking would split this list into two layouts.
+    SettingsRowContainer(interaction = Modifier.clickableLabeled("Restore ${backup.name}", onClick = onClick)) {
+        SettingsIconTile(Icons.Rounded.Restore)
+        SettingsRowText(
+            backup.name,
+            buildString {
+                append("Avex backup")
+                if (backup.passwordProtected) append(" · password")
+                append(" · ${formatShortDate(backup.lastModified)}")
+            }
+        )
+        SettingsCompactButton("Restore")
+    }
 }

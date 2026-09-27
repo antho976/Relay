@@ -1,17 +1,26 @@
 package com.forge.app.ui.settings
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.NoAccounts
+import androidx.compose.material.icons.rounded.Policy
+import androidx.compose.material.icons.rounded.VisibilityOff
 import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -22,33 +31,38 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.appicon.AppIcon
 
 /**
- * Settings → About. Shows the real installed version (read from PackageManager, so no BuildConfig
- * feature needed) and the app's privacy stance: Avex is fully offline and holds no INTERNET
- * permission, so every claim below is verifiable from the manifest.
+ * Settings → About. Who the app is (the installed icon, name and real version, read from the
+ * package), the privacy stance as four claims each verifiable from the manifest, the hidden
+ * gestures, and diagnostics.
  */
 @Composable
 internal fun AboutPage(
-    modifier: Modifier = Modifier,
+    onBack: () -> Unit,
     viewModel: SettingsViewModel? = null,
     onOpenExport: () -> Unit = {},
     onOpenPrivacyPolicy: () -> Unit = {}
 ) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val context = LocalContext.current
     val version = remember {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
         }.getOrNull().orEmpty()
     }
+    val iconKey = viewModel?.state?.collectAsStateWithLifecycle()?.value?.appIconKey
 
     var showCrashLogs by remember { mutableStateOf(false) }
     var showLicenses by remember { mutableStateOf(false) }
@@ -57,124 +71,75 @@ internal fun AboutPage(
 
     if (showCrashLogs) {
         LaunchedEffect(Unit) { viewModel?.loadCrashLogs() }
-        CrashLogViewerDialog(
-            logs = crashLogs,
-            onDismiss = { showCrashLogs = false }
-        )
+        CrashLogViewerDialog(logs = crashLogs, onDismiss = { showCrashLogs = false })
     }
+    if (showLicenses) LicensesDialog(onDismiss = { showLicenses = false })
 
-    if (showLicenses) {
-        LicensesDialog(onDismiss = { showLicenses = false })
-    }
+    SettingsScaffold("About", onBack) {
+        SettingsGroup {
+            SettingsGroupBlock(padding = PaddingValues(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Image(
+                        painter = painterResource(AppIcon.fromKey(iconKey.orEmpty()).previewRes),
+                        contentDescription = null,
+                        modifier = Modifier.size(56.dp).clip(RoundedCornerShape(14.dp))
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Avex", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface)
+                        Text(
+                            if (version.isBlank()) "Offline strength tracker" else "Version $version",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "A personal gym companion: generated programs, an adaptive coach, progress stats, " +
+                        "trophies and a rank ladder. Built for lifting, not for the cloud.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(bottom = 56.dp)
-    ) {
-        SettingsSectionHeader("App", top = 12.dp)
+        // The privacy stance is four claims, each verifiable from the manifest.
+        SettingsGroup("Your data stays on this device") {
+            SettingsInfoRow("No internet permission", "Avex physically cannot upload anything", Icons.Rounded.CloudOff)
+            SettingsInfoRow("No account, no sign-in", "Everything lives in a private database on this phone", Icons.Rounded.NoAccounts)
+            SettingsInfoRow("No servers, analytics or tracking", "Nothing is collected, because nothing is sent", Icons.Rounded.VisibilityOff)
+            SettingsInfoRow("Your data moves only when you move it", "Exports and backups go where you point them", Icons.Rounded.FolderOpen)
+            SettingsNavigationRow("Privacy policy", "Offline use, permissions and deletion", Icons.Rounded.Policy, onClick = onOpenPrivacyPolicy)
+            SettingsNavigationRow("Export or back up your data", icon = SettingsIcons.Export, onClick = onOpenExport)
+        }
+
+        SettingsGroup("Gestures & shortcuts") {
+            SettingsInfoRow("Long-press an exercise card", "Skip it, swap it, or set its rest timer")
+            SettingsInfoRow("Swipe a logged set left", "Delete that set")
+            SettingsInfoRow("Long-press Log set", "Repeat your last set, same weight and reps")
+            SettingsInfoRow("Tap the session sparkline", "Open the exercise's full history chart")
+            SettingsInfoRow("Long-press a day on the Gym list", "Change its color, re-roll it, or edit that day")
+        }
+
+        SettingsGroup(
+            "Diagnostics & licenses",
+            footer = "Built on Jetpack Compose, Room, Hilt and Health Connect (Apache 2.0), with the anatomical " +
+                "figures adapted from react-native-body-highlighter (MIT)."
+        ) {
+            if (viewModel != null) {
+                SettingsNavigationRow("Crash logs", "Kept on this phone, never sent", Icons.Rounded.BugReport) { showCrashLogs = true }
+            }
+            SettingsNavigationRow("Open-source licenses", icon = Icons.Outlined.Description) { showLicenses = true }
+        }
+
         Text(
-            if (version.isBlank()) "Offline strength tracker" else "Version $version · Offline strength tracker",
-            style = MaterialTheme.typography.bodyMedium,
-            color = muted,
-            modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
-        )
-
-        // §4.3: "a sentences-only section is redesigned to data or cut". The privacy stance was
-        // three 40-word paragraphs restating one another; it is four CLAIMS, each verifiable from
-        // the manifest, so it renders as four claim rows with the §12 dot carrying present/absent —
-        // the same vocabulary Recovery's connection rail uses. The prose said no more than these do.
-        SettingsSectionHeader("Your data stays on this device")
-        PrivacyClaim("No Internet permission", "Avex physically cannot upload anything.")
-        PrivacyClaim("No account, no sign-in", "Everything lives in a private database on this phone.")
-        PrivacyClaim("No servers, analytics or tracking", "Nothing is collected, because nothing is sent.")
-        PrivacyClaim("Your data moves only when you move it", "Exports and backups go where you point them, through Android's own picker.")
-        SettingsActionLink("Read the full privacy policy →", onOpenPrivacyPolicy)
-        SettingsActionLink("Export or back up your data →", onOpenExport)
-
-        SettingsSectionHeader("Gestures & shortcuts")
-        SettingsExplainer(
-            "Hidden gestures built into the training screen and workout logging.",
-            Modifier.padding(start = SETTINGS_GUTTER, end = SETTINGS_GUTTER, bottom = 4.dp)
-        )
-        GestureRow(
-            gesture = "Long-press an exercise card",
-            action = "Quick actions: skip exercise, open swap picker, set rest timer"
-        )
-        GestureRow(
-            gesture = "Swipe a logged set left",
-            action = "Delete that set"
-        )
-        GestureRow(
-            gesture = "Long-press LOG SET",
-            action = "Repeat your last set (same weight and reps)"
-        )
-        GestureRow(
-            gesture = "Tap the session strip (sparkline)",
-            action = "Open the full exercise history chart sheet"
-        )
-        GestureRow(
-            gesture = "Long-press a day card on the Gym list",
-            action = "Change day color · re-roll exercises · edit program for this day"
-        )
-        SettingsSectionHeader("About")
-        SettingsExplainer(
-            "A personal gym companion: auto-generated programs, an adaptive coach, progress stats, " +
-                "trophies and a rank ladder. Built for lifting, not for the cloud.",
-            Modifier.padding(horizontal = SETTINGS_GUTTER)
-        )
-        Text(
-            "Avex · a solo-built, offline-first project.",
+            "Avex · a solo-built, offline-first project",
             style = MaterialTheme.typography.bodySmall,
-            color = muted,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontStyle = FontStyle.Italic,
-            modifier = Modifier.padding(horizontal = SETTINGS_GUTTER, vertical = 8.dp)
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
         )
-
-        // §8 ③: these open something, so they are `action →` links, not muted body sentences.
-        SettingsSectionHeader("Diagnostics & licenses")
-        SettingsExplainer(
-            "Built on Jetpack Compose, Room, Hilt and Health Connect (Apache 2.0), with the " +
-                "anatomical figures adapted from react-native-body-highlighter (MIT).",
-            Modifier.padding(horizontal = SETTINGS_GUTTER)
-        )
-        if (viewModel != null) {
-            SettingsActionLink("View crash logs →") { showCrashLogs = true }
-        }
-        SettingsActionLink("View licenses →") { showLicenses = true }
-        Spacer(Modifier.height(8.dp))
-    }
-}
-
-/** One verifiable privacy claim: the §12 dot carries "true of this build", the words say what of. */
-@Composable
-private fun PrivacyClaim(claim: String, detail: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Box(Modifier.padding(top = 5.dp)) { StatusDot(active = true, size = 7.dp) }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(claim, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
-            SettingsExplainer(detail)
-        }
-    }
-}
-
-/** A gesture and what it does. Each row carries a distinct action, which is what earns a list over
- *  one mark (§4.10) — the pair reads as a reference table, so it keeps the label/explainer shape. */
-@Composable
-private fun GestureRow(gesture: String, action: String) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)
-    ) {
-        Text(gesture, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
-        SettingsExplainer(action)
     }
 }
 

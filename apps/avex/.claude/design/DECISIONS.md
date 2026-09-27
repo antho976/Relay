@@ -8,6 +8,37 @@ an entry whenever a rule is added, changed or retired.
 
 ---
 
+## 2026-09-26 — Settings leaves the editorial language for a native settings kit
+
+Antho, reviewing Settings end to end: it read as dated and not professional ("the reset and data
+categories are fine, others range from hate to ok"), with the instruction to redesign it on general
+best practice rather than this doctrine. The cause was not any one page. Flat rows on the page with no
+container, tracked mono anchors, capsule buttons set in the mono label voice and `→ ▾ ✕ ⌄` characters
+standing in for icons made an Operate surface (change one thing, leave) read like a terminal.
+
+**Changed, Settings only.** `ui/settings/SettingsKit.kt` replaces the page primitives:
+
+- **Grouped slabs.** Each row is its own `surfaceContainerHigh` slab, 4dp corners, 2dp apart; the
+  group clip rounds the outer corners to 16dp. §1 still holds in spirit: every slab is a tap target,
+  so the fill is earned, and the gap separates rows with no divider.
+- **A collapsing large title** names every page (serif, settling into the bar). §4.6's "never the
+  screen's name" is lifted for Settings alone; the back arrow is still the one back affordance.
+- **Sans labels.** `SettingsTheme` maps `labelLarge/Medium/Small` to the sans rungs for this screen,
+  so M3 buttons, chips and menus stop rendering in mono. Serif stays for titles and live previews.
+- **Real controls.** M3 `Switch` (accent track when on), `RadioButton`, `FilterChip`, a sliding
+  `SettingsSegmented`, drawn Material Rounded icons; the unicode glyphs are gone.
+- **Live previews** open Appearance (a slice of Home in the current theme) and Units & format (one
+  sample of every unit); they are the only figures on Settings pages.
+- Privacy mode moved to **Privacy & security** (it was under Appearance); "Holiday / Vacation" is
+  **Holidays**. The Data and Reset dialogs first kept the old primitives; on 2026-09-27 Antho asked
+  for them at parity too, so Export, Import and Reset became `SettingsSheet`s of grouped rows, every
+  irreversible act confirms through `SettingsConfirmDialog`, and `SettingsPrimitives.kt` was deleted.
+
+**Not changed.** Every setting, its copy of record, its behaviour and its search entry. The palette,
+the accent ladder and the 48dp touch floor.
+
+---
+
 ## 2026-08-24 — §8: a modal's one commit may fill with the accent
 
 The rebuilt swap picker (`SETTLED.md`, 2026-08-23) puts a `Today` / `Every week` `SegmentPill` pair

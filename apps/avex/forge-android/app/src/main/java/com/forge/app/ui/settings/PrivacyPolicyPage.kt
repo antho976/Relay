@@ -2,30 +2,24 @@ package com.forge.app.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
+/** The privacy policy, set for reading: plain text on the page, headed sections, a real measure. */
 @Composable
-internal fun PrivacyPolicyPage(modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(bottom = 56.dp)
-    ) {
-        SettingsSectionHeader("Privacy policy", top = 12.dp)
-        SettingsExplainer(
+internal fun PrivacyPolicyPage(onBack: () -> Unit) {
+    SettingsScaffold("Privacy policy", onBack) {
+        Text(
             "Last updated September 26, 2026",
-            Modifier.padding(horizontal = SETTINGS_GUTTER)
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 8.dp)
         )
 
         PolicySection(
@@ -59,21 +53,25 @@ internal fun PrivacyPolicyPage(modifier: Modifier = Modifier) {
             "Children and contact",
             "Avex is a personal fitness tool and is not directed at children. Questions about this policy can be sent to anthonybacon419@gmail.com. Material policy changes will update the date shown here and in the public policy."
         )
-        Spacer(Modifier.height(8.dp))
     }
 }
 
 @Composable
 private fun PolicySection(title: String, vararg paragraphs: String) {
-    SettingsSectionHeader(title)
     Column(
-        modifier = Modifier.padding(horizontal = SETTINGS_GUTTER),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        modifier = Modifier.padding(horizontal = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.semantics { heading() }
+        )
         paragraphs.forEach { paragraph ->
             Text(
                 paragraph,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
