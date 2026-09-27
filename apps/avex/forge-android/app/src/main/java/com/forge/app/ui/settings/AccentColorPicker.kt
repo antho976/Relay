@@ -1,30 +1,38 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.forge.app.ui.settings
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,9 +43,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
@@ -47,10 +52,16 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.theme.ForgeMotion
 import java.util.Locale
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -83,11 +94,16 @@ private val ACCENT_PRESETS = listOf(
     "#3E5E3E" to "Forest", "#356B6B" to "Teal", "#3D4F73" to "Navy", "#445A6B" to "Steel"
 )
 
+/** The accent's name: its preset's, or "Custom" for a colour picked on the wheel or typed. */
+internal fun accentName(hex: String): String =
+    ACCENT_PRESETS.firstOrNull { it.first.equals(hex.ifEmpty { DEFAULT_ACCENT }, ignoreCase = true) }?.second ?: "Custom"
+
+/**
+ * The accent picker, drawn as two rows of the Accent group: the twelve presets as a swatch grid,
+ * then a Custom row showing the live colour and hex that opens the wheel and a hex field.
+ */
 @Composable
-internal fun AccentColorRow(currentHex: String, onSelect: (String) -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    // The custom-hex preview swatch doubles as the wheel toggle.
+internal fun AccentColorPicker(currentHex: String, onSelect: (String) -> Unit) {
     var wheelVisible by remember { mutableStateOf(false) }
 
     // Lag-free picking: the wheel/slider mutate `liveHex` synchronously, so the indicator and preview
@@ -101,132 +117,131 @@ internal fun AccentColorRow(currentHex: String, onSelect: (String) -> Unit) {
         if (!dragging) liveHex = currentHex.ifEmpty { DEFAULT_ACCENT }
     }
 
-    Column(
-        modifier = Modifier.padding(horizontal = SETTINGS_GUTTER, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Text("Accent color", style = MaterialTheme.typography.bodyMedium, color = onBg)
-        // One choice among nine, and TalkBack is told so. The same treatment the per-day accent
-        // swatches already got: `selectableGroup` + `Role.RadioButton` + `selected` names the SET,
-        // and the colour's own name names the option.
-        //
-        // Every preset here announced the identical action label "Use this accent" with no colour
-        // and no selected state, so the nine were indistinguishable and the ring marking the
-        // current one is a purely visual cue. The target was a 28 dp dot plus its caption; it is a
-        // 48 dp control now, with the paint unchanged.
-        FlowRow(
-            modifier = Modifier.selectableGroup(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            ACCENT_PRESETS.forEach { (hex, label) ->
-                val isSelected = currentHex == hex || (currentHex.isEmpty() && hex == DEFAULT_ACCENT)
-                val swatchColor = remember(hex) { Color(android.graphics.Color.parseColor(hex)) }
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    // Tapping a preset writes its hex into the custom field too (currentHex drives it).
-                    modifier = Modifier
-                        .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                        .semantics(mergeDescendants = true) { contentDescription = label }
-                        .selectable(
-                            selected = isSelected,
-                            role = Role.RadioButton,
-                            onClick = { onSelect(hex) }
-                        )
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .background(swatchColor)
-                            .border(2.dp, if (isSelected) onBg else Color.Transparent, CircleShape)
-                    )
-                    Text(
-                        label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = muted.copy(alpha = if (isSelected) 1f else 0.65f),
-                        fontSize = 9.sp
-                    )
+    SettingsGroupBlock {
+        // One choice among twelve, announced as such: `selectableGroup` + a radio role per swatch,
+        // each named by its colour.
+        Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            ACCENT_PRESETS.chunked(6).forEach { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    row.forEach { (hex, label) ->
+                        val selected = currentHex.equals(hex, ignoreCase = true) || (currentHex.isEmpty() && hex == DEFAULT_ACCENT)
+                        AccentSwatch(hex, label, selected) { onSelect(hex) }
+                    }
                 }
             }
         }
-        Spacer(Modifier.height(4.dp))
-        CustomHexInput(
-            currentHex = currentHex,
-            livePreview = liveHex,
-            onSelect = onSelect,
-            onBg = onBg,
-            muted = muted,
-            wheelVisible = wheelVisible,
-            onToggleWheel = { wheelVisible = !wheelVisible }
+    }
+
+    val isCustom = accentName(currentHex) == "Custom"
+    val liveColor = remember(liveHex) { parseHex(liveHex) }
+    SettingsRowContainer(
+        interaction = Modifier.clickableLabeled(if (wheelVisible) "Hide the colour wheel" else "Pick a custom colour") {
+            wheelVisible = !wheelVisible
+        }
+    ) {
+        // The live colour once a custom one is picked; until then a hue wheel, so the tile reads as
+        // "any colour" rather than repeating the preset above.
+        val hueRing = remember {
+            Brush.sweepGradient(listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red))
+        }
+        Box(
+            Modifier
+                .size(40.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .then(
+                    if (isCustom) Modifier.background(liveColor ?: MaterialTheme.colorScheme.surfaceContainerHighest)
+                    else Modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                )
+        ) {
+            if (!isCustom) {
+                Box(Modifier.align(Alignment.Center).size(24.dp).clip(CircleShape).background(hueRing))
+            } else {
+                Icon(
+                    Icons.Rounded.Check, contentDescription = null,
+                    tint = contentOn(liveColor),
+                    modifier = Modifier.align(Alignment.Center).size(20.dp)
+                )
+            }
+        }
+        SettingsRowText("Custom color", if (isCustom) liveHex else "Pick any shade on a wheel, or type a hex")
+        Icon(
+            if (wheelVisible) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Text(
-            "Enter a 6-digit #RRGGBB hex code, or tap the swatch for a color wheel.",
-            style = MaterialTheme.typography.labelSmall,
-            color = muted.copy(alpha = 0.65f)
-        )
-        AnimatedVisibility(visible = wheelVisible) {
+    }
+
+    AnimatedVisibility(
+        visible = wheelVisible,
+        enter = expandVertically(ForgeMotion.enterTween()) + fadeIn(ForgeMotion.enterTween()),
+        exit = shrinkVertically(ForgeMotion.exitTween()) + fadeOut(ForgeMotion.exitTween(ForgeMotion.DurationFast))
+    ) {
+        SettingsGroupBlock {
             Column(
+                Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp, bottom = 8.dp)
+                verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
                 ColorWheel(
                     hex = liveHex,
-                    onBg = onBg,
+                    onBg = MaterialTheme.colorScheme.onSurface,
                     onPickStart = { dragging = true },
                     onPick = { liveHex = it },
                     onPickEnd = { dragging = false; onSelect(it) }
                 )
                 BrightnessSlider(
                     hex = liveHex,
-                    muted = muted,
+                    muted = MaterialTheme.colorScheme.onSurfaceVariant,
                     onPickStart = { dragging = true },
                     onPick = { liveHex = it },
                     onPickEnd = { dragging = false; onSelect(it) }
                 )
+                HexField(livePreview = liveHex, onSelect = onSelect)
             }
         }
-        Spacer(Modifier.height(4.dp))
+    }
+}
+
+/** One preset: a 36dp disc inside a 48dp target, ringed and checked when it is the accent. */
+@Composable
+private fun AccentSwatch(hex: String, label: String, selected: Boolean, onClick: () -> Unit) {
+    val color = remember(hex) { parseHex(hex) ?: Color.Gray }
+    val ring = MaterialTheme.colorScheme.onSurface
+    Box(
+        Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .semantics(mergeDescendants = true) { contentDescription = label }
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .then(if (selected) Modifier.border(2.dp, ring, CircleShape) else Modifier)
+            .padding(5.dp)
+            .clip(CircleShape)
+            .background(color),
+        contentAlignment = Alignment.Center
+    ) {
+        if (selected) Icon(Icons.Rounded.Check, contentDescription = null, tint = contentOn(color), modifier = Modifier.size(20.dp))
     }
 }
 
 /**
- * Type any `#RRGGBB` hex for an accent colour outside the preset palette; applies live once valid.
- * The preview swatch doubles as the show/hide toggle for the colour wheel and reflects the live
- * wheel/slider pick instantly ([livePreview]); the text field tracks the same live value so it never
- * shows a stale hex mid-drag (it settles on the committed value when the gesture ends).
+ * Type any `#RRGGBB` for an accent outside the presets; applies live once valid and readable. It
+ * tracks the wheel's live value so it never shows a stale hex mid-drag.
  */
 @Composable
-private fun CustomHexInput(
-    currentHex: String,
-    livePreview: String,
-    onSelect: (String) -> Unit,
-    onBg: Color,
-    muted: Color,
-    wheelVisible: Boolean,
-    onToggleWheel: () -> Unit
-) {
-    val outline = MaterialTheme.colorScheme.outline
-    // Track the live (in-progress) pick so the field mirrors the wheel/slider during a drag — matching
-    // the swatch — instead of lagging on the committed value. When idle livePreview == currentHex, and
-    // it settles back to the committed hex on release, so typing/presets still round-trip cleanly.
-    var text by remember(livePreview) {
-        mutableStateOf(livePreview.takeIf { it.length == 7 }.orEmpty())
-    }
-    // Swatch tracks the live (in-progress) pick so dragging the wheel gives instant feedback.
-    val swatch = remember(livePreview) {
-        runCatching { Color(android.graphics.Color.parseColor(livePreview)) }.getOrNull()
-    }
+private fun HexField(livePreview: String, onSelect: (String) -> Unit) {
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    var text by remember(livePreview) { mutableStateOf(livePreview.takeIf { it.length == 7 }.orEmpty()) }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Custom hex", style = MaterialTheme.typography.bodySmall, color = muted)
+        Text("Hex", style = MaterialTheme.typography.bodyMedium, color = muted)
         BasicTextField(
             value = text,
             onValueChange = { raw ->
@@ -238,48 +253,29 @@ private fun CustomHexInput(
                 if (HEX_REGEX.matches(text) && isReadableAccent(text)) onSelect(text)
             },
             singleLine = true,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
-            cursorBrush = SolidColor(onBg),
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrectEnabled = false),
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = onSurface, fontFeatureSettings = "tnum"),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             decorationBox = { inner ->
                 Box(contentAlignment = Alignment.CenterStart) {
                     if (text.isEmpty() || text == "#") {
-                        Text(
-                            "#RRGGBB",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = muted.copy(alpha = 0.4f)
-                        )
+                        Text("#RRGGBB", style = MaterialTheme.typography.bodyLarge, color = muted)
                     }
                     inner()
                 }
             },
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
-                .padding(horizontal = 10.dp, vertical = 6.dp)
-                .size(width = 96.dp, height = 20.dp)
+            modifier = Modifier.weight(1f)
         )
-        // Tap the live-preview swatch to reveal/hide the colour wheel. Ring highlights when open.
-        //
-        // Labelled, because a bare `clickable` announces "button" and nothing else: the ring that
-        // marks the wheel as open is a purely visual cue, so TalkBack gave an unnamed control whose
-        // effect and current state were both invisible.
-        Box(
-            modifier = Modifier
-                .size(28.dp)
-                .clip(CircleShape)
-                .clickableLabeled(
-                    if (wheelVisible) "Hide the colour wheel" else "Show the colour wheel",
-                    onClick = onToggleWheel
-                )
-                .background(swatch ?: Color.Transparent)
-                .border(
-                    width = if (wheelVisible) 2.dp else 1.dp,
-                    color = if (wheelVisible) onBg else outline.copy(alpha = 0.35f),
-                    shape = CircleShape
-                )
-        )
+        Text("Faint shades are skipped", style = MaterialTheme.typography.bodySmall, color = muted, modifier = Modifier.widthIn(max = 150.dp))
     }
 }
+
+private fun parseHex(hex: String): Color? =
+    runCatching { Color(android.graphics.Color.parseColor(hex)) }.getOrNull()
+
+/** Black or white, whichever reads on [color]. */
+private fun contentOn(color: Color?): Color =
+    if (color == null || color.luminance() > 0.4f) Color.Black else Color.White
 
 @Composable
 private fun ColorWheel(

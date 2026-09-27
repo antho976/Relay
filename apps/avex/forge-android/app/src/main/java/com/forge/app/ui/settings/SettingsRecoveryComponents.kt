@@ -2,132 +2,67 @@ package com.forge.app.ui.settings
 
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.forge.app.ui.common.ForgeSwitch
 import com.forge.app.ui.common.clickableLabeled
-import com.forge.app.ui.common.toggleableLabeled
 
 /**
- * Building blocks for the Recovery page ([RecoveryPage]). The page leads with a connection rail —
- * the §12 filled/hollow dot row that shows the whole state at a glance and is honest at zero — and
- * each integration is one quiet row: title + explainer on the left, its state on the right (a
- * passive accent `• ON`, or a mono accent `connect →` that the whole row taps). No per-row capsule
- * buttons: a capsule repeated down a list is a wall of buttons (DESIGN §8); the only capsule is the
- * page-end Get/Update Health Connect action when no provider exists.
+ * Building blocks for the Wearable page ([RecoveryPage]): one row per Health Connect signal, and
+ * the indented rows that hang off a connected one.
  */
 
-/**
- * The page-lead mark: one dot per integration in row order — a solid accent disc when connected, a
- * clearly-drawn ring (muted, 1.5dp) when not — with a mono running count. Reads honestly at zero
- * ("0 OF 5 CONNECTED"); the ring weight keeps the empty state legible on the near-black page.
- */
-@Composable
-internal fun RecoveryConnectionRail(states: List<Boolean>) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        modifier = Modifier.padding(horizontal = SETTINGS_GUTTER),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        states.forEach { on -> StatusDot(on, size = 10.dp) }
-        Spacer(Modifier.width(6.dp))
-        Text(
-            "${states.count { it }} OF ${states.size} CONNECTED",
-            style = MaterialTheme.typography.labelMedium,
-            color = muted,
-            letterSpacing = 1.sp
-        )
-    }
-}
+/** Where a signal's own options start: under its title, past the 40dp tile and its gap. */
+internal val SignalDetailIndent = 56.dp
 
 /**
- * One Health Connect integration as a quiet row: title + one-line explainer, and on the right its
- * state — connected = passive accent dot + a mono reading; connectable = a compact OUTLINED "Connect"
- * pill (a clear affordance without the filled-white weight, §8 ②), the WHOLE row as its tap target.
- * The pill is drawn, not independently clickable, so it never nests inside the row's tap. Rows render
- * passive while loading or without a provider, so nothing promises an action that can't run.
- *
- * [receiving] is the post-connect "is data actually arriving" reading (§9 — show the reading, not just
- * the conclusion): true → RECEIVING, false → NOTHING YET (granted but silent — usually the companion
- * app's Health Connect sharing is off), null → not probed yet or a write-only signal, so the dot's ON
- * stands alone. The dot already carries "connected", so the word carries only the reading.
+ * One Health Connect signal: its glyph, title and what it feeds, and at its end either its state
+ * (Receiving; On for a write-only signal; Nothing yet when granted but silent, which usually means
+ * the companion app's sharing is off) or, when it can be connected, a Connect button the whole row
+ * answers to. Rows stay passive while loading or without a provider, so nothing offers an action
+ * that can't run.
  */
 @Composable
 internal fun RecoveryRow(
     title: String,
     explainer: String,
+    icon: ImageVector,
     connected: Boolean,
     connectable: Boolean,
     onConnect: () -> Unit,
     receiving: Boolean? = null
 ) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                if (!connected && connectable) Modifier.clickableLabeled("Connect $title", onClick = onConnect)
-                else Modifier
-            )
-            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalAlignment = Alignment.CenterVertically
+    SettingsAdaptiveRow(
+        title = title,
+        supporting = explainer,
+        interaction = if (!connected && connectable) Modifier.clickableLabeled("Connect $title", onClick = onConnect) else Modifier,
+        leading = { SettingsIconTile(icon, if (connected) TileTone.Accent else TileTone.Neutral) }
     ) {
-        // bodyMedium + SettingsExplainer, not titleSmall + bodySmall: every other settings row in
-        // the app uses that pair, and Recovery reading a size louder made it a different page (§6).
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium, color = onBg)
-            SettingsExplainer(explainer)
-        }
         when {
-            connected -> Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                StatusDot(active = true, size = 7.dp)
-                // "nothing yet" stays muted (it's ambiguous — maybe nothing's synced yet), so it
-                // reads as a quiet nudge to check sharing, not a false alarm; "receiving"/"on" are onBg.
-                val (label, tone) = when (receiving) {
-                    true -> "RECEIVING" to onBg
-                    false -> "NOTHING YET" to muted
-                    null -> "ON" to onBg
-                }
-                Text(label, style = MaterialTheme.typography.labelMedium, color = tone, letterSpacing = 1.sp)
+            connected -> when (receiving) {
+                false -> SettingsStatus("Nothing yet", live = false)
+                true -> SettingsStatus("Receiving", live = true)
+                null -> SettingsStatus("On", live = true)
             }
-            connectable -> ConnectPill()
+            connectable -> SettingsCompactButton("Connect")
         }
     }
 }
 
 /**
- * What hangs off one connected signal — its write-back switch, import links and their result lines
- * — inset under the row it belongs to. Flush with the signal list, these read as five more signals;
- * the inset says "this is part of Bodyweight sync" with air alone, no line (§1).
+ * One thing a connected signal can do now, indented under it: an import, or allowing write-back.
+ * Its result ("Imported 82.4 kg from today") replaces its description, so the answer lands where
+ * the question was asked.
  */
 @Composable
-internal fun SignalDetail(content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(start = 16.dp, bottom = 4.dp)) { content() }
+internal fun SignalAction(title: String, description: String, button: String, onClick: () -> Unit) {
+    SettingsAdaptiveRow(
+        title = title,
+        supporting = description,
+        indent = SignalDetailIndent,
+        interaction = Modifier.clickableLabeled("$button: $title", onClick = onClick)
+    ) { SettingsCompactButton(button) }
 }
 
 /** The device segment's short label; the explainer under it names the companion app in full. */
@@ -135,41 +70,6 @@ internal fun brandShortLabel(brand: com.forge.app.domain.health.WearableBrand): 
     com.forge.app.domain.health.WearableBrand.GALAXY -> "Galaxy"
     com.forge.app.domain.health.WearableBrand.PIXEL -> "Pixel"
     com.forge.app.domain.health.WearableBrand.NONE -> "Other"
-}
-
-/** Compact label + switch row for a connected integration's write-back toggle (no subtitle line).
- *  Same contract as [ToggleRow]: the WHOLE ROW is the ≥48dp tap target and the switch is drawn, so
- *  the write-backs aren't 24dp targets and never nest a tap inside the row (§14, §2③). */
-@Composable
-internal fun RecoveryToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val bg = MaterialTheme.colorScheme.background
-    val outline = MaterialTheme.colorScheme.outline
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .toggleableLabeled(label, checked) { onCheckedChange(!checked) }
-            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = onBg,
-            modifier = Modifier.weight(1f)
-        )
-        ForgeSwitch(
-            checked = checked,
-            onCheckedChange = null,     // drawn — the row is the target
-            checkedTrackColor = onBg,
-            checkedThumbColor = bg,
-            checkedBorderColor = Color.Transparent,
-            uncheckedTrackColor = Color.Transparent,
-            uncheckedThumbColor = outline,
-            uncheckedBorderColor = outline.copy(alpha = 0.35f)
-        )
-    }
 }
 
 private const val HEALTH_CONNECT_PACKAGE = "com.google.android.apps.healthdata"

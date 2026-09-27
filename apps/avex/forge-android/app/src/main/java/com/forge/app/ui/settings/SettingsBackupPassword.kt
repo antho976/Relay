@@ -25,6 +25,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
 import com.forge.app.security.BackupEncryption
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.window.AlertDialog
@@ -43,38 +47,29 @@ internal fun BackupPasswordSection(vm: SettingsViewModel, galleryLocked: Boolean
     val busy by vm.backupPasswordBusy.collectAsStateWithLifecycle()
     var askNew by rememberSaveable { mutableStateOf(false) }
     var confirmOff by rememberSaveable { mutableStateOf(false) }
-    val onBg = MaterialTheme.colorScheme.onBackground
-
     fun guarded(reason: String, action: () -> Unit) =
         if (galleryLocked) authenticateSettingsAction(context, vm, reason) { action() } else action()
 
-    SettingsSectionHeader("Password")
-    ToggleRow(
-        label = "Password-protect backups",
-        subtitle = when (state) {
-            BackupPasswordState.NEEDS_RESET -> "Set it again to keep backing up."
-            else -> "Encrypts backups so only your password opens them."
-        },
-        checked = state != BackupPasswordState.OFF,
-        onCheckedChange = { on -> if (on) askNew = true else confirmOff = true }
-    )
-    if (state != BackupPasswordState.OFF) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickableLabeled("Change backup password") { guarded("Unlock to change the backup password") { askNew = true } }
-                .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Backup password", style = MaterialTheme.typography.bodyMedium, color = onBg)
-                SettingsExplainer(
-                    if (state == BackupPasswordState.NEEDS_RESET) "This phone lost its copy of the key"
-                    else "Older backups keep their old password"
-                )
-            }
-            ConnectPill(if (state == BackupPasswordState.NEEDS_RESET) "Set" else "Change")
+    SettingsGroup("Password") {
+        SettingsSwitchRow(
+            "Password-protect backups",
+            when (state) {
+                BackupPasswordState.NEEDS_RESET -> "Set it again to keep backing up"
+                else -> "Encrypts backups so only your password opens them"
+            },
+            checked = state != BackupPasswordState.OFF,
+            onCheckedChange = { on -> if (on) askNew = true else confirmOff = true }
+        )
+        if (state != BackupPasswordState.OFF) {
+            SettingsAdaptiveRow(
+                title = "Backup password",
+                supporting = if (state == BackupPasswordState.NEEDS_RESET) "This phone lost its copy of the key"
+                             else "Older backups keep their old password",
+                interaction = Modifier.clickableLabeled("Change backup password") {
+                    guarded("Unlock to change the backup password") { askNew = true }
+                },
+                leading = { SettingsIconTile(Icons.Rounded.Key, if (state == BackupPasswordState.NEEDS_RESET) TileTone.Danger else TileTone.Neutral) }
+            ) { SettingsCompactButton(if (state == BackupPasswordState.NEEDS_RESET) "Set" else "Change") }
         }
     }
 
@@ -86,26 +81,17 @@ internal fun BackupPasswordSection(vm: SettingsViewModel, galleryLocked: Boolean
         )
     }
     if (confirmOff) {
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.surface,
-            onDismissRequest = { confirmOff = false },
-            text = {
-                Text(
-                    "New backups will be saved without a password, so anyone with the file can open " +
-                        "them. Backups you already made still need their password."
-                )
+        SettingsConfirmDialog(
+            title = "Turn off the backup password?",
+            body = "New backups will be saved without a password, so anyone with the file can open them. " +
+                "Backups you already made still need their password.",
+            confirmLabel = "Turn off",
+            icon = Icons.Rounded.LockOpen,
+            onConfirm = {
+                confirmOff = false
+                guarded("Unlock to remove the backup password") { vm.clearBackupPassword() }
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmOff = false
-                    guarded("Unlock to remove the backup password") { vm.clearBackupPassword() }
-                }) { Text("Turn off", color = MaterialTheme.colorScheme.onBackground) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmOff = false }) {
-                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
+            onDismiss = { confirmOff = false }
         )
     }
 }
@@ -128,6 +114,8 @@ private fun PasswordField(
         isError = isError,
         supportingText = supporting?.let { { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) } },
         visualTransformation = PasswordVisualTransformation(),
+        colors = settingsFieldColors(),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
         keyboardOptions = KeyboardOptions(
             keyboardType = KeyboardType.Password,
             autoCorrectEnabled = false,
@@ -150,45 +138,34 @@ private fun NewBackupPasswordDialog(busy: Boolean, onSubmit: (CharArray) -> Unit
     val longEnough = first.length >= min
     val matches = first == second
     val canSave = longEnough && matches && !busy
-    AlertDialog(
-        containerColor = MaterialTheme.colorScheme.surface,
-        onDismissRequest = onDismiss,
-        text = {
-            Column {
-                Text(
-                    "If you forget this password, backups made with it can't be opened. " +
-                        "Avex can't recover it for you."
-                )
-                Spacer(Modifier.height(16.dp))
-                PasswordField(
-                    value = first,
-                    onValueChange = { first = it },
-                    label = "Password",
-                    supporting = if (first.isNotEmpty() && !longEnough) "At least $min characters" else null
-                )
-                Spacer(Modifier.height(8.dp))
-                PasswordField(
-                    value = second,
-                    onValueChange = { second = it },
-                    label = "Type it again",
-                    isError = second.isNotEmpty() && !matches,
-                    supporting = if (second.isNotEmpty() && !matches) "The two don't match" else null,
-                    imeAction = ImeAction.Done
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onSubmit(first.toCharArray()); first = ""; second = "" }, enabled = canSave) {
-                Text(
-                    if (busy) "Saving" else "Save",
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = if (canSave) 1f else 0.35f)
-                )
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    SettingsConfirmDialog(
+        title = "Set a backup password",
+        body = "If you forget it, backups made with it can't be opened. Avex can't recover it for you.",
+        confirmLabel = if (busy) "Saving" else "Save password",
+        icon = Icons.Rounded.Key,
+        destructive = false,
+        confirmEnabled = canSave,
+        onConfirm = { onSubmit(first.toCharArray()); first = ""; second = "" },
+        onDismiss = onDismiss
+    ) {
+        Column {
+            PasswordField(
+                value = first,
+                onValueChange = { first = it },
+                label = "Password",
+                supporting = if (first.isNotEmpty() && !longEnough) "At least $min characters" else null
+            )
+            Spacer(Modifier.height(8.dp))
+            PasswordField(
+                value = second,
+                onValueChange = { second = it },
+                label = "Type it again",
+                isError = second.isNotEmpty() && !matches,
+                supporting = if (second.isNotEmpty() && !matches) "The two don't match" else null,
+                imeAction = ImeAction.Done
+            )
         }
-    )
+    }
 }
 
 /** Hosted at the Settings root: a restore found a protected backup and needs its password. */
@@ -198,35 +175,22 @@ internal fun RestorePasswordDialogHost(vm: SettingsViewModel) {
     val p = prompt ?: return
     var typed by remember(p.source) { mutableStateOf("") }
     val canOpen = typed.isNotEmpty() && !p.busy
-    AlertDialog(
-        containerColor = MaterialTheme.colorScheme.surface,
-        onDismissRequest = { if (!p.busy) vm.dismissRestorePassword() },
-        text = {
-            Column {
-                Text("This backup is password-protected. Enter the password it was made with.")
-                Spacer(Modifier.height(16.dp))
-                PasswordField(
-                    value = typed,
-                    onValueChange = { typed = it },
-                    label = "Backup password",
-                    isError = p.wrong,
-                    supporting = if (p.wrong) "That password doesn't open this backup" else null,
-                    imeAction = ImeAction.Done
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { vm.submitRestorePassword(typed.toCharArray()); typed = "" }, enabled = canOpen) {
-                Text(
-                    if (p.busy) "Opening" else "Restore & restart",
-                    color = MaterialTheme.colorScheme.error.copy(alpha = if (canOpen) 1f else 0.35f)
-                )
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = { vm.dismissRestorePassword() }, enabled = !p.busy) {
-                Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    )
+    SettingsConfirmDialog(
+        title = "Enter the backup password",
+        body = "This backup is password-protected. Enter the password it was made with.",
+        confirmLabel = if (p.busy) "Opening" else "Restore and restart",
+        icon = Icons.Rounded.Lock,
+        confirmEnabled = canOpen,
+        onConfirm = { vm.submitRestorePassword(typed.toCharArray()); typed = "" },
+        onDismiss = { if (!p.busy) vm.dismissRestorePassword() }
+    ) {
+        PasswordField(
+            value = typed,
+            onValueChange = { typed = it },
+            label = "Backup password",
+            isError = p.wrong,
+            supporting = if (p.wrong) "That password doesn't open this backup" else null,
+            imeAction = ImeAction.Done
+        )
+    }
 }

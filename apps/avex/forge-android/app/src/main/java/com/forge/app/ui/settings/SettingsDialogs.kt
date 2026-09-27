@@ -1,26 +1,32 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.forge.app.ui.settings
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import com.forge.app.ui.common.window.AlertDialog
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.DirectionsRun
+import androidx.compose.material.icons.rounded.DataObject
+import androidx.compose.material.icons.rounded.DeleteForever
+import androidx.compose.material.icons.rounded.EmojiEvents
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.FitnessCenter
+import androidx.compose.material.icons.rounded.FolderZip
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.PictureAsPdf
+import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material.icons.rounded.Restore
+import androidx.compose.material.icons.rounded.TableChart
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,11 +34,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.forge.app.ui.common.window.Dialog
 import com.forge.app.ui.common.clickableLabeled
 
+/**
+ * Export & back up, as a sheet: the restorable backup first (it is the real safety net), then the
+ * one-tap exports, each tagged with the format it writes. Every file goes out through Android's
+ * share sheet, so the person picks where it lands.
+ */
 @Composable
 internal fun DataExportDialog(
     viewModel: SettingsViewModel,
@@ -41,299 +51,222 @@ internal fun DataExportDialog(
     onExportCrashLogs: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    Dialog(onDismissRequest = onDismiss) {
-        val onBg = MaterialTheme.colorScheme.onBackground
-        val muted = MaterialTheme.colorScheme.onSurfaceVariant
-        // §1/§5: a modal KEEPS its surface. Painting it `background` made the sheet vanish into the
-        // page it floats over, which is the one place the open-editorial rule does not apply.
-        val surface = MaterialTheme.colorScheme.surface
+    // Refresh the auto-backup slot and progress-photo stats on open (both may have changed since).
+    LaunchedEffect(Unit) {
+        viewModel.refreshAutoBackupInfo()
+        viewModel.refreshPhotoInfo()
+    }
+    val autoBackupFailed by viewModel.autoBackupFailed.collectAsState()
+    val noBackupWarning by viewModel.noBackupWarning.collectAsState()
+    val photoCount by viewModel.photoCount.collectAsState()
+    val photoLastTakenMs by viewModel.photoLastTakenMs.collectAsState()
+    val dbSize by viewModel.dbSizeLabel.collectAsState()
+    val autoBackupCopies by viewModel.autoBackupCopies.collectAsState()
+    // Which kept copy the confirm is about (null: none), and whether the copy picker is open. With
+    // one copy the picker is skipped: there is nothing to choose.
+    var confirmAutoRestore by remember { mutableStateOf<SettingsViewModel.AutoBackupCopyUi?>(null) }
+    var chooseAutoCopy by remember { mutableStateOf(false) }
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(surface, RoundedCornerShape(16.dp))
-                // §14: the dialog must survive the biggest font. Eight export rows plus the backup
-                // block do not fit a 200% viewport, and it had no scroll at all.
-                .verticalScroll(rememberScrollState())
-                .padding(vertical = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+    // What a backup would carry, so "Back up now" says what is at stake.
+    val stake = buildList {
+        add("Everything, photos included")
+        if (dbSize.isNotBlank()) add(dbSize)
+        if (photoCount > 0) add(photoCountLabel(photoCount) + (photoLastTakenMs?.let { ", last ${formatShortDate(it)}" } ?: ""))
+    }.joinToString(" · ")
+
+    SettingsSheet("Export & back up", "Every file opens in your share sheet, so you choose where it goes.", onDismiss) {
+        if (noBackupWarning) {
+            SettingsNotice(
+                icon = Icons.Rounded.ErrorOutline,
+                title = "No backup yet",
+                body = "Your training lives only on this phone. Back it up so losing the phone doesn't lose it."
+            )
+        }
+
+        SettingsGroup(
+            "Backup & restore",
+            footer = if (autoBackupFailed) "The last auto-backup failed. Free up storage, then back up now."
+                     else "Restoring replaces all current data and restarts Avex.",
+            footerIsError = autoBackupFailed
         ) {
-            SettingsSectionHeader("Data", top = 0.dp)
-
-            // ── Backup & restore — the real safety net ───────────────────────────
-            // Refresh the auto-backup slot and progress-photo stats on open (both may have changed since).
-            androidx.compose.runtime.LaunchedEffect(Unit) {
-                viewModel.refreshAutoBackupInfo()
-                viewModel.refreshPhotoInfo()
-            }
-            val autoBackupFailed by viewModel.autoBackupFailed.collectAsState()
-            val noBackupWarning by viewModel.noBackupWarning.collectAsState()
-            val photoCount by viewModel.photoCount.collectAsState()
-            val photoLastTakenMs by viewModel.photoLastTakenMs.collectAsState()
-            val dbSize by viewModel.dbSizeLabel.collectAsState()
-            val autoBackupCopies by viewModel.autoBackupCopies.collectAsState()
-            // Which kept copy the confirm dialog is about (null: none), and whether the copy picker
-            // is open. With one copy the picker is skipped: there is nothing to choose.
-            var confirmAutoRestore by remember { mutableStateOf<SettingsViewModel.AutoBackupCopyUi?>(null) }
-            var chooseAutoCopy by remember { mutableStateOf(false) }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)) {
-                Text("Backup & restore (.zip)", style = MaterialTheme.typography.bodyMedium, color = onBg)
-                SettingsExplainer("Your whole database in one file. Save it somewhere safe; restore replaces all current data and restarts the app.")
-                // No backup yet, but there's data worth protecting — nudge toward "Back up" (#5 P1).
-                // §14 bans accent-coloured body text: only Ember clears AA, the other four presets
-                // measure 2.34–3.37:1. The accent moves to a DOT and the sentence stays onBg — the
-                // one treatment that is correct under every accent choice, monochrome included.
-                if (noBackupWarning) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        StatusDot(active = true, size = 7.dp)
-                        Text(
-                            "You haven't backed up yet. Your training lives only on this phone.",
-                            style = MaterialTheme.typography.bodySmall, color = onBg
-                        )
-                    }
-                }
-                // Two fillMaxWidth capsules used to sit in a plain Row here, so "Back up" took the
-                // whole line and "Restore" got the remainder. Gutterless capsules in a FlowRow wrap
-                // instead of overflowing at large font scales. (Not SettingsActionRow — the parent
-                // Column already owns the gutter inside a dialog.)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    SettingsPrimaryAction("Back up") { onBackup(); onDismiss() }
-                    SettingsOutlineAction("Restore") { onRestore(); onDismiss() }
-                }
-                // Recover from the silent weekly auto-backup without needing the file picker (#86).
-                autoBackupCopies.firstOrNull()?.let { newest ->
-                    val many = autoBackupCopies.size > 1
-                    Text(
-                        if (many) "Restore an auto-backup · ${autoBackupCopies.size} kept · newest ${newest.savedAt}"
-                        else "Restore last auto-backup · saved ${newest.savedAt}",
-                        style = MaterialTheme.typography.bodySmall, color = muted,
-                        modifier = Modifier
-                            .clickableLabeled("Restore an auto-backup") {
-                                if (many) chooseAutoCopy = true else confirmAutoRestore = newest
-                            }
-                            .padding(vertical = 10.dp)
-                    )
-                }
-                // The weekly worker gave up (e.g. storage full) — say so instead of silently losing backups.
-                // §12's inline error line — the one sanctioned use of error-as-text, kept quiet.
-                if (autoBackupFailed) {
-                    Text(
-                        "Last auto-backup failed. Free up storage, then back up manually above.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error
-                    )
-                }
-            }
-            if (chooseAutoCopy) {
-                // Each kept copy is one whole-row tap target; the newest is named as such so an
-                // older one is a deliberate pick, for when the newest is damaged or already wrong.
-                AlertDialog(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    onDismissRequest = { chooseAutoCopy = false },
-                    text = {
-                        Column {
-                            Text("Pick the auto-backup to restore. Older copies are kept in case the newest is damaged.")
-                            Spacer(Modifier.height(8.dp))
-                            autoBackupCopies.forEachIndexed { i, copy ->
-                                Text(
-                                    if (i == 0) "${copy.savedAt} · newest" else copy.savedAt,
-                                    style = MaterialTheme.typography.bodyMedium, color = onBg,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickableLabeled("Restore the copy saved ${copy.savedAt}") {
-                                            chooseAutoCopy = false
-                                            confirmAutoRestore = copy
-                                        }
-                                        .padding(vertical = 12.dp)
-                                )
-                            }
-                        }
-                    },
-                    confirmButton = {},
-                    dismissButton = {
-                        TextButton(onClick = { chooseAutoCopy = false }) {
-                            Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                )
-            }
-            confirmAutoRestore?.let { copy ->
-                AlertDialog(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    onDismissRequest = { confirmAutoRestore = null },
-                    title = { Text("Restore this auto-backup?") },
-                    text = { Text("Replaces all current data with the auto-backup saved ${copy.savedAt} and restarts the app.") },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            confirmAutoRestore = null
-                            viewModel.restoreAutoBackup(copy.generation)
-                            onDismiss()
-                        }) { Text("Restore") }
-                    },
-                    dismissButton = { TextButton(onClick = { confirmAutoRestore = null }) { Text("Cancel") } }
-                )
-            }
-
-            // ── Data stake indicator — DB size + what's at risk if this device is lost ─────
-            val stakeLine = buildString {
-                append("Database")
-                if (dbSize.isNotBlank()) append(" · $dbSize")
-                if (photoCount > 0) {
-                    append(" · ${photoCountLabel(photoCount)}")
-                    photoLastTakenMs?.let { append(" · last ${formatShortDate(it)}") }
-                }
-            }
-            SettingsExplainer(stakeLine, Modifier.padding(horizontal = SETTINGS_GUTTER))
-
-            // ── Quick export — one tap, format baked into each row ───────────────
-            // Their own Column: the dialog's spacedBy(16) is section rhythm, and applying it
-            // BETWEEN eight sibling rows on top of each row's own padding pulls the group apart.
-            // Each row carries a distinct format and action, which is what earns a list (§4.10).
-            Column {
-                SettingsSectionHeader("Quick export", top = 0.dp)
-                SettingsExplainer("For a restorable copy including photos, use Settings → Backup.", Modifier.padding(horizontal = SETTINGS_GUTTER))
-                ExportRow("Training history", "JSON", "finished workouts, cardio, goals & selected preferences", onBg, muted) { viewModel.exportFullBackup(); onDismiss() }
-                ExportRow("This week", "JSON", "summary for AI analysis", onBg, muted) { viewModel.exportWeeklyJson(); onDismiss() }
-                ExportRow("All sessions", "CSV", "spreadsheet of every session", onBg, muted) { viewModel.exportSessionsCsv(); onDismiss() }
-                ExportRow("All PRs", "CSV", "your best lift per exercise", onBg, muted) { viewModel.exportPrsCsv(); onDismiss() }
-                ExportRow("Bodyweight", "CSV", "every weigh-in", onBg, muted) { viewModel.exportBodyweightCsv(); onDismiss() }
-                ExportRow("Cardio", "CSV", "every cardio session", onBg, muted) { viewModel.exportCardioCsv(); onDismiss() }
-                ExportRow("Last session", "PDF", "printable session sheet", onBg, muted) { viewModel.exportLastSessionPdf(); onDismiss() }
-                ExportRow("Crash logs", "ZIP", "diagnostics if something broke", onBg, muted) { onExportCrashLogs(); onDismiss() }
-            }
-
-            // §5: a modal's dismiss is muted at FULL strength. It was `muted@0.6` (4.08:1) and
-            // lower-case, i.e. the least legible text in the app on the least reversible screen.
-            SettingsActionRow {
-                SettingsOutlineAction("Close", onClick = onDismiss)
+            SettingsActionRow("Back up now", stake, SettingsIcons.Backup) { onBackup(); onDismiss() }
+            SettingsActionRow("Restore from a file", "Pick an Avex backup .zip", Icons.Rounded.Restore) { onRestore(); onDismiss() }
+            // Recover from the silent weekly auto-backup without the file picker (#86).
+            autoBackupCopies.firstOrNull()?.let { newest ->
+                val many = autoBackupCopies.size > 1
+                SettingsNavigationRow(
+                    "Restore an auto-backup",
+                    if (many) "${autoBackupCopies.size} kept · newest ${newest.savedAt}" else "Saved ${newest.savedAt}",
+                    Icons.Rounded.History
+                ) { if (many) chooseAutoCopy = true else confirmAutoRestore = newest }
             }
         }
+
+        // Each row carries its own format and writes at once; the format is a tag, not an action.
+        SettingsGroup("Quick export", footer = "Quick exports leave photos out. Back up now for a copy you can restore.") {
+            ExportRow("Training history", "JSON", "Finished workouts, cardio, goals and preferences") { viewModel.exportFullBackup(); onDismiss() }
+            ExportRow("This week", "JSON", "A summary made for AI analysis") { viewModel.exportWeeklyJson(); onDismiss() }
+            ExportRow("All sessions", "CSV", "A spreadsheet of every session") { viewModel.exportSessionsCsv(); onDismiss() }
+            ExportRow("All PRs", "CSV", "Your best lift per exercise") { viewModel.exportPrsCsv(); onDismiss() }
+            ExportRow("Bodyweight", "CSV", "Every weigh-in") { viewModel.exportBodyweightCsv(); onDismiss() }
+            ExportRow("Cardio", "CSV", "Every cardio session") { viewModel.exportCardioCsv(); onDismiss() }
+            ExportRow("Last session", "PDF", "A printable session sheet") { viewModel.exportLastSessionPdf(); onDismiss() }
+            ExportRow("Crash logs", "ZIP", "Diagnostics, if something broke") { onExportCrashLogs(); onDismiss() }
+        }
+    }
+
+    if (chooseAutoCopy) {
+        // Each kept copy is one row; the newest is named as such, so picking an older one (when the
+        // newest is damaged or already wrong) is deliberate.
+        com.forge.app.ui.common.window.AlertDialog(
+            onDismissRequest = { chooseAutoCopy = false },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            icon = { Icon(Icons.Rounded.History, contentDescription = null) },
+            title = { Text("Pick an auto-backup") },
+            text = {
+                Column {
+                    Text(
+                        "Older copies are kept in case the newest is damaged.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    autoBackupCopies.forEachIndexed { i, copy ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickableLabeled("Restore the copy saved ${copy.savedAt}") {
+                                    chooseAutoCopy = false
+                                    confirmAutoRestore = copy
+                                }
+                                .padding(vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(copy.savedAt, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                            if (i == 0) SettingsStatus("Newest", live = true)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { chooseAutoCopy = false }) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurface)
+                }
+            }
+        )
+    }
+    confirmAutoRestore?.let { copy ->
+        SettingsConfirmDialog(
+            title = "Restore this auto-backup?",
+            body = "Replaces all current data with the copy saved ${copy.savedAt}, then restarts Avex.",
+            confirmLabel = "Restore and restart",
+            icon = Icons.Rounded.Restore,
+            onConfirm = {
+                confirmAutoRestore = null
+                viewModel.restoreAutoBackup(copy.generation)
+                onDismiss()
+            },
+            onDismiss = { confirmAutoRestore = null }
+        )
     }
 }
 
+/** One quick export: its format's glyph, what it holds, and the format as a tag. The row writes it. */
 @Composable
-private fun ExportRow(
-    label: String,
-    format: String,
-    hint: String,
-    onBg: androidx.compose.ui.graphics.Color,
-    muted: androidx.compose.ui.graphics.Color,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickableLabeled("Export $label as $format", onClick = onClick)
-            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text(label, style = MaterialTheme.typography.bodyMedium, color = onBg)
-            SettingsExplainer(hint)
-        }
-        Text(format, style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.sp)
+private fun ExportRow(label: String, format: String, hint: String, onClick: () -> Unit) {
+    val glyph = when (format) {
+        "JSON" -> Icons.Rounded.DataObject
+        "CSV" -> Icons.Rounded.TableChart
+        "PDF" -> Icons.Rounded.PictureAsPdf
+        else -> Icons.Rounded.FolderZip
     }
+    SettingsAdaptiveRow(
+        title = label,
+        supporting = hint,
+        interaction = Modifier.clickableLabeled("Export $label as $format", onClick = onClick),
+        leading = { SettingsIconTile(glyph) }
+    ) { SettingsPill(format, PillTone.Quiet) }
 }
 
+/**
+ * The reset confirmation. A factory reset is irreversible and wipes everything, so it is gated
+ * behind typing a word; the targeted resets confirm with one tap.
+ */
 @Composable
 internal fun ResetConfirmDialog(
     target: ResetTarget,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
-    /** Extra line shown below the main message — used to warn about progress photos on factory reset. */
+    /** Extra line under the message, used to warn about progress photos on factory reset. */
     photoWarning: String? = null
 ) {
-    // A factory reset is irreversible and wipes EVERYTHING — too dangerous behind a single tap on a
-    // shared device. Gate it behind typing a word; lesser resets keep their one-tap confirm.
-    val needsTyped = target == ResetTarget.FACTORY
+    val factory = target == ResetTarget.FACTORY
     val confirmWord = "ERASE"
     var typed by remember { mutableStateOf("") }
-    val canConfirm = !needsTyped || typed.trim().equals(confirmWord, ignoreCase = true)
-    AlertDialog(
-        containerColor = MaterialTheme.colorScheme.surface,
-        onDismissRequest = onDismiss,
-        title = { Text(target.label) },
-        text = {
-            Column {
-                Text(target.message)
-                if (photoWarning != null) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(photoWarning, style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error)
-                }
-                if (needsTyped) {
-                    Spacer(Modifier.height(16.dp))
-                    OutlinedTextField(
-                        value = typed,
-                        onValueChange = { typed = it },
-                        singleLine = true,
-                        label = { Text("Type $confirmWord to confirm") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
+    val canConfirm = !factory || typed.trim().equals(confirmWord, ignoreCase = true)
+    SettingsConfirmDialog(
+        title = "${target.label}?",
+        body = target.message,
+        confirmLabel = when (target) {
+            ResetTarget.FACTORY -> "Erase everything"
+            ResetTarget.SETTINGS -> "Reset settings"
+            else -> "Delete"
         },
-        confirmButton = {
-            TextButton(onClick = onConfirm, enabled = canConfirm) {
-                Text(
-                    "Confirm",
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = if (canConfirm) 1f else 0.35f)
-                )
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        icon = if (factory) Icons.Rounded.DeleteForever else Icons.Rounded.RestartAlt,
+        destructive = true,
+        confirmEnabled = canConfirm,
+        onConfirm = onConfirm,
+        onDismiss = onDismiss,
+        extra = if (photoWarning == null && !factory) null else {
+            {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    if (photoWarning != null) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.PhotoLibrary, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
+                            Text(photoWarning, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                    if (factory) {
+                        OutlinedTextField(
+                            value = typed,
+                            onValueChange = { typed = it },
+                            singleLine = true,
+                            label = { Text("Type $confirmWord to confirm") },
+                            colors = settingsFieldColors(),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
             }
         }
     )
 }
 
 /**
- * Chooser for the targeted resets — everything except [ResetTarget.FACTORY], which keeps its own
- * dedicated (more dangerous) button. Picking an option here still routes through [ResetConfirmDialog]
- * so each reset keeps its own confirmation.
+ * The targeted resets as a sheet, everything except [ResetTarget.FACTORY], which keeps its own
+ * row on the root list. Picking one still goes through [ResetConfirmDialog].
  */
 @Composable
 internal fun ResetMenuDialog(
     onPick: (ResetTarget) -> Unit,
     onDismiss: () -> Unit
 ) {
-    Dialog(onDismissRequest = onDismiss) {
-        val onBg = MaterialTheme.colorScheme.onBackground
-        val surface = MaterialTheme.colorScheme.surface
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(surface, RoundedCornerShape(16.dp))
-                .verticalScroll(rememberScrollState())   // §14 — four reset rows + explainers at 200%
-                .padding(vertical = 20.dp)
-        ) {
-            SettingsSectionHeader("Reset", top = 0.dp)
-            // Air separates these rows, not a rule (§1: a line exists only as data). The hairline
-            // that used to sit between them is the "hairline habit" named in FAILURES.md.
+    SettingsSheet("Reset", "Pick what to clear. Each one asks before it deletes anything.", onDismiss) {
+        SettingsGroup {
             ResetTarget.entries.filter { it != ResetTarget.FACTORY }.forEach { target ->
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickableLabeled(target.label) { onPick(target) }
-                        .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Text(target.label, style = MaterialTheme.typography.bodyMedium, color = onBg)
-                    SettingsExplainer(target.message)
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            SettingsActionRow {
-                SettingsOutlineAction("Cancel", onClick = onDismiss)
+                SettingsActionRow(target.label, target.message, resetGlyph(target)) { onPick(target) }
             }
         }
     }
+}
+
+private fun resetGlyph(target: ResetTarget): ImageVector = when (target) {
+    ResetTarget.SESSIONS -> Icons.Rounded.FitnessCenter
+    ResetTarget.TROPHIES -> Icons.Rounded.EmojiEvents
+    ResetTarget.CARDIO -> Icons.AutoMirrored.Rounded.DirectionsRun
+    ResetTarget.SETTINGS -> Icons.Rounded.Tune
+    ResetTarget.FACTORY -> Icons.Rounded.DeleteForever
 }

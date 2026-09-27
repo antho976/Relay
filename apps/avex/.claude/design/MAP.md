@@ -553,7 +553,7 @@ any activity, `buildYearActivity` in `ProfileRepository`), filmstrip.
 
 + `ui/security` (GYMAP-69) — an optional biometric / device-credential lock; no app PIN is stored
 (`BiometricPrompt` with `BIOMETRIC_STRONG or DEVICE_CREDENTIAL`, failing OPEN when the phone has no
-screen lock). Two independent Settings → **Security** toggles: **App lock** (an opaque
+screen lock). Two independent Settings → **Privacy & security** toggles: **App lock** (an opaque
 `AppLockScreen` gate over the nav host at cold start / after a configurable background timeout —
 Immediately·1·5 min — wired in `MainActivity` through the `AppLockManager` singleton +
 `LocalAppLock`, honouring the existing `userLeaving`/`onUserLeaveHint` guard so a
@@ -563,25 +563,32 @@ free, no second prompt — and app lock forces `FLAG_SECURE` app-wide (like Priv
 hides recents/screenshots). The unlock screen is the modal archetype: opaque theme-gradient scrim +
 `• Avex` wordmark + serif "Locked" + one caption + one filled `Unlock` capsule (the OS sheet does
 the credential entry). Offered as one onboarding opt-in step (shared "about you" block). Settings →
-Appearance keeps the separate **Privacy mode** FLAG_SECURE toggle.
+Privacy & security also carries the separate **Privacy mode** FLAG_SECURE toggle (moved from
+Appearance, 2026-09-26).
 
-### Settings sub-pages redesign (2026-09-25)
+### Settings redesign (2026-09-26) — `ui/settings/SettingsKit.kt`
 
-Program & equipment (and its Plan · Goal & experience · Emphasis & priorities · Equipment drill-ins),
-Session, Units & format, Exercise likes, Your coach and Wearable each open on `SettingsPageTitle`
-(serif `headlineSmall` + one muted line: Units & format's line is its live format preview, Coach's
-the feeds it reads, Exercise likes' its preferred/hidden tally). Settings' own `PillChip` (4dp,
-10sp UPPERCASE mono, no 48dp target) is gone: every choice is the shared selectable family in
-`ui/common/Selectables.kt`, promoted out of onboarding, so Settings → Program → Goal is the same
-option card, words and rep-range meta onboarding asked with (`GOAL_DETAILS` / `EXPERIENCE_DETAILS`
-are shared), Equipment is onboarding's preset + gear tile grid, and days per week the round day
-chips. 2–4-way values are `SettingsSegmentRow` (label + `ForgeSegmentedChoice`, wrapping under the
-label at large font); rest times are −/+ `SettingsStepperRow`s; the fixed weekly plan is one
-`WeekdayRow` per day opening a menu (it was seven chip walls). Coach mode is two option cards, the
-auto card's meta the count of change types that earned it. Wearable's per-signal extras (write-back,
-imports, their results) sit in a `SignalDetail` inset under their signal.
+Every Settings page is built from one kit, scoped to Settings by `SettingsTheme` (labels in sans):
+`SettingsScaffold` / `SettingsLazyScaffold` give each page a large serif title that collapses into
+the bar; `SettingsGroup` stacks rows as 4dp slabs 2dp apart under a sans header, clipped to 16dp
+outer corners, with one footer note; rows are navigation (icon tile · title · live value ·
+chevron), switch, radio, dropdown (value + menu with a check), stepper (round −/+, rest times),
+hour (a menu of the day's hours: reminder, quiet hours), segmented (sliding accent thumb; a grid of
+cells when a label would break) and action (no chevron). A row's end element goes under its text
+past 1.5x font, or when its title cannot fit. Status is a dot and a word; an action at a row's end
+is a compact tonal button. A denied permission disables the rows it silences, values kept. Root: search pill, then General · Training ·
+Coach & recovery · Data · Reset · About, every row showing its live value; search hits render as
+one group. Appearance and Units & format open on live previews (`SettingsPreviews.kt`). Program's
+choices are radio rows and filter chips, Equipment a tile grid with a check badge. Wearable's
+Signals header carries the n-of-9 count; a connected signal's write-back and imports are rows
+indented under it, each import's result replacing its description. Quiet hours default to one
+every-day window, with "Different hours each day" revealing the seven. Coach opens on a main switch. Export & back up, Import and Reset are bottom sheets (`SettingsSheet`)
+of the same grouped rows; each export row is tagged with its format, found files carry an Import or
+Restore button. Every reset, restore and password change confirms through `SettingsConfirmDialog`
+(icon, question, filled button naming the act; factory reset still types ERASE). Rationale:
+`DECISIONS.md`, 2026-09-26.
 
-### Exercise likes — `ui/settings/SettingsSubPages.kt`
+### Exercise likes — `ui/settings/SettingsExercisePrefsPage.kt`
 
 The preference list opens on **All exercises**: every public library movement plus the user's custom
 moves, regardless of configured equipment. Its first scope selector adds **Your gear**, which alone

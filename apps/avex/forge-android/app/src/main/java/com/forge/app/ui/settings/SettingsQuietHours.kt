@@ -1,87 +1,140 @@
 package com.forge.app.ui.settings
 
 import androidx.compose.animation.AnimatedVisibility
-import com.forge.app.ui.common.clickableLabeled
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.forge.app.domain.notify.QuietWindow
 import com.forge.app.domain.units.formatClockHour
+import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.currentLocale
+import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.DayOfWeek
 import java.time.format.TextStyle
 
 /**
- * The per-day quiet-hours editor (GYMAP-75) — one row per weekday showing its live window, tapping
- * expands the From/Until steppers for that day alone (accordion, one open at a time) so seven
- * windows never stack into a picker wall (DESIGN §3 settings: split a dense block, each row shows
- * its live value). Days follow the user's week-start preference; storage stays Monday-canonical.
+ * The quiet-hours window (GYMAP-75). Most people keep one window every night, so that is the
+ * default shape: From and Until for every day. "Different hours each day", above them, opens the seven days,
+ * each row showing its window and opening its own From and Until. Days follow the week-start
+ * preference; storage stays Monday-first. [enabled] follows the notification permission: while the
+ * phone blocks Avex's alerts, the window is kept but cannot be edited.
  */
 @Composable
-internal fun QuietHoursDays(state: SettingsUiState, vm: SettingsViewModel) {
+internal fun QuietHoursDays(state: SettingsUiState, vm: SettingsViewModel, enabled: Boolean = true) {
     val schedule = state.quietHoursSchedule
     val days = remember(state.firstDayMonday) { orderedDays(state.firstDayMonday) }
+    var perDay by rememberSaveable { mutableStateOf(!schedule.isUniform) }
     var expanded by remember { mutableStateOf<DayOfWeek?>(null) }
     val locale = currentLocale()
+    val use24h = LocalForgeSettings.current.timeFormat24h
 
-    Column {
+    // The switch leads what it governs, so turning it on adds rows below it and never moves it.
+    SettingsSwitchRow(
+        "Different hours each day",
+        if (perDay) "Tap a day to change its window" else "Otherwise every night uses the window below",
+        perDay,
+        indent = 16.dp,
+        enabled = enabled
+    ) { on ->
+        perDay = on
+        // Back to one window: every day takes the first day's, so what shows is what applies.
+        if (!on) {
+            val w = schedule.windowFor(days.first())
+            DayOfWeek.entries.forEach { vm.setQuietWindow(it, w.start, w.end) }
+            expanded = null
+        }
+    }
+    if (!perDay) {
+        val w = schedule.windowFor(days.first())
+        SettingsHourRow("From", w.start, use24h, enabled, indent = 16.dp) { h -> DayOfWeek.entries.forEach { vm.setQuietWindow(it, h, w.end) } }
+        SettingsHourRow("Until", w.end, use24h, enabled, indent = 16.dp) { h -> DayOfWeek.entries.forEach { vm.setQuietWindow(it, w.start, h) } }
+    } else {
         days.forEach { day ->
             val window = schedule.windowFor(day)
-            QuietDayRow(
-                label = day.getDisplayName(TextStyle.SHORT, locale),
-                window = window,
-                expanded = expanded == day,
-                onToggle = { expanded = if (expanded == day) null else day }
-            )
-            AnimatedVisibility(visible = expanded == day) {
-                Column {
-                    HourPickerRow("From", window.start) { vm.setQuietWindow(day, it, window.end) }
-                    HourPickerRow("Until", window.end) { vm.setQuietWindow(day, window.start, it) }
+            val open = expanded == day
+            val label = day.getDisplayName(TextStyle.FULL, locale)
+            SettingsAdaptiveRow(
+                title = label,
+                indent = 16.dp,
+                enabled = enabled,
+                interaction = Modifier.clickableLabeled("$label quiet hours, ${windowLabel(window, use24h)}") {
+                    expanded = if (open) null else day
+                }
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        windowLabel(window, use24h),
+                        style = MaterialTheme.typography.bodyMedium,
+                        // A day with no window is the inactive state, so it reads quieter.
+                        color = if (window.isOff) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+                    )
+                    val turn by animateFloatAsState(if (open) 180f else 0f, ForgeMotion.standardTween(), label = "chevron")
+                    Icon(
+                        Icons.Rounded.ExpandMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.rotate(turn)
+                    )
+                }
+            }
+            AnimatedVisibility(
+                visible = open && enabled,
+                enter = expandVertically(ForgeMotion.enterTween()) + fadeIn(ForgeMotion.enterTween()),
+                exit = shrinkVertically(ForgeMotion.exitTween()) + fadeOut(ForgeMotion.exitTween(ForgeMotion.DurationFast))
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    SettingsHourRow("From", window.start, use24h, enabled, indent = 32.dp) { vm.setQuietWindow(day, it, window.end) }
+                    SettingsHourRow("Until", window.end, use24h, enabled, indent = 32.dp) { vm.setQuietWindow(day, window.start, it) }
                 }
             }
         }
     }
 }
 
+/**
+ * A time of day at hour precision (reminders and quiet hours store whole hours), picked from a
+ * menu of the day's hours in the user's clock format.
+ */
 @Composable
-private fun QuietDayRow(label: String, window: QuietWindow, expanded: Boolean, onToggle: () -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickableLabeled("$label quiet hours", onClick = onToggle)
-            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Day label left / window value right — mirrors the From/Until rows it expands into, so the
-        // two columns (muted labels, onBg values) read as one rhythm.
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = muted)
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                windowLabel(window, LocalForgeSettings.current.timeFormat24h),
-                style = MaterialTheme.typography.bodyMedium,
-                // An "off" day (a zero-length window) reads dim — it's the inactive state.
-                color = if (window.isOff) muted else onBg
-            )
-            Text(if (expanded) "⌃" else "⌄", style = MaterialTheme.typography.bodyMedium, color = muted)
-        }
-    }
+internal fun SettingsHourRow(
+    title: String,
+    hour: Int,
+    use24h: Boolean,
+    enabled: Boolean = true,
+    indent: androidx.compose.ui.unit.Dp = 0.dp,
+    onChange: (Int) -> Unit
+) {
+    val hours = remember(use24h) { (0..23).map { formatClockHour(it, use24h) } }
+    SettingsDropdownRow(
+        title = title,
+        value = hours[hour.coerceIn(0, 23)],
+        options = hours,
+        selectedIndex = hour.coerceIn(0, 23),
+        indent = indent,
+        enabled = enabled,
+        onSelect = onChange
+    )
 }
 
 /** "22:00–07:00", or "10 PM–7 AM" on a 12h clock (Settings → Format → Clock, 2026-09-26 audit). */
