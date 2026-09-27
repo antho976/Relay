@@ -713,7 +713,7 @@ class SettingsViewModel @Inject constructor(
     /** Where a restore reads from, kept so a password prompt can retry the same source. */
     sealed interface RestoreSource {
         data class File(val uri: android.net.Uri) : RestoreSource
-        data object AutoBackup : RestoreSource
+        data class AutoBackup(val generation: Int) : RestoreSource
     }
 
     /** A password-protected backup is waiting on its password. [wrong] after a failed try. */
@@ -747,7 +747,7 @@ class SettingsViewModel @Inject constructor(
         val outcome = try {
             when (source) {
                 is RestoreSource.File -> backupRepo.restoreFromUri(source.uri, password)
-                RestoreSource.AutoBackup -> backupRepo.restoreFromAutoBackup(password)
+                is RestoreSource.AutoBackup -> backupRepo.restoreFromAutoBackup(password, source.generation)
             }
         } catch (e: CancellationException) {
             withContext(NonCancellable) { backupRepo.discardPendingRestore() }
@@ -769,7 +769,11 @@ class SettingsViewModel @Inject constructor(
                 _restorePasswordPrompt.value = null
                 // MainActivity restarts on it, whichever screen the user is on by now (RestoreRestart).
                 if (outcome == RestoreOutcome.SUCCESS) RestoreRestart.request()
-                else _statusMessage.value = restoreFailureMessage(outcome)
+                else _statusMessage.value =
+                    if (outcome == RestoreOutcome.CORRUPT && source is RestoreSource.AutoBackup &&
+                        _autoBackupCopies.value.size > 1
+                    ) "That auto-backup copy is damaged. Restore an older one from Data."
+                    else restoreFailureMessage(outcome)
             }
         }
     }
@@ -850,6 +854,8 @@ class SettingsViewModel @Inject constructor(
         _restoreImpact.value = info.impact
         _dbSizeLabel.value = formatBytes(info.dbSize)
         _backupPassword.value = withContext(Dispatchers.IO) { readBackupPasswordState() }
+        _autoBackupCopies.value = withContext(Dispatchers.IO) { backupRepo.autoBackupCopies() }
+            .map { AutoBackupCopyUi(it.generation, formatMediumDate(it.savedAtMs)) }
     }
 
     // ── Progress-photo info (tasks 3 + 4: factory-reset warning + data-dialog stake indicator) ──────
@@ -869,7 +875,14 @@ class SettingsViewModel @Inject constructor(
     }
 
     /** In-app restore from the weekly auto-backup slot — the recovery path for the local auto-backup (#86). */
-    fun restoreAutoBackup() = restore(RestoreSource.AutoBackup, password = null)
+    /** Restore one of the kept auto-backup copies; [generation] 0 is the newest. */
+    fun restoreAutoBackup(generation: Int = 0) = restore(RestoreSource.AutoBackup(generation), password = null)
+
+    /** A kept auto-backup copy for the restore picker: its generation and human save date. */
+    data class AutoBackupCopyUi(val generation: Int, val savedAt: String)
+
+    private val _autoBackupCopies = MutableStateFlow<List<AutoBackupCopyUi>>(emptyList())
+    val autoBackupCopies: StateFlow<List<AutoBackupCopyUi>> = _autoBackupCopies.asStateFlow()
 
     // ── Backup password (optional encryption) ─────────────────────────────────
     enum class BackupPasswordState { OFF, ON, NEEDS_RESET }

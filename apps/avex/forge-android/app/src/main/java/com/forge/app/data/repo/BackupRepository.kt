@@ -492,12 +492,19 @@ class BackupRepository @Inject constructor(
     }
 
     /**
-     * Auto-backup: runs silently, overwrites the weekly auto-backup slot (#86). Writes a real,
+     * Auto-backup: runs silently into the weekly auto-backup slots (#86). Writes a real,
      * RESTORABLE ZIP (DB + prefs + progress photos) — the same format as [backupToUri] — instead of
      * the lossy JSON export it used to write, which nothing could ever read back in.
+     *
+     * Keeps [BACKUP_GENERATIONS] copies, newest first, instead of one. A single slot meant a copy
+     * that went bad (a flash fault, a bug in the build that wrote it, data the user damaged and
+     * then backed up) had already replaced the last good one. The new copy is read back and checked
+     * end to end ([verifyBackup]) BEFORE anything older moves, so a bad write never costs a good
+     * copy, and copies are kept at least [MIN_GENERATION_SPACING_MS] apart so tapping "Back up now"
+     * a few times refreshes the newest instead of pushing every older one out.
      */
     suspend fun autoBackup(folderUri: Uri? = null): File = withContext(Dispatchers.IO) {
-        val file = File(context.filesDir, AUTO_BACKUP_NAME)
+        val file = generationFile(0)
         val tmp = File(context.filesDir, AUTO_BACKUP_TMP_NAME)
         // Resolved before the snapshot: with a password set but its key unreadable, this throws
         // rather than writing the weekly copy unencrypted behind the user's back.
@@ -514,12 +521,16 @@ class BackupRepository @Inject constructor(
             // slot now only ever holds a complete zip.
             tmp.delete()
             tmp.outputStream().use { out -> writeBackupZip(out, snap, key) }
+            if (!tmp.inputStream().use { verifyBackup(it, key) }) {
+                throw java.io.IOException("the new backup did not read back correctly")
+            }
             // A factory reset is running (or was interrupted and will finish at boot). This backup
             // snapshotted the data the user just asked to erase, and landing it in the slot would
             // bring a copy of it back after [deleteLocalCopies] ran (2026-09-26 audit, D2). The
             // worker retries later, by which time the reset is done and the snapshot is the new,
             // empty state.
             if (factoryResetPending()) throw java.io.IOException("factory reset in progress")
+            if (file.exists() && isOlderThanSpacing(file.lastModified())) rotateGenerations()
             if (!tmp.renameTo(file)) {
                 // Same-directory rename should not fail on Android. If it somehow does, keep the
                 // previous backup instead of truncating it for a copy we cannot guarantee; the
@@ -529,7 +540,7 @@ class BackupRepository @Inject constructor(
             // The reset may have started between the check and the rename; if it has, its sweep
             // may already be past this file, so take the copy back out ourselves.
             if (factoryResetPending()) {
-                file.delete()
+                (0 until BACKUP_GENERATIONS).forEach { generationFile(it).delete() }
                 throw java.io.IOException("factory reset in progress")
             }
             // Also mirror into a user-picked folder so the backup survives an uninstall (GYMAP-67). A
@@ -547,7 +558,57 @@ class BackupRepository @Inject constructor(
         file
     }
 
-    /** Write the full backup zip into a user-granted SAF tree, overwriting the prior slot (GYMAP-67). */
+    /** The internal slot for [generation] copies back; 0 keeps the name the single slot always had. */
+    private fun generationFile(generation: Int): File = File(context.filesDir, generationName(generation))
+
+    /** True when a copy saved at [savedAtMs] is old enough to be kept rather than refreshed. */
+    private fun isOlderThanSpacing(savedAtMs: Long): Boolean =
+        clock.nowMs() - savedAtMs >= MIN_GENERATION_SPACING_MS
+
+    /**
+     * Shift every internal copy back one generation, dropping the oldest, to free slot 0. A rename
+     * that fails leaves that copy where it was; the caller's rename into slot 0 then refuses to
+     * clobber it rather than losing it silently.
+     */
+    private fun rotateGenerations() {
+        for (g in BACKUP_GENERATIONS - 1 downTo 1) {
+            val src = generationFile(g - 1)
+            if (!src.exists()) continue
+            val dst = generationFile(g)
+            dst.delete()
+            src.renameTo(dst)
+        }
+    }
+
+    /**
+     * Read a just-written backup back from the start and check it end to end: every segment
+     * authenticates (password-protected) and every ZIP entry's CRC matches, with the database
+     * entry present. A copy that fails here is never allowed to replace an older one.
+     */
+    private fun verifyBackup(input: java.io.InputStream, key: BackupCrypto.MasterKey?): Boolean = try {
+        val buffered = input.buffered()
+        val plain = if (key == null) buffered else {
+            val header = BackupCrypto.readHeader(buffered) ?: return false
+            BackupCrypto.decryptingStream(header, key, buffered)
+        }
+        var sawDb = false
+        val zin = java.util.zip.ZipInputStream(plain)
+        val sink = ByteArray(64 * 1024)
+        var entry = zin.nextEntry
+        while (entry != null) {
+            if (entry.name == ZIP_DB_ENTRY) sawDb = true
+            while (zin.read(sink) >= 0) Unit // an entry's CRC is checked as its last byte is read
+            entry = zin.nextEntry
+        }
+        // The ZIP reader stops at the central directory; the rest of the file is still ours to
+        // authenticate, so a damaged tail cannot pass.
+        while (plain.read(sink) >= 0) Unit
+        sawDb
+    } catch (e: java.io.IOException) {
+        false
+    }
+
+    /** Write the full backup zip into a user-granted SAF tree, keeping older copies (GYMAP-67). */
     private fun writeZipToFolder(folderUri: Uri, snap: File, key: BackupCrypto.MasterKey?) {
         val tree = DocumentFile.fromTreeUri(context, folderUri) ?: return
         // Write the replacement under a temp name FIRST, then retire the old one. Deleting the
@@ -563,10 +624,23 @@ class BackupRepository @Inject constructor(
             out.use { writeBackupZip(it, snap, key) }
             true
         }.getOrDefault(false)
-        if (!wrote) { tmp.delete(); return }
-        // The replacement is complete on disk: only now retire the previous backup and take its
-        // name. If the rename fails the data is still present under the temp name, so leave it
-        // rather than deleting the only copy in this folder.
+        // Read back through the provider, which is the copy that matters: a cloud-synced folder or
+        // an SD card can store something other than what was written.
+        val verified = wrote && runCatching {
+            context.contentResolver.openInputStream(tmp.uri)?.use { verifyBackup(it, key) } ?: false
+        }.getOrDefault(false)
+        if (!verified) { tmp.delete(); return }
+        // The replacement is complete and checked: only now move the older copies back and take
+        // the newest name. If a rename fails the data is still present under its old name, so
+        // leave it rather than deleting a copy in this folder.
+        val latest = tree.findFile(AUTO_BACKUP_NAME)
+        if (latest != null && isOlderThanSpacing(latest.lastModified())) {
+            for (g in BACKUP_GENERATIONS - 1 downTo 1) {
+                val src = tree.findFile(generationName(g - 1)) ?: continue
+                tree.findFile(generationName(g))?.delete()
+                if (!src.renameTo(generationName(g))) break
+            }
+        }
         tree.findFile(AUTO_BACKUP_NAME)?.delete()
         tmp.renameTo(AUTO_BACKUP_NAME)
     }
@@ -637,10 +711,10 @@ class BackupRepository @Inject constructor(
      * says so. Best effort throughout: a file that won't delete must not stop the rest.
      */
     suspend fun deleteLocalCopies() = withContext(Dispatchers.IO) {
-        listOf(
-            AUTO_BACKUP_NAME, AUTO_BACKUP_TMP_NAME, LEGACY_AUTO_BACKUP_JSON,
+        ((0 until BACKUP_GENERATIONS).map { generationName(it) } + listOf(
+            AUTO_BACKUP_TMP_NAME, LEGACY_AUTO_BACKUP_JSON,
             AUTO_BACKUP_FAILED_MARKER, MANUAL_BACKUP_MARKER
-        ).forEach { name -> runCatching { File(context.filesDir, name).delete() } }
+        )).forEach { name -> runCatching { File(context.filesDir, name).delete() } }
         clearPendingRestore()
         runCatching { File(context.filesDir, com.forge.app.core.io.EXPORTS_DIR).deleteRecursively() }
         runCatching { File(context.filesDir, CRASH_LOG_DIR).deleteRecursively() }
@@ -656,8 +730,16 @@ class BackupRepository @Inject constructor(
     }
 
     /** When the auto-backup slot was last written, or null if none exists yet (#86 restore affordance). */
-    fun autoBackupSavedAtMs(): Long? =
-        File(context.filesDir, AUTO_BACKUP_NAME).takeIf { it.exists() }?.lastModified()
+    fun autoBackupSavedAtMs(): Long? = autoBackupCopies().maxOfOrNull { it.savedAtMs }
+
+    /** One kept internal auto-backup: [generation] 0 is the newest. */
+    data class AutoBackupCopy(val generation: Int, val savedAtMs: Long)
+
+    /** Every internal auto-backup copy on disk, newest first, for the restore picker. */
+    fun autoBackupCopies(): List<AutoBackupCopy> =
+        (0 until BACKUP_GENERATIONS).mapNotNull { g ->
+            generationFile(g).takeIf { it.exists() }?.let { AutoBackupCopy(g, it.lastModified()) }
+        }.sortedByDescending { it.savedAtMs }
 
     /**
      * The weekly auto-backup worker exhausted its retries (e.g. storage full): record it so Settings can
@@ -740,6 +822,12 @@ class BackupRepository @Inject constructor(
             context.contentResolver.openOutputStream(uri)?.use { out ->
                 writeBackupZip(out, snap, key)
             } ?: error("Could not open the chosen destination")
+            // Read it back through the provider before calling it saved. A destination that
+            // won't hand the file back (some cloud providers) is taken on trust, as before.
+            val verified = context.contentResolver.openInputStream(uri)?.use { verifyBackup(it, key) }
+            if (verified == false) {
+                throw java.io.IOException("The backup didn't read back correctly. Try another location")
+            }
         } finally {
             snap.delete()
             key?.wipe()
@@ -899,8 +987,12 @@ class BackupRepository @Inject constructor(
      * file, so this is the in-app recovery path for the otherwise write-only auto-backup. Copies the
      * slot to a cache temp first so [restoreFromIncoming]'s cleanup never deletes the live slot itself.
      */
-    suspend fun restoreFromAutoBackup(password: CharArray? = null): RestoreOutcome = withContext(Dispatchers.IO) {
-        val auto = File(context.filesDir, AUTO_BACKUP_NAME)
+    suspend fun restoreFromAutoBackup(
+        password: CharArray? = null,
+        generation: Int = 0
+    ): RestoreOutcome = withContext(Dispatchers.IO) {
+        if (generation !in 0 until BACKUP_GENERATIONS) return@withContext RestoreOutcome.NO_BACKUP_FILE
+        val auto = generationFile(generation)
         if (!auto.exists()) return@withContext RestoreOutcome.NO_BACKUP_FILE
         val incoming = File(context.cacheDir, "forge_restore_in_${System.currentTimeMillis()}")
         if (incoming.exists()) incoming.delete()
@@ -1348,6 +1440,19 @@ class BackupRepository @Inject constructor(
         private const val PHOTOS_PREFIX = "progress_photos/"
         /** The weekly auto-backup slot, written by [autoBackup] and read by [restoreFromAutoBackup] (#86). */
         private const val AUTO_BACKUP_NAME = "forge_auto_backup.zip"
+
+        /** How many auto-backup copies are kept, in the app and in the backup folder alike. */
+        const val BACKUP_GENERATIONS = 3
+
+        /**
+         * Copies closer together than this replace the newest instead of rotating, so the kept
+         * copies span weeks of history rather than the last few taps of "Back up now".
+         */
+        private const val MIN_GENERATION_SPACING_MS = 24L * 60 * 60 * 1000
+
+        /** Slot name for [generation]: `forge_auto_backup.zip`, then `forge_auto_backup.1.zip`, … */
+        internal fun generationName(generation: Int): String =
+            if (generation == 0) AUTO_BACKUP_NAME else "forge_auto_backup.$generation.zip"
         /** Temp slots written before replacing [AUTO_BACKUP_NAME], so a failed write never destroys
          *  the previous good backup. Internal storage and the user-picked SAF folder each need one. */
         private const val AUTO_BACKUP_TMP_NAME = "forge_auto_backup.zip.tmp"

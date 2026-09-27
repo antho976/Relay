@@ -66,13 +66,16 @@ internal fun DataExportDialog(
                 viewModel.refreshAutoBackupInfo()
                 viewModel.refreshPhotoInfo()
             }
-            val autoBackupSavedAt by viewModel.autoBackupSavedAt.collectAsState()
             val autoBackupFailed by viewModel.autoBackupFailed.collectAsState()
             val noBackupWarning by viewModel.noBackupWarning.collectAsState()
             val photoCount by viewModel.photoCount.collectAsState()
             val photoLastTakenMs by viewModel.photoLastTakenMs.collectAsState()
             val dbSize by viewModel.dbSizeLabel.collectAsState()
-            var confirmAutoRestore by remember { mutableStateOf(false) }
+            val autoBackupCopies by viewModel.autoBackupCopies.collectAsState()
+            // Which kept copy the confirm dialog is about (null: none), and whether the copy picker
+            // is open. With one copy the picker is skipped: there is nothing to choose.
+            var confirmAutoRestore by remember { mutableStateOf<SettingsViewModel.AutoBackupCopyUi?>(null) }
+            var chooseAutoCopy by remember { mutableStateOf(false) }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)) {
                 Text("Backup & restore (.zip)", style = MaterialTheme.typography.bodyMedium, color = onBg)
                 SettingsExplainer("Your whole database in one file. Save it somewhere safe; restore replaces all current data and restarts the app.")
@@ -104,12 +107,16 @@ internal fun DataExportDialog(
                     SettingsOutlineAction("Restore") { onRestore(); onDismiss() }
                 }
                 // Recover from the silent weekly auto-backup without needing the file picker (#86).
-                autoBackupSavedAt?.let { savedAt ->
+                autoBackupCopies.firstOrNull()?.let { newest ->
+                    val many = autoBackupCopies.size > 1
                     Text(
-                        "Restore last auto-backup · saved $savedAt",
+                        if (many) "Restore an auto-backup · ${autoBackupCopies.size} kept · newest ${newest.savedAt}"
+                        else "Restore last auto-backup · saved ${newest.savedAt}",
                         style = MaterialTheme.typography.bodySmall, color = muted,
                         modifier = Modifier
-                            .clickableLabeled("Restore last auto-backup") { confirmAutoRestore = true }
+                            .clickableLabeled("Restore an auto-backup") {
+                                if (many) chooseAutoCopy = true else confirmAutoRestore = newest
+                            }
                             .padding(vertical = 10.dp)
                     )
                 }
@@ -122,16 +129,53 @@ internal fun DataExportDialog(
                     )
                 }
             }
-            if (confirmAutoRestore) {
+            if (chooseAutoCopy) {
+                // Each kept copy is one whole-row tap target; the newest is named as such so an
+                // older one is a deliberate pick, for when the newest is damaged or already wrong.
                 AlertDialog(
                     containerColor = MaterialTheme.colorScheme.surface,
-                    onDismissRequest = { confirmAutoRestore = false },
-                    title = { Text("Restore last auto-backup?") },
-                    text = { Text("Replaces all current data with the weekly auto-backup (saved ${autoBackupSavedAt ?: ""}) and restarts the app.") },
-                    confirmButton = {
-                        TextButton(onClick = { confirmAutoRestore = false; viewModel.restoreAutoBackup(); onDismiss() }) { Text("Restore") }
+                    onDismissRequest = { chooseAutoCopy = false },
+                    text = {
+                        Column {
+                            Text("Pick the auto-backup to restore. Older copies are kept in case the newest is damaged.")
+                            Spacer(Modifier.height(8.dp))
+                            autoBackupCopies.forEachIndexed { i, copy ->
+                                Text(
+                                    if (i == 0) "${copy.savedAt} · newest" else copy.savedAt,
+                                    style = MaterialTheme.typography.bodyMedium, color = onBg,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickableLabeled("Restore the copy saved ${copy.savedAt}") {
+                                            chooseAutoCopy = false
+                                            confirmAutoRestore = copy
+                                        }
+                                        .padding(vertical = 12.dp)
+                                )
+                            }
+                        }
                     },
-                    dismissButton = { TextButton(onClick = { confirmAutoRestore = false }) { Text("Cancel") } }
+                    confirmButton = {},
+                    dismissButton = {
+                        TextButton(onClick = { chooseAutoCopy = false }) {
+                            Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                )
+            }
+            confirmAutoRestore?.let { copy ->
+                AlertDialog(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    onDismissRequest = { confirmAutoRestore = null },
+                    title = { Text("Restore this auto-backup?") },
+                    text = { Text("Replaces all current data with the auto-backup saved ${copy.savedAt} and restarts the app.") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            confirmAutoRestore = null
+                            viewModel.restoreAutoBackup(copy.generation)
+                            onDismiss()
+                        }) { Text("Restore") }
+                    },
+                    dismissButton = { TextButton(onClick = { confirmAutoRestore = null }) { Text("Cancel") } }
                 )
             }
 

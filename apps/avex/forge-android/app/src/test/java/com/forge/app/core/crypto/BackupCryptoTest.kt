@@ -175,6 +175,41 @@ class BackupCryptoTest {
         assertNull(BackupCrypto.readHeader(ByteArrayInputStream(ByteArray(3))))
     }
 
+    @Test fun theStreamingReaderReturnsThePlaintext() {
+        val plain = Random(11).nextBytes(3 * seg + 99)
+        val input = ByteArrayInputStream(seal(plain))
+        val header = BackupCrypto.readHeader(input)!!
+        val back = BackupCrypto.decryptingStream(header, key, input).use { it.readBytes() }
+        assertArrayEquals(plain, back)
+    }
+
+    @Test fun theStreamingReaderNeverEndsCleanlyOnATruncatedFile() {
+        val sealed = seal(Random(12).nextBytes(3 * seg))
+        val cut = sealed.copyOf(BackupCrypto.HEADER_BYTES + seg + 16)
+        val input = ByteArrayInputStream(cut)
+        val header = BackupCrypto.readHeader(input)!!
+        val stream = BackupCrypto.decryptingStream(header, key, input)
+        try {
+            stream.readBytes()
+            org.junit.Assert.fail("a truncated file must not read as complete")
+        } catch (e: BackupCrypto.IntegrityException) {
+            // expected
+        }
+    }
+
+    @Test fun theStreamingReaderRefusesTheWrongKeyUpFront() {
+        val sealed = seal(ByteArray(10))
+        val input = ByteArrayInputStream(sealed)
+        val header = BackupCrypto.readHeader(input)!!
+        val other = BackupCrypto.newMasterKey("something else entirely".toCharArray(), iterations)
+        try {
+            BackupCrypto.decryptingStream(header, other, input)
+            org.junit.Assert.fail("expected WrongKeyException")
+        } catch (e: BackupCrypto.WrongKeyException) {
+            // expected
+        }
+    }
+
     /** RFC 7914 §11: PBKDF2-HMAC-SHA256, P = "passwd", S = "salt", c = 1, dkLen 64 (first 32 bytes). */
     @Test fun pbkdf2MatchesThePublishedVector() {
         val spec = javax.crypto.spec.PBEKeySpec("passwd".toCharArray(), "salt".toByteArray(), 1, 256)

@@ -11,7 +11,6 @@ import java.security.GeneralSecurityException
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.text.Normalizer
-import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.SecretKeyFactory
@@ -314,53 +313,124 @@ object BackupCrypto {
 
     // ── Decrypt ─────────────────────────────────────────────────────────────────────────────────
 
+    /** A segment failed to authenticate: the file is damaged, truncated or edited. */
+    class IntegrityException : java.io.IOException("backup failed its integrity check")
+
+    /** The key check failed: the password (or cached key) is not the one this file was made with. */
+    class WrongKeyException : java.io.IOException("wrong backup password")
+
+    /**
+     * An [InputStream] of the plaintext that follows [header] in [input] (positioned just past the
+     * header, as [readHeader] leaves it). Only authenticated bytes are ever returned: a segment that
+     * fails raises [IntegrityException], and a file cut off early raises it at the point the missing
+     * final segment should have been, never a clean end of stream. Throws [WrongKeyException] at
+     * once when [key] is not the file's key. Closing it closes [input].
+     */
+    fun decryptingStream(header: Header, key: MasterKey, input: InputStream): InputStream {
+        val keys = fileKeys(key, header.fileSalt)
+        if (!MessageDigest.isEqual(keyCheck(keys.check, header.bytes.copyOf(PREFIX_BYTES)), header.keyCheck)) {
+            keys.wipe()
+            throw WrongKeyException()
+        }
+        return DecryptingInputStream(input, keys, header)
+    }
+
+    private class DecryptingInputStream(
+        private val input: InputStream,
+        private val keys: FileKeys,
+        private val header: Header
+    ) : InputStream() {
+        private val chunk = header.segmentSize + TAG_BYTES
+        private var cur = ByteArray(chunk)
+        private var next = ByteArray(chunk)
+        private var curLen = -1 // -1: nothing read yet
+        private var index = 0
+        private var plain = ByteArray(0)
+        private var plainPos = 0
+        private var done = false
+        private val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        private val keySpec = SecretKeySpec(keys.enc, "AES")
+
+        override fun read(): Int {
+            val one = ByteArray(1)
+            return if (read(one, 0, 1) < 0) -1 else one[0].toInt() and 0xFF
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (len == 0) return 0
+            while (plainPos == plain.size) {
+                if (done) return -1
+                openNextSegment()
+            }
+            val n = minOf(len, plain.size - plainPos)
+            System.arraycopy(plain, plainPos, b, off, n)
+            plainPos += n
+            return n
+        }
+
+        private fun openNextSegment() {
+            if (curLen < 0) curLen = readUpTo(input, cur)
+            if (curLen < TAG_BYTES) throw IntegrityException()
+            // Only a FULL chunk can have another after it; a short one must be the end.
+            val nextLen = if (curLen == chunk) readUpTo(input, next) else 0
+            val last = nextLen == 0
+            plain.fill(0)
+            plain = try {
+                cipher.init(Cipher.DECRYPT_MODE, keySpec, GCMParameterSpec(TAG_BITS, nonce(header.noncePrefix, index, last)))
+                cipher.updateAAD(header.bytes)
+                cipher.doFinal(cur, 0, curLen)
+            } catch (e: GeneralSecurityException) {
+                throw IntegrityException()
+            }
+            plainPos = 0
+            if (last) { done = true; return }
+            if (index == Int.MAX_VALUE) throw IntegrityException()
+            index++
+            val t = cur; cur = next; next = t
+            curLen = nextLen
+        }
+
+        override fun close() {
+            plain.fill(0)
+            keys.wipe()
+            input.close()
+        }
+    }
+
     /**
      * Decrypt the segments that follow [header] in [input] into [output], writing at most
      * [maxBytes] of plaintext. [input] must be positioned just past the header (as [readHeader]
      * leaves it). Plaintext is only ever written for segments that authenticated, but a Corrupt
      * result can follow earlier good segments, so on anything but [DecryptResult.Ok] the caller
-     * must discard what was written.
+     * must discard what was written. Does not close [input].
      */
     fun decrypt(header: Header, key: MasterKey, input: InputStream, output: OutputStream, maxBytes: Long): DecryptResult {
-        val keys = fileKeys(key, header.fileSalt)
-        try {
-            val prefix = header.bytes.copyOf(PREFIX_BYTES)
-            if (!MessageDigest.isEqual(keyCheck(keys.check, prefix), header.keyCheck)) return DecryptResult.WrongPassword
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            val keySpec = SecretKeySpec(keys.enc, "AES")
-            val chunk = header.segmentSize + TAG_BYTES
-            var cur = ByteArray(chunk)
-            var next = ByteArray(chunk)
-            var curLen = readUpTo(input, cur)
-            var index = 0
-            var total = 0L
-            while (true) {
-                if (curLen < TAG_BYTES) return DecryptResult.Corrupt
-                // Only a FULL chunk can have another after it; a short one must be the end.
-                val nextLen = if (curLen == chunk) readUpTo(input, next) else 0
-                val last = nextLen == 0
-                val plain = try {
-                    cipher.init(Cipher.DECRYPT_MODE, keySpec, GCMParameterSpec(TAG_BITS, nonce(header.noncePrefix, index, last)))
-                    cipher.updateAAD(header.bytes)
-                    cipher.doFinal(cur, 0, curLen)
-                } catch (e: AEADBadTagException) {
-                    return DecryptResult.Corrupt
-                } catch (e: GeneralSecurityException) {
-                    return DecryptResult.Corrupt
-                }
-                total += plain.size
-                if (total > maxBytes) { plain.fill(0); return DecryptResult.TooLarge }
-                output.write(plain)
-                plain.fill(0)
-                if (last) return DecryptResult.Ok
-                if (index == Int.MAX_VALUE) return DecryptResult.Corrupt
-                index++
-                val t = cur; cur = next; next = t
-                curLen = nextLen
-            }
-        } finally {
-            keys.wipe()
+        val plain = try {
+            decryptingStream(header, key, NonClosing(input))
+        } catch (e: WrongKeyException) {
+            return DecryptResult.WrongPassword
         }
+        return plain.use { stream -> copyAtMost(stream, output, maxBytes) }
+    }
+
+    private fun copyAtMost(stream: InputStream, output: OutputStream, maxBytes: Long): DecryptResult {
+        val buf = ByteArray(64 * 1024)
+        var total = 0L
+        while (true) {
+            val n = try {
+                stream.read(buf)
+            } catch (e: IntegrityException) {
+                return DecryptResult.Corrupt
+            }
+            if (n < 0) return DecryptResult.Ok
+            total += n
+            if (total > maxBytes) return DecryptResult.TooLarge
+            output.write(buf, 0, n)
+        }
+    }
+
+    private class NonClosing(input: InputStream) : java.io.FilterInputStream(input) {
+        override fun close() = Unit
     }
 
     /** Fill [buf] from [input] until it is full or the stream ends; the number of bytes read. */

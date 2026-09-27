@@ -38,6 +38,8 @@ once on, a `Backup password` row in the folder row's whole-row + `ConnectPill` s
 `Set` when the phone lost its key). Setting it is a small two-field dialog; turning it off confirms
 and sits behind the gallery lock. A restore that meets a protected backup asks through
 `RestorePasswordDialogHost` at the Settings root, so the prompt outlives the Data dialog.
+Data's auto-restore link names how many copies are kept (three, a day or more apart); with more
+than one it opens a picker of whole-row dates, newest labelled, before the usual confirm.
 
 ### Notifications — `ui/notifications`
 
