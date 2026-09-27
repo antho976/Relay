@@ -177,8 +177,8 @@ object PreferenceKeys {
      *  (stable across builds). Empty/absent = the default emblem. The live source of truth is the
      *  enabled activity-alias; this only lets the picker ring the current choice. */
     val APP_ICON = stringPreferencesKey("app_icon")
-    /** When ON (default), the cold-launch intro themes the Avex wordmark to the chosen app icon's
-     *  family (sheen/crystals/aurora/melt/…). OFF plays the plain black-and-white Avex settle instead. */
+    /** When ON, the cold-launch intro themes the Avex wordmark to the chosen app icon's
+     *  family (sheen/crystals/aurora/melt/…). OFF (default) plays the plain black-and-white Avex settle instead. */
     val THEMED_LAUNCH_INTRO = booleanPreferencesKey("themed_launch_intro")
 
     // ─── Locale (#116) ────────────────────────────────────────────────────────

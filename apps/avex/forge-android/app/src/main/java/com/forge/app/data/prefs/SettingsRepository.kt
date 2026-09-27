@@ -571,9 +571,9 @@ class SettingsRepository @Inject constructor(
     suspend fun setAppIcon(key: String) =
         context.forgePreferences.edit { it[PreferenceKeys.APP_ICON] = key }
 
-    /** Theme the cold-launch Avex intro to the chosen app icon's family (default on). Off = the plain
+    /** Theme the cold-launch Avex intro to the chosen app icon's family (default off). Off = the plain
      *  black-and-white Avex settle, no icon-family effect. */
-    val themedLaunchIntro: Flow<Boolean> = pref { it[PreferenceKeys.THEMED_LAUNCH_INTRO] ?: true }
+    val themedLaunchIntro: Flow<Boolean> = pref { it[PreferenceKeys.THEMED_LAUNCH_INTRO] ?: false }
     suspend fun setThemedLaunchIntro(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.THEMED_LAUNCH_INTRO] = value }
 
@@ -1058,7 +1058,7 @@ class SettingsRepository @Inject constructor(
             galleryLockEnabled = protection(prefs, PreferenceKeys.GALLERY_LOCK_ENABLED) { it.galleryLockEnabled },
             amoledMode = prefs[PreferenceKeys.AMOLED_MODE] ?: false,
             appIcon = prefs[PreferenceKeys.APP_ICON] ?: "",
-            themedLaunchIntro = prefs[PreferenceKeys.THEMED_LAUNCH_INTRO] ?: true
+            themedLaunchIntro = prefs[PreferenceKeys.THEMED_LAUNCH_INTRO] ?: false
         )
     }
 
