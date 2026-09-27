@@ -621,6 +621,10 @@ Path: **generated** = mode → goal → experience → days → gym → gear →
 experience because those steer the coach and Stats. `pathFor(planMode)` owns this; the rail counts
 its cells from the list, so the short path visibly drops four.
 
+The day-count step warns, never gates, outside 3 to 5 days (2026-09-26): one line under the chips,
+a `ForgeWarning` dot beside onBg `bodySmall` prose (`daysAdvice`), naming what that count costs
+(pace for 1 to 2, rest days for 6 to 7; six reads softer for an experienced lifter). Continue stays live.
+
 `PlanLedger` is the persistent mark: one bar per training day carrying that day's SETS, scaled to
 the heaviest day, sitting below the question and outside the page slider. Before any gear exists it
 draws `ProgramGenerator.plannedSetsPerDay` (the split's own volume allocation, computable from a

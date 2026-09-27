@@ -337,7 +337,7 @@ fun OnboardingScreen(
                         PAGE_MODE -> StepPlanMode(selected = planMode, onSelect = { planMode = it })
                         PAGE_GOAL -> StepGoal(selected = goal, onSelect = { goal = it })
                         PAGE_EXPERIENCE -> StepExperience(selected = experience, onSelect = { experience = it })
-                        PAGE_DAYS -> StepDays(days = daysPerWeek, onChange = { daysPerWeek = it })
+                        PAGE_DAYS -> StepDays(days = daysPerWeek, experience = experience, onChange = { daysPerWeek = it })
                         PAGE_GYM -> StepGymPresets(
                             selected = equipment,
                             frozenIds = frozenIds,

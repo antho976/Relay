@@ -1,16 +1,24 @@
 package com.forge.app.ui.onboarding
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.forge.app.ui.theme.ForgeWarning
 
 /**
  * The plan-shaping questions, in the order the generator needs them: the plan-mode fork first (it
@@ -125,7 +133,7 @@ internal fun StepExperience(selected: String, onSelect: (String) -> Unit) {
  * saying it twice broke §4.3's one-home rule.
  */
 @Composable
-internal fun StepDays(days: Int, onChange: (Int) -> Unit) {
+internal fun StepDays(days: Int, experience: String, onChange: (Int) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         StepTitle("How many days a week?")
         StepCaption("Your split follows, and it becomes your weekly target on Home.")
@@ -133,5 +141,46 @@ internal fun StepDays(days: Int, onChange: (Int) -> Unit) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             (1..7).forEach { n -> DayChip(n, days == n) { onChange(n) } }
         }
+        daysAdvice(days, experience)?.let { DaysAdvice(it) }
+    }
+}
+
+/**
+ * What a day-count outside 3 to 5 costs you, or null inside it. Advice, never a gate: the CTA stays
+ * live, because someone with two free evenings a week still gets a real plan. Each line names what
+ * that count costs (the pace, the rest days) rather than repeating one cue.
+ */
+internal fun daysAdvice(days: Int, experience: String): String? = when (days) {
+    1 -> "One day a week maintains more than it builds. Most people progress on 3 to 5."
+    2 -> "Two days works, just slower. Most people progress fastest on 3 to 5."
+    6 -> if (experience == "advanced") "Six days leaves one rest day. Fine if you recover well, but 3 to 5 suits most."
+        else "Six days leaves one rest day, which is hard to recover from. 3 to 5 suits most people."
+    7 -> "Seven days leaves no rest day to recover on. 3 to 5 suits most people."
+    else -> null
+}
+
+/**
+ * The off-range note under the day chips: a warning dot (the exception is the only thing that earns a
+ * dot, §8) beside onBg prose, so the line reads under every accent without colouring body text (§14).
+ */
+@Composable
+private fun DaysAdvice(text: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Box(
+            Modifier
+                .padding(top = 6.dp)
+                .size(7.dp)
+                .background(ForgeWarning, CircleShape)
+        )
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onBackground
+        )
     }
 }
