@@ -7,9 +7,10 @@ import java.io.File
 /**
  * Polices the doctrine itself.
  *
- * The loader skill drifted from `DESIGN.md` once already: it named the wrong wordmark, taught a
- * verdict the doctrine bans by name, and carried three off-by-one section references. Nobody
- * noticed, because nothing was checking. A doc that governs code should be governed too.
+ * The old forge-design loader skill drifted from `DESIGN.md`: it named the wrong wordmark, taught a
+ * verdict the doctrine bans by name, and carried three off-by-one section references. That skill is
+ * gone (2026-09-27, design work now loads impeccable, which reads PRODUCT.md and this doctrine),
+ * but a doc that governs code should still be governed.
  */
 class DoctrineSelfCheckTest {
 
@@ -113,117 +114,13 @@ class DoctrineSelfCheckTest {
         )
     }
 
-    /**
-     * Every copy of the loader, not just the canonical one.
-     *
-     * `.agents/skills/forge-design/SKILL.md` was a byte-for-byte duplicate of the `.claude` router
-     * with every path rewritten to a `.Codex/` prefix that does not exist in this repository. It
-     * told any agent that loaded it to read the binding doctrine in full before touching UI, gave a
-     * path with nothing behind it, and so handed out no doctrine at all. It sat that way because
-     * this test named one file by hand; a router nobody checks is a router that drifts. Discover
-     * them instead.
-     */
-    private val routers: List<File> by lazy {
-        val found = listOf(".claude", ".agents")
-            .map { File(DesignDoctrine.repoRoot, "$it/skills/forge-design/SKILL.md") }
-            .filter { it.isFile }
-        assertTrue(
-            "\n\nNo forge-design SKILL.md found under .claude/ or .agents/ in " +
-                DesignDoctrine.repoRoot.canonicalPath + "\n",
-            found.isNotEmpty()
-        )
-        found
-    }
-
-    /** The one a UI task is meant to read; the others must forward to it rather than restate it. */
-    private val canonicalRouter: File
-        get() = File(DesignDoctrine.repoRoot, ".claude/skills/forge-design/SKILL.md")
-
-    @Test
-    fun theLoaderSkillPointsAtThingsThatExist() {
-        assertTrue("forge-design SKILL.md missing at ${canonicalRouter.path}", canonicalRouter.isFile)
-        val recipeDir = DesignDoctrine.debugSource("ui/recipes")
-        val broken = mutableListOf<String>()
-
-        routers.forEach { skill ->
-            val text = skill.readText()
-            val where = skill.parentFile.parentFile.parentFile.name + "/"
-
-            Regex("""`(\w+Recipe)\.kt`""").findAll(text).map { it.groupValues[1] }.toSortedSet()
-                .filterNot { File(recipeDir, "$it.kt").isFile }
-                .forEach { broken += "$where routes to recipe $it.kt, which does not exist" }
-
-            // The `design/` here is a DIRECTORY, so require a boundary before it. Unanchored, this
-            // also matched the `design/SKILL.md` inside the path `.claude/skills/forge-design/
-            // SKILL.md` and then went looking for a satellite by that name.
-            Regex("""(?<![\w-])design/([A-Z]+\.md)""").findAll(text).map { it.groupValues[1] }.toSortedSet()
-                .filterNot { DesignDoctrine.satellite(it).isFile }
-                .forEach { broken += "$where routes to satellite design/$it, which does not exist" }
-
-            // Any backtick-quoted repo-relative path the router hands out has to resolve. This is
-            // the check that would have caught the `.Codex/` prefix on the day it was written.
-            Regex("""`(\.?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+/?)`""").findAll(text)
-                .map { it.groupValues[1] }
-                // Repo-root-relative only: the router also quotes module-relative paths for the
-                // Gradle commands in §4, which resolve under forge-android/ rather than here.
-                .filter { it.endsWith(".md") || it.endsWith(".kt") || it.endsWith("/") }
-                .toSortedSet()
-                .filterNot { File(DesignDoctrine.repoRoot, it.trimEnd('/')).exists() }
-                .forEach { broken += "$where routes to $it, which does not exist" }
-        }
-
-        assertTrue(
-            "\n\nA design router points at files that are not in this repository. An agent that " +
-                "follows it reads nothing and writes UI with no doctrine loaded:\n" +
-                broken.joinToString("\n") { "  $it" } + "\n",
-            broken.isEmpty()
-        )
-    }
-
-    /**
-     * A second copy of the doctrine is a second thing to drift, and the copy is always the one that
-     * loses. Non-canonical routers forward; they do not restate.
-     */
-    @Test
-    fun onlyOneRouterCarriesTheRouting() {
-        val duplicates = routers.filter { it != canonicalRouter }
-            .filterNot { it.readText().contains(".claude/skills/forge-design/SKILL.md") }
-            .map { it.toRelativeString(DesignDoctrine.repoRoot) }
-        assertTrue(
-            "\n\nThese routers neither are the canonical one nor forward to it, so they are a " +
-                "second copy of the doctrine's entry point: $duplicates\n" +
-                "Replace the body with a pointer at .claude/skills/forge-design/SKILL.md.\n",
-            duplicates.isEmpty()
-        )
-    }
-
-    /**
-     * The loader is a router, not a summary — that is precisely why it drifted last time. If it
-     * starts restating rules it will disagree with the doctrine again, so keep it short.
-     */
-    @Test
-    fun theLoaderStaysARouter() {
-        val n = canonicalRouter.readLines().size
-        // 110, raised from 80 on 2026-07-24 when the redesign workflow was added. Length is a proxy
-        // for the real rule, which is that the loader ROUTES and never restates: an earlier version
-        // summarised the doctrine, drifted from it, and ended up teaching a verdict §11 bans by name.
-        // Process and commands are fine here; rules are not. If this fails, ask which one you added.
-        assertTrue(
-            "\n\nSKILL.md is $n lines. It is a ROUTER: it points at the doctrine, the recipes and the " +
-                "maintenance commands, and restates no rules. If you added a RULE, it belongs in " +
-                "DESIGN.md instead. If you added process and the file genuinely needs to be longer, " +
-                "raise the cap here in the same commit.\n",
-            n <= 110
-        )
-    }
-
     /** The wordmark is "Avex". The old loader said "Forge" for months. It left the top bar on
      *  2026-07-27 (the bell took that slot) but still plays at launch, so the name still has to be
      *  right wherever the docs mention it. */
     @Test
     fun theWordmarkIsNamedConsistently() {
         val offenders = mutableListOf<String>()
-        (listOf(DesignDoctrine.designDoc) + routers).forEach { f ->
+        listOf(DesignDoctrine.designDoc).forEach { f ->
             if (Regex("""[•·]\s*Forge\b""").containsMatchIn(f.readText())) {
                 offenders += f.toRelativeString(DesignDoctrine.repoRoot)
             }

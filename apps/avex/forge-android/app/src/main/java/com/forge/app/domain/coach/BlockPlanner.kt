@@ -159,17 +159,24 @@ object BlockPlanner {
     /** The line the coach screen and the directive both use — one sentence, no jargon. */
     fun describe(block: TrainingBlock): String {
         val phase = BlockPhase.fromCode(block.phase) ?: BlockPhase.ACCUMULATE
+        return if (phase == BlockPhase.DELOAD) "Deload week. ${purpose(block)}"
+        else "Week ${block.weekIndex} of ${block.plannedWeeks}, ${purpose(block).replaceFirstChar { it.lowercase() }}"
+    }
+
+    /**
+     * What this week of the block is FOR, without the week count: "Building volume. Deload in 3
+     * weeks." The Coach page sets the count as its own figure and this as the line under it, and
+     * [describe] joins the two, so the sentence and the figure can never disagree.
+     */
+    fun purpose(block: TrainingBlock): String {
+        val phase = BlockPhase.fromCode(block.phase) ?: BlockPhase.ACCUMULATE
         val weeks = weeksToDeload(block)
         return when (phase) {
             BlockPhase.ACCUMULATE ->
-                "Week ${block.weekIndex} of ${block.plannedWeeks}, building volume. " +
-                    if (weeks > 0) "Deload in $weeks weeks." else ""
-            BlockPhase.INTENSIFY ->
-                "Week ${block.weekIndex} of ${block.plannedWeeks}, trading volume for load."
-            BlockPhase.PEAK ->
-                "Week ${block.weekIndex} of ${block.plannedWeeks}, expressing what you built."
-            BlockPhase.DELOAD ->
-                "Deload week. Loads and volume come down so the work catches up with you."
+                "Building volume. " + if (weeks > 0) "Deload in $weeks weeks." else ""
+            BlockPhase.INTENSIFY -> "Trading volume for load."
+            BlockPhase.PEAK -> "Expressing what you built."
+            BlockPhase.DELOAD -> "Loads and volume come down so the work catches up with you."
         }.trim()
     }
 

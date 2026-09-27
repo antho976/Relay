@@ -173,12 +173,15 @@ fun HubScreen(
                     onLogFreestyle = { nav.navigate(Routes.FREESTYLE_LOG) },
                     onBuildPlan = { nav.navigate(Routes.programBuilder()) }
                 )
+                // Coach and Academy sit furthest from Home, so each carries the top-bar back arrow
+                // to it; the system Back already goes there (the BackHandler above).
                 BottomTab.COACH -> CoachScreen(
+                    onBack = { goTo(homeIndex) },
                     isVisible = pagerState.settledPage == page,
                     onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
                 )
-                // A pager page, so no back arrow — swiping off it IS the back gesture.
                 BottomTab.ACADEMY -> AcademyScreen(
+                    onBack = { goTo(homeIndex) },
                     onOpenLesson = { nav.navigate(Routes.lesson(it)) }
                 )
             }

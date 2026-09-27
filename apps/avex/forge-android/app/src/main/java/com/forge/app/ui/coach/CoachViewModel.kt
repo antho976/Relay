@@ -80,6 +80,13 @@ class CoachViewModel @Inject constructor(
         /** Best estimated 1RM per non-skipped bout, per program slot, oldest first. */
         val e1rmBySlot: Map<String, List<Double>> = emptyMap(),
         val health: HealthSeries = HealthSeries(),
+        /**
+         * Today's readiness, the same read that scales the day's weight targets. Null when the
+         * advisor is silent: below [readinessGateSessions], or nothing today moves the number.
+         */
+        val readiness: com.forge.app.domain.adapt.Recommendation.ReadinessScale? = null,
+        /** Finished sessions readiness needs before it reads anything at all. */
+        val readinessGateSessions: Int = AdaptThresholds().readinessMinSessions,
         /** Whole days until the next weekly brief (next Monday); 0 when unknown. */
         val daysToNextBrief: Int = 0,
         /** A2: the Goal Portfolio, priority order, each with its live reading and ETA. */
@@ -139,6 +146,11 @@ class CoachViewModel @Inject constructor(
         // lesson the first time it happens. Idempotent, so calling it on every open is fine.
         runCatching { academyRepo.syncCoachMoments() }
         val activeBlock = runCatching { blockRepo.active() }.getOrNull()
+        // Off the snapshot above, so the page reads the same sessions and Health Connect nights
+        // the day screen scales its targets from, without a second whole-history walk.
+        val readiness = runCatching { adaptationRepo.readinessScale(snapshot = snap) }
+            .onFailure { if (it is CancellationException) throw it }
+            .getOrNull()
         kotlinx.coroutines.currentCoroutineContext().ensureActive()
         _state.update { current -> current.copy(
             loading = false,
@@ -148,6 +160,7 @@ class CoachViewModel @Inject constructor(
             timeline = timeline,
             e1rmBySlot = snap?.let(::e1rmSeries).orEmpty(),
             health = snap?.let(::healthSeries) ?: HealthSeries(),
+            readiness = readiness,
             daysToNextBrief = snap?.let { 7 - todayIndex(it) } ?: 0,
             block = activeBlock,
             profile = snap?.let { com.forge.app.domain.coach.PersonalProfile.build(it) }

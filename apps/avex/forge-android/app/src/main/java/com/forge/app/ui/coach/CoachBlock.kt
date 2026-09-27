@@ -42,19 +42,22 @@ internal fun LazyListScope.coachBlock(
         Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(2)) {
             Spacer(Modifier.height(30.dp))
             CoachAnchor("Block", c)
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(18.dp))
+            // The week is the reading, so it takes the figure; what the week is FOR sits under it.
+            state.block?.let { block ->
+                CoachFigure(
+                    "Week ${block.weekIndex} of ${block.plannedWeeks}",
+                    BlockPlanner.purpose(block),
+                    c
+                )
+                Spacer(Modifier.height(16.dp))
+            }
             // The rail is the zero shape: unlit with no block running, the same mark it uses when
             // one is, so starting a block fills in a shape already seen.
             PhaseRail(state.block, c)
             Spacer(Modifier.height(14.dp))
             state.block?.let { block ->
-                Text(
-                    BlockPlanner.describe(block),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = c.onBg
-                )
                 if (block.intent.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
                     Text(
                         block.intent,
                         style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
@@ -119,36 +122,50 @@ internal fun LazyListScope.coachUnlocks(
     }
 }
 
-/** The four phases as a segmented rail, the live one filled. Works unlit at zero. */
+/**
+ * The four phases on one thin rail: the phases already run in the 0.6 accent rung, the live one in
+ * full accent, the ones ahead on the empty track. Labels in sentence case under their own stretch,
+ * the live one in ink. It was four 6dp capsules with mono caps under each, which read as a tab bar
+ * rather than as time passing. Works unlit at zero.
+ */
 @Composable
 private fun PhaseRail(block: TrainingBlock?, c: CoachColors) {
     val current = block?.let { BlockPhase.fromCode(it.phase) }
+    val currentIndex = current?.let { BlockPhase.entries.indexOf(it) } ?: -1
     Row(
         Modifier.fillMaxWidth().semantics {
             contentDescription = current?.let { "Training block phase: ${it.displayName}" }
                 ?: "No training block running"
         },
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.Top
     ) {
         BlockPhase.entries.forEachIndexed { i, phase ->
             Column(Modifier.weight(1f)) {
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .height(6.dp)
+                        .height(3.dp)
                         .clip(RoundedCornerShape(50))
-                        .drawBehind { drawRect(if (phase == current) c.accent else c.track) }
+                        .drawBehind {
+                            drawRect(
+                                when {
+                                    i == currentIndex -> c.accent
+                                    i < currentIndex -> c.secondary
+                                    else -> c.track
+                                }
+                            )
+                        }
                 )
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
                 // Four columns share ~73dp on a 360dp screen, so a long phase name WRAPS rather
-                // than truncating: a two-line "ACCUMULATE" still reads, "ACCUM…" does not.
+                // than truncating.
                 Text(
-                    phase.displayName.uppercase(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = c.muted
+                    phase.displayName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (i == currentIndex) c.onBg else c.muted
                 )
             }
-            if (i < BlockPhase.entries.lastIndex) Spacer(Modifier.width(6.dp))
+            if (i < BlockPhase.entries.lastIndex) Spacer(Modifier.width(4.dp))
         }
     }
 }

@@ -60,7 +60,9 @@ internal fun CoachAdvancedPrompt(
     onTurnOn: () -> Unit,
     onRemindLater: () -> Unit,
     onIgnore: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // Clears the page's top bar when it has one, so the offer never lands on the back arrow.
+    belowTopBar: Boolean = false
 ) {
     // Held back a beat so the account's own entrance lands first and the offer reads as arriving
     // over it, the way a notification does, rather than as part of the page.
@@ -86,7 +88,7 @@ internal fun CoachAdvancedPrompt(
                 Modifier
                     .statusBarsPadding()
                     .padding(horizontal = 24.dp)
-                    .padding(top = 8.dp)
+                    .padding(top = if (belowTopBar) TOP_BAR_HEIGHT + 8.dp else 8.dp)
                     .widthIn(max = 420.dp)
                     .fillMaxWidth()
                     .semantics {
@@ -138,3 +140,6 @@ internal fun CoachAdvancedPrompt(
 
 /** How long after the page appears the offer settles in. Long enough for the entrance cascade. */
 private const val PROMPT_ARRIVAL_DELAY_MS = 700L
+
+/** Material 3's small top app bar height, which the offer clears when the page draws one. */
+private val TOP_BAR_HEIGHT = 64.dp
