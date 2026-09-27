@@ -121,11 +121,50 @@ class WorkoutImportRepository @Inject constructor(
      * newest first — so the Import screen can list them for a one-tap pick (#GYMAP-17). A light parse
      * gives the workout count; the actual insert happens later via [import].
      */
-    suspend fun scanFolder(treeUri: Uri): List<FoundImport> = withContext(Dispatchers.IO) {
-        val tree = runCatching { DocumentFile.fromTreeUri(context, treeUri) }.getOrNull() ?: return@withContext emptyList()
+    suspend fun scanFolder(treeUri: Uri): List<FoundImport> = scanFolders(listOf(treeUri)).imports
+
+    /**
+     * Everything the Import screen can offer from the folders Avex may read: the import folder and
+     * the backup folder. Each is searched [MAX_SCAN_DEPTH] levels down, because exports rarely sit
+     * at the top: an app that saves into `Download/Strong/`, or a user who files them by month, used
+     * to get "No exports found" for a folder that plainly held them. Avex backup ZIPs are listed
+     * too, as restores, so a backup in Downloads no longer has to be hunted for in a file picker.
+     */
+    suspend fun scanFolders(treeUris: List<Uri>): FolderScan = withContext(Dispatchers.IO) {
+        val files = treeUris.distinct()
+            .mapNotNull { runCatching { DocumentFile.fromTreeUri(context, it) }.getOrNull() }
+            .flatMap { listFilesDeep(it, MAX_SCAN_DEPTH, MAX_SCAN_DIRS) }
+            .distinctBy { it.uri }
+        val backups = files
+            .filter { it.name?.lowercase()?.endsWith(".zip") == true }
+            .sortedByDescending { it.lastModified() }
+            .take(MAX_SCAN_FILES)
+            .mapNotNull(::sniffBackup)
+        FolderScan(imports = scanImports(files), backups = backups)
+    }
+
+    /**
+     * An Avex backup, recognised by its first bytes rather than its name: the password-protected
+     * container's magic, or a ZIP whose first entry is `database.db` (the backup writer always puts
+     * the database first). Anything else, including other apps' ZIPs, is not listed.
+     */
+    private fun sniffBackup(doc: DocumentFile): FoundBackup? {
+        val head = runCatching {
+            context.contentResolver.openInputStream(doc.uri)?.use { input ->
+                val buf = ByteArray(64)
+                var n = 0
+                while (n < buf.size) { val r = input.read(buf, n, buf.size - n); if (r < 0) break; n += r }
+                buf.copyOf(n)
+            }
+        }.getOrNull() ?: return null
+        val encrypted = backupHeadKind(head) ?: return null
+        return FoundBackup(doc.uri, doc.name ?: "backup.zip", doc.lastModified(), encrypted)
+    }
+
+    private suspend fun scanImports(files: List<DocumentFile>): List<FoundImport> {
         val assumeKg = settingsRepo.useKg.first()
-        val candidates = runCatching { tree.listFiles() }.getOrDefault(emptyArray())
-            .filter { it.isFile && it.name?.lowercase()?.let { n -> IMPORTABLE_EXTENSIONS.any(n::endsWith) } == true }
+        val candidates = files
+            .filter { it.name?.lowercase()?.let { n -> IMPORTABLE_EXTENSIONS.any(n::endsWith) } == true }
             .sortedByDescending { it.lastModified() }
             .take(MAX_SCAN_FILES)
         val found = ArrayList<FoundImport>()
@@ -189,7 +228,38 @@ class WorkoutImportRepository @Inject constructor(
             scanCache[key] = stamp to entry
             entry?.let(found::add)
         }
-        found
+        return found
+    }
+
+    /**
+     * Make sure `Download/Avex` exists, and say whether it does.
+     *
+     * Android 11 and later refuse to grant an app the Downloads folder itself ("Can't use this
+     * folder"), so pointing the picker there, as the grant used to, led straight into a dead end.
+     * Any folder INSIDE Downloads can be granted, so Avex makes one and opens the picker in it: one
+     * tap on "Use this folder". Created through MediaStore, which needs no storage permission on
+     * Android 10+, by saving a short note that says what the folder is for. Older versions can
+     * grant Downloads directly and are left alone.
+     */
+    suspend fun ensureInboxFolder(): Boolean = withContext(Dispatchers.IO) {
+        if (android.os.Build.VERSION.SDK_INT < 29) return@withContext false
+        val downloads = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        if (runCatching { java.io.File(downloads, INBOX_FOLDER).isDirectory }.getOrDefault(false)) return@withContext true
+        runCatching {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, INBOX_NOTE_NAME)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                put(
+                    android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                    "${android.os.Environment.DIRECTORY_DOWNLOADS}/$INBOX_FOLDER"
+                )
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: return@runCatching false
+            resolver.openOutputStream(uri)?.use { it.write(INBOX_NOTE.toByteArray()) }
+            true
+        }.getOrDefault(false)
     }
 
     /**
@@ -892,6 +962,16 @@ class WorkoutImportRepository @Inject constructor(
         private val IMPORTABLE_EXTENSIONS = listOf(".csv", ".json", ".txt")
         /** Cap folder-scan work; Downloads can be large and we only need the recent exports. */
         private const val MAX_SCAN_FILES = 60
+        /** Folder levels searched below a scanned folder: `Download/Avex/Strong/2026` is depth 2. */
+        private const val MAX_SCAN_DEPTH = 2
+        /** Folders visited per scan at most, across every level. */
+        private const val MAX_SCAN_DIRS = 40
+        /** The grantable folder Avex makes inside Downloads; see [ensureInboxFolder]. */
+        const val INBOX_FOLDER = "Avex"
+        private const val INBOX_NOTE_NAME = "About this folder.txt"
+        private const val INBOX_NOTE =
+            "Save workout exports (Strong, Hevy, FitNotes, CSV) and Avex backups in this folder.\n" +
+                "Avex lists them when you open Import. Subfolders are checked too.\n"
         /** Highest `exportVersion` this build knows how to read. Bump it with the export format. */
         private const val SUPPORTED_EXPORT_VERSION = 1
         /** How much of a file the folder scan reads to decide what it is. Every importer detects
@@ -907,6 +987,55 @@ class WorkoutImportRepository @Inject constructor(
         private const val QUARTER_HOUR_MS = 15L * 60 * 1000
     }
 }
+
+/**
+ * Files under [root], down to [maxDepth] folders deep. Hidden folders (`.thumbnails`,
+ * `.trashed-…`) are skipped, and the walk stops after [maxDirs] folders so a tree with thousands
+ * of them cannot stall the Import screen.
+ */
+internal fun listFilesDeep(root: DocumentFile, maxDepth: Int, maxDirs: Int): List<DocumentFile> {
+    val out = ArrayList<DocumentFile>()
+    var level = listOf(root)
+    var visited = 0
+    for (depth in 0..maxDepth) {
+        val nextLevel = ArrayList<DocumentFile>()
+        for (dir in level) {
+            if (visited++ >= maxDirs) return out
+            val children = runCatching { dir.listFiles() }.getOrDefault(emptyArray())
+            for (child in children) {
+                when {
+                    child.isFile -> out += child
+                    child.isDirectory && child.name?.startsWith(".") == false -> nextLevel += child
+                }
+            }
+        }
+        level = nextLevel
+    }
+    return out
+}
+
+/** The backup ZIP's first entry; mirrors BackupRepository's ZIP_DB_ENTRY. */
+private const val BACKUP_DB_ENTRY = "database.db"
+
+/**
+ * What a file's first bytes say about it as an Avex backup: true for a password-protected one,
+ * false for a plain one (a ZIP whose first entry is `database.db`), null for anything else.
+ */
+internal fun backupHeadKind(head: ByteArray): Boolean? {
+    if (com.forge.app.core.crypto.BackupCrypto.hasMagic(head)) return true
+    if (head.size < 30 || head[0] != 0x50.toByte() || head[1] != 0x4B.toByte() ||
+        head[2] != 0x03.toByte() || head[3] != 0x04.toByte()
+    ) return null
+    val nameLen = (head[26].toInt() and 0xFF) or ((head[27].toInt() and 0xFF) shl 8)
+    if (nameLen != BACKUP_DB_ENTRY.length || head.size < 30 + nameLen) return null
+    return if (String(head, 30, nameLen, Charsets.US_ASCII) == BACKUP_DB_ENTRY) false else null
+}
+
+/** What one folder scan found: exports to import and Avex backups to restore. */
+data class FolderScan(val imports: List<FoundImport>, val backups: List<FoundBackup>)
+
+/** An Avex backup found by [WorkoutImportRepository.scanFolders], ready to restore with one tap. */
+data class FoundBackup(val uri: Uri, val name: String, val lastModified: Long, val passwordProtected: Boolean)
 
 /** A gym-app export found by [WorkoutImportRepository.scanFolder], ready to import with one tap. */
 data class FoundImport(

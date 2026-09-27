@@ -41,6 +41,11 @@ and sits behind the gallery lock. A restore that meets a protected backup asks t
 Data's auto-restore link names how many copies are kept (three, a day or more apart); with more
 than one it opens a picker of whole-row dates, newest labelled, before the usual confirm.
 
+**Import → found files** (2026-09-27): "Find my exports" makes `Download/Avex` and opens the picker
+in it, because Android 11+ refuses to grant Downloads itself. The scan covers the import folder AND
+the backup folder, two levels deep, and lists Avex backup ZIPs (sniffed by bytes, not name) as
+`RESTORE` rows under the `IMPORT` ones; a restore row goes through the usual restore confirm.
+
 ### Notifications — `ui/notifications`
 
 The one feed for everything that used to be a page-level banner, reached from any screen's bell.

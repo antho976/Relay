@@ -198,6 +198,10 @@ object BackupCrypto {
 
     // ── Format sniffing ─────────────────────────────────────────────────────────────────────────
 
+    /** True when [head], a file's first bytes, starts with this container's magic. */
+    fun hasMagic(head: ByteArray): Boolean =
+        head.size >= MAGIC.size && head.copyOf(MAGIC.size).contentEquals(MAGIC)
+
     /** True when [file] starts with this container's magic, whatever state the rest is in. */
     fun isEncrypted(file: File): Boolean = runCatching {
         file.inputStream().use { ins ->

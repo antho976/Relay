@@ -672,14 +672,43 @@ class SettingsViewModel @Inject constructor(
         scanImportFolder()
     }
 
-    /** Scan the remembered folder for importable exports (no-op when no folder is granted yet). */
+    /** Avex backups found alongside the exports, newest first: offered as one-tap restores. */
+    private val _foundBackups =
+        MutableStateFlow<List<com.forge.app.data.importer.FoundBackup>>(emptyList())
+    val foundBackups: StateFlow<List<com.forge.app.data.importer.FoundBackup>> = _foundBackups.asStateFlow()
+
+    /**
+     * Scan every folder Avex may read for exports and backups: the import folder, plus the backup
+     * folder the user already granted for auto-backup (no-op when neither is set).
+     */
     fun scanImportFolder() = viewModelScope.launch {
-        val folder = settingsRepo.importFolderUri.first()
-            ?: run { _foundImports.value = emptyList(); return@launch }
+        val folders = listOfNotNull(settingsRepo.importFolderUri.first(), settingsRepo.backupFolderUri.first())
+            .map { android.net.Uri.parse(it) }
+        if (folders.isEmpty()) {
+            _foundImports.value = emptyList()
+            _foundBackups.value = emptyList()
+            return@launch
+        }
         _scanningImports.value = true
-        _foundImports.value =
-            runCatching { importRepo.scanFolder(android.net.Uri.parse(folder)) }.getOrDefault(emptyList())
+        val scan = runCatching { importRepo.scanFolders(folders) }
+            .getOrDefault(com.forge.app.data.importer.FolderScan(emptyList(), emptyList()))
+        _foundImports.value = scan.imports
+        _foundBackups.value = scan.backups
         _scanningImports.value = false
+    }
+
+    /**
+     * Make `Download/Avex` before the folder picker opens, then [launch] the picker there (or at
+     * its old Downloads start when the folder can't be made, or isn't needed before Android 10).
+     */
+    fun openImportFolderPicker(launch: (android.net.Uri?) -> Unit) = viewModelScope.launch {
+        val inbox = runCatching { importRepo.ensureInboxFolder() }.getOrDefault(false)
+        launch(
+            if (inbox) android.net.Uri.parse(
+                "content://com.android.externalstorage.documents/document/primary%3ADownload%2F" +
+                    com.forge.app.data.importer.WorkoutImportRepository.INBOX_FOLDER
+            ) else null
+        )
     }
 
     // ── Complete DB backup & restore (the real safety net) ─────────────────────

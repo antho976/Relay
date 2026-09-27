@@ -348,9 +348,11 @@ fun SettingsScreen(
     if (showImportDialog) {
         ImportDialog(
             viewModel = viewModel,
-            onGrantFolder = { folderGrantLauncher.launch(null) },
+            onGrantFolder = { viewModel.openImportFolderPicker { start -> folderGrantLauncher.launch(start) } },
             onManualPick = launchImport,
             onImportFound = { viewModel.importData(it) },
+            // A found backup goes through the same confirm as one picked by hand.
+            onRestoreFound = { pendingRestoreUri = it },
             onDismiss = { showImportDialog = false }
         )
     }
@@ -480,11 +482,14 @@ private class OpenImportDocument : ActivityResultContracts.OpenDocument() {
         }
 }
 
-/** [ActivityResultContracts.OpenDocumentTree] that starts at Downloads, for the one-time folder grant. */
+/**
+ * [ActivityResultContracts.OpenDocumentTree] for the one-time folder grant. Starts at [input] when
+ * given (`Download/Avex`, which Android 11+ lets an app use), else at Downloads, which it does not.
+ */
 private class OpenDownloadsTree : ActivityResultContracts.OpenDocumentTree() {
     override fun createIntent(context: android.content.Context, input: android.net.Uri?): android.content.Intent =
         super.createIntent(context, input ?: DOWNLOADS_TREE_URI).apply {
-            putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, DOWNLOADS_TREE_URI)
+            putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, input ?: DOWNLOADS_TREE_URI)
         }
 }
 
