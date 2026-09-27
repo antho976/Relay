@@ -33,6 +33,12 @@ The bell replaced the `• Avex` wordmark on 2026-07-27; "Avex" now appears only
 privacy actions deep-link to that same page, so Android's rationale surface and the in-app policy
 cannot drift into separate copies.
 
+**Settings → Backup → PASSWORD** (2026-09-27, `SettingsBackupPassword.kt`): an opt-in toggle plus,
+once on, a `Backup password` row in the folder row's whole-row + `ConnectPill` shape (`Change`, or
+`Set` when the phone lost its key). Setting it is a small two-field dialog; turning it off confirms
+and sits behind the gallery lock. A restore that meets a protected backup asks through
+`RestorePasswordDialogHost` at the Settings root, so the prompt outlives the Data dialog.
+
 ### Notifications — `ui/notifications`
 
 The one feed for everything that used to be a page-level banner, reached from any screen's bell.

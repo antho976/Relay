@@ -132,6 +132,7 @@ class SettingsViewModel @Inject constructor(
     // the user had to dismiss. They now go to the app's ONE snackbar (§8), already rendered at the
     // root by SnackbarControllerHost — the same channel every other feature's Undo uses.
     private val snackbar: com.forge.app.ui.common.SnackbarController,
+    private val backupEncryption: com.forge.app.security.BackupEncryption,
 ) : ViewModel() {
 
     /**
@@ -707,7 +708,29 @@ class SettingsViewModel @Inject constructor(
      *  "avex_backup" with nothing in it isn't left in Downloads looking like a real backup. */
     fun discardBackupTarget(uri: android.net.Uri) = viewModelScope.launch { backupRepo.discardBackupTarget(uri) }
 
-    fun restoreDatabase(uri: android.net.Uri) = restore { backupRepo.restoreFromUri(uri) }
+    fun restoreDatabase(uri: android.net.Uri) = restore(RestoreSource.File(uri), password = null)
+
+    /** Where a restore reads from, kept so a password prompt can retry the same source. */
+    sealed interface RestoreSource {
+        data class File(val uri: android.net.Uri) : RestoreSource
+        data object AutoBackup : RestoreSource
+    }
+
+    /** A password-protected backup is waiting on its password. [wrong] after a failed try. */
+    data class RestorePasswordPrompt(val source: RestoreSource, val wrong: Boolean, val busy: Boolean)
+
+    private val _restorePasswordPrompt = MutableStateFlow<RestorePasswordPrompt?>(null)
+    val restorePasswordPrompt: StateFlow<RestorePasswordPrompt?> = _restorePasswordPrompt.asStateFlow()
+
+    /** Retry the waiting restore with [password]. The array is wiped once the attempt ends. */
+    fun submitRestorePassword(password: CharArray) {
+        val prompt = _restorePasswordPrompt.value ?: return password.fill('\u0000')
+        if (prompt.busy) return password.fill('\u0000')
+        _restorePasswordPrompt.value = prompt.copy(busy = true)
+        restore(prompt.source, password)
+    }
+
+    fun dismissRestorePassword() { _restorePasswordPrompt.value = null }
 
     /**
      * Run a restore and report it — and if the user leaves Settings before it finishes, undo it.
@@ -720,18 +743,35 @@ class SettingsViewModel @Inject constructor(
      * possibly days later, then replaced everything logged in between with the backup. A restore
      * the user walked away from is now discarded, and the cancellation is re-thrown.
      */
-    private fun restore(stage: suspend () -> RestoreOutcome) = viewModelScope.launch {
+    private fun restore(source: RestoreSource, password: CharArray?) = viewModelScope.launch {
         val outcome = try {
-            stage()
+            when (source) {
+                is RestoreSource.File -> backupRepo.restoreFromUri(source.uri, password)
+                RestoreSource.AutoBackup -> backupRepo.restoreFromAutoBackup(password)
+            }
         } catch (e: CancellationException) {
             withContext(NonCancellable) { backupRepo.discardPendingRestore() }
+            _restorePasswordPrompt.value = null
             throw e
         } catch (e: Exception) {
             RestoreOutcome.IO_ERROR
+        } finally {
+            password?.fill('\u0000')
         }
-        // MainActivity restarts on it, whichever screen the user is on by now (RestoreRestart).
-        if (outcome == RestoreOutcome.SUCCESS) RestoreRestart.request()
-        else _statusMessage.value = restoreFailureMessage(outcome)
+        // A protected backup asks for its password in a dialog, and a wrong one keeps the dialog
+        // open with the field marked, rather than closing it into a snackbar and a second pick.
+        when (outcome) {
+            RestoreOutcome.NEEDS_PASSWORD ->
+                _restorePasswordPrompt.value = RestorePasswordPrompt(source, wrong = false, busy = false)
+            RestoreOutcome.WRONG_PASSWORD ->
+                _restorePasswordPrompt.value = RestorePasswordPrompt(source, wrong = true, busy = false)
+            else -> {
+                _restorePasswordPrompt.value = null
+                // MainActivity restarts on it, whichever screen the user is on by now (RestoreRestart).
+                if (outcome == RestoreOutcome.SUCCESS) RestoreRestart.request()
+                else _statusMessage.value = restoreFailureMessage(outcome)
+            }
+        }
     }
 
     /** Plain-English reason for a failed restore, so the user knows what to do next (E6). */
@@ -751,6 +791,8 @@ class SettingsViewModel @Inject constructor(
                 "No auto-backup to restore yet."
             RestoreOutcome.IO_ERROR ->
                 "Couldn't read that file. Try again, or pick a different copy."
+            // Both open the password dialog instead of a message; see [restore].
+            RestoreOutcome.NEEDS_PASSWORD, RestoreOutcome.WRONG_PASSWORD -> ""
             RestoreOutcome.SUCCESS -> ""
         }
 
@@ -807,6 +849,7 @@ class SettingsViewModel @Inject constructor(
         _noBackupWarning.value = info.noBackup
         _restoreImpact.value = info.impact
         _dbSizeLabel.value = formatBytes(info.dbSize)
+        _backupPassword.value = withContext(Dispatchers.IO) { readBackupPasswordState() }
     }
 
     // ── Progress-photo info (tasks 3 + 4: factory-reset warning + data-dialog stake indicator) ──────
@@ -826,7 +869,60 @@ class SettingsViewModel @Inject constructor(
     }
 
     /** In-app restore from the weekly auto-backup slot — the recovery path for the local auto-backup (#86). */
-    fun restoreAutoBackup() = restore { backupRepo.restoreFromAutoBackup() }
+    fun restoreAutoBackup() = restore(RestoreSource.AutoBackup, password = null)
+
+    // ── Backup password (optional encryption) ─────────────────────────────────
+    enum class BackupPasswordState { OFF, ON, NEEDS_RESET }
+
+    private val _backupPassword = MutableStateFlow(BackupPasswordState.OFF)
+    val backupPassword: StateFlow<BackupPasswordState> = _backupPassword.asStateFlow()
+
+    /** True while a new password is being stretched into a key (about a second, on purpose). */
+    private val _backupPasswordBusy = MutableStateFlow(false)
+    val backupPasswordBusy: StateFlow<Boolean> = _backupPasswordBusy.asStateFlow()
+
+    private fun readBackupPasswordState(): BackupPasswordState =
+        when (val s = backupEncryption.state()) {
+            com.forge.app.security.BackupEncryption.State.Off -> BackupPasswordState.OFF
+            is com.forge.app.security.BackupEncryption.State.On -> { s.key.wipe(); BackupPasswordState.ON }
+            com.forge.app.security.BackupEncryption.State.Unavailable -> BackupPasswordState.NEEDS_RESET
+        }
+
+    /**
+     * Set or replace the backup password, then rewrite the backups this app keeps so the copies on
+     * disk are protected now rather than from next week. [password] is wiped here. Durable (M-22):
+     * leaving Settings mid-derivation must not leave the setting half-changed.
+     */
+    fun setBackupPassword(password: CharArray) = viewModelScope.launch {
+        if (_backupPasswordBusy.value) return@launch password.fill('\u0000')
+        _backupPasswordBusy.value = true
+        val ok = try {
+            withContext(NonCancellable) { runCatching { backupEncryption.setPassword(password) }.isSuccess }
+        } finally {
+            password.fill('\u0000')
+            _backupPasswordBusy.value = false
+        }
+        _backupPassword.value = withContext(Dispatchers.IO) { readBackupPasswordState() }
+        if (!ok) {
+            _statusMessage.value = "Couldn't set the backup password. Try again."
+            return@launch
+        }
+        // Re-seal the weekly slot and the folder copy under the new password. Skipped silently when
+        // the gallery lock is holding photos back; the weekly run protects them next time.
+        if (backupRepo.autoBackupSavedAtMs() != null && protectedSettings.canExportPhotos()) {
+            val folder = settingsRepo.backupFolderUri.first()?.let { android.net.Uri.parse(it) }
+            runCatching { backupRepo.autoBackup(folder) }
+            refreshAutoBackupInfo()
+        }
+        _statusMessage.value = "Backups are now password-protected."
+    }
+
+    /** Stop protecting new backups. Ones already made keep needing their password. */
+    fun clearBackupPassword() = write {
+        backupEncryption.clear()
+        _backupPassword.value = withContext(Dispatchers.IO) { readBackupPasswordState() }
+        _statusMessage.value = "New backups will be saved without a password."
+    }
 
     // ── Auto-backup config + manual "Back up now" (GYMAP-67) ───────────────────
     /** Whether the weekly auto-backup is on (default true) — the Backup page toggle. */

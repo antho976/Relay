@@ -358,6 +358,10 @@ fun SettingsScreen(
     // Import / backup / restore outcomes are transient lines on the app's ONE snackbar now (§12) —
     // they used to be two AlertDialogs that had to be dismissed to confirm something already done.
 
+    // A restore that found a password-protected backup asks for the password here, at the root, so
+    // it outlives the Data dialog the auto-backup restore was started from.
+    RestorePasswordDialogHost(viewModel)
+
     pendingRestoreUri?.let { uri ->
         AlertDialog(
             containerColor = MaterialTheme.colorScheme.surface,
