@@ -420,7 +420,7 @@ class MainActivity : FragmentActivity() {
                         // The rest are cosmetic: a wrong theme for one frame is not a privacy event.
                         amoledMode = false,
                         appIcon = "",
-                        themedLaunchIntro = true
+                        themedLaunchIntro = false
                     )
                 }
         }

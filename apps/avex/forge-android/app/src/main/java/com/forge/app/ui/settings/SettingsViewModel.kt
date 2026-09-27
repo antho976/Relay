@@ -70,8 +70,8 @@ data class SettingsUiState(
     val accentEnabled: Boolean = true,
     /** Selected launcher-icon enum name; "" = default emblem. Rings the current choice in the picker. */
     val appIconKey: String = "",
-    /** Theme the cold-launch Avex intro to the chosen app icon (default on); off = plain B&W Avex. */
-    val themedLaunchIntro: Boolean = true,
+    /** Theme the cold-launch Avex intro to the chosen app icon (default off); off = plain B&W Avex. */
+    val themedLaunchIntro: Boolean = false,
     val timezone: String = java.util.TimeZone.getDefault().id,
     /** IANA zone ids the user has starred — pinned to the top of the timezone picker. */
     val favoriteTimezones: Set<String> = emptySet(),
