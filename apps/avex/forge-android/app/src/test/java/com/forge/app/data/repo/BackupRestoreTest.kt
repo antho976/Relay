@@ -66,7 +66,8 @@ class BackupRestoreTest {
         avatarRepo = AvatarRepository(context, settings),
         grants = PersistedTreeGrants(context, settings),
         db = db,
-        clock = clock
+        clock = clock,
+        encryption = com.forge.app.security.BackupEncryption(context, com.forge.app.security.FakeDeviceKeyWrapper())
     )
 
     private val pendingDb get() = File(context.filesDir, "pending_restore.db")

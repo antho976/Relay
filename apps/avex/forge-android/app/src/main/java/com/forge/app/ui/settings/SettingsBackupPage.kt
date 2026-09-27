@@ -95,6 +95,7 @@ internal fun BackupPage(vm: SettingsViewModel, modifier: Modifier = Modifier) {
             }
             ConnectPill(if (folderUri == null) "Choose" else "Change")
         }
+        BackupPasswordSection(vm, galleryLocked = state.galleryLockEnabled)
         // Page actions, grouped at the END (§8) — "Back up now" is always available (a manual backup
         // works with auto-backup off), and dropping the folder joins them as the outlined sidekick
         // rather than sitting mid-scroll as a bare text link, which is where it used to live.

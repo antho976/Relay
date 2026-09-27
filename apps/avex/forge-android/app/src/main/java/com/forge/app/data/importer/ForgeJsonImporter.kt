@@ -87,8 +87,13 @@ class ForgeJsonImporter : GymImporter {
                 val sets = ArrayList<ImportedSet>(setArr.length())
                 for (k in 0 until setArr.length()) {
                     val set = setArr.optJSONObject(k) ?: continue
-                    val weightLb = set.optDouble("weightLb", 0.0).takeIf { it > 0.0 }
-                    val reps = set.optInt("reps", 0)
+                    // optDouble reads a string "Infinity", "NaN" or "1e999" as a non-finite
+                    // double, and optInt turns a huge number into Int.MAX_VALUE or a wrapped
+                    // negative. Non-finite is dropped here; the 2000 lb ceiling is left to
+                    // ImportBounds, which clears weightText along with a clamped weight and would
+                    // not see the clamp if it happened first.
+                    val weightLb = set.optDouble("weightLb", 0.0).takeIf { it.isFinite() && it > 0.0 }
+                    val reps = ImportBounds.reps(set.optInt("reps", 0))
                     val rpe = set.optDouble("rpe", 0.0).takeIf { it in 1.0..10.0 }
                     // Read back everything that changes what the set means. Older exports simply
                     // don't carry these keys and fall through to the same defaults as before.
@@ -180,14 +185,18 @@ class ForgeJsonImporter : GymImporter {
                     ImportedCardio(
                         dateMs = date,
                         type = type,
-                        durationMin = c.optInt("durationMin", 0),
-                        distanceKm = c.optDouble("distanceKm", 0.0).takeIf { it > 0.0 },
+                        // Bounded, not trusted: a NaN or Infinity distance reaches every cardio
+                        // total and trophy, and optDouble reads both from a string. An implausible
+                        // measure is dropped to null (the entry itself is still real); the
+                        // duration is clamped because the entry needs one.
+                        durationMin = ImportBounds.cardioMinutes(c.optInt("durationMin", 0)),
+                        distanceKm = ImportBounds.distanceKm(c.optDouble("distanceKm", 0.0)),
                         effort = c.optString("effort").ifBlank { null },
                         restReason = c.optString("restReason").ifBlank { null },
                         note = c.optString("note").ifBlank { null },
-                        inclinePct = c.optDouble("inclinePct", 0.0).takeIf { it > 0.0 },
+                        inclinePct = ImportBounds.inclinePct(c.optDouble("inclinePct", 0.0)),
                         laps = c.optInt("laps", 0).takeIf { it > 0 },
-                        elevationM = c.optDouble("elevationM", 0.0).takeIf { it != 0.0 },
+                        elevationM = ImportBounds.elevationM(c.optDouble("elevationM", 0.0)),
                         intervalCount = c.optInt("intervalCount", 0).takeIf { it > 0 },
                         hrZone = c.optString("hrZone").ifBlank { null },
                         conditions = c.optString("conditions").ifBlank { null }
@@ -205,7 +214,7 @@ class ForgeJsonImporter : GymImporter {
                     ImportedCoachGoal(
                         kind = kind,
                         targetKey = g.optString("targetKey"),
-                        targetValue = g.optDouble("targetValue", Double.NaN).takeIf { !it.isNaN() },
+                        targetValue = g.optDouble("targetValue", Double.NaN).takeIf { it.isFinite() },
                         priority = g.optInt("priority", 0),
                         createdAt = g.optLong("createdAt", 0L),
                         completedAt = g.optLong("completedAt", 0L).takeIf { it > 0L },

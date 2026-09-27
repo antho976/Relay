@@ -27,6 +27,7 @@ class SessionDetailViewModel @Inject constructor(
     private val statsRepo: StatsRepository,
     private val backupRepo: BackupRepository,
     private val workoutRepo: WorkoutRepository,
+    private val snackbar: com.forge.app.ui.common.SnackbarController,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -80,8 +81,15 @@ class SessionDetailViewModel @Inject constructor(
     /** Write this session's data to a JSON file, then surface its path so the screen can share it. */
     fun exportSession() {
         if (sessionId < 0 || exportJob?.isActive == true) return
+        // Classified like the Settings exports: a full disk used to throw out of this launch and
+        // take the app down with it. Cancellation still propagates (see attemptExport).
         exportJob = viewModelScope.launch {
-            backupRepo.exportSessionJson(sessionId)?.let { _exportPath.value = it.absolutePath }
+            when (val r = com.forge.app.ui.settings.attemptExport { backupRepo.exportSessionJson(sessionId) }) {
+                is com.forge.app.ui.settings.ExportAttempt.Written -> _exportPath.value = r.file.absolutePath
+                com.forge.app.ui.settings.ExportAttempt.NothingToExport -> Unit
+                com.forge.app.ui.settings.ExportAttempt.Failed ->
+                    snackbar.show("Export failed. Check your free storage and try again.")
+            }
         }
     }
 

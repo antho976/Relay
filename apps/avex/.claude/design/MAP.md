@@ -33,6 +33,19 @@ The bell replaced the `• Avex` wordmark on 2026-07-27; "Avex" now appears only
 privacy actions deep-link to that same page, so Android's rationale surface and the in-app policy
 cannot drift into separate copies.
 
+**Settings → Backup → PASSWORD** (2026-09-27, `SettingsBackupPassword.kt`): an opt-in toggle plus,
+once on, a `Backup password` row in the folder row's whole-row + `ConnectPill` shape (`Change`, or
+`Set` when the phone lost its key). Setting it is a small two-field dialog; turning it off confirms
+and sits behind the gallery lock. A restore that meets a protected backup asks through
+`RestorePasswordDialogHost` at the Settings root, so the prompt outlives the Data dialog.
+Data's auto-restore link names how many copies are kept (three, a day or more apart); with more
+than one it opens a picker of whole-row dates, newest labelled, before the usual confirm.
+
+**Import → found files** (2026-09-27): "Find my exports" makes `Download/Avex` and opens the picker
+in it, because Android 11+ refuses to grant Downloads itself. The scan covers the import folder AND
+the backup folder, two levels deep, and lists Avex backup ZIPs (sniffed by bytes, not name) as
+`RESTORE` rows under the `IMPORT` ones; a restore row goes through the usual restore confirm.
+
 ### Notifications — `ui/notifications`
 
 The one feed for everything that used to be a page-level banner, reached from any screen's bell.

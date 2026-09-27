@@ -43,6 +43,9 @@
     <!-- The auto-backup slot itself: a zip of the database, already covered by the database entry
          above. Backing it up doubles the payload for no recovery benefit. -->
     <exclude domain="file" path="forge_auto_backup.zip" />
+    <!-- Older kept copies (BackupRepository.BACKUP_GENERATIONS). -->
+    <exclude domain="file" path="forge_auto_backup.1.zip" />
+    <exclude domain="file" path="forge_auto_backup.2.zip" />
     <exclude domain="file" path="forge_auto_backup.zip.tmp" />
     <exclude domain="file" path="forge_auto_backup.json" />
 </full-backup-content>

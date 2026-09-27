@@ -348,15 +348,21 @@ fun SettingsScreen(
     if (showImportDialog) {
         ImportDialog(
             viewModel = viewModel,
-            onGrantFolder = { folderGrantLauncher.launch(null) },
+            onGrantFolder = { viewModel.openImportFolderPicker { start -> folderGrantLauncher.launch(start) } },
             onManualPick = launchImport,
             onImportFound = { viewModel.importData(it) },
+            // A found backup goes through the same confirm as one picked by hand.
+            onRestoreFound = { pendingRestoreUri = it },
             onDismiss = { showImportDialog = false }
         )
     }
 
     // Import / backup / restore outcomes are transient lines on the app's ONE snackbar now (§12) —
     // they used to be two AlertDialogs that had to be dismissed to confirm something already done.
+
+    // A restore that found a password-protected backup asks for the password here, at the root, so
+    // it outlives the Data dialog the auto-backup restore was started from.
+    RestorePasswordDialogHost(viewModel)
 
     pendingRestoreUri?.let { uri ->
         AlertDialog(
@@ -476,11 +482,14 @@ private class OpenImportDocument : ActivityResultContracts.OpenDocument() {
         }
 }
 
-/** [ActivityResultContracts.OpenDocumentTree] that starts at Downloads, for the one-time folder grant. */
+/**
+ * [ActivityResultContracts.OpenDocumentTree] for the one-time folder grant. Starts at [input] when
+ * given (`Download/Avex`, which Android 11+ lets an app use), else at Downloads, which it does not.
+ */
 private class OpenDownloadsTree : ActivityResultContracts.OpenDocumentTree() {
     override fun createIntent(context: android.content.Context, input: android.net.Uri?): android.content.Intent =
         super.createIntent(context, input ?: DOWNLOADS_TREE_URI).apply {
-            putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, DOWNLOADS_TREE_URI)
+            putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, input ?: DOWNLOADS_TREE_URI)
         }
 }
 

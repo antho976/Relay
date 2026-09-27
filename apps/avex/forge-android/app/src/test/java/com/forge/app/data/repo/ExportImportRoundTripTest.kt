@@ -64,7 +64,8 @@ class ExportImportRoundTripTest {
         avatarRepo = AvatarRepository(context, settings),
         grants = PersistedTreeGrants(context, settings),
         db = db,
-        clock = clock
+        clock = clock,
+        encryption = com.forge.app.security.BackupEncryption(context, com.forge.app.security.FakeDeviceKeyWrapper())
     )
 
     private fun importerOf(db: ForgeDatabase) = WorkoutImportRepository(

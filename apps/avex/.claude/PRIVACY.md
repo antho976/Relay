@@ -1,6 +1,6 @@
 # Avex Privacy Policy
 
-_Last updated: September 26, 2026_
+_Last updated: September 27, 2026_
 
 Avex is an offline, single-user fitness tracker. It has no account, servers, analytics,
 advertising, or `INTERNET` permission. Your data stays on your devices unless you export or
@@ -12,9 +12,17 @@ Avex stores workouts, sets, cardio, programs, goals, notes, moods, trophies, per
 body measurements, settings, coach history, Academy progress, crash logs, your profile, avatar,
 and progress photos in private app storage.
 
-With auto-backup on, Avex also keeps a weekly backup copy of this data, including progress photos,
-in the same private storage. Files you export are written there too before you choose where to
+With auto-backup on, Avex also keeps up to three weekly backup copies of this data, including
+progress photos, in the same private storage (and in the backup folder, if you chose one). Files you export are written there too before you choose where to
 send them.
+
+You can set an optional backup password in Settings. Backups made with it are encrypted
+(AES-256-GCM, with a key derived from your password using PBKDF2-HMAC-SHA256), so a backup file
+can only be opened with that password. Avex does not store the password itself. It keeps a key
+derived from it, protected by your phone's hardware keystore, so weekly backups can be encrypted
+without asking. If you forget the password, backups made with it cannot be opened, and Avex
+cannot recover them. Spreadsheet (CSV), JSON, and PDF exports are not encrypted, because they
+are meant to be opened in other apps.
 
 ## Health Connect
 
@@ -75,7 +83,7 @@ Layer. Avex does not send that data to an Avex or Quiet Software server.
 
 Data remains on your device until you delete it, reset Avex, clear app storage, or uninstall. You
 can delete individual records in the app. Factory reset in Settings erases all Avex data stored in
-the app, including its backup copy, exports, and crash logs.
+the app, including its backup copies, exports, and crash logs.
 
 Backups or exports you saved to a folder you picked, such as Downloads, a cloud drive, or the
 auto-backup folder, are outside the app and are not erased by a factory reset or an uninstall.

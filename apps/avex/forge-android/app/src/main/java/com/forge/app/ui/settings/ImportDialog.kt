@@ -36,6 +36,7 @@ internal fun ImportDialog(
     onGrantFolder: () -> Unit,
     onManualPick: () -> Unit,
     onImportFound: (android.net.Uri) -> Unit,
+    onRestoreFound: (android.net.Uri) -> Unit,
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -48,6 +49,7 @@ internal fun ImportDialog(
         val granted by viewModel.importFolderGranted.collectAsState()
         val scanning by viewModel.scanningImports.collectAsState()
         val found by viewModel.foundImports.collectAsState()
+        val backups by viewModel.foundBackups.collectAsState()
 
         // Re-scan whenever the sheet opens with access already granted (new exports may have landed).
         LaunchedEffect(granted) { if (granted) viewModel.scanImportFolder() }
@@ -73,7 +75,7 @@ internal fun ImportDialog(
                         SettingsOutlineAction("Find my exports") { onGrantFolder() }
                     }
                     SettingsExplainer(
-                        "Point Avex at your Downloads folder once; it lists the exports it finds there.",
+                        "Opens Download/Avex. Tap Use this folder, then save exports there.",
                         Modifier.padding(horizontal = SETTINGS_GUTTER)
                     )
                 }
@@ -81,12 +83,19 @@ internal fun ImportDialog(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     when {
                         scanning -> SettingsExplainer("Scanning…", Modifier.padding(horizontal = SETTINGS_GUTTER))
-                        found.isEmpty() -> SettingsExplainer(
-                            "No exports found in that folder.",
+                        found.isEmpty() && backups.isEmpty() -> SettingsExplainer(
+                            "Nothing found yet. Save exports into that folder or one inside it.",
                             Modifier.padding(horizontal = SETTINGS_GUTTER)
                         )
-                        else -> found.forEach { file ->
-                            FoundFileRow(file, onBg, muted) { onImportFound(file.uri); onDismiss() }
+                        else -> {
+                            found.forEach { file ->
+                                FoundFileRow(file, onBg, muted) { onImportFound(file.uri); onDismiss() }
+                            }
+                            // Backups replace everything rather than adding to it, so they say
+                            // RESTORE and go through the usual confirm, never a one-tap swap.
+                            backups.forEach { backup ->
+                                FoundBackupRow(backup, onBg, muted) { onRestoreFound(backup.uri); onDismiss() }
+                            }
                         }
                     }
                     // §8 ③ is the mono accent `action →`, not an accent-coloured sentence (§14).
@@ -134,13 +143,47 @@ private fun FoundFileRow(
         Column(verticalArrangement = Arrangement.spacedBy(1.dp), modifier = Modifier.padding(end = 12.dp)) {
             // No maxLines: a file NAME is user content and wraps rather than truncating (§14).
             Text(file.name, style = MaterialTheme.typography.bodyMedium, color = onBg)
-            Text(
-                // What the file HOLDS, not just its workout count (L-01): a bodyweight CSV carries
-                // no workouts at all, and describing it as "0 workouts" is why it read as empty.
-                "${foundImportSummary(file)} · ${formatShortDate(file.lastModified)}",
-                style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
-            )
+            // What the file HOLDS, not just its workout count (L-01): a bodyweight CSV carries
+            // no workouts at all, and describing it as "0 workouts" is why it read as empty.
+            FoundMeta("${foundImportSummary(file)} · ${formatShortDate(file.lastModified)}", muted)
         }
         Text("IMPORT", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.sp)
     }
+}
+
+/** One Avex backup found in a scanned folder: filename + "Avex backup · date", tap to restore. */
+@Composable
+private fun FoundBackupRow(
+    backup: com.forge.app.data.importer.FoundBackup,
+    onBg: androidx.compose.ui.graphics.Color,
+    muted: androidx.compose.ui.graphics.Color,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickableLabeled("Restore ${backup.name}", onClick = onClick)
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp), modifier = Modifier.padding(end = 12.dp)) {
+            Text(backup.name, style = MaterialTheme.typography.bodyMedium, color = onBg)
+            FoundMeta(
+                buildString {
+                    append("Avex backup")
+                    if (backup.passwordProtected) append(" · password")
+                    append(" · ${formatShortDate(backup.lastModified)}")
+                },
+                muted
+            )
+        }
+        Text("RESTORE", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.sp)
+    }
+}
+
+/** A found file's caption line: §6's sanctioned 9sp figure-caption size, shared by both row kinds. */
+@Composable
+private fun FoundMeta(text: String, muted: androidx.compose.ui.graphics.Color) {
+    Text(text, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
 }

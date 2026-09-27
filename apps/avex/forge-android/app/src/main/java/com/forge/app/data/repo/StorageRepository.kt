@@ -46,7 +46,9 @@ class StorageRepository @Inject constructor(
         val files = context.filesDir
         val photos = dirSize(photoRepo.dir) + (avatarRepo.file.takeIf { it.exists() }?.length() ?: 0L)
         val database = backupRepo.dbSizeBytes()
-        val backup = File(files, AUTO_BACKUP_NAME).takeIf { it.exists() }?.length() ?: 0L
+        // Every kept auto-backup copy, not only the newest.
+        val backup = (0 until BackupRepository.BACKUP_GENERATIONS)
+            .sumOf { g -> File(files, BackupRepository.generationName(g)).takeIf { it.exists() }?.length() ?: 0L }
         val exports = dirSize(File(files, com.forge.app.core.io.EXPORTS_DIR))
         val cache = dirSize(context.cacheDir)
         val categories = listOf(
@@ -67,10 +69,5 @@ class StorageRepository @Inject constructor(
         val before = dirSize(context.cacheDir)
         context.cacheDir.listFiles()?.forEach { runCatching { it.deleteRecursively() } }
         (before - dirSize(context.cacheDir)).coerceAtLeast(0L)
-    }
-
-    private companion object {
-        // Kept in sync with BackupRepository.AUTO_BACKUP_NAME (its constant is private; this is a leaf read).
-        const val AUTO_BACKUP_NAME = "forge_auto_backup.zip"
     }
 }
