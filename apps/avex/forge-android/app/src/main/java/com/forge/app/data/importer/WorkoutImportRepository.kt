@@ -47,7 +47,10 @@ class WorkoutImportRepository @Inject constructor(
     private val coachGoalDao: com.forge.app.data.db.dao.CoachGoalDao,
     private val bodyweightDao: com.forge.app.data.db.dao.BodyweightDao,
     private val settingsRepo: SettingsRepository,
-    private val grants: com.forge.app.data.repo.PersistedTreeGrants
+    private val grants: com.forge.app.data.repo.PersistedTreeGrants,
+    // Defaulted so a test or caller that predates it still builds; Hilt always injects the bound
+    // Clock (Dagger reads the full constructor and ignores Kotlin defaults).
+    private val clock: com.forge.app.core.time.Clock = com.forge.app.core.time.SystemClock()
 ) {
     /** uri → (lastModified, what the scan concluded). Bounded by [MAX_SCAN_FILES] per folder. */
     private val scanCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, FoundImport?>>()
@@ -83,13 +86,22 @@ class WorkoutImportRepository @Inject constructor(
         // so a power user's multi-year export that couldn't fit in memory used to be reported as "No
         // new workouts found in that file" — they concluded the export was empty and gave up. A
         // parser that throws on the file is not an empty file either, and says so.
-        val parsed = try {
+        //
+        // org.json parses recursively, so a few megabytes of "[[[[" nest deeper than the thread's
+        // stack. That StackOverflowError is an Error, not an Exception, and escaped import()
+        // entirely. It is a malformed file, and is reported as one.
+        val raw = try {
             importer.read(text, assumeKg)
         } catch (e: OutOfMemoryError) {
             return@withContext ImportResult.TooLarge
+        } catch (e: StackOverflowError) {
+            return@withContext ImportResult.ParseFailed(importer.source)
         } catch (e: Exception) {
             return@withContext ImportResult.ParseFailed(importer.source)
         }
+        // Every source's values bounded, and out-of-range dates counted as skipped rows, before
+        // anything below (the duplicate guard included) looks at them. See ImportBounds.
+        val parsed = ImportBounds.apply(raw, clock.nowMs())
         val sessions = parsed.sessions.filter { it.exercises.isNotEmpty() }
         // Cardio and coach goals are carried by our own export and used to be read by nobody, so a
         // JSON migration lost them all silently. A file with no workouts but 400 cardio entries is
@@ -148,13 +160,19 @@ class WorkoutImportRepository @Inject constructor(
             // file held, so a bodyweight CSV — which returns its data through parseExtras by
             // design — was cached as "nothing here", and so was a cardio- or goals-only Avex JSON.
             // The same file picked directly imported perfectly, which is what made it a quiet one.
-            val parsed = try {
+            //
+            // Bounded the same way import() bounds it, so the count shown is the count imported.
+            val raw = try {
                 importer.read(text, assumeKg)
             } catch (e: OutOfMemoryError) {
+                ParsedImport(emptyList())
+            } catch (e: StackOverflowError) {
+                // Pathologically nested JSON: skip this file, not the rest of the folder.
                 ParsedImport(emptyList())
             } catch (e: Exception) {
                 ParsedImport(emptyList())
             }
+            val parsed = ImportBounds.apply(raw, clock.nowMs())
             val count = parsed.sessions.count { it.exercises.isNotEmpty() }
             val extras = parsed.extras
             val entry = if (count == 0 && extras.isEmpty) null
@@ -240,7 +258,12 @@ class WorkoutImportRepository @Inject constructor(
         // per run however many incoming workouts share its window.
         val storedIdentities = HashMap<Long, WorkoutIdentity?>()
 
-        db.withTransaction {
+        // ONE transaction for workouts and extras. They used to commit separately, so a failure
+        // writing cardio left every workout committed while the user was told the file could not be
+        // read, and re-importing it then reported them as duplicates. insertExtras' own
+        // withTransaction joins this one. Nothing in here is file or Health Connect I/O: the file
+        // was read and parsed before insert() was called, so only DAO work holds the transaction.
+        val extrasWritten = db.withTransaction {
             for (session in sessions) {
                 val totalSets = session.exercises.sumOf { it.sets.size }
                 if (totalSets == 0) continue
@@ -248,9 +271,12 @@ class WorkoutImportRepository @Inject constructor(
                 // Denormalised volume from lb weights, matching how a real finished session is
                 // stamped — including VolumeCalculator's exclusion of timed holds, whose reps is a
                 // duration, not a count.
+                // From the bounded values the sets are stored with (ImportBounds already applied
+                // them; repeated here because this total is written beside the sets and must
+                // never disagree with them).
                 val volumeLb = session.exercises.sumOf { ex ->
                     ex.sets.filter { it.durationSeconds == null }
-                        .sumOf { (it.weightLb ?: 0.0) * it.reps }
+                        .sumOf { (ImportBounds.weightLb(it.weightLb) ?: 0.0) * ImportBounds.reps(it.reps) }
                 }
 
                 // Duplicate guard (#GYMAP-17): a workout already logged at this start time WITH THE
@@ -367,8 +393,8 @@ class WorkoutImportRepository @Inject constructor(
                         sessionType = session.sessionType ?: "normal",
                         intensity = session.intensity ?: "normal",
                         isUntracked = session.isUntracked,
-                        tags = session.tags ?: "",
-                        journal = session.note ?: "",
+                        tags = ImportBounds.shortText(session.tags) ?: "",
+                        journal = ImportBounds.longText(session.note) ?: "",
                         activeSeconds = activeSec
                     )
                 )
@@ -391,9 +417,9 @@ class WorkoutImportRepository @Inject constructor(
                     .let { counts -> exerciseCount += counts.first; setCount += counts.second }
                 importedSessions++
             }
-        }
 
-        val extrasWritten = insertExtras(extras)
+            insertExtras(extras)
+        }
 
         // Everything in the file was already present — say so distinctly, not "imported 0".
         if (importedSessions == 0 && corrected == 0 && extrasWritten.none) return ImportResult.NothingToImport
@@ -545,7 +571,7 @@ class WorkoutImportRepository @Inject constructor(
     private fun dateKeyToMillis(dateKey: String): Long = runCatching {
         java.time.LocalDate.parse(dateKey)
             .atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
-    }.getOrDefault(System.currentTimeMillis())
+    }.getOrDefault(clock.nowMs())
 
     /** Canonical lb weight string (weightText is always stored in lb); "BW" for a bodyweight set. */
     private fun weightText(weightLb: Double?): String {
@@ -587,7 +613,9 @@ class WorkoutImportRepository @Inject constructor(
             ?: if (sourceFinished != null) {
                 // A real start/end pair from another app is the best estimate available; bound it
                 // only against nonsense, not down to a "plausible" session length.
-                ((finishedAt - startedAt) / 1000L).toInt().coerceIn(0, MAX_WALL_CLOCK_ACTIVE_SEC)
+                // Clamped as a Long first: toInt() of a delta past ~68 years wraps, and could
+                // wrap into range as a plausible-looking wrong number.
+                ((finishedAt - startedAt) / 1000L).coerceIn(0L, MAX_WALL_CLOCK_ACTIVE_SEC.toLong()).toInt()
             } else {
                 synthesisedSec
             }
@@ -649,11 +677,15 @@ class WorkoutImportRepository @Inject constructor(
                     // a stable synthetic id keyed on the name, kept readable via swappedName.
                     exerciseId = matchedId ?: syntheticCache.getOrPut(ex.name) { storedSyntheticId(ex.name) },
                     orderIndex = ex.orderIndex ?: orderIndex,
-                    swappedName = if (matchedId == null) ex.name else ex.swappedName,
+                    // Names are already capped by ImportBounds; capped again at the write so no
+                    // path into this row can store a label larger than a CursorWindow.
+                    swappedName = ImportBounds.shortText(if (matchedId == null) ex.name else ex.swappedName),
                     difficulty = effortRating(ex.difficulty),
                     skipped = ex.skipped,
-                    note = ex.note ?: carriedNotes[matchedId ?: syntheticCache[ex.name]]
-                        ?: carriedNotes["name:" + ex.name.trim().lowercase()],
+                    note = ImportBounds.longText(
+                        ex.note ?: carriedNotes[matchedId ?: syntheticCache[ex.name]]
+                            ?: carriedNotes["name:" + ex.name.trim().lowercase()]
+                    ),
                     // Our own export carries these; without them every imported PR read 0
                     // in recent PRs, trophies and milestones while the session said N.
                     wasPr = ex.wasPr,
@@ -665,14 +697,20 @@ class WorkoutImportRepository @Inject constructor(
             // export can carry thousands of sets.
             loggedSetDao.insertAll(
                 ex.sets.mapIndexed { setIndex, s ->
+                    // The logging path's clamps (sanitizeWeightLb / sanitizeReps), which this write
+                    // used to bypass. ImportBounds.apply has normally done this already; it is
+                    // idempotent, and this is the boundary the row actually crosses.
+                    val safeLb = ImportBounds.weightLb(s.weightLb)
                     LoggedSet(
                         loggedExerciseId = loggedExerciseId,
                         setIndex = setIndex,
                         // The source's own text when it has one (our JSON export does), so
-                        // "2 plates" survives the round trip instead of coming back "135".
-                        weightText = s.weightText ?: weightText(s.weightLb),
-                        weightLb = s.weightLb,
-                        reps = s.reps,
+                        // "2 plates" survives the round trip instead of coming back "135". A
+                        // clamped weight takes its text with it, as on the logging path.
+                        weightText = (if (safeLb == s.weightLb) ImportBounds.shortText(s.weightText) else null)
+                            ?: weightText(safeLb),
+                        weightLb = safeLb,
+                        reps = ImportBounds.reps(s.reps),
                         // The source's own per-set instant when it has one; otherwise the
                         // session's finish, as before. Stamping every set of a two-hour
                         // workout at the same millisecond loses the within-session ordering

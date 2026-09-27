@@ -212,8 +212,12 @@ object ImportParsing {
      * cardio-row guard, which reads `reps == null && (weight == null || weight == 0.0)`: a Strong
      * or Hevy distance row (Weight 0, Reps 0) passed it and became a phantom 0 x 0 set, inflating
      * set counts, streaks and trophies with sessions the user never lifted in.
+     *
+     * Non-finite is not a count either. `toDoubleOrNull` accepts "Infinity", "NaN" and "1e999", and
+     * `Infinity.toInt()` is Int.MAX_VALUE, a two-billion-rep set.
      */
-    fun parseReps(raw: String): Int? = raw.trim().toDoubleOrNull()?.toInt()?.takeIf { it > 0 }
+    fun parseReps(raw: String): Int? =
+        raw.trim().toDoubleOrNull()?.takeIf { it.isFinite() }?.toInt()?.takeIf { it > 0 }
 
     /**
      * Weight can be "", "0", "45.5", "45.5 kg", "100,5" (European exports use a comma decimal — see
@@ -225,6 +229,9 @@ object ImportParsing {
      * 1.3 lb, with the session's denormalised totalVolumeLb computed from it, so a 10,000 lb session
      * landed in history as a 10 lb one and dragged every volume chart down permanently. A comma
      * followed by exactly three digits, or more than one comma, is a thousands separator.
+     *
+     * Only a finite number is a weight: "Infinity", "NaN" and an overflowing "1e999" all parse as
+     * doubles, and one of them in a set's volume makes every total it reaches Infinity or NaN.
      */
     fun parseWeight(raw: String): Double? {
         val s = raw.trim().lowercase().removeSuffix("kg").removeSuffix("kgs").removeSuffix("lb")
@@ -241,7 +248,7 @@ object ImportParsing {
             // "1,250" / "12,345" / "1,234,567" — thousands separators.
             else -> s.replace(",", "")
         }
-        return normalised.toDoubleOrNull()
+        return normalised.toDoubleOrNull()?.takeIf { it.isFinite() }
     }
 
     /** A single comma with a 1-2 digit tail: the only shape a lone comma is a decimal point in. */

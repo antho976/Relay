@@ -1,5 +1,7 @@
 package com.forge.app.data.importer
 
+import java.time.LocalDate
+
 /**
  * Reads back the bodyweight CSV Avex itself writes (`BackupRepository.exportBodyweightCsv`).
  *
@@ -26,26 +28,45 @@ class ForgeBodyweightCsvImporter : GymImporter {
     /** No workouts in this file — the weigh-ins come back through [parseExtras]. */
     override fun parse(text: String, assumeKg: Boolean): List<ImportedSession> = emptyList()
 
-    override fun parseExtras(text: String, assumeKg: Boolean): ImportedExtras {
+    override fun parseExtras(text: String, assumeKg: Boolean): ImportedExtras = read(text, assumeKg).extras
+
+    /**
+     * Weigh-ins plus the rows that could not be one. Counted rather than dropped silently: a file
+     * of nothing but bad rows used to report "No new workouts found", which reads as empty.
+     */
+    override fun read(text: String, assumeKg: Boolean): ParsedImport {
         val rows = CsvParser.parse(text)
-        if (rows.size < 2) return ImportedExtras()
+        if (rows.size < 2) return ParsedImport(emptyList())
         val idx = ImportParsing.headerIndex(rows.first())
-        val dateCol = ImportParsing.findCol(idx, "date") ?: return ImportedExtras()
+        val dateCol = ImportParsing.findCol(idx, "date") ?: return ParsedImport(emptyList())
         val weightCol = ImportParsing.findCol(idx, "weightlb", "weight_lb", "weight")
-            ?: return ImportedExtras()
+            ?: return ParsedImport(emptyList())
 
         val out = ArrayList<ImportedBodyweight>(rows.size - 1)
+        var skipped = 0
         for (row in rows.drop(1)) {
             val dateKey = ImportParsing.at(row, dateCol).trim()
             // The export writes the entry's own `date_key`, which is already yyyy-MM-dd and is the
             // column the unique index is on — so keep it verbatim rather than re-deriving a day
             // from a parsed instant in whatever zone this device happens to be in.
-            if (!DATE_KEY.matches(dateKey)) continue
-            val weightLb = ImportParsing.parseWeight(ImportParsing.at(row, weightCol))
-            if (weightLb == null || weightLb <= 0.0) continue
+            //
+            // The shape alone admitted "2024-13-45", which then failed to parse wherever the key was
+            // read back as a date: the weigh-in chart, and the insert's own recordedAt, which fell
+            // back to the import instant for a day that does not exist.
+            if (!DATE_KEY.matches(dateKey) || runCatching { LocalDate.parse(dateKey) }.isFailure) {
+                skipped++
+                continue
+            }
+            // NaN failed `<= 0.0` and was kept; Infinity and a 10x typo passed too, and one of them
+            // flattens the weight chart's axis for good.
+            val weightLb = ImportBounds.bodyweightLb(ImportParsing.parseWeight(ImportParsing.at(row, weightCol)))
+            if (weightLb == null) {
+                skipped++
+                continue
+            }
             out.add(ImportedBodyweight(dateKey = dateKey, weightLb = weightLb))
         }
-        return ImportedExtras(bodyweight = out)
+        return ParsedImport(emptyList(), ImportedExtras(bodyweight = out), skipped)
     }
 
     private companion object {
