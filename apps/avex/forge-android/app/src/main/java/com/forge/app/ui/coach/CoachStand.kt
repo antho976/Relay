@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -21,8 +22,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.forge.app.data.repo.RecoverySignal
@@ -36,6 +42,9 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private const val LIFTS_SHOWN = 8
+
+/** One trend width for every lift row, live or forming, so the column holds. */
+private val LIFT_SPARK_W = 72.dp
 
 /**
  * WHERE YOU STAND — the coach's live reading, in one place.
@@ -69,11 +78,14 @@ internal fun LazyListScope.coachStand(
             // All gates met yet no score: the advisor mutes itself right after a deload.
             val muted = score == null &&
                 watch.sessionsLogged >= gate && watch.historyDays >= watch.recoveryWindowDays
-            StandGroup("Recovery load", c)
-            Spacer(Modifier.height(10.dp))
+            CoachSubhead("Recovery load", c)
+            Spacer(Modifier.height(8.dp))
             when {
                 score != null -> {
-                    CoachFatigueMeter(score, watch.fatigueThreshold, c)
+                    val threshold = watch.fatigueThreshold
+                    CoachFigure("$score of $threshold", recoveryVerdict(score, threshold), c)
+                    Spacer(Modifier.height(14.dp))
+                    CoachFatigueMeter(score, threshold, c)
                     val fired = watch.fatigueChecks.filter { it.fired }
                     if (fired.isNotEmpty()) {
                         Spacer(Modifier.height(12.dp))
@@ -119,25 +131,37 @@ internal fun LazyListScope.coachStand(
                     )
                 }
                 // Below a gate, the reading is progress toward the gate — never "not enough data".
-                watch.sessionsLogged < gate -> CoachProgressRow(
-                    label = "Building a baseline",
-                    value = "${watch.sessionsLogged} of $gate sessions",
-                    c = c,
-                    segments = watch.sessionsLogged.coerceAtMost(gate) to gate
-                )
-                else -> CoachProgressRow(
-                    label = "Building a baseline",
-                    value = "${watch.historyDays} of ${watch.recoveryWindowDays} days trained",
-                    c = c,
-                    fraction = watch.historyDays.toFloat() / watch.recoveryWindowDays.coerceAtLeast(1)
-                )
+                // The same figure-then-track shape as a live read, so the first real score fills in
+                // a form already on the page.
+                watch.sessionsLogged < gate -> {
+                    CoachFigure(
+                        "${watch.sessionsLogged} of $gate",
+                        "Sessions logged. The first read lands at $gate.",
+                        c
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    CoachWatchBar(watch.sessionsLogged.toFloat() / gate, c.accent, c)
+                }
+                else -> {
+                    CoachFigure(
+                        "${watch.historyDays} of ${watch.recoveryWindowDays}",
+                        "Days of training on record. The first read needs a full window.",
+                        c
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    CoachWatchBar(
+                        watch.historyDays.toFloat() / watch.recoveryWindowDays.coerceAtLeast(1),
+                        c.accent,
+                        c
+                    )
+                }
             }
 
             // ── Lifts on watch ───────────────────────────────────────────────
             if (watch.trackedLifts.isNotEmpty()) {
                 Spacer(Modifier.height(28.dp))
-                StandGroup("Lifts on watch", c)
-                Spacer(Modifier.height(10.dp))
+                CoachSubhead("Lifts on watch", c)
+                Spacer(Modifier.height(8.dp))
                 val (withTrend, forming) = watch.trackedLifts
                     .partition { (state.e1rmBySlot[it.slotId]?.size ?: 0) >= 2 }
                 withTrend.take(LIFTS_SHOWN).forEach { lift ->
@@ -152,8 +176,8 @@ internal fun LazyListScope.coachStand(
                         // mark only needs 3:1, which error clears.
                         statusColor = if (lift.stalling || word.startsWith("↑")) c.onBg else c.muted,
                         markColor = if (lift.stalling) c.error else c.accent,
-                        valueText = "${formatWeight(series.last(), weightUnit)} · " +
-                            "${lift.bouts} session${if (lift.bouts == 1) "" else "s"}",
+                        valueText = "${lift.bouts} session${if (lift.bouts == 1) "" else "s"}",
+                        figure = formatWeight(series.last(), weightUnit),
                         series = series,
                         c = c
                     )
@@ -224,18 +248,20 @@ internal fun LazyListScope.coachInputs(
     }
 }
 
-/**
- * A group inside SIGNALS. Ranked below the 15sp anchor by SIZE, not by tracking or colour: the
- * anchor names the region, these name the readings inside it.
- */
-@Composable
-private fun StandGroup(label: String, c: CoachColors) {
-    Text(label.uppercase(), style = MaterialTheme.typography.labelLarge, color = c.muted)
+/** What a live recovery score means, worded against the line it is measured to. */
+private fun recoveryVerdict(score: Int, threshold: Int): String {
+    val room = threshold - score
+    return when {
+        room <= 0 -> "Past the deload line. The next brief proposes one."
+        room <= 2 -> "Building, $room from the deload line."
+        else -> "Fresh, $room from the deload line."
+    }
 }
 
 /**
- * One watched lift: its name and its real movement on the left, the trend drawn on the right when
- * there are two points to draw.
+ * One watched lift as a table row: its name and movement on the left, the trend in the middle, and
+ * today's estimated max set as a figure flush right, so a column of lifts scans like a column of
+ * numbers. The weight used to trail the status line in grey, where it was the hardest thing to find.
  */
 @Composable
 private fun LiftTrendRow(
@@ -245,22 +271,33 @@ private fun LiftTrendRow(
     markColor: Color,
     valueText: String?,
     series: List<Double>,
-    c: CoachColors
+    c: CoachColors,
+    figure: String? = null
 ) {
+    // Past ~130% the three columns squeeze the name to a sliver, so the figure joins the sub-line
+    // instead of holding its own column. Nothing on this page truncates.
+    val stacked = LocalDensity.current.fontScale > 1.3f
+    val sub = listOfNotNull(figure?.takeIf { stacked }, valueText).joinToString(" · ").ifEmpty { null }
     Row(
-        Modifier.fillMaxWidth().padding(vertical = COACH_ROW_PAD),
+        Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {}
+            .padding(vertical = COACH_ROW_PAD + 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
             Text(name, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
             // A row's sub-reading is sentence-shaped, so it takes the sans voice; mono here would
             // be the machine voice set as prose.
-            Row {
-                Text(statusWord, style = MaterialTheme.typography.bodySmall, color = statusColor)
-                if (valueText != null) {
-                    Text(" · $valueText", style = MaterialTheme.typography.bodySmall, color = c.muted)
-                }
-            }
+            // One text, two colours, so a long line wraps back to the margin instead of hanging
+            // its second half in a column of its own.
+            Text(
+                buildAnnotatedString {
+                    withStyle(SpanStyle(color = statusColor)) { append(statusWord) }
+                    if (sub != null) withStyle(SpanStyle(color = c.muted)) { append(" · $sub") }
+                },
+                style = MaterialTheme.typography.bodySmall
+            )
         }
         if (series.size >= 2) {
             Spacer(Modifier.width(12.dp))
@@ -269,9 +306,19 @@ private fun LiftTrendRow(
                 markColor,
                 c.bg,
                 modifier = Modifier
-                    .width(110.dp)
+                    .width(LIFT_SPARK_W)
                     .semantics { contentDescription = "$name trend, $statusWord" },
-                height = 32.dp
+                height = 28.dp
+            )
+        }
+        if (figure != null && !stacked) {
+            Spacer(Modifier.width(14.dp))
+            Text(
+                figure,
+                style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
+                color = c.onBg,
+                textAlign = TextAlign.End,
+                modifier = Modifier.widthIn(min = 64.dp)
             )
         }
     }
@@ -282,14 +329,35 @@ private fun LiftTrendRow(
  * stall call as the one worded exception.
  */
 private fun liftTrendWord(lift: TrackedLift, series: List<Double>): String {
-    val first = series.first()
-    val pct = if (first > 0) (series.last() - first) / first * 100 else 0.0
-    return when {
-        lift.stalling -> "stalling"
-        pct >= 0.5 -> "↑ ${pct.roundToInt()}%"
-        pct <= -0.5 -> "↓ ${abs(pct).roundToInt()}%"
-        else -> "flat"
+    val pct = liftMovePct(series)
+    return when (liftMove(lift, series)) {
+        LiftMove.STALLED -> "stalling"
+        LiftMove.UP -> "↑ ${pct.roundToInt()}%"
+        LiftMove.DOWN -> "↓ ${abs(pct).roundToInt()}%"
+        LiftMove.FLAT -> "flat"
     }
+}
+
+/** Which way a watched lift is going. The coach's stall call outranks the raw movement. */
+internal enum class LiftMove { UP, FLAT, DOWN, STALLED }
+
+/**
+ * One classification for both readings of a lift, the advanced row and the one-line summary, so
+ * the two can never disagree about the same lift. Half a percent either way is flat.
+ */
+internal fun liftMove(lift: TrackedLift, series: List<Double>): LiftMove {
+    val pct = liftMovePct(series)
+    return when {
+        lift.stalling -> LiftMove.STALLED
+        pct >= 0.5 -> LiftMove.UP
+        pct <= -0.5 -> LiftMove.DOWN
+        else -> LiftMove.FLAT
+    }
+}
+
+private fun liftMovePct(series: List<Double>): Double {
+    val first = series.firstOrNull() ?: return 0.0
+    return if (first > 0) (series.last() - first) / first * 100 else 0.0
 }
 
 /** Lifts still short of two logged sessions, collapsed to ONE row naming the concrete unlock. */
@@ -316,7 +384,9 @@ private fun FormingLiftsRow(forming: List<TrackedLift>, showGhost: Boolean, c: C
         }
         if (showGhost) {
             Spacer(Modifier.width(12.dp))
-            CoachGhostSpark(c, modifier = Modifier.width(110.dp), height = 32.dp)
+            CoachGhostSpark(c, modifier = Modifier.width(LIFT_SPARK_W), height = 28.dp)
+            // Holds the figure column open, so the ghost lines up under the live sparks above.
+            if (LocalDensity.current.fontScale <= 1.3f) Spacer(Modifier.width(78.dp))
         }
     }
 }

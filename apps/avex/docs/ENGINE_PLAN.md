@@ -246,7 +246,7 @@ Sequencing lives in `docs/ROADMAP.md`.
   `data/prefs/PreferencesDataStore.kt` (`CARDIO_WEEKLY_TARGET_MIN`, new age/max-HR keys) ·
   `data/health/HealthConnectManager.kt` · `ui/cardio/` (hub: planned week, load, zones; live
   session screen) · Wear protocol in `:shared` (+ `/cardio/live`, `/cmd/cardio`).
-- **UI doctrine**: load the forge-design skill before any UI; the cardio hub already exists —
+- **UI doctrine**: load the impeccable skill before any UI; the cardio hub already exists —
   Engine adds sections, no new hub.
 
 ## Verification

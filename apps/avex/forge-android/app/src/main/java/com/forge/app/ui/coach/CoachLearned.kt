@@ -1,6 +1,12 @@
 package com.forge.app.ui.coach
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -51,26 +57,15 @@ internal fun LazyListScope.coachLearned(
                 val on = state.watch?.autopilot == true
                 val earned = trust.count { it.earned }
                 val total = state.timeline?.trust?.size ?: trust.size
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("AUTOPILOT", style = MaterialTheme.typography.labelLarge, color = c.muted)
-                    Text(
-                        "$earned OF $total EARNED",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = c.muted
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                Text(
+                CoachSubhead("Autopilot", c)
+                Spacer(Modifier.height(8.dp))
+                CoachFigure(
+                    "$earned of $total earned",
                     if (on) "On. A change applies on its own once its type has earned it."
                     else "Off. Earned changes still wait for your tap.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = c.onBg
+                    c
                 )
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(10.dp))
                 // Each type carries its own distinct reading, which is what earns these a list.
                 // They used to carry a segmented bar each as well: three identical rails stacked,
                 // saying nothing the reading beside them did not already say.
@@ -80,8 +75,8 @@ internal fun LazyListScope.coachLearned(
             // ── The biases it carries ────────────────────────────────────────
             if (biases.isNotEmpty()) {
                 Spacer(Modifier.height(28.dp))
-                Text("BIASES", style = MaterialTheme.typography.labelLarge, color = c.muted)
-                Spacer(Modifier.height(4.dp))
+                CoachSubhead("Biases", c)
+                Spacer(Modifier.height(2.dp))
                 Text(
                     "Carried into every regenerated plan.",
                     style = MaterialTheme.typography.bodySmall,
@@ -99,54 +94,89 @@ internal fun LazyListScope.coachLearned(
             // ── The numbers it measured about you ────────────────────────────
             if (hasNumbers) {
                 Spacer(Modifier.height(28.dp))
-                Text("YOUR NUMBERS", style = MaterialTheme.typography.labelLarge, color = c.muted)
-                Spacer(Modifier.height(12.dp))
+                CoachSubhead("Your numbers", c)
+                Spacer(Modifier.height(8.dp))
                 ProfileReadout(state.profile, c)
             }
         }
     }
 }
 
-/** One change type's trust: its label and how close it is to applying itself. */
+/**
+ * One change type's trust: its label, and its streak as a row of pips toward the autopilot line.
+ * The pips are the reading ("2 of 3" drawn rather than set in mono caps); an earned type swaps them
+ * for the word, since a full row would say the same thing less plainly.
+ */
 @Composable
 private fun TrustRow(t: TypeTrust, c: CoachColors) {
-    Column(Modifier.fillMaxWidth().padding(vertical = COACH_ROW_PAD)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                t.label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = c.onBg,
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                if (t.earned) "AUTO" else "${t.streak} OF ${t.required}",
-                style = MaterialTheme.typography.labelSmall,
-                color = c.muted
-            )
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {
+                contentDescription = if (t.earned) "${t.label}, applies on its own"
+                else "${t.label}, ${t.streak} of ${t.required} toward autopilot"
+            }
+            .padding(vertical = COACH_ROW_PAD + 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            t.label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = c.onBg,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(Modifier.width(12.dp))
+        if (t.earned) {
+            Text("Applies on its own", style = MaterialTheme.typography.bodySmall, color = c.onBg)
+        } else {
+            val required = t.required.coerceAtLeast(1)
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                repeat(required) { i ->
+                    Box(
+                        Modifier
+                            .size(7.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(if (i < t.streak) c.accent else c.track)
+                    )
+                }
+            }
         }
     }
 }
 
-/** What the coach has measured about this athlete — the numbers that replaced its defaults. */
+/**
+ * What the coach has measured about this athlete, the numbers that replaced its defaults, as a
+ * two-column table: what was measured on the left, the number on the right in tabular figures.
+ */
 @Composable
 private fun ProfileReadout(profile: PersonalProfile.Profile, c: CoachColors) {
     Column(Modifier.fillMaxWidth()) {
         profile.recoveryDays?.let { days ->
-            Text(
-                "Best spacing: $days ${if (days == 1) "day" else "days"} between sessions",
-                style = MaterialTheme.typography.bodyMedium,
-                color = c.onBg,
-                modifier = Modifier.padding(vertical = 3.dp)
-            )
+            NumberRow("Best spacing", "$days ${if (days == 1) "day" else "days"} between sessions", c)
         }
         profile.volumeCaps.entries.take(3).forEach { (muscle, cap) ->
-            Text(
-                "${muscle.displayName}: up to $cap sets a week",
-                style = MaterialTheme.typography.bodyMedium,
-                color = c.onBg,
-                modifier = Modifier.padding(vertical = 3.dp)
-            )
+            NumberRow(muscle.displayName, "Up to $cap sets a week", c)
         }
+    }
+}
+
+@Composable
+private fun NumberRow(label: String, value: String, c: CoachColors) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {}
+            .padding(vertical = COACH_ROW_PAD + 2.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = c.muted, modifier = Modifier.weight(1f))
+        Spacer(Modifier.width(12.dp))
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
+            color = c.onBg,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1f, fill = false)
+        )
     }
 }

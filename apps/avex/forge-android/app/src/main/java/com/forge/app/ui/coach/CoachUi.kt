@@ -303,3 +303,35 @@ internal fun CoachFlagDot(color: Color?, modifier: Modifier = Modifier) {
         }
     }
 }
+
+/**
+ * An instrument's reading as a figure: the number in the serif voice, the meaning in one sans line
+ * under it. The account already speaks this way ("2 of 4" on a new baseline, the week's figures);
+ * the regions under it used to open on a mono caption instead and read as a readout, not a coach.
+ * One per region at most, and only where the region IS a measurement.
+ */
+@Composable
+internal fun CoachFigure(value: String, line: String?, c: CoachColors, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth().semantics(mergeDescendants = true) {}) {
+        Text(value, style = MaterialTheme.typography.headlineSmall, color = c.onBg)
+        if (!line.isNullOrBlank()) {
+            Spacer(Modifier.height(2.dp))
+            Text(line, style = MaterialTheme.typography.bodySmall, color = c.muted)
+        }
+    }
+}
+
+/**
+ * A group inside a region ("Recovery load", "Lifts on watch", "Autopilot"). Sentence case in the
+ * sans voice: mono caps belong to the region anchor alone, and a second tier of them under it is
+ * what made the advanced regions read as a terminal. Muted, so the rows it heads stay the ink.
+ */
+@Composable
+internal fun CoachSubhead(label: String, c: CoachColors, modifier: Modifier = Modifier) {
+    Text(
+        label,
+        style = MaterialTheme.typography.titleSmall,
+        color = c.muted,
+        modifier = modifier.semantics { heading() }
+    )
+}

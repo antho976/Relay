@@ -119,7 +119,27 @@ data class LearnedBias(val label: String, val detail: String)
 data class CoachTimeline(
     val trust: List<TypeTrust>,
     val milestones: List<CoachMilestone>,
-    val weeks: List<CoachRepository.CoachHistoryEntry>
+    val weeks: List<CoachRepository.CoachHistoryEntry>,
+    /** Every change ever applied and what became of it, over the whole ledger (not just [weeks]). */
+    val record: CoachRecord = CoachRecord()
+)
+
+/**
+ * The coach's track record in four counts. [applied] counts everything that crossed the apply line
+ * (folded and reverted included, as the milestones count it); the other four split it by verdict,
+ * so they sum to at most [applied]. A "not_followed" verdict sits in none of them: skipping the
+ * work is the user's call, not a miss by the coach.
+ */
+data class CoachRecord(
+    val applied: Int = 0,
+    val held: Int = 0,
+    val missed: Int = 0,
+    /** Applied and still inside its two-week window. */
+    val watching: Int = 0,
+    /** Taken back with Undo before the watcher reached a verdict. */
+    val undone: Int = 0,
+    /** True once the coach has proposed anything at all, applied or not. */
+    val anyProposed: Boolean = false
 )
 
 /** One step of the coach's journey — a named achievement, [reached] or still ahead. */
@@ -348,7 +368,29 @@ class CoachRepository @Inject constructor(
         // Group the decisions we already loaded by week instead of a per-pass query (was 1 + N).
         val byWeek = all.groupBy { it.weekId }
         val weeks = passes.map { CoachHistoryEntry(it, byWeek[it.weekId].orEmpty().sortedBy { d -> d.id }) }
-        return CoachTimeline(trust = trust, milestones = coachMilestones(passes, all, trust), weeks = weeks)
+        return CoachTimeline(
+            trust = trust,
+            milestones = coachMilestones(passes, all, trust),
+            weeks = weeks,
+            record = coachRecord(all)
+        )
+    }
+
+    /** The whole ledger's applied changes, split by what became of them. */
+    private fun coachRecord(all: List<CoachDecision>): CoachRecord {
+        val applied = all.filter {
+            it.status == STATUS_APPLIED || it.status == STATUS_FOLDED || it.status == "reverted"
+        }
+        return CoachRecord(
+            applied = applied.size,
+            held = applied.count { it.outcome == "ok" },
+            missed = applied.count { it.outcome == "failed" },
+            watching = applied.count {
+                it.outcome == "pending" && (it.status == STATUS_APPLIED || it.status == STATUS_FOLDED)
+            },
+            undone = applied.count { it.status == "reverted" && it.outcome == "pending" },
+            anyProposed = all.any { it.status != STATUS_SHADOW }
+        )
     }
 
     /** Fixed achievement ladder, each marked reached/ahead from the pass + decision ledger. */

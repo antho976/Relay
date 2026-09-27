@@ -27,7 +27,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -53,9 +54,9 @@ internal fun rememberCoachDraw(key: Any = Unit): Float {
 }
 
 /**
- * A small smooth-curve sparkline (the session-detail line idiom, sized for inline deep dives):
- * accent stroke over a soft gradient fill, page-background ring markers on the endpoints, and a
- * left-to-right reveal. A flat series draws as a centred line.
+ * A small smooth-curve sparkline: a thin accent line and one solid end marker, revealed left to
+ * right. No area wash under it: at this size the fill read as a blur beneath the line and was the
+ * most dated thing on the page. A flat series draws as a centred line.
  */
 @Composable
 internal fun CoachSparkline(
@@ -73,8 +74,8 @@ internal fun CoachSparkline(
     val minV = lo - pad
     val range = ((hi + pad) - minV).coerceAtLeast(1.0)
     Canvas(modifier = modifier.fillMaxWidth().height(height)) {
-        val hInset = 8.dp.toPx()
-        val vInset = 8.dp.toPx()
+        val hInset = 6.dp.toPx()
+        val vInset = 6.dp.toPx()
         val plotW = (size.width - hInset * 2).coerceAtLeast(1f)
         val plotH = (size.height - vInset * 2).coerceAtLeast(1f)
         val stepX = plotW / (values.size - 1)
@@ -83,23 +84,13 @@ internal fun CoachSparkline(
             return vInset + (1f - t) * plotH
         }
         val pts = values.mapIndexed { i, v -> Offset(hInset + stepX * i, yOf(v)) }
-        val baseline = size.height - vInset
-        val line = coachSmoothCurve(pts, minY = vInset, maxY = baseline)
-        val fill = Path().apply {
-            addPath(line)
-            lineTo(pts.last().x, baseline)
-            lineTo(pts.first().x, baseline)
-            close()
-        }
+        val line = coachSmoothCurve(pts, minY = vInset, maxY = size.height - vInset)
         val clip = (size.width * progress.coerceIn(0f, 1f)).coerceAtLeast(0.01f)
         clipRect(right = clip) {
-            // A wash, never a block — the fill sits at ~10% so the 2dp line stays the mark.
-            drawPath(fill, brush = Brush.verticalGradient(listOf(accent.copy(alpha = 0.10f), accent.copy(alpha = 0f))))
-            drawPath(line, color = accent, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+            drawPath(line, color = accent, style = Stroke(width = 1.75.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
             val last = pts.last()
-            drawCircle(color = pageBg, radius = 5.5.dp.toPx(), center = last)
-            drawCircle(color = accent, radius = 3.5.dp.toPx(), center = last)
-            drawCircle(color = pageBg, radius = 1.3.dp.toPx(), center = last)
+            drawCircle(color = pageBg, radius = 4.5.dp.toPx(), center = last)
+            drawCircle(color = accent, radius = 3.dp.toPx(), center = last)
         }
     }
 }
@@ -128,45 +119,43 @@ private fun coachSmoothCurve(pts: List<Offset>, minY: Float, maxY: Float): Path 
 }
 
 /**
- * The recovery load meter: the fatigue score as a segmented fill toward the deload line, one
- * segment per point. Fill carries severity (accent, error past the line) on the outline track
- * rung; labels stay in ink — the meter, not the text, carries the color.
+ * The recovery load gauge: one thin continuous track with the score filled along it and the
+ * deload line standing up out of it as a tick. The scale runs a little PAST the line, so the line
+ * reads as a mark on the way rather than as the end of the bar; the fill turns error once it
+ * crosses. It replaced a 10dp bar of one chunky segment per point, which read as a loading widget.
  */
 @Composable
 internal fun CoachFatigueMeter(score: Int, threshold: Int, c: CoachColors) {
-    val total = maxOf(threshold, score, 1)
+    val line = threshold.coerceAtLeast(1)
+    val total = maxOf(line + 3, score + 1)
     val progress = rememberCoachDraw("fatigue-$score")
-    val fillColor = if (score >= threshold) c.error else c.accent
+    val fillColor = if (score >= line) c.error else c.accent
     Column {
-        Row(
-            Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)),
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            repeat(total) { i ->
-                val filled = progress * score > i
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .background(if (filled) fillColor else c.track)
-                )
+        Canvas(
+            Modifier.fillMaxWidth().height(14.dp).semantics {
+                contentDescription = "Recovery load $score, deload at $line"
             }
+        ) {
+            val track = 3.dp.toPx()
+            val cy = size.height / 2f
+            val tickX = size.width * line / total
+            drawLine(c.track, Offset(0f, cy), Offset(size.width, cy), track, StrokeCap.Round)
+            val fillTo = size.width * (score.toFloat() / total) * progress
+            if (fillTo > 0f) drawLine(fillColor, Offset(0f, cy), Offset(fillTo, cy), track, StrokeCap.Round)
+            drawLine(c.onBg, Offset(tickX, 0f), Offset(tickX, size.height), 1.5.dp.toPx(), StrokeCap.Round)
         }
         Spacer(Modifier.height(6.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        // The caption hangs under the tick it names, so the number and the line are one object.
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val tickFrac = line.toFloat() / total
             Text(
-                "NOW $score",
-                style = MaterialTheme.typography.labelSmall,
-                color = c.onBg,
-                fontSize = 9.sp,
-                letterSpacing = 1.sp
-            )
-            Text(
-                "DELOAD AT $threshold",
+                "DELOAD AT $line",
                 style = MaterialTheme.typography.labelSmall,
                 color = c.muted,
                 fontSize = 9.sp,
-                letterSpacing = 1.sp
+                letterSpacing = 1.sp,
+                modifier = Modifier.align(Alignment.TopEnd)
+                    .padding(end = (maxWidth * (1f - tickFrac) - 2.dp).coerceAtLeast(0.dp))
             )
         }
     }
@@ -230,88 +219,43 @@ internal fun CoachWatchBar(
 }
 
 /**
- * One dashboard progression row: two mono end labels over a bar. [segments] draws the earned
- * style segmented meter (n of m); [fraction] draws a continuous fill. The page's answer to
- * "how long until the next thing", drawn instead of written.
+ * Nightly sleep as thin rounded columns against the recovery floor, dashed across them. Rested
+ * nights take the accent, short ones the 0.6 rung. Columns at the chart doctrine's comparison-bar
+ * weight, not the slabs they were: ten fat red blocks were the loudest thing on the page.
  */
-@Composable
-internal fun CoachProgressRow(
-    label: String,
-    value: String,
-    c: CoachColors,
-    modifier: Modifier = Modifier,
-    fraction: Float? = null,
-    segments: Pair<Int, Int>? = null,
-    sub: String? = null,
-    barColor: Color = c.accent
-) {
-    Column(modifier.fillMaxWidth().padding(bottom = 14.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(
-                label.uppercase(), style = MaterialTheme.typography.labelSmall,
-                color = c.muted, fontSize = 9.sp, letterSpacing = 1.sp
-            )
-            Text(
-                value.uppercase(), style = MaterialTheme.typography.labelSmall,
-                color = c.onBg, fontSize = 9.sp, letterSpacing = 1.sp
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        when {
-            segments != null -> TrustProgressBar(
-                streak = segments.first, required = segments.second,
-                earned = segments.first >= segments.second,
-                track = c.track,
-                modifier = Modifier.fillMaxWidth()
-            )
-            fraction != null -> CoachWatchBar(fraction, barColor, c)
-        }
-        if (sub != null) {
-            Spacer(Modifier.height(4.dp))
-            Text(sub, style = MaterialTheme.typography.labelSmall, color = c.muted, fontSize = 9.sp)
-        }
-    }
-}
-
-/** Nightly sleep bars against the recovery floor; short nights render muted, rested ones accent. */
 @Composable
 internal fun CoachSleepBars(hours: List<Float>, floorHours: Float, c: CoachColors) {
     if (hours.isEmpty()) return
     val max = maxOf(hours.max(), floorHours + 1f)
     val progress = rememberCoachDraw(hours.size)
+    val floorText = String.format(java.util.Locale.US, "%.1f", floorHours)
     Column {
-        Box(Modifier.fillMaxWidth().height(64.dp)) {
-            Row(
-                Modifier.fillMaxSize(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.Bottom
-            ) {
-                hours.forEach { h ->
-                    val frac = ((h / max) * progress).coerceIn(0.04f, 1f)
-                    // Two ladder rungs of the accent: rested nights full, short nights the 0.6 step.
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .fillMaxHeight(frac)
-                            .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
-                            .background(if (h >= floorHours) c.accent else c.secondary)
-                    )
-                }
-            }
-            // The floor line the sleep-debt driver measures against — a solid recessive hairline.
-            Canvas(Modifier.fillMaxSize()) {
-                val y = size.height * (1f - (floorHours / max))
+        Canvas(Modifier.fillMaxWidth().height(56.dp)) {
+            val slot = size.width / hours.size
+            val bar = minOf(6.dp.toPx(), slot * 0.5f)
+            hours.forEachIndexed { i, h ->
+                val frac = ((h / max) * progress).coerceIn(0.04f, 1f)
+                val cx = slot * i + slot / 2f
                 drawLine(
-                    color = c.outline.copy(alpha = 0.25f),
-                    start = Offset(0f, y),
-                    end = Offset(size.width, y),
-                    strokeWidth = 1.dp.toPx()
+                    color = if (h >= floorHours) c.accent else c.secondary,
+                    start = Offset(cx, size.height - bar / 2f),
+                    end = Offset(cx, (size.height - size.height * frac + bar / 2f).coerceAtMost(size.height - bar / 2f)),
+                    strokeWidth = bar,
+                    cap = StrokeCap.Round
                 )
             }
+            val y = size.height * (1f - (floorHours / max))
+            drawLine(
+                color = c.muted.copy(alpha = 0.6f),
+                start = Offset(0f, y),
+                end = Offset(size.width, y),
+                strokeWidth = 1.dp.toPx(),
+                pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))
+            )
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(8.dp))
         Text(
-            "LAST ${hours.size} NIGHTS · FLOOR ${String.format(java.util.Locale.US, "%.1f", floorHours)}H",
+            "LAST ${hours.size} NIGHTS · FLOOR ${floorText}H",
             style = MaterialTheme.typography.labelSmall,
             color = c.muted, fontSize = 9.sp, letterSpacing = 1.sp
         )
@@ -329,20 +273,21 @@ internal fun CoachHrLine(values: List<Int>, baseline: Int?, c: CoachColors) {
                 val lo = minOf(values.min(), baseline).toFloat()
                 val hi = maxOf(values.max(), baseline).toFloat()
                 Canvas(Modifier.fillMaxWidth().height(56.dp)) {
-                    val vInset = 8.dp.toPx()
+                    val vInset = 6.dp.toPx()
                     val plotH = size.height - vInset * 2
                     val t = if (hi - lo < 1e-6f) 0.5f else (baseline - lo) / (hi - lo)
                     val y = vInset + (1f - t) * plotH
                     drawLine(
-                        color = c.outline.copy(alpha = 0.25f),
+                        color = c.muted.copy(alpha = 0.6f),
                         start = Offset(0f, y),
                         end = Offset(size.width, y),
-                        strokeWidth = 1.dp.toPx()
+                        strokeWidth = 1.dp.toPx(),
+                        pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))
                     )
                 }
             }
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(8.dp))
         Text(
             buildString {
                 append("NOW ${values.last()} BPM")

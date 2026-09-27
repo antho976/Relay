@@ -26,12 +26,15 @@ import com.forge.app.data.db.entities.CoachProject
 import com.forge.app.data.db.entities.TrainingBlock
 import com.forge.app.data.repo.CoachBrief
 import com.forge.app.data.repo.CoachRepository
+import com.forge.app.data.repo.CoachRecord
 import com.forge.app.data.repo.CoachTimeline
 import com.forge.app.data.repo.CoachWatch
 import com.forge.app.data.repo.LearnedBias
 import com.forge.app.data.repo.RecoverySignal
 import com.forge.app.data.repo.TrackedLift
+import com.forge.app.domain.adapt.Confidence
 import com.forge.app.domain.adapt.DeloadAdvisor
+import com.forge.app.domain.adapt.Recommendation
 import com.forge.app.data.repo.CoachMilestone
 import com.forge.app.domain.coach.BlockPhase
 import com.forge.app.domain.coach.CoachGoalKind
@@ -134,6 +137,15 @@ class CoachLedgerScreenshotTest {
     }
 
     /**
+     * WHERE YOU STAND on the default page: readiness, recovery load, the lifts and the record, each
+     * one line with its reason. Advanced tracking off, so all four draw here.
+     */
+    @Test
+    fun ledgerNow() = shoot("coach-ledger-now", scrollTo = "Changes applied") {
+        ledger(activeState().copy(advanced = false))()
+    }
+
+    /**
      * A LazyColumn only composes what is near the viewport, so absence is proved by scrolling:
      * `performScrollToNode` walks the whole list and fails when nothing matches, and that failure
      * is the assertion. NEXT is scrolled to first so the pass is not an artefact of an empty page.
@@ -164,6 +176,26 @@ class CoachLedgerScreenshotTest {
             }
         }
         compose.onRoot().captureRoboImage("src/test/screenshots/coach-ledger-200.png", options)
+    }
+
+    /**
+     * SIGNALS at 200%: the lift rows fold their figure into the sub-line rather than squeezing the
+     * name between a trend and a number, and the recovery figure wraps instead of clipping.
+     */
+    @Test
+    fun ledgerStandAtLargeFontScale() {
+        compose.setContent {
+            ForgeTheme {
+                Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                    CompositionLocalProvider(
+                        LocalDensity provides Density(LocalDensity.current.density, fontScale = 2f)
+                    ) { ledger(activeState())() }
+                }
+            }
+        }
+        compose.onAllNodes(hasScrollAction()).onFirst()
+            .performScrollToNode(hasText("stalling", substring = true))
+        compose.onRoot().captureRoboImage("src/test/screenshots/coach-ledger-stand-200.png", options)
     }
 
     /** The state every first-run user sees: no calls, no history, a baseline still filling. */
@@ -199,7 +231,7 @@ class CoachLedgerScreenshotTest {
     /**
      * `accountItemCount` mirrors `coachAccount`'s item emission by hand — the deep link that used
      * to open the Signals lens scrolls by it — so the two are pinned together here. Scrolling by
-     * that count must land on SIGNALS, the first thing after the account.
+     * that count must land on WHERE YOU STAND, the first thing after the account.
      */
     @Test
     fun theDeepLinkIndexLandsOnWhereYouStand() {
@@ -217,7 +249,7 @@ class CoachLedgerScreenshotTest {
                 )
             }
         }
-        compose.onNodeWithText("SIGNALS").assertIsDisplayed()
+        compose.onNodeWithText("WHERE YOU STAND").assertIsDisplayed()
     }
 
     /**
@@ -331,6 +363,7 @@ private fun activeState() = CoachViewModel.UiState(
         )
     ),
     timeline = CoachTimeline(
+        record = CoachRecord(applied = 14, held = 10, missed = 2, watching = 1, undone = 1, anyProposed = true),
         trust = listOf(
             TypeTrust("weight_nudge", 3, 3, earned = true),
             TypeTrust("swap", 1, 3, earned = false),
@@ -428,6 +461,11 @@ private fun activeState() = CoachViewModel.UiState(
         restingHr = listOf(54, 55, 57, 56, 58, 59, 57, 56),
         hrWindowAvg = 57, hrBaseline = 55,
         hrvWindowAvg = 62, hrvBaseline = 68
+    ),
+    readiness = Recommendation.ReadinessScale(
+        percent = -3,
+        reason = "short night (5h) · resting HR up 4 bpm",
+        confidence = Confidence.MEDIUM
     ),
     daysToNextBrief = 3
 )
