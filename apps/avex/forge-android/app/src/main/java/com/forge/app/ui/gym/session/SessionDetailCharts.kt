@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -11,9 +12,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -35,7 +38,7 @@ import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.session.state.ExerciseDetail
 import com.forge.app.ui.gym.session.state.SessionChartStyle
 import com.forge.app.ui.gym.session.state.SessionMetric
-import com.forge.app.ui.common.rememberDrawProgress
+import com.forge.app.ui.common.rememberDrawProgressState
 import com.forge.app.ui.common.staggeredProgress
 import com.forge.app.ui.theme.ForgeMotion
 
@@ -93,8 +96,10 @@ internal fun PerExerciseSetChart(
 ) {
     // RPE is only meaningful on the sets that logged one — drop the rest so unrated sets don't read
     // as a 0 trough. Every other metric maps one value per set.
-    val values = if (metric == SessionMetric.RPE) ex.sets.mapNotNull { it.rpe }
-    else ex.sets.map { it.metricValue(metric) }
+    val values = remember(ex.sets, metric) {
+        if (metric == SessionMetric.RPE) ex.sets.mapNotNull { it.rpe }
+        else ex.sets.map { it.metricValue(metric) }
+    }
     // Nothing to plot (e.g. a bodyweight exercise under the Weight metric) — show why, don't vanish.
     if (values.isEmpty() || values.none { it > 0.0 }) {
         Text(
@@ -124,7 +129,8 @@ internal fun PerExerciseSetChart(
 private fun PerSetLine(values: List<Double>, metric: SessionMetric, accent: Color, pageBg: Color) {
     // Reveal starts immediately but rides the slow, gentle draw curve so the line glides in over
     // ~0.9 s instead of snapping — the default enter tween front-loads the motion and reads as sharp.
-    val progress = rememberDrawProgress(metric, ForgeMotion.drawTween())
+    // Read only in the draw lambda below: the reveal redraws the chart, never recomposes it.
+    val progress = rememberDrawProgressState(metric, ForgeMotion.drawTween())
     // The marker ring "cuts" each point out of the page background so dots read crisply on the open
     // surface — now uses pageBg directly since there's no card fill beneath the chart.
     val haloBg = pageBg
@@ -133,7 +139,8 @@ private fun PerSetLine(values: List<Double>, metric: SessionMetric, accent: Colo
     val pad = if (hi - lo < 1e-6) 1.0 else 0.0
     val minV = lo - pad
     val range = ((hi + pad) - minV).coerceAtLeast(1.0)
-    Canvas(modifier = Modifier.fillMaxWidth().height(64.dp)) {
+    // The curve, fill and markers are built once per size; only the reveal clip moves per frame.
+    Spacer(Modifier.fillMaxWidth().height(64.dp).drawWithCache {
         // Inset all four edges so the end markers + the rounded stroke sit clear of the canvas bounds.
         val hInset = 10.dp.toPx()
         val vInset = 9.dp.toPx()
@@ -154,21 +161,26 @@ private fun PerSetLine(values: List<Double>, metric: SessionMetric, accent: Colo
             lineTo(pts.first().x, baseline)
             close()
         }
-        val clip = (size.width * progress.coerceIn(0f, 1f)).coerceAtLeast(0.01f)
-        clipRect(right = clip) {
-            // §10: area fades to transparent from a ≤0.15 top stop.
-            drawPath(fill, brush = Brush.verticalGradient(listOf(accent.copy(alpha = 0.15f), accent.copy(alpha = 0f))))
-            drawPath(line, color = accent.copy(alpha = 0.15f), style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-            drawPath(line, color = accent, style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-            pts.forEachIndexed { i, p ->
-                val last = i == pts.lastIndex
-                val r = if (last) 4.dp.toPx() else 3.dp.toPx()
-                drawCircle(color = haloBg, radius = r + 2.dp.toPx(), center = p)        // ring cuts the dot out
-                drawCircle(color = accent, radius = r, center = p)                       // accent core
-                if (last) drawCircle(color = haloBg, radius = 1.5.dp.toPx(), center = p) // hollow centre = latest set
+        // §10: area fades to transparent from a ≤0.15 top stop.
+        val fillBrush = Brush.verticalGradient(listOf(accent.copy(alpha = 0.15f), accent.copy(alpha = 0f)))
+        val glowStroke = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        val lineStroke = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+        onDrawBehind {
+            val clip = (size.width * progress.value.coerceIn(0f, 1f)).coerceAtLeast(0.01f)
+            clipRect(right = clip) {
+                drawPath(fill, brush = fillBrush)
+                drawPath(line, color = accent.copy(alpha = 0.15f), style = glowStroke)
+                drawPath(line, color = accent, style = lineStroke)
+                pts.forEachIndexed { i, p ->
+                    val last = i == pts.lastIndex
+                    val r = if (last) 4.dp.toPx() else 3.dp.toPx()
+                    drawCircle(color = haloBg, radius = r + 2.dp.toPx(), center = p)        // ring cuts the dot out
+                    drawCircle(color = accent, radius = r, center = p)                       // accent core
+                    if (last) drawCircle(color = haloBg, radius = 1.5.dp.toPx(), center = p) // hollow centre = latest set
+                }
             }
         }
-    }
+    })
 }
 
 /**
@@ -209,7 +221,7 @@ private fun SetBars(values: List<Double>, metric: SessionMetric, accent: Color) 
     val secondary = MaterialTheme.colorScheme.secondary
     val weightUnit = com.forge.app.ui.theme.LocalForgeSettings.current.weightUnit
     // Keyed by metric so the first draw animates in; the play-once kit snaps on a later switch.
-    val progress = rememberDrawProgress(metric, ForgeMotion.drawTween())
+    val progress = rememberDrawProgressState(metric, ForgeMotion.drawTween())
     val desc = "Per set: " + values.joinToString(", ") { formatMetricValue(it, metric, weightUnit) }
     Canvas(
         Modifier.fillMaxWidth().height(56.dp).semantics { contentDescription = desc }
@@ -219,7 +231,8 @@ private fun SetBars(values: List<Double>, metric: SessionMetric, accent: Color) 
         val barW = ((size.width - gap * (n - 1)) / n).coerceAtMost(SET_BAR_MAX_W.toPx())
         val radius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx())
         values.forEachIndexed { i, v ->
-            val frac = ((v / max).toFloat() * staggeredProgress(progress, i, n)).coerceIn(0.03f, 1f)
+            // The reveal is read here, in draw, so the growing bars never recompose SetBars.
+            val frac = ((v / max).toFloat() * staggeredProgress(progress.value, i, n)).coerceIn(0.03f, 1f)
             val h = size.height * frac
             val x = i * (barW + gap)
             val left = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Rtl) size.width - x - barW else x
@@ -263,10 +276,12 @@ internal fun SessionHrSection(
             )
         }
         androidx.compose.foundation.layout.Spacer(Modifier.height(10.dp))
-        val progress = rememberDrawProgress()
-        Canvas(Modifier.fillMaxWidth().height(110.dp)) {
+        val progress = rememberDrawProgressState()
+        // The line and the set markers (a nearest-point search each) are built once per size; the
+        // reveal only moves the clip, read in draw.
+        Spacer(Modifier.fillMaxWidth().height(110.dp).drawWithCache {
             val pts = hr.points
-            if (pts.size < 2) return@Canvas
+            if (pts.size < 2) return@drawWithCache onDrawBehind {}
             val t0 = pts.first().timeMs
             val t1 = pts.last().timeMs
             val span = (t1 - t0).coerceAtLeast(1L).toFloat()
@@ -276,29 +291,32 @@ internal fun SessionHrSection(
             fun x(ms: Long) = ((ms - t0) / span) * size.width
             fun y(bpm: Int) = size.height - ((bpm - minBpm) / range) * (size.height * 0.9f) - size.height * 0.05f
 
-            // Exercise boundaries — lines as data (§1).
-            hr.exerciseBoundariesMs.forEach { ms ->
-                if (ms in t0..t1) drawLine(
-                    color = outline.copy(alpha = 0.25f),
-                    start = Offset(x(ms), 0f), end = Offset(x(ms), size.height),
-                    strokeWidth = 1.dp.toPx()
-                )
+            val boundaryXs = hr.exerciseBoundariesMs.filter { it in t0..t1 }.map { x(it) }
+            val path = Path()
+            pts.forEachIndexed { i, p ->
+                if (i == 0) path.moveTo(x(p.timeMs), y(p.bpm)) else path.lineTo(x(p.timeMs), y(p.bpm))
             }
-            clipRect(right = size.width * progress) {
-                val path = Path()
-                pts.forEachIndexed { i, p ->
-                    if (i == 0) path.moveTo(x(p.timeMs), y(p.bpm)) else path.lineTo(x(p.timeMs), y(p.bpm))
+            val lineStroke = Stroke(2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+            // Set markers ride the line: the moment each set was logged.
+            val markers = hr.setMarkersMs.filter { it in t0..t1 }.mapNotNull { ms ->
+                val nearest = pts.minByOrNull { kotlin.math.abs(it.timeMs - ms) } ?: return@mapNotNull null
+                Offset(x(ms), y(nearest.bpm))
+            }
+            onDrawBehind {
+                // Exercise boundaries — lines as data (§1).
+                boundaryXs.forEach { bx ->
+                    drawLine(
+                        color = outline.copy(alpha = 0.25f),
+                        start = Offset(bx, 0f), end = Offset(bx, size.height),
+                        strokeWidth = 1.dp.toPx()
+                    )
                 }
-                drawPath(path, color = accent, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-                // Set markers ride the line: the moment each set was logged.
-                hr.setMarkersMs.forEach { ms ->
-                    if (ms in t0..t1) {
-                        val nearest = pts.minByOrNull { kotlin.math.abs(it.timeMs - ms) } ?: return@forEach
-                        drawCircle(color = accent, radius = 2.5.dp.toPx(), center = Offset(x(ms), y(nearest.bpm)))
-                    }
+                clipRect(right = size.width * progress.value) {
+                    drawPath(path, color = accent, style = lineStroke)
+                    markers.forEach { m -> drawCircle(color = accent, radius = 2.5.dp.toPx(), center = m) }
                 }
             }
-        }
+        })
         androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))
         hr.perExercise.forEach { ex ->
             Row(

@@ -1,8 +1,11 @@
 package com.forge.app.ui.profile
 
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -12,7 +15,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.unit.dp
-import com.forge.app.ui.common.rememberDrawProgress
+import com.forge.app.ui.common.rememberDrawProgressState
 import com.forge.app.ui.theme.ForgeMotion
 
 /**
@@ -44,13 +47,15 @@ internal fun ProfileSparkline(
     referenceColor: Color = color.copy(alpha = 0.6f)
 ) {
     if (values.size < 2) return
-    val progress = if (animated) rememberDrawProgress(key = values, spec = ForgeMotion.drawTween()) else 1f
+    // Read only in draw (below), so the reveal redraws the canvas without recomposing the tile.
+    val progress = if (animated) rememberDrawProgressState(key = values, spec = ForgeMotion.drawTween()) else FullyDrawn
     // Range spans the line, the raw scatter (dots sit outside the smoothed envelope) and the
     // reference (a goal can be beyond every weigh-in) so nothing is drawn off-canvas.
     val min = minOf(values.min(), points?.minOrNull() ?: Double.POSITIVE_INFINITY, reference ?: Double.POSITIVE_INFINITY)
     val max = maxOf(values.max(), points?.maxOrNull() ?: Double.NEGATIVE_INFINITY, reference ?: Double.NEGATIVE_INFINITY)
     val range = (max - min).takeIf { it > 0.0 } ?: 1.0
-    Canvas(modifier) {
+    // Paths are built once per size; only the clip and the frontier dot follow the reveal.
+    Spacer(modifier.drawWithCache {
         val h = size.height
         val w = size.width
         val stepX = if (values.size > 1) w / (values.size - 1) else 0f
@@ -70,35 +75,39 @@ internal fun ProfileSparkline(
                 if (i == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y)
             }
         }
-        val revealW = (w * progress).coerceAtLeast(0.01f)
-        clipRect(right = revealW) {
-            // Reference (goal) threshold under the data, so the line + dots read on top of it.
-            reference?.let { r ->
-                val dashPx = 4.dp.toPx()
-                drawLine(
-                    referenceColor,
-                    start = Offset(0f, yOf(r)),
-                    end = Offset(w, yOf(r)),
-                    strokeWidth = 1.5.dp.toPx(),
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(dashPx, dashPx))
-                )
-            }
-            if (fill) {
-                val area = Path().apply {
-                    moveTo(0f, h)
-                    values.indices.forEach { i -> val p = pointAt(i); lineTo(p.x, p.y) }
-                    lineTo(w, h)
-                    close()
+        val area = if (fill) Path().apply {
+            moveTo(0f, h)
+            values.indices.forEach { i -> val p = pointAt(i); lineTo(p.x, p.y) }
+            lineTo(w, h)
+            close()
+        } else null
+        val areaBrush = Brush.verticalGradient(listOf(color.copy(alpha = 0.15f), Color.Transparent))
+        val dashPx = 4.dp.toPx()
+        val referenceDash = PathEffect.dashPathEffect(floatArrayOf(dashPx, dashPx))
+        val lineStroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+        onDrawBehind {
+            val p = progress.value
+            val revealW = (w * p).coerceAtLeast(0.01f)
+            clipRect(right = revealW) {
+                // Reference (goal) threshold under the data, so the line + dots read on top of it.
+                reference?.let { r ->
+                    drawLine(
+                        referenceColor,
+                        start = Offset(0f, yOf(r)),
+                        end = Offset(w, yOf(r)),
+                        strokeWidth = 1.5.dp.toPx(),
+                        pathEffect = referenceDash
+                    )
                 }
-                drawPath(
-                    area,
-                    Brush.verticalGradient(listOf(color.copy(alpha = 0.15f), Color.Transparent))
-                )
+                if (area != null) drawPath(area, areaBrush)
+                drawPath(line, color, style = lineStroke)
+                // Raw weigh-ins as faint scatter dots (index-aligned to [values]).
+                points?.forEachIndexed { i, v -> drawCircle(pointColor, radius = 2.dp.toPx(), center = Offset(stepX * i, yOf(v))) }
             }
-            drawPath(line, color, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
-            // Raw weigh-ins as faint scatter dots (index-aligned to [values]).
-            points?.forEachIndexed { i, v -> drawCircle(pointColor, radius = 2.dp.toPx(), center = Offset(stepX * i, yOf(v))) }
+            drawCircle(color, radius = 3.dp.toPx(), center = frontier(p))
         }
-        drawCircle(color, radius = 3.dp.toPx(), center = frontier(progress))
-    }
+    })
 }
+
+/** The un-animated sparkline's progress: already fully drawn. */
+private val FullyDrawn: State<Float> = mutableFloatStateOf(1f)

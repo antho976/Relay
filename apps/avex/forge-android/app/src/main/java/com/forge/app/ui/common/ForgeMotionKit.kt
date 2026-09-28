@@ -5,6 +5,7 @@ import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,6 +34,7 @@ import kotlinx.coroutines.launch
  *  - [statsEntrance] — fade + slight slide-up on first appearance, staggered by index
  *  - [CountUpText]   — a number that animates from its "was X" value to current
  *  - [rememberDrawProgress] — a 0→1 reveal used by sparklines, bars, and grids
+ *    ([rememberDrawProgressState] is the draw-phase form every chart uses)
  *
  * Everything plays ONCE per appearance (tracked via rememberSaveable, so scrolling
  * away and back doesn't replay) and nothing loops.
@@ -92,24 +94,41 @@ internal fun CountUpText(
  * fill. Re-keyed by [key] (pass the data identity) so a data refresh re-reveals only
  * when the series itself changes. [spec] is the curve the reveal rides — defaults to the
  * standard 600 ms enter tween; pass [ForgeMotion.drawTween] for a slower, gentler glide.
+ *
+ * Returns the value read in composition, so the caller recomposes every frame of the reveal:
+ * only for consumers that genuinely need it there (the debug recipes). Charts take
+ * [rememberDrawProgressState] and read it in draw.
  */
 @Composable
 internal fun rememberDrawProgress(
     key: Any? = Unit,
     spec: FiniteAnimationSpec<Float> = ForgeMotion.enterTween(DRAW_IN_MS)
-): Float {
+): Float = rememberDrawProgressState(key, spec).value
+
+/**
+ * [rememberDrawProgress] as a [State], for charts: read `.value` only inside a draw lambda
+ * (`Canvas {}`, `drawBehind {}`, `drawWithCache { onDrawBehind {} }`) so the reveal invalidates
+ * the draw alone. Reading it in composition recomposes the whole chart every frame of the
+ * reveal, which lands exactly on the screen's entry transition.
+ */
+@Composable
+internal fun rememberDrawProgressState(
+    key: Any? = Unit,
+    spec: FiniteAnimationSpec<Float> = ForgeMotion.enterTween(DRAW_IN_MS)
+): State<Float> {
     var played by rememberSaveable { mutableStateOf(false) }
     val anim = remember { Animatable(if (played) 1f else 0f) }
     LaunchedEffect(key) {
         if (anim.value < 1f) anim.animateTo(1f, spec)
         played = true
     }
-    return anim.value
+    return anim.asState()
 }
 
 /**
  * Slice one overall [rememberDrawProgress] value into a per-tile progress so a row or
- * grid of [count] tiles fills with a stagger — no per-tile Animatable needed.
+ * grid of [count] tiles fills with a stagger — no per-tile Animatable needed. Pure, so
+ * a chart calls it inside its draw lambda with [rememberDrawProgressState]'s value.
  */
 internal fun staggeredProgress(overall: Float, index: Int, count: Int): Float {
     if (count <= 1) return overall

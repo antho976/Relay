@@ -6,7 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -15,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -23,7 +23,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
@@ -32,13 +36,18 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.theme.ForgeMotion
 
-/** Play-once draw progress for the page's charts, riding the shared slow draw curve. */
+/**
+ * Play-once draw progress for the page's charts, riding the shared slow draw curve. Returned as a
+ * [State] so each chart reads it in its draw lambda: a composition read recomposed the chart on
+ * every frame of the reveal, which plays during the page's entry transition.
+ */
 @Composable
-internal fun rememberCoachDraw(key: Any = Unit): Float {
+internal fun rememberCoachDrawState(key: Any = Unit): State<Float> {
     var played by rememberSaveable(key) { mutableStateOf(false) }
     val anim = remember(key) { Animatable(if (played) 1f else 0f) }
     LaunchedEffect(key) {
@@ -47,7 +56,7 @@ internal fun rememberCoachDraw(key: Any = Unit): Float {
             played = true
         }
     }
-    return anim.value
+    return anim.asState()
 }
 
 /**
@@ -64,32 +73,40 @@ internal fun CoachSparkline(
     height: androidx.compose.ui.unit.Dp = 56.dp
 ) {
     if (values.size < 2) return
-    val progress = rememberCoachDraw(values.size)
+    val progress = rememberCoachDrawState(values.size)
     val lo = values.min()
     val hi = values.max()
     val pad = if (hi - lo < 1e-6) 1.0 else 0.0
     val minV = lo - pad
     val range = ((hi + pad) - minV).coerceAtLeast(1.0)
-    Canvas(modifier = modifier.fillMaxWidth().height(height)) {
-        val hInset = 6.dp.toPx()
-        val vInset = 6.dp.toPx()
-        val plotW = (size.width - hInset * 2).coerceAtLeast(1f)
-        val plotH = (size.height - vInset * 2).coerceAtLeast(1f)
-        val stepX = plotW / (values.size - 1)
-        fun yOf(v: Double): Float {
-            val t = ((v - minV) / range).toFloat().coerceIn(0f, 1f)
-            return vInset + (1f - t) * plotH
-        }
-        val pts = values.mapIndexed { i, v -> Offset(hInset + stepX * i, yOf(v)) }
-        val line = coachSmoothCurve(pts, minY = vInset, maxY = size.height - vInset)
-        val clip = (size.width * progress.coerceIn(0f, 1f)).coerceAtLeast(0.01f)
-        clipRect(right = clip) {
-            drawPath(line, color = accent, style = Stroke(width = 1.75.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+    // The curve is built once per size; only the reveal clip moves, read in draw.
+    Spacer(
+        modifier.fillMaxWidth().height(height).drawWithCache {
+            val hInset = 6.dp.toPx()
+            val vInset = 6.dp.toPx()
+            val plotW = (size.width - hInset * 2).coerceAtLeast(1f)
+            val plotH = (size.height - vInset * 2).coerceAtLeast(1f)
+            val stepX = plotW / (values.size - 1)
+            fun yOf(v: Double): Float {
+                val t = ((v - minV) / range).toFloat().coerceIn(0f, 1f)
+                return vInset + (1f - t) * plotH
+            }
+            val pts = values.mapIndexed { i, v -> Offset(hInset + stepX * i, yOf(v)) }
+            val line = coachSmoothCurve(pts, minY = vInset, maxY = size.height - vInset)
+            val stroke = Stroke(width = 1.75.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
             val last = pts.last()
-            drawCircle(color = pageBg, radius = 4.5.dp.toPx(), center = last)
-            drawCircle(color = accent, radius = 3.dp.toPx(), center = last)
+            val haloR = 4.5.dp.toPx()
+            val dotR = 3.dp.toPx()
+            onDrawBehind {
+                val clip = (size.width * progress.value.coerceIn(0f, 1f)).coerceAtLeast(0.01f)
+                clipRect(right = clip) {
+                    drawPath(line, color = accent, style = stroke)
+                    drawCircle(color = pageBg, radius = haloR, center = last)
+                    drawCircle(color = accent, radius = dotR, center = last)
+                }
+            }
         }
-    }
+    )
 }
 
 /** Catmull-Rom spline through [pts], control points clamped inside the plot box. */
@@ -125,7 +142,7 @@ private fun coachSmoothCurve(pts: List<Offset>, minY: Float, maxY: Float): Path 
 internal fun CoachFatigueMeter(score: Int, threshold: Int, c: CoachColors) {
     val line = threshold.coerceAtLeast(1)
     val total = maxOf(line + 3, score + 1)
-    val progress = rememberCoachDraw("fatigue-$score")
+    val progress = rememberCoachDrawState("fatigue-$score")
     val fillColor = if (score >= line) c.error else c.accent
     Column {
         Canvas(
@@ -137,7 +154,7 @@ internal fun CoachFatigueMeter(score: Int, threshold: Int, c: CoachColors) {
             val cy = size.height / 2f
             val tickX = size.width * line / total
             drawLine(c.track, Offset(0f, cy), Offset(size.width, cy), track, StrokeCap.Round)
-            val fillTo = size.width * (score.toFloat() / total) * progress
+            val fillTo = size.width * (score.toFloat() / total) * progress.value
             if (fillTo > 0f) drawLine(fillColor, Offset(0f, cy), Offset(fillTo, cy), track, StrokeCap.Round)
             drawLine(c.onBg, Offset(tickX, 0f), Offset(tickX, size.height), 1.5.dp.toPx(), StrokeCap.Round)
         }
@@ -197,22 +214,26 @@ internal fun CoachWatchBar(
     c: CoachColors,
     modifier: Modifier = Modifier
 ) {
-    val progress = rememberCoachDraw("watch-$fraction")
+    val progress = rememberCoachDrawState("watch-$fraction")
+    // The fill is drawn, not laid out: a fillMaxWidth(fraction) child re-measured every frame of
+    // the reveal. Same pill (radius half its shorter side), anchored at the start edge.
     Box(
         modifier
             .fillMaxWidth()
             .height(5.dp)
             .clip(RoundedCornerShape(50))
             .background(c.track)
-    ) {
-        Box(
-            Modifier
-                .fillMaxWidth((fraction * progress).coerceIn(0.03f, 1f))
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(50))
-                .background(color)
-        )
-    }
+            .drawBehind {
+                val w = size.width * (fraction * progress.value).coerceIn(0.03f, 1f)
+                val left = if (layoutDirection == LayoutDirection.Rtl) size.width - w else 0f
+                drawRoundRect(
+                    color = color,
+                    topLeft = Offset(left, 0f),
+                    size = Size(w, size.height),
+                    cornerRadius = CornerRadius(minOf(w, size.height) / 2f)
+                )
+            }
+    )
 }
 
 /**
@@ -224,14 +245,14 @@ internal fun CoachWatchBar(
 internal fun CoachSleepBars(hours: List<Float>, floorHours: Float, c: CoachColors) {
     if (hours.isEmpty()) return
     val max = maxOf(hours.max(), floorHours + 1f)
-    val progress = rememberCoachDraw(hours.size)
+    val progress = rememberCoachDrawState(hours.size)
     val floorText = String.format(java.util.Locale.US, "%.1f", floorHours)
     Column {
         Canvas(Modifier.fillMaxWidth().height(56.dp)) {
             val slot = size.width / hours.size
             val bar = minOf(6.dp.toPx(), slot * 0.5f)
             hours.forEachIndexed { i, h ->
-                val frac = ((h / max) * progress).coerceIn(0.04f, 1f)
+                val frac = ((h / max) * progress.value).coerceIn(0.04f, 1f)
                 val cx = slot * i + slot / 2f
                 drawLine(
                     color = if (h >= floorHours) c.accent else c.secondary,
@@ -263,9 +284,10 @@ internal fun CoachSleepBars(hours: List<Float>, floorHours: Float, c: CoachColor
 @Composable
 internal fun CoachHrLine(values: List<Int>, baseline: Int?, c: CoachColors) {
     if (values.size < 2) return
+    val series = remember(values) { values.map { it.toDouble() } }
     Column {
         Box {
-            CoachSparkline(values.map { it.toDouble() }, c.accent, c.bg, height = 56.dp)
+            CoachSparkline(series, c.accent, c.bg, height = 56.dp)
             if (baseline != null) {
                 val lo = minOf(values.min(), baseline).toFloat()
                 val hi = maxOf(values.max(), baseline).toFloat()

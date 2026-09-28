@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -31,9 +30,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.adapt.E1rm
@@ -43,7 +46,7 @@ import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.gym.stats.components.LineChart
 import com.forge.app.ui.gym.stats.components.ScatterChart
-import com.forge.app.ui.common.rememberDrawProgress
+import com.forge.app.ui.common.rememberDrawProgressState
 import com.forge.app.ui.common.staggeredProgress
 import com.forge.app.ui.gym.stats.state.E1rmLift
 import com.forge.app.ui.gym.stats.state.PrEntry
@@ -77,13 +80,14 @@ internal fun ColumnScope.E1rmComparisonList(
 ) {
     val maxE1 = lifts.maxOf { it.currentE1rm }.coerceAtLeast(1.0)
     // The comparison bars glide in on first appearance, staggered down the list — the same motion
-    // as the session screen's per-exercise bars.
-    val progress = rememberDrawProgress(Unit, ForgeMotion.drawTween())
+    // as the session screen's per-exercise bars. Each row gets a lambda over the shared reveal and
+    // reads it in draw, so the glide never recomposes the list.
+    val progress = rememberDrawProgressState(Unit, ForgeMotion.drawTween())
     lifts.forEachIndexed { i, lift ->
         E1rmDrillRow(
             lift = lift,
             frac = (lift.currentE1rm / maxE1).toFloat(),
-            barProgress = staggeredProgress(progress, i, lifts.size),
+            barProgress = { staggeredProgress(progress.value, i, lifts.size) },
             prsForLift = prs.filter { it.exerciseName == lift.exerciseName },
             curve = curves.firstOrNull { it.exerciseId == lift.exerciseId },
             weightUnit = weightUnit,
@@ -103,7 +107,7 @@ internal fun ColumnScope.E1rmComparisonList(
 private fun E1rmDrillRow(
     lift: E1rmLift,
     frac: Float,
-    barProgress: Float,
+    barProgress: () -> Float,
     prsForLift: List<PrEntry>,
     curve: StrengthCurve?,
     weightUnit: WeightUnit,
@@ -171,15 +175,24 @@ private fun E1rmDrillRow(
                     }
                 }
             }
+            // The fill is drawn rather than sized with fillMaxWidth(fraction), so the reveal is a
+            // redraw per frame, not a relayout: the same pill, anchored at the start edge.
             Box(
                 modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(50))
                     .background(c.outline.copy(alpha = 0.25f))
-            ) {
-                Box(
-                    modifier = Modifier.fillMaxWidth((frac * barProgress).coerceIn(0f, 1f)).fillMaxHeight()
-                        .clip(RoundedCornerShape(50)).background(c.accent)
-                )
-            }
+                    .drawBehind {
+                        val w = size.width * (frac * barProgress()).coerceIn(0f, 1f)
+                        if (w > 0f) {
+                            val left = if (layoutDirection == LayoutDirection.Rtl) size.width - w else 0f
+                            drawRoundRect(
+                                color = c.accent,
+                                topLeft = Offset(left, 0f),
+                                size = Size(w, size.height),
+                                cornerRadius = CornerRadius(minOf(w, size.height) / 2f)
+                            )
+                        }
+                    }
+            )
         }
         AnimatedVisibility(
             visible = expanded && expandable,

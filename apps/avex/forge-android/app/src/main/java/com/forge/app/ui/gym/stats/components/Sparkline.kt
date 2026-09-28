@@ -1,14 +1,16 @@
 package com.forge.app.ui.gym.stats.components
 
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.foundation.Canvas
 import androidx.compose.ui.unit.dp
 
 /**
@@ -45,8 +47,11 @@ internal fun Sparkline(
     minValue: Double,
     maxValue: Double,
     modifier: Modifier = Modifier,
-    /** 0→1 left-to-right reveal (see rememberDrawProgress). 1f = fully drawn. */
-    progress: Float = 1f,
+    /**
+     * 0→1 left-to-right reveal (see rememberDrawProgressState). Returns 1f when fully drawn. A
+     * lambda, read only in draw, so the reveal redraws the chart without recomposing it.
+     */
+    progress: () -> Float = { 1f },
     /** Vertical positions of the dashed guide lines, 0 (top) → 1 (bottom). */
     gridFractions: List<Float> = listOf(0.25f, 0.50f, 0.75f),
     /** Draw the faint marker on the first point (off for the full-size chart). */
@@ -60,53 +65,62 @@ internal fun Sparkline(
     val range = (maxValue - minValue).coerceAtLeast(rangeFloor)
     val gridColor = lineColor.copy(alpha = 0.12f)
 
-    Canvas(modifier = modifier) {
+    // Built once per data set, not per frame of the reveal.
+    val trend = remember(values) { olsTrend(values) }
+
+    // Geometry is cached per size; only the reveal clip moves, read in draw.
+    Spacer(modifier.drawWithCache {
         val dashPx = 4.dp.toPx()
         val gridEffect = PathEffect.dashPathEffect(floatArrayOf(dashPx, dashPx))
-
-        // Gridlines render in full; the data line + endpoints reveal left-to-right.
-        gridFractions.forEach { frac ->
-            drawLine(
-                color = gridColor,
-                start = Offset(0f, size.height * frac),
-                end = Offset(size.width, size.height * frac),
-                strokeWidth = 1.dp.toPx(),
-                pathEffect = gridEffect
-            )
-        }
-
         fun yOf(v: Double) = size.height - ((v - minValue) / range * size.height).toFloat()
-        val clip = size.width * progress.coerceIn(0f, 1f)
         val stepX = size.width / (values.size - 1)
+        val path = Path()
+        values.forEachIndexed { i, value ->
+            val x = stepX * i
+            val y = yOf(value)
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        val lineStroke = Stroke(width = 2.dp.toPx())
+        val trendStart = trend?.let { (_, intercept) -> Offset(0f, yOf(intercept)) }
+        val trendEnd = trend?.let { (slope, intercept) -> Offset(size.width, yOf(intercept + slope * (values.size - 1))) }
+        val startPoint = Offset(0f, yOf(values.first()))
+        val endPoint = Offset(stepX * (values.size - 1), yOf(values.last()))
 
-        // Trend first, so the data line reads on top of it.
-        if (trendColor != null) {
-            olsTrend(values)?.let { (slope, intercept) ->
+        onDrawBehind {
+            // Gridlines render in full; the data line + endpoints reveal left-to-right.
+            gridFractions.forEach { frac ->
+                drawLine(
+                    color = gridColor,
+                    start = Offset(0f, size.height * frac),
+                    end = Offset(size.width, size.height * frac),
+                    strokeWidth = 1.dp.toPx(),
+                    pathEffect = gridEffect
+                )
+            }
+
+            val clip = size.width * progress().coerceIn(0f, 1f)
+
+            // Trend first, so the data line reads on top of it.
+            if (trendColor != null && trendStart != null && trendEnd != null) {
                 clipRect(right = clip) {
                     drawLine(
                         color = trendColor,
-                        start = Offset(0f, yOf(intercept)),
-                        end = Offset(size.width, yOf(intercept + slope * (values.size - 1))),
+                        start = trendStart,
+                        end = trendEnd,
                         strokeWidth = 1.5.dp.toPx(),
                         pathEffect = gridEffect
                     )
                 }
             }
-        }
 
-        clipRect(right = clip) {
-            val path = Path()
-            values.forEachIndexed { i, value ->
-                val x = stepX * i
-                val y = yOf(value)
-                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            }
-            drawPath(path = path, color = lineColor, style = Stroke(width = 2.dp.toPx()))
+            clipRect(right = clip) {
+                drawPath(path = path, color = lineColor, style = lineStroke)
 
-            if (showStartEndpoint) {
-                drawCircle(color = lineColor.copy(alpha = 0.5f), radius = 3.dp.toPx(), center = Offset(0f, yOf(values.first())))
+                if (showStartEndpoint) {
+                    drawCircle(color = lineColor.copy(alpha = 0.5f), radius = 3.dp.toPx(), center = startPoint)
+                }
+                drawCircle(color = lineColor, radius = 4.dp.toPx(), center = endPoint)
             }
-            drawCircle(color = lineColor, radius = 4.dp.toPx(), center = Offset(stepX * (values.size - 1), yOf(values.last())))
         }
-    }
+    })
 }

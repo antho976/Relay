@@ -18,8 +18,8 @@ internal fun LineChart(
     trendColor: Color? = null,
     minValue: Double = values.minOrNull() ?: 0.0,
     maxValue: Double = values.maxOrNull() ?: 1.0,
-    /** 0→1 left-to-right reveal (see rememberDrawProgress). 1f = fully drawn. */
-    progress: Float = 1f
+    /** 0→1 left-to-right reveal (see rememberDrawProgressState), read only in draw. */
+    progress: () -> Float = { 1f }
 ) {
     Sparkline(
         values = values,

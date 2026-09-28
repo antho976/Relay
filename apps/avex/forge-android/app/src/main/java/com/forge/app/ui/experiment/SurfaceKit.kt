@@ -48,7 +48,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.sparklineSeries
 import com.forge.app.ui.common.bounceCombinedClick
-import com.forge.app.ui.common.rememberDrawProgress
+import com.forge.app.ui.common.rememberDrawProgressState
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 
@@ -257,11 +257,12 @@ fun SurfaceSparkline(
     modifier: Modifier = Modifier
 ) {
     if (values.size < 2) return
-    val progress = rememberDrawProgress(key = values, spec = ForgeMotion.drawTween())
+    // Read only inside the Canvas below: the reveal invalidates the draw, not this composable.
+    val progress = rememberDrawProgressState(key = values, spec = ForgeMotion.drawTween())
     // Reduced to what the chart can actually show, once (P-13) — see [sparklineSeries].
     val plotted = remember(values) { sparklineSeries(values) }
     // The extrema are a property of the DATA, so they belong outside the draw scope: they were
-    // recomputed on every recomposition, and the reveal recomposes ~54 times per entry (P-13).
+    // recomputed on every recomposition, back when the reveal recomposed ~54 times per entry (P-13).
     val min = remember(plotted) { plotted.min() }
     val range = remember(plotted) { (plotted.max() - min).takeIf { it > 0.0 } ?: 1.0 }
     // And so are the paths, once the canvas size is known — which the reveal does not change. Both
@@ -274,12 +275,13 @@ fun SurfaceSparkline(
         // Half a stroke would clear the line; the dot is fatter, so it sets the inset.
         val inset = maxOf(stroke / 2f, dot)
         geometry.ensure(size, plotted, min, range, inset)
-        clipRect(right = (w * progress).coerceAtLeast(0.01f)) {
+        val p = progress.value
+        clipRect(right = (w * p).coerceAtLeast(0.01f)) {
             drawPath(geometry.area, Brush.verticalGradient(listOf(color.copy(alpha = 0.15f), Color.Transparent)))
             drawPath(geometry.line, color, style = Stroke(width = stroke, cap = StrokeCap.Round))
         }
         // The only per-frame work left: the end dot riding the reveal frontier.
-        val fx = (plotted.size - 1) * progress
+        val fx = (plotted.size - 1) * p
         val i = fx.toInt().coerceIn(0, plotted.size - 2)
         val t = fx - i
         val ys = geometry.ys
