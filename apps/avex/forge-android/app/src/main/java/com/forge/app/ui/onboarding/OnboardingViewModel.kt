@@ -10,6 +10,8 @@ import com.forge.app.program.GeneratedDay
 import com.forge.app.program.GenerationParams
 import com.forge.app.program.ProblemArea
 import com.forge.app.program.ProgramGenerator
+import com.forge.app.program.SplitTemplates
+import com.forge.app.domain.schedule.WeeklySchedule
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -46,12 +48,13 @@ class OnboardingViewModel @Inject constructor(
     /** Pure, side-effect-free week for the preview step — the same [seed] is persisted on finish. */
     fun buildPreview(
         daysPerWeek: Int, equipment: Set<String>, goal: String, experience: String,
-        problemAreas: Set<String>, frozenIds: Set<String>?, seed: Long
+        problemAreas: Set<String>, frozenIds: Set<String>?, seed: Long, sessionMinutes: Int? = null
     ): List<GeneratedDay> = ProgramGenerator.generate(
         GenerationParams(
             daysPerWeek = daysPerWeek, goal = goal, experience = experience,
             problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet(),
-            frozenIds = frozenIds
+            frozenIds = frozenIds,
+            sessionMinutes = sessionMinutes?.takeIf { it > 0 }
         ),
         equipment.mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
         emptySet(), emptySet(), seed = seed
@@ -86,7 +89,11 @@ class OnboardingViewModel @Inject constructor(
         frozenIds: Set<String>? = null,
         coachEnabled: Boolean = true,
         /** App-lock opt-in from onboarding (GYMAP-69); false leaves it off (the default). */
-        appLock: Boolean = false
+        appLock: Boolean = false,
+        /** Minutes per session; null / ≤ 0 = no ceiling. Generated path only, like the day count. */
+        sessionMinutes: Int? = null,
+        /** Weekdays to pin the generated days to (0 = Monday); null = "whenever I can" (sequence). */
+        trainingWeekdays: Set<Int>? = null
     ) {
         // Stop the resume-draft autosaver before the completion write removes the draft.
         drafts.stopWrites()
@@ -104,6 +111,7 @@ class OnboardingViewModel @Inject constructor(
                 PLAN_GENERATED -> {
                     effectiveGoal = goal
                     settingsRepo.setDaysPerWeek(daysPerWeek)
+                    settingsRepo.setSessionMinutes(sessionMinutes)
                     settingsRepo.setAvailableEquipment(equipment)
                     settingsRepo.setFrozenExerciseIds(frozenIds)
                     settingsRepo.setRotationCadence(cadence)
@@ -112,7 +120,16 @@ class OnboardingViewModel @Inject constructor(
                     settingsRepo.setUserGoal(goal)
                     problemAreas.forEach { settingsRepo.toggleProblemArea(it, true) }
                     // Persist exactly the week shown in the preview (same seed + inputs).
-                    generateProgram(daysPerWeek, goal, experience, problemAreas, equipment, frozenIds, seed)
+                    generateProgram(daysPerWeek, goal, experience, problemAreas, equipment, frozenIds, seed, sessionMinutes)
+                    // The generated days carry their template keys, in template order.
+                    if (!trainingWeekdays.isNullOrEmpty()) {
+                        settingsRepo.setWeeklySchedule(
+                            WeeklySchedule.fromWeekdays(trainingWeekdays, SplitTemplates.forDays(daysPerWeek).map { it.key })
+                        )
+                        settingsRepo.setScheduleMode(WeeklySchedule.MODE_WEEKDAY)
+                    } else {
+                        settingsRepo.setScheduleMode(WeeklySchedule.MODE_SEQUENCE)
+                    }
                 }
                 PLAN_CUSTOM -> {
                     // Build-your-own starts with a genuinely EMPTY plan — the builder opens blank and
@@ -155,7 +172,8 @@ class OnboardingViewModel @Inject constructor(
 
     private suspend fun generateProgram(
         daysPerWeek: Int, goal: String, experience: String,
-        problemAreas: Set<String>, equipment: Set<String>, frozenIds: Set<String>?, seed: Long
+        problemAreas: Set<String>, equipment: Set<String>, frozenIds: Set<String>?, seed: Long,
+        sessionMinutes: Int?
     ) {
         programRepository.generate(
             // Onboarding doesn't collect emphasis / priorityMuscles / pinned / dbMaxLb (the dumbbell
@@ -165,7 +183,8 @@ class OnboardingViewModel @Inject constructor(
             GenerationParams(
                 daysPerWeek = daysPerWeek, goal = goal, experience = experience,
                 problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet(),
-                frozenIds = frozenIds
+                frozenIds = frozenIds,
+                sessionMinutes = sessionMinutes?.takeIf { it > 0 }
             ),
             equipment.mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
             emptySet(), emptySet(), seed = seed

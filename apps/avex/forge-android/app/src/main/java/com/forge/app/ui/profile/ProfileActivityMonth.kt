@@ -101,6 +101,14 @@ import java.util.Locale
  * anything in it, forward stops at this one.
  *
  * Swapping back to the year is one call site in [ProfileScreen]; both live in the package.
+ *
+ * ## Planned rest (2026-09-28)
+ *
+ * With fixed training weekdays the plan knows which days were meant to be rest. Those draw the way
+ * the Home week strip draws them — unfilled, with a short rest bar — so "rested as planned" and
+ * "skipped a training day" stop being the same grey square. Each day is judged by the schedule in
+ * force ON it ([com.forge.app.domain.schedule.ScheduleHistory]), so changing your days today does
+ * not repaint last month. Days before the schedule was first recorded keep the old single tone.
  */
 
 /**
@@ -151,7 +159,12 @@ internal fun ProfileActivityMonth(
     hue: Color,
     /** Opens the day sheet. Only lit days call it — a rest day has nothing to show. */
     onDayTap: ((LocalDate) -> Unit)? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /**
+     * What the plan said about a day: true = planned rest, false = a training day, null = no fixed
+     * plan was in force (sequence mode, or before the schedule was recorded).
+     */
+    planOn: (LocalDate) -> Boolean? = { null }
 ) {
     val today = remember { LocalDate.now() }
     val thisMonth = remember(today) { YearMonth.from(today) }
@@ -196,6 +209,12 @@ internal fun ProfileActivityMonth(
         if (monthsBack == 0) MonthStreak.of(streakDays, longestStreakDays) else null
     }
 
+    // Whether the month on screen has a planned rest day, so the key only explains the bar when
+    // there is a bar to explain.
+    val hasPlannedRest = (1..month.lengthOfMonth()).any { d ->
+        val date = month.atDay(d)
+        planOn(date) == true && (activityByDay[date.toEpochDay()] ?: 0) == 0
+    }
     val empty = MaterialTheme.colorScheme.outline.copy(alpha = MONTH_EMPTY_ALPHA)
     val future = MaterialTheme.colorScheme.outline.copy(alpha = MONTH_FUTURE_ALPHA)
     val monthName = month.month.getDisplayName(TextStyle.FULL, currentLocale()).uppercase()
@@ -272,7 +291,10 @@ internal fun ProfileActivityMonth(
                             } else {
                                 val count = activityByDay[date.toEpochDay()] ?: 0
                                 val level = monthLevelOf(count)
+                                val plan = planOn(date)
+                                val plannedRest = plan == true && count == 0
                                 val color = when {
+                                    plannedRest -> Color.Transparent
                                     date.isAfter(today) -> future
                                     level == 0 -> empty
                                     else -> lerp(empty, hue, MONTH_LIT_RUNGS[level - 1])
@@ -285,13 +307,23 @@ internal fun ProfileActivityMonth(
                                     cell
                                         .clip(MONTH_CELL_SHAPE)
                                         .background(color)
-                                        .semantics { contentDescription = dayReading(date, count) }
+                                        .semantics { contentDescription = dayReading(date, count, plan, date.isAfter(today)) }
                                         .then(
                                             if (tap != null)
                                                 Modifier.clickableLabeled("See what you did") { tap(date) }
                                             else Modifier
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (plannedRest) {
+                                        // The same rest bar the Home week strip draws.
+                                        Box(
+                                            Modifier.size(width = 12.dp, height = 3.dp)
+                                                .clip(MONTH_SWATCH_SHAPE)
+                                                .background(if (date.isAfter(today)) future else muted)
                                         )
-                                )
+                                    }
+                                }
                             }
                         }
                     }
@@ -310,7 +342,7 @@ internal fun ProfileActivityMonth(
         // the mark above it. Put back against the grid it explains, it needs no alignment at all,
         // and the readings get the whole measure for the streak that moved down off the cover.
         Spacer(Modifier.height(12.dp))
-        MonthRampLegend(empty, hue, muted, Modifier.align(Alignment.End))
+        MonthRampLegend(empty, hue, muted, Modifier.align(Alignment.End), showRest = hasPlannedRest)
         Spacer(Modifier.height(18.dp))
         // The figures the grid cannot be counted for. BEST sits off at the right margin and only
         // when it beats the current run — printed beside an equal streak it is the same number
@@ -389,9 +421,12 @@ private fun MonthStep(
 }
 
 /** What TalkBack says on one day cell: the date, then what is on it. */
-private fun dayReading(date: LocalDate, count: Int): String {
+private fun dayReading(date: LocalDate, count: Int, plan: Boolean? = null, ahead: Boolean = false): String {
     val day = date.format(DAY_READING_FMT)
     return when {
+        count <= 0 && plan == true -> "$day, planned rest day"
+        count <= 0 && plan == false && ahead -> "$day, training day"
+        count <= 0 && plan == false -> "$day, no session on a training day"
         count <= 0 -> "$day, rest day"
         count == 1 -> "$day, 1 session"
         else -> "$day, $count sessions"
@@ -448,8 +483,21 @@ private fun MonthReading(figure: String, noun: String, onBg: Color, muted: Color
  * because the ramp is ordinal and the grid's own reading names both counts in words.
  */
 @Composable
-private fun MonthRampLegend(empty: Color, hue: Color, muted: Color, modifier: Modifier = Modifier) {
+private fun MonthRampLegend(
+    empty: Color,
+    hue: Color,
+    muted: Color,
+    modifier: Modifier = Modifier,
+    /** Leads the key with the rest bar, when the month on screen has a planned rest day to explain. */
+    showRest: Boolean = false
+) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        if (showRest) {
+            Box(Modifier.size(width = 12.dp, height = 3.dp).clip(MONTH_SWATCH_SHAPE).background(muted))
+            Spacer(Modifier.width(6.dp))
+            Text("REST", style = MaterialTheme.typography.labelSmall, color = muted)
+            Spacer(Modifier.width(14.dp))
+        }
         Text("LESS", style = MaterialTheme.typography.labelSmall, color = muted)
         Spacer(Modifier.width(6.dp))
         Box(Modifier.size(MONTH_SWATCH).clip(MONTH_SWATCH_SHAPE).background(empty))

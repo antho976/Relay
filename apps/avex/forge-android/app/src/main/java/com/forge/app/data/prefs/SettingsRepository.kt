@@ -29,7 +29,7 @@ enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
         listOf(
             PreferenceKeys.AMOLED_MODE, PreferenceKeys.COMPACT_SET_LOGGING,
             PreferenceKeys.ACCENT_COLOR_HEX, PreferenceKeys.ACCENT_ENABLED, PreferenceKeys.FONT_CHOICE,
-            PreferenceKeys.THEMED_LAUNCH_INTRO
+            PreferenceKeys.THEMED_LAUNCH_INTRO, PreferenceKeys.ACCENT_FROM_ICON
             // APP_ICON is deliberately excluded — the enabled activity-alias is the real state, so
             // clearing the pref alone would desync the ringed choice from the on-device icon.
         )
@@ -577,6 +577,22 @@ class SettingsRepository @Inject constructor(
     suspend fun setThemedLaunchIntro(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.THEMED_LAUNCH_INTRO] = value }
 
+    /** Accent follows the launcher icon's colour (default off) — see [effectiveAccentHex]. */
+    val accentFromIcon: Flow<Boolean> = pref { it[PreferenceKeys.ACCENT_FROM_ICON] ?: false }
+    suspend fun setAccentFromIcon(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.ACCENT_FROM_ICON] = value }
+
+    /**
+     * The accent everything should actually paint with: the chosen icon's colour when "match accent
+     * to icon" is on and the icon has one, else the picked [accentColorHex] ("" = the default red).
+     * The theme, the widget and the watch all read this one, so they can't disagree.
+     */
+    val effectiveAccentHex: Flow<String> = pref { prefs ->
+        val picked = prefs[PreferenceKeys.ACCENT_COLOR_HEX] ?: ""
+        if (prefs[PreferenceKeys.ACCENT_FROM_ICON] != true) picked
+        else com.forge.app.appicon.AppIcon.fromKey(prefs[PreferenceKeys.APP_ICON] ?: "").accentHex ?: picked
+    }
+
     val fontChoice: Flow<String> = pref { it[PreferenceKeys.FONT_CHOICE] ?: "default" }
 
     // ─── Locale (#116) ────────────────────────────────────────────────────────
@@ -717,6 +733,14 @@ class SettingsRepository @Inject constructor(
     val daysPerWeek: Flow<Int> = pref { it[PreferenceKeys.DAYS_PER_WEEK] ?: 4 }
     suspend fun setDaysPerWeek(n: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.DAYS_PER_WEEK] = n.coerceIn(1, 7) }
+
+    /** Preferred session length in minutes; null = no ceiling (the generator's historical behavior). */
+    val sessionMinutes: Flow<Int?> = pref { prefs -> prefs[PreferenceKeys.SESSION_MINUTES]?.takeIf { it > 0 } }
+    suspend fun setSessionMinutes(minutes: Int?) =
+        context.forgePreferences.edit {
+            if (minutes == null || minutes <= 0) it.remove(PreferenceKeys.SESSION_MINUTES)
+            else it[PreferenceKeys.SESSION_MINUTES] = minutes.coerceIn(15, 180)
+        }
 
     /** Default rest base (seconds) per movement type — what the rest timer starts at before personal
      *  tuning + the brutal bonus. Defaults to the canonical 120 / 90; clamped to a sane 30s–10min. */
@@ -866,7 +890,35 @@ class SettingsRepository @Inject constructor(
     /** "sequence" (default — day after the last finished) or "weekday" (fixed Mon..Sun plan). */
     val scheduleMode: Flow<String> = pref { it[PreferenceKeys.SCHEDULE_MODE] ?: com.forge.app.domain.schedule.WeeklySchedule.MODE_SEQUENCE }
     suspend fun setScheduleMode(v: String) =
-        context.forgePreferences.edit { it[PreferenceKeys.SCHEDULE_MODE] = v }
+        context.forgePreferences.edit { it[PreferenceKeys.SCHEDULE_MODE] = v; recordSchedule(it) }
+
+    /** Every schedule change with the day it took effect — see [com.forge.app.domain.schedule.ScheduleHistory]. */
+    val scheduleHistory: Flow<List<com.forge.app.domain.schedule.ScheduleHistory.Entry>> =
+        pref { com.forge.app.domain.schedule.ScheduleHistory.parse(it[PreferenceKeys.SCHEDULE_HISTORY]) }
+
+    /**
+     * Start the history for a user whose fixed-weekday schedule predates it (set before the history
+     * was recorded). From today on, not backwards: what the plan was before today isn't known.
+     */
+    suspend fun ensureScheduleHistory() = context.forgePreferences.edit { prefs ->
+        if (prefs[PreferenceKeys.SCHEDULE_HISTORY].isNullOrBlank() &&
+            prefs[PreferenceKeys.SCHEDULE_MODE] == com.forge.app.domain.schedule.WeeklySchedule.MODE_WEEKDAY
+        ) recordSchedule(prefs)
+    }
+
+    /** Append the schedule [prefs] now holds to the history, effective today. Inside the caller's edit. */
+    private fun recordSchedule(prefs: androidx.datastore.preferences.core.MutablePreferences) {
+        val mode = prefs[PreferenceKeys.SCHEDULE_MODE] ?: com.forge.app.domain.schedule.WeeklySchedule.MODE_SEQUENCE
+        val slots = prefs[PreferenceKeys.SCHEDULE_WEEKLY]
+            ?.let { stored -> com.forge.app.domain.schedule.WeeklySchedule.parse(stored) }
+            ?: com.forge.app.domain.schedule.WeeklySchedule.defaultFor(com.forge.app.program.Program.dayKeys)
+        val today = java.time.Instant.ofEpochMilli(clock.nowMs())
+            .atZone(java.time.ZoneId.systemDefault()).toLocalDate().toEpochDay()
+        val history = com.forge.app.domain.schedule.ScheduleHistory
+        prefs[PreferenceKeys.SCHEDULE_HISTORY] = history.encode(
+            history.record(history.parse(prefs[PreferenceKeys.SCHEDULE_HISTORY]), today, mode, slots)
+        )
+    }
 
     /** The 7-slot weekly schedule (Mon..Sun; "" = rest). Defaults to program days on the first weekdays. */
     val weeklySchedule: Flow<List<String>> = pref {
@@ -877,6 +929,7 @@ class SettingsRepository @Inject constructor(
     suspend fun setWeeklySchedule(slots: List<String>) =
         context.forgePreferences.edit {
             it[PreferenceKeys.SCHEDULE_WEEKLY] = com.forge.app.domain.schedule.WeeklySchedule.encode(slots)
+            recordSchedule(it)
         }
 
     /**
@@ -899,6 +952,7 @@ class SettingsRepository @Inject constructor(
             prefs[PreferenceKeys.SCHEDULE_WEEKLY] = com.forge.app.domain.schedule.WeeklySchedule.encode(
                 slots.mapIndexed { index, slot -> if (index == weekdayIndex) dayKey else slot }
             )
+            recordSchedule(prefs)
         }
     }
 

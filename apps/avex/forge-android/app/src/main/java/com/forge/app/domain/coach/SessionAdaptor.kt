@@ -2,6 +2,7 @@ package com.forge.app.domain.coach
 
 import com.forge.app.domain.adapt.ProgramSlotSnap
 import com.forge.app.program.MuscleGroup
+import com.forge.app.program.SessionEstimate
 
 /**
  * Mid-session re-planning (Coach v3 E) — the "what now?" eliminator.
@@ -68,6 +69,52 @@ object SessionAdaptor {
             else -> "Keeping the ${kept.size} that matter most and dropping ${dropped.size} for time."
         }
         return Triage(kept, dropped, reason)
+    }
+
+    /**
+     * One exercise still to do today, priced for [fitToTime]. [remainingSets] is what's left of the
+     * target (a half-done exercise costs only its remaining sets); [started] means sets are already
+     * logged against it, so it is never the one cut.
+     */
+    data class TimedExercise(
+        val id: String,
+        val remainingSets: Int,
+        val restSeconds: Int,
+        val compound: Boolean,
+        val started: Boolean = false
+    ) {
+        val seconds: Int get() = SessionEstimate.exerciseSeconds(remainingSets, restSeconds)
+    }
+
+    /** What survives an "I have N minutes" fit, both lists in the session's own order. */
+    data class TimeFit(val keepIds: List<String>, val dropIds: List<String>)
+
+    /**
+     * The day screen's "I have N minutes today". Priced by the same rule as the day card's "~min"
+     * ([SessionEstimate.exerciseSeconds]), not a flat per-set guess, so "20 minutes" means the same
+     * thing on both screens. Keeps, in order: anything already started, then compounds, then the
+     * rest in the order the day lists them (a generated day lists its most important work first).
+     * Whatever doesn't fit is dropped, but never below [MIN_EXERCISES] kept.
+     */
+    fun fitToTime(exercises: List<TimedExercise>, minutesAvailable: Int): TimeFit {
+        val budget = minutesAvailable.coerceAtLeast(0) * 60
+        val ranked = exercises.withIndex().sortedWith(
+            compareByDescending<IndexedValue<TimedExercise>> { it.value.started }
+                .thenByDescending { it.value.compound }
+                .thenBy { it.index }
+        ).map { it.value }
+        val keep = HashSet<String>()
+        var used = 0
+        for (ex in ranked) {
+            val mustKeep = ex.started || keep.size < MIN_EXERCISES
+            if (!mustKeep && used + ex.seconds > budget) continue
+            keep += ex.id
+            used += ex.seconds
+        }
+        return TimeFit(
+            keepIds = exercises.map { it.id }.filter { it in keep },
+            dropIds = exercises.map { it.id }.filterNot { it in keep }
+        )
     }
 
     /**

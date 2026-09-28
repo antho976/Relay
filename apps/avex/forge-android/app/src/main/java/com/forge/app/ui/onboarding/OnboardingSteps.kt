@@ -23,6 +23,10 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.forge.app.domain.schedule.WeeklySchedule
+import com.forge.app.program.SessionEstimate
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import com.forge.app.ui.theme.ForgeWarning
 
 /**
@@ -139,7 +143,13 @@ internal fun StepExperience(selected: String, onSelect: (String) -> Unit) {
  * group, the same control every one-of-few answer uses in this flow.
  */
 @Composable
-internal fun StepDays(days: Int, experience: String, onChange: (Int) -> Unit) {
+internal fun StepDays(
+    days: Int,
+    experience: String,
+    onChange: (Int) -> Unit,
+    sessionMinutes: Int? = null,
+    onSessionMinutes: (Int) -> Unit = {}
+) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         StepTitle("How many days a week?")
         StepCaption("Your split follows, and it becomes your weekly target on Home.")
@@ -157,6 +167,78 @@ internal fun StepDays(days: Int, experience: String, onChange: (Int) -> Unit) {
                     modifier = Modifier.fillMaxWidth().padding(10.dp)
                 )
             })
+        }
+        Spacer(Modifier.height(6.dp))
+        // Optional: the CTA doesn't wait on it. The week above redraws as it changes, because the
+        // answer trims each day to fit (accessories first, never the main lift).
+        val lengths = SessionEstimate.SESSION_LENGTH_CHOICES
+        ForgeGroupSection(
+            label = "About how long per session?",
+            meta = "minutes",
+            footer = { StepCaption("Optional. Avex fits each workout to it, and you can still shorten any one workout on the day.") }
+        ) {
+            ForgeRowGroup({
+                ForgeSlidingSegments(
+                    options = lengths.map { SessionEstimate.sessionLengthLabel(it) },
+                    // null = unanswered (nothing ringed); 0 = an explicit "Any".
+                    selectedIndex = when (sessionMinutes) {
+                        null -> -1
+                        0 -> lengths.lastIndex
+                        else -> lengths.indexOf(sessionMinutes)
+                    },
+                    onSelect = { onSessionMinutes(lengths[it] ?: 0) },
+                    modifier = Modifier.fillMaxWidth().padding(10.dp)
+                )
+            })
+        }
+    }
+}
+
+/** "Same days each week" vs "whenever I can" — keys for [StepWeekdays]. */
+internal const val DAYS_FIXED = "fixed"
+internal const val DAYS_FLEXIBLE = "flexible"
+
+/**
+ * Which weekdays the user trains on. Fixed days pin each workout to a weekday (Home shows the right
+ * one on the right day); flexible keeps the old "next in line" sequence. Picking fixed pre-rings a
+ * sensible spread for the day count, so most people only confirm it.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun StepWeekdays(
+    daysPerWeek: Int,
+    fixedDays: Boolean?,
+    weekdays: Set<Int>,
+    onFixedDays: (Boolean) -> Unit,
+    onToggleWeekday: (Int) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        StepTitle("Same days every week?")
+        StepCaption("Pick your days and Home shows the right workout on each one. Change it anytime in your plan.")
+        Spacer(Modifier.height(6.dp))
+        ForgeChoiceList(
+            choices = listOf(
+                ForgeChoice(DAYS_FIXED, "Same days each week", "Each workout gets its own weekday"),
+                ForgeChoice(DAYS_FLEXIBLE, "Whenever I can", "The next workout in line, whatever the day")
+            ),
+            selected = when (fixedDays) { true -> DAYS_FIXED; false -> DAYS_FLEXIBLE; null -> "" },
+            onSelect = { onFixedDays(it == DAYS_FIXED) }
+        )
+        if (fixedDays == true) {
+            Spacer(Modifier.height(6.dp))
+            ForgeGroupSection(
+                label = "Your $daysPerWeek days",
+                meta = "${weekdays.size} of $daysPerWeek"
+            ) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    WeeklySchedule.WEEKDAY_SHORT.forEachIndexed { i, label ->
+                        ChoiceChip(label, selected = i in weekdays, onClick = { onToggleWeekday(i) })
+                    }
+                }
+            }
         }
     }
 }

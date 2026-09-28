@@ -135,6 +135,10 @@ class DayViewModel @Inject constructor(
 
     internal var undoClearJob: Job? = null
 
+    /** In-flight "I have N minutes" fit or its undo — one at a time, so two quick taps can't
+     *  interleave their skip writes and leave a mix of both fits behind. */
+    internal var timeFitJob: Job? = null
+
     /** In-flight finish (FINISH WORKOUT / save-and-exit). The controls stay enabled until the
      *  summary lands, and the finish path is ~8 DB round-trips, so without this a double tap ran the
      *  whole thing twice — mirroring SessionDetailViewModel's exportJob/reLogJob guards. */
@@ -333,6 +337,7 @@ class DayViewModel @Inject constructor(
             is DayUiEvent.UndoLastSet, is DayUiEvent.SetSessionType,
             is DayUiEvent.SetUntracked, is DayUiEvent.SetIntensity,
             is DayUiEvent.ConfirmPreSessionPicker,
+            is DayUiEvent.FitToTime, is DayUiEvent.UndoFitToTime,
             is DayUiEvent.ApplyOrderingSuggestion,
             is DayUiEvent.DismissOrderingSuggestion -> handleSessionEvent(event)
         }

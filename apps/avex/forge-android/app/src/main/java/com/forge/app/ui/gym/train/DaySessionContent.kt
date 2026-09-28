@@ -156,6 +156,12 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
             shownExerciseId = firstIncompleteId ?: state.exercises.firstOrNull()?.plan?.id
         }
     }
+    // A time fit can skip the exercise on screen; move off it the way a hand skip does.
+    LaunchedEffect(state.timeFit) {
+        if (state.exercises.firstOrNull { it.plan.id == shownExerciseId }?.skipped == true) {
+            firstIncompleteId?.let { shownExerciseId = it }
+        }
+    }
     val shownExercise = state.exercises.firstOrNull { it.plan.id == shownExerciseId }
         ?: state.exercises.firstOrNull()
 
@@ -170,6 +176,10 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                     onDisableToday = { onEvent(DayUiEvent.DisableWarmupToday) },
                     onDisableWeek = { onEvent(DayUiEvent.DisableWarmupWeek) }
                 )
+            }
+            // Before the warmup too: "I have 20 minutes" is decided at the door, not after it.
+            if (showTimeFit(state)) {
+                item(key = "time-fit", contentType = "time-fit") { TimeFitRow(state, onEvent) }
             }
         } else {
             item(key = "session-hero", contentType = "session-hero") {
@@ -226,6 +236,10 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                         }
                     }
                 }
+            }
+
+            if (showTimeFit(state)) {
+                item(key = "time-fit", contentType = "time-fit") { TimeFitRow(state, onEvent) }
             }
 
             if (shownExercise != null) {

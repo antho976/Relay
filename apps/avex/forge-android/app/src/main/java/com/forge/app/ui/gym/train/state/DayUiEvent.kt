@@ -89,6 +89,9 @@ sealed interface DayUiEvent {
     data class SetUntracked(val v: Boolean) : DayUiEvent
     data class SetIntensity(val intensity: String) : DayUiEvent
     data object ConfirmPreSessionPicker : DayUiEvent
+    // "I have N minutes today": skip what doesn't fit, and put it back
+    data class FitToTime(val minutes: Int) : DayUiEvent
+    data object UndoFitToTime : DayUiEvent
     // Journal (#111)
     data class UpdateJournal(val text: String) : DayUiEvent
     // Pinned note (#112)

@@ -252,7 +252,13 @@ private fun SearchResultRow(result: SearchResult, query: String) {
 internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when (page) {
     SettingsPage.Appearance -> buildList {
         add(if (s.amoledMode) "Pure black" else "Warm dark")
-        add(if (s.accentEnabled) "${accentName(s.accentColorHex)} accent" else "Monochrome")
+        add(
+            when {
+                !s.accentEnabled -> "Monochrome"
+                s.accentFromIcon && com.forge.app.appicon.AppIcon.fromKey(s.appIconKey).accentHex != null -> "Icon accent"
+                else -> "${accentName(s.accentColorHex)} accent"
+            }
+        )
     }.joinToString(" · ")
     SettingsPage.Format -> "${s.weightUnit.label} · ${if (s.useMiles) "mi" else "km"} · ${if (s.useCm) "cm" else "in"} · ${if (s.timeFormat24h) "24h" else "12h"} · week from ${if (s.firstDayMonday) "Mon" else "Sun"}"
     SettingsPage.Session -> "${s.hapticStrength.replaceFirstChar { it.uppercase() }} haptics · ${restLabel(s.restCompoundSeconds)} rest"

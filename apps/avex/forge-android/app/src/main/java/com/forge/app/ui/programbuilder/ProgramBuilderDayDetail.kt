@@ -60,6 +60,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.schedule.WeeklySchedule
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.ui.common.Corners
 import com.forge.app.ui.common.DraggableItem
@@ -109,6 +110,8 @@ fun ProgramBuilderDayDetail(
     onRename: (String) -> Unit,
     onSetType: (String) -> Unit,
     onSetAccent: (String) -> Unit,
+    onToggleWeekday: (Int) -> Unit,
+    onClearWeekdays: () -> Unit,
     onAddExercises: (Collection<String>) -> Unit,
     onRemoveExercise: (String) -> Unit,
     onSwapExercise: (String, String) -> Unit,
@@ -123,8 +126,9 @@ fun ProgramBuilderDayDetail(
     BackHandler { onBack() }
 
     val listState = rememberLazyListState()
-    // Four leading items (name, TYPE, COLOR, EXERCISES anchor) sit above the draggable rows.
-    val dragState = rememberDragDropState(listState, firstDraggableIndex = 4) { from, to -> onMoveExercise(from, to) }
+    // Five leading items (name, TYPE, DAY OF THE WEEK, COLOR, EXERCISES anchor) sit above the
+    // draggable rows.
+    val dragState = rememberDragDropState(listState, firstDraggableIndex = 5) { from, to -> onMoveExercise(from, to) }
 
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
@@ -191,6 +195,31 @@ fun ProgramBuilderDayDetail(
                                 selected = current == key,
                                 corners = corners,
                                 onClick = { onSetType(key) },
+                                modifier = modifier
+                            )
+                        }
+                    }
+                }
+            }
+            item(key = "weekday") {
+                Box(Modifier.padding(top = 20.dp)) {
+                    ForgeGroupSection(
+                        "Day of the week",
+                        footer = {
+                            ForgeGroupCaption(
+                                if (day.weekdays.isEmpty()) "No fixed day. It comes up when it's next in line."
+                                else "Home shows this workout on these days. A day can hold one workout."
+                            )
+                        }
+                    ) {
+                        // Seven weekdays plus "Any" = two even rows of four.
+                        val tiles: List<Int?> = (0 until WeeklySchedule.SLOTS).toList() + null
+                        ForgeTileGrid(tiles, cols = if (LocalDensity.current.fontScale > 1.3f) 2 else 4) { wd, corners, modifier ->
+                            BuilderTextTile(
+                                label = wd?.let { WeeklySchedule.WEEKDAY_SHORT[it] } ?: "Any",
+                                selected = if (wd == null) day.weekdays.isEmpty() else wd in day.weekdays,
+                                corners = corners,
+                                onClick = { if (wd == null) onClearWeekdays() else onToggleWeekday(wd) },
                                 modifier = modifier
                             )
                         }

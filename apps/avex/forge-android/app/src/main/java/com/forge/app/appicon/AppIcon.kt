@@ -93,6 +93,15 @@ enum class AppIcon(
     GymIron("Iron", IconFamily.Gym, R.drawable.app_icon_gym_iron,
         launchPalette = listOf(0xFF161719, 0xFF8A8C91, 0xFFEDEAE3));
 
+    /**
+     * The icon's own colour as an accent ("#RRGGBB"): the middle of [launchPalette], which is the
+     * mark's body colour (the first is the deep backdrop wash, the last the highlight glow). null
+     * for the house icons, which have no colour of their own — "match accent to icon" then keeps
+     * the accent the user picked.
+     */
+    val accentHex: String?
+        get() = launchPalette?.let { p -> iconAccent(p[1], p.last()) }?.let { "#%06X".format(it) }
+
     /** Human name for the current-selection row: "Avex Pearl", "Nebula Violet". */
     val displayName: String get() = "$family $label"
 
@@ -135,6 +144,36 @@ enum class AppIcon(
         /** Family headers in declaration order (Avex, Solid, Metal, Stealth, …), de-duped. */
         val families: List<IconFamily> = entries.map { it.family }.distinct()
     }
+}
+
+/** The app background the accent draws on (Pearl), as RGB. */
+private const val ACCENT_BACKDROP_RGB = 0x110F0CL
+
+/** Accent text and highlights must read on the background: WCAG's 3:1 for large text and UI marks. */
+private const val ACCENT_MIN_CONTRAST = 3.0
+
+/**
+ * An icon's body colour, lifted toward its own highlight [glow] only as far as it takes to read on
+ * the dark background. A navy or violet mark is a fine icon and an unreadable accent (a nav label in
+ * #3D4F73 on near-black measures about 2.4:1), so the dark icons borrow some of their own glow
+ * rather than a colour from outside the icon. Bright icons come back unchanged. Returns RGB.
+ */
+internal fun iconAccent(body: Long, glow: Long): Long {
+    fun channel(c: Long, shift: Int) = ((c shr shift) and 0xFF).toDouble()
+    fun luminance(rgb: Long): Double {
+        fun lin(v: Double): Double = (v / 255).let { if (it <= 0.04045) it / 12.92 else Math.pow((it + 0.055) / 1.055, 2.4) }
+        return 0.2126 * lin(channel(rgb, 16)) + 0.7152 * lin(channel(rgb, 8)) + 0.0722 * lin(channel(rgb, 0))
+    }
+    val backdrop = luminance(ACCENT_BACKDROP_RGB)
+    fun mix(t: Double): Long {
+        fun ch(shift: Int) = Math.round(channel(body, shift) + (channel(glow, shift) - channel(body, shift)) * t)
+        return (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+    }
+    for (step in 0..10) {
+        val rgb = mix(step / 10.0)
+        if ((luminance(rgb) + 0.05) / (backdrop + 0.05) >= ACCENT_MIN_CONTRAST) return rgb
+    }
+    return glow and 0xFFFFFF
 }
 
 /**

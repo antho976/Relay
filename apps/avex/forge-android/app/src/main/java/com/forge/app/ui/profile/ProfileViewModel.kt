@@ -61,6 +61,10 @@ class ProfileViewModel @Inject constructor(
     private val _state = MutableStateFlow(ProfileUiState())
     val state: StateFlow<ProfileUiState> = _state.asStateFlow()
 
+    /** Every schedule change with its start day — lets ACTIVITY draw the rest days each day's plan had. */
+    val scheduleHistory: StateFlow<List<com.forge.app.domain.schedule.ScheduleHistory.Entry>> =
+        settingsRepo.scheduleHistory.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     // ── Bodyweight (the BODYWEIGHT section + its quick-log sheet) ─────────────────
 
     /** Recent weigh-ins, oldest → newest (the DAO emits newest-first) — feeds the trend sparkline. */

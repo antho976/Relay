@@ -492,7 +492,7 @@ class MainActivity : FragmentActivity() {
                     s.copy(overviewTileOrder = order)
                 }.combine(settingsRepo.pinnedGoals) { s, keys ->
                     s.copy(pinnedGoalKeys = keys)
-                }.combine(settingsRepo.accentColorHex) { s, v ->
+                }.combine(settingsRepo.effectiveAccentHex) { s, v ->
                     s.copy(accentColorHex = v)
                 }.combine(settingsRepo.accentEnabled) { s, v ->
                     s.copy(accentEnabled = v)

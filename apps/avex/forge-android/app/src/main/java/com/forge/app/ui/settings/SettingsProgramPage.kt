@@ -207,6 +207,22 @@ private fun PlanSection(state: SettingsUiState, vm: SettingsViewModel) {
 
     // A schedule orders a plan's workouts; freestyle has none to order.
     if (!state.freestyleMode) {
+        val lengths = com.forge.app.program.SessionEstimate.SESSION_LENGTH_CHOICES
+        SettingsGroup(
+            "Minutes per session",
+            footer = "Each workout is trimmed to fit: accessories go first, your main lifts stay. " +
+                "Used the next time you generate or re-roll."
+        ) {
+            SettingsGroupBlock(padding = PaddingValues(12.dp)) {
+                SettingsSegmented(
+                    options = lengths.map { com.forge.app.program.SessionEstimate.sessionLengthLabel(it) },
+                    selectedIndex = lengths.indexOf(state.sessionMinutes).takeIf { it >= 0 } ?: lengths.lastIndex,
+                    onSelect = { vm.setSessionMinutes(lengths[it]) },
+                    contentDescription = "Minutes per session"
+                )
+            }
+        }
+
         SettingsGroup("Schedule") {
             SettingsSegmentedRow(
                 "Order",

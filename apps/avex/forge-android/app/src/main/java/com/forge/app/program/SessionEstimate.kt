@@ -69,12 +69,21 @@ object SessionEstimate {
      */
     fun estimateMinutes(plan: DayPlan, restFor: (ExercisePlan) -> Int = ::restSeconds): Int {
         if (plan.exercises.isEmpty()) return 0
-        val workSeconds = plan.exercises.sumOf { ex ->
-            ex.sets * WORK_SECONDS_PER_SET + (ex.sets - 1).coerceAtLeast(0) * restFor(ex)
-        }
+        val workSeconds = plan.exercises.sumOf { ex -> exerciseSeconds(ex.sets, restFor(ex)) }
         val minutes = ((workSeconds + WARMUP_SECONDS) / 60.0).roundToInt()
         return ((minutes + 2) / 5) * 5 // nearest 5
     }
+
+    /**
+     * What one exercise costs on the clock: [sets] working sets plus the rest between them (none
+     * after the last). The one pricing rule behind [estimateMinutes], the generator's session-length
+     * ceiling and the day screen's "I have N minutes" fit, so all three agree on what fits.
+     */
+    fun exerciseSeconds(sets: Int, restSeconds: Int): Int =
+        sets.coerceAtLeast(0) * WORK_SECONDS_PER_SET + (sets - 1).coerceAtLeast(0) * restSeconds
+
+    /** The warmup allowance [estimateMinutes] adds on top of the working sets. */
+    const val WARMUP_ALLOWANCE_SECONDS = WARMUP_SECONDS
 
     /** A prescription whose whole numeric range sits at [HEAVY_MAX_REPS] or fewer reps. */
     fun isHeavy(reps: String): Boolean {
@@ -82,4 +91,12 @@ object SessionEstimate {
         val upper = match.groupValues[2].ifEmpty { match.groupValues[1] }.toIntOrNull() ?: return false
         return upper in 1..HEAVY_MAX_REPS
     }
+
+    /**
+     * The session lengths onboarding and Settings → Program offer, in minutes; null is "Any" (no
+     * ceiling). One list so the two screens can't drift.
+     */
+    val SESSION_LENGTH_CHOICES: List<Int?> = listOf(30, 45, 60, 75, 90, null)
+
+    fun sessionLengthLabel(minutes: Int?): String = minutes?.toString() ?: "Any"
 }

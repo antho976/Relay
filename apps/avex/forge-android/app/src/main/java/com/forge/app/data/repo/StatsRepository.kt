@@ -37,6 +37,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -88,6 +89,12 @@ class StatsRepository @Inject constructor(
          * when the week starts on Sunday) that had a finished gym session this week.
          */
         val weekDaysTrained: Set<Int> = emptySet(),
+        /**
+         * Day indices (same order as [weekDaysTrained]) the fixed-weekday schedule plans as rest —
+         * past days under the schedule in force then, today and ahead under today's. Empty in
+         * sequence mode, which plans no rest days.
+         */
+        val weekRestDays: Set<Int> = emptySet(),
         /** Next gym day key in the rotation (Upper A → Lower A → Upper B → Lower B). */
         val nextUpDayKey: String = Program.UPPER_A,
         /** Last 5 finished gym sessions for the overview RECENT section. */
@@ -206,9 +213,17 @@ class StatsRepository @Inject constructor(
             .combine(sessionDao.observeFirstFinishedSessionStartedAt()) { (stats, ats), firstMs ->
                 stats.copy(firstFinishedSessionMs = firstMs) to ats
             }
-            .combine(vacationDao.observeAll()) { (stats, ats), periods ->
-                // Vacation days bridge the streak — a planned holiday doesn't reset it (#135).
-                stats.copy(streakDays = computeStreak(ats, com.forge.app.domain.vacation.VacationCalendar.onVacation(periods)))
+            .combine(vacationDao.observeAll().combine(settingsRepo.scheduleHistory, ::Pair)) { (stats, ats), (periods, history) ->
+                // Vacation days bridge the streak — a planned holiday doesn't reset it (#135) — and
+                // so do the rest days a fixed-weekday schedule planned: on a Mon/Tue/Thu/Fri week,
+                // Wednesday reset the streak every week, so it could never pass two.
+                val weekStart = Instant.ofEpochMilli(weekStartMs).atZone(zone).toLocalDate()
+                stats.copy(
+                    streakDays = computeStreak(ats, streakBridge(periods, history)),
+                    weekRestDays = (0 until 7).filterTo(mutableSetOf()) { i ->
+                        com.forge.app.domain.schedule.ScheduleHistory.isPlannedRest(history, weekStart.plusDays(i.toLong()))
+                    }
+                )
             }
             .flowOn(Dispatchers.Default)
     }
@@ -232,13 +247,19 @@ class StatsRepository @Inject constructor(
         val trainingDays = finishedAts.mapTo(mutableSetOf()) {
             Instant.ofEpochMilli(it).atZone(zone).toLocalDate()
         }
-        // Skip vacation days at the tip so being on holiday *today* doesn't zero an active streak.
-        var tip = today
-        while (onVacation(tip) && !trainingDays.contains(tip)) tip = tip.minusDays(1)
+        // Skip bridged days (vacation, planned rest) at the tip so being on holiday or resting as
+        // planned *today* doesn't zero an active streak.
+        fun skipBridged(from: LocalDate): LocalDate {
+            var d = from
+            while (onVacation(d) && !trainingDays.contains(d)) d = d.minusDays(1)
+            return d
+        }
+        val tip = skipBridged(today)
         val anchor = when {
             trainingDays.contains(tip) -> tip
-            trainingDays.contains(tip.minusDays(1)) -> tip.minusDays(1) // one rest-day grace
-            else -> return 0
+            // One grace day (today, not trained YET) — then the bridged days behind it, so a
+            // Thursday morning after a planned Wednesday rest still reads Tuesday's streak.
+            else -> skipBridged(tip.minusDays(1)).takeIf { trainingDays.contains(it) } ?: return 0
         }
         var streak = 0
         var day = anchor
@@ -260,7 +281,16 @@ class StatsRepository @Inject constructor(
     suspend fun currentStreakDays(): Int {
         val finishedAts = sessionDao.finishedAts()
         val periods = vacationDao.all()
-        return computeStreak(finishedAts, com.forge.app.domain.vacation.VacationCalendar.onVacation(periods))
+        return computeStreak(finishedAts, streakBridge(periods, settingsRepo.scheduleHistory.first()))
+    }
+
+    /** Days that neither extend nor break a streak: vacation, and rest days the schedule planned. */
+    private fun streakBridge(
+        periods: List<com.forge.app.data.db.entities.VacationPeriod>,
+        history: List<com.forge.app.domain.schedule.ScheduleHistory.Entry>
+    ): (LocalDate) -> Boolean {
+        val onVacation = com.forge.app.domain.vacation.VacationCalendar.onVacation(periods)
+        return { d -> onVacation(d) || com.forge.app.domain.schedule.ScheduleHistory.isPlannedRest(history, d) }
     }
 
     /**

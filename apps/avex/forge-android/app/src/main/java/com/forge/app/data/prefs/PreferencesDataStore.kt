@@ -180,6 +180,9 @@ object PreferenceKeys {
     /** When ON, the cold-launch intro themes the Avex wordmark to the chosen app icon's
      *  family (sheen/crystals/aurora/melt/…). OFF (default) plays the plain black-and-white Avex settle instead. */
     val THEMED_LAUNCH_INTRO = booleanPreferencesKey("themed_launch_intro")
+    /** When ON, the app's accent follows the chosen launcher icon's colour instead of the picked
+     *  [ACCENT_COLOR_HEX] (which is kept, and comes back when this is turned off). Default off. */
+    val ACCENT_FROM_ICON = booleanPreferencesKey("accent_from_icon")
 
     // ─── Locale (#116) ────────────────────────────────────────────────────────
     /** "MM/dd/yyyy" or "dd/MM/yyyy" */
@@ -294,6 +297,8 @@ object PreferenceKeys {
     // ─── Program generation (program-unlock) ──────────────────────────────────
     /** Training days/week the program targets — drives the split template (3-day ≠ 7-day). */
     val DAYS_PER_WEEK = intPreferencesKey("days_per_week")
+    /** "About this long per session" in minutes — each generated day is trimmed to fit. Absent = no ceiling. */
+    val SESSION_MINUTES = intPreferencesKey("session_minutes")
     /** Program focus, e.g. "balanced" | "arms_shoulders" | "legs". Empty = balanced. */
     val PROGRAM_EMPHASIS = stringPreferencesKey("program_emphasis")
     /** Training experience: "beginner" | "intermediate" | "advanced". Drives volume + difficulty filter. */
@@ -312,6 +317,9 @@ object PreferenceKeys {
     val SCHEDULE_MODE = stringPreferencesKey("schedule_mode")
     /** Weekly schedule: comma-joined 7 slots, Mon..Sun, each a program day key or "" for rest. */
     val SCHEDULE_WEEKLY = stringPreferencesKey("schedule_weekly")
+    /** Every schedule change with the day it took effect (ScheduleHistory JSON) — lets a past day
+     *  be read as a planned rest day or a missed one under the plan that was in force on it. */
+    val SCHEDULE_HISTORY = stringPreferencesKey("schedule_history")
     /** N for the "every_n" cadence. */
     val ROTATION_EVERY_N = intPreferencesKey("rotation_every_n")
     /** Progress toward the next rotation. */
@@ -443,8 +451,8 @@ object PreferenceKeys {
         AVATAR_EDIT_HINT_SHOWN, COACH_ADVANCED_PROMPT_AFTER, COACH_BRIEF_INTRO_SEEN,
         LAST_SEEN_COACH_WEEK_ID, LAST_SEEN_RANK_TIER_ORDINAL,
         // What the current program was generated from, and the engine state riding on it.
-        DAYS_PER_WEEK, PROGRAM_EMPHASIS, PROGRAM_EXPERIENCE, PROBLEM_AREAS, PRIORITY_MUSCLES,
-        AVAILABLE_EQUIPMENT, FROZEN_EXERCISE_IDS, MAX_DB_WEIGHT_LB, SCHEDULE_MODE, SCHEDULE_WEEKLY,
+        DAYS_PER_WEEK, SESSION_MINUTES, PROGRAM_EMPHASIS, PROGRAM_EXPERIENCE, PROBLEM_AREAS, PRIORITY_MUSCLES,
+        AVAILABLE_EQUIPMENT, FROZEN_EXERCISE_IDS, MAX_DB_WEIGHT_LB, SCHEDULE_MODE, SCHEDULE_WEEKLY, SCHEDULE_HISTORY,
         PINNED_EXERCISES, FAVORITE_EXERCISES, LIKED_EXERCISES, DISLIKED_EXERCISES,
         DELOAD_WEEK_START_MS, BLOCK_DELOAD_OWED, PROGRAM_GENERATION_INTENT, PROGRAM_GENERATION_SEED, ROTATION_COUNTER,
         COACH_OFF_PASS_WEEK,

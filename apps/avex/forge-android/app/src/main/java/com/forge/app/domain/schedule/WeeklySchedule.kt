@@ -26,6 +26,44 @@ object WeeklySchedule {
     fun encode(slots: List<String>): String =
         (0 until SLOTS).joinToString(",") { slots.getOrElse(it) { "" } }
 
+    /** Weekday names, index 0 = Monday, matching the slot order. */
+    val WEEKDAY_NAMES = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+    val WEEKDAY_SHORT = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+    /**
+     * A schedule from the weekdays the user trains on: the program's days, in order, land on the
+     * chosen weekdays, in calendar order (4 days on Mon/Tue/Thu/Fri → day 1 Mon … day 4 Fri). Extra
+     * weekdays stay rest; extra days go unscheduled.
+     */
+    fun fromWeekdays(weekdays: Collection<Int>, dayKeys: List<String>): List<String> {
+        val result = MutableList(SLOTS) { "" }
+        weekdays.filter { it in 0 until SLOTS }.distinct().sorted().zip(dayKeys).forEach { (wd, key) -> result[wd] = key }
+        return result
+    }
+
+    /** The weekday [dayKey] is scheduled on, or null when it has none. */
+    fun weekdayOf(schedule: List<String>, dayKey: String): Int? =
+        schedule.indexOf(dayKey).takeIf { it >= 0 }
+
+    /**
+     * Carry a weekday schedule over to a regenerated program whose day keys may differ.
+     *
+     * A schedule whose days all still exist is kept exactly as it is (rest slots and deliberately
+     * unscheduled days included). Otherwise the user's training weekdays
+     * are kept and the new days are laid onto them in order — so a 4-day Mon/Tue/Thu/Fri lifter who
+     * regenerates stays on Mon/Tue/Thu/Fri. Only when the day count changed (the old weekdays can't
+     * hold the new week) does it fall back to [defaultFor]. Before this, a regenerate with a new
+     * split left every slot naming a day that no longer existed, and the schedule silently stopped
+     * resolving.
+     */
+    fun remap(old: List<String>, newKeys: List<String>): List<String> {
+        val scheduled = old.filter { it.isNotBlank() }
+        val valid = newKeys.toSet()
+        if (scheduled.all { it in valid }) return parse(encode(old))
+        val weekdays = old.indices.filter { old[it].isNotBlank() }
+        return if (weekdays.size == newKeys.size) fromWeekdays(weekdays, newKeys) else defaultFor(newKeys)
+    }
+
     /** Spread sessions across the week, with intervening rest days for full-body plans. */
     fun defaultFor(dayKeys: List<String>): List<String> {
         val positions = when (dayKeys.size) {

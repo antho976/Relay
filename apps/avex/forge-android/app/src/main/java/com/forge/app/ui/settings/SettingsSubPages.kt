@@ -64,16 +64,26 @@ internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, onBac
             )
         }
 
-        SettingsGroup("Accent color", headerTrailing = if (state.accentEnabled) accentName(state.accentColorHex) else null) {
+        val icon = com.forge.app.appicon.AppIcon.fromKey(state.appIconKey)
+        // The icon is steering the accent right now: on, and the icon has a colour of its own.
+        val iconAccent = state.accentFromIcon && icon.accentHex != null
+        SettingsGroup(
+            "Accent color",
+            headerTrailing = when {
+                !state.accentEnabled -> null
+                iconAccent -> "From icon"
+                else -> accentName(state.accentColorHex)
+            }
+        ) {
             SettingsSwitchRow(
                 "Use an accent color",
                 "Off keeps the app black and white.",
                 state.accentEnabled,
                 onCheckedChange = vm::setAccentEnabled
             )
-            // The picker only means something while the accent is on; the chosen colour is kept
-            // and comes back on re-enable.
-            if (state.accentEnabled) AccentColorPicker(state.accentColorHex, vm::setAccentColorHex)
+            // The picker only means something while the accent is on and is not being taken from
+            // the icon; the chosen colour is kept either way and comes back when it applies again.
+            if (state.accentEnabled && !iconAccent) AccentColorPicker(state.accentColorHex, vm::setAccentColorHex)
         }
 
         SettingsGroup("Icon & startup") {
@@ -83,6 +93,18 @@ internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, onBac
                 "Plays the launch animation in your icon's style. Off shows the plain wordmark.",
                 state.themedLaunchIntro,
                 onCheckedChange = vm::setThemedLaunchIntro
+            )
+            SettingsSwitchRow(
+                "Match accent to icon",
+                when {
+                    !state.accentEnabled -> "Turn on the accent color above to use this."
+                    icon.accentHex == null -> "${icon.displayName} has no color of its own, so your picked accent stays."
+                    else -> "Buttons and highlights take your icon's color. Off goes back to the accent you picked."
+                },
+                state.accentFromIcon,
+                // Nothing to steer while the app is monochrome; the choice is kept for later.
+                enabled = state.accentEnabled,
+                onCheckedChange = vm::setAccentFromIcon
             )
         }
 

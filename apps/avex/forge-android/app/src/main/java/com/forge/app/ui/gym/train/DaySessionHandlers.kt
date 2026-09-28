@@ -53,6 +53,8 @@ internal fun DayViewModel.handleSessionEvent(event: DayUiEvent) {
             }
         }
         is DayUiEvent.ConfirmPreSessionPicker -> _state.update { it.copy(showPreSessionPicker = false) }
+        is DayUiEvent.FitToTime -> fitToTime(event.minutes)
+        is DayUiEvent.UndoFitToTime -> undoFitToTime()
         is DayUiEvent.ApplyOrderingSuggestion -> applyOrderingSuggestion()
         is DayUiEvent.DismissOrderingSuggestion -> {
             val suggestion = _state.value.orderingSuggestion
@@ -62,6 +64,66 @@ internal fun DayViewModel.handleSessionEvent(event: DayUiEvent) {
         }
         else -> {}
     }
+}
+
+/**
+ * "I have [minutes] today": skip whatever of the remaining work doesn't fit, through the same
+ * per-exercise skip the user can toggle by hand, so each one is visible, stored with the session and
+ * individually reversible. A second fit first undoes the previous one, so picking 20 and then 45
+ * gives the 45-minute day rather than the 20-minute day with nothing added back.
+ */
+private fun DayViewModel.fitToTime(minutes: Int) {
+    if (timeFitJob?.isActive == true) return
+    timeFitJob = viewModelScope.launch { applyFitToTime(minutes) }
+}
+
+private suspend fun DayViewModel.applyFitToTime(minutes: Int) {
+    restoreFitSkips()
+    val remaining = _state.value.exercises.filter { !it.isComplete }
+    val fit = com.forge.app.domain.coach.SessionAdaptor.fitToTime(
+        remaining.map { ex ->
+            com.forge.app.domain.coach.SessionAdaptor.TimedExercise(
+                id = ex.plan.id,
+                remainingSets = (ex.targetSets - ex.loggedSets.size).coerceAtLeast(1),
+                restSeconds = computeRestPrescription(ex.plan, null, ex.restTimerOverrideSeconds).seconds,
+                compound = com.forge.app.program.SessionEstimate.isCompound(ex.plan),
+                started = ex.loggedSets.isNotEmpty()
+            )
+        },
+        minutes
+    )
+    val skipped = mutableListOf<String>()
+    for (id in fit.dropIds) {
+        val leId = ensureLoggedExercise(id) ?: continue
+        workoutRepo.setSkipped(leId, true)
+        skipped += id
+    }
+    if (skipped.isNotEmpty()) refreshExercises()
+    val names = _state.value.exercises.associate { it.plan.id to it.effectiveName }
+    _state.update {
+        it.copy(timeFit = com.forge.app.ui.gym.train.state.TimeFitApplied(minutes, skipped, skipped.mapNotNull(names::get)))
+    }
+}
+
+private fun DayViewModel.undoFitToTime() {
+    if (timeFitJob?.isActive == true) return
+    timeFitJob = viewModelScope.launch { restoreFitSkips() }
+}
+
+/** Un-skip what the last fit skipped — only those still skipped, so a later hand toggle stands. */
+private suspend fun DayViewModel.restoreFitSkips() {
+    val fit = _state.value.timeFit ?: return
+    val byId = _state.value.exercises.associateBy { it.plan.id }
+    var changed = false
+    for (id in fit.skippedIds) {
+        val ex = byId[id] ?: continue
+        if (!ex.skipped) continue
+        val leId = ex.loggedExerciseId ?: ensureLoggedExercise(id) ?: continue
+        workoutRepo.setSkipped(leId, false)
+        changed = true
+    }
+    _state.update { it.copy(timeFit = null) }
+    if (changed) refreshExercises()
 }
 
 /** Apply the engine's suggested order via the same in-memory mechanism as manual reordering. */
