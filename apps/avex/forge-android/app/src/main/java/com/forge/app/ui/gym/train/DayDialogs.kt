@@ -1,8 +1,6 @@
 package com.forge.app.ui.gym.train
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.text.KeyboardOptions
 import com.forge.app.ui.common.window.AlertDialog
@@ -56,38 +54,6 @@ internal fun CrossDaySessionDialog(
         text = { Text("You have an unfinished $otherDayName workout. Go back to resume it, or discard it and start $thisDayName instead.") },
         confirmButton = { Button(onClick = onGoBack) { Text("Resume $otherDayName") } },
         dismissButton = { TextButton(onClick = onDiscardAndStart) { Text("Discard & start $thisDayName") } }
-    )
-}
-
-@Composable
-internal fun RestTimerSetterDialog(
-    exerciseName: String,
-    currentSeconds: Int?,
-    onSet: (Int) -> Unit,
-    onClear: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    val presets = listOf(60 to "1m", 90 to "1:30", 120 to "2m", 150 to "2:30", 180 to "3m", 240 to "4m")
-    var selected by remember { mutableStateOf(currentSeconds) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Rest timer — $exerciseName") },
-        text = {
-            @OptIn(ExperimentalLayoutApi::class)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                presets.forEach { (secs, label) ->
-                    // Six options, pick one: the app's shared selectable chip.
-                    com.forge.app.ui.common.ForgeChoiceChip(label, selected = selected == secs, onClick = { selected = secs })
-                }
-            }
-        },
-        confirmButton = {
-            Button(onClick = { selected?.let { onSet(it) } }, enabled = selected != null) { Text("Save") }
-        },
-        dismissButton = {
-            if (currentSeconds != null) TextButton(onClick = onClear) { Text("Use default") }
-            else TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
     )
 }
 

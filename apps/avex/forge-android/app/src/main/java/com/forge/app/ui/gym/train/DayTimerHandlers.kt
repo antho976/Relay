@@ -21,6 +21,16 @@ internal fun DayViewModel.handleTimerEvent(event: DayUiEvent) {
             openRestEvent = openRestEvent?.let { it.copy(secondsAdded = it.secondsAdded + event.seconds) }
             restTimer.addSeconds(event.seconds)
         }
+        is DayUiEvent.RestTimerSetTo -> {
+            // An explicit length, counted from now. The presets used to ADD ("+2 min", "+5 min"),
+            // so a lifter who tapped "+5 min" meaning "rest 5 minutes" two minutes in got seven.
+            // Measured from the set as before: planned = what they have now asked for, in total.
+            openRestEvent = openRestEvent?.let { open ->
+                val elapsed = ((clock.nowMs() - open.startedAtMs) / 1000L).toInt().coerceAtLeast(0)
+                open.copy(plannedSeconds = elapsed + event.seconds, secondsAdded = 0, manual = true)
+            }
+            restTimer.start(event.seconds)
+        }
         else -> {}
     }
 }
@@ -40,7 +50,9 @@ internal data class OpenRestEvent(
     val secondsAdded: Int = 0,
     val skipped: Boolean = false,
     /** The rest was capped for a light / feeler set — not evidence of the user's pace, never persisted. */
-    val light: Boolean = false
+    val light: Boolean = false,
+    /** The user picked this rest's length by hand; a later effort rating must not re-price it. */
+    val manual: Boolean = false
 )
 
 /** Close (and persist) the open rest interval — the set logged at [endedAtMs] ended it. */
@@ -71,7 +83,7 @@ internal suspend fun DayViewModel.closeOpenRestEvent(sessionId: Long, endedAtMs:
 internal fun DayViewModel.updateRestForLatestEffort(exerciseId: String, setId: Long? = null) {
     val open = openRestEvent ?: return
     val timer = restTimer.state.value ?: return
-    if (timer.isFinished || open.skipped) return
+    if (timer.isFinished || open.skipped || open.manual) return
     val ui = _state.value.exercises.firstOrNull { it.plan.id == exerciseId } ?: return
     val latest = ui.loggedSets.lastOrNull() ?: return
     if (setId != null && latest.id != setId) return

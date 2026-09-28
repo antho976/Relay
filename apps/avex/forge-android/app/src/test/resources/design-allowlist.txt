@@ -116,7 +116,7 @@
 1 em-dash security/LocalAppLock.kt em dash in string
 2 em-dash service/WeeklyRecapWorker.kt em dash in string
 2 em-dash ui/coach/CoachUi.kt em dash in string
-2 em-dash ui/gym/train/DayDialogs.kt em dash in string
+1 em-dash ui/gym/train/DayDialogs.kt em dash in string
 1 em-dash ui/gym/train/DayListScreen.kt em dash in string
 1 em-dash ui/gym/train/DayScreen.kt em dash in string
 2 em-dash ui/gym/train/DaySwapHandlers.kt em dash in string
@@ -193,7 +193,7 @@
 7 raw-color wear/ui/WearTheme.kt Color(0x
 1 screen-name-title ui/coach/GoalPickerDialog.kt title={Text(
 1 screen-name-title ui/common/ProgramChangeGuardHost.kt title={Text(
-4 screen-name-title ui/gym/train/DayDialogs.kt title={Text(
+3 screen-name-title ui/gym/train/DayDialogs.kt title={Text(
 3 screen-name-title ui/gym/train/DayListScreen.kt title={Text(
 2 screen-name-title ui/gym/train/DayScreen.kt title={Text(
 1 screen-name-title ui/gym/train/DaySessionContent.kt title={Text(
@@ -219,4 +219,4 @@
 1 unlabelled-clickable ui/gym/stats/StatsStrength.kt .clickable(
 1 unlabelled-clickable ui/gym/train/components/ExerciseCard.kt .clickable(
 6 unlabelled-clickable ui/gym/train/components/ExerciseCardComponents.kt .clickable(
-4 unlabelled-clickable ui/gym/train/components/RestTimerBubble.kt .clickable(
+3 unlabelled-clickable ui/gym/train/components/RestTimerBubble.kt .clickable(

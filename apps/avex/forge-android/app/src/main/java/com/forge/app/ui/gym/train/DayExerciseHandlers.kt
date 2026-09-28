@@ -328,7 +328,9 @@ internal fun DayViewModel.logSet(
             restTimer.start(rest.seconds)
             // Push the started timer into UI state synchronously so it's visible before refreshExercise
             // re-renders — don't wait for the collector coroutine to forward the first emission.
-            _state.update { it.copy(restTimer = restTimer.state.value, restTimerReason = rest.reason) }
+            _state.update {
+                it.copy(restTimer = restTimer.state.value, restTimerReason = rest.reason, restTimerExerciseId = exerciseId)
+            }
 
             closeOpenRestEvent(sessionId, restEndedAtMs)
             openRestEvent = OpenRestEvent(

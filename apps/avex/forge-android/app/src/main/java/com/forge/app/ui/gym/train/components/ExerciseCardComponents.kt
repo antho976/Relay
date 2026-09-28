@@ -348,6 +348,35 @@ internal fun ActionChip(icon: ImageVector, label: String, onClick: () -> Unit) {
  * Completed-rest indicator shown between two logged sets — the actual time rested,
  * derived from the gap between their timestamps. Green = a finished rest period.
  */
+/**
+ * The rest taken between two consecutive sets of one exercise, in seconds, or null when the gap was
+ * not a rest worth printing.
+ *
+ * The label used to print the raw gap between the two LOG taps, which is not the rest: it also holds
+ * the whole next set (and the typing), so a 2:00 rest before a 45-second set read "rested 2:50", and
+ * a gap with another exercise's set inside it (a superset, or jumping around the gym) read as one
+ * long rest of 6 or 7 minutes. Now the next set's own time comes off (its measured hold, else the
+ * same 45 seconds the session estimate uses), a gap with other work logged inside it isn't called a
+ * rest at all, and neither is one past the ten minutes the rest tuner already treats as walking off.
+ */
+internal fun restBetweenSeconds(
+    prev: com.forge.app.data.db.entities.LoggedSet,
+    next: com.forge.app.data.db.entities.LoggedSet,
+    /** When every OTHER exercise's sets this session were logged. */
+    otherSetTimes: List<Long> = emptyList()
+): Int? {
+    // Seeded / imported rows can carry no real time.
+    if (prev.completedAt <= 0L || next.completedAt <= prev.completedAt) return null
+    if (otherSetTimes.any { it > prev.completedAt && it < next.completedAt }) return null
+    val gap = ((next.completedAt - prev.completedAt) / 1000L).toInt()
+    val work = next.durationSeconds?.takeIf { it > 0 } ?: com.forge.app.program.SessionEstimate.WORK_SECONDS_PER_SET
+    val rest = gap - work
+    return rest.takeIf { it in 1..MAX_SHOWN_REST_SECONDS }
+}
+
+/** Past this, the gap was not a rest (matches AdaptThresholds.maxSaneRestSeconds). */
+private const val MAX_SHOWN_REST_SECONDS = 600
+
 @Composable
 internal fun RestBetweenSets(seconds: Int) {
     if (seconds <= 0) return
