@@ -1,73 +1,60 @@
 package com.forge.app.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 
 /**
- * Settings → What's new. The app changelog ([CHANGELOG]) as a settings sub-page: one mono section
- * anchor per release (version · date, DESIGN §7 air rhythm — no dividers), then its change lines.
- * Follows the Settings archetype like its neighbour [AboutPage] — no serif hero, no figures — so the
- * two app-info pages read as one. Each line leads with its kind (New/Improved/Fixed) as a quiet mono
- * tag, the distinct "reading" that earns a list over a run of identical bullets (§4.10).
+ * Settings → What's new: the changelog ([CHANGELOG]), one group per release headed by its version
+ * and date, each change led by its kind so a release reads New, then Improved, then Fixed.
  */
 @Composable
-internal fun WhatsNewPage(modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(bottom = 56.dp)
-    ) {
+internal fun WhatsNewPage(onBack: () -> Unit) {
+    SettingsScaffold("What's new", onBack) {
         CHANGELOG.forEachIndexed { index, release ->
-            SettingsSectionHeader("${release.version} · ${release.date}", top = if (index == 0) 12.dp else 26.dp)
-            release.notes.forEach { note -> ChangeRow(note) }
+            SettingsGroup(
+                if (index == 0) "Version ${release.version} · latest" else "Version ${release.version}",
+                headerTrailing = release.date
+            ) {
+                SettingsGroupBlock {
+                    release.notes.forEachIndexed { i, note ->
+                        if (i > 0) Spacer(Modifier.height(14.dp))
+                        ChangeRow(note)
+                    }
+                }
+            }
         }
-        Spacer(Modifier.height(8.dp))
     }
 }
 
-/** One changelog line: a fixed-width mono kind tag so the descriptions align, then the change. */
+/** One change: its kind as a small pill in a fixed column so the descriptions align, then the line. */
 @Composable
 private fun ChangeRow(note: ChangeNote) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = SETTINGS_GUTTER, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        // widthIn(min), not width(): a fixed 72dp box with maxLines = 1 clipped "IMPROVED" to
-        // "IMPROV…" at 200% font scale (§14 — a container holding text sizes to its content).
-        // The min keeps the descriptions aligned at normal scale, and the tag may wrap past it.
-        Text(
-            note.kind.tag.uppercase(),
-            style = MaterialTheme.typography.labelSmall,
-            color = muted,
-            letterSpacing = 0.5.sp,
-            modifier = Modifier
-                .widthIn(min = 72.dp)
-                .padding(top = 2.dp)
-        )
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        // widthIn(min), not width(): the pill may grow past it at 200% font rather than clip.
+        Box(Modifier.widthIn(min = 84.dp)) {
+            SettingsPill(
+                note.kind.tag,
+                when (note.kind) {
+                    ChangeKind.New -> PillTone.Accent
+                    ChangeKind.Improved -> PillTone.Neutral
+                    ChangeKind.Fixed -> PillTone.Quiet
+                }
+            )
+        }
         Text(
             note.text,
-            style = MaterialTheme.typography.bodySmall,
-            color = onBg,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f)
         )
     }

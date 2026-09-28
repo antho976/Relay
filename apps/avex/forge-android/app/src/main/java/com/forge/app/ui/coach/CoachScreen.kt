@@ -25,6 +25,7 @@
  */
 package com.forge.app.ui.coach
 
+import com.forge.app.ui.common.ForgeTopBar
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -40,7 +41,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -60,7 +64,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.forge.app.domain.units.WeightUnit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
-import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 
@@ -90,7 +93,7 @@ enum class CoachEntryPoint { ACCOUNT, WHERE_YOU_STAND }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CoachScreen(
-    // Null when hosted as a hub pager page (no redundant back arrow); a real callback as a route.
+    // The top-bar back arrow: to Home as a hub pager page, pop as a route. Null draws no bar.
     onBack: (() -> Unit)? = null,
     entryPoint: CoachEntryPoint = CoachEntryPoint.ACCOUNT,
     // Lands on Settings → Recovery; the unconnected inputs carry it as a Connect pill.
@@ -112,10 +115,12 @@ fun CoachScreen(
     val now = remember(state.brief, state.timeline) { System.currentTimeMillis() }
 
     // A deep link that used to open the Signals lens scrolls to the reading it meant, once, after
-    // the first read lands. Everything else opens at the top of the account, and so does that link
-    // while advanced tracking is off: there is no reading below the account to land on.
+    // the first read lands: WHERE YOU STAND, then Signals under advanced tracking. Everything else
+    // opens at the top of the account, and so does that link when nothing below the account reads.
     LaunchedEffect(state.loading, state.advanced, entryPoint) {
-        if (!state.loading && state.advanced && entryPoint == CoachEntryPoint.WHERE_YOU_STAND) {
+        if (!state.loading && (state.advanced || hasStanding(state)) &&
+            entryPoint == CoachEntryPoint.WHERE_YOU_STAND
+        ) {
             listState.scrollToItem(accountItemCount(state))
         }
     }
@@ -123,10 +128,12 @@ fun CoachScreen(
     Box(Modifier.fillMaxSize()) {
         Scaffold(
             topBar = {
-                // The top bar never names the screen — just, on a routed entry, the back arrow. Hosted
-                // as a hub pager page there is no back arrow and no action, so the bar has NO content
-                // and is not drawn at all: an empty app bar above the account is a void to scroll past.
-                if (onBack != null) ForgeTopBar(onBack = onBack)
+                // The top bar never names the screen, it only carries the back arrow. Without one
+                // the bar has NO content and is not drawn at all: an empty app bar above the account
+                // is a void to scroll past.
+                if (onBack != null) {
+                    ForgeTopBar(onBack = onBack)
+                }
             },
             containerColor = Color.Transparent
         ) { inner ->
@@ -160,6 +167,8 @@ fun CoachScreen(
                         setAdvanced = viewModel::setAdvanced
                     ),
                     listState = listState,
+                    // The top bar already holds the status bar off the account.
+                    reserveStatusBar = onBack == null,
                     modifier = Modifier.padding(inner)
                 )
             }
@@ -172,7 +181,8 @@ fun CoachScreen(
                 System.currentTimeMillis() >= state.advancedPromptAfter,
             onTurnOn = { viewModel.setAdvanced(true) },
             onRemindLater = viewModel::remindAdvancedLater,
-            onIgnore = viewModel::ignoreAdvancedPrompt
+            onIgnore = viewModel::ignoreAdvancedPrompt,
+            belowTopBar = onBack != null
         )
     }
 }
@@ -206,10 +216,11 @@ internal fun CoachLedger(
     now: Long,
     actions: CoachActions,
     modifier: Modifier = Modifier,
-    listState: LazyListState = rememberLazyListState()
+    listState: LazyListState = rememberLazyListState(),
+    reserveStatusBar: Boolean = true
 ) {
     val c = rememberCoachColors()
-    val statusBar = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val statusBar = if (reserveStatusBar) WindowInsets.statusBars.asPaddingValues().calculateTopPadding() else 0.dp
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxSize(),
@@ -227,6 +238,9 @@ internal fun CoachLedger(
             onUndo = actions.undo,
             onApplyAll = actions.applyAll
         )
+        // Where you stand reads on every account; under advanced tracking it keeps only what the
+        // instruments below do not already draw.
+        coachNow(state = state, c = c)
         // The readings behind the calls draw only under advanced tracking. What is NEXT stays on
         // every account: it is the one line that turns a quiet page forward, and it is short.
         if (state.advanced) {
@@ -270,9 +284,9 @@ private fun LazyListScope.coachTracking(
     item("tracking") {
         Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(6)) {
             Spacer(Modifier.height(30.dp))
-            // A small filled capsule: the fill marks it as the action, so it needs neither the
-            // accent (which clears AA on two of the five accents only, §14) nor an arrow.
-            CoachCapsuleAction("Hide advanced tracking", "Hide advanced tracking", c) {
+            // onBg, not accent: accent-as-text clears AA on two of the five accents only (§14),
+            // and the arrow already marks the line as the action.
+            CoachAction("Hide advanced tracking →", c.onBg, "Hide advanced tracking") {
                 onSetAdvanced(false)
             }
         }

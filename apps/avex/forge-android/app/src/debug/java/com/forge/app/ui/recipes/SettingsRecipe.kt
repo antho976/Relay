@@ -1,194 +1,118 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-
 package com.forge.app.ui.recipes
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
-import com.forge.app.ui.settings.ConnectPill
-import com.forge.app.ui.settings.SettingsActionLink
-import com.forge.app.ui.settings.SettingsActionRow
-import com.forge.app.ui.settings.SettingsExplainer
-import com.forge.app.ui.settings.SettingsOutlineAction
-import com.forge.app.ui.settings.SettingsPrimaryAction
-import com.forge.app.ui.settings.SettingsSectionHeader
-import com.forge.app.ui.settings.SETTINGS_GUTTER
-import com.forge.app.ui.settings.SETTINGS_ROW_PAD
-import com.forge.app.ui.settings.SettingsNavRow
-import com.forge.app.ui.settings.StatusDot
-import com.forge.app.ui.settings.ToggleRow
+import com.forge.app.ui.settings.ButtonKind
+import com.forge.app.ui.settings.SettingsButton
+import com.forge.app.ui.settings.SettingsButtonBar
+import com.forge.app.ui.settings.SettingsFilterChip
+import com.forge.app.ui.settings.SettingsChipBlock
+import com.forge.app.ui.settings.SettingsGroup
+import com.forge.app.ui.settings.SettingsIcons
+import com.forge.app.ui.settings.SettingsNavigationRow
+import com.forge.app.ui.settings.SettingsRadioRow
+import com.forge.app.ui.settings.SettingsScaffold
+import com.forge.app.ui.settings.SettingsSearchBar
+import com.forge.app.ui.settings.SettingsSegmentedRow
+import com.forge.app.ui.settings.SettingsStepperRow
+import com.forge.app.ui.settings.SettingsSwitchRow
+import com.forge.app.ui.settings.SettingsTheme
 import com.forge.app.ui.theme.ForgeTheme
 
 /**
- * RECIPE — Settings / form / editor archetype (DESIGN §3).
+ * RECIPE — Settings / form / editor archetype.
  *
- * The archetype most often got wrong, because the editorial kit is tempting and all of it is banned
- * here. NO serif hero. NO figures. NO lens pills. NO chart motion or entrance cascade. NO dividers.
+ * Settings runs on its own kit (`ui/settings/SettingsKit.kt`), not the editorial one:
  *
- *   top bar (← + ≤1 action; the bell is Home only)
- *   ├─ SettingsSectionHeader  mono anchor + air, never a divider          §3, §7
- *   ├─ rows                   each control gets a ≤1-line explainer       §3
- *   │                         nav rows show their LIVE value              §3
- *   │                         WHOLE ROW is the ≥48dp tap target           §14, §2③
- *   ├─ per-row action         whole-row tap + drawn OUTLINED pill         §2③, §8
- *   └─ SettingsActionRow      filled ① + outlined ② GROUPED AT THE END    §8
+ *   SettingsTheme                  labels re-mapped to sans for every control on the screen
+ *   └─ SettingsScaffold            large serif title that collapses into the bar on scroll
+ *      ├─ SettingsSearchBar        root page only
+ *      └─ SettingsGroup            sans header · rows as 4dp slabs 2dp apart · 16dp outer clip
+ *         ├─ navigation row        icon tile · title · live value · chevron
+ *         ├─ switch / radio row    the WHOLE row is the tap target, the control is drawn
+ *         ├─ segmented row         2–4 short values, sliding thumb
+ *         └─ footer                one note under the group, never above it
  *
- * Two gutter rules, and they are the thing this recipe most exists to pin down:
- *  - `SettingsPrimitives` ROWS apply their own `SETTINGS_GUTTER` padding, so the page Column must
- *    NOT add it again.
- *  - page ACTIONS are gutterless capsules that only ever go inside [SettingsActionRow], which owns
- *    the gutter and wraps them at large font scales. Wrapping them in your own padded Row or a
- *    ChipFlow double-gutters them to 48dp — every shipped call site had that bug once.
+ * Groups own no page gutter: [SettingsScaffold] applies it once. A do-it-now button closes the
+ * page in a [SettingsButtonBar]; the Primary kind takes the accent, the rest stay neutral.
  */
 @Composable
-fun SettingsRecipe(
-    onBack: () -> Unit = {},
-) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-
-    var keepAwake by remember { mutableStateOf(true) }
+fun SettingsRecipe(onBack: () -> Unit = {}) {
+    var query by remember { mutableStateOf("") }
     var privacy by remember { mutableStateOf(false) }
+    var keepAwake by remember { mutableStateOf(true) }
+    var unit by remember { mutableIntStateOf(1) }
+    var haptics by remember { mutableIntStateOf(2) }
+    var rest by remember { mutableIntStateOf(2) }
+    var goal by remember { mutableIntStateOf(0) }
+    val picked = remember { mutableStateOf(setOf("Chest", "Back")) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {},     // §4.6 — never "Settings" here
-                navigationIcon = {
-                    // §4.6 — ONE back affordance per page. No second in-page back arrow.
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+    SettingsTheme {
+        SettingsScaffold(title = "Settings", onBack = onBack) {
+            SettingsSearchBar(query, "Search settings", { query = it })
+
+            SettingsGroup("General") {
+                SettingsNavigationRow("Appearance", "Warm dark · Red accent", SettingsIcons.Appearance) {}
+                SettingsNavigationRow("Units & format", "kg · km · cm · 24h", SettingsIcons.Units) {}
+                SettingsNavigationRow("Notifications", "Reminders · recap", SettingsIcons.Notifications) {}
+            }
+
+            SettingsGroup("Screen", footer = "A footer carries the group's one note, under it and never above.") {
+                SettingsSwitchRow("Privacy mode", "Hides Avex in recent apps and blocks screenshots", privacy, onCheckedChange = { privacy = it })
+                SettingsSwitchRow("Keep screen on", "The display stays awake between sets", keepAwake, onCheckedChange = { keepAwake = it })
+            }
+
+            SettingsGroup("Units") {
+                SettingsSegmentedRow("Weight", listOf("lb", "kg", "st"), unit, onSelect = { unit = it })
+                SettingsSegmentedRow(
+                    "Haptic feedback", listOf("Off", "Light", "Medium", "Strong"), haptics,
+                    supporting = "Set logged, PR hit, rest over.", stacked = true, onSelect = { haptics = it }
+                )
+                SettingsStepperRow(
+                    "Compound lifts", "${1 + rest / 2}:${if (rest % 2 == 0) "00" else "30"}",
+                    canDecrease = rest > 0, canIncrease = rest < 5,
+                    onDecrease = { rest-- }, onIncrease = { rest++ },
+                    supporting = "Squat, bench, deadlift, rows"
+                )
+            }
+
+            SettingsGroup("Goal") {
+                SettingsRadioRow("Build muscle", goal == 0, "Moderate loads, 8 to 12 reps", Icons.Rounded.FavoriteBorder) { goal = 0 }
+                SettingsRadioRow("Get stronger", goal == 1, "Heavy loads, 3 to 6 reps", Icons.Rounded.FavoriteBorder) { goal = 1 }
+            }
+
+            SettingsGroup("Priority muscles", footer = "These get extra volume.") {
+                SettingsChipBlock {
+                    listOf("Chest", "Back", "Shoulders", "Arms", "Legs", "Glutes").forEach { m ->
+                        SettingsFilterChip(m, m in picked.value) {
+                            picked.value = if (m in picked.value) picked.value - m else picked.value + m
+                        }
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
-        },
-        containerColor = Color.Transparent
-    ) { inner ->
-        Column(
-            Modifier
-                .padding(inner)
-                .verticalScroll(rememberScrollState())
-            // no horizontal padding — the row primitives own the 24dp gutter
-        ) {
-            // ── A section ───────────────────────────────────────────────────────────────────────
-            // §3/§7: a mono anchor plus air IS the separator. Reaching for a divider here is the
-            // "hairline habit" in FAILURES.md.
-            SettingsSectionHeader("APPEARANCE")
-
-            // §3: every control carries a ≤1-line explainer. It sits beside the control, never as
-            // a paragraph above the section (§4.3 — mechanics narration is cut, not trimmed).
-            ToggleRow(
-                label = "Privacy mode",
-                subtitle = "Hides the app in recents and blocks screenshots",
-                checked = privacy,
-                onCheckedChange = { privacy = it }
-            )
-            ToggleRow(
-                label = "Keep screen on",
-                subtitle = "Holds the display awake while you log",
-                checked = keepAwake,
-                onCheckedChange = { keepAwake = it }
-            )
-
-            // §3: a nav row shows its LIVE value in the subtitle, so the page answers without a tap.
-            SettingsNavRow(
-                label = "App icon",
-                subtitle = "Metal",
-                onClick = { }
-            )
-
-            // ── A list of connectables ──────────────────────────────────────────────────────────
-            SettingsSectionHeader("RECOVERY")
-            // §8: a per-row action is a DRAWN outlined pill with the WHOLE row as the tap target.
-            // Five filled capsules stacked here is the canonical "button wall" (FAILURES.md) —
-            // this app shipped that exact mistake once.
-            ConnectableRow(name = "Sleep", connected = true)
-            ConnectableRow(name = "Steps", connected = true)
-            ConnectableRow(name = "Heart rate", connected = false)
-
-            // §8 level ③ — navigation is a mono accent link, not a button.
-            SettingsActionLink("Manage permissions →") { }
-
-            // ── Page-level actions, GROUPED AT THE END ──────────────────────────────────────────
-            // §8: never mid-scroll. ① filled is the do-it-now; ② outlined is its sidekick. A
-            // destructive one-shot stays level ② tinted `error`, paired with an Undo snackbar —
-            // never a filled red button.
-            Spacer(Modifier.height(28.dp))
-            SettingsActionRow {
-                SettingsPrimaryAction("Update Health Connect") { }
-                SettingsOutlineAction("Re-sync from watch") { }
+                }
             }
-            Spacer(Modifier.height(32.dp))
+
+            SettingsButtonBar {
+                SettingsButton("Generate 4-day plan") {}
+                SettingsButton("Re-roll exercises", kind = ButtonKind.Tonal) {}
+            }
         }
     }
 }
 
-/**
- * One connectable integration. Demonstrates §2③'s row-scoped action rule and §8's
- * "don't render state twice": the dot carries the state, so the right side shows a reading or an
- * action — never the word "Connected" repeating what the dot already said.
- */
-@Composable
-private fun ConnectableRow(name: String, connected: Boolean) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        Modifier
-            .fillMaxWidth()
-            // The WHOLE row is the tap target. The pill below is drawn, not separately clickable —
-            // a nested tap is banned (§2③).
-            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        // §8/§12: the dot rail. Filled disc = present, muted ring = absent — so the empty state is
-        // DRAWN, not a column of the words "Not connected".
-        StatusDot(active = connected)
-        Column(Modifier.weight(1f)) {
-            Text(name, style = MaterialTheme.typography.bodyMedium, color = onBg)
-            if (connected) {
-                // §4.9: show the reading, not just the conclusion. §12: a stale signal reports its
-                // AGE rather than an error banner.
-                SettingsExplainer("Last read 2h ago")
-            }
-        }
-        if (!connected) ConnectPill()
-    }
-}
-
-@Preview(name = "Settings", showBackground = true, backgroundColor = 0xFF0E0E11)
+@Preview(name = "Settings", showBackground = true, backgroundColor = 0xFF110F0C)
 @Composable
 private fun SettingsRecipePreview() {
     ForgeTheme { SettingsRecipe() }
 }
 
-@Preview(name = "Settings · 200% font", showBackground = true, backgroundColor = 0xFF0E0E11, fontScale = 2.0f)
+@Preview(name = "Settings · 200% font", showBackground = true, backgroundColor = 0xFF110F0C, fontScale = 2.0f)
 @Composable
 private fun SettingsRecipeLargeFontPreview() {
     ForgeTheme { SettingsRecipe() }

@@ -27,21 +27,14 @@ import com.forge.app.domain.coach.AutoCoachPlanner
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.ui.common.EditorialFigure
-import com.forge.app.ui.common.GROUP_SEAM
-import com.forge.app.ui.common.ROW_H
-import com.forge.app.ui.common.rowShape
-import androidx.compose.foundation.background
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.ui.draw.clip
+import com.forge.app.ui.common.ForgeRowPill
+import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.common.forgeItemMotion
 import kotlin.math.ceil
 
 /** How many past weeks the account draws inline before it says how many it did not. */
 private const val RECORD_WEEKS = 6
-
-/** Where a grouped entry's node sits: on the member's first line, past its 14dp top padding. */
-private val NODE_ON_MEMBER = 24.dp
 
 /** The outcome watcher's window: an applied change has two weeks to prove itself. */
 private const val WATCH_WINDOW_MS = 14L * 24 * 60 * 60 * 1000
@@ -100,8 +93,8 @@ internal fun LazyListScope.coachAccount(
         }
     }
 
-    // With more than one open call the page offers the sweep as a small secondary capsule rather
-    // than a second primary: the tiles already carry the primary action, one apiece.
+    // With more than one open call the page offers the sweep, as a link rather than a second
+    // filled control: the tiles already carry the primary action, one apiece.
     if (open.size > 1 && brief != null) {
         item("acct-apply-all") {
             Column(
@@ -111,27 +104,25 @@ internal fun LazyListScope.coachAccount(
                     .padding(horizontal = COACH_GUTTER)
                     .padding(bottom = 12.dp)
             ) {
-                CoachCapsuleAction(
-                    "Apply all ${open.size}",
-                    "Apply all ${open.size} changes",
-                    c
+                CoachAction(
+                    "Apply all ${open.size} →",
+                    c.accent,
+                    "Apply all ${open.size} changes"
                 ) { onApplyAll(brief.pass.weekId) }
             }
         }
     }
 
     // Anything already decided this week, stamped in place beside the open ones.
-    // They sit as one filled group, each entry a member, with the spine still running beside them.
-    itemsIndexed(settled, key = { _, d -> "settled-${d.id}" }) { i, d ->
+    items(settled, key = { "settled-${it.id}" }) { d ->
         Column(
             Modifier
                 .fillMaxWidth()
-                .ledgerSpine(c, node = entryNode(d), nodeY = NODE_ON_MEMBER)
+                .ledgerSpine(c, node = entryNode(d))
                 .padding(horizontal = COACH_GUTTER)
-                .padding(bottom = if (i == settled.lastIndex) 18.dp else GROUP_SEAM)
                 .then(forgeItemMotion())
         ) {
-            DecisionEntry(d, now, c, onUndo, i, settled.size)
+            DecisionEntry(d, now, c, onUndo)
         }
     }
 
@@ -255,13 +246,11 @@ internal fun LazyListScope.coachAccount(
                             .ledgerSpine(
                                 c,
                                 node = entryNode(d),
-                                nodeY = NODE_ON_MEMBER,
                                 bottom = !(last && di == week.decisions.lastIndex)
                             )
                             .padding(horizontal = COACH_GUTTER)
-                            .padding(bottom = if (di == week.decisions.lastIndex) 18.dp else GROUP_SEAM)
                     ) {
-                        DecisionEntry(d, now, c, onUndo, di, week.decisions.size)
+                        DecisionEntry(d, now, c, onUndo)
                     }
                 }
             }
@@ -291,9 +280,7 @@ private fun DecisionEntry(
     d: CoachDecision,
     now: Long,
     c: CoachColors,
-    onUndo: (Long) -> Unit,
-    index: Int,
-    count: Int
+    onUndo: (Long) -> Unit
 ) {
     val copy = callCopy(d)
     // Non-null exactly when this change is still inside its two-week window.
@@ -305,14 +292,7 @@ private fun DecisionEntry(
     // While the window runs, the bar and its line below say how long is left, so the stamp stays
     // the plain lifecycle word rather than repeating the countdown out to the right.
     val word = if (watching) "applied" else coachDecisionStatusWord(d, now)
-    // A member of its week's group: the filled row, with this entry's corners in that group.
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(rowShape(index, count))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .padding(horizontal = ROW_H, vertical = 14.dp)
-    ) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 18.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Text(
                 "${copy.subject} · ${copy.change}",
@@ -345,7 +325,7 @@ private fun DecisionEntry(
                 color = c.muted
             )
         }
-        // A per-row action is a drawn filled pill, not a bare word. As muted text it sat dimmer
+        // A per-row action is a drawn outlined pill, not a bare word. As muted text it sat dimmer
         // than the entry it acts on and read as a caption; accent would have been unreadable on
         // four of the five accent choices.
         // Undo is offered only while the change is still inside its undo window (stamped at apply
@@ -353,8 +333,11 @@ private fun DecisionEntry(
         val undoable = d.status == CoachRepository.STATUS_APPLIED && d.undoData != null &&
             (d.undoExpiresAt == null || now <= d.undoExpiresAt!!)
         if (undoable) {
-            Spacer(Modifier.height(6.dp))
-            CoachRowButton("Undo", c, label = "Undo this change") { onUndo(d.id) }
+            Spacer(Modifier.height(10.dp))
+            ForgeRowPill(
+                "Undo",
+                Modifier.clickableLabeled("Undo this change") { onUndo(d.id) }
+            )
         }
     }
 }

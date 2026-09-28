@@ -338,7 +338,7 @@ means relaunching from the launcher, which kills the 2-second promise.
 **Notification bridging**: the phone's timer/session notifications currently auto-bridge
 to the watch; from W1 the watch has native surfaces, so bridged duplicates are excluded
 (bridging config / dismissal sync) — one alert, on one body part.
-Load the forge-design skill before any watch UI work; add the Wear addendum to DESIGN.md
+Load the impeccable skill before any watch UI work; add the Wear addendum to DESIGN.md
 in Phase W1 before the first screen (round-screen rules, ambient = dimmed mono only,
 bezel affordances).
 
@@ -364,7 +364,7 @@ bezel affordances).
   notification-bridging config, ambient timer.
 - Rest-timer math to `:shared`, tests moved **and CI updated to run them**
   (`:shared:test` is not covered by the existing `testDebugUnitTest` invocation).
-- DESIGN.md Wear addendum before the first screen (forge-design loaded first).
+- DESIGN.md Wear addendum before the first screen (impeccable loaded first).
 
 ### Phase W2 — "Log from the wrist"
 - Watch set screen: target big, one-tap log-as-prescribed, bezel/± adjust with shared
@@ -454,5 +454,5 @@ have zero coach coupling. Protocol path registry is additive for Engine's later
 W0 → W5 → W1 → W2 → (W6 any time after W5, parallel-safe) → W3 → W4, interleaved with
 Coach/Engine releases per `ROADMAP.md`. W0 and W5 require no watch app and deliver
 Galaxy-Watch-visible value immediately; W3 unlocks Engine E-C; W4 lands after Coach v3 B
-so the directive exists to render. Watch UI work loads the forge-design skill first and
+so the directive exists to render. Watch UI work loads the impeccable skill first and
 adds the Wear addendum to DESIGN.md before the first screen.

@@ -10,21 +10,17 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import com.forge.app.ui.common.window.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,24 +28,23 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.graphics.Color
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.ui.theme.ForgeMotion
 
 enum class SettingsPage(val title: String) {
     Appearance("Appearance"),
     Format("Units & format"),
     Session("Session"),
     Notifications("Notifications"),
-    Security("Security"),
+    Security("Privacy & security"),
     Program("Program & equipment"),
     Coach("Coach"),
     Recovery("Wearable"),
     ExercisePrefs("Exercise likes"),
     CardioActivities("Cardio activities"),
-    Vacation("Holiday / Vacation"),
+    Vacation("Holidays"),
     Backup("Backup"),
     Storage("Storage"),
     WhatsNew("What's new"),
@@ -83,11 +78,11 @@ internal val ACTION_ENTRIES = listOf(
 internal data class SettingsPageEntry(val page: SettingsPage, val tags: String)
 
 internal val PAGE_ENTRIES = listOf(
-    SettingsPageEntry(SettingsPage.Appearance, "appearance amoled dark theme accent color display privacy look app icon launcher home screen"),
+    SettingsPageEntry(SettingsPage.Appearance, "appearance amoled dark theme accent color display look app icon launcher home screen startup animation"),
     SettingsPageEntry(SettingsPage.Format, "units format kg lb weight time clock 12h 24h week distance strength standards sex"),
     SettingsPageEntry(SettingsPage.Session, "session haptic feedback vibration notes templates rest timer between sets compound isolation"),
     SettingsPageEntry(SettingsPage.Notifications, "notifications reminders quiet hours recap timer alerts notify suppress daily check-in morning sleep soreness stress drive weight"),
-    SettingsPageEntry(SettingsPage.Security, "security lock app lock gallery lock biometric fingerprint face pin passcode privacy photos protect unlock"),
+    SettingsPageEntry(SettingsPage.Security, "security lock app lock gallery lock biometric fingerprint face pin passcode privacy mode screenshots recents photos protect unlock"),
     SettingsPageEntry(SettingsPage.Program, "program equipment generate auto split days routine rotate trainings workouts barbell dumbbell cable machine plate focus goal experience emphasis priority"),
     SettingsPageEntry(SettingsPage.Coach, "coach weekly review autopilot auto-apply suggest mode on off tweaks"),
     SettingsPageEntry(SettingsPage.Recovery, "recovery health connect sleep heart rate resting samsung galaxy pixel fitbit wearable watch ring coach deload steps bodyweight"),
@@ -117,7 +112,7 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Available equipment", "equipment barbell dumbbell cable machine body weight", SettingsPage.Program),
     SettingsItem("Weight per plate", "plate weight machine plates count", SettingsPage.Program),
     SettingsItem("Heaviest dumbbell", "dumbbell max heaviest adjustable ceiling", SettingsPage.Program),
-    SettingsItem("Privacy mode", "privacy mode blur screenshot screen", SettingsPage.Appearance),
+    SettingsItem("Privacy mode", "privacy mode blur screenshot screen recents", SettingsPage.Security),
     SettingsItem("App lock", "app lock biometric fingerprint face pin passcode unlock protect open security", SettingsPage.Security),
     SettingsItem("Photo gallery lock", "gallery lock photos progress pictures biometric fingerprint pin protect security", SettingsPage.Security),
     SettingsItem("Auto-lock", "auto lock timeout re-lock immediately minutes grace security", SettingsPage.Security),
@@ -154,7 +149,15 @@ enum class ResetTarget(val label: String, val message: String) {
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** Where Settings is: a page, and inside Program one of its sections. Depth orders the slide. */
+private data class SettingsDestination(val page: SettingsPage?, val section: ProgramSection?) {
+    val depth: Int get() = when {
+        page == null -> 0
+        section != null -> 2
+        else -> 1
+    }
+}
+
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
@@ -236,55 +239,42 @@ fun SettingsScreen(
         OpenDownloadsTree()
     ) { uri -> uri?.let { viewModel.grantImportFolder(it) } }
 
-    BackHandler(enabled = currentPage != null || searchQuery.isNotBlank()) {
+    // One back path for the top-bar arrow and the system gesture: a Program section returns to the
+    // Program menu, a deep-linked page returns to whoever linked it, any other page to the root,
+    // and the root clears its search before it leaves Settings.
+    fun goBack() {
         when {
             currentPage == SettingsPage.Program && programSection != null -> programSection = null
             onDeepLinkedPage && currentPage != null -> onBack()
             currentPage != null -> { currentPage = null; programSection = null }
-            else -> searchQuery = ""
+            searchQuery.isNotBlank() -> searchQuery = ""
+            else -> onBack()
         }
     }
+    BackHandler(enabled = currentPage != null || searchQuery.isNotBlank()) { goBack() }
 
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = {
-                        when {
-                            currentPage == SettingsPage.Program && programSection != null -> programSection = null
-                            onDeepLinkedPage && currentPage != null -> onBack()
-                            currentPage != null -> { currentPage = null; programSection = null }
-                            searchQuery.isNotBlank() -> searchQuery = ""
-                            else -> onBack()
-                        }
-                    }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
-        },
-        containerColor = Color.Transparent
-    ) { inner ->
+    SettingsTheme {
         AnimatedContent(
-            targetState = currentPage,
+            targetState = SettingsDestination(currentPage, programSection),
             transitionSpec = {
-                // Opening a sub-page slides in from the right; backing out slides from the left.
-                val dir = if (targetState != null) 1 else -1
-                (slideInHorizontally { dir * it / 4 } + fadeIn()) togetherWith
-                    (slideOutHorizontally { -dir * it / 4 } + fadeOut())
+                // Material's shared X axis: deeper pages arrive from the end edge, backing out
+                // returns from the start edge, and both halves fade so the titles never collide.
+                val forward = targetState.depth > initialState.depth
+                val shift = { full: Int -> (full * 0.1f).toInt() }
+                (slideInHorizontally(ForgeMotion.enterTween(ForgeMotion.DurationEmphasized)) { if (forward) shift(it) else -shift(it) } +
+                    fadeIn(ForgeMotion.enterTween(ForgeMotion.DurationStandard))) togetherWith
+                    (slideOutHorizontally(ForgeMotion.exitTween(ForgeMotion.DurationEmphasized)) { if (forward) -shift(it) else shift(it) } +
+                        fadeOut(ForgeMotion.exitTween(ForgeMotion.DurationFast)))
             },
             label = "settings-page"
-        ) { page ->
-            when (page) {
+        ) { dest ->
+            val back: () -> Unit = { goBack() }
+            when (dest.page) {
                 null -> MainList(
                     state = state,
                     searchQuery = searchQuery,
-                    modifier = Modifier.fillMaxSize().padding(inner),
                     listState = mainListState,
+                    onBack = back,
                     onSearchChange = { searchQuery = it },
                     onOpenPage = { currentPage = it; programSection = null },
                     onOpenCoachBrief = onOpenCoachBrief,
@@ -293,125 +283,40 @@ fun SettingsScreen(
                     onResetTarget = { confirmReset = it },
                     onOpenResetMenu = { showResetMenu = true }
                 )
-                SettingsPage.Appearance -> AppearancePage(state, viewModel, Modifier.padding(inner))
-                SettingsPage.Format -> FormatPage(state, viewModel, Modifier.padding(inner))
-                SettingsPage.Session -> SessionPage(state, viewModel, Modifier.padding(inner))
-                SettingsPage.Notifications -> NotificationsPage(state, viewModel, Modifier.padding(inner))
-                SettingsPage.Security -> SecurityPage(state, viewModel, Modifier.padding(inner))
+                SettingsPage.Appearance -> AppearancePage(state, viewModel, back)
+                SettingsPage.Format -> FormatPage(state, viewModel, back)
+                SettingsPage.Session -> SessionPage(state, viewModel, back)
+                SettingsPage.Notifications -> NotificationsPage(state, viewModel, back)
+                SettingsPage.Security -> SecurityPage(state, viewModel, back)
                 SettingsPage.Program -> ProgramPage(
                     state = state,
                     vm = viewModel,
-                    section = programSection,
+                    section = dest.section,
                     onSectionChange = { programSection = it },
-                    modifier = Modifier.padding(inner),
+                    onBack = back,
                     onOpenBuilder = onOpenBuilder
                 )
                 SettingsPage.Coach -> CoachSettingsPage(
                     state, viewModel,
                     onOpenRecovery = { currentPage = SettingsPage.Recovery },
-                    modifier = Modifier.padding(inner)
+                    onBack = back
                 )
-                SettingsPage.Recovery -> RecoveryPage(Modifier.padding(inner))
-                SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
-                SettingsPage.CardioActivities -> CardioActivitiesPage(viewModel, Modifier.padding(inner))
-                SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))
-                SettingsPage.Backup -> BackupPage(viewModel, Modifier.padding(inner))
-                SettingsPage.Storage -> StoragePage(viewModel, Modifier.padding(inner))
-                SettingsPage.WhatsNew -> WhatsNewPage(Modifier.padding(inner))
-                SettingsPage.PrivacyPolicy -> PrivacyPolicyPage(Modifier.padding(inner))
+                SettingsPage.Recovery -> RecoveryPage(back)
+                SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, back)
+                SettingsPage.CardioActivities -> CardioActivitiesPage(viewModel, back)
+                SettingsPage.Vacation -> VacationPage(viewModel, back)
+                SettingsPage.Backup -> BackupPage(viewModel, back)
+                SettingsPage.Storage -> StoragePage(viewModel, back)
+                SettingsPage.WhatsNew -> WhatsNewPage(back)
+                SettingsPage.PrivacyPolicy -> PrivacyPolicyPage(back)
                 SettingsPage.About -> AboutPage(
-                    Modifier.padding(inner), viewModel,
+                    onBack = back,
+                    viewModel = viewModel,
                     onOpenExport = { showDataDialog = true },
                     onOpenPrivacyPolicy = { currentPage = SettingsPage.PrivacyPolicy }
                 )
             }
         }
-    }
-
-    if (showResetMenu) {
-        ResetMenuDialog(
-            onPick = { showResetMenu = false; confirmReset = it },
-            onDismiss = { showResetMenu = false }
-        )
-    }
-
-    if (showDataDialog) {
-        DataExportDialog(
-            viewModel = viewModel,
-            onBackup = { backupLauncher.launch("avex_backup_$dateStamp.zip") },
-            onRestore = { restoreLauncher.launch(arrayOf("*/*")) },
-            onExportCrashLogs = { crashLauncher.launch("avex_crash_logs_$dateStamp.zip") },
-            onDismiss = { showDataDialog = false }
-        )
-    }
-
-    if (showImportDialog) {
-        ImportDialog(
-            viewModel = viewModel,
-            onGrantFolder = { viewModel.openImportFolderPicker { start -> folderGrantLauncher.launch(start) } },
-            onManualPick = launchImport,
-            onImportFound = { viewModel.importData(it) },
-            // A found backup goes through the same confirm as one picked by hand.
-            onRestoreFound = { pendingRestoreUri = it },
-            onDismiss = { showImportDialog = false }
-        )
-    }
-
-    // Import / backup / restore outcomes are transient lines on the app's ONE snackbar now (§12) —
-    // they used to be two AlertDialogs that had to be dismissed to confirm something already done.
-
-    // A restore that found a password-protected backup asks for the password here, at the root, so
-    // it outlives the Data dialog the auto-backup restore was started from.
-    RestorePasswordDialogHost(viewModel)
-
-    pendingRestoreUri?.let { uri ->
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.surface,
-            onDismissRequest = { pendingRestoreUri = null },
-            title = { Text("Restore from backup?") },
-            text = {
-                val impact = restoreImpact
-                Text(
-                    buildString {
-                        append("This replaces ALL current data")
-                        if (!impact.isNullOrBlank()) append(", your $impact,")
-                        append(" with the chosen backup, then restarts the app. It can't be undone; back up first if you're unsure.")
-                    }
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { viewModel.restoreDatabase(uri); pendingRestoreUri = null }) {
-                    Text("Restore & restart", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = { TextButton(onClick = { pendingRestoreUri = null }) { Text("Cancel") } }
-        )
-    }
-
-    // A whole training history is minutes of work on an old phone, and the export used to report
-    // nothing at all until the file appeared — so a user with two years of sessions could not tell
-    // a slow export from a stuck one, and had no way to stop it (P-01). Cancelling is safe: the
-    // export publishes by rename, so the previous file is still there afterwards.
-    exportProgress?.let { (done, total) ->
-        AlertDialog(
-            containerColor = MaterialTheme.colorScheme.surface,
-            onDismissRequest = { },
-            // No title: §4.6's ban on a name above the content is enforced by counting
-            // `title = { Text(` everywhere, dialogs included, and a progress line reads better as
-            // one sentence than as a heading with a number under it.
-            text = {
-                Text(
-                    when {
-                        total <= 0 -> "Exporting your data. Reading your history…"
-                        total == 1 -> "Exporting your data. One workout to write."
-                        else -> "Exporting your data. $done of $total workouts written."
-                    }
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { viewModel.cancelExport() }) { Text("Cancel") }
-            }
-        )
     }
 
     // When an export finishes, open the system share sheet so it can be saved as a real file
@@ -443,6 +348,139 @@ fun SettingsScreen(
         }
     }
 
+    SettingsTheme { SettingsDialogs(
+        viewModel = viewModel,
+        showResetMenu = showResetMenu,
+        onCloseResetMenu = { showResetMenu = false },
+        onPickReset = { showResetMenu = false; confirmReset = it },
+        showDataDialog = showDataDialog,
+        onCloseData = { showDataDialog = false },
+        onBackup = { backupLauncher.launch("avex_backup_$dateStamp.zip") },
+        onRestore = { restoreLauncher.launch(arrayOf("*/*")) },
+        onExportCrashLogs = { crashLauncher.launch("avex_crash_logs_$dateStamp.zip") },
+        showImportDialog = showImportDialog,
+        onCloseImport = { showImportDialog = false },
+        onGrantFolder = { viewModel.openImportFolderPicker { start -> folderGrantLauncher.launch(start) } },
+        onManualPick = launchImport,
+        onRestoreFound = { pendingRestoreUri = it },
+        pendingRestoreUri = pendingRestoreUri,
+        onClearRestore = { pendingRestoreUri = null },
+        restoreImpact = restoreImpact,
+        exportProgress = exportProgress,
+        confirmReset = confirmReset,
+        onClearReset = { confirmReset = null },
+        photoCount = photoCount
+    ) }
+}
+
+/**
+ * Everything Settings opens over its pages: the Data sheets, the reset flow and the restore and
+ * export dialogs. Drawn in [SettingsTheme] so they speak the same voice as the pages.
+ */
+@Composable
+private fun SettingsDialogs(
+    viewModel: SettingsViewModel,
+    showResetMenu: Boolean,
+    onCloseResetMenu: () -> Unit,
+    onPickReset: (ResetTarget) -> Unit,
+    showDataDialog: Boolean,
+    onCloseData: () -> Unit,
+    onBackup: () -> Unit,
+    onRestore: () -> Unit,
+    onExportCrashLogs: () -> Unit,
+    showImportDialog: Boolean,
+    onCloseImport: () -> Unit,
+    onGrantFolder: () -> Unit,
+    onManualPick: () -> Unit,
+    onRestoreFound: (Uri) -> Unit,
+    pendingRestoreUri: Uri?,
+    onClearRestore: () -> Unit,
+    restoreImpact: String?,
+    exportProgress: Pair<Int, Int>?,
+    confirmReset: ResetTarget?,
+    onClearReset: () -> Unit,
+    photoCount: Int
+) {
+    if (showResetMenu) {
+        ResetMenuDialog(onPick = onPickReset, onDismiss = onCloseResetMenu)
+    }
+
+    if (showDataDialog) {
+        DataExportDialog(
+            viewModel = viewModel,
+            onBackup = onBackup,
+            onRestore = onRestore,
+            onExportCrashLogs = onExportCrashLogs,
+            onDismiss = onCloseData
+        )
+    }
+
+    if (showImportDialog) {
+        ImportDialog(
+            viewModel = viewModel,
+            onGrantFolder = onGrantFolder,
+            onManualPick = onManualPick,
+            onImportFound = { viewModel.importData(it) },
+            // A found backup goes through the same confirm as one picked by hand.
+            onRestoreFound = onRestoreFound,
+            onDismiss = onCloseImport
+        )
+    }
+
+    // Import / backup / restore outcomes are transient lines on the app's ONE snackbar now (§12) —
+    // they used to be two AlertDialogs that had to be dismissed to confirm something already done.
+
+    // A restore that found a password-protected backup asks for the password here, at the root, so
+    // it outlives the Data dialog the auto-backup restore was started from.
+    RestorePasswordDialogHost(viewModel)
+
+    pendingRestoreUri?.let { uri ->
+        val impact = restoreImpact
+        SettingsConfirmDialog(
+            title = "Restore from this backup?",
+            body = buildString {
+                append("This replaces all current data")
+                if (!impact.isNullOrBlank()) append(", your $impact,")
+                append(" with the chosen backup, then restarts Avex. It can't be undone, so back up first if you're unsure.")
+            },
+            confirmLabel = "Restore and restart",
+            icon = Icons.Rounded.Restore,
+            onConfirm = { viewModel.restoreDatabase(uri); onClearRestore() },
+            onDismiss = onClearRestore
+        )
+    }
+
+    // A whole training history is minutes of work on an old phone, and the export used to report
+    // nothing at all until the file appeared — so a user with two years of sessions could not tell
+    // a slow export from a stuck one, and had no way to stop it (P-01). Cancelling is safe: the
+    // export publishes by rename, so the previous file is still there afterwards.
+    exportProgress?.let { (done, total) ->
+        AlertDialog(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            onDismissRequest = { },
+            icon = { Icon(SettingsIcons.Export, contentDescription = null) },
+            title = { Text("Exporting your data") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text(
+                        when {
+                            total <= 0 -> "Reading your history…"
+                            total == 1 -> "One workout to write."
+                            else -> "$done of $total workouts written."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    // Drawn, not a platform spinner: a share of a known total, so it reads as progress.
+                    SettingsProgressBar(if (total > 0) done.toFloat() / total else 0f)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.cancelExport() }) { Text("Cancel", color = MaterialTheme.colorScheme.onSurface) }
+            }
+        )
+    }
+
     confirmReset?.let { target ->
         // Refresh photo count the moment the factory-reset dialog opens so the warning is accurate.
         androidx.compose.runtime.LaunchedEffect(target) {
@@ -461,9 +499,9 @@ fun SettingsScreen(
                     ResetTarget.SETTINGS -> viewModel.resetSettings()
                     ResetTarget.FACTORY -> viewModel.factoryReset()
                 }
-                confirmReset = null
+                onClearReset()
             },
-            onDismiss = { confirmReset = null },
+            onDismiss = onClearReset,
             photoWarning = photoWarning
         )
     }

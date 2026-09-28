@@ -536,7 +536,7 @@ sequencing rationale lives in `ROADMAP.md`.
 ### Phase B1 — v3.1 "Readiness v2 + check-in + life events"
 
 - New `CheckinEntry` entity + 5-second sheet (design per `.claude/DESIGN.md` — load the
-  forge-design skill before any UI work); prompted at first app-open of a day, always skippable;
+  impeccable skill before any UI work); prompted at first app-open of a day, always skippable;
   includes the sick option, the optional muscle picker (M8), the optional bodyweight quick-log,
   and adaptive prompting.
 - Rebuild `ReadinessAdvisor` with the full input set (sleep, HR, check-in, moods, interference,
