@@ -31,9 +31,6 @@ interface CardioDao {
     fun observeAll(): Flow<List<CardioEntry>>
 
     @Query("SELECT * FROM cardio_entry WHERE date >= :since ORDER BY date DESC")
-    fun observeSince(since: Long): Flow<List<CardioEntry>>
-
-    @Query("SELECT * FROM cardio_entry WHERE date >= :since ORDER BY date DESC")
     suspend fun since(since: Long): List<CardioEntry>
 
     /** Non-rest entries in [start, end), oldest-first — a single week's slice for the PDF report. */
@@ -43,10 +40,6 @@ interface CardioDao {
     /** Cardio minutes since [sinceEpochMs], excluding rest-day entries. */
     @Query("SELECT SUM(duration_min) FROM cardio_entry WHERE date >= :sinceEpochMs AND type != :excludeType")
     fun observeMinutesSince(sinceEpochMs: Long, excludeType: String = "rest"): Flow<Int?>
-
-    /** Cardio distance (km) since [sinceEpochMs], excluding rest-day entries. */
-    @Query("SELECT SUM(distance_km) FROM cardio_entry WHERE date >= :sinceEpochMs AND type != :excludeType AND distance_km IS NOT NULL")
-    fun observeDistanceKmSince(sinceEpochMs: Long, excludeType: String = "rest"): Flow<Double?>
 
     /** Count of non-rest cardio sessions ever (cardio trophies). */
     @Query("SELECT COUNT(*) FROM cardio_entry WHERE type != :excludeType")

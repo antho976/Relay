@@ -5,7 +5,6 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.forge.app.data.db.entities.CoachGoal
-import kotlinx.coroutines.flow.Flow
 
 /** The Goal Portfolio's rows (Coach v3 A2). Active goals sort by priority, then by age. */
 @Dao
@@ -22,12 +21,6 @@ interface CoachGoalDao {
             "ORDER BY priority ASC, created_at ASC"
     )
     suspend fun active(): List<CoachGoal>
-
-    @Query(
-        "SELECT * FROM coach_goal WHERE completed_at IS NULL AND archived_at IS NULL " +
-            "ORDER BY priority ASC, created_at ASC"
-    )
-    fun observeActive(): Flow<List<CoachGoal>>
 
     @Query("UPDATE coach_goal SET completed_at = :atMs WHERE id = :id")
     suspend fun markCompleted(id: Long, atMs: Long)

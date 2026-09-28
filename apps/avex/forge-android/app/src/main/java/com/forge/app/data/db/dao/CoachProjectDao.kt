@@ -5,7 +5,6 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.forge.app.data.db.entities.CoachProject
-import kotlinx.coroutines.flow.Flow
 
 /** Proactive projects (Coach v3 D). At most one active at a time; the rest are the record. */
 @Dao
@@ -16,9 +15,6 @@ interface CoachProjectDao {
 
     @Query("SELECT * FROM coach_project WHERE completed_at IS NULL AND abandoned_at IS NULL ORDER BY started_at DESC LIMIT 1")
     suspend fun active(): CoachProject?
-
-    @Query("SELECT * FROM coach_project WHERE completed_at IS NULL AND abandoned_at IS NULL ORDER BY started_at DESC LIMIT 1")
-    fun observeActive(): Flow<CoachProject?>
 
     @Query("SELECT * FROM coach_project ORDER BY started_at DESC")
     suspend fun all(): List<CoachProject>

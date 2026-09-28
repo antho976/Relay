@@ -6,7 +6,6 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import com.forge.app.data.db.entities.TrainingBlock
-import kotlinx.coroutines.flow.Flow
 
 /** The training block (Coach v3 C). At most one active block at a time. */
 @Dao
@@ -18,11 +17,8 @@ interface TrainingBlockDao {
     @Update
     suspend fun update(block: TrainingBlock)
 
-    @Query("SELECT * FROM training_block WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1")
-    fun observeActive(): Flow<TrainingBlock?>
-
     /**
-     * Every row still open, in the same order [observeActive] reads them. The invariant says there is at
+     * Every row still open, newest first. The invariant says there is at
      * most one; the repository's repair path reads them all so it can end the extras (M-13).
      */
     @Query("SELECT * FROM training_block WHERE ended_at IS NULL ORDER BY started_at DESC")
