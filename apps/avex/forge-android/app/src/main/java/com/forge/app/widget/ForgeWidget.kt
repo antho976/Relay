@@ -67,7 +67,9 @@ class ForgeWidget : GlanceAppWidget() {
         val entryPoint = EntryPointAccessors.fromApplication(
             context.applicationContext, WidgetEntryPoint::class.java
         )
-        entryPoint.programRepository().ensureLoaded()
+        // Only when not loaded yet: the widget refreshes on every session start/finish/discard, and an
+        // unconditional reload bumped the program revision each time, re-running everything keyed on it.
+        if (!com.forge.app.program.Program.isLoaded) entryPoint.programRepository().ensureLoaded()
 
         // --- Item 2: active/in-progress session detection ---
         // getActiveSession() returns the unique unfinished session row if one exists.

@@ -953,7 +953,12 @@ class CoachRepository @Inject constructor(
      * words — tracked lifts, the recovery inputs it reads, and what it has learned so far. Pure
      * read off ONE snapshot + the decision history; never writes. Call on screen open only.
      */
-    suspend fun coachLab(): CoachWatch {
+    suspend fun coachLab(): CoachWatch =
+        // The advisors below are CPU passes over the whole history; callers reach this from
+        // viewModelScope (Main), so the work is moved off it here rather than at every call site.
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { assembleCoachLab() }
+
+    private suspend fun assembleCoachLab(): CoachWatch {
         // Read-only display: reuse a recent snapshot (e.g. the Week Brief's) rather than re-running the
         // whole-history fan-out again when Coach Lab is opened straight from it.
         val s = adaptationRepository.snapshotCached()

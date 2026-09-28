@@ -387,10 +387,14 @@ class MainActivity : FragmentActivity() {
         // screen — which keeps working however many times the permission was already denied, unlike
         // a re-request. Nothing interrupts a cold launch to ask.
 
-        AutoBackupWorker.schedule(this@MainActivity)
-        // The widget rolls over at local midnight from here (KEEP under a per-midnight name, so
-        // re-arming on each launch is a no-op in the same zone rather than stacking work).
-        com.forge.app.service.WidgetMidnightWorker.schedule(this@MainActivity)
+        // Off Main and not awaited: the first WorkManager.getInstance() builds its database and
+        // schedulers, and doing that here held the splash. Both are KEEP, so order doesn't matter.
+        lifecycleScope.launch(Dispatchers.IO) {
+            AutoBackupWorker.schedule(applicationContext)
+            // The widget rolls over at local midnight from here (KEEP under a per-midnight name, so
+            // re-arming on each launch is a no-op in the same zone rather than stacking work).
+            com.forge.app.service.WidgetMidnightWorker.schedule(applicationContext)
+        }
 
         // Read off Main with a bounded wait. A failed/stalled read uses the remembered privacy
         // protections; no real app content is composed before these flags and gates are primed.

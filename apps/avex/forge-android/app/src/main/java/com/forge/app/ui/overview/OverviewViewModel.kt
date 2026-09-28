@@ -228,7 +228,10 @@ class OverviewViewModel @Inject constructor(
         // which has to be able to show it long after the open that resolved it.
         viewModelScope.launch {
             runCatching {
-                programRepo.ensureLoaded()
+                // Guarded like every other caller: an unconditional ensureLoaded RELOADS the program
+                // (a query per day) and bumps its revision, which re-ran Stats, Coach, the day list and
+                // the watch mirror on every Home open.
+                if (!com.forge.app.program.Program.isLoaded) programRepo.ensureLoaded()
                 workoutRepo.resolveOrphanSession(com.forge.app.program.Program.dayKeys.toSet())
             }.getOrNull()?.let { res ->
                 settingsRepo.addSystemNotice(

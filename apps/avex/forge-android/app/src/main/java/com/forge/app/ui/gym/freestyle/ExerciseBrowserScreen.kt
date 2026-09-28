@@ -120,16 +120,19 @@ fun customExerciseId(name: String): String {
     val fullSlug = canonical
         .map { if (it.isLetterOrDigit()) it else '-' }
         .joinToString("")
-        .replace(Regex("-+"), "-")
+        .replace(DASH_RUN_REGEX, "-")
         .trim('-')
     if (fullSlug.isNotEmpty() && fullSlug.length <= CUSTOM_SLUG_MAX) return CUSTOM_PREFIX + fullSlug
     val slug = fullSlug.take(CUSTOM_SLUG_MAX).trimEnd('-').ifBlank { "exercise" }
     return CUSTOM_PREFIX + slug + "-" + customNameDigest(canonical)
 }
 
+private val DASH_RUN_REGEX = Regex("-+")
+private val WHITESPACE_REGEX = Regex("\\s+")
+
 /** The name as identity: trimmed, lower-cased, inner whitespace collapsed to one space. */
 fun canonicalCustomExerciseName(name: String): String =
-    name.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+    name.trim().lowercase().split(WHITESPACE_REGEX).filter { it.isNotEmpty() }.joinToString(" ")
 
 /**
  * Eight hex characters of FNV-1a over the canonical name. Stable across processes and builds

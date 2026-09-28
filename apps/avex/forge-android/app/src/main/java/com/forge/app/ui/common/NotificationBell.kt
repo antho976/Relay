@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.layout.boundsInRoot
@@ -34,7 +35,10 @@ val LocalGoHome = staticCompositionLocalOf<() -> Unit> { {} }
 val LocalOpenNotifications = staticCompositionLocalOf<() -> Unit> { {} }
 
 /** How many notices are waiting, fed from the one [com.forge.app.data.repo.NotificationFeed]. */
-val LocalUnreadNotifications = staticCompositionLocalOf { 0 }
+// Dynamic, not static: the count changes at runtime (load, new milestones, read/clear, resume), and
+// a static local invalidates everything beneath its provider — the NavHost root — while the bell is
+// the only reader.
+val LocalUnreadNotifications = compositionLocalOf { 0 }
 
 /**
  * The top-bar bell — the app's one entry to the notifications page, standing where the `• Avex`

@@ -60,6 +60,13 @@ import com.forge.app.ui.settings.SettingsScreen
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.trophies.TrophiesScreen
 
+/**
+ * Destinations that rise as modals. Top-level so the transition lambdas that read it keep one
+ * identity across recompositions of the nav root (a set built in the body gave them a new one each
+ * time, so the NavHost could never skip).
+ */
+private val ModalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_BUILDER, Routes.COACH_BRIEF, Routes.FREESTYLE_LOG)
+
 @Composable
 fun ForgeNavHost(
     widgetOpen: com.forge.app.widget.WidgetOpenRequest? = null,
@@ -80,7 +87,7 @@ fun ForgeNavHost(
     val rise: (Int) -> Int = { it / 4 }        // vertical distance for modal mode screens
     // The five hubs (Cardio/Stats/Overview/Coach/Academy) are pages of HubScreen's pager, reached by
     // swipe — they aren't nav destinations. Only the deep "mode" screens remain, and they RISE as modals.
-    val modalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_BUILDER, Routes.COACH_BRIEF, Routes.FREESTYLE_LOG)
+    val modalRoutes = ModalRoutes
     // One-shot fade so the first screen eases in on cold launch instead of snapping on.
     var appeared by remember { mutableStateOf(false) }
     val rootAlpha by animateFloatAsState(

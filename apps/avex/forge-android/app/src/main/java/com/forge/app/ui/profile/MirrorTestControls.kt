@@ -125,12 +125,14 @@ private fun photoSearchText(photo: ProgressPhoto, zone: ZoneId): String {
     return "${photo.title} ${photo.note} $pose $muscles $tags ${photo.album} ${date.format(SEARCH_DATE_FMT)}".lowercase()
 }
 
+private val QUERY_SPLIT_REGEX = Regex("\\s+")
+
 /** True if every whitespace-separated token of [query] appears somewhere in the photo's own text. */
 internal fun photoMatchesQuery(photo: ProgressPhoto, query: String, zone: ZoneId): Boolean {
     val q = query.trim().removePrefix("#").lowercase()
     if (q.isEmpty()) return true
     val hay = photoSearchText(photo, zone)
-    return q.split(Regex("\\s+")).all { hay.contains(it) }
+    return q.split(QUERY_SPLIT_REGEX).all { hay.contains(it) }
 }
 
 /** Apply every axis of [filter] to [photos] and sort the survivors. AND across facets, OR within. */

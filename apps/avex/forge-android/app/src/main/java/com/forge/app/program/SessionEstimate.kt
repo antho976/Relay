@@ -23,6 +23,8 @@ object SessionEstimate {
     const val HEAVY_REST_BONUS = 60
     /** The most reps a set may have had and still count as heavy — matches the plan-side rule below. */
     const val HEAVY_MAX_REPS = 6
+    /** Compiled once: [isHeavy] runs inside the generator's time-fit loop, per candidate slot. */
+    private val REP_RANGE_REGEX = Regex("""^(\d+)(?:-(\d+))?$""")
 
     /**
      * Compound vs isolation classification: generated plans carry tags; legacy/tagless
@@ -88,7 +90,7 @@ object SessionEstimate {
 
     /** A prescription whose whole numeric range sits at [HEAVY_MAX_REPS] or fewer reps. */
     fun isHeavy(reps: String): Boolean {
-        val match = Regex("""^(\d+)(?:-(\d+))?$""").matchEntire(reps.trim()) ?: return false
+        val match = REP_RANGE_REGEX.matchEntire(reps.trim()) ?: return false
         val upper = match.groupValues[2].ifEmpty { match.groupValues[1] }.toIntOrNull() ?: return false
         return upper in 1..HEAVY_MAX_REPS
     }

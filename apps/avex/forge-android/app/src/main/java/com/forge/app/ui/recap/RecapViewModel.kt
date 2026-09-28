@@ -8,10 +8,12 @@ import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.program.CustomExerciseRegistry
 import com.forge.app.program.Program
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
@@ -54,6 +56,8 @@ data class RecapUiState(
 internal fun recapExerciseName(exerciseId: String, swappedName: String?): String =
     CustomExerciseRegistry.name(exerciseId) ?: Program.exerciseDisplayName(exerciseId, swappedName)
 
+private val WHITESPACE_REGEX = Regex("\\s+")
+
 /**
  * The most-trained movement over a set of (session, exercise, swapped name) rows: every row is
  * resolved to its display name FIRST, rows are bucketed by that name (case- and
@@ -73,7 +77,7 @@ internal fun recapTopExercise(
     val sessionsByKey = LinkedHashMap<String, MutableSet<Long>>()
     rows.forEach { row ->
         val display = resolve(row.exerciseId, row.swappedName).trim()
-        val key = display.lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+        val key = display.lowercase().split(WHITESPACE_REGEX).filter { it.isNotEmpty() }.joinToString(" ")
         displayByKey.putIfAbsent(key, display)
         sessionsByKey.getOrPut(key) { mutableSetOf() }.add(row.sessionId)
     }
@@ -94,7 +98,9 @@ class RecapViewModel @Inject constructor(
         viewModelScope.launch { load() }
     }
 
-    private suspend fun load() {
+    // Default: the grouping, name resolution and streak passes below are CPU work, and
+    // viewModelScope would otherwise run them on Main during the screen's entrance.
+    private suspend fun load() = withContext(Dispatchers.Default) {
         val zone = ZoneId.systemDefault()
         val now = YearMonth.now(zone)
         val thisYear = now.year

@@ -38,6 +38,7 @@ import com.forge.app.ui.gym.train.state.ExerciseUiState
 
 /** Reps to PRE-FILL the field with — numeric targets only ("8-12" → 12, "15" → 15); null otherwise. */
 private val TARGET_REPS_REGEX = Regex("""^(\d+)(?:-(\d+))?$""")
+private val DIGITS_REGEX = Regex("""\d+""")
 private fun targetRepsOf(reps: String): Int? {
     val m = TARGET_REPS_REGEX.matchEntire(reps.trim()) ?: return null
     return m.groupValues[2].ifEmpty { m.groupValues[1] }.toIntOrNull()
@@ -52,7 +53,7 @@ private fun recommendedRepsOf(reps: String): Int? {
     val t = reps.trim()
     if (t.equals("AMRAP", ignoreCase = true)) return 12
     if (t.contains('s')) return null
-    return Regex("""\d+""").findAll(t).map { it.value.toInt() }.lastOrNull()
+    return DIGITS_REGEX.findAll(t).map { it.value.toInt() }.lastOrNull()
 }
 
 @OptIn(ExperimentalFoundationApi::class)

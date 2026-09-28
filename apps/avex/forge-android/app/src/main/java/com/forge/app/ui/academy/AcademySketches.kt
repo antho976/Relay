@@ -269,7 +269,9 @@ internal fun SketchCanvas(
     /** Centre on what is drawn. Off for drawings whose content moves under a finger. */
     fitContent: Boolean = true
 ) {
-    val measurer = rememberTextMeasurer()
+    // Room for every label a sketch carries (most heroes have 9–13). The default cache of 8 thrashed,
+    // re-laying out every label on every frame of the draw-in.
+    val measurer = rememberTextMeasurer(cacheSize = 32)
     val scheme = MaterialTheme.colorScheme
     val colors = SketchColors(
         guide = scheme.onSurfaceVariant.copy(alpha = 0.65f),

@@ -155,6 +155,9 @@ fun ProfileScreen(
     var showWeightSheet by remember { mutableStateOf(false) }
     var showBodyFatSheet by remember { mutableStateOf(false) }
     var showAvatarSheet by remember { mutableStateOf(false) }
+    // One File for the screen's life: avatarFile() builds a new one per call, and a new instance on
+    // every recomposition kept the cover header from ever skipping.
+    val avatarFile = remember(viewModel) { viewModel.avatarFile() }
 
     // Persist the one-time edit hint as soon as it surfaces — it stays visible this session, gone next.
     LaunchedEffect(state.showAvatarHint) { if (state.showAvatarHint) viewModel.markAvatarHintSeen() }
@@ -233,7 +236,7 @@ fun ProfileScreen(
                         name = state.name,
                         sinceLabel = state.sinceLabel,
                         hasAvatar = state.hasAvatar,
-                        avatarFile = viewModel.avatarFile(),
+                        avatarFile = avatarFile,
                         avatarStamp = state.avatarStamp,
                         onSetName = viewModel::setUserName,
                         onPickAvatar = { viewModel.dismissAvatarHint(); showAvatarSheet = true },
