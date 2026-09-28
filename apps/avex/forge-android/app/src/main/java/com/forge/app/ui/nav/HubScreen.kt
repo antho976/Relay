@@ -83,6 +83,11 @@ fun HubScreen(
         scope.launch { pagerState.animateScrollToPage(page.coerceIn(0, tabs.lastIndex), animationSpec = pageSpec) }
     }
     fun goToTab(tab: BottomTab) { tabs.indexOf(tab).takeIf { it >= 0 }?.let { goTo(it) } }
+    // A screen with nothing in its route to tell two opens apart. The hub stays tappable while the
+    // push animates, so a double tap on Profile, Settings or History stacked two copies, and Back
+    // had to be pressed twice to get home. Routes that carry an id (a day, a session) are left as
+    // plain pushes: single-top would re-point the open screen at the new id instead.
+    fun pushOnce(route: String) = nav.navigate(route) { launchSingleTop = true }
     val homeIndex = tabs.indexOf(BottomTab.HOME)
 
     // External tab requests (deep screen → tab, or a cardio widget launch).
@@ -124,24 +129,24 @@ fun HubScreen(
             // Pages are keyed off the visible tab list so they always line up with the bar.
             when (tabs.getOrElse(page) { BottomTab.HOME }) {
                 BottomTab.CARDIO -> CardioScreen(
-                    onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) },
-                    onOpenGoals = { nav.navigate(Routes.GOALS) },
-                    onOpenWeeks = { nav.navigate(Routes.cardioWeeks()) },
+                    onOpenHistory = { pushOnce(Routes.SESSION_HISTORY) },
+                    onOpenGoals = { pushOnce(Routes.GOALS) },
+                    onOpenWeeks = { pushOnce(Routes.cardioWeeks()) },
                     // Tapping the hero's Mon–Sun strip opens THIS week in full.
                     onOpenWeek = { weekStartMs -> nav.navigate(Routes.cardioWeeks(weekStartMs)) }
                 )
                 BottomTab.STATS -> DayListScreen(
                     onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
                     onOpenDayQuick = { dayKey -> nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
-                    onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) },
-                    onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
-                    onOpenRecap = { nav.navigate(Routes.RECAP) },
+                    onOpenHistory = { pushOnce(Routes.SESSION_HISTORY) },
+                    onOpenNotes = { pushOnce(Routes.NOTES_SEARCH) },
+                    onOpenRecap = { pushOnce(Routes.RECAP) },
                     // Long-press "Edit program for this day" → the streamlined program builder (the same
                     // editor Settings → Program opens), replacing the old per-day editor screen.
-                    onEditProgram = { _ -> nav.navigate(Routes.programBuilder()) },
+                    onEditProgram = { _ -> pushOnce(Routes.programBuilder()) },
                     onOpenCardio = { goToTab(BottomTab.CARDIO) },
-                    onLogFreestyle = { nav.navigate(Routes.FREESTYLE_LOG) },
-                    onBuildPlan = { nav.navigate(Routes.programBuilder()) },
+                    onLogFreestyle = { pushOnce(Routes.FREESTYLE_LOG) },
+                    onBuildPlan = { pushOnce(Routes.programBuilder()) },
                     // The consistency-heatmap day sheet drills into the same detail screens History uses.
                     onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
                     onOpenCardioSession = { cardioId -> nav.navigate(Routes.cardioSession(cardioId)) },
@@ -155,23 +160,23 @@ fun HubScreen(
                     onStartSessionSkipWarmup = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
                     // "View program" opens the program screen read-only — the top-bar pencil
                     // unlocks the same editor Settings → Program opens (GYMAP-28).
-                    onViewProgram = { nav.navigate(Routes.programBuilder(view = true)) },
+                    onViewProgram = { pushOnce(Routes.programBuilder(view = true)) },
                     onGoToCardio = { goToTab(BottomTab.CARDIO) },
-                    onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
-                    onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
-                    onGoToNutrition = { nav.navigate(Routes.NUTRITION) },
-                    onOpenProfile = { nav.navigate(Routes.PROFILE) },
-                    onOpenSettings = { nav.navigate(Routes.settings()) },
+                    onGoToTrophies = { pushOnce(Routes.TROPHIES) },
+                    onOpenNotes = { pushOnce(Routes.NOTES_SEARCH) },
+                    onGoToNutrition = { pushOnce(Routes.NUTRITION) },
+                    onOpenProfile = { pushOnce(Routes.PROFILE) },
+                    onOpenSettings = { pushOnce(Routes.settings()) },
                     // Coach is its own hub page when enabled — swipe to it rather than pushing the modal brief.
                     onOpenCoachBrief = { goToTab(BottomTab.COACH) },
-                    onOpenCoachLab = { nav.navigate(Routes.COACH_LAB) },
-                    onOpenGoals = { nav.navigate(Routes.GOALS) },
+                    onOpenCoachLab = { pushOnce(Routes.COACH_LAB) },
+                    onOpenGoals = { pushOnce(Routes.GOALS) },
                     onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
                     // "View all" opens the real searchable History destination (a proper back-stack
                     // entry) rather than a bottom sheet, so Back from a session returns to the list.
-                    onViewAllHistory = { nav.navigate(Routes.SESSION_HISTORY) },
-                    onLogFreestyle = { nav.navigate(Routes.FREESTYLE_LOG) },
-                    onBuildPlan = { nav.navigate(Routes.programBuilder()) }
+                    onViewAllHistory = { pushOnce(Routes.SESSION_HISTORY) },
+                    onLogFreestyle = { pushOnce(Routes.FREESTYLE_LOG) },
+                    onBuildPlan = { pushOnce(Routes.programBuilder()) }
                 )
                 // Coach and Academy sit furthest from Home, so each carries the top-bar back arrow
                 // to it; the system Back already goes there (the BackHandler above).

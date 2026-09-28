@@ -54,7 +54,7 @@ import java.util.Date
 import java.util.Locale
 
 @Composable
-internal fun HeroSection(state: TrophiesUiState, nextLocked: TrophyDisplay?, onBg: Color, muted: Color, outline: Color) {
+internal fun HeroSection(state: TrophiesUiState, nextLocked: TrophyDisplay?, muted: Color, outline: Color) {
     val accent = MaterialTheme.colorScheme.primary
     val frac = if (state.totalCount == 0) 0f else state.unlockedCount.toFloat() / state.totalCount
     val animFrac by animateFloatAsState(frac.coerceIn(0f, 1f), label = "trophyProgress")

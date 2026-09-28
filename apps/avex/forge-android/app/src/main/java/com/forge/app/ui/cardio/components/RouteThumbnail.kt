@@ -18,8 +18,8 @@ import com.forge.app.domain.cardio.RoutePoint
  * streets removed). Points are normalised into the canvas box; renders nothing for an
  * empty / single-point route, so a wearable-less entry simply shows no thumbnail.
  *
- * Today nothing populates [route] — the Health Connect `ExerciseSessionRecord` route read is
- * a deferred follow-up — so this stays dormant until that data is wired in.
+ * [route] is the session's Health Connect GPS track, matched and (where needed) consented to on the
+ * session sheet.
  */
 @Composable
 internal fun RouteThumbnail(

@@ -28,11 +28,8 @@ data class SettingsUiState(
     val weightUnit: com.forge.app.domain.units.WeightUnit = com.forge.app.domain.units.WeightUnit.LB,
     val useMiles: Boolean = false,
     val useCm: Boolean = false,
-    val compactSetLogging: Boolean = false,
     val noteTemplates: Set<String> = setOf("form felt: ", "energy: ", "pain/discomfort: ", "focus cue: "),
     val hiddenOverviewTiles: Set<String> = emptySet(),
-    val overviewTileOrder: List<String> = listOf("gym", "cardio", "trophies"),
-    val dateFormat: String = "MMM d, yyyy",
     val timeFormat24h: Boolean = false,
     val firstDayMonday: Boolean = true,
     val hapticStrength: String = "strong",
@@ -108,10 +105,7 @@ data class SettingsUiState(
     val coachEnabled: Boolean = true,
     /** Current program's weekly sets per muscle (display name → sets), busiest first (Phase 6). */
     val weeklyVolume: List<Pair<String, Int>> = emptyList()
-) {
-    /** Legacy convenience — true only for kilograms. Prefer [weightUnit]. */
-    val useKg: Boolean get() = weightUnit == com.forge.app.domain.units.WeightUnit.KG
-}
+)
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -122,7 +116,6 @@ class SettingsViewModel @Inject constructor(
     private val backupRepo: com.forge.app.data.repo.BackupRepository,
     private val storageRepo: com.forge.app.data.repo.StorageRepository,
     private val importRepo: com.forge.app.data.importer.WorkoutImportRepository,
-    private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
     private val photoRepo: com.forge.app.data.repo.ProgressPhotoRepository,
     private val pdfExport: com.forge.app.data.repo.PdfExportRepository,
     private val programRepository: com.forge.app.data.repo.ProgramRepository,
@@ -212,8 +205,10 @@ class SettingsViewModel @Inject constructor(
         vacationRepo.observeAll()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    // Through [write], like every other edit on these pages: a holiday added in the dialog and then
+    // Back on the same breath was cancelled with the Settings destination and never landed.
     fun addVacation(startDate: String, endDate: String, label: String) =
-        viewModelScope.launch { vacationRepo.add(startDate, endDate, label) }
+        write { vacationRepo.add(startDate, endDate, label) }
 
     /** §12 undo-over-confirm: delete now, re-insert the captured row if the user takes it back.
      *  A reversible delete never gets a confirm dialog — it gets the app's ONE Undo snackbar. */
@@ -250,7 +245,6 @@ class SettingsViewModel @Inject constructor(
     val state: StateFlow<SettingsUiState> = combine(
         settingsRepo.amoledMode,
         settingsRepo.weightUnit,
-        settingsRepo.dateFormat,
         settingsRepo.timeFormat24h,
         settingsRepo.firstDayMonday,
         settingsRepo.hapticStrength,
@@ -260,23 +254,18 @@ class SettingsViewModel @Inject constructor(
         SettingsUiState(
             amoledMode = values[0] as Boolean,
             weightUnit = values[1] as com.forge.app.domain.units.WeightUnit,
-            dateFormat = values[2] as String,
-            timeFormat24h = values[3] as Boolean,
-            firstDayMonday = values[4] as Boolean,
-            hapticStrength = values[5] as String,
-            quietHoursEnabled = values[6] as Boolean,
-            quietHoursSchedule = values[7] as com.forge.app.domain.notify.QuietHoursSchedule
+            timeFormat24h = values[2] as Boolean,
+            firstDayMonday = values[3] as Boolean,
+            hapticStrength = values[4] as String,
+            quietHoursEnabled = values[5] as Boolean,
+            quietHoursSchedule = values[6] as com.forge.app.domain.notify.QuietHoursSchedule
         )
     }.combine(settingsRepo.noteTemplates) { s, templates ->
         s.copy(noteTemplates = templates)
     }.combine(settingsRepo.hiddenOverviewTiles) { s, hidden ->
         s.copy(hiddenOverviewTiles = hidden)
-    }.combine(settingsRepo.compactSetLogging) { s, v ->
-        s.copy(compactSetLogging = v)
     }.combine(settingsRepo.keepScreenOn) { s, v ->
         s.copy(keepScreenOn = v)
-    }.combine(settingsRepo.overviewTileOrder) { s, order ->
-        s.copy(overviewTileOrder = order)
     }.combine(settingsRepo.privacyMode) { s, v ->
         s.copy(privacyMode = v)
     }.combine(settingsRepo.appLockEnabled) { s, v ->
@@ -383,7 +372,6 @@ class SettingsViewModel @Inject constructor(
         write { settingsRepo.setWeightUnit(u) }
     fun setUseMiles(v: Boolean) = write { settingsRepo.setUseMiles(v) }
     fun setUseCm(v: Boolean) = write { settingsRepo.setUseCm(v) }
-    fun setDateFormat(v: String) = write { settingsRepo.setDateFormat(v) }
     fun setTimeFormat24h(v: Boolean) = write { settingsRepo.setTimeFormat24h(v) }
     fun setFirstDayMonday(v: Boolean) = write { settingsRepo.setFirstDayMonday(v) }
     fun setHapticStrength(v: String) = write { settingsRepo.setHapticStrength(v) }
@@ -413,11 +401,6 @@ class SettingsViewModel @Inject constructor(
         write { settingsRepo.setNoticeKindEnabled(key, enabled) }
 
     fun setTileHidden(id: String, hidden: Boolean) = write { settingsRepo.setTileHidden(id, hidden) }
-    fun setCompactSetLogging(v: Boolean) = write { settingsRepo.setCompactSetLogging(v) }
-    fun setCustomWarmup(dayKey: String, items: List<String>) =
-        write { settingsRepo.setCustomWarmup(dayKey, items) }
-    fun setOverviewTileOrder(order: List<String>) =
-        write { settingsRepo.setOverviewTileOrder(order) }
 
     // Resets are shielded like preference writes: the confirm dialog closes with nothing on screen,
     // so Back straight after it used to cancel a factory reset between `clearAllTables()` and the
@@ -431,7 +414,6 @@ class SettingsViewModel @Inject constructor(
     fun resetSection(section: com.forge.app.data.prefs.SettingsSection) =
         write { settingsRepo.resetSection(section) }
     fun factoryReset() = write { resetRepo.factoryReset() }
-    fun loadSampleData() = viewModelScope.launch { sampleDataSeeder.seed() }
     fun setPrivacyMode(v: Boolean) = write { settingsRepo.setPrivacyMode(v) }
     // App / gallery lock (GYMAP-69). Enabling is gated on an available device credential in the UI
     // (Security page), so these persist the choice directly.
@@ -648,8 +630,13 @@ class SettingsViewModel @Inject constructor(
     private val _importResult = OutcomeSink()
 
     fun importData(uri: android.net.Uri) = viewModelScope.launch {
+        // A cancelled import is not a file that could not be read: rethrow it rather than posting
+        // a read-error message to the app-wide snackbar after the user has left.
         val result = runCatching { importRepo.import(uri) }
-            .getOrDefault(com.forge.app.data.importer.ImportResult.ReadError)
+            .getOrElse {
+                if (it is CancellationException) throw it
+                com.forge.app.data.importer.ImportResult.ReadError
+            }
         _importResult.value = result.userMessage()
         // A successful merge changed the data set — refresh the backup nudge / db size readout, and
         // rescan the folder so its found-file counts reflect what's now imported.
@@ -740,7 +727,12 @@ class SettingsViewModel @Inject constructor(
                 // open "last auto-backup failed" notice disappears without reopening the dialog.
                 refreshAutoBackupInfo()
             }
-            .onFailure { _statusMessage.value = "Backup failed: ${it.message}" }
+            .onFailure {
+                // Leaving Settings is not a failed backup. The snackbar is app-wide, so a swallowed
+                // cancellation surfaced "Backup failed: Job was cancelled" on the next screen.
+                if (it is CancellationException) throw it
+                _statusMessage.value = "Backup failed: ${it.message}"
+            }
     }
 
     /** The unlock for a backup was refused: remove the empty file the picker created for it, so an
@@ -1026,7 +1018,10 @@ class SettingsViewModel @Inject constructor(
         val folder = settingsRepo.backupFolderUri.first()?.let { android.net.Uri.parse(it) }
         runCatching { backupRepo.autoBackup(folder) }
             .onSuccess { _statusMessage.value = "Backed up."; refreshAutoBackupInfo() }
-            .onFailure { _statusMessage.value = "Backup failed: ${it.message}" }
+            .onFailure {
+                if (it is CancellationException) throw it // see backupDatabase
+                _statusMessage.value = "Backup failed: ${it.message}"
+            }
     }
 
     fun exportCrashLogs(uri: android.net.Uri) = viewModelScope.launch {
@@ -1036,7 +1031,10 @@ class SettingsViewModel @Inject constructor(
                     if (n == 0) "No crash logs yet, nothing to export."
                     else "Exported $n crash log${if (n == 1) "" else "s"}."
             }
-            .onFailure { _statusMessage.value = "Crash log export failed: ${it.message}" }
+            .onFailure {
+                if (it is CancellationException) throw it // see backupDatabase
+                _statusMessage.value = "Crash log export failed: ${it.message}"
+            }
     }
 
     // ── In-app crash log viewer ────────────────────────────────────────────────

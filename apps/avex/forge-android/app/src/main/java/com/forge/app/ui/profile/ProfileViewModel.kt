@@ -21,6 +21,7 @@ import com.forge.app.data.repo.ProgressPhotoRepository
 import com.forge.app.domain.goal.GoalMetric
 import com.forge.app.domain.goal.parseGoalType
 import com.forge.app.ui.common.DayLog
+import com.forge.app.ui.common.launchDurable
 import com.forge.app.ui.common.loadDayLog
 import com.forge.app.ui.profile.state.ProfileUiState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -97,7 +98,9 @@ class ProfileViewModel @Inject constructor(
      * note field was never touched, so the day keeps whatever note it already has, rather than the
      * sheet's possibly-unseeded blank erasing it (audit 2026-09-26, 03). A blank string clears it.
      */
-    fun logBodyweight(weightLb: Double, date: LocalDate, note: String?) = viewModelScope.launch {
+    fun logBodyweight(weightLb: Double, date: LocalDate, note: String?) = viewModelScope.launchDurable {
+        // Durable for the same reason as [setUserName]: the sheet closes on Save and Back from the
+        // profile often follows at once, which cleared this ViewModel and could drop the weigh-in.
         if (note == null) bodyweightRepo.logWeightOnly(weightLb, date)
         else bodyweightRepo.log(weightLb, date, note)
         _bodyweightMessage.value = "Saved."
@@ -139,7 +142,7 @@ class ProfileViewModel @Inject constructor(
     val bodyFatMessage: StateFlow<String?> = _bodyFatMessage.asStateFlow()
 
     /** Save a typed body-fat reading (%) for [date]; the trend updates reactively. */
-    fun logBodyFat(percent: Double, date: LocalDate) = viewModelScope.launch {
+    fun logBodyFat(percent: Double, date: LocalDate) = viewModelScope.launchDurable {
         bodyFatRepo.log(percent, date)
         _bodyFatMessage.value = "Saved."
     }

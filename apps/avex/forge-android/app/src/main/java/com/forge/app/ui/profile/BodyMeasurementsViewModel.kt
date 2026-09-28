@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
+import com.forge.app.ui.common.launchDurable
 import javax.inject.Inject
 
 /** One measurement type with its readings oldest → newest (empty when never logged). */
@@ -26,7 +26,6 @@ data class BodyMeasurementsUiState(
     val useCm: Boolean = false
 ) {
     val trackedCount: Int get() = series.count { it.entries.isNotEmpty() }
-    val anyData: Boolean get() = trackedCount > 0
 }
 
 /**
@@ -54,10 +53,11 @@ class BodyMeasurementsViewModel @Inject constructor(
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BodyMeasurementsUiState())
 
-    /** Record today's readings — one upsert per supplied (type, cm) pair. */
-    fun log(values: List<Pair<BodyMeasurementType, Double>>) = viewModelScope.launch {
+    /** Record today's readings — one upsert per supplied (type, cm) pair. Durable, like the other
+     *  logging writes: the sheet closes on Save, and leaving the screen straight after cancelled it. */
+    fun log(values: List<Pair<BodyMeasurementType, Double>>) = viewModelScope.launchDurable {
         values.forEach { (type, cm) -> repo.log(type, cm) }
     }
 
-    fun delete(id: Long) = viewModelScope.launch { repo.delete(id) }
+    fun delete(id: Long) = viewModelScope.launchDurable { repo.delete(id) }
 }

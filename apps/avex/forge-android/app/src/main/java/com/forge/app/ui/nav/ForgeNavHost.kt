@@ -47,7 +47,6 @@ import com.forge.app.ui.common.ProgramChangeGuardHost
 import com.forge.app.ui.gym.history.SessionHistoryScreen
 import com.forge.app.ui.gym.session.SessionDetailScreen
 import com.forge.app.ui.gym.notes.NotesSearchScreen
-import com.forge.app.ui.gym.train.DayListScreen
 import com.forge.app.ui.gym.train.DayScreen
 import com.forge.app.ui.goals.GoalEditorScreen
 import com.forge.app.ui.goals.GoalsScreen
@@ -316,9 +315,10 @@ fun ForgeNavHost(
         composable(Routes.PROFILE) {
             com.forge.app.ui.profile.ProfileScreen(
                 onBack = { nav.popBackStack() },
-                onOpenTrophies = { nav.navigate(Routes.TROPHIES) },
-                onOpenPhotoGallery = { nav.navigate(Routes.MIRROR_TEST) },
-                onOpenMeasurements = { nav.navigate(Routes.BODY_MEASUREMENTS) },
+                // Single-top, like the hub's own entry points: a double tap stacked two copies.
+                onOpenTrophies = { nav.navigate(Routes.TROPHIES) { launchSingleTop = true } },
+                onOpenPhotoGallery = { nav.navigate(Routes.MIRROR_TEST) { launchSingleTop = true } },
+                onOpenMeasurements = { nav.navigate(Routes.BODY_MEASUREMENTS) { launchSingleTop = true } },
                 // Out of the ACTIVITY day sheet, into the same two destinations History opens.
                 onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
                 onOpenCardio = { cardioId -> nav.navigate(Routes.cardioSession(cardioId)) }
@@ -355,14 +355,18 @@ fun ForgeNavHost(
                 // Acting on a notice leaves the feed behind rather than stacking on top of it, so Back
                 // from the session (or the brief) returns to where the user actually was.
                 onResumeSession = { dayKey ->
-                    nav.popBackStack()
                     if (dayKey.startsWith("cardio")) {
+                        // A hub TAB, so go back to the hub itself: the feed can be opened over a deep
+                        // screen (the arrival banner rides over Settings), and a single pop landed
+                        // there with the tab request left pending until some later return to the hub.
+                        nav.popBackStack(Routes.OVERVIEW, false)
                         pendingHubPage = BottomTab.CARDIO
                     } else {
+                        nav.popBackStack()
                         nav.navigate(Routes.gymDay(dayKey))
                     }
                 },
-                onOpenCoachBrief = { nav.popBackStack(); pendingHubPage = BottomTab.COACH },
+                onOpenCoachBrief = { nav.popBackStack(Routes.OVERVIEW, false); pendingHubPage = BottomTab.COACH },
                 onConnectWearable = {
                     nav.popBackStack()
                     nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name))
@@ -425,7 +429,7 @@ fun ForgeNavHost(
         composable(Routes.GOALS) {
             GoalsScreen(
                 onBack = { nav.popBackStack() },
-                onAddGoal = { nav.navigate(Routes.goalEditor()) },
+                onAddGoal = { nav.navigate(Routes.goalEditor()) { launchSingleTop = true } },
                 onEditLift = { id -> nav.navigate(Routes.goalEditor(exerciseId = id)) },
                 onEditCustom = { id -> nav.navigate(Routes.goalEditor(customId = id)) }
             )
@@ -440,7 +444,9 @@ fun ForgeNavHost(
             GoalEditorScreen(
                 exerciseId = entry.arguments?.getString(Routes.ARG_GOAL_EXERCISE_ID)?.takeIf { it.isNotBlank() },
                 customId = entry.arguments?.getString(Routes.ARG_GOAL_CUSTOM_ID)?.toLongOrNull(),
-                onDone = { nav.popBackStack() }
+                // Pop only while the editor is still on top, as DayScreen does: a second onDone from
+                // a double tap took the Goals list with it.
+                onDone = { nav.popIfCurrent(entry) }
             )
         }
         composable(Routes.MIRROR_TEST) {
@@ -458,7 +464,7 @@ fun ForgeNavHost(
             } else {
                 MirrorTestScreen(
                     onBack = { nav.popBackStack() },
-                    onOpenCamera = { nav.navigate(Routes.PROGRESS_CAMERA) }
+                    onOpenCamera = { nav.navigate(Routes.PROGRESS_CAMERA) { launchSingleTop = true } }
                 )
             }
         }

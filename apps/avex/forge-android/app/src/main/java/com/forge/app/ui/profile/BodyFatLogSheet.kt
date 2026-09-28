@@ -36,6 +36,7 @@ import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.util.Locale
 import com.forge.app.domain.units.filterDecimalInput
+import com.forge.app.domain.units.storedUnlessEdited
 
 /** Sane manual-entry bounds for a body-fat % (essential-fat floor to severe-obesity ceiling). */
 internal const val MIN_BODY_FAT_PCT = 3.0
@@ -82,14 +83,17 @@ internal fun BodyFatLogSheet(
 
     // Keyed on the day + seed so switching date re-seeds from that day, and a late flow emission still
     // lands the prefill instead of leaving a stale value that fails validation and locks Save.
-    var input by remember(seed, date) {
-        // Locale.US: this seeds the field above, so it is read back by the same parser. The bare
-        // format used the device locale and opened the sheet already holding "18,5" — a value the
-        // range check then rejected, on a device where the user had typed nothing.
-        mutableStateOf(seed?.let { String.format(Locale.US, "%.1f", it) } ?: "")
-    }
+    // Locale.US: this seeds the field below, so it is read back by the same parser. The bare
+    // format used the device locale and opened the sheet already holding "18,5" — a value the
+    // range check then rejected, on a device where the user had typed nothing.
+    val seedText = seed?.let { String.format(Locale.US, "%.1f", it) }
+    var input by remember(seed, date) { mutableStateOf(seedText ?: "") }
 
-    val parsed = parseSaneBodyFat(input)
+    // An untouched field saves the stored reading, not its 0.1 rounding: re-saving an imported
+    // 18.47% rewrote it as 18.5 (the same rule the weigh-in sheet applies).
+    val parsed = storedUnlessEdited(input, seedText, seed?.takeIf { it in MIN_BODY_FAT_PCT..MAX_BODY_FAT_PCT }) {
+        parseSaneBodyFat(it)
+    }
     val invalid = input.isNotBlank() && parsed == null
 
     val isToday = date == today

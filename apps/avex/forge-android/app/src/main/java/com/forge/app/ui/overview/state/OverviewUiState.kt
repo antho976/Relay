@@ -60,21 +60,14 @@ data class OverviewUiState(
     val brief: com.forge.app.domain.coach.PreSessionBrief.Brief? = null,
     /** The cold-start lesson the directive is carrying, while the coach is still learning you. */
     val coldStartLesson: com.forge.app.domain.academy.Lesson? = null,
-    val workoutsThisWeek: Int = 0,
     /**
      * Training days in the generated program — the "of N" denominator, NOT a hardcoded 6
      * (multi-user). Named for DAYS because that is what it denominates: [weekDaysTrained], the set
      * the week strip draws. While it was called `weeklyWorkoutTarget`, Home read it as a target for
-     * [workoutsThisWeek] and printed "4 / 7 target" above a strip with one cell lit — three
+     * the week's workout count and printed "4 / 7 target" above a strip with one cell lit — three
      * sessions on one Monday are four workouts and one day (2026-08-24).
      */
     val weeklyTrainingDays: Int = 4,
-    val volumeThisWeekLb: Double = 0.0,
-    val cardioMinutesThisWeek: Int = 0,
-    val totalFinishedSessions: Int = 0,
-    val streakDays: Int = 0,
-    /** Highest single-session volume (lb) logged in the current ISO week; null/0 when none. */
-    val bestSessionThisWeekLb: Double? = null,
     val pendingMilestone: MilestoneEvent? = null,
     /** Next gym day in the rotation. */
     val nextUpDayKey: String = "upper-a",
@@ -82,8 +75,6 @@ data class OverviewUiState(
     val weekDaysTrained: Set<Int> = emptySet(),
     /** Planned rest days this week, same indices as [weekDaysTrained]; empty without fixed weekdays. */
     val weekRestDays: Set<Int> = emptySet(),
-    /** 0=Mon..6=Sun indices that had a cardio entry this ISO week. */
-    val cardioWeekDays: Set<Int> = emptySet(),
     /** Custom name for the next-up day set by the user, or null if using the program default. */
     val customDayName: String? = null,
     /** Combined gym + cardio, sorted newest first, capped at 3. */

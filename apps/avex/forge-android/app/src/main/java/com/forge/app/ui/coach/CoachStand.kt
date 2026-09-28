@@ -61,8 +61,7 @@ private val LIFT_SPARK_W = 72.dp
 internal fun LazyListScope.coachStand(
     state: CoachViewModel.UiState,
     weightUnit: WeightUnit,
-    c: CoachColors,
-    onConnectHealth: (() -> Unit)?
+    c: CoachColors
 ) {
     val watch = state.watch ?: return
 

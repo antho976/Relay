@@ -27,9 +27,9 @@ import com.forge.app.ui.common.CountBadge
 
 /**
  * The five primary hubs, in display order. They're pages of the [HubScreen] HorizontalPager, so the
- * bar is driven by page index (not nav routes) — each tab's [ordinal] IS its pager page, so the rest
- * of the nav code refers to pages via e.g. [HOME]`.ordinal` rather than magic numbers. Home sits in
- * the middle.
+ * bar is driven by page index (not nav routes). A tab's page is its index in the VISIBLE tab list,
+ * which [HubScreen] resolves with `indexOf`: it matches the [ordinal] only while every tab is shown,
+ * and Coach can be hidden. Home sits in the middle.
  */
 enum class BottomTab(val label: String, val icon: ImageVector) {
     CARDIO("Cardio", NavIcons.Cardio),

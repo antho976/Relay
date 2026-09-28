@@ -7,8 +7,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,7 +22,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -43,9 +40,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import com.forge.app.core.time.userWeekDayIndex
 import com.forge.app.ui.settings.SettingsIcons
 import com.forge.app.ui.common.NotificationBell
@@ -65,11 +60,6 @@ import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.Program
 import com.forge.app.ui.common.ForgeHeroAction
-import com.forge.app.ui.common.ForgeGlyphBadge
-import com.forge.app.ui.common.GROUP_OUTER
-import com.forge.app.ui.common.GROUP_SEAM
-import com.forge.app.ui.common.ROW_H
-import com.forge.app.ui.common.rowShape
 import com.forge.app.ui.experiment.CellShape
 import com.forge.app.ui.experiment.SectionAnchor
 import com.forge.app.ui.experiment.SurfaceListRow
@@ -359,7 +349,6 @@ fun OverviewScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val freestyleMode by viewModel.freestyleMode.collectAsStateWithLifecycle()
-    val coachEnabled by viewModel.coachEnabled.collectAsStateWithLifecycle()
     val programEmpty by viewModel.programEmpty.collectAsStateWithLifecycle()
     val selectedItem by viewModel.selectedItem.collectAsStateWithLifecycle()
     val summaryLines by viewModel.sessionExerciseLines.collectAsStateWithLifecycle()
@@ -644,7 +633,7 @@ fun OverviewScreen(
 
             movement?.let { currentMovement ->
                 Spacer(Modifier.height(16.dp))
-                MovementLine(currentMovement, onBg = onBg, muted = muted, outline = outline, accent = accent)
+                MovementLine(currentMovement, muted = muted, outline = outline, accent = accent)
             }
 
             // Goals can be taken off Home (2026-09-27): "hide" sits beside "view all", Undo follows,
@@ -733,7 +722,6 @@ fun OverviewScreen(
 @Composable
 private fun MovementLine(
     movement: OverviewViewModel.TodayMovement,
-    onBg: Color,
     muted: Color,
     outline: Color,
     accent: Color

@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 
 /**
@@ -145,6 +146,15 @@ class HealthConnectViewModel @Inject constructor(
     /** Permissions the muscle-mass launcher should request (read LeanBodyMass, W6). */
     val leanMassPermissions: Set<String> get() = manager.leanMassPermissions
 
+    /**
+     * One refresh at a time. Every permission result calls [refresh], and a history backfill can
+     * still be running from the last one: two in parallel both read the backfill latches as "due"
+     * before either set them, so the whole weight history was imported twice and announced twice.
+     * Serialised, the second reads the latches the first left and every grant it reads is fresh.
+     */
+    private val refreshMutex = kotlinx.coroutines.sync.Mutex()
+
+    // After [refreshMutex]: initialisers run in declaration order, and this launch runs at once.
     init { refresh() }
 
     /**
@@ -154,6 +164,10 @@ class HealthConnectViewModel @Inject constructor(
      * that latched before history access existed can still fetch the rest.
      */
     fun refresh(forceWeightHistory: Boolean = false) = viewModelScope.launch {
+        refreshMutex.withLock { refreshNow(forceWeightHistory) }
+    }
+
+    private suspend fun refreshNow(forceWeightHistory: Boolean) {
         val available = manager.isAvailable
         val granted = if (available) manager.hasAllPermissions() else false
         val weightGranted = if (available) manager.canReadWeight() else false

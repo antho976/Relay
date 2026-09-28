@@ -233,12 +233,19 @@ class CoachViewModel @Inject constructor(
         runCatching { block() }.onFailure { if (it is CancellationException) throw it }
         // A lifecycle tap can move trust, learned biases and the brief itself; refresh all three
         // reads (each falls back to the last good value on failure). The chart series don't change.
-        val s = _state.value
-        _state.value = s.copy(
-            brief = runCatching { coachRepo.refreshBrief() }.getOrNull() ?: s.brief,
-            watch = runCatching { coachRepo.coachLab() }.getOrNull() ?: s.watch,
-            timeline = runCatching { coachRepo.timeline() }.getOrNull() ?: s.timeline
-        )
+        // Read first, then update atomically, as [refreshGoals] does: a copy() of a snapshot taken
+        // BEFORE these suspending reads wrote the whole state back after them, reverting whatever
+        // landed in between (the advanced switch's collector, a block action's busy flag).
+        val brief = runCatching { coachRepo.refreshBrief() }.getOrNull()
+        val watch = runCatching { coachRepo.coachLab() }.getOrNull()
+        val timeline = runCatching { coachRepo.timeline() }.getOrNull()
+        _state.update { s ->
+            s.copy(
+                brief = brief ?: s.brief,
+                watch = watch ?: s.watch,
+                timeline = timeline ?: s.timeline
+            )
+        }
     }
 
     // ─── Goal portfolio (A2) ───────────────────────────────────────────────────

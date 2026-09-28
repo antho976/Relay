@@ -101,5 +101,12 @@ class SnackbarController @Inject constructor(private val clock: Clock) {
 class SnackbarControllerViewModel @Inject constructor(
     val controller: SnackbarController
 ) : ViewModel() {
-    fun runAction(action: suspend () -> Unit) = viewModelScope.launch { runCatching { action() } }
+    fun runAction(action: suspend () -> Unit) = viewModelScope.launch {
+        // A failed undo used to vanish here, leaving the item deleted with nothing said. Say so
+        // rather than pretend the restore landed; a cancellation is not a failure to report.
+        runCatching { action() }.onFailure {
+            if (it is kotlinx.coroutines.CancellationException) throw it
+            controller.show("Couldn't undo that.")
+        }
+    }
 }

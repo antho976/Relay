@@ -51,7 +51,6 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.time.temporal.WeekFields
 import java.util.Locale
 
 /** Air between sections — §7's rhythm, applied once so no section carries its own leading spacer. */
@@ -109,7 +108,6 @@ fun CardioScreen(
             ?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
             ?: LocalDate.now(zone)
     }
-    val weekNum = today.get(WeekFields.ISO.weekOfWeekBasedYear())
     val isoWeekStart = today.minusDays(today.dayOfWeek.value.toLong() - 1)
     val isoWeekEnd = isoWeekStart.plusDays(6)
     val weekLabel = remember(isoWeekStart) {
@@ -364,7 +362,7 @@ private fun LazyListScope.weekLens(
             if (last != null) {
                 LastSessionLine(
                     entry = last, today = today, zone = zone,
-                    muted = muted, accent = accent,
+                    muted = muted,
                     onClick = { onOpenSession(last.id) }
                 )
             } else {
@@ -424,7 +422,7 @@ private fun LazyListScope.weekLens(
             StepsByHourSection(
                 wearable = state.todayWearable,
                 connected = state.stepsConnected,
-                onBg = onBg, muted = muted, outline = outline, accent = accent
+                muted = muted, outline = outline, accent = accent
             )
         }
     }
@@ -455,7 +453,7 @@ private fun LazyListScope.progressLens(
             CardioPaceTrendSection(
                 series = state.cardioPaceSeries,
                 useMiles = state.useMiles,
-                onBg = onBg, muted = muted, outline = outline, accent = accent
+                muted = muted, accent = accent
             )
         }
     }
@@ -509,7 +507,6 @@ private fun LastSessionLine(
     today: LocalDate,
     zone: ZoneId,
     muted: Color,
-    accent: Color,
     onClick: () -> Unit
 ) {
     val customs = LocalCardioTypes.current

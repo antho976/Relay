@@ -47,9 +47,7 @@ import kotlin.math.roundToInt
 internal fun CardioPaceTrendSection(
     series: List<CardioPaceSeries>,
     useMiles: Boolean,
-    onBg: Color,
     muted: Color,
-    outline: Color,
     accent: Color
 ) {
     if (series.isEmpty()) return

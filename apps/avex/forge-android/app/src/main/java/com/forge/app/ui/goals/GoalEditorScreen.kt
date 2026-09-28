@@ -62,7 +62,6 @@ import com.forge.app.domain.units.storedUnlessEdited
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.ExerciseIcons
-import com.forge.app.ui.common.ForgeChoiceList
 import com.forge.app.ui.common.ForgeFieldRow
 import com.forge.app.ui.common.ForgeGlyphBadge
 import com.forge.app.ui.common.ForgeGroupCaption
@@ -152,6 +151,17 @@ fun GoalEditorScreen(
         }
     }
 
+    // One commit per visit. Each write below is followed by onDone(), and the screen stays tappable
+    // through its exit animation: a double tap on "Add goal" inserted the goal twice (create is an
+    // unconditional insert) and popped a second destination along with this one.
+    var committed by remember { mutableStateOf(false) }
+    fun commit(write: () -> Unit) {
+        if (committed) return
+        committed = true
+        write()
+        onDone()
+    }
+
     fun goBack() {
         when (step) {
             EditorStep.LiftPicker -> step = EditorStep.ChooseType
@@ -200,22 +210,21 @@ fun GoalEditorScreen(
                     step = s,
                     pinned = liftPinKey(s.exerciseId) in pinned,
                     onTogglePin = { viewModel.toggleLiftPin(s.exerciseId) },
-                    onSet = { lb -> viewModel.setLiftGoal(s.exerciseId, lb); onDone() },
-                    onClear = { viewModel.clearLiftGoal(s.exerciseId); onDone() }
+                    onSet = { lb -> commit { viewModel.setLiftGoal(s.exerciseId, lb) } },
+                    onClear = { commit { viewModel.clearLiftGoal(s.exerciseId) } }
                 )
                 is EditorStep.CustomNew -> CustomNewStep(
                     metric = s.metric,
-                    muted = muted,
                     onConfirm = { period, target, label ->
-                        viewModel.createCustomGoal(s.metric, period, target, label); onDone()
+                        commit { viewModel.createCustomGoal(s.metric, period, target, label) }
                     }
                 )
                 is EditorStep.CustomEdit -> CustomEditStep(
                     goal = s.goal,
                     pinned = customPinKey(s.goal.id) in pinned,
                     onTogglePin = { viewModel.toggleCustomPin(s.goal.id) },
-                    onSave = { target -> viewModel.updateCustomGoalTarget(s.goal.id, target); onDone() },
-                    onDelete = { viewModel.deleteCustomGoal(s.goal.id); onDone() },
+                    onSave = { target -> commit { viewModel.updateCustomGoalTarget(s.goal.id, target) } },
+                    onDelete = { commit { viewModel.deleteCustomGoal(s.goal.id) } },
                     onUnchanged = onDone
                 )
             }
@@ -427,7 +436,6 @@ internal fun LiftWeightStep(
 @Composable
 internal fun CustomNewStep(
     metric: GoalMetric,
-    muted: Color,
     onConfirm: (period: GoalPeriod, targetCanonical: Double, label: String) -> Unit
 ) {
     val settings = LocalForgeSettings.current

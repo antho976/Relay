@@ -183,7 +183,7 @@ internal fun CompareSheet(
                 }
             }
 
-            CompareReadout(before, after, zone, weightUnit, onBg = Color.White, muted = muted, accent = accent)
+            CompareReadout(before, after, zone, weightUnit, onBg = Color.White, muted = muted)
         }
         }
     }
@@ -267,8 +267,7 @@ private fun CompareReadout(
     zone: ZoneId,
     weightUnit: WeightUnit,
     onBg: Color,
-    muted: Color,
-    accent: Color
+    muted: Color
 ) {
     val span = gallerySpanLabel(before.takenAtMs, after.takenAtMs, zone)
     val apart = if (span.isEmpty()) "Same day" else "$span apart"

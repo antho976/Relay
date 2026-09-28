@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.data.repo.ProgressPhotoRepository
+import com.forge.app.ui.common.launchDurable
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,10 +47,7 @@ class MirrorTestViewModel @Inject constructor(
         /** Top-level folders, precomputed at load — not a per-read getter, so the grid doesn't
          *  re-run the groupBy on every recomposition. */
         val folders: List<AlbumFolder> = emptyList()
-    ) {
-        // Case-insensitive so a folder whose name differs only in case still shows its photos.
-        fun photosIn(album: String): List<ProgressPhoto> = photos.filter { it.album.equals(album, ignoreCase = true) }
-    }
+    )
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -116,14 +114,16 @@ class MirrorTestViewModel @Inject constructor(
         uris.forEach { photoRepo.add(it, album = album, pose = pose, muscles = muscles) }
     }
 
-    fun setAlbum(photo: ProgressPhoto, album: String) = viewModelScope.launch { photoRepo.setAlbum(photo, album) }
-    fun setNote(photo: ProgressPhoto, note: String) = viewModelScope.launch { photoRepo.setNote(photo, note) }
-    fun setTitle(photo: ProgressPhoto, title: String) = viewModelScope.launch { photoRepo.setTitle(photo, title) }
-    fun setPose(photo: ProgressPhoto, pose: String) = viewModelScope.launch { photoRepo.setPose(photo, pose) }
-    fun setMuscles(photo: ProgressPhoto, muscles: List<String>) = viewModelScope.launch { photoRepo.setMuscles(photo, muscles) }
-    fun setTags(photo: ProgressPhoto, tags: List<String>) = viewModelScope.launch { photoRepo.setTags(photo, tags) }
-    fun setWeight(photo: ProgressPhoto, weightLb: Double?) = viewModelScope.launch { photoRepo.setWeight(photo, weightLb) }
-    fun setTakenAt(photo: ProgressPhoto, takenAtMs: Long) = viewModelScope.launch { photoRepo.setTakenAt(photo, takenAtMs) }
+    // Durable: the viewer commits a typed title, note or weight as it is DISMISSED, and Back out of
+    // the gallery on the same breath cleared this ViewModel and cancelled the write it had just made.
+    fun setAlbum(photo: ProgressPhoto, album: String) = viewModelScope.launchDurable { photoRepo.setAlbum(photo, album) }
+    fun setNote(photo: ProgressPhoto, note: String) = viewModelScope.launchDurable { photoRepo.setNote(photo, note) }
+    fun setTitle(photo: ProgressPhoto, title: String) = viewModelScope.launchDurable { photoRepo.setTitle(photo, title) }
+    fun setPose(photo: ProgressPhoto, pose: String) = viewModelScope.launchDurable { photoRepo.setPose(photo, pose) }
+    fun setMuscles(photo: ProgressPhoto, muscles: List<String>) = viewModelScope.launchDurable { photoRepo.setMuscles(photo, muscles) }
+    fun setTags(photo: ProgressPhoto, tags: List<String>) = viewModelScope.launchDurable { photoRepo.setTags(photo, tags) }
+    fun setWeight(photo: ProgressPhoto, weightLb: Double?) = viewModelScope.launchDurable { photoRepo.setWeight(photo, weightLb) }
+    fun setTakenAt(photo: ProgressPhoto, takenAtMs: Long) = viewModelScope.launchDurable { photoRepo.setTakenAt(photo, takenAtMs) }
     fun deletePhoto(photo: ProgressPhoto) = viewModelScope.launch { photoRepo.delete(photo) }
 
     /** Multi-select delete. Sequential for the same reason as [addPhotos]: one index, one lock. */
