@@ -63,11 +63,23 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             // NonCancellable the write is dropped mid-flight, losing exactly the last-moment edit
             // the dispose commit exists to save. The refresh afterwards stays cancellable: it only
             // updates UI state that is going away anyway.
+            val hadRow = _state.value.exercises
+                .firstOrNull { it.plan.id == event.exerciseId }?.loggedExerciseId != null
             withContext(NonCancellable) {
                 val leId = ensureLoggedExercise(event.exerciseId) ?: return@withContext
                 workoutRepo.setNote(leId, event.note.ifBlank { null })
             }
-            refreshExercise(event.exerciseId)
+            // The note commits every pause in typing. When its row already existed nothing else on
+            // the card can have changed, so patch the one field instead of re-reading the card (~7
+            // queries and three settings reads) and rebuilding the day's state each time.
+            if (hadRow) {
+                val note = event.note.ifBlank { null }
+                _state.update { s ->
+                    s.copy(exercises = s.exercises.map { if (it.plan.id == event.exerciseId) it.copy(note = note) else it })
+                }
+            } else {
+                refreshExercise(event.exerciseId)
+            }
         }
         is DayUiEvent.ToggleSkipped -> viewModelScope.launch {
             val currentUi = _state.value.exercises
