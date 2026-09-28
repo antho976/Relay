@@ -13,7 +13,4 @@ interface WarmupRoutineDao {
 
     @Query("SELECT * FROM warmup_routine_item WHERE day_key = :dayKey ORDER BY order_index ASC")
     suspend fun forDay(dayKey: String): List<WarmupRoutineItem>
-
-    @Query("DELETE FROM warmup_routine_item")
-    suspend fun deleteAll()
 }

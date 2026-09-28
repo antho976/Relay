@@ -30,7 +30,6 @@ import com.forge.app.data.db.dao.CoachProjectDao
 import com.forge.app.data.db.dao.TrainingBlockDao
 import com.forge.app.data.db.dao.CoachGoalDao
 import com.forge.app.data.db.dao.InjuryRestrictionDao
-import com.forge.app.data.db.dao.ArticleEventDao
 import com.forge.app.data.db.dao.LessonEventDao
 import com.forge.app.data.db.dao.SuggestionOutcomeDao
 import com.forge.app.data.db.dao.SessionSegmentDao
@@ -75,7 +74,8 @@ import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is v31 (v31 added `session_hr_sample` — the watch's live HR stream per session for W3,
+ * Schema is v38 (v32–v38 are described beside their migrations in [com.forge.app.data.db.Migrations];
+ * v31 added `session_hr_sample` — the watch's live HR stream per session for W3,
  * a new empty table, additive, CASCADE with its session;
  * v30 added `lean_mass` — per-day lean-body-mass history for W6, a new empty
  * table, additive; import-only from Health Connect (a watch's BIA measurement), sibling of `body_fat`;
@@ -107,7 +107,7 @@ import com.forge.app.data.db.entities.VacationPeriod
  * The schema is now LOCKED from v12 onward: every change needs a real Migration in
  * [com.forge.app.data.db.Migrations] (registered in ALL_MIGRATIONS), a bumped version here,
  * an exported schema JSON, and a case in MigrationTest. Only the pre-lock versions (≤11) still
- * reset destructively (see [com.forge.app.di.DatabaseModule]). A version bump without a matching
+ * reset destructively (see [forgeDatabaseBuilder]). A version bump without a matching
  * migration fails loudly at startup — intended, so data is never silently wiped.
  */
 @Database(
@@ -187,7 +187,6 @@ abstract class ForgeDatabase : RoomDatabase() {
     abstract fun coachProjectDao(): CoachProjectDao
     abstract fun injuryRestrictionDao(): InjuryRestrictionDao
     abstract fun lessonEventDao(): LessonEventDao
-    abstract fun articleEventDao(): ArticleEventDao
     abstract fun suggestionOutcomeDao(): SuggestionOutcomeDao
     abstract fun sessionSegmentDao(): SessionSegmentDao
 }

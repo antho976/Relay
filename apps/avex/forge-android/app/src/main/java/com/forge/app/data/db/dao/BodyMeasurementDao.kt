@@ -23,7 +23,4 @@ interface BodyMeasurementDao {
 
     @Query("DELETE FROM body_measurement WHERE id = :id")
     suspend fun delete(id: Long)
-
-    @Query("DELETE FROM body_measurement")
-    suspend fun deleteAll()
 }

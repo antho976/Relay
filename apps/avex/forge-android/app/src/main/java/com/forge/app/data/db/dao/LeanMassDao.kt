@@ -18,10 +18,4 @@ interface LeanMassDao {
 
     @Query("SELECT * FROM lean_mass ORDER BY date_key DESC, recorded_at DESC LIMIT 1")
     suspend fun latest(): LeanMassEntry?
-
-    @Query("DELETE FROM lean_mass WHERE id = :id")
-    suspend fun delete(id: Long)
-
-    @Query("DELETE FROM lean_mass")
-    suspend fun deleteAll()
 }

@@ -297,7 +297,8 @@ interface SessionDao {
     @Query("SELECT id FROM session")
     suspend fun allIds(): List<Long>
 
-    /** Deletes all sessions (CASCADE removes LoggedExercise, LoggedSet, MoodEntry). For reset (#119). */
+    /** Deletes all sessions (CASCADE removes LoggedExercise → LoggedSet, rest events, segments, breaks
+     *  and HR samples; MoodEntry is only SET NULL — see [MoodDao.deleteAll]). For reset (#119). */
     @Query("DELETE FROM session")
     suspend fun deleteAll()
 

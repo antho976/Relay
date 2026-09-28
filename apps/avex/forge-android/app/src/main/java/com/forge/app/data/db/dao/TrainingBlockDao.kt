@@ -19,13 +19,10 @@ interface TrainingBlockDao {
     suspend fun update(block: TrainingBlock)
 
     @Query("SELECT * FROM training_block WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1")
-    suspend fun active(): TrainingBlock?
-
-    @Query("SELECT * FROM training_block WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1")
     fun observeActive(): Flow<TrainingBlock?>
 
     /**
-     * Every row still open, in the same order [active] reads them. The invariant says there is at
+     * Every row still open, in the same order [observeActive] reads them. The invariant says there is at
      * most one; the repository's repair path reads them all so it can end the extras (M-13).
      */
     @Query("SELECT * FROM training_block WHERE ended_at IS NULL ORDER BY started_at DESC")
@@ -35,7 +32,7 @@ interface TrainingBlockDao {
     @Query("UPDATE training_block SET ended_at = :endedAt WHERE ended_at IS NULL AND id != :keepId")
     suspend fun endAllExcept(keepId: Long, endedAt: Long): Int
 
-    /** Finished blocks, newest first — the record of how the training year was shaped. */
+    /** Every block, finished or not, newest first — the record of how the training year was shaped. */
     @Query("SELECT * FROM training_block ORDER BY started_at DESC")
     suspend fun all(): List<TrainingBlock>
 }

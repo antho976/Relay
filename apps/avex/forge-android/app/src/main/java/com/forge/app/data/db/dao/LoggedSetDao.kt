@@ -151,7 +151,7 @@ interface LoggedSetDao {
      * two adjacent screens — "PB 40 lb" on a lift with no PR ever recorded.
      *
      * The `finished_at IS NOT NULL` join predicate keeps the LIVE session out of every maximum here
-     * and below, matching [maxSessionVolume] and [topLift]. A mid-workout typo (2255 for 225) used
+     * and below, matching [maxSessionVolume]. A mid-workout typo (2255 for 225) used
      * to be visible to the trophy pass the moment the exercise was completed, and
      * `UnlockedTrophyDao.unlock` is IGNORE-on-conflict — so deleting the bad set seconds later left
      * the trophies unlocked forever. Both trophy passes run AFTER `finishSession` stamps
@@ -264,7 +264,11 @@ interface LoggedSetDao {
     """)
     suspend fun bestE1rmLbSince(sinceMs: Long): Double?
 
-    /** Max reps summed across one exercise's sets (per logged exercise) — the "Rep Machine" trophy (#105). */
+    /**
+     * Max reps summed across one exercise's sets (per logged exercise) — the "Rep Machine" trophy
+     * (#105). Timed holds are excluded: their `reps` is not a rep count, so a 90-second plank read
+     * as ninety reps.
+     */
     @Query("""
         SELECT MAX(total_reps) FROM (
             SELECT SUM(s.reps) AS total_reps
@@ -272,6 +276,7 @@ interface LoggedSetDao {
             INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
             INNER JOIN session sess ON le.session_id = sess.id
             WHERE sess.is_untracked = 0 AND sess.finished_at IS NOT NULL
+              AND s.duration_seconds IS NULL
             GROUP BY s.logged_exercise_id
         )
     """)
@@ -385,22 +390,4 @@ interface LoggedSetDao {
         )
     """)
     suspend fun maxSessionVolume(): Double?
-
-    /** The single heaviest set ever logged, with its exercise id — the profile "top lift" signature. */
-    @Query("""
-        SELECT le.exercise_id AS exercise_id, s.weight_lb AS weight_lb
-        FROM logged_set s
-        INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
-        INNER JOIN session ss ON le.session_id = ss.id
-        WHERE ss.finished_at IS NOT NULL AND s.weight_lb IS NOT NULL AND s.duration_seconds IS NULL
-          AND s.is_assisted = 0 AND ss.is_untracked = 0
-        ORDER BY s.weight_lb DESC
-        LIMIT 1
-    """)
-    suspend fun topLift(): TopLiftRow?
-
-    data class TopLiftRow(
-        @androidx.room.ColumnInfo(name = "exercise_id") val exerciseId: String,
-        @androidx.room.ColumnInfo(name = "weight_lb") val weightLb: Double
-    )
 }
