@@ -76,6 +76,8 @@ data class SettingsUiState(
     /** IANA zone ids the user has starred — pinned to the top of the timezone picker. */
     val favoriteTimezones: Set<String> = emptySet(),
     val daysPerWeek: Int = 4,
+    /** Preferred minutes per session; null = no ceiling. Staged like the day count: used on the next generate. */
+    val sessionMinutes: Int? = null,
     val liked: Set<String> = emptySet(),
     val disliked: Set<String> = emptySet(),
     /** User-created exercises (deduped by name), so they can be liked/disliked on the same screen. */
@@ -317,6 +319,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(favoriteTimezones = v)
     }.combine(settingsRepo.daysPerWeek) { s, v ->
         s.copy(daysPerWeek = v)
+    }.combine(settingsRepo.sessionMinutes) { s, v ->
+        s.copy(sessionMinutes = v)
     }.combine(settingsRepo.likedExercises) { s, v ->
         s.copy(liked = v)
     }.combine(settingsRepo.dislikedExercises) { s, v ->
@@ -443,6 +447,7 @@ class SettingsViewModel @Inject constructor(
     }
     fun setPlateWeightLb(lb: Double) = write { settingsRepo.setPlateWeightLb(lb) }
     fun setDaysPerWeek(n: Int) = write { settingsRepo.setDaysPerWeek(n) }
+    fun setSessionMinutes(minutes: Int?) = write { settingsRepo.setSessionMinutes(minutes) }
     /** Toggle "go with the flow" (no fixed plan; home leads with freestyle logging). */
     fun setFreestyleMode(v: Boolean) = write { settingsRepo.setFreestyleMode(v) }
     /** Show/hide the Coach feature (tab + banners). */

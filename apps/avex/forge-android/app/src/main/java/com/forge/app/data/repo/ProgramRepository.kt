@@ -358,6 +358,7 @@ class ProgramRepository @Inject constructor(
         pinned = settings.pinnedExercises.first(),
         dbMaxLb = settings.maxDbWeightLb.first(),
         frozenIds = settings.frozenExerciseIds.first(),
+        sessionMinutes = settings.sessionMinutes.first(),
         // D: personal volume ceilings where the athlete's own history has earned them; empty
         // otherwise, which is exactly the pre-D behavior.
         personalCaps = personalCaps()

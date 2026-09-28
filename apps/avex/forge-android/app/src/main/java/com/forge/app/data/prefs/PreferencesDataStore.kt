@@ -294,6 +294,8 @@ object PreferenceKeys {
     // ─── Program generation (program-unlock) ──────────────────────────────────
     /** Training days/week the program targets — drives the split template (3-day ≠ 7-day). */
     val DAYS_PER_WEEK = intPreferencesKey("days_per_week")
+    /** "About this long per session" in minutes — each generated day is trimmed to fit. Absent = no ceiling. */
+    val SESSION_MINUTES = intPreferencesKey("session_minutes")
     /** Program focus, e.g. "balanced" | "arms_shoulders" | "legs". Empty = balanced. */
     val PROGRAM_EMPHASIS = stringPreferencesKey("program_emphasis")
     /** Training experience: "beginner" | "intermediate" | "advanced". Drives volume + difficulty filter. */
@@ -443,7 +445,7 @@ object PreferenceKeys {
         AVATAR_EDIT_HINT_SHOWN, COACH_ADVANCED_PROMPT_AFTER, COACH_BRIEF_INTRO_SEEN,
         LAST_SEEN_COACH_WEEK_ID, LAST_SEEN_RANK_TIER_ORDINAL,
         // What the current program was generated from, and the engine state riding on it.
-        DAYS_PER_WEEK, PROGRAM_EMPHASIS, PROGRAM_EXPERIENCE, PROBLEM_AREAS, PRIORITY_MUSCLES,
+        DAYS_PER_WEEK, SESSION_MINUTES, PROGRAM_EMPHASIS, PROGRAM_EXPERIENCE, PROBLEM_AREAS, PRIORITY_MUSCLES,
         AVAILABLE_EQUIPMENT, FROZEN_EXERCISE_IDS, MAX_DB_WEIGHT_LB, SCHEDULE_MODE, SCHEDULE_WEEKLY,
         PINNED_EXERCISES, FAVORITE_EXERCISES, LIKED_EXERCISES, DISLIKED_EXERCISES,
         DELOAD_WEEK_START_MS, BLOCK_DELOAD_OWED, PROGRAM_GENERATION_INTENT, PROGRAM_GENERATION_SEED, ROTATION_COUNTER,

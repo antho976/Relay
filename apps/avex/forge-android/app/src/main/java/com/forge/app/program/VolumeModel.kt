@@ -98,7 +98,12 @@ object VolumeModel {
          * the profile has months of history, at which point generation stops using a number that
          * was never about this person.
          */
-        personalCaps: Map<MuscleGroup, Int> = emptyMap()
+        personalCaps: Map<MuscleGroup, Int> = emptyMap(),
+        /**
+         * The athlete's "about this long per session" answer (onboarding / Settings → Program), in
+         * minutes; null or ≤ 0 = no ceiling. Applied last, see [fitSessionToTime].
+         */
+        sessionMinutes: Int? = null
     ): List<List<Int>> {
         val result: List<IntArray> = days.map { day ->
             IntArray(day.targets.size) { si -> slotSets(day.targets[si], focus, volumeFactor, goal, minSets) }
@@ -153,7 +158,66 @@ object VolumeModel {
                 sets[index]--
             }
         }
+        if (sessionMinutes != null && sessionMinutes > 0) {
+            result.forEachIndexed { di, sets -> fitSessionToTime(days, di, sets, sessionMinutes, minSets, goal, result) }
+        }
         return result.map { it.toList() }
+    }
+
+    /** Fewest slots a time-fitted day keeps — below this it stops being a session. */
+    const val MIN_SLOTS_PER_SESSION = 2
+
+    /**
+     * Shrink day [di] until its estimated length fits [minutes], priced by the same rule as the
+     * day card's "~min" ([SessionEstimate]) so a 45-minute answer reads as ~45 on the card.
+     *
+     * Two passes, cheapest loss first: shave accessory sets down to [minSets] (PUMP, then
+     * HYPERTROPHY, the heavy compound last — the same order as the weekly cap), then drop whole
+     * accessory slots, preferring a muscle the rest of the week still trains so a short-session
+     * week loses frequency before it loses a muscle outright. STRENGTH slots are never dropped and
+     * the day keeps at least [MIN_SLOTS_PER_SESSION]; if that floor still runs long, it runs long —
+     * a ceiling that deletes the session's main lift has stopped helping.
+     */
+    private fun fitSessionToTime(
+        days: List<DayArchetype>,
+        di: Int,
+        sets: IntArray,
+        minutes: Int,
+        minSets: Int,
+        goal: String,
+        week: List<IntArray>
+    ) {
+        val slots = days[di].targets
+        val budget = minutes * 60 - SessionEstimate.WARMUP_ALLOWANCE_SECONDS
+        fun cost(): Int = sets.indices.sumOf { SessionEstimate.exerciseSeconds(sets[it], restFor(slots[it].scheme, goal)) }
+        while (cost() > budget) {
+            val index = sets.indices.filter { sets[it] > minSets }
+                .maxWithOrNull(compareBy({ trimRank(slots[it].scheme) }, { sets[it] })) ?: break
+            sets[index]--
+        }
+        fun trainedElsewhere(muscle: MuscleGroup): Boolean = week.indices.any { d ->
+            d != di && days[d].targets.indices.any { si -> days[d].targets[si].muscle == muscle && week[d][si] > 0 }
+        }
+        while (cost() > budget && sets.count { it > 0 } > MIN_SLOTS_PER_SESSION) {
+            val index = sets.indices
+                .filter { sets[it] > 0 && slots[it].scheme != RepScheme.STRENGTH }
+                .maxWithOrNull(
+                    compareBy<Int>({ trimRank(slots[it].scheme) }, { trainedElsewhere(slots[it].muscle) }, { it })
+                ) ?: break
+            sets[index] = 0
+        }
+    }
+
+    /**
+     * The rest a slot's sets are priced at before a movement is picked: a STRENGTH slot leads with a
+     * compound (plus the heavy bonus when the goal prescribes heavy reps), a PUMP slot with an
+     * isolation, and a HYPERTROPHY slot could be either, so it is priced between the two.
+     */
+    private fun restFor(scheme: RepScheme, goal: String): Int = when (scheme) {
+        RepScheme.STRENGTH -> SessionEstimate.COMPOUND_REST +
+            if (SessionEstimate.isHeavy(GoalProfiles.reps(goal, scheme))) SessionEstimate.HEAVY_REST_BONUS else 0
+        RepScheme.HYPERTROPHY -> (SessionEstimate.COMPOUND_REST + SessionEstimate.ISOLATION_REST) / 2
+        RepScheme.PUMP -> SessionEstimate.ISOLATION_REST
     }
 
     /** Lowest-priority scheme first (PUMP > HYPERTROPHY > STRENGTH), then the largest slot. */

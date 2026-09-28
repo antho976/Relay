@@ -187,6 +187,8 @@ fun OnboardingScreen(
     // generated plan is what the coach adapts, freestyle has nothing to adapt.
     var coachChoice by remember { mutableStateOf(draft?.coachChoice) }
     var daysPerWeek by remember { mutableIntStateOf(draft?.daysPerWeek ?: 0) }
+    // Optional, asked under the day count: null = not answered, 0 = "Any". Either means no ceiling.
+    var sessionMinutes by remember { mutableStateOf(draft?.sessionMinutes) }
     var equipment by remember { mutableStateOf(draft?.equipment ?: emptySet()) }
     // Non-null when a curated preset (e.g. Developer's) is picked — locks the exercise pool.
     var frozenIds by remember { mutableStateOf(draft?.frozenIds) }
@@ -216,7 +218,7 @@ fun OnboardingScreen(
     val snapshot = OnboardingDraft(
         step, planMode, name, useKg, useMilesChoice, distanceTouched, goal, experience,
         bodyweightInput, sex, daysPerWeek, equipment, frozenIds, plateWeightLb,
-        problemAreas, cadence, everyN, previewSeed, appLock, coachChoice
+        problemAreas, cadence, everyN, previewSeed, appLock, coachChoice, sessionMinutes
     )
     SideEffect { viewModel.saveDraft(snapshot) }
 
@@ -227,16 +229,17 @@ fun OnboardingScreen(
     }
     // The volume that split plans to carry, before any gear filter — what lets the ledger draw a
     // real week one step before the exercises exist.
-    val plannedSets = remember(daysPerWeek, experience, goal) {
+    val plannedSets = remember(daysPerWeek, experience, goal, sessionMinutes) {
         if (daysPerWeek in 1..7) ProgramGenerator.plannedSetsPerDay(
-            daysPerWeek, experience.ifBlank { "intermediate" }, goal.ifBlank { "build_muscle" }
+            daysPerWeek, experience.ifBlank { "intermediate" }, goal.ifBlank { "build_muscle" },
+            sessionMinutes?.takeIf { it > 0 }
         ) else emptyList()
     }
     // Pure preview — recomputed whenever an input or the re-roll seed changes. Null until there is
     // gear to build from: the ledger draws empty tracks rather than inventing a week (§12).
-    val previewDays = remember(previewSeed, daysPerWeek, equipment, frozenIds, goal, experience, problemAreas) {
+    val previewDays = remember(previewSeed, daysPerWeek, equipment, frozenIds, goal, experience, problemAreas, sessionMinutes) {
         if (equipment.isEmpty() || daysPerWeek !in 1..7) null
-        else viewModel.buildPreview(daysPerWeek, equipment, goal, experience, problemAreas, frozenIds, previewSeed)
+        else viewModel.buildPreview(daysPerWeek, equipment, goal, experience, problemAreas, frozenIds, previewSeed, sessionMinutes)
     }
 
     fun finish() {
@@ -249,7 +252,7 @@ fun OnboardingScreen(
             cadence = cadence.ifEmpty { "never" }, everyN = everyN, experience = experience,
             problemAreas = problemAreas, seed = previewSeed,
             plateWeightLb = plateWeightLb, frozenIds = frozenIds, coachEnabled = coachEnabled,
-            appLock = appLock
+            appLock = appLock, sessionMinutes = sessionMinutes
         )
         onFinished(planMode)
     }
@@ -338,7 +341,10 @@ fun OnboardingScreen(
                         PAGE_MODE -> StepPlanMode(selected = planMode, onSelect = { planMode = it })
                         PAGE_GOAL -> StepGoal(selected = goal, onSelect = { goal = it })
                         PAGE_EXPERIENCE -> StepExperience(selected = experience, onSelect = { experience = it })
-                        PAGE_DAYS -> StepDays(days = daysPerWeek, experience = experience, onChange = { daysPerWeek = it })
+                        PAGE_DAYS -> StepDays(
+                            days = daysPerWeek, experience = experience, onChange = { daysPerWeek = it },
+                            sessionMinutes = sessionMinutes, onSessionMinutes = { sessionMinutes = it }
+                        )
                         PAGE_GYM -> StepGymPresets(
                             selected = equipment,
                             frozenIds = frozenIds,

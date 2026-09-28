@@ -718,6 +718,14 @@ class SettingsRepository @Inject constructor(
     suspend fun setDaysPerWeek(n: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.DAYS_PER_WEEK] = n.coerceIn(1, 7) }
 
+    /** Preferred session length in minutes; null = no ceiling (the generator's historical behavior). */
+    val sessionMinutes: Flow<Int?> = pref { prefs -> prefs[PreferenceKeys.SESSION_MINUTES]?.takeIf { it > 0 } }
+    suspend fun setSessionMinutes(minutes: Int?) =
+        context.forgePreferences.edit {
+            if (minutes == null || minutes <= 0) it.remove(PreferenceKeys.SESSION_MINUTES)
+            else it[PreferenceKeys.SESSION_MINUTES] = minutes.coerceIn(15, 180)
+        }
+
     /** Default rest base (seconds) per movement type — what the rest timer starts at before personal
      *  tuning + the brutal bonus. Defaults to the canonical 120 / 90; clamped to a sane 30s–10min. */
     val restCompoundSeconds: Flow<Int> = pref { it[PreferenceKeys.REST_COMPOUND_SECONDS] ?: com.forge.app.program.SessionEstimate.COMPOUND_REST }

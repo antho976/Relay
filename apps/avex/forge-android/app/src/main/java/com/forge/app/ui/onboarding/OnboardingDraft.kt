@@ -33,7 +33,9 @@ internal data class OnboardingDraft(
     /** App-lock opt-in (GYMAP-69). */
     val appLock: Boolean,
     /** Explicit coach opt-in / opt-out; null = untouched, so the mode's default applies. */
-    val coachChoice: Boolean?
+    val coachChoice: Boolean?,
+    /** Minutes per session; null = never answered, 0 = explicitly "Any" (no ceiling). */
+    val sessionMinutes: Int? = null
 ) {
     fun toJson(): String = JSONObject().apply {
         put("schema", SCHEMA)
@@ -57,6 +59,7 @@ internal data class OnboardingDraft(
         put("previewSeed", previewSeed)
         put("appLock", appLock)
         coachChoice?.let { put("coachChoice", it) }       // absent = never touched
+        sessionMinutes?.let { put("sessionMinutes", it) } // absent = never answered
     }.toString()
 
     companion object {
@@ -90,7 +93,8 @@ internal data class OnboardingDraft(
                 everyN = o.getInt("everyN"),
                 previewSeed = o.getLong("previewSeed"),
                 appLock = o.optBoolean("appLock", false),
-                coachChoice = if (o.has("coachChoice")) o.getBoolean("coachChoice") else null
+                coachChoice = if (o.has("coachChoice")) o.getBoolean("coachChoice") else null,
+                sessionMinutes = if (o.has("sessionMinutes")) o.getInt("sessionMinutes") else null
             )
         }.getOrNull()
 

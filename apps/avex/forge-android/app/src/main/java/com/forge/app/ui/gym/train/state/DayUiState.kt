@@ -99,6 +99,8 @@ data class DayUiState(
     val sessionIntensity: String = "normal",
     /** Pre-session picker shown once on first open. False after user confirms. */
     val showPreSessionPicker: Boolean = false,
+    /** The last "I have N minutes" fit, while it can still be undone. Null = none applied. */
+    val timeFit: TimeFitApplied? = null,
     /** Per-warmup-item reactions (#69). Key = item index, value = true (👍) / false (👎). */
     val warmupReactions: Map<Int, Boolean> = emptyMap(),
     /** True when the add-exercise picker sheet is open (#61). */
@@ -325,4 +327,14 @@ data class ExerciseSessionPoint(
     val durationMin: Int?,
     val volumeLb: Double,
     val topWeightLb: Double?
+)
+
+/**
+ * An "I have N minutes today" fit the user applied. [skippedIds] are exactly the exercises the fit
+ * marked skipped (not ones the user skipped by hand), so Undo restores only what the fit took.
+ */
+data class TimeFitApplied(
+    val minutes: Int,
+    val skippedIds: List<String>,
+    val skippedNames: List<String>
 )

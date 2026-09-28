@@ -41,7 +41,13 @@ data class GenerationParams(
      * generation draws ONLY from these library ids and ignores [available] equipment filtering —
      * locking the preset against any movement added to the library later.
      */
-    val frozenIds: Set<String>? = null
+    val frozenIds: Set<String>? = null,
+    /**
+     * "About this long per session", in minutes (onboarding's time question, Settings → Program).
+     * Null = no ceiling. Each day is trimmed to fit by [VolumeModel.allocate]: accessory sets first,
+     * then whole accessory slots, never the day's heavy compound.
+     */
+    val sessionMinutes: Int? = null
 )
 
 data class GeneratedExercise(val libId: String, val sets: Int, val reps: String)
@@ -116,11 +122,17 @@ object ProgramGenerator {
      * from a day-count alone without duplicating the volume math (or drifting from it). Emphasis,
      * bias and personal caps are onboarding's no-op defaults.
      */
-    fun plannedSetsPerDay(daysPerWeek: Int, experience: String, goal: String = "build_muscle"): List<Int> =
+    fun plannedSetsPerDay(
+        daysPerWeek: Int,
+        experience: String,
+        goal: String = "build_muscle",
+        sessionMinutes: Int? = null
+    ): List<Int> =
         VolumeModel.allocate(
             SplitTemplates.forDays(daysPerWeek),
             volumeFactor = GoalProfiles.volumeFactor(experience),
-            goal = goal
+            goal = goal,
+            sessionMinutes = sessionMinutes
         ).map { it.sum() }
 
     /**
@@ -144,7 +156,9 @@ object ProgramGenerator {
         val volumeFactor = GoalProfiles.volumeFactor(params.experience) * (if (params.deload) DELOAD_FACTOR else 1.0)
         val minSets = if (params.deload) 1 else VolumeModel.MIN_SETS
         fun totalsPerMuscle(bias: Map<MuscleGroup, Int>): Map<MuscleGroup, Int> {
-            val sets = VolumeModel.allocate(template, focus, volumeFactor, minSets, bias, params.goal, params.personalCaps)
+            val sets = VolumeModel.allocate(
+                template, focus, volumeFactor, minSets, bias, params.goal, params.personalCaps, params.sessionMinutes
+            )
             val out = HashMap<MuscleGroup, Int>()
             template.forEachIndexed { di, day ->
                 day.targets.forEachIndexed { si, slot ->
@@ -187,7 +201,8 @@ object ProgramGenerator {
             template, focus, volumeFactor, minSets = if (params.deload) 1 else VolumeModel.MIN_SETS,
             bias = params.volumeBias,
             goal = params.goal,
-            personalCaps = params.personalCaps
+            personalCaps = params.personalCaps,
+            sessionMinutes = params.sessionMinutes
         )
         val maxDifficulty = GoalProfiles.maxDifficulty(params.experience)
         val pool = ExerciseLibrary.availablePool(available, params.frozenIds)
