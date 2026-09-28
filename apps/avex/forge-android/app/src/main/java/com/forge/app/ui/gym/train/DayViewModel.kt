@@ -8,7 +8,6 @@ import com.forge.app.data.repo.CustomizationRepository
 import com.forge.app.data.repo.GoalRepository
 import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.data.repo.WorkoutRepository
-import com.forge.app.domain.timer.RestTimerController
 import com.forge.app.program.Equipment
 import com.forge.app.program.Program
 import com.forge.app.service.WorkoutSessionBridge
@@ -195,12 +194,10 @@ class DayViewModel @Inject constructor(
         // Compare complete rows: ratings can change without adding a set. The delayed UI comparison
         // still avoids rebuilding cards that a local write already reconciled.
         viewModelScope.launch {
-            var lastSessionId: Long? = null
             var job: Job? = null
-            _state.collect { s ->
-                val sid = s.sessionId
-                if (sid == lastSessionId) return@collect
-                lastSessionId = sid
+            // Keyed on the session id alone: collecting the whole state re-ran this on every
+            // rest-timer tick just to find the id unchanged.
+            _state.map { it.sessionId }.distinctUntilChanged().collect { sid ->
                 job?.cancel()
                 job = if (sid == null) null else viewModelScope.launch {
                     workoutRepo.observeSetsForSession(sid)

@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -121,5 +120,6 @@ private fun NoteResultRow(
     }
 }
 
-private val dateFormat = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
-private fun formatDate(epochMs: Long) = dateFormat.format(Date(epochMs))
+/** Built per call from the CURRENT locale: a top-level instance froze the locale at class load (a
+ *  language change kept the old format until process death), as DayCardComponents' dateFormat notes. */
+private fun formatDate(epochMs: Long) = SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(epochMs))

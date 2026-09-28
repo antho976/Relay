@@ -229,15 +229,20 @@ internal fun historyDayLabel(epochMs: Long, today: LocalDate = LocalDate.now(Zon
     return when {
         date == today -> "TODAY"
         date == today.minusDays(1) -> "YESTERDAY"
-        date.isAfter(today.minusDays(7)) -> "$weekday · ${shortDateFormat.format(Date(epochMs)).uppercase()}"
-        date.year == today.year -> shortDateFormat.format(Date(epochMs)).uppercase()
-        else -> historyDateFormat.format(Date(epochMs)).uppercase()
+        date.isAfter(today.minusDays(7)) -> "$weekday · ${shortDateFormat().format(Date(epochMs)).uppercase()}"
+        date.year == today.year -> shortDateFormat().format(Date(epochMs)).uppercase()
+        else -> historyDateFormat().format(Date(epochMs)).uppercase()
     }
 }
 
-private val historyDateFormat = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
-private val shortDateFormat = SimpleDateFormat("MMM d", Locale.getDefault())
+/**
+ * Built per call, never shared: [historyDayLabel] runs on `Dispatchers.Default` (the History
+ * ViewModel's flowOn) while [formatHistoryDate] runs on the main thread, and SimpleDateFormat is not
+ * thread-safe. A top-level instance also froze the locale at class load (see DayCardComponents).
+ */
+private fun historyDateFormat() = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+private fun shortDateFormat() = SimpleDateFormat("MMM d", Locale.getDefault())
 
 /** The full date, for surfaces that name a single session rather than a day of them (freestyle
  *  templates). The History list itself groups by [historyDayLabel] instead. */
-fun formatHistoryDate(epochMs: Long): String = historyDateFormat.format(Date(epochMs))
+fun formatHistoryDate(epochMs: Long): String = historyDateFormat().format(Date(epochMs))

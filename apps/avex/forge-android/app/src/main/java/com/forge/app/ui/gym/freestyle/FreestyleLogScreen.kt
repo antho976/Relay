@@ -22,13 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -43,7 +37,6 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.parseHold
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.domain.units.toStoredWeightText
@@ -143,16 +136,27 @@ fun FreestyleLogScreen(
 
     // Last time's sets and the pinned cue (#112, GYMAP-49) for every move on the log, loaded once
     // each and kept here rather than in the card so scrolling a card away doesn't drop them.
+    //
+    // Each load finishes BEFORE the map is read back: `lastTime + (id to lastSets(id))` read the map,
+    // then suspended, so this effect and the recent-moves one below interleaving at that suspension
+    // wrote back stale maps and dropped each other's entries (the move then showed no Last row).
     LaunchedEffect(items.map { it.libId }) {
         items.map { it.libId }.forEach { id ->
-            if (id !in lastTime) lastTime = lastTime + (id to viewModel.lastSets(id))
-            if (id !in pinnedNotes) pinnedNotes = pinnedNotes + (id to viewModel.pinnedNote(id))
+            if (id !in lastTime) {
+                val sets = viewModel.lastSets(id)
+                lastTime = lastTime + (id to sets)
+            }
+            if (id !in pinnedNotes) {
+                val note = viewModel.pinnedNote(id)
+                pinnedNotes = pinnedNotes + (id to note)
+            }
         }
     }
 
     LaunchedEffect(recentDefs) {
         recentDefs.map { it.id }.filter { it !in lastTime }.forEach { id ->
-            lastTime = lastTime + (id to viewModel.lastSets(id))
+            val sets = viewModel.lastSets(id)
+            lastTime = lastTime + (id to sets)
         }
     }
 
@@ -260,8 +264,9 @@ fun FreestyleLogScreen(
         }
     }
 
-    val totalVolumeLb = items.sumOf { it.volumeLb(weightUnit) }
-    val loggedSets = items.sumOf { ex -> ex.sets.count { ex.isLogged(it) } }
+    // Remembered: the header clock recomposes this screen every second, and these re-parse every set.
+    val totalVolumeLb = remember(items, weightUnit) { items.sumOf { it.volumeLb(weightUnit) } }
+    val loggedSets = remember(items) { items.sumOf { ex -> ex.sets.count { ex.isLogged(it) } } }
     val canSave = loggedSets > 0
 
     fun save() {

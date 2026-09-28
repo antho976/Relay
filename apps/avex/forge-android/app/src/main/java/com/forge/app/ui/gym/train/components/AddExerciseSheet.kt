@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import com.forge.app.ui.common.window.ModalBottomSheet
@@ -52,9 +51,13 @@ fun AddExerciseSheet(
     val allExercises: List<ExercisePlan> = remember {
         Program.days.flatMap { it.exercises }.distinctBy { it.id }
     }
-    val filtered = if (query.isBlank()) allExercises
-                   else allExercises.filter { it.name.contains(query, ignoreCase = true) }
-    val grouped = filtered.groupBy { it.muscle.displayName }.toSortedMap()
+    // Keyed on the query: the host day screen recomposes every rest-timer second, and this sheet
+    // re-filtered and re-grouped the whole catalog each time.
+    val grouped = remember(query) {
+        val filtered = if (query.isBlank()) allExercises
+                       else allExercises.filter { it.name.contains(query, ignoreCase = true) }
+        filtered.groupBy { it.muscle.displayName }.toSortedMap()
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,

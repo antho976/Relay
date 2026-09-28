@@ -2,7 +2,6 @@ package com.forge.app.ui.gym.train
 
 import com.forge.app.data.db.entities.LoggedExercise
 import com.forge.app.data.db.entities.LoggedSet
-import com.forge.app.domain.volume.VolumeCalculator
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.adapt.IntensityIntent
 import com.forge.app.domain.adapt.ProgressionAdvisor
@@ -10,10 +9,8 @@ import com.forge.app.domain.adapt.RestAdvisor
 import com.forge.app.domain.adapt.RestPrescription
 import com.forge.app.domain.pr.PrDetector
 import com.forge.app.program.ExercisePlan
-import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
 import com.forge.app.ui.gym.train.state.ExerciseUiState
-import com.forge.app.ui.gym.train.state.VsLastStatus
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import java.util.concurrent.TimeUnit
@@ -148,21 +145,8 @@ internal suspend fun DayViewModel.buildExerciseUi(
         ProgressionAdvisor.suggestNextReps(effectiveExerciseId, plan.name, prevSets, prevLE?.difficulty, plan.reps)
     else null
 
-    val pbSet = pbDeferred.await()
-    val allTimePbLb = pbSet?.weightLb
-    val allTimePbText = pbSet?.let { "${displayWeight(it)} × ${it.reps}" }
+    val allTimePbLb = pbDeferred.await()?.weightLb
     val goalWeightLb = goalDeferred.await()
-
-    // Through the canonical helper: a timed hold's reps is a duration, so open-coding this made a
-    // 90-second plank outweigh the whole rest of the session in the "vs last time" verdict.
-    val currentVolume = VolumeCalculator.sessionVolumeLb(sets)
-    val prevVolume = VolumeCalculator.sessionVolumeLb(prevSets)
-    val vsLastStatus = when {
-        sets.isEmpty() || prevSets.isEmpty() -> null
-        currentVolume > prevVolume * 1.05 -> VsLastStatus.BEATING
-        currentVolume >= prevVolume * 0.95 -> VsLastStatus.MATCHING
-        else -> VsLastStatus.UNDER
-    }
 
     val sessionHistory = aggregatesDeferred.await()
         .map { agg ->
@@ -219,6 +203,13 @@ internal suspend fun DayViewModel.buildExerciseUi(
     } else sessionHistory
     // ──────────────────────────────────────────────────────────────────────────────
 
+    // A blank name is "no swap" (the effectiveUnit precedence above already reads it that way): a
+    // customization row that only holds a rest override or pinned note, or a cleared swap, stores "".
+    // Passed through, it made effectiveName blank and isSwapped true, so the card lost its title and
+    // form cue.
+    val sessionSwapName = logged?.swappedName?.takeIf { it.isNotBlank() }
+    val persistentSwapName = persistent?.swappedName?.takeIf { it.isNotBlank() }
+
     ExerciseUiState(
         plan = plan,
         effectiveExerciseId = effectiveExerciseId,
@@ -236,21 +227,18 @@ internal suspend fun DayViewModel.buildExerciseUi(
         wasPr = wasPr,
         prSetIds = prSetIds,
         bestPrSetId = bestPrSetId,
-        sessionSwapName = logged?.swappedName,
-        sessionSwapUnit = logged?.swappedUnit,
-        persistentSwapName = persistent?.swappedName,
-        persistentSwapUnit = persistent?.swappedUnit,
+        sessionSwapName = sessionSwapName,
+        sessionSwapUnit = logged?.swappedUnit?.takeIf { sessionSwapName != null },
+        persistentSwapName = persistentSwapName,
+        persistentSwapUnit = persistent?.swappedUnit?.takeIf { persistentSwapName != null },
         suggestedWeight = displaySuggested,
         suggestionReason = displayReason,
         suggestedDeltaLb = suggestion?.deltaLb,
         suggestedTargetLb = suggestion?.targetWeightLb,
         suggestedReps = repSuggestion?.targetReps,
-        suggestedRepsReason = repSuggestion?.reason,
         priorSets = displayPrior,
         priorFrontier = priorFrontier,
-        allTimePbText = allTimePbText,
         allTimePbLb = allTimePbLb,
-        vsLastStatus = vsLastStatus,
         goalWeightLb = goalWeightLb,
         restTimerOverrideSeconds = persistent?.restTimerOverrideSeconds,
         pinnedNote = persistent?.pinnedNote ?: "",

@@ -9,9 +9,6 @@ import com.forge.app.program.Equipment
 import com.forge.app.program.ExercisePlan
 import com.forge.app.program.ExerciseUnit
 
-/** How the current session compares to the previous session on the same exercise. */
-enum class VsLastStatus { BEATING, MATCHING, UNDER }
-
 /**
  * Set when this day is opened while a *different* day's workout is still in progress. The app
  * keeps only one active session, so we prompt rather than silently resume the wrong day's sets.
@@ -20,7 +17,7 @@ data class CrossDaySessionInfo(val dayKey: String, val dayName: String)
 
 /**
  * The swapped-out exercise the post-swap prompt offers to dislike. [exerciseId] is its
- * ExerciseLibrary id (what [com.forge.app.data.prefs.SettingsRepository.setExerciseDisliked] keys
+ * ExerciseLibrary id (what [com.forge.app.data.prefs.SettingsRepository.setExercisesDisliked] keys
  * on); [exerciseName] is the display name for the dialog copy.
  */
 data class DislikeSwapPrompt(val exerciseId: String, val exerciseName: String)
@@ -36,7 +33,10 @@ data class WeightJumpWarning(
     val reps: Int,
     val lastLabel: String,
     val newLabel: String,
-    val percent: Int
+    val percent: Int,
+    /** A timed hold's duration (reps is 0 then), carried so confirming re-logs the hold instead of
+     *  dropping it at logSet's "no reps and no duration" guard. */
+    val durationSeconds: Int? = null
 )
 
 /**
@@ -235,7 +235,6 @@ data class ExerciseUiState(
     val suggestedTargetLb: Double? = null,
     /** Bodyweight rep-progression target — "aim for N reps" (CO5). Null for weighted exercises. */
     val suggestedReps: Int? = null,
-    val suggestedRepsReason: String? = null,
     /**
      * The PREVIOUS session's sets in performed order — the positional "ghost" comparisons
      * (same-position duels, per-row ghost values) and "last session" labels read these.
@@ -247,12 +246,8 @@ data class ExerciseUiState(
      * and the weight-jump check (#117).
      */
     val priorFrontier: List<LoggedSet> = emptyList(),
-    /** All-time personal best formatted as "X lb × Y" — shown in the card header (#101). */
-    val allTimePbText: String? = null,
-    /** Raw all-time best weight in lb — used for goal progress computation (#28). */
+    /** Raw all-time best weight in lb — the warmup's last-resort working load (DayWarmupBuilder). */
     val allTimePbLb: Double? = null,
-    /** How this session's volume compares to last session for this exercise (#104). */
-    val vsLastStatus: VsLastStatus? = null,
     /** User-set goal weight for this exercise in lb (#28). Null if no goal set. */
     val goalWeightLb: Double? = null,
     /** Custom rest duration in seconds for this exercise (#59). Null = use smart defaults. */
