@@ -167,7 +167,9 @@ fun OnboardingScreen(
     val draftLoad = viewModel.draftLoad.collectAsState()
     val loaded by remember { derivedStateOf { draftLoad.value is DraftLoad.Ready } }
     if (!loaded) return
-    val draft = (viewModel.draftLoad.value as? DraftLoad.Ready)?.draft
+    val draft = androidx.compose.runtime.snapshots.Snapshot.withoutReadObservation {
+        (draftLoad.value as? DraftLoad.Ready)?.draft
+    }
 
     // A draft written by this same schema always points inside its own path, but coerce anyway so a
     // corrupt cursor restarts the flow instead of indexing off the end.
