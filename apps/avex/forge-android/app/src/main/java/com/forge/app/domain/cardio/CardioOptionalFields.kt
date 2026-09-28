@@ -1,6 +1,6 @@
 package com.forge.app.domain.cardio
 
-import java.util.Locale
+import com.forge.app.domain.units.trimDecimal
 
 /**
  * The optional, per-activity metrics (GYMAP-38): a grade [INCLINE] for belt machines, pool [LAPS]
@@ -25,7 +25,4 @@ fun optionalFieldsFor(type: CardioType): Set<CardioField> = when (type) {
 }
 
 /** A stored incline percent as a compact label — "6%" / "6.5%", no trailing ".0". */
-fun formatInclinePct(pct: Double): String {
-    val s = if (pct % 1.0 == 0.0) pct.toInt().toString() else String.format(Locale.US, "%.1f", pct)
-    return "$s%"
-}
+fun formatInclinePct(pct: Double): String = "${trimDecimal(pct)}%"

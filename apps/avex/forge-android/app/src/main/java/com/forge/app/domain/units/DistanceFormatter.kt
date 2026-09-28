@@ -28,10 +28,7 @@ fun formatDistance(km: Double, useMiles: Boolean): String =
  * the trailing ".0" so the field reads "5" not "5.0". Pairs with [parseToKm] so the edit field
  * round-trips: a 5 km entry shown as "3.1" (mi) parses back to ~5 km on submit.
  */
-fun distanceInputValue(km: Double, useMiles: Boolean): String {
-    val v = toDisplayDistance(km, useMiles)
-    return if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(Locale.US, "%.1f", v)
-}
+fun distanceInputValue(km: Double, useMiles: Boolean): String = trimDecimal(toDisplayDistance(km, useMiles))
 
 /**
  * Converts a user-entered string in the display unit back to stored km, or null if blank/unparseable.

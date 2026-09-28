@@ -63,7 +63,7 @@ class BodyweightUnitTransitionTest {
         // 5000 lb was an error under lb; 2268 kg is the same error under kg — never a valid value
         // conjured by the unit change.
         val text = convertBodyweightInput("5000", fromKg = false, toKg = true)
-        assertEquals("2268.0", text)
+        assertEquals("2268", text) // 2267.96 kg, whole once rounded to its one shown decimal
         assertNull(parseSaneBodyweightLb(text, useKg = true))
     }
 }

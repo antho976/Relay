@@ -23,6 +23,10 @@ object WeightParser {
 
     const val PLATE_LB: Double = 15.0
 
+    // Compiled once: parse runs per logged set, per import row and per history recompute.
+    private val PLATE_REGEX = Regex("""^([0-9]*\.?[0-9]+)\s*(plates?|p)$""")
+    private val LB_REGEX = Regex("""^([0-9]*\.?[0-9]+)\s*lbs?$""")
+
     fun parse(input: String, unit: ExerciseUnit, plateLb: Double = PLATE_LB): Double? {
         // Normalise the decimal separator first: toDoubleOrNull below is locale-independent and
         // takes only '.', so a comma-locale keyboard's "82,5" parsed as null and logged a set with
@@ -31,21 +35,22 @@ object WeightParser {
         if (text.isEmpty() || text == "bw") return null
 
         // "N plate" / "N plates" / "Np" — explicit plate notation
-        val plateMatch = Regex("""^([0-9]*\.?[0-9]+)\s*(plates?|p)$""").matchEntire(text)
+        val plateMatch = PLATE_REGEX.matchEntire(text)
         if (plateMatch != null) {
             val plates = plateMatch.groupValues[1].toDoubleOrNull() ?: return null
             return plates * plateLb
         }
 
         // "N lb" / "Nlb" — always lb regardless of unit hint
-        val lbMatch = Regex("""^([0-9]*\.?[0-9]+)\s*lbs?$""").matchEntire(text)
+        val lbMatch = LB_REGEX.matchEntire(text)
         if (lbMatch != null) {
             return lbMatch.groupValues[1].toDoubleOrNull()
         }
 
         // Bare number. On a PLATES exercise it's a plate count (field is labelled "PLATES");
-        // otherwise it's literal pounds. Reject negatives (which would corrupt volume / PRs).
-        val n = text.toDoubleOrNull()?.takeIf { it >= 0.0 } ?: return null
+        // otherwise it's literal pounds. Reject negatives and overflow ("1e999" parses to Infinity),
+        // either of which would corrupt volume / PRs.
+        val n = text.toDoubleOrNull()?.takeIf { it >= 0.0 && it.isFinite() } ?: return null
         return if (unit == ExerciseUnit.PLATES) n * plateLb else n
     }
 }

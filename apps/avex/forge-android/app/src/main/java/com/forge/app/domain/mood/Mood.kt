@@ -6,12 +6,12 @@ package com.forge.app.domain.mood
  * as [com.forge.app.data.db.types.EffortRating] so the value stays interpretable
  * forever, even if the enum shifts.
  */
-enum class Mood(val code: String, val displayName: String, val emoji: String) {
-    DRAINED("drained", "Drained", "😩"),   // 😩
-    OFF("off",         "Off",      "😕"),   // 😕
-    FINE("fine",       "Fine",     "😐"),   // 😐
-    GOOD("good",       "Good",     "🙂"),   // 🙂
-    STRONG("strong",   "Strong",   "💪");   // 💪
+enum class Mood(val code: String, val displayName: String) {
+    DRAINED("drained", "Drained"),
+    OFF("off",         "Off"),
+    FINE("fine",       "Fine"),
+    GOOD("good",       "Good"),
+    STRONG("strong",   "Strong");
 
     companion object {
         fun fromCode(code: String?): Mood? =

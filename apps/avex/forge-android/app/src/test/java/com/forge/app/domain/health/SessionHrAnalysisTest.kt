@@ -46,6 +46,24 @@ class SessionHrAnalysisTest {
     }
 
     @Test
+    fun `a superset reads as one row per exercise, weighted by samples`() {
+        // A/B/A/B rounds, one minute each: Curl at 100 then 120, Press at 140 both times.
+        val samples = trace(100, 140, 120, 140)
+        val sets = listOf(
+            HrSetRef(completedAtMs = 59_000L, exerciseName = "Curl"),
+            HrSetRef(completedAtMs = 119_000L, exerciseName = "Press"),
+            HrSetRef(completedAtMs = 179_000L, exerciseName = "Curl"),
+            HrSetRef(completedAtMs = 239_000L, exerciseName = "Press")
+        )
+        val view = buildSessionHrView(samples, sets, emptyList())!!
+        assertEquals(listOf("Curl", "Press"), view.perExercise.map { it.name })
+        assertEquals(110, view.perExercise[0].avgBpm)
+        assertEquals(140, view.perExercise[1].avgBpm)
+        // The hairlines still mark every change of exercise.
+        assertEquals(3, view.exerciseBoundariesMs.size)
+    }
+
+    @Test
     fun `hrr60 averages the drop over the first minute of long rests`() {
         // Rest starts at t=60s (bpm 150) and one minute later bpm is 110 → drop 40.
         val samples = trace(150, 150, 110, 110)

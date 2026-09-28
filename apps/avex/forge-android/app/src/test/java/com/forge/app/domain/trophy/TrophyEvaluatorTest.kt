@@ -38,6 +38,18 @@ class TrophyEvaluatorTest {
     }
 
     @Test
+    fun sessionDurationAtMost_progressAgreesWithUnlock() {
+        // A sub-5-minute session never unlocks the trophy, so it must not fill the bar either.
+        val rule = UnlockRule.SessionDurationAtMost(45)
+        val tooShort = snap().copy(minFinishedSessionDurationMinutes = 2)
+        assertFalse(TrophyEvaluator.isUnlocked(rule, tooShort))
+        assertEquals(0f, TrophyEvaluator.progressFraction(rule, tooShort), 0f)
+        val quick = snap().copy(minFinishedSessionDurationMinutes = 30)
+        assertTrue(TrophyEvaluator.isUnlocked(rule, quick))
+        assertEquals(1f, TrophyEvaluator.progressFraction(rule, quick), 0f)
+    }
+
+    @Test
     fun expandedMilestones_areWiredIntoTheCatalog() {
         val unlocked = TrophyEvaluator.unlockedByRule(snap(finishedSessions = 100, maxStreak = 30))
         assertTrue("workouts_50" in unlocked)

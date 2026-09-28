@@ -13,7 +13,8 @@ class UpNextDeltaLabelTest {
 
     @Test
     fun `a kg user reads kilograms, never the raw pound float`() {
-        assertEquals("+1.0 kg ↑", upNextDeltaLabel(2.299999999999997, isPlates = false, WeightUnit.KG, plateLb = 15.0))
+        // 2.3 lb = 1.04 kg, which shows as a whole "1 kg" once rounded to the one decimal it displays.
+        assertEquals("+1 kg ↑", upNextDeltaLabel(2.299999999999997, isPlates = false, WeightUnit.KG, plateLb = 15.0))
     }
 
     @Test

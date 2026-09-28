@@ -24,17 +24,19 @@ object PhotoTag {
     const val MAX_PER_PHOTO = 8
 
     private val ALLOWED = Regex("""[^a-z0-9\-]""")
+    private val WHITESPACE = Regex("""\s+""")
+    private val HYPHEN_RUN = Regex("-{2,}")
 
     /**
      * Fold [raw] to its canonical tag spelling, or null when nothing usable is left. Lower-cased, a
-     * leading hash dropped, runs of spaces and punctuation collapsed to single hyphens, and trimmed
-     * of stray hyphens at either end.
+     * leading hash dropped, runs of whitespace turned into single hyphens, any other punctuation
+     * dropped ("post_cut" → "postcut"), and trimmed of stray hyphens at either end.
      */
     fun normalize(raw: String): String? {
         val folded = raw.trim().removePrefix("#").lowercase()
-            .replace(Regex("""\s+"""), "-")
+            .replace(WHITESPACE, "-")
             .replace(ALLOWED, "")
-            .replace(Regex("-{2,}"), "-")
+            .replace(HYPHEN_RUN, "-")
             .trim('-')
             .take(MAX_LENGTH)
             .trim('-')

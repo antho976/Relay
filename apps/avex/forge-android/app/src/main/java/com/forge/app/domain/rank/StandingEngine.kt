@@ -4,6 +4,7 @@ import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.trimDecimal
 import com.forge.app.domain.units.unitLabel
 import kotlin.math.roundToInt
 
@@ -93,9 +94,7 @@ object StandingEngine {
     }
 
     // Same reason as [pct]'s NaN guard: a corrupt sessions-per-week would otherwise render the
-    // literal string "NaN×/wk" on the Profile screen.
-    private fun fmt1(raw: Double): String {
-        val d = if (raw.isFinite()) raw else 0.0
-        return if (d % 1.0 == 0.0) d.toInt().toString() else "%.1f".format(d)
-    }
+    // literal string "NaN×/wk" on the Profile screen. [trimDecimal] zeroes non-finite input and pins
+    // Locale.US; the old default-locale "%.1f" read "2,5×/wk" on a comma-decimal device.
+    private fun fmt1(raw: Double): String = trimDecimal(raw)
 }

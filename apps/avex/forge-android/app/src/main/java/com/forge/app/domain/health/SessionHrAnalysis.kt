@@ -14,7 +14,7 @@ data class SessionHrView(
     val setMarkersMs: List<Long>,
     /** Exercise start boundaries (first set's span start per exercise) — the chart's hairlines. */
     val exerciseBoundariesMs: List<Long>,
-    /** Per-exercise average bpm, in session order — "what was my HR during squats". */
+    /** Per-exercise average bpm, one row per exercise in first-seen order — "what was my HR during squats". */
     val perExercise: List<ExerciseHr>,
     /** Mean HR drop over the first 60 s of rest, across rests long enough to measure; null when
      *  no rest window had usable samples. Positive = bpm recovered. */
@@ -40,8 +40,10 @@ fun buildSessionHrView(
     val bySets = sets.sortedBy { it.completedAtMs }
 
     // Per-exercise spans: an exercise owns the time from just after the previous exercise's last
-    // set to its own last set (the first exercise starts at the session's first sample).
-    val perExercise = mutableListOf<SessionHrView.ExerciseHr>()
+    // set to its own last set (the first exercise starts at the session's first sample). Spans are
+    // pooled by name, weighted by their samples, so a superset (A, B, A, B …) or a revisited lift
+    // reads as one row per exercise rather than one row per consecutive run.
+    val byName = LinkedHashMap<String, LongArray>() // name → [bpm sum, sample count]
     val boundaries = mutableListOf<Long>()
     var spanStart = ordered.first().timeMs
     var i = 0
@@ -52,11 +54,16 @@ fun buildSessionHrView(
         val spanEnd = bySets[j].completedAtMs
         val inSpan = ordered.filter { it.timeMs in spanStart..spanEnd }
         if (inSpan.isNotEmpty()) {
-            perExercise += SessionHrView.ExerciseHr(name = name, avgBpm = inSpan.map { it.bpm }.average().toInt())
+            val acc = byName.getOrPut(name) { LongArray(2) }
+            acc[0] += inSpan.sumOf { it.bpm.toLong() }
+            acc[1] += inSpan.size.toLong()
             if (i > 0) boundaries += spanStart
         }
         spanStart = spanEnd + 1
         i = j + 1
+    }
+    val perExercise = byName.map { (name, acc) ->
+        SessionHrView.ExerciseHr(name = name, avgBpm = (acc[0].toDouble() / acc[1]).toInt())
     }
 
     // HRR60: for each rest ≥60 s, the drop from the rest's start bpm to bpm one minute in.

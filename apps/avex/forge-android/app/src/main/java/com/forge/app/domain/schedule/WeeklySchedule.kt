@@ -26,8 +26,7 @@ object WeeklySchedule {
     fun encode(slots: List<String>): String =
         (0 until SLOTS).joinToString(",") { slots.getOrElse(it) { "" } }
 
-    /** Weekday names, index 0 = Monday, matching the slot order. */
-    val WEEKDAY_NAMES = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+    /** Short weekday names, index 0 = Monday, matching the slot order. */
     val WEEKDAY_SHORT = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
     /**

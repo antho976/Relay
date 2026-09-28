@@ -10,15 +10,15 @@ import com.forge.app.program.ExerciseUnit
  * point: temperature first (cheap, systemic), then range of motion through the joints about to be
  * loaded, then task-specific rehearsal at rising load. Reversing any two wastes the phase before it.
  */
-enum class WarmupPhase(val label: String) {
+enum class WarmupPhase {
     /** General pulse raiser. Raises muscle temperature, heart rate and blood flow. */
-    RAISE("Raise"),
+    RAISE,
 
     /** Dynamic range-of-motion work through the joints this session loads. Never static holds. */
-    MOBILIZE("Mobilize"),
+    MOBILIZE,
 
     /** Specific rehearsal: the actual movement at rising load, up to the working set. */
-    RAMP("Ramp")
+    RAMP
 }
 
 /**

@@ -1,5 +1,7 @@
 package com.forge.app.domain.warmup
 
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.fromDisplayWeight
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.program.MuscleGroup
 import kotlin.math.roundToInt
@@ -162,13 +164,14 @@ object WarmupEngine {
      * kilo instead of on 22.7.
      */
     internal fun loadIncrement(unit: ExerciseUnit, metric: Boolean = false): Double = when (unit) {
-        ExerciseUnit.DUMBBELL -> if (metric) 2.5 / KG_PER_LB else 5.0
+        ExerciseUnit.DUMBBELL -> if (metric) METRIC_STEP_LB else 5.0
         ExerciseUnit.PLATES -> 1.0
-        ExerciseUnit.WEIGHT -> if (metric) 2.5 / KG_PER_LB else 2.5
+        ExerciseUnit.WEIGHT -> if (metric) METRIC_STEP_LB else 2.5
         ExerciseUnit.BODYWEIGHT -> 0.0
     }
 
-    private const val KG_PER_LB = 0.45359237
+    /** 2.5 kg, the metric grid's smallest step, in the pounds loads are carried in. */
+    private val METRIC_STEP_LB = fromDisplayWeight(2.5, WeightUnit.KG)
 
     /**
      * Ramp sets for one exercise, or empty when it has not earned any.
