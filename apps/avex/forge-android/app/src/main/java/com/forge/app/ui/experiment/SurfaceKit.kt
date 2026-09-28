@@ -85,6 +85,7 @@ import com.forge.app.ui.theme.LocalForgeSettings
  * The experiment's surface + data colours, resolved against the two theme switches the shipped app
  * already honours (AMOLED, monochrome). Read once per screen and thread it down.
  */
+@androidx.compose.runtime.Immutable
 data class SurfacePalette(
     /** The one elevation. Cards do not stack on cards, so there is no second fill. */
     val card: Color,
@@ -117,7 +118,10 @@ fun surfacePalette(): SurfacePalette {
     // that would break that promise. Direction still reads without it, because the ↑/↓ glyph
     // carries it and the three "hues" separate by tone. Meaning is never gated on colour (§14).
     val mono = !settings.accentEnabled
-    return SurfacePalette(
+    // Remembered: a new palette per call (its `hues` list compared by identity) made every Home and
+    // Profile child that takes it recompose whenever the screen body did. @Immutable lets equal
+    // palettes compare equal.
+    return androidx.compose.runtime.remember(settings.amoledMode, mono, muted, onBg) { SurfacePalette(
         // On AMOLED the ground is pure black, so the card steps DOWN rather than up — a lit slab on
         // black reads as a panel, the opposite of one quiet elevation.
         // The grouped-surface fill (`surfaceContainerHigh`), so a Home or Profile card and an
@@ -133,7 +137,7 @@ fun surfacePalette(): SurfacePalette {
         // for the four places that carry a decision — see `OverviewScreen`'s colour budget.
         hues = listOf(onBg, muted, muted.copy(alpha = 0.7f)),
         mutedOnCard = muted.copy(alpha = MUTED_ON_CARD_ALPHA),
-    )
+    ) }
 }
 
 /** The group radius, so a card and a grouped list share one corner. */

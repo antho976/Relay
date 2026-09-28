@@ -127,11 +127,22 @@ private fun photoSearchText(photo: ProgressPhoto, zone: ZoneId): String {
 
 private val QUERY_SPLIT_REGEX = Regex("\\s+")
 
+/**
+ * Each photo's haystack, built once: the search re-filters every photo on every keystroke, and each
+ * haystack formats a date, resolves muscle names and lower-cases the lot. Keyed by the photo's value
+ * (a data class) and the zone, so an edited photo or a flight builds a fresh one.
+ */
+private val PHOTO_SEARCH_TEXT: MutableMap<Pair<ProgressPhoto, ZoneId>, String> =
+    java.util.Collections.synchronizedMap(object : LinkedHashMap<Pair<ProgressPhoto, ZoneId>, String>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Pair<ProgressPhoto, ZoneId>, String>?) =
+            size > 1024
+    })
+
 /** True if every whitespace-separated token of [query] appears somewhere in the photo's own text. */
 internal fun photoMatchesQuery(photo: ProgressPhoto, query: String, zone: ZoneId): Boolean {
     val q = query.trim().removePrefix("#").lowercase()
     if (q.isEmpty()) return true
-    val hay = photoSearchText(photo, zone)
+    val hay = PHOTO_SEARCH_TEXT.getOrPut(photo to zone) { photoSearchText(photo, zone) }
     return q.split(QUERY_SPLIT_REGEX).all { hay.contains(it) }
 }
 
