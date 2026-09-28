@@ -24,7 +24,10 @@ import androidx.compose.material3.MaterialTheme
 import com.forge.app.ui.common.window.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.annotation.DrawableRes
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,7 +37,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -46,6 +51,8 @@ import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material3.Icon
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The Appearance page's App icon row: the icon you are on now as the row's tile, its name, and a
@@ -186,10 +193,36 @@ private fun AppIconThumb(
             )
             .semantics { contentDescription = label },
     ) {
-        Image(
-            painter = painterResource(icon.previewRes),
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-        )
+        AppIconPreviewImage(icon.previewRes, Modifier.fillMaxSize())
     }
+}
+
+/**
+ * Launcher-icon previews, decoded once per process and off Main.
+ *
+ * `painterResource` decoded each 256 px WebP on the main thread every time the picker opened, some
+ * two dozen of them in the sheet's first frame. The decoded bitmaps are small and immutable, so one
+ * process-wide cache serves the sheet, its row tile and the About header alike.
+ */
+internal object AppIconPreviews {
+    private val cache = java.util.concurrent.ConcurrentHashMap<Int, ImageBitmap>()
+
+    fun cached(@DrawableRes id: Int): ImageBitmap? = cache[id]
+
+    fun load(res: android.content.res.Resources, @DrawableRes id: Int): ImageBitmap =
+        cache.getOrPut(id) { ImageBitmap.imageResource(res, id) }
+}
+
+/** One icon preview from [AppIconPreviews]; an empty box of the same size until it is decoded. */
+@Composable
+internal fun AppIconPreviewImage(@DrawableRes id: Int, modifier: Modifier = Modifier) {
+    val resources = LocalContext.current.resources
+    // produceState keeps its value across a key change, so a new id always reassigns: the cache
+    // answers at once when it can, else the decode runs on IO.
+    val bitmap by produceState(AppIconPreviews.cached(id), id) {
+        value = AppIconPreviews.cached(id) ?: withContext(Dispatchers.IO) { AppIconPreviews.load(resources, id) }
+    }
+    val loaded = bitmap
+    if (loaded != null) Image(bitmap = loaded, contentDescription = null, modifier = modifier)
+    else Box(modifier)
 }

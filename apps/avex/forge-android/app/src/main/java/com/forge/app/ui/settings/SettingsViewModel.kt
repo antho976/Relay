@@ -12,7 +12,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -159,8 +161,10 @@ class SettingsViewModel @Inject constructor(
 
     /** Load the Coach page's data (called when the page opens — not part of the big combine). */
     fun loadCoachData() = viewModelScope.launch {
-        runCatching { _coachTrust.value = coachRepo.trust() }
-        runCatching { _coachSignals.value = coachRepo.coachLab().recoverySignals }
+        // Independent reads, so neither waits on the other. The trust assessment is a CPU pass over
+        // the whole decision ledger and is kept off Main; coachLab already moves its own work off.
+        launch { runCatching { _coachTrust.value = withContext(Dispatchers.Default) { coachRepo.trust() } } }
+        launch { runCatching { _coachSignals.value = coachRepo.coachLab().recoverySignals } }
     }
 
     /**
@@ -180,12 +184,15 @@ class SettingsViewModel @Inject constructor(
     fun setCoachAdvanced(v: Boolean) = write { settingsRepo.setCoachAdvanced(v) }
 
     // ─── Day-aware scheduling (weekly plan vs sequence) ───────────────────────
+    // Seeded from the last snapshot like [state], so the schedule does not open on its defaults.
     val scheduleMode: StateFlow<String> = settingsRepo.scheduleMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
-            com.forge.app.domain.schedule.WeeklySchedule.MODE_SEQUENCE)
+            settingsRepo.lastPreferences?.let { settingsRepo.values(it).scheduleMode }
+                ?: com.forge.app.domain.schedule.WeeklySchedule.MODE_SEQUENCE)
 
     val weeklySchedule: StateFlow<List<String>> = settingsRepo.weeklySchedule
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
+            settingsRepo.lastPreferences?.let { settingsRepo.values(it).weeklySchedule } ?: emptyList())
 
     fun setScheduleMode(mode: String) = write { settingsRepo.setScheduleMode(mode) }
 
@@ -242,121 +249,88 @@ class SettingsViewModel @Inject constructor(
             }
         }
 
+    /**
+     * Every setting on these pages, built from ONE preferences snapshot per write.
+     *
+     * This was 53 separate preference flows through 48 `combine` stages on Main, so one write fanned
+     * out through every read lambda and every stage, and the first frame painted [SettingsUiState]'s
+     * hard-coded defaults before correcting them (subtitles flipped, switch thumbs slid). Now one
+     * snapshot is read on [Dispatchers.Default] through the repository's own per-key readers, and the
+     * first frame is seeded from the last snapshot the process already read.
+     */
     val state: StateFlow<SettingsUiState> = combine(
-        settingsRepo.amoledMode,
-        settingsRepo.weightUnit,
-        settingsRepo.timeFormat24h,
-        settingsRepo.firstDayMonday,
-        settingsRepo.hapticStrength,
-        settingsRepo.quietHoursEnabled,
-        settingsRepo.quietHoursSchedule
-    ) { values ->
-        SettingsUiState(
-            amoledMode = values[0] as Boolean,
-            weightUnit = values[1] as com.forge.app.domain.units.WeightUnit,
-            timeFormat24h = values[2] as Boolean,
-            firstDayMonday = values[3] as Boolean,
-            hapticStrength = values[4] as String,
-            quietHoursEnabled = values[5] as Boolean,
-            quietHoursSchedule = values[6] as com.forge.app.domain.notify.QuietHoursSchedule
+        settingsRepo.preferences.map { settingsFrom(it) }.distinctUntilChanged(),
+        // Program days only change with the revision, not with a settings write.
+        programRepository.revision.map { computeWeeklyVolume() }.distinctUntilChanged(),
+        programCustomizationRepo.observeCustomExercises()
+    ) { s, volume, custom ->
+        s.copy(weeklyVolume = volume, customExercises = custom)
+    }.flowOn(Dispatchers.Default)
+        .stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5_000),
+            settingsRepo.lastPreferences?.let { settingsFrom(it).copy(weeklyVolume = computeWeeklyVolume()) }
+                ?: SettingsUiState()
         )
-    }.combine(settingsRepo.noteTemplates) { s, templates ->
-        s.copy(noteTemplates = templates)
-    }.combine(settingsRepo.hiddenOverviewTiles) { s, hidden ->
-        s.copy(hiddenOverviewTiles = hidden)
-    }.combine(settingsRepo.keepScreenOn) { s, v ->
-        s.copy(keepScreenOn = v)
-    }.combine(settingsRepo.privacyMode) { s, v ->
-        s.copy(privacyMode = v)
-    }.combine(settingsRepo.appLockEnabled) { s, v ->
-        s.copy(appLockEnabled = v)
-    }.combine(settingsRepo.galleryLockEnabled) { s, v ->
-        s.copy(galleryLockEnabled = v)
-    }.combine(settingsRepo.appLockTimeoutSec) { s, v ->
-        s.copy(appLockTimeoutSec = v)
-    }.combine(settingsRepo.trainingReminderEnabled) { s, v ->
-        s.copy(trainingReminderEnabled = v)
-    }.combine(settingsRepo.trainingReminderHour) { s, v ->
-        s.copy(trainingReminderHour = v)
-    }.combine(settingsRepo.weeklyRecapEnabled) { s, v ->
-        s.copy(weeklyRecapEnabled = v)
-    }.combine(settingsRepo.disabledNoticeKinds) { s, v ->
-        s.copy(disabledNoticeKinds = v)
-    }.combine(settingsRepo.restTimerAlertEnabled) { s, v ->
-        s.copy(restTimerAlertEnabled = v)
-    }.combine(settingsRepo.availableEquipment) { s, equip ->
-        s.copy(availableEquipment = equip)
-    }.combine(settingsRepo.frozenExerciseIds) { s, v ->
-        s.copy(frozenExerciseIds = v)
-    }.combine(settingsRepo.plateWeightLb) { s, v ->
-        s.copy(plateWeightLb = v)
-    }.combine(settingsRepo.maxDbWeightLb) { s, v ->
-        s.copy(maxDbWeightLb = v)
-    }.combine(settingsRepo.coachMode) { s, v ->
-        s.copy(coachMode = v)
-    }.combine(settingsRepo.coachAdvanced) { s, v ->
-        s.copy(coachAdvanced = v)
-    }.combine(settingsRepo.accentColorHex) { s, v ->
-        s.copy(accentColorHex = v)
-    }.combine(settingsRepo.accentEnabled) { s, v ->
-        s.copy(accentEnabled = v)
-    }.combine(settingsRepo.appIcon) { s, v ->
-        s.copy(appIconKey = v)
-    }.combine(settingsRepo.themedLaunchIntro) { s, v ->
-        s.copy(themedLaunchIntro = v)
-    }.combine(settingsRepo.accentFromIcon) { s, v ->
-        s.copy(accentFromIcon = v)
-    }.combine(settingsRepo.timezone) { s, v ->
-        s.copy(timezone = v)
-    }.combine(settingsRepo.favoriteTimezones) { s, v ->
-        s.copy(favoriteTimezones = v)
-    }.combine(settingsRepo.daysPerWeek) { s, v ->
-        s.copy(daysPerWeek = v)
-    }.combine(settingsRepo.sessionMinutes) { s, v ->
-        s.copy(sessionMinutes = v)
-    }.combine(settingsRepo.likedExercises) { s, v ->
-        s.copy(liked = v)
-    }.combine(settingsRepo.dislikedExercises) { s, v ->
-        s.copy(disliked = v)
-    }.combine(settingsRepo.swapDislikePromptEnabled) { s, v ->
-        s.copy(swapDislikePromptEnabled = v)
-    }.combine(settingsRepo.rotationCadence) { s, v ->
-        s.copy(rotationCadence = v)
-    }.combine(settingsRepo.rotationEveryN) { s, v ->
-        s.copy(rotationEveryN = v)
-    }.combine(settingsRepo.cardioWeeklyTargetMin) { s, v ->
-        s.copy(cardioWeeklyTargetMin = v)
-    }.combine(settingsRepo.restCompoundSeconds) { s, v ->
-        s.copy(restCompoundSeconds = v)
-    }.combine(settingsRepo.restIsolationSeconds) { s, v ->
-        s.copy(restIsolationSeconds = v)
-    }.combine(settingsRepo.userGoal) { s, v ->
-        s.copy(userGoal = v.ifBlank { "build_muscle" })
-    }.combine(settingsRepo.userSex) { s, v ->
-        s.copy(userSex = v)
-    }.combine(settingsRepo.programExperience) { s, v ->
-        s.copy(experience = v)
-    }.combine(settingsRepo.problemAreas) { s, v ->
-        s.copy(problemAreas = v)
-    }.combine(settingsRepo.priorityMuscles) { s, v ->
-        s.copy(priorityMuscles = v)
-    }.combine(settingsRepo.pinnedExercises) { s, v ->
-        s.copy(pinnedExercises = v)
-    }.combine(settingsRepo.programEmphasis) { s, v ->
-        s.copy(programEmphasis = v)
-    }.combine(settingsRepo.freestyleMode) { s, v ->
-        s.copy(freestyleMode = v)
-    }.combine(settingsRepo.coachEnabled) { s, v ->
-        s.copy(coachEnabled = v)
-    }.combine(settingsRepo.useMiles) { s, v ->
-        s.copy(useMiles = v)
-    }.combine(settingsRepo.useCm) { s, v ->
-        s.copy(useCm = v)
-    }.combine(programRepository.revision) { s, _ ->
-        s.copy(weeklyVolume = computeWeeklyVolume())
-    }.combine(programCustomizationRepo.observeCustomExercises()) { s, v ->
-        s.copy(customExercises = v)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
+
+    /** One snapshot mapped field by field; every default and parse is the matching flow's own. */
+    private fun settingsFrom(prefs: androidx.datastore.preferences.core.Preferences): SettingsUiState {
+        val v = settingsRepo.values(prefs)
+        return SettingsUiState(
+            amoledMode = v.amoledMode,
+            weightUnit = v.weightUnit,
+            useMiles = v.useMiles,
+            useCm = v.useCm,
+            noteTemplates = v.noteTemplates,
+            hiddenOverviewTiles = v.hiddenOverviewTiles,
+            timeFormat24h = v.timeFormat24h,
+            firstDayMonday = v.firstDayMonday,
+            hapticStrength = v.hapticStrength,
+            keepScreenOn = v.keepScreenOn,
+            restCompoundSeconds = v.restCompoundSeconds,
+            restIsolationSeconds = v.restIsolationSeconds,
+            quietHoursEnabled = v.quietHoursEnabled,
+            quietHoursSchedule = v.quietHoursSchedule,
+            trainingReminderEnabled = v.trainingReminderEnabled,
+            trainingReminderHour = v.trainingReminderHour,
+            weeklyRecapEnabled = v.weeklyRecapEnabled,
+            disabledNoticeKinds = v.disabledNoticeKinds,
+            restTimerAlertEnabled = v.restTimerAlertEnabled,
+            privacyMode = v.privacyMode,
+            appLockEnabled = v.appLockEnabled,
+            galleryLockEnabled = v.galleryLockEnabled,
+            appLockTimeoutSec = v.appLockTimeoutSec,
+            availableEquipment = v.availableEquipment,
+            frozenExerciseIds = v.frozenExerciseIds,
+            plateWeightLb = v.plateWeightLb,
+            maxDbWeightLb = v.maxDbWeightLb,
+            accentColorHex = v.accentColorHex,
+            accentEnabled = v.accentEnabled,
+            appIconKey = v.appIcon,
+            themedLaunchIntro = v.themedLaunchIntro,
+            accentFromIcon = v.accentFromIcon,
+            timezone = v.timezone,
+            favoriteTimezones = v.favoriteTimezones,
+            daysPerWeek = v.daysPerWeek,
+            sessionMinutes = v.sessionMinutes,
+            liked = v.likedExercises,
+            disliked = v.dislikedExercises,
+            swapDislikePromptEnabled = v.swapDislikePromptEnabled,
+            rotationCadence = v.rotationCadence,
+            rotationEveryN = v.rotationEveryN,
+            cardioWeeklyTargetMin = v.cardioWeeklyTargetMin,
+            userGoal = v.userGoal.ifBlank { "build_muscle" },
+            userSex = v.userSex,
+            experience = v.programExperience,
+            problemAreas = v.problemAreas,
+            priorityMuscles = v.priorityMuscles,
+            pinnedExercises = v.pinnedExercises,
+            programEmphasis = v.programEmphasis,
+            coachMode = v.coachMode,
+            coachAdvanced = v.coachAdvanced,
+            freestyleMode = v.freestyleMode,
+            coachEnabled = v.coachEnabled
+        )
+    }
 
     /** Sets-per-muscle across the active program (busiest first) — drives the Program page readout. */
     private fun computeWeeklyVolume(): List<Pair<String, Int>> =
@@ -383,6 +357,9 @@ class SettingsViewModel @Inject constructor(
     fun setQuietHoursEnabled(v: Boolean) = write { settingsRepo.setQuietHoursEnabled(v) }
     fun setQuietWindow(day: java.time.DayOfWeek, start: Int, end: Int) =
         write { settingsRepo.setQuietWindow(day, start, end) }
+    /** One window for every day, as one write (the uniform "every night" rows). */
+    fun setQuietWindowAllDays(start: Int, end: Int) =
+        write { settingsRepo.setQuietWindowAllDays(start, end) }
 
     fun setTrainingReminderEnabled(v: Boolean) = write {
         settingsRepo.setTrainingReminderEnabled(v)

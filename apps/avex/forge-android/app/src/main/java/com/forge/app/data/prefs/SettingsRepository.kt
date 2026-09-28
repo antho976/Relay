@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -99,6 +100,25 @@ class SettingsRepository @Inject constructor(
      */
     private val allPreferences: Flow<Preferences> = context.forgePreferences.data
         .catch { e -> if (e is IOException) emit(READ_FAILED) else throw e }
+        // Remembered for [lastPreferences]. A failed read is not a snapshot of anyone's settings.
+        .onEach { if (!it.readFailed) lastPreferences = it }
+
+    /**
+     * The newest real [Preferences] any reader of this class has seen, or null before the first
+     * read in this process. A screen can seed its first frame from this synchronously instead of
+     * painting every default and then correcting (Settings did: subtitles flipped, switches slid).
+     * It may trail the file by a write when nothing is collecting; the live flow catches it up.
+     */
+    @Volatile
+    var lastPreferences: Preferences? = null
+        private set
+
+    /**
+     * Every preference as ONE deduped flow, for a screen that shows dozens of settings at once.
+     * Mapping one snapshot through [values] costs one pass per write, where fifty separate flows
+     * each ran their own read, dedupe and combine stage for the same write.
+     */
+    val preferences: Flow<Preferences> = allPreferences.distinctUntilChanged()
 
     /**
      * Every preference as one immutable value, for callers that key a cache on "has any setting
@@ -176,6 +196,81 @@ class SettingsRepository @Inject constructor(
      */
     private fun <T> pref(read: (Preferences) -> T): Flow<T> =
         allPreferences.map(read).distinctUntilChanged()
+
+    /** Typed reads over one snapshot. The flows below read through here too, so the Settings
+     *  screen's one-snapshot state and each single flow can never disagree on a default. */
+    fun values(prefs: Preferences): PreferenceValues = PreferenceValues(prefs)
+
+    /** One snapshot's settings, each with exactly the default and parsing its flow applies. */
+    inner class PreferenceValues(private val prefs: Preferences) {
+        val hiddenOverviewTiles: Set<String> get() = prefs[PreferenceKeys.HIDDEN_OVERVIEW_TILES] ?: emptySet()
+        val noteTemplates: Set<String> get() = prefs[PreferenceKeys.NOTE_TEMPLATES] ?: defaultNoteTemplates
+        val weightUnit: com.forge.app.domain.units.WeightUnit get() =
+            prefs[PreferenceKeys.WEIGHT_UNIT]?.let { com.forge.app.domain.units.WeightUnit.fromKey(it) }
+                ?: com.forge.app.domain.units.WeightUnit.ofKg(prefs[PreferenceKeys.USE_KG] ?: false)
+        val useMiles: Boolean get() =
+            prefs[PreferenceKeys.USE_MILES] ?: !(prefs[PreferenceKeys.USE_KG] ?: false)
+        val useCm: Boolean get() =
+            prefs[PreferenceKeys.USE_CM] ?: (prefs[PreferenceKeys.USE_KG] ?: false)
+        val amoledMode: Boolean get() = prefs[PreferenceKeys.AMOLED_MODE] ?: false
+        val accentColorHex: String get() = prefs[PreferenceKeys.ACCENT_COLOR_HEX] ?: ""
+        val accentEnabled: Boolean get() = prefs[PreferenceKeys.ACCENT_ENABLED] ?: true
+        val appIcon: String get() = prefs[PreferenceKeys.APP_ICON] ?: ""
+        val themedLaunchIntro: Boolean get() = prefs[PreferenceKeys.THEMED_LAUNCH_INTRO] ?: false
+        val accentFromIcon: Boolean get() = prefs[PreferenceKeys.ACCENT_FROM_ICON] ?: false
+        val timeFormat24h: Boolean get() =
+            prefs[PreferenceKeys.TIME_FORMAT_24H] ?: android.text.format.DateFormat.is24HourFormat(context)
+        val firstDayMonday: Boolean get() = prefs[PreferenceKeys.FIRST_DAY_MONDAY] ?: true
+        val timezone: String get() = prefs[PreferenceKeys.TIMEZONE] ?: java.util.TimeZone.getDefault().id
+        val favoriteTimezones: Set<String> get() = prefs[PreferenceKeys.FAVORITE_TIMEZONES] ?: emptySet()
+        val hapticStrength: String get() = prefs[PreferenceKeys.HAPTIC_STRENGTH] ?: "strong"
+        val keepScreenOn: Boolean get() = prefs[PreferenceKeys.KEEP_SCREEN_ON] ?: true
+        val quietHoursEnabled: Boolean get() = prefs[PreferenceKeys.QUIET_HOURS_ENABLED] ?: false
+        val quietHoursSchedule: com.forge.app.domain.notify.QuietHoursSchedule get() = readQuietSchedule(prefs)
+        val trainingReminderEnabled: Boolean get() = prefs[PreferenceKeys.TRAINING_REMINDER_ENABLED] ?: false
+        val trainingReminderHour: Int get() = prefs[PreferenceKeys.TRAINING_REMINDER_HOUR] ?: 18
+        val weeklyRecapEnabled: Boolean get() = prefs[PreferenceKeys.WEEKLY_RECAP_ENABLED] ?: true
+        val restTimerAlertEnabled: Boolean get() = prefs[PreferenceKeys.REST_TIMER_ALERT_ENABLED] ?: true
+        val disabledNoticeKinds: Set<String> get() = prefs[PreferenceKeys.DISABLED_NOTICE_KINDS] ?: emptySet()
+        val availableEquipment: Set<String> get() = prefs[PreferenceKeys.AVAILABLE_EQUIPMENT] ?: emptySet()
+        val frozenExerciseIds: Set<String>? get() = prefs[PreferenceKeys.FROZEN_EXERCISE_IDS]
+        val daysPerWeek: Int get() = prefs[PreferenceKeys.DAYS_PER_WEEK] ?: 4
+        val sessionMinutes: Int? get() = prefs[PreferenceKeys.SESSION_MINUTES]?.takeIf { it > 0 }
+        val restCompoundSeconds: Int get() =
+            prefs[PreferenceKeys.REST_COMPOUND_SECONDS] ?: com.forge.app.program.SessionEstimate.COMPOUND_REST
+        val restIsolationSeconds: Int get() = prefs[PreferenceKeys.REST_ISOLATION_SECONDS] ?: 90
+        val programEmphasis: String get() = prefs[PreferenceKeys.PROGRAM_EMPHASIS] ?: "balanced"
+        val likedExercises: Set<String> get() = prefs[PreferenceKeys.LIKED_EXERCISES] ?: emptySet()
+        val dislikedExercises: Set<String> get() = prefs[PreferenceKeys.DISLIKED_EXERCISES] ?: emptySet()
+        val swapDislikePromptEnabled: Boolean get() = prefs[PreferenceKeys.SWAP_DISLIKE_PROMPT_ENABLED] ?: true
+        val rotationCadence: String get() = prefs[PreferenceKeys.ROTATION_CADENCE] ?: "never"
+        val rotationEveryN: Int get() = prefs[PreferenceKeys.ROTATION_EVERY_N] ?: 4
+        val scheduleMode: String get() =
+            prefs[PreferenceKeys.SCHEDULE_MODE] ?: com.forge.app.domain.schedule.WeeklySchedule.MODE_SEQUENCE
+        val weeklySchedule: List<String> get() =
+            prefs[PreferenceKeys.SCHEDULE_WEEKLY]
+                ?.let { stored -> com.forge.app.domain.schedule.WeeklySchedule.parse(stored) }
+                ?: com.forge.app.domain.schedule.WeeklySchedule.defaultFor(com.forge.app.program.Program.dayKeys)
+        val cardioWeeklyTargetMin: Int get() = prefs[PreferenceKeys.CARDIO_WEEKLY_TARGET_MIN] ?: 0
+        val plateWeightLb: Double get() = prefs[PreferenceKeys.PLATE_WEIGHT_LB] ?: 15.0
+        val maxDbWeightLb: Double? get() = prefs[PreferenceKeys.MAX_DB_WEIGHT_LB]?.takeIf { it > 0.0 }
+        val coachMode: String get() = prefs[PreferenceKeys.COACH_MODE] ?: "suggest"
+        val coachAdvanced: Boolean get() = prefs[PreferenceKeys.COACH_ADVANCED] ?: false
+        val privacyMode: Boolean get() = protection(prefs, PreferenceKeys.PRIVACY_MODE) { p -> p.privacyMode }
+        val appLockEnabled: Boolean get() =
+            protection(prefs, PreferenceKeys.APP_LOCK_ENABLED) { p -> p.appLockEnabled }
+        val galleryLockEnabled: Boolean get() =
+            protection(prefs, PreferenceKeys.GALLERY_LOCK_ENABLED) { p -> p.galleryLockEnabled }
+        val appLockTimeoutSec: Int get() = prefs[PreferenceKeys.APP_LOCK_TIMEOUT_SEC] ?: 0
+        val userGoal: String get() = prefs[PreferenceKeys.USER_GOAL] ?: ""
+        val userSex: String get() = prefs[PreferenceKeys.USER_SEX] ?: ""
+        val freestyleMode: Boolean get() = prefs[PreferenceKeys.FREESTYLE_MODE] ?: false
+        val coachEnabled: Boolean get() = prefs[PreferenceKeys.COACH_ENABLED] ?: true
+        val programExperience: String get() = prefs[PreferenceKeys.PROGRAM_EXPERIENCE] ?: "intermediate"
+        val problemAreas: Set<String> get() = prefs[PreferenceKeys.PROBLEM_AREAS] ?: emptySet()
+        val priorityMuscles: Set<String> get() = prefs[PreferenceKeys.PRIORITY_MUSCLES] ?: emptySet()
+        val pinnedExercises: Set<String> get() = prefs[PreferenceKeys.PINNED_EXERCISES] ?: emptySet()
+    }
 
     val shownMilestones: Flow<Set<String>> = pref { prefs -> prefs[PreferenceKeys.SHOWN_MILESTONES] ?: emptySet() }
 
@@ -265,7 +360,7 @@ class SettingsRepository @Inject constructor(
     }
 
     /** `NoticeKind.key`s switched off — those rows never reach the feed. */
-    val disabledNoticeKinds: Flow<Set<String>> = pref { prefs -> prefs[PreferenceKeys.DISABLED_NOTICE_KINDS] ?: emptySet() }
+    val disabledNoticeKinds: Flow<Set<String>> = pref { values(it).disabledNoticeKinds }
 
     suspend fun setNoticeKindEnabled(key: String, enabled: Boolean) =
         context.forgePreferences.edit { prefs ->
@@ -400,7 +495,7 @@ class SettingsRepository @Inject constructor(
 
     // ─── Overview tile visibility (#121) ─────────────────────────────────────
 
-    val hiddenOverviewTiles: Flow<Set<String>> = pref { it[PreferenceKeys.HIDDEN_OVERVIEW_TILES] ?: emptySet() }
+    val hiddenOverviewTiles: Flow<Set<String>> = pref { values(it).hiddenOverviewTiles }
     suspend fun setTileHidden(tileId: String, hidden: Boolean) {
         context.forgePreferences.edit { prefs ->
             val current = prefs[PreferenceKeys.HIDDEN_OVERVIEW_TILES] ?: emptySet()
@@ -412,7 +507,7 @@ class SettingsRepository @Inject constructor(
 
     private val defaultNoteTemplates = setOf("form felt: ", "energy: ", "pain/discomfort: ", "focus cue: ")
 
-    val noteTemplates: Flow<Set<String>> = pref { it[PreferenceKeys.NOTE_TEMPLATES] ?: defaultNoteTemplates }
+    val noteTemplates: Flow<Set<String>> = pref { values(it).noteTemplates }
 
     /** Add a user-defined note template (materializes the default set on first edit). Blank = no-op. */
     suspend fun addNoteTemplate(template: String) {
@@ -434,10 +529,7 @@ class SettingsRepository @Inject constructor(
 
     /** The weight display unit (lb | kg | st). Reads the tri-state key, falling back to the legacy
      *  [USE_KG] boolean for installs that predate it so their kg/lb choice carries over. */
-    val weightUnit: Flow<com.forge.app.domain.units.WeightUnit> = pref { prefs ->
-            prefs[PreferenceKeys.WEIGHT_UNIT]?.let { com.forge.app.domain.units.WeightUnit.fromKey(it) }
-                ?: com.forge.app.domain.units.WeightUnit.ofKg(prefs[PreferenceKeys.USE_KG] ?: false)
-        }
+    val weightUnit: Flow<com.forge.app.domain.units.WeightUnit> = pref { values(it).weightUnit }
     suspend fun setWeightUnit(unit: com.forge.app.domain.units.WeightUnit) =
         context.forgePreferences.edit { prefs ->
             val stone = com.forge.app.domain.units.WeightUnit.ST
@@ -494,7 +586,7 @@ class SettingsRepository @Inject constructor(
      * (lb→miles, kg→km) so a single "pounds + miles" / "kilos + km" mental model holds by default —
      * this is also what existing users and the skip-onboarding path get for free.
      */
-    val useMiles: Flow<Boolean> = pref { it[PreferenceKeys.USE_MILES] ?: !(it[PreferenceKeys.USE_KG] ?: false) }
+    val useMiles: Flow<Boolean> = pref { values(it).useMiles }
     suspend fun setUseMiles(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.USE_MILES] = value }
 
@@ -503,7 +595,7 @@ class SettingsRepository @Inject constructor(
      * follows the weight unit (kg→cm, lb→in) so one metric/imperial mental model holds by default;
      * an explicit pick in Settings breaks the tie.
      */
-    val useCm: Flow<Boolean> = pref { it[PreferenceKeys.USE_CM] ?: (it[PreferenceKeys.USE_KG] ?: false) }
+    val useCm: Flow<Boolean> = pref { values(it).useCm }
     suspend fun setUseCm(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.USE_CM] = value }
 
@@ -557,34 +649,34 @@ class SettingsRepository @Inject constructor(
 
     // ─── Appearance (#35a) ────────────────────────────────────────────────────
 
-    val amoledMode: Flow<Boolean> = pref { it[PreferenceKeys.AMOLED_MODE] ?: false }
+    val amoledMode: Flow<Boolean> = pref { values(it).amoledMode }
     suspend fun setAmoledMode(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.AMOLED_MODE] = value }
 
-    val accentColorHex: Flow<String> = pref { it[PreferenceKeys.ACCENT_COLOR_HEX] ?: "" }
+    val accentColorHex: Flow<String> = pref { values(it).accentColorHex }
     suspend fun setAccentColorHex(hex: String) =
         context.forgePreferences.edit { it[PreferenceKeys.ACCENT_COLOR_HEX] = hex }
 
     /** When false the accent is suppressed app-wide (monochrome highlights). Default on. */
-    val accentEnabled: Flow<Boolean> = pref { it[PreferenceKeys.ACCENT_ENABLED] ?: true }
+    val accentEnabled: Flow<Boolean> = pref { values(it).accentEnabled }
     suspend fun setAccentEnabled(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.ACCENT_ENABLED] = value }
 
     /** Selected launcher-icon enum name; "" = default emblem. Deliberately NOT in the APPEARANCE
      *  reset set — the enabled activity-alias is the real state, so clearing this pref alone would
      *  desync the ringed choice from the icon actually on the home screen. */
-    val appIcon: Flow<String> = pref { it[PreferenceKeys.APP_ICON] ?: "" }
+    val appIcon: Flow<String> = pref { values(it).appIcon }
     suspend fun setAppIcon(key: String) =
         context.forgePreferences.edit { it[PreferenceKeys.APP_ICON] = key }
 
     /** Theme the cold-launch Avex intro to the chosen app icon's family (default off). Off = the plain
      *  black-and-white Avex settle, no icon-family effect. */
-    val themedLaunchIntro: Flow<Boolean> = pref { it[PreferenceKeys.THEMED_LAUNCH_INTRO] ?: false }
+    val themedLaunchIntro: Flow<Boolean> = pref { values(it).themedLaunchIntro }
     suspend fun setThemedLaunchIntro(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.THEMED_LAUNCH_INTRO] = value }
 
     /** Accent follows the launcher icon's colour (default off) — see [effectiveAccentHex]. */
-    val accentFromIcon: Flow<Boolean> = pref { it[PreferenceKeys.ACCENT_FROM_ICON] ?: false }
+    val accentFromIcon: Flow<Boolean> = pref { values(it).accentFromIcon }
     suspend fun setAccentFromIcon(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.ACCENT_FROM_ICON] = value }
 
@@ -610,21 +702,20 @@ class SettingsRepository @Inject constructor(
      * setting rather than a hard 12h: the toggle did nothing until the 2026-09-26 audit wired it,
      * so a 24h-phone user who never opened it would otherwise have flipped to AM/PM overnight.
      */
-    val timeFormat24h: Flow<Boolean> =
-        pref { it[PreferenceKeys.TIME_FORMAT_24H] ?: android.text.format.DateFormat.is24HourFormat(context) }
+    val timeFormat24h: Flow<Boolean> = pref { values(it).timeFormat24h }
     suspend fun setTimeFormat24h(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.TIME_FORMAT_24H] = value }
 
-    val firstDayMonday: Flow<Boolean> = pref { it[PreferenceKeys.FIRST_DAY_MONDAY] ?: true }
+    val firstDayMonday: Flow<Boolean> = pref { values(it).firstDayMonday }
     suspend fun setFirstDayMonday(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.FIRST_DAY_MONDAY] = value }
 
-    val timezone: Flow<String> = pref { it[PreferenceKeys.TIMEZONE] ?: java.util.TimeZone.getDefault().id }
+    val timezone: Flow<String> = pref { values(it).timezone }
     suspend fun setTimezone(id: String) =
         context.forgePreferences.edit { it[PreferenceKeys.TIMEZONE] = id }
 
     /** IANA zone ids the user has starred, pinned to the top of the timezone picker. */
-    val favoriteTimezones: Flow<Set<String>> = pref { it[PreferenceKeys.FAVORITE_TIMEZONES] ?: emptySet() }
+    val favoriteTimezones: Flow<Set<String>> = pref { values(it).favoriteTimezones }
     suspend fun toggleFavoriteTimezone(id: String) =
         context.forgePreferences.edit { prefs ->
             val cur = prefs[PreferenceKeys.FAVORITE_TIMEZONES] ?: emptySet()
@@ -633,25 +724,24 @@ class SettingsRepository @Inject constructor(
 
     // ─── Feel (#118) ──────────────────────────────────────────────────────────
 
-    val hapticStrength: Flow<String> = pref { it[PreferenceKeys.HAPTIC_STRENGTH] ?: "strong" }
+    val hapticStrength: Flow<String> = pref { values(it).hapticStrength }
     suspend fun setHapticStrength(value: String) =
         context.forgePreferences.edit { it[PreferenceKeys.HAPTIC_STRENGTH] = value }
 
     // Keep-screen-on while logging (GYMAP-74) — default on so a session never locks mid-rest.
-    val keepScreenOn: Flow<Boolean> = pref { it[PreferenceKeys.KEEP_SCREEN_ON] ?: true }
+    val keepScreenOn: Flow<Boolean> = pref { values(it).keepScreenOn }
     suspend fun setKeepScreenOn(v: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.KEEP_SCREEN_ON] = v }
 
     // ─── Notifications (#122) ─────────────────────────────────────────────────
 
-    val quietHoursEnabled: Flow<Boolean> = pref { it[PreferenceKeys.QUIET_HOURS_ENABLED] ?: false }
+    val quietHoursEnabled: Flow<Boolean> = pref { values(it).quietHoursEnabled }
     suspend fun setQuietHoursEnabled(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.QUIET_HOURS_ENABLED] = value }
 
     /** Per-day quiet windows (GYMAP-75). Seeds from the legacy single window (START/END) until the
      *  user first edits a day, after which the JSON schedule is authoritative. */
-    val quietHoursSchedule: Flow<com.forge.app.domain.notify.QuietHoursSchedule> =
-        pref { readQuietSchedule(it) }
+    val quietHoursSchedule: Flow<com.forge.app.domain.notify.QuietHoursSchedule> = pref { values(it).quietHoursSchedule }
 
     private fun readQuietSchedule(prefs: androidx.datastore.preferences.core.Preferences) =
         com.forge.app.domain.notify.QuietHoursSchedule.fromJson(
@@ -670,23 +760,32 @@ class SettingsRepository @Inject constructor(
                 com.forge.app.domain.notify.QuietHoursSchedule.toJson(next)
         }
 
+    /** Sets every weekday to one window in a single edit: the stored JSON is exactly what seven
+     *  [setQuietWindow] calls would leave, without seven file writes and seven re-emissions. */
+    suspend fun setQuietWindowAllDays(start: Int, end: Int) =
+        context.forgePreferences.edit { prefs ->
+            prefs[PreferenceKeys.QUIET_HOURS_SCHEDULE] = com.forge.app.domain.notify.QuietHoursSchedule.toJson(
+                com.forge.app.domain.notify.QuietHoursSchedule.uniform(start, end)
+            )
+        }
+
     /** Daily training reminder (engagement) — opt-in, default OFF so a new user is never nagged. */
-    val trainingReminderEnabled: Flow<Boolean> = pref { it[PreferenceKeys.TRAINING_REMINDER_ENABLED] ?: false }
+    val trainingReminderEnabled: Flow<Boolean> = pref { values(it).trainingReminderEnabled }
     suspend fun setTrainingReminderEnabled(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.TRAINING_REMINDER_ENABLED] = value }
 
     /** Hour-of-day (0–23) the reminder fires; default 18 (6pm). */
-    val trainingReminderHour: Flow<Int> = pref { it[PreferenceKeys.TRAINING_REMINDER_HOUR] ?: 18 }
+    val trainingReminderHour: Flow<Int> = pref { values(it).trainingReminderHour }
     suspend fun setTrainingReminderHour(hour: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.TRAINING_REMINDER_HOUR] = hour.coerceIn(0, 23) }
 
     /** Weekly "your week in numbers" recap notification (N2). On by default. */
-    val weeklyRecapEnabled: Flow<Boolean> = pref { it[PreferenceKeys.WEEKLY_RECAP_ENABLED] ?: true }
+    val weeklyRecapEnabled: Flow<Boolean> = pref { values(it).weeklyRecapEnabled }
     suspend fun setWeeklyRecapEnabled(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.WEEKLY_RECAP_ENABLED] = value }
 
     /** Rest-timer "done" alert — buzz + notification when the app is backgrounded (N2). On by default. */
-    val restTimerAlertEnabled: Flow<Boolean> = pref { it[PreferenceKeys.REST_TIMER_ALERT_ENABLED] ?: true }
+    val restTimerAlertEnabled: Flow<Boolean> = pref { values(it).restTimerAlertEnabled }
     suspend fun setRestTimerAlertEnabled(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.REST_TIMER_ALERT_ENABLED] = value }
 
@@ -705,7 +804,7 @@ class SettingsRepository @Inject constructor(
 
     // ─── Equipment context (#44) ──────────────────────────────────────────────
 
-    val availableEquipment: Flow<Set<String>> = pref { it[PreferenceKeys.AVAILABLE_EQUIPMENT] ?: emptySet() }
+    val availableEquipment: Flow<Set<String>> = pref { values(it).availableEquipment }
     suspend fun setAvailableEquipment(codes: Set<String>) =
         context.forgePreferences.edit { it[PreferenceKeys.AVAILABLE_EQUIPMENT] = codes }
 
@@ -714,7 +813,7 @@ class SettingsRepository @Inject constructor(
      * curation (ordinary equipment filtering). Drives generation, the swap picker and the
      * like/dislike screen so they all show the same locked set.
      */
-    val frozenExerciseIds: Flow<Set<String>?> = pref { it[PreferenceKeys.FROZEN_EXERCISE_IDS] }
+    val frozenExerciseIds: Flow<Set<String>?> = pref { values(it).frozenExerciseIds }
     suspend fun setFrozenExerciseIds(ids: Set<String>?) =
         context.forgePreferences.edit {
             if (ids == null) it.remove(PreferenceKeys.FROZEN_EXERCISE_IDS)
@@ -723,12 +822,12 @@ class SettingsRepository @Inject constructor(
 
     // ─── Program generation (program-unlock) ──────────────────────────────────
 
-    val daysPerWeek: Flow<Int> = pref { it[PreferenceKeys.DAYS_PER_WEEK] ?: 4 }
+    val daysPerWeek: Flow<Int> = pref { values(it).daysPerWeek }
     suspend fun setDaysPerWeek(n: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.DAYS_PER_WEEK] = n.coerceIn(1, 7) }
 
     /** Preferred session length in minutes; null = no ceiling (the generator's historical behavior). */
-    val sessionMinutes: Flow<Int?> = pref { prefs -> prefs[PreferenceKeys.SESSION_MINUTES]?.takeIf { it > 0 } }
+    val sessionMinutes: Flow<Int?> = pref { values(it).sessionMinutes }
     suspend fun setSessionMinutes(minutes: Int?) =
         context.forgePreferences.edit {
             if (minutes == null || minutes <= 0) it.remove(PreferenceKeys.SESSION_MINUTES)
@@ -737,19 +836,19 @@ class SettingsRepository @Inject constructor(
 
     /** Default rest base (seconds) per movement type — what the rest timer starts at before personal
      *  tuning + the brutal bonus. Defaults to the canonical 120 / 90; clamped to a sane 30s–10min. */
-    val restCompoundSeconds: Flow<Int> = pref { it[PreferenceKeys.REST_COMPOUND_SECONDS] ?: com.forge.app.program.SessionEstimate.COMPOUND_REST }
-    val restIsolationSeconds: Flow<Int> = pref { it[PreferenceKeys.REST_ISOLATION_SECONDS] ?: 90 }
+    val restCompoundSeconds: Flow<Int> = pref { values(it).restCompoundSeconds }
+    val restIsolationSeconds: Flow<Int> = pref { values(it).restIsolationSeconds }
     suspend fun setRestCompoundSeconds(s: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.REST_COMPOUND_SECONDS] = s.coerceIn(30, 600) }
     suspend fun setRestIsolationSeconds(s: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.REST_ISOLATION_SECONDS] = s.coerceIn(30, 600) }
 
-    val programEmphasis: Flow<String> = pref { it[PreferenceKeys.PROGRAM_EMPHASIS] ?: "balanced" }
+    val programEmphasis: Flow<String> = pref { values(it).programEmphasis }
     suspend fun setProgramEmphasis(v: String) =
         context.forgePreferences.edit { it[PreferenceKeys.PROGRAM_EMPHASIS] = v }
 
-    val likedExercises: Flow<Set<String>> = pref { it[PreferenceKeys.LIKED_EXERCISES] ?: emptySet() }
-    val dislikedExercises: Flow<Set<String>> = pref { it[PreferenceKeys.DISLIKED_EXERCISES] ?: emptySet() }
+    val likedExercises: Flow<Set<String>> = pref { values(it).likedExercises }
+    val dislikedExercises: Flow<Set<String>> = pref { values(it).dislikedExercises }
 
     /**
      * Batch absolute set — a custom exercise spans several `custom_…` ids (one per day it's on), so the
@@ -796,16 +895,16 @@ class SettingsRepository @Inject constructor(
         }
 
     /** After a "Make default" swap, offer to dislike the swapped-out exercise (default ON). */
-    val swapDislikePromptEnabled: Flow<Boolean> = pref { it[PreferenceKeys.SWAP_DISLIKE_PROMPT_ENABLED] ?: true }
+    val swapDislikePromptEnabled: Flow<Boolean> = pref { values(it).swapDislikePromptEnabled }
     suspend fun setSwapDislikePromptEnabled(enabled: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.SWAP_DISLIKE_PROMPT_ENABLED] = enabled }
 
     /** Rotation cadence: "never" | "every_n" (count = finished sessions). */
-    val rotationCadence: Flow<String> = pref { it[PreferenceKeys.ROTATION_CADENCE] ?: "never" }
+    val rotationCadence: Flow<String> = pref { values(it).rotationCadence }
     suspend fun setRotationCadence(v: String) =
         context.forgePreferences.edit { it[PreferenceKeys.ROTATION_CADENCE] = v }
 
-    val rotationEveryN: Flow<Int> = pref { it[PreferenceKeys.ROTATION_EVERY_N] ?: 4 }
+    val rotationEveryN: Flow<Int> = pref { values(it).rotationEveryN }
     suspend fun setRotationEveryN(n: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.ROTATION_EVERY_N] = n.coerceAtLeast(1) }
 
@@ -865,7 +964,7 @@ class SettingsRepository @Inject constructor(
 
     // ─── Day-aware scheduling (weekly plan vs legacy sequence) ────────────────
     /** "sequence" (default — day after the last finished) or "weekday" (fixed Mon..Sun plan). */
-    val scheduleMode: Flow<String> = pref { it[PreferenceKeys.SCHEDULE_MODE] ?: com.forge.app.domain.schedule.WeeklySchedule.MODE_SEQUENCE }
+    val scheduleMode: Flow<String> = pref { values(it).scheduleMode }
     suspend fun setScheduleMode(v: String) =
         context.forgePreferences.edit { it[PreferenceKeys.SCHEDULE_MODE] = v; recordSchedule(it) }
 
@@ -898,11 +997,7 @@ class SettingsRepository @Inject constructor(
     }
 
     /** The 7-slot weekly schedule (Mon..Sun; "" = rest). Defaults to program days on the first weekdays. */
-    val weeklySchedule: Flow<List<String>> = pref {
-            it[PreferenceKeys.SCHEDULE_WEEKLY]
-                ?.let { stored -> com.forge.app.domain.schedule.WeeklySchedule.parse(stored) }
-                ?: com.forge.app.domain.schedule.WeeklySchedule.defaultFor(com.forge.app.program.Program.dayKeys)
-        }
+    val weeklySchedule: Flow<List<String>> = pref { values(it).weeklySchedule }
     suspend fun setWeeklySchedule(slots: List<String>) =
         context.forgePreferences.edit {
             it[PreferenceKeys.SCHEDULE_WEEKLY] = com.forge.app.domain.schedule.WeeklySchedule.encode(slots)
@@ -934,7 +1029,7 @@ class SettingsRepository @Inject constructor(
     }
 
     // ─── Cardio weekly-minutes goal (cardio tab — NOT a program day) ──────────
-    val cardioWeeklyTargetMin: Flow<Int> = pref { it[PreferenceKeys.CARDIO_WEEKLY_TARGET_MIN] ?: 0 }
+    val cardioWeeklyTargetMin: Flow<Int> = pref { values(it).cardioWeeklyTargetMin }
     suspend fun setCardioWeeklyTargetMin(min: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.CARDIO_WEEKLY_TARGET_MIN] = min.coerceAtLeast(0) }
 
@@ -1002,7 +1097,7 @@ class SettingsRepository @Inject constructor(
 
     // ─── Plate weight (machine/cable plate-loaded exercises) ──────────────────
     /** Weight of one plate in lb. Plate-loaded exercises are entered/shown as a plate count. */
-    val plateWeightLb: Flow<Double> = pref { it[PreferenceKeys.PLATE_WEIGHT_LB] ?: 15.0 }
+    val plateWeightLb: Flow<Double> = pref { values(it).plateWeightLb }
     suspend fun setPlateWeightLb(lb: Double) =
         context.forgePreferences.edit { it[PreferenceKeys.PLATE_WEIGHT_LB] = lb.coerceIn(1.0, 200.0) }
 
@@ -1011,7 +1106,7 @@ class SettingsRepository @Inject constructor(
      * Drives the generator's heavy-slot stack bias and caps the progression chip's DB targets
      * (auto-coach Phase 0).
      */
-    val maxDbWeightLb: Flow<Double?> = pref { prefs -> prefs[PreferenceKeys.MAX_DB_WEIGHT_LB]?.takeIf { it > 0.0 } }
+    val maxDbWeightLb: Flow<Double?> = pref { values(it).maxDbWeightLb }
     suspend fun setMaxDbWeightLb(lb: Double?) =
         context.forgePreferences.edit {
             if (lb == null || lb <= 0.0) it.remove(PreferenceKeys.MAX_DB_WEIGHT_LB)
@@ -1023,7 +1118,7 @@ class SettingsRepository @Inject constructor(
      * Brief; "auto" = the coach may auto-apply an adjustment TYPE once it has earned trust
      * (TrustLedger) — never a blanket switch.
      */
-    val coachMode: Flow<String> = pref { it[PreferenceKeys.COACH_MODE] ?: "suggest" }
+    val coachMode: Flow<String> = pref { values(it).coachMode }
     suspend fun setCoachMode(mode: String) =
         context.forgePreferences.edit { it[PreferenceKeys.COACH_MODE] = mode }
 
@@ -1032,7 +1127,7 @@ class SettingsRepository @Inject constructor(
      * week's calls and the record. On, it also shows the readings the calls were made from — the
      * signals, the block, the inputs with their charts, and what the coach has learned.
      */
-    val coachAdvanced: Flow<Boolean> = pref { it[PreferenceKeys.COACH_ADVANCED] ?: false }
+    val coachAdvanced: Flow<Boolean> = pref { values(it).coachAdvanced }
     suspend fun setCoachAdvanced(v: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.COACH_ADVANCED] = v }
 
@@ -1103,20 +1198,17 @@ class SettingsRepository @Inject constructor(
         val themedLaunchIntro: Boolean
     )
 
-    val privacyMode: Flow<Boolean> =
-        pref { protection(it, PreferenceKeys.PRIVACY_MODE) { p -> p.privacyMode } }
+    val privacyMode: Flow<Boolean> = pref { values(it).privacyMode }
     suspend fun setPrivacyMode(v: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.PRIVACY_MODE] = v }
 
     // ─── App & gallery lock (GYMAP-69) ────────────────────────────────────────
 
-    val appLockEnabled: Flow<Boolean> =
-        pref { protection(it, PreferenceKeys.APP_LOCK_ENABLED) { p -> p.appLockEnabled } }
+    val appLockEnabled: Flow<Boolean> = pref { values(it).appLockEnabled }
     suspend fun setAppLockEnabled(v: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.APP_LOCK_ENABLED] = v }
 
-    val galleryLockEnabled: Flow<Boolean> =
-        pref { protection(it, PreferenceKeys.GALLERY_LOCK_ENABLED) { p -> p.galleryLockEnabled } }
+    val galleryLockEnabled: Flow<Boolean> = pref { values(it).galleryLockEnabled }
 
     /**
      * The three protections together, plus whether they came from a real read.
@@ -1148,7 +1240,7 @@ class SettingsRepository @Inject constructor(
         context.forgePreferences.edit { it[PreferenceKeys.GALLERY_LOCK_ENABLED] = v }
 
     /** Background grace before re-locking, in seconds (0 = immediately). */
-    val appLockTimeoutSec: Flow<Int> = pref { it[PreferenceKeys.APP_LOCK_TIMEOUT_SEC] ?: 0 }
+    val appLockTimeoutSec: Flow<Int> = pref { values(it).appLockTimeoutSec }
     suspend fun setAppLockTimeoutSec(v: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.APP_LOCK_TIMEOUT_SEC] = v }
 
@@ -1180,12 +1272,12 @@ class SettingsRepository @Inject constructor(
     val avatarEditHintShown: Flow<Boolean> = pref { it[PreferenceKeys.AVATAR_EDIT_HINT_SHOWN] ?: false }
     suspend fun setAvatarEditHintShown() =
         context.forgePreferences.edit { it[PreferenceKeys.AVATAR_EDIT_HINT_SHOWN] = true }
-    val userGoal: Flow<String> = pref { it[PreferenceKeys.USER_GOAL] ?: "" }
+    val userGoal: Flow<String> = pref { values(it).userGoal }
     suspend fun setUserGoal(goal: String) =
         context.forgePreferences.edit { it[PreferenceKeys.USER_GOAL] = goal }
 
     /** User's sex for bodyweight-relative strength standards: "male" | "female" | "" (unspecified). */
-    val userSex: Flow<String> = pref { it[PreferenceKeys.USER_SEX] ?: "" }
+    val userSex: Flow<String> = pref { values(it).userSex }
     suspend fun setUserSex(sex: String) =
         context.forgePreferences.edit { it[PreferenceKeys.USER_SEX] = sex }
 
@@ -1204,13 +1296,13 @@ class SettingsRepository @Inject constructor(
 
     /** "Go with the flow": no fixed program — the home surfaces freestyle logging instead of day
      *  cards. A seed program still exists; this flag only changes what the UI leads with. */
-    val freestyleMode: Flow<Boolean> = pref { it[PreferenceKeys.FREESTYLE_MODE] ?: false }
+    val freestyleMode: Flow<Boolean> = pref { values(it).freestyleMode }
     suspend fun setFreestyleMode(v: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.FREESTYLE_MODE] = v }
 
     /** Whether the Coach is surfaced (tab + banners). Defaults on; declined during onboarding for the
      *  no-plan / make-your-own modes hides it until re-enabled in Settings. */
-    val coachEnabled: Flow<Boolean> = pref { it[PreferenceKeys.COACH_ENABLED] ?: true }
+    val coachEnabled: Flow<Boolean> = pref { values(it).coachEnabled }
     suspend fun setCoachEnabled(v: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.COACH_ENABLED] = v }
 
@@ -1254,13 +1346,13 @@ class SettingsRepository @Inject constructor(
         context.forgePreferences.edit { it[PreferenceKeys.COACH_OFF_PASS_WEEK] = weekId }
 
     /** Training experience drives generation volume + difficulty filter (program-unlock Phase 4 / Phase 2). */
-    val programExperience: Flow<String> = pref { it[PreferenceKeys.PROGRAM_EXPERIENCE] ?: "intermediate" }
+    val programExperience: Flow<String> = pref { values(it).programExperience }
     suspend fun setProgramExperience(level: String) =
         context.forgePreferences.edit { it[PreferenceKeys.PROGRAM_EXPERIENCE] = level }
 
     // ─── Personalization & safety (program-unlock Phase 3) ────────────────────
     /** Flagged problem-area codes — generation steers around movements that stress them. */
-    val problemAreas: Flow<Set<String>> = pref { it[PreferenceKeys.PROBLEM_AREAS] ?: emptySet() }
+    val problemAreas: Flow<Set<String>> = pref { values(it).problemAreas }
     suspend fun toggleProblemArea(code: String, on: Boolean) =
         context.forgePreferences.edit { prefs ->
             val cur = prefs[PreferenceKeys.PROBLEM_AREAS] ?: emptySet()
@@ -1268,7 +1360,7 @@ class SettingsRepository @Inject constructor(
         }
 
     /** Priority muscle codes — granular emphasis (extra volume). */
-    val priorityMuscles: Flow<Set<String>> = pref { it[PreferenceKeys.PRIORITY_MUSCLES] ?: emptySet() }
+    val priorityMuscles: Flow<Set<String>> = pref { values(it).priorityMuscles }
     suspend fun togglePriorityMuscle(code: String, on: Boolean) =
         context.forgePreferences.edit { prefs ->
             val cur = prefs[PreferenceKeys.PRIORITY_MUSCLES] ?: emptySet()
@@ -1276,7 +1368,7 @@ class SettingsRepository @Inject constructor(
         }
 
     /** Pinned exercise ids — kept across regenerations when their muscle is trained. */
-    val pinnedExercises: Flow<Set<String>> = pref { it[PreferenceKeys.PINNED_EXERCISES] ?: emptySet() }
+    val pinnedExercises: Flow<Set<String>> = pref { values(it).pinnedExercises }
     suspend fun togglePinned(libId: String, on: Boolean) =
         context.forgePreferences.edit { prefs ->
             val cur = prefs[PreferenceKeys.PINNED_EXERCISES] ?: emptySet()

@@ -197,7 +197,7 @@ private fun PlanSection(state: SettingsUiState, vm: SettingsViewModel) {
     SettingsGroup("Days per week", footer = "Your split follows the count, and it sets your weekly target on Home.") {
         SettingsGroupBlock(padding = PaddingValues(12.dp)) {
             SettingsSegmented(
-                options = (1..7).map { "$it" },
+                options = DAY_COUNT_OPTIONS,
                 selectedIndex = state.daysPerWeek - 1,
                 onSelect = { vm.setDaysPerWeek(it + 1) },
                 contentDescription = "Days per week"
@@ -253,6 +253,9 @@ private fun PlanSection(state: SettingsUiState, vm: SettingsViewModel) {
         }
     }
 }
+
+/** "1".."7", built once: the segmented control keys its label measurements on this list. */
+private val DAY_COUNT_OPTIONS = (1..7).map { "$it" }
 
 private val WEEKDAYS = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 

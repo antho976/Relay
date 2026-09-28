@@ -120,6 +120,7 @@ class DayListViewModel @Inject constructor(
         }
 
         DayListUiState(
+            loaded = true,
             days = Program.days.map { plan ->
                 DayListItem(
                     plan = plan,

@@ -2,7 +2,9 @@ package com.forge.app.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.DeleteForever
@@ -13,6 +15,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.AnnotatedString
@@ -44,11 +47,28 @@ internal fun MainList(
     onResetTarget: (ResetTarget) -> Unit,
     onOpenResetMenu: () -> Unit
 ) {
+    // Built once per query rather than on every recomposition, and holding targets rather than
+    // lambdas so a fresh callback from the caller never invalidates it.
+    val q = searchQuery.trim()
+    val results = remember(q, state.freestyleMode) {
+        if (q.isEmpty()) emptyList() else searchHits(q.lowercase(), state.freestyleMode)
+    }
+    val openResult: (SearchResult) -> Unit = { r ->
+        when (r.action) {
+            null -> r.page?.let(onOpenPage)
+            SearchAction.DATA -> onOpenDataDialog()
+            SearchAction.IMPORT -> onImportData()
+            SearchAction.RESET -> onOpenResetMenu()
+            SearchAction.COACH -> onOpenCoachBrief()
+        }
+    }
     SettingsLazyScaffold(
         title = "Settings",
         onBack = onBack,
         listState = listState,
-        verticalArrangement = Arrangement.spacedBy(KitGroupSpacing)
+        // The hits are one lazy item each, 2dp apart like a group's rows, so while searching the
+        // group spacing is placed by hand instead of between every item.
+        verticalArrangement = if (searchQuery.isBlank()) Arrangement.spacedBy(KitGroupSpacing) else Arrangement.Top
     ) {
         item("search") { SettingsSearchBar(searchQuery, "Search settings", onSearchChange) }
         if (searchQuery.isBlank()) {
@@ -104,42 +124,11 @@ internal fun MainList(
                 }
             }
         } else {
-            // One flat, ranked list: name-prefix hits first, then name substrings, then tag-only
-            // matches, each tapping straight through to where the setting lives.
-            val q = searchQuery.trim()
-            val ql = q.lowercase()
-            val results = buildList {
-                PAGE_ENTRIES.forEach { pe ->
-                    if (ql in pe.page.title.lowercase() || ql in pe.tags) {
-                        add(SearchResult(pe.page.title, pageSection(pe.page), pageGlyph(pe.page), searchRank(pe.page.title, ql)) {
-                            onOpenPage(pe.page)
-                        })
-                    }
-                }
-                ALL_ITEMS.forEach { item ->
-                    if (ql in item.name.lowercase() || ql in item.tags) {
-                        add(SearchResult(item.name, item.page.title, pageGlyph(item.page), searchRank(item.name, ql)) {
-                            onOpenPage(item.page)
-                        })
-                    }
-                }
-                ACTION_ENTRIES.forEach { e ->
-                    val hidden = e.action == SearchAction.COACH && state.freestyleMode
-                    if (!hidden && (ql in e.name.lowercase() || ql in e.tags)) {
-                        val onClick: () -> Unit = when (e.action) {
-                            SearchAction.DATA -> onOpenDataDialog
-                            SearchAction.IMPORT -> onImportData
-                            SearchAction.RESET -> onOpenResetMenu
-                            SearchAction.COACH -> onOpenCoachBrief
-                        }
-                        add(SearchResult(e.name, e.where, actionGlyph(e.action), searchRank(e.name, ql), onClick))
-                    }
-                }
-            }.sortedWith(compareBy({ it.rank }, { it.name.lowercase() }))
-
+            // One flat, ranked list (see [searchHits]), each hit tapping straight through to where
+            // the setting lives.
             if (results.isEmpty()) {
                 item("empty") {
-                    SettingsGroup {
+                    SettingsGroup(modifier = Modifier.padding(top = KitGroupSpacing)) {
                         SettingsEmptyBlock(
                             Icons.Rounded.SearchOff,
                             "No settings match “$q”",
@@ -148,12 +137,16 @@ internal fun MainList(
                     }
                 }
             } else {
-                // One group: the hit list is short (a few dozen at most), and one container keeps
-                // the rows 2dp apart instead of a group's width apart.
-                item("results") {
-                    SettingsGroup("${results.size} ${if (results.size == 1) "result" else "results"}") {
-                        results.forEach { SearchResultRow(it, q) }
-                    }
+                // One lazy item per hit, shaped by position like a group's rows: a broad query can
+                // match dozens, and one item holding them all composed every row at once.
+                item("results", contentType = "results-header") {
+                    SettingsGroupHeader(
+                        "${results.size} ${if (results.size == 1) "result" else "results"}",
+                        Modifier.padding(top = KitGroupSpacing)
+                    )
+                }
+                itemsIndexed(results, key = { _, r -> r.key }, contentType = { _, _ -> "result" }) { i, r ->
+                    KitLazyRow(i, results.size) { SearchResultRow(r, q) { openResult(r) } }
                 }
             }
         }
@@ -166,14 +159,37 @@ private fun PageRow(page: SettingsPage, state: SettingsUiState, onOpenPage: (Set
     SettingsNavigationRow(page.title, rowSubtitle(page, state), pageGlyph(page)) { onOpenPage(page) }
 }
 
-/** One resolved search hit: its display fields, a leading glyph and where it goes. */
+/** One resolved search hit: its display fields, a leading glyph and where it goes ([page], or
+ *  [action] when it fires one). [key] is stable per entry across queries. */
 private class SearchResult(
+    val key: String,
     val name: String,
     val where: String,
     val glyph: ImageVector,
     val rank: Int,
-    val onClick: () -> Unit
+    val page: SettingsPage? = null,
+    val action: SearchAction? = null
 )
+
+/** Every hit for [ql] (lowercased), name-prefix hits first, then name substrings, then tag-only. */
+private fun searchHits(ql: String, freestyleMode: Boolean): List<SearchResult> = buildList {
+    PAGE_ENTRIES.forEachIndexed { i, pe ->
+        if (ql in pe.page.title.lowercase() || ql in pe.tags) {
+            add(SearchResult("page-$i", pe.page.title, pageSection(pe.page), pageGlyph(pe.page), searchRank(pe.page.title, ql), page = pe.page))
+        }
+    }
+    ALL_ITEMS.forEachIndexed { i, item ->
+        if (ql in item.name.lowercase() || ql in item.tags) {
+            add(SearchResult("item-$i", item.name, item.page.title, pageGlyph(item.page), searchRank(item.name, ql), page = item.page))
+        }
+    }
+    ACTION_ENTRIES.forEachIndexed { i, e ->
+        val hidden = e.action == SearchAction.COACH && freestyleMode
+        if (!hidden && (ql in e.name.lowercase() || ql in e.tags)) {
+            add(SearchResult("action-$i", e.name, e.where, actionGlyph(e.action), searchRank(e.name, ql), action = e.action))
+        }
+    }
+}.sortedWith(compareBy({ it.rank }, { it.name.lowercase() }))
 
 /** Relevance: name-prefix (0) beats a name substring (1) beats a tag-only match (2). */
 private fun searchRank(name: String, ql: String): Int {
@@ -234,8 +250,8 @@ private fun highlightMatch(name: String, query: String): AnnotatedString = build
 
 /** A search hit: the page glyph, the name with its matched span bold, and where it lives. */
 @Composable
-private fun SearchResultRow(result: SearchResult, query: String) {
-    SettingsRowContainer(interaction = Modifier.clickableLabeled(result.name, onClick = result.onClick)) {
+private fun SearchResultRow(result: SearchResult, query: String, onClick: () -> Unit) {
+    SettingsRowContainer(interaction = Modifier.clickableLabeled(result.name, onClick = onClick)) {
         SettingsIconTile(result.glyph)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(highlightMatch(result.name, query), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)

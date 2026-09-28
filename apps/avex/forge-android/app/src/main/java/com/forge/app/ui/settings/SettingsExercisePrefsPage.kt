@@ -66,6 +66,13 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, on
     val nothingMatches = visibleByMuscle.isEmpty() && visibleCustom.isEmpty()
     val muscles = remember(allByMuscle) { allByMuscle.keys.toList() }
 
+    // Read once here so the item lambdas below capture these, not the whole state: a change to any
+    // other setting then leaves the rows alone.
+    val liked = state.liked
+    val disliked = state.disliked
+    val swapPrompt = state.swapDislikePromptEnabled
+    val hasCustom = state.customExercises.isNotEmpty()
+
     SettingsLazyScaffold("Exercise likes", onBack) {
         item("search") { SettingsSearchBar(query, "Search exercises", { query = it }) }
         item("filters") {
@@ -82,7 +89,7 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, on
                         add("All exercises")
                         add("Your gear")
                         addAll(muscles.map { it.displayName.sentenceCase() })
-                        if (state.customExercises.isNotEmpty()) add("Custom")
+                        if (hasCustom) add("Custom")
                     },
                     selectedIndex = when (val s = scope) {
                         PrefScope.All -> 0
@@ -125,25 +132,25 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, on
             // end of a list that can run to several hundred rows.
             SettingsGroup(
                 modifier = Modifier.padding(top = 20.dp),
-                footer = if (state.liked.isEmpty() && state.disliked.isEmpty()) "Tap any exercise to prefer or hide it. Preferred moves come up more; hidden ones never do."
-                         else "${state.liked.size} preferred · ${state.disliked.size} hidden. Tap any exercise to change it."
+                footer = if (liked.isEmpty() && disliked.isEmpty()) "Tap any exercise to prefer or hide it. Preferred moves come up more; hidden ones never do."
+                         else "${liked.size} preferred · ${disliked.size} hidden. Tap any exercise to change it."
             ) {
                 SettingsSwitchRow(
                     "Ask to hide after swapping",
                     "After a Make default swap, offer to hide the old exercise",
-                    state.swapDislikePromptEnabled,
+                    swapPrompt,
                     onCheckedChange = { vm.setSwapDislikePromptEnabled(it) }
                 )
             }
         }
         visibleByMuscle.forEach { (m, defs) ->
-            item("hdr-${m.code}") {
-                val likedN = defs.count { it.id in state.liked }
-                val dislikedN = defs.count { it.id in state.disliked }
+            item("hdr-${m.code}", contentType = "header") {
+                val likedN = defs.count { it.id in liked }
+                val dislikedN = defs.count { it.id in disliked }
                 SettingsGroupHeader(m.displayName.sentenceCase(), Modifier.padding(top = KitGroupSpacing), trailing = prefSummary(likedN, dislikedN, defs.size))
             }
-            itemsIndexed(defs, key = { _, def -> "lib-${def.id}" }) { i, def ->
-                val pref = prefOf(def.id in state.liked, def.id in state.disliked)
+            itemsIndexed(defs, key = { _, def -> "lib-${def.id}" }, contentType = { _, _ -> "pref-row" }) { i, def ->
+                val pref = prefOf(def.id in liked, def.id in disliked)
                 KitLazyRow(i, defs.size) {
                     ExercisePrefRow(
                         name = def.name,
@@ -156,7 +163,7 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, on
             }
         }
         if (visibleCustom.isNotEmpty()) {
-            item("hdr-custom") {
+            item("hdr-custom", contentType = "header") {
                 SettingsGroupHeader(
                     "Custom",
                     Modifier.padding(top = KitGroupSpacing),
@@ -165,10 +172,10 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, on
             }
             // Group id-sets are disjoint, so the smallest id is a unique, stable per-group key
             // (name+muscle could collide on malformed data and crash the list).
-            itemsIndexed(visibleCustom, key = { _, ref -> "cus-${ref.ids.minOrNull()}" }) { i, ref ->
+            itemsIndexed(visibleCustom, key = { _, ref -> "cus-${ref.ids.minOrNull()}" }, contentType = { _, _ -> "pref-row" }) { i, ref ->
                 val pref = prefOf(
-                    liked = ref.ids.any { it in state.liked },
-                    disliked = ref.ids.any { it in state.disliked }
+                    liked = ref.ids.any { it in liked },
+                    disliked = ref.ids.any { it in disliked }
                 )
                 KitLazyRow(i, visibleCustom.size) {
                     ExercisePrefRow(

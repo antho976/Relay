@@ -145,7 +145,10 @@ private fun TrainTab(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        if (state.days.isEmpty()) {
+        if (!state.loaded) {
+            // Nothing until the first read lands: the empty-plan copy and its CTA flashed on every
+            // open, before the plan they said was missing appeared.
+        } else if (state.days.isEmpty()) {
             if (state.freestyleMode) {
                 // Freestyle: no plan by design — lead with logging, not a "build a plan" push.
                 Text(
