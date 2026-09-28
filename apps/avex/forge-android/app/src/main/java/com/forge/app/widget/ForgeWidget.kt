@@ -141,7 +141,7 @@ class ForgeWidget : GlanceAppWidget() {
         val amoled = settings.amoledMode.first()
         // Accent off ⇒ the widget goes monochrome too (near-white highlight), matching the app.
         val accentArgb = if (!settings.accentEnabled.first()) PearlOnBg.toArgb()
-            else settings.accentColorHex.first().takeIf { it.isNotBlank() }
+            else settings.effectiveAccentHex.first().takeIf { it.isNotBlank() }
                 ?.let { runCatching { android.graphics.Color.parseColor(it) }.getOrNull() }
                 ?: AccentRed.toArgb()
         val bgArgb = if (amoled) android.graphics.Color.BLACK else PearlBackground.toArgb()

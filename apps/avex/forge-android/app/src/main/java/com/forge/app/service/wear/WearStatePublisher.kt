@@ -109,7 +109,7 @@ class WearStatePublisher @Inject constructor(
         }
         scope.launch {
             combine(
-                settingsRepo.accentColorHex,
+                settingsRepo.effectiveAccentHex,
                 settingsRepo.accentEnabled,
                 settingsRepo.weightUnit
             ) { hex, enabled, unit: WeightUnit ->

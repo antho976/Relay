@@ -29,7 +29,7 @@ enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
         listOf(
             PreferenceKeys.AMOLED_MODE, PreferenceKeys.COMPACT_SET_LOGGING,
             PreferenceKeys.ACCENT_COLOR_HEX, PreferenceKeys.ACCENT_ENABLED, PreferenceKeys.FONT_CHOICE,
-            PreferenceKeys.THEMED_LAUNCH_INTRO
+            PreferenceKeys.THEMED_LAUNCH_INTRO, PreferenceKeys.ACCENT_FROM_ICON
             // APP_ICON is deliberately excluded — the enabled activity-alias is the real state, so
             // clearing the pref alone would desync the ringed choice from the on-device icon.
         )
@@ -576,6 +576,22 @@ class SettingsRepository @Inject constructor(
     val themedLaunchIntro: Flow<Boolean> = pref { it[PreferenceKeys.THEMED_LAUNCH_INTRO] ?: false }
     suspend fun setThemedLaunchIntro(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.THEMED_LAUNCH_INTRO] = value }
+
+    /** Accent follows the launcher icon's colour (default off) — see [effectiveAccentHex]. */
+    val accentFromIcon: Flow<Boolean> = pref { it[PreferenceKeys.ACCENT_FROM_ICON] ?: false }
+    suspend fun setAccentFromIcon(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.ACCENT_FROM_ICON] = value }
+
+    /**
+     * The accent everything should actually paint with: the chosen icon's colour when "match accent
+     * to icon" is on and the icon has one, else the picked [accentColorHex] ("" = the default red).
+     * The theme, the widget and the watch all read this one, so they can't disagree.
+     */
+    val effectiveAccentHex: Flow<String> = pref { prefs ->
+        val picked = prefs[PreferenceKeys.ACCENT_COLOR_HEX] ?: ""
+        if (prefs[PreferenceKeys.ACCENT_FROM_ICON] != true) picked
+        else com.forge.app.appicon.AppIcon.fromKey(prefs[PreferenceKeys.APP_ICON] ?: "").accentHex ?: picked
+    }
 
     val fontChoice: Flow<String> = pref { it[PreferenceKeys.FONT_CHOICE] ?: "default" }
 

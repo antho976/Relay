@@ -180,6 +180,9 @@ object PreferenceKeys {
     /** When ON, the cold-launch intro themes the Avex wordmark to the chosen app icon's
      *  family (sheen/crystals/aurora/melt/…). OFF (default) plays the plain black-and-white Avex settle instead. */
     val THEMED_LAUNCH_INTRO = booleanPreferencesKey("themed_launch_intro")
+    /** When ON, the app's accent follows the chosen launcher icon's colour instead of the picked
+     *  [ACCENT_COLOR_HEX] (which is kept, and comes back when this is turned off). Default off. */
+    val ACCENT_FROM_ICON = booleanPreferencesKey("accent_from_icon")
 
     // ─── Locale (#116) ────────────────────────────────────────────────────────
     /** "MM/dd/yyyy" or "dd/MM/yyyy" */

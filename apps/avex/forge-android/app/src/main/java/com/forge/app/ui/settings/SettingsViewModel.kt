@@ -72,6 +72,8 @@ data class SettingsUiState(
     val appIconKey: String = "",
     /** Theme the cold-launch Avex intro to the chosen app icon (default off); off = plain B&W Avex. */
     val themedLaunchIntro: Boolean = false,
+    /** Accent follows the launcher icon's colour (when the icon has one). */
+    val accentFromIcon: Boolean = false,
     val timezone: String = java.util.TimeZone.getDefault().id,
     /** IANA zone ids the user has starred — pinned to the top of the timezone picker. */
     val favoriteTimezones: Set<String> = emptySet(),
@@ -313,6 +315,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(appIconKey = v)
     }.combine(settingsRepo.themedLaunchIntro) { s, v ->
         s.copy(themedLaunchIntro = v)
+    }.combine(settingsRepo.accentFromIcon) { s, v ->
+        s.copy(accentFromIcon = v)
     }.combine(settingsRepo.timezone) { s, v ->
         s.copy(timezone = v)
     }.combine(settingsRepo.favoriteTimezones) { s, v ->
@@ -569,6 +573,7 @@ class SettingsViewModel @Inject constructor(
     }
     fun setAccentColorHex(hex: String) = write { settingsRepo.setAccentColorHex(hex) }
     fun setAccentEnabled(enabled: Boolean) = write { settingsRepo.setAccentEnabled(enabled) }
+    fun setAccentFromIcon(enabled: Boolean) = write { settingsRepo.setAccentFromIcon(enabled) }
 
     /** Persist the pick, which rings it in the picker immediately. The actual launcher-alias swap is
      *  deferred to a user-initiated app-background by [com.forge.app.MainActivity]'s onStop (gated on
