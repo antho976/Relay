@@ -32,14 +32,14 @@ class ExerciseBrowserViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
     private val _recent = MutableStateFlow<List<ExerciseDef>>(emptyList())
-    /** Most-performed moves over the last 90 days, resolved to library defs (top [RECENT_LIMIT]). */
+    /** Most-performed moves over the last 90 days, resolved to library or custom defs (top [RECENT_LIMIT]). */
     val recent: StateFlow<List<ExerciseDef>> = _recent.asStateFlow()
 
     init {
         viewModelScope.launch {
             val since = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(RECENT_WINDOW_DAYS)
             _recent.value = loggedExerciseDao.frequencySince(since)
-                .mapNotNull { ExerciseLibrary.byId(it.exerciseId) }
+                .mapNotNull { ExerciseLibrary.byId(it.exerciseId) ?: customBrowserDef(it.exerciseId) }
                 .filter { !it.curatedOnly }
                 .take(RECENT_LIMIT)
         }

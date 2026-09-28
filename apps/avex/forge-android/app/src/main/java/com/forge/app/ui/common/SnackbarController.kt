@@ -46,6 +46,15 @@ class SnackbarController @Inject constructor(private val clock: Clock) {
     )
 
     private val ids = AtomicLong()
+
+    /**
+     * Stretches the undo window to the user's system "Time to take action" setting. The host installs
+     * it (it has a Context; this singleton does not), and it is applied when an event is POSTED so the
+     * window is fixed for the event's life. The delete is already committed, so an Undo that expires
+     * before someone who asked for more time can reach it is data lost for good. Identity until a host
+     * has installed one.
+     */
+    @Volatile var windowAdjuster: (Long) -> Long = { it }
     private val _current = MutableStateFlow<Event?>(null)
 
     /** The event on screen (or waiting for a host to draw it); null when nothing is live. */
@@ -65,7 +74,7 @@ class SnackbarController @Inject constructor(private val clock: Clock) {
             message = message,
             actionLabel = actionLabel,
             onAction = onAction,
-            expiresAtMs = clock.nowMs() + WINDOW_MS
+            expiresAtMs = clock.nowMs() + windowAdjuster(WINDOW_MS).coerceAtLeast(WINDOW_MS)
         )
     }
 

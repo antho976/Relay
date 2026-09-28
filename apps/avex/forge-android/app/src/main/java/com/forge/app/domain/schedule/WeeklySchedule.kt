@@ -48,19 +48,46 @@ object WeeklySchedule {
      * Carry a weekday schedule over to a regenerated program whose day keys may differ.
      *
      * A schedule whose days all still exist is kept exactly as it is (rest slots and deliberately
-     * unscheduled days included). Otherwise the user's training weekdays
+     * unscheduled days included) — except that when the program GREW, so days that were not in the
+     * replaced program ([oldKeys]) now exist (2 to 3 days, 6 to 7), those are laid onto free weekdays,
+     * as far from the trained ones as possible. Their old keys are all still valid, so without this
+     * the new day sat on no weekday and was never suggested. Only genuinely new keys are placed: a
+     * day the old program already had and the user left off stays off, so a same-keys regenerate
+     * (rotation, deload, restore) keeps the schedule exactly. A schedule that repeats a day is a
+     * deliberate arrangement and is left alone. Otherwise the user's training weekdays
      * are kept and the new days are laid onto them in order — so a 4-day Mon/Tue/Thu/Fri lifter who
      * regenerates stays on Mon/Tue/Thu/Fri. Only when the day count changed (the old weekdays can't
      * hold the new week) does it fall back to [defaultFor]. Before this, a regenerate with a new
      * split left every slot naming a day that no longer existed, and the schedule silently stopped
      * resolving.
      */
-    fun remap(old: List<String>, newKeys: List<String>): List<String> {
+    fun remap(old: List<String>, newKeys: List<String>, oldKeys: Collection<String>): List<String> {
         val scheduled = old.filter { it.isNotBlank() }
         val valid = newKeys.toSet()
-        if (scheduled.all { it in valid }) return parse(encode(old))
+        if (scheduled.all { it in valid }) {
+            val kept = parse(encode(old))
+            val previous = oldKeys.toSet()
+            val missing = newKeys.filter { it !in scheduled && it !in previous }
+            if (scheduled.isEmpty() || missing.isEmpty() || scheduled.toSet().size != scheduled.size) return kept
+            return layOntoFreeWeekdays(kept, missing)
+        }
         val weekdays = old.indices.filter { old[it].isNotBlank() }
         return if (weekdays.size == newKeys.size) fromWeekdays(weekdays, newKeys) else defaultFor(newKeys)
+    }
+
+    /** Place each of [keys] on the free weekday farthest (circularly) from the occupied ones; ties take the earliest. */
+    private fun layOntoFreeWeekdays(slots: List<String>, keys: List<String>): List<String> {
+        val result = slots.toMutableList()
+        for (key in keys) {
+            val free = result.indices.filter { result[it].isBlank() }
+            if (free.isEmpty()) break
+            val occupied = result.indices.filter { result[it].isNotBlank() }
+            val best = free.maxByOrNull { wd ->
+                occupied.minOf { o -> minOf((wd - o + SLOTS) % SLOTS, (o - wd + SLOTS) % SLOTS) }
+            } ?: break
+            result[best] = key
+        }
+        return result
     }
 
     /** Spread sessions across the week, with intervening rest days for full-body plans. */

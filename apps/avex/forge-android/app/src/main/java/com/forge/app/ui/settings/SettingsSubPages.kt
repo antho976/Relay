@@ -1,10 +1,7 @@
 @file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.forge.app.ui.settings
 
-import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
@@ -288,17 +285,18 @@ internal fun SettingsResetGroup(section: SettingsSection, vm: SettingsViewModel)
 }
 
 /**
- * Whether Android is blocking Avex's notifications (Android 13+ permission denied). Every phone
+ * Whether Android is blocking Avex's notifications (the Android 13+ permission denied, or blocked in system settings). Every phone
  * alert on the Notifications page is inert until it is granted, so the page shows why and turns
  * those rows off with their values kept. Re-checked on resume, so it clears the moment someone
  * comes back from system settings with notifications on.
  */
 @Composable
 private fun rememberNotificationsBlocked(): Boolean {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    fun granted() = context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    // Also covers Android 8-12, where there is no runtime permission but the user can still block
+    // Avex's notifications in system settings.
+    fun granted() = com.forge.app.data.repo.NotificationFeed.osNotificationsEnabled(context)
     var blocked by remember { mutableStateOf(!granted()) }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->

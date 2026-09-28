@@ -232,7 +232,8 @@ private fun ExerciseDrillRow(
 
 /**
  * RPE for the whole session, merged into one card: pick an exercise from the dropdown and see its
- * per-set RPE (in this card's bars/line style). Only exercises that actually logged an RPE appear.
+ * per-set RPE (in this card's bars/line style). Every logged exercise stays listed, so this lens
+ * never hides what was done (SessionDetailAuditRegressionTest); it opens on one that was rated.
  */
 @Composable
 internal fun RpeExerciseCard(
@@ -249,7 +250,12 @@ internal fun RpeExerciseCard(
     val loggedExercises = remember(exercises) { exercises.filter { it.sets.isNotEmpty() } }
     val names = remember(loggedExercises) { loggedExercises.map { it.name } }
     // Track the selection by name so it survives a reorder; fall back to the first if it vanishes.
-    var selectedName by rememberSaveable { mutableStateOf(loggedExercises.firstOrNull()?.name.orEmpty()) }
+    var selectedName by rememberSaveable {
+        mutableStateOf(
+            (loggedExercises.firstOrNull { ex -> ex.sets.any { it.rpe != null } } ?: loggedExercises.firstOrNull())
+                ?.name.orEmpty()
+        )
+    }
     MetricCardShell("RPE", style, onStyle, onBg, muted, accent, outline) {
         if (loggedExercises.isEmpty()) {
             Text(
@@ -267,9 +273,13 @@ internal fun RpeExerciseCard(
             onBg = onBg, muted = muted, outline = outline
         )
         val rated = ex.sets.count { it.rpe != null }
+        if (rated == 0) {
+            // The chart below would only repeat this line for an unrated exercise.
+            Text("No RPE logged for this exercise.", style = MaterialTheme.typography.labelMedium, color = muted)
+            return@MetricCardShell
+        }
         Text(
-            if (rated == 0) "No RPE logged for this exercise."
-            else "Avg RPE ${rpeLabel(ex.avgRpe)} · $rated ${if (rated == 1) "set" else "sets"} rated",
+            "Avg RPE ${rpeLabel(ex.avgRpe)} · $rated ${if (rated == 1) "set" else "sets"} rated",
             style = MaterialTheme.typography.labelMedium, color = muted
         )
         ExerciseDetailBody(ex, SessionMetric.RPE, style, onBg, muted, accent, outline)

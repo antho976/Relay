@@ -25,20 +25,42 @@ class WeeklyScheduleRemapTest {
     fun aScheduleThatStillResolvesIsKeptExactly() {
         // Same workout twice a week and a deliberately unscheduled day both survive.
         val old = listOf("upper-a", "", "lower-a", "", "upper-a", "", "")
-        assertEquals(old, WeeklySchedule.remap(old, four))
+        assertEquals(old, WeeklySchedule.remap(old, four, four))
     }
 
     @Test
     fun aNewSplitWithTheSameCountKeepsTheWeekdays() {
         val old = listOf("push", "pull", "", "legs", "upper", "", "")
-        val s = WeeklySchedule.remap(old, four)
+        val s = WeeklySchedule.remap(old, four, listOf("push", "pull", "legs", "upper"))
         assertEquals(listOf("upper-a", "lower-a", "", "upper-b", "lower-b", "", ""), s)
     }
 
     @Test
     fun aDifferentCountFallsBackToTheDefaultSpread() {
         val old = listOf("fb-a", "", "fb-b", "", "fb-c", "", "")
-        assertEquals(WeeklySchedule.defaultFor(four), WeeklySchedule.remap(old, four))
+        assertEquals(WeeklySchedule.defaultFor(four), WeeklySchedule.remap(old, four, listOf("fb-a", "fb-b", "fb-c")))
+    }
+
+    @Test
+    fun aGrownProgramGetsItsNewDayOnAFreeWeekday() {
+        // Mon/Thu 2-day lifter goes to 3 days: fb-a and fb-b are still valid, fb-c must not be left off.
+        val old = listOf("fb-a", "", "", "fb-b", "", "", "")
+        val s = WeeklySchedule.remap(old, listOf("fb-a", "fb-b", "fb-c"), listOf("fb-a", "fb-b"))
+        assertEquals(listOf("fb-a", "", "", "fb-b", "", "fb-c", ""), s)
+    }
+
+    @Test
+    fun aSixToSevenGrowthFillsTheLastFreeWeekday() {
+        val six = listOf("push-a", "pull-a", "legs-a", "push-b", "pull-b", "legs-b", "")
+        val s = WeeklySchedule.remap(six, six.take(6) + "core-calves", six.take(6))
+        assertEquals(six.take(6) + "core-calves", s)
+    }
+
+    @Test
+    fun aSameKeysRegenerateKeepsADeliberatelyUnscheduledDayOff() {
+        // Rotation / deload / restore regenerate the same four days; lower-b was left off on purpose.
+        val old = listOf("upper-a", "", "lower-a", "", "upper-b", "", "")
+        assertEquals(old, WeeklySchedule.remap(old, four, four))
     }
 
     @Test

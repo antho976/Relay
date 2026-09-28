@@ -60,20 +60,25 @@ internal fun buildVolumeDeloadTrend(
 
 /**
  * Weekly tonnage: per-session volume points bucketed into ISO weeks, oldest → newest.
- * A week reads as deload when any session in it was deload-marked.
+ * A week reads as deload when any session in it was deload-marked. The week containing
+ * [excludeWeekOf] (the in-progress one) is dropped when given.
  */
 internal fun buildWeeklyTonnage(
     points: List<VolumeDeloadPoint>,
     zone: java.time.ZoneId = java.time.ZoneId.systemDefault(),
-    maxWeeks: Int = 12
+    maxWeeks: Int = 12,
+    excludeWeekOf: java.time.LocalDate? = null
 ): List<WeeklyTonnage> {
     if (points.isEmpty()) return emptyList()
+    val excludeFrom = excludeWeekOf?.let { it.minusDays(it.dayOfWeek.value.toLong() - 1) }
     return points
         .groupBy { p ->
             val d = java.time.Instant.ofEpochMilli(p.sessionDate).atZone(zone).toLocalDate()
             d.minusDays(d.dayOfWeek.value.toLong() - 1)
         }
         .entries
+        // [excludeWeekOf] is the unfinished week: its partial total isn't comparable to full weeks.
+        .filter { excludeFrom == null || it.key < excludeFrom }
         .sortedBy { it.key }
         .takeLast(maxWeeks)
         .map { (weekStart, ps) ->

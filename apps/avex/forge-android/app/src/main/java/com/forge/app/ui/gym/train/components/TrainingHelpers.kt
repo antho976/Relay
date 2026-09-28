@@ -80,7 +80,9 @@ fun WarmupSuggesterDialog(
     muscleAlreadyWarm: Boolean,
     workingWeightLb: Double?,
     weightUnit: com.forge.app.domain.units.WeightUnit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** Empty-bar weight in stored pounds for a barbell movement (see [WarmupEngine.barLoadFor]); null = no floor. */
+    barLoadLb: Double? = null
 ) {
     val isPlates = unit == ExerciseUnit.PLATES
     val plateLb = LocalForgeSettings.current.plateWeightLb
@@ -94,7 +96,7 @@ fun WarmupSuggesterDialog(
     val typed = input.toDoubleOrNull()
     val workingStored = typed?.let { if (isPlates) it else fromDisplayWeight(it, weightUnit) }
 
-    val ramp = remember(workingStored, unit, isCompound, targetReps, muscleAlreadyWarm, weightUnit) {
+    val ramp = remember(workingStored, unit, isCompound, targetReps, muscleAlreadyWarm, weightUnit, barLoadLb) {
         if (workingStored == null || workingStored <= 0.0) emptyList()
         else WarmupEngine.rampFor(
             WarmupExercise(
@@ -105,7 +107,8 @@ fun WarmupSuggesterDialog(
                 isCompound = isCompound,
                 workingLoad = workingStored,
                 targetReps = targetReps,
-                loadStep = WarmupEngine.loadIncrement(unit, weightUnit.isMetric)
+                loadStep = WarmupEngine.loadIncrement(unit, weightUnit.isMetric),
+                barLoad = barLoadLb
             ),
             alreadyWarm = muscleAlreadyWarm
         )

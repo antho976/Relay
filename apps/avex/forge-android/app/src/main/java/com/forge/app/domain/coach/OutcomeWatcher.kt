@@ -82,8 +82,12 @@ object OutcomeWatcher {
         }
         when (d.type) {
             "swap" -> {
+                // History is filed by SLOT, so the bouts here include whatever the athlete trained in
+                // the slot — the original lift, or a third lift swapped in for one session. Only bouts
+                // of the swapped-in movement (d.payload) say anything about this change: training the
+                // old lift is not the rotation landing, and skipping a different lift is not avoiding it.
                 val boutsSince = s.exerciseHistory[d.targetKey].orEmpty()
-                    .filter { it.sessionStartedAt >= appliedAt }
+                    .filter { it.sessionStartedAt >= appliedAt && it.performedExerciseId == d.payload }
                 val skips = boutsSince.count { it.skipped }
                 when {
                     skips >= SKIP_FAIL_COUNT -> WatchVerdict(
@@ -117,8 +121,14 @@ object OutcomeWatcher {
                         // A rep-range shift is meant to break a stall — judge it on strength, not just
                         // attendance. Best e1RM since the change vs. the best before it: a slip below the
                         // tolerance means the shift didn't restart progress, so it owes a revert.
-                        val priorBest = all.filter { it.sessionStartedAt < appliedAt && !it.skipped }.bestE1rm()
-                        val sinceBest = boutsSince.filter { !it.skipped }.bestE1rm()
+                        //
+                        // Both sides are read on ONE lift: the one performed most recently since the change.
+                        // The slot's history spans any swap (H-06), so comparing a swapped-in dumbbell row
+                        // against the barbell row's old best reads as a slip that never happened.
+                        val lift = boutsSince.lastOrNull { !it.skipped }?.performedExerciseId
+                        val sameLift = all.filter { it.performedExerciseId == lift }
+                        val priorBest = sameLift.filter { it.sessionStartedAt < appliedAt && !it.skipped }.bestE1rm()
+                        val sinceBest = sameLift.filter { it.sessionStartedAt >= appliedAt && !it.skipped }.bestE1rm()
                         when {
                             // No post-change e1RM means the shifted range was never actually lifted
                             // under: nothing to judge, and nothing to earn trust on (audit M-08).

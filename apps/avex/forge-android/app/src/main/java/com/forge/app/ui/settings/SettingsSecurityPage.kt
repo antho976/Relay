@@ -86,5 +86,13 @@ internal fun authenticateSettingsAction(
     }
     val activity = host as? androidx.fragment.app.FragmentActivity ?: return onDenied()
     BiometricAuthenticator.authenticate(activity, subtitle,
-        onSuccess = { vm.protectionAuthenticated(); action() }, onError = { _, _ -> onDenied() })
+        onSuccess = { vm.protectionAuthenticated(); action() },
+        onError = { code, _ ->
+            // A cancel is self-evident; anything else (lockout, credential removed) needs saying.
+            if (code != androidx.biometric.BiometricPrompt.ERROR_USER_CANCELED &&
+                code != androidx.biometric.BiometricPrompt.ERROR_NEGATIVE_BUTTON &&
+                code != androidx.biometric.BiometricPrompt.ERROR_CANCELED
+            ) vm.reportAuthDenied()
+            onDenied()
+        })
 }

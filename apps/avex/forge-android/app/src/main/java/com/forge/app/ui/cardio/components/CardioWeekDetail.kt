@@ -123,7 +123,7 @@ internal fun CardioWeekDetail(
             }
 
             item("figures") {
-                val avgPace = pacePerUnit(agg.minutes, agg.distanceKm, useMiles)
+                val avgPace = pacePerUnit(agg.pacedMinutes, agg.distanceKm, useMiles)
                 val distUnit = distanceUnitLabel(useMiles)
                 // Honest zeros, never a dash and never hidden (§12).
                 val figures = buildList {

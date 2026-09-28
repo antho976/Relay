@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
+import com.forge.app.ui.gym.stats.components.rememberToday
 import com.forge.app.ui.gym.stats.state.DayLoad
 import com.forge.app.ui.gym.stats.state.RpeBucket
 import java.time.LocalDate
@@ -75,8 +76,9 @@ internal fun ColumnScope.RpeHistogramContent(buckets: List<RpeBucket>, avgRpe: D
 internal fun ColumnScope.BanisterContent(dailyActivity: List<DayLoad>, c: StatsColors) {
     if (dailyActivity.size < 5) return
     // The 182-day EWMA sweep is recomputed only when the data changes, not on every recomposition.
-    val series = remember(dailyActivity) {
-        val today = LocalDate.now().toEpochDay()
+    val todayDate = rememberToday()
+    val series = remember(dailyActivity, todayDate) {
+        val today = todayDate.toEpochDay()
         val start = today - 182 + 1
         val loadByDay = dailyActivity.associate { it.epochDay to it.volumeLb }
         // Normalized EWMA so fitness (slow) and fatigue (fast) share a load scale; form = fitness −

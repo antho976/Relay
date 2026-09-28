@@ -2,7 +2,6 @@ package com.forge.app.data.repo
 
 import com.forge.app.data.db.projections.SetWithExerciseAndSession
 import com.forge.app.domain.adapt.E1rm
-import com.forge.app.program.Program
 import com.forge.app.ui.gym.stats.state.DayLoad
 import com.forge.app.ui.gym.stats.state.RepWeightPoint
 import com.forge.app.ui.gym.stats.state.StrengthCurve
@@ -28,7 +27,7 @@ internal fun buildStrengthCurves(
         .groupBy { it.exerciseId }
         .mapNotNull { (id, sets) ->
             if (sets.size < minPoints) return@mapNotNull null
-            val name = Program.exercise(id)?.name ?: return@mapNotNull null
+            val name = liftDisplayName(id, sets) ?: return@mapNotNull null
             StrengthCurve(
                 exerciseId = id,
                 exerciseName = name,

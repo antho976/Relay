@@ -74,6 +74,20 @@ class WeeklyReviewTest {
     }
 
     @Test
+    fun aSwapToAHeavierLiftIsNotAPr() {
+        // The slot held a 60 lb row, then last week the coach rotated it to a 120 lb pulldown. History
+        // is filed by slot, but the pulldown's first bout is not beating the row's best.
+        val history = mapOf(
+            "ua1" to listOf(
+                bout(44, 60.0).copy(performedExerciseId = "row"),
+                bout(51, 120.0).copy(performedExerciseId = "pulldown")
+            )
+        )
+        val r = WeeklyReview.assemble(snapshot(emptyList(), history), weekStart, 4, hasDeloadShadow = false)
+        assertEquals(0, r.prsLastWeek)
+    }
+
+    @Test
     fun firstEverBoutIsNotAPr() {
         val history = mapOf("ua1" to listOf(bout(51, 45.0)))
         val r = WeeklyReview.assemble(snapshot(emptyList(), history), weekStart, 4, hasDeloadShadow = false)

@@ -49,6 +49,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -112,11 +114,13 @@ fun CoachScreen(
     // A deep link that used to open the Signals lens scrolls to the reading it meant, once, after
     // the first read lands: WHERE YOU STAND, then Signals under advanced tracking. Everything else
     // opens at the top of the account, and so does that link when nothing below the account reads.
+    // One-shot per link: the effect re-runs on rotation and whenever advanced tracking is toggled,
+    // and must not pull the reader back from wherever they have scrolled since.
+    var deepLinkHandled by rememberSaveable(entryPoint) { mutableStateOf(false) }
     LaunchedEffect(state.loading, state.advanced, entryPoint) {
-        if (!state.loading && (state.advanced || hasStanding(state)) &&
-            entryPoint == CoachEntryPoint.WHERE_YOU_STAND
-        ) {
-            listState.scrollToItem(accountItemCount(state))
+        if (!state.loading && !deepLinkHandled && entryPoint == CoachEntryPoint.WHERE_YOU_STAND) {
+            deepLinkHandled = true
+            if (state.advanced || hasStanding(state)) listState.scrollToItem(accountItemCount(state))
         }
     }
 

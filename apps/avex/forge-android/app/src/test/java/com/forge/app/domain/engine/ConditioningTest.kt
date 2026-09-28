@@ -117,10 +117,27 @@ class ConditioningTest {
 
     @Test
     fun interferenceIsBoundedAndOnlyFiresOnRealLoad() {
-        val light = listOf(cardio(0, 20, effort = "easy"))
-        val heavy = listOf(cardio(0, 60, effort = "hard"))
+        val light = listOf(cardio(1, 20, effort = "easy"))
+        val heavy = listOf(cardio(1, 60, effort = "hard"))
         assertEquals(0, ConditioningLoad.interferencePenalty(light, now))
         assertTrue(ConditioningLoad.interferencePenalty(heavy, now) in 1..2)
+    }
+
+    @Test
+    fun interferenceReadsYesterdayAndToday_byCalendarDay_notARolling24Hours() {
+        // Now is 18:00 on day 100 (UTC). A hard run at 07:00 yesterday is 35 h old but IS yesterday's
+        // load; the same run at 07:00 TODAY, before lifting, counts too. The day before yesterday
+        // does not, and nor does an entry logged for later today.
+        val evening = now + 18 * 60 * 60 * 1000
+        val hour = 60 * 60 * 1000L
+        val yesterdayMorning = listOf(cardio(1, 60, effort = "hard").copy(date = now - day + 7 * hour))
+        val todayMorning = listOf(cardio(0, 60, effort = "hard").copy(date = now + 7 * hour))
+        val twoDaysAgoEvening = listOf(cardio(2, 60, effort = "hard").copy(date = now - 2 * day + 20 * hour))
+        val laterToday = listOf(cardio(0, 60, effort = "hard").copy(date = now + 20 * hour))
+        assertTrue(ConditioningLoad.interferencePenalty(yesterdayMorning, evening) in 1..2)
+        assertTrue(ConditioningLoad.interferencePenalty(todayMorning, evening) in 1..2)
+        assertEquals(0, ConditioningLoad.interferencePenalty(twoDaysAgoEvening, evening))
+        assertEquals(0, ConditioningLoad.interferencePenalty(laterToday, evening))
     }
 
     @Test

@@ -177,7 +177,11 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { withContext(NonCancellable) { block() } }
 
     fun setCoachMode(mode: String) = write { settingsRepo.setCoachMode(mode) }
-    fun setCoachAdvanced(v: Boolean) = write { settingsRepo.setCoachAdvanced(v) }
+    fun setCoachAdvanced(v: Boolean) = write {
+        settingsRepo.setCoachAdvanced(v)
+        // Turning it on retires the Coach page's offer for good, as from the pop-up itself.
+        if (v) settingsRepo.setCoachAdvancedPromptAfter(Long.MAX_VALUE)
+    }
 
     // ─── Day-aware scheduling (weekly plan vs sequence) ───────────────────────
     val scheduleMode: StateFlow<String> = settingsRepo.scheduleMode
@@ -418,13 +422,21 @@ class SettingsViewModel @Inject constructor(
     // App / gallery lock (GYMAP-69). Enabling is gated on an available device credential in the UI
     // (Security page), so these persist the choice directly.
     fun protectionAuthenticated() = appLockManager.markAuthenticated()
+    /** A lock action was refused by the system prompt for a reason other than the user backing out
+     *  (lockout, no credential left): say so, or the switch just sits there doing nothing. */
+    fun reportAuthDenied() { _statusMessage.value = "Couldn't confirm it's you, so nothing changed. Check your phone's screen lock and try again." }
     fun setAppLockEnabled(v: Boolean) = write { protectedSettings.setAppLock(v) }
     fun setGalleryLockEnabled(v: Boolean) = write { protectedSettings.setGalleryLock(v) }
     fun setAppLockTimeoutSec(v: Int) = write { settingsRepo.setAppLockTimeoutSec(v) }
-    fun setAvailableEquipment(codes: Set<String>) = write {
-        settingsRepo.setAvailableEquipment(codes)
+    /** Flip one gear tile against the persisted set (quick taps can't overwrite each other). The last
+     *  piece can't be removed: an empty set would silently mean "all equipment" to the generator. */
+    fun toggleEquipment(code: String) = write {
         // Hand-editing the equipment set leaves any curated preset — drop the freeze.
-        settingsRepo.setFrozenExerciseIds(null)
+        if (settingsRepo.toggleAvailableEquipment(code)) {
+            settingsRepo.setFrozenExerciseIds(null)
+        } else {
+            _statusMessage.value = "Keep at least one. Pick Bodyweight only if you train without gear."
+        }
     }
     /** One-tap preset: fills the equipment set AND applies/clears its curated freeze together. */
     fun selectEquipmentPreset(preset: com.forge.app.program.EquipmentPreset) = write {
@@ -443,7 +455,7 @@ class SettingsViewModel @Inject constructor(
     /** All generation inputs read from prefs, through the one shared builder: a copy here left out
      *  personal caps, so Settings generated a different program than rotation and deload (audit
      *  2026-09-26, 08). */
-    private suspend fun buildParams(days: Int) = programRepository.currentParams(days)
+    private suspend fun buildParams(days: Int?) = programRepository.currentParams(days)
     private suspend fun currentEquipment(): Set<com.forge.app.program.Equipment> =
         settingsRepo.availableEquipment.first()
             .mapNotNull { runCatching { com.forge.app.program.Equipment.valueOf(it) }.getOrNull() }.toSet()
@@ -486,7 +498,10 @@ class SettingsViewModel @Inject constructor(
         val wasFreestyle = settingsRepo.freestyleMode.first()
         programChangeGuard.run {
             programRepository.reroll(
-                buildParams(settingsRepo.daysPerWeek.first()),
+                // "Same split" has to be true: null keeps the current plan's day count, since the
+                // staged days chip only takes effect through Generate. A freestyle user has no
+                // visible plan, so the chip is the only count they chose: build that.
+                buildParams(if (wasFreestyle) settingsRepo.daysPerWeek.first() else null),
                 currentEquipment(),
                 settingsRepo.likedExercises.first(),
                 settingsRepo.dislikedExercises.first()
@@ -506,12 +521,8 @@ class SettingsViewModel @Inject constructor(
     fun setMaxDbWeightLb(lb: Double?) = write { settingsRepo.setMaxDbWeightLb(lb) }
     fun setExperience(level: String) = write { settingsRepo.setProgramExperience(level) }
     fun setProgramEmphasis(v: String) = write { settingsRepo.setProgramEmphasis(v) }
-    fun toggleProblemArea(code: String) = write {
-        settingsRepo.toggleProblemArea(code, code !in settingsRepo.problemAreas.first())
-    }
-    fun togglePriorityMuscle(code: String) = write {
-        settingsRepo.togglePriorityMuscle(code, code !in settingsRepo.priorityMuscles.first())
-    }
+    fun toggleProblemArea(code: String) = write { settingsRepo.toggleProblemArea(code) }
+    fun togglePriorityMuscle(code: String) = write { settingsRepo.togglePriorityMuscle(code) }
     fun togglePin(libId: String) = write {
         settingsRepo.togglePinned(libId, libId !in settingsRepo.pinnedExercises.first())
     }
@@ -542,9 +553,9 @@ class SettingsViewModel @Inject constructor(
     fun generateDeloadWeek() = viewModelScope.launch {
         val wasFreestyle = settingsRepo.freestyleMode.first()
         programChangeGuard.run {
-            val days = settingsRepo.daysPerWeek.first()
             programRepository.generate(
-                buildParams(days).copy(deload = true),
+                // null: the CURRENT split's day count (keepPicks replays its seed), not the staged chip.
+                buildParams(null).copy(deload = true),
                 currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first(),
                 // Same movements at lighter volume — the seed of the program being deloaded.
                 keepPicks = true
@@ -951,14 +962,34 @@ class SettingsViewModel @Inject constructor(
             _statusMessage.value = "Couldn't set the backup password. Try again."
             return@launch
         }
-        // Re-seal the weekly slot and the folder copy under the new password. Skipped silently when
-        // the gallery lock is holding photos back; the weekly run protects them next time.
-        if (backupRepo.autoBackupSavedAtMs() != null && protectedSettings.canExportPhotos()) {
-            val folder = settingsRepo.backupFolderUri.first()?.let { android.net.Uri.parse(it) }
-            runCatching { backupRepo.autoBackup(folder) }
+        // Re-seal the weekly slot and the folder copy under the new password. Skipped when the
+        // gallery lock is holding photos back; the weekly run protects them next time.
+        val folder = settingsRepo.backupFolderUri.first()?.let { android.net.Uri.parse(it) }
+        val hasBackups = backupRepo.autoBackupSavedAtMs() != null
+        var resealed = false
+        var folderFailed = false
+        if (hasBackups && protectedSettings.canExportPhotos()) {
+            runCatching { backupRepo.autoBackupWithFolderStatus(folder) }
+                .onSuccess { resealed = true; folderFailed = it.folderFailed }
+                .onFailure { if (it is CancellationException) throw it }
             refreshAutoBackupInfo()
         }
-        _statusMessage.value = "Backups are now password-protected."
+        // Only the copy written just now is sealed; older generations, on this phone and in the
+        // picked folder, stay readable without the password until they rotate out. Say so.
+        val unprotected = runCatching { backupRepo.unprotectedBackupCopies(folder) }.getOrDefault(0)
+        _statusMessage.value = buildString {
+            append(
+                when {
+                    !hasBackups -> "Backups are now password-protected."
+                    resealed && !folderFailed -> "Backups are now password-protected."
+                    resealed -> "Your latest backup is password-protected, but the folder copy could not be updated."
+                    else -> "New backups will need the password."
+                }
+            )
+            if (unprotected > 0) {
+                append(" $unprotected saved ${if (unprotected == 1) "copy is" else "copies are"} still unprotected until newer backups replace ${if (unprotected == 1) "it" else "them"}.")
+            }
+        }
     }
 
     /** Stop protecting new backups. Ones already made keep needing their password. */
@@ -1016,8 +1047,13 @@ class SettingsViewModel @Inject constructor(
             return@launch
         }
         val folder = settingsRepo.backupFolderUri.first()?.let { android.net.Uri.parse(it) }
-        runCatching { backupRepo.autoBackup(folder) }
-            .onSuccess { _statusMessage.value = "Backed up."; refreshAutoBackupInfo() }
+        runCatching { backupRepo.autoBackupWithFolderStatus(folder) }
+            .onSuccess {
+                _statusMessage.value =
+                    if (it.folderFailed) "Saved on this phone, but the copy in your backup folder failed."
+                    else "Backed up."
+                refreshAutoBackupInfo()
+            }
             .onFailure {
                 if (it is CancellationException) throw it // see backupDatabase
                 _statusMessage.value = "Backup failed: ${it.message}"

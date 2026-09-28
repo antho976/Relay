@@ -122,7 +122,7 @@ internal fun LazyListScope.coachAccount(
                 .padding(horizontal = COACH_GUTTER)
                 .then(forgeItemMotion())
         ) {
-            DecisionEntry(d, now, c, onUndo)
+            DecisionEntry(d, now, c, onUndo, undoRefused = d.id in state.undoRefused)
         }
     }
 
@@ -199,6 +199,7 @@ internal fun LazyListScope.coachAccount(
     val past = state.timeline?.weeks
         .orEmpty()
         .filterNot { it.pass.weekId == brief?.pass?.weekId }
+        .map(::withoutShadowCalls)
         .filterNot { w ->
             w.decisions.isEmpty() && AutoCoachPlanner.isLearningHold(w.pass.holdReason)
         }
@@ -250,7 +251,7 @@ internal fun LazyListScope.coachAccount(
                             )
                             .padding(horizontal = COACH_GUTTER)
                     ) {
-                        DecisionEntry(d, now, c, onUndo)
+                        DecisionEntry(d, now, c, onUndo, undoRefused = d.id in state.undoRefused)
                     }
                 }
             }
@@ -280,7 +281,8 @@ private fun DecisionEntry(
     d: CoachDecision,
     now: Long,
     c: CoachColors,
-    onUndo: (Long) -> Unit
+    onUndo: (Long) -> Unit,
+    undoRefused: Boolean = false
 ) {
     val copy = callCopy(d)
     // Non-null exactly when this change is still inside its two-week window.
@@ -330,7 +332,8 @@ private fun DecisionEntry(
         // four of the five accent choices.
         // Undo is offered only while the change is still inside its undo window (stamped at apply
         // time). Rows applied before that stamp existed carry null and keep the old behaviour.
-        val undoable = d.status == CoachRepository.STATUS_APPLIED && d.undoData != null &&
+        // One the repository has just declined (window over, newer call owns the slot) is dead.
+        val undoable = !undoRefused && d.status == CoachRepository.STATUS_APPLIED && d.undoData != null &&
             (d.undoExpiresAt == null || now <= d.undoExpiresAt!!)
         if (undoable) {
             Spacer(Modifier.height(10.dp))
@@ -397,6 +400,7 @@ internal fun accountItemCount(state: CoachViewModel.UiState): Int {
     val past = state.timeline?.weeks
         .orEmpty()
         .filterNot { it.pass.weekId == brief?.pass?.weekId }
+        .map(::withoutShadowCalls)
         .filterNot { w -> w.decisions.isEmpty() && AutoCoachPlanner.isLearningHold(w.pass.holdReason) }
     val shown = past.take(RECORD_WEEKS)
     shown.forEach { week ->
@@ -407,6 +411,14 @@ internal fun accountItemCount(state: CoachViewModel.UiState): Int {
     if (past.size > shown.size) n += 1 // the "and N more weeks" line
     return n
 }
+
+/**
+ * A week the coach was switched off for records its would-be proposals as inert SHADOW rows: never
+ * proposed, never applied. They are observations, not calls, so the record does not list or count
+ * them; a week with only those reads as a week with none.
+ */
+private fun withoutShadowCalls(w: CoachRepository.CoachHistoryEntry): CoachRepository.CoachHistoryEntry =
+    w.copy(decisions = w.decisions.filterNot { it.status == CoachRepository.STATUS_SHADOW })
 
 /** The lifecycle a node draws. The stamp beside it carries the outcome, so neither repeats. */
 private fun entryNode(d: CoachDecision): EntryNode = when {

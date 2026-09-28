@@ -17,7 +17,7 @@ data class StatsUiState(
     val e1rmLifts: List<E1rmLift> = emptyList(),
     /** Per-exercise load-rep scatter + e1RM for the strength curve (Strength tab). */
     val strengthCurves: List<StrengthCurve> = emptyList(),
-    /** Working sets per muscle this ISO week (Volume tab). */
+    /** Working sets per muscle over the rolling last 7 days (Volume tab, hero map). */
     val weeklySetsByMuscle: List<MuscleSetCount> = emptyList(),
     /** Planned weekly sets per muscle from the active program (Volume tab). */
     val plannedSetsByMuscle: Map<MuscleGroup, Int> = emptyMap(),
@@ -143,7 +143,8 @@ data class PrRecord(
     val maxWeightLb: Double,
     val bestReps: Int,
     val sessionDate: Long,
-    val muscle: MuscleGroup,
+    /** Null for a lift the catalogue can't place (an unmatched import). */
+    val muscle: MuscleGroup?,
     /** Relative strength as multiple of bodyweight. Null if no bodyweight logged (#77). */
     val relativeStrength: Double? = null
 )

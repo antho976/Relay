@@ -137,7 +137,7 @@ fun ForgeNavHost(
         )
         if (routing !is com.forge.app.widget.WidgetRouting.Decided) return@LaunchedEffect
         when (val destination = routing.destination) {
-            is com.forge.app.widget.WidgetDestination.GymDay -> nav.navigate(Routes.gymDay(destination.dayKey))
+            is com.forge.app.widget.WidgetDestination.GymDay -> nav.navigateToGymDay(destination.dayKey)
             com.forge.app.widget.WidgetDestination.CardioTab -> {
                 nav.popBackStack(Routes.OVERVIEW, false)
                 pendingHubPage = BottomTab.CARDIO
@@ -363,7 +363,7 @@ fun ForgeNavHost(
                         pendingHubPage = BottomTab.CARDIO
                     } else {
                         nav.popBackStack()
-                        nav.navigate(Routes.gymDay(dayKey))
+                        nav.navigateToGymDay(dayKey)
                     }
                 },
                 onOpenCoachBrief = { nav.popBackStack(Routes.OVERVIEW, false); pendingHubPage = BottomTab.COACH },

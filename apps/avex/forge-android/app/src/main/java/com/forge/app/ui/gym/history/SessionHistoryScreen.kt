@@ -107,7 +107,7 @@ fun SessionHistoryScreen(
             Spacer(Modifier.height(18.dp))
             // ── Search: the filled rounded search row ──────────
             GymSearchRow(
-                query = state.query,
+                query = viewModel.queryText,
                 onQueryChange = viewModel::setQuery,
                 placeholder = "Search day, exercise or note",
                 modifier = Modifier.padding(horizontal = 24.dp)

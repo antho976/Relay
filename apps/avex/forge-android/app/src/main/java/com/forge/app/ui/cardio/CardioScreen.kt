@@ -153,6 +153,8 @@ fun CardioScreen(
             wearable = state.sessionWearable, // That day's watch steps (null until loaded / when none).
             wearableConnected = state.stepsConnected, // Show an empty placeholder once connected.
             hr = state.sessionHr, // Matched watch workout's HR series (W5); null hides the section.
+            hrAvgBpm = state.sessionHrAvgBpm,
+            hrMaxBpm = state.sessionHrMaxBpm,
             watchStats = state.sessionWatch,
             onAdoptWatchStats = viewModel::adoptWatchStats,
             onEdit = { viewModel.editEntry(sessionEntry.id) },

@@ -6,6 +6,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,6 +33,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.window.Dialog
@@ -111,6 +116,13 @@ fun ExerciseLibraryPicker(
                 ) {
                     items(results, key = { it.id }) { def ->
                         val checked = def.id in picked
+                        val onPick = {
+                            picked = when {
+                                checked -> picked - def.id
+                                singleSelect -> setOf(def.id)
+                                else -> picked + def.id
+                            }
+                        }
                         Row(
                             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
                                 // Single-select rows carry the pick as the §3 tile wash (radio for
@@ -119,13 +131,15 @@ fun ExerciseLibraryPicker(
                                     if (singleSelect && checked) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
                                     else Color.Transparent
                                 )
-                                .clickableLabeled(def.name, role = if (singleSelect) Role.RadioButton else Role.Checkbox) {
-                                    picked = when {
-                                        checked -> picked - def.id
-                                        singleSelect -> setOf(def.id)
-                                        else -> picked + def.id
-                                    }
-                                }
+                                // selectable / toggleable rather than a bare clickable, so TalkBack
+                                // reads the picked state (the drawn Checkbox is passive, and the
+                                // single-select wash is only colour).
+                                .then(
+                                    if (singleSelect) Modifier.selectable(selected = checked, role = Role.RadioButton, onClick = onPick)
+                                    else Modifier.toggleable(value = checked, role = Role.Checkbox, onValueChange = { onPick() })
+                                )
+                                .semantics { onClick(label = def.name, action = null) }
+                                .heightIn(min = 48.dp)
                                 .padding(vertical = 4.dp, horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)

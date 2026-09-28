@@ -309,7 +309,10 @@ class HealthConnectManager @Inject constructor(
                     ReadRecordsRequest(
                         WeightRecord::class,
                         timeRangeFilter = range,
-                        ascendingOrder = true,
+                        // NEWEST first, so a history past HISTORY_MAX_RECORDS drops the oldest
+                        // readings, not the recent weeks the backfill latches as complete (the
+                        // single-row latest read cannot fill that gap). Re-sorted oldest-first below.
+                        ascendingOrder = false,
                         pageSize = HISTORY_PAGE_SIZE,
                         pageToken = token
                     )
@@ -319,6 +322,7 @@ class HealthConnectManager @Inject constructor(
                 // Stop on an empty page even if a token lingers: without this, a provider that returns
                 // a non-null continuation token but no records would loop forever (out.size never grows).
             } while (token != null && resp.records.isNotEmpty() && out.size < HISTORY_MAX_RECORDS)
+            out.sortBy { it.timeMs }
             out
         } // null when the read threw — distinct from a successful empty read.
     }
@@ -893,6 +897,10 @@ class HealthConnectManager @Inject constructor(
             client.readAllPages(HeartRateRecord::class, range)
                 .asSequence()
                 .flatMap { it.samples }
+                // HC returns every record that OVERLAPS the range, so a provider's one long series
+                // record brings its warm-up/cool-down samples along; clip to the window (as
+                // writeHrSeries does on the write side).
+                .filter { s -> s.time.toEpochMilli() in startMs..endMs }
                 .mapNotNull { s ->
                     val bpm = s.beatsPerMinute.toInt()
                     if (bpm in MIN_BPM..MAX_BPM) HrPoint(timeMs = s.time.toEpochMilli(), bpm = bpm) else null
@@ -928,6 +936,28 @@ class HealthConnectManager @Inject constructor(
             val idx = bestSessionMatch(entryStartMs, entryDurationMin, windows) ?: return@hcCatching null
             records[idx].toWatchWorkout(client, granted)
         }
+    }
+
+    /**
+     * True when another app (never Avex itself) already holds an exercise session that covers most
+     * of `[startMs, endMs]` — the same workout, as far as Health Connect readers can tell. Used to
+     * avoid mirroring a cardio entry that was imported FROM a watch session (or logged by hand
+     * over one) back as a second Avex-origin session, which Samsung Health / Google Fit / Fitbit
+     * would list twice. Fail-soft to false: without read access or on error the mirror proceeds.
+     */
+    suspend fun hasOverlappingWatchSession(startMs: Long, endMs: Long): Boolean = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext false
+        if (!canReadExercise()) return@withContext false
+        val entryMs = maxOf(endMs - startMs, 1L)
+        hcCatching {
+            val range = TimeRangeFilter.between(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(maxOf(endMs, startMs + 1)))
+            client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, timeRangeFilter = range))
+                .records.filterNot(::isSelfWritten)
+                .any { r ->
+                    val overlap = minOf(endMs, r.endTime.toEpochMilli()) - maxOf(startMs, r.startTime.toEpochMilli())
+                    overlap * 2 >= entryMs
+                }
+        } ?: false
     }
 
     /**

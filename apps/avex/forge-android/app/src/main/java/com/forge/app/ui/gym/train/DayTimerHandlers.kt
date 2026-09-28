@@ -79,6 +79,32 @@ internal suspend fun DayViewModel.closeOpenRestEvent(sessionId: Long, endedAtMs:
     )
 }
 
+/**
+ * A set that is about to be undone or deleted may be the one whose logging started the running rest
+ * timer. That rest never happened, so stop the timer and drop the open interval: left in place, the
+ * corrected re-log would close it and persist the time spent fixing the entry as a realized rest.
+ * Deleting an earlier set leaves the current rest alone.
+ */
+internal fun DayViewModel.cancelRestForRemovedSet(setId: Long) {
+    val open = openRestEvent ?: return
+    val ex = _state.value.exercises.firstOrNull { e -> e.loggedSets.any { it.id == setId } } ?: return
+    val index = ex.loggedSets.indexOfFirst { it.id == setId }
+    if (open.exerciseId != ex.effectiveExerciseId.ifBlank { ex.plan.id } || open.setIndex != index) return
+    openRestEvent = null
+    restTimer.stop()
+    _state.update { it.copy(showTimerControls = false) }
+}
+
+/**
+ * A removed set that recorded a suggestion outcome (the first set of an exercise, logged while a
+ * suggestion chip showed) takes that sample with it. Left in place, the mis-tap stays in the coach's
+ * step calibration, and the corrected re-log (loggedSets is empty again) records a second sample.
+ */
+internal suspend fun DayViewModel.dropSuggestionOutcomeForRemovedSet(setId: Long) {
+    val outcomeId = suggestionOutcomeBySetId.remove(setId) ?: return
+    workoutRepo.deleteSuggestionOutcome(outcomeId)
+}
+
 /** Reprice only the current set's open rest, retaining elapsed time and manual timer adjustments. */
 internal fun DayViewModel.updateRestForLatestEffort(exerciseId: String, setId: Long? = null) {
     val open = openRestEvent ?: return

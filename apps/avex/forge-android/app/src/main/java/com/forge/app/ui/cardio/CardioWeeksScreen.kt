@@ -20,8 +20,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,6 +76,10 @@ fun CardioWeeksScreen(
 
     // A tapped bar opens its own page — the same one back arrow, one level down (§4.6).
     val openWeek = state.openWeekStartMs
+    // Declared ABOVE the week-detail early return: a slot below it leaves composition while a week is
+    // open, so closing the week would land the chart back on the newest page. Saveable so it also
+    // survives the screen being recreated.
+    var pagesBack by rememberSaveable { mutableStateOf(0) }
     // ...and system Back climbs that level exactly as the arrow does, including the distinction the
     // arrow already makes: entered ON a week, Back leaves; entered on the chart, Back returns to it.
     // Without this the gesture skipped the level entirely and popped the route from a week page.
@@ -101,7 +106,6 @@ fun CardioWeeksScreen(
 
     val perPage = CardioWeeksViewModel.WEEKS_PER_PAGE
     // 0 = the window ending on this week; each step back is one full page of older weeks.
-    var pagesBack by remember { mutableIntStateOf(0) }
     val maxPagesBack = remember(state.weeks, perPage) {
         if (state.weeks.isEmpty()) 0 else (state.weeks.size - 1) / perPage
     }
@@ -127,7 +131,22 @@ fun CardioWeeksScreen(
     val target = if (state.weekTargetMin > 0) state.weekTargetMin else WHO_WEEKLY_ACTIVITY_MIN
     // The figures read the WINDOW, so paging back actually says something about the weeks on screen.
     // The week still running is excluded — it has not had its chance to clear anything yet.
-    val judged = remember(window, currentWeekStartMs) { window.filterNot { it.weekStartMs == currentWeekStartMs } }
+    // The series pads zero weeks back to a full page, and weeks before the first session were never
+    // lived — judging them would drag the average down and inflate the denominator. The cut-off is
+    // the Monday of the OLDEST entry (rest days included), not the first non-empty bar: the series
+    // is truncated at two years, so its first bar says nothing about when logging really began, and
+    // a real break at the start of that window is a lived week that must still count.
+    val firstLoggedWeekMs = remember(state.entries, zone) {
+        state.entries.minOfOrNull { it.date }?.let {
+            Instant.ofEpochMilli(it).atZone(zone).toLocalDate()
+                .with(DayOfWeek.MONDAY).atStartOfDay(zone).toInstant().toEpochMilli()
+        }
+    }
+    val judged = remember(window, currentWeekStartMs, firstLoggedWeekMs) {
+        window.filter {
+            it.weekStartMs != currentWeekStartMs && firstLoggedWeekMs != null && it.weekStartMs >= firstLoggedWeekMs
+        }
+    }
     val averageMin = remember(judged) { if (judged.isEmpty()) 0 else judged.sumOf { it.minutes } / judged.size }
     val cleared = remember(judged, target) { judged.count { it.minutes >= target } }
 

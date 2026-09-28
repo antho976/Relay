@@ -16,12 +16,28 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 
+/**
+ * [nothingLogged]: the session holds nothing the user authored (FINISH on an empty workout lands
+ * here). There is nothing to resume then, and "Resume later" would keep an empty session active that
+ * every other day then offers to discard, so only Discard and Keep going are offered.
+ */
 @Composable
 internal fun LeaveSessionDialog(
     onResumeLater: () -> Unit,
     onDiscard: () -> Unit,
-    onKeepGoing: () -> Unit
+    onKeepGoing: () -> Unit,
+    nothingLogged: Boolean = false
 ) {
+    if (nothingLogged) {
+        AlertDialog(
+            onDismissRequest = onKeepGoing,
+            title = { Text("Nothing logged yet") },
+            text = { Text("This workout has no sets to save. Keep going, or discard it.") },
+            confirmButton = { Button(onClick = onKeepGoing) { Text("Keep going") } },
+            dismissButton = { TextButton(onClick = onDiscard) { Text("Discard workout") } }
+        )
+        return
+    }
     AlertDialog(
         onDismissRequest = onKeepGoing,
         title = { Text("Leave this workout?") },

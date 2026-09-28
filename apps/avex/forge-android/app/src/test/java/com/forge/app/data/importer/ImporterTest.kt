@@ -67,7 +67,37 @@ class ImporterTest {
     @Test fun anEquipmentQualifierOnTheSourceNameStillMatches() {
         // The source may be MORE specific than the library name — that invents nothing.
         assertEquals("lat-pulldown", ExerciseNameMatcher.match("Lat Pulldown (Cable)"))
-        assertEquals("leg-extension", ExerciseNameMatcher.match("Leg Extension (Machine)"))
+    }
+
+    @Test fun neverResolvesToAnOwnerOnlyPlateCountStation() {
+        // leg-extension / leg-curl are ExerciseUnit.PLATES stations; an imported lb value filed under
+        // one reads back as a plate count. They stay unmatched and import under their own label.
+        assertNull(ExerciseNameMatcher.match("Leg Extension (Machine)"))
+        assertNull(ExerciseNameMatcher.match("Leg Curl"))
+        assertNull(ExerciseNameMatcher.match("Straight Arm Pulldown"))
+        // The exact library name still reaches the WEIGHT-unit entry, not the plate-count leg-curl.
+        assertEquals("seated-leg-curl", ExerciseNameMatcher.match("Seated Leg Curl"))
+    }
+
+    @Test fun aMovementChangingModifierIsNotDroppedByTheFuzzyPass() {
+        assertNull(ExerciseNameMatcher.match("Decline Bench Press (Barbell)"))
+        assertNull(ExerciseNameMatcher.match("Decline Bench Press (Dumbbell)"))
+        // Scored 0.75 against the flat barbell bench before the guard.
+        assertNull(ExerciseNameMatcher.match("Paused Bench Press (Barbell)"))
+        // The plain names still match.
+        assertEquals("barbell-bench-press", ExerciseNameMatcher.match("Bench Press (Barbell)"))
+        assertEquals("db-bench-press", ExerciseNameMatcher.match("Bench Press (Dumbbell)"))
+    }
+
+    @Test fun legacyMatchReproducesWhatEarlierBuildsStoredNamesUnder() {
+        // Identity only: the duplicate guard must still recognise rows written under these ids.
+        assertEquals("barbell-bench-press", ExerciseNameMatcher.legacyMatch("Decline Bench Press (Barbell)"))
+        assertEquals("barbell-bench-press", ExerciseNameMatcher.legacyMatch("Paused Bench Press (Barbell)"))
+        assertEquals("leg-extension", ExerciseNameMatcher.legacyMatch("Leg Extension (Machine)"))
+        assertEquals("leg-curl", ExerciseNameMatcher.legacyMatch("Seated Leg Curl"))
+        // Where nothing narrowed, it agrees with today's matcher.
+        assertEquals(ExerciseNameMatcher.match("Lat Pulldown (Cable)"), ExerciseNameMatcher.legacyMatch("Lat Pulldown (Cable)"))
+        assertNull(ExerciseNameMatcher.legacyMatch("Zercher Carry"))
     }
 
     // ── Weight parsing ──────────────────────────────────────────────────────────
@@ -155,6 +185,30 @@ class ImporterTest {
         assertEquals(1, sessions.size)
         assertEquals(2, sessions.first().exercises[0].sets.size)
         assertEquals(225.0, sessions.first().exercises[0].sets[0].weightLb!!, 0.001)
+    }
+
+    @Test fun aUnitWrittenInTheWeightCellOverridesTheAssumedUnit() {
+        val lbCsv = "Date,Exercise,Weight,Reps\n2024-11-05,Back Squat,225 lb,5"
+        val kgAssumed = GenericCsvImporter().parse(lbCsv, assumeKg = true)
+        assertEquals(225.0, kgAssumed.single().exercises[0].sets[0].weightLb!!, 0.001)
+        val kgCsv = "Date,Exercise,Weight,Reps\n2024-11-05,Back Squat,100 kg,5"
+        val lbAssumed = GenericCsvImporter().parse(kgCsv, assumeKg = false)
+        assertEquals(220.5, lbAssumed.single().exercises[0].sets[0].weightLb!!, 0.05)
+    }
+
+    @Test fun avexPrListIsNotAWorkoutCsv() {
+        val csv = "exercise,muscle,bestWeightLb,reps,date\nBack Squat,Quads,315.0,5,2024-11-05\n"
+        assertTrue(ImportParsing.isAvexPrListHeader(ImportParsing.firstLine(csv)))
+        assertTrue(!GenericCsvImporter().canParse(csv))
+    }
+
+    @Test fun fitNotesSkipsBodyweightAndUnitColumnsAheadOfWeight() {
+        val csv = "Date,Exercise,Category,Bodyweight,Weight Unit,Weight,Reps\n" +
+            "2024-11-05,Squat,Legs,80,lbs,225,5"
+        val importer = FitNotesImporter()
+        assertTrue(importer.canParse(csv))
+        val set = importer.parse(csv, assumeKg = false).single().exercises[0].sets[0]
+        assertEquals(225.0, set.weightLb!!, 0.001)
     }
 
     @Test fun genericCsvRejectsNonWorkoutFile() {

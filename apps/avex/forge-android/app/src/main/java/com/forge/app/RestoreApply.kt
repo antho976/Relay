@@ -18,7 +18,7 @@ import java.io.File
 internal object RestoreApply {
 
     /** Must match `preferencesDataStore(name = "forge_settings")`. */
-    private const val PREFS_PATH = "datastore/forge_settings.preferences_pb"
+    internal const val PREFS_PATH = "datastore/forge_settings.preferences_pb"
     /** Must match `AvatarRepository.FILE_NAME`. */
     private const val AVATAR_NAME = "avatar.jpg"
     /** Must match `ProgressPhotoRepository`'s folder. */

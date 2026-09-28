@@ -74,6 +74,11 @@ class WorkoutImportRepository @Inject constructor(
         }
         if (text.isBlank()) return@withContext ImportResult.NothingToImport
 
+        // Our own PR list reads as a workout CSV, so name it before detection rather than let it
+        // import a fake workout per PR date (or fall through to "not recognised").
+        if (ImportParsing.isAvexPrListHeader(ImportParsing.firstLine(text))) {
+            return@withContext ImportResult.AvexPrList
+        }
         val importer = importers.firstOrNull { it.canParse(text) }
             ?: return@withContext ImportResult.UnrecognisedFormat
         // A file from a FUTURE export format would parse "successfully" against today's key names
@@ -310,6 +315,8 @@ class WorkoutImportRepository @Inject constructor(
         // Memoise name→catalogue-id for this import: the same movement recurs across many sessions and
         // ExerciseNameMatcher.match scans the whole library, so resolve each distinct name only once.
         val matchCache = HashMap<String, String?>()
+        // Name → what earlier matcher builds resolved it to; identity only, see incomingIdentityOf.
+        val legacyMatchCache = HashMap<String, String?>()
         // Unmatched name → the id its rows are stored under; see storedSyntheticId.
         val syntheticCache = HashMap<String, String>()
         // A stored session stands in for exactly ONE incoming workout.
@@ -380,7 +387,7 @@ class WorkoutImportRepository @Inject constructor(
                 val occupied = sessionDao.startRefsInRange(session.startedAtMs, windowEndMs)
                 // Compared on what the SOURCE states, not on everything the row holds: see
                 // WorkoutIdentity for the re-imports an exact print duplicated.
-                val incoming = incomingIdentityOf(session, matchCache)
+                val incoming = incomingIdentityOf(session, matchCache, legacyMatchCache)
                 suspend fun storedIdentity(id: Long) = storedIdentities.getOrPut(id) { storedIdentityOf(id) }
                 // The same workout a whole zone offset away, too. A source with no zone in its times
                 // is read in the device's CURRENT zone, so re-importing the same file after a move or
@@ -699,17 +706,27 @@ class WorkoutImportRepository @Inject constructor(
      *
      * A movement's keys are every id and name it could have been stored under: the id pinned by the
      * source, the id the matcher resolves today, the synthetic id an unmatched name folds to, and the
-     * source's own name. An update that changes what the matcher resolves therefore still recognises
-     * the rows an earlier import wrote.
+     * source's own name. An update that WIDENS what the matcher resolves therefore still recognises
+     * the rows an earlier import wrote. One that NARROWS it (a name now unmatched, or matched to a
+     * different id) would not, so the id the earlier matcher resolved ([ExerciseNameMatcher.legacyMatch])
+     * is a key too: without it every past workout holding such a lift was inserted a second time.
      */
-    private fun incomingIdentityOf(session: ImportedSession, matchCache: HashMap<String, String?>) =
+    private fun incomingIdentityOf(
+        session: ImportedSession,
+        matchCache: HashMap<String, String?>,
+        legacyMatchCache: HashMap<String, String?>
+    ) =
         WorkoutIdentity(
             session.exercises.mapIndexed { position, ex ->
                 val matched = matchCache.getOrPut(ex.name) { ExerciseNameMatcher.match(ex.name) }
+                val legacyMatched = legacyMatchCache.getOrPut(ex.name) { ExerciseNameMatcher.legacyMatch(ex.name) }
                 ExerciseIdentity(
                     orderIndex = ex.orderIndex ?: position,
                     keys = ExerciseIdentity.keysOf(
-                        ids = listOf(ex.catalogueId, ex.sourceExerciseId, matched, syntheticId(ex.name), legacySyntheticId(ex.name)),
+                        ids = listOf(
+                            ex.catalogueId, ex.sourceExerciseId, matched, legacyMatched,
+                            syntheticId(ex.name), legacySyntheticId(ex.name)
+                        ),
                         names = listOf(ex.name, ex.swappedName)
                     ),
                     sets = if (ex.skipped) emptyList() else ex.sets.map { s ->

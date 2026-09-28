@@ -32,7 +32,7 @@ class ProfileAuditRegressionTest {
    var saved:Long?=null
    compose.setContent { ForgeTheme { GalleryViewerPager(
     photos=listOf(ProgressPhoto("missing.jpg",stamp)),startIndex=0,albumNames=emptyList(),knownTags=emptyList(),weightUnit=WeightUnit.LB,
-    fileFor={File("/tmp/audit-missing-image.jpg")},onSaveNote={_,_->},onSaveTitle={_,_->},onMove={_,_->},onSetPose={_,_->},onSetMuscles={_,_->},onSetTags={_,_->},onSetWeight={_,_->},onSetDate={_,ms->saved=ms},onDelete={},onDismiss={}) } }
+    fileFor={File("/tmp/audit-missing-image.jpg")},onSaveNote={_,_->},onSaveTitle={_,_->},onMove={_,_->},onSetPose={_,_->},onSetMuscles={_,_->},onSetTags={_,_->},onSetWeight={_,_->},onSetDate={_,ms,_->saved=ms},onDelete={},onDismiss={}) } }
    compose.onNodeWithText("Monday, Sep 7, 2026").performClick()
    compose.onNodeWithText("Set").performClick()
    compose.runOnIdle {
@@ -40,6 +40,20 @@ class ProfileAuditRegressionTest {
     assertEquals(date,actual)
    }
   } finally { TimeZone.setDefault(oldZone);Locale.setDefault(oldLocale) }
+ }
+ @Test fun `re-dating a photo shows the bodyweight the repository stored for the new date`() {
+  val oldLocale=Locale.getDefault(); Locale.setDefault(Locale.US)
+  try {
+  compose.setContent { ForgeTheme { GalleryViewerPager(
+   photos=listOf(ProgressPhoto("pp_1.jpg",LocalDate.of(2026,9,7).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),weightLb=180.0)),startIndex=0,albumNames=emptyList(),knownTags=emptyList(),weightUnit=WeightUnit.LB,
+   fileFor={File("/tmp/audit-missing-image.jpg")},onSaveNote={_,_->},onSaveTitle={_,_->},onMove={_,_->},onSetPose={_,_->},onSetMuscles={_,_->},onSetTags={_,_->},onSetWeight={_,_->},
+   onSetDate={p,ms,onStored->onStored(p.copy(takenAtMs=ms,weightLb=200.0))},onDelete={},onDismiss={}) } }
+  compose.onNodeWithText("180 lb",substring=true).assertExists()
+  compose.onNodeWithText("Monday, Sep 7, 2026").performClick()
+  compose.onNodeWithText("Set").performClick()
+  compose.onNodeWithText("200 lb",substring=true).assertExists()
+  compose.onAllNodesWithText("180 lb",substring=true).assertCountEquals(0)
+  } finally { Locale.setDefault(oldLocale) }
  }
  @Test fun `profile name editor remains open after tap`() {
   var savedName: String? = null

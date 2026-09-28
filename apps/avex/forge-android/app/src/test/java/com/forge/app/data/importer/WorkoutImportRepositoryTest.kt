@@ -413,6 +413,29 @@ class WorkoutImportRepositoryTest {
     }
 
     @Test
+    fun aMovementTheMatcherNoLongerResolvesDoesNotDuplicateTheOlderImport() = runTest {
+        // Written by an earlier build whose fuzzy pass dropped "Decline" and filed it under the flat
+        // bench, with no label (a matched row keeps swappedName null).
+        val start = java.time.LocalDateTime.of(2026, 1, 5, 10, 0)
+            .atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val sessionId = db.sessionDao().insert(session(startedAt = start, finishedAt = start + 3_600_000L, dayKey = "freestyle"))
+        val leId = db.loggedExerciseDao().insert(
+            com.forge.app.data.db.entities.LoggedExercise(
+                sessionId = sessionId, exerciseId = "barbell-bench-press", orderIndex = 0, swappedName = null
+            )
+        )
+        db.loggedSetDao().insert(loggedSet(loggedExerciseId = leId, weightLb = 185.0, reps = 8))
+        val name = "Decline Bench Press (Barbell)"
+        assertEquals("the premise: today's matcher leaves it unmatched", null, ExerciseNameMatcher.match(name))
+        assertEquals("the premise: the earlier one did not", "barbell-bench-press", ExerciseNameMatcher.legacyMatch(name))
+
+        val result = repo.import(strongFile("decline.csv", strongRow("2026-01-05 10:00:00", "Chest", name, 185, 8)))
+
+        assertTrue("got $result", result is ImportResult.NothingToImport)
+        assertEquals(1, storedSessionCount())
+    }
+
+    @Test
     fun strongRunsImportAsCardioAndOnlyOnce() = runTest {
         fun runs(name: String): Uri {
             val file = temporaryFolder.newFile(name)

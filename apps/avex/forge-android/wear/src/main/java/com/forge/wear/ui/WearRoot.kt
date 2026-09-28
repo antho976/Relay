@@ -53,7 +53,10 @@ fun WearRoot(repo: WearDataRepository, haptics: WristHaptics) {
 
     var rpeSetId by remember { mutableStateOf<Long?>(null) }
     var prWash by remember { mutableStateOf(false) }
-    var consumedAckId by remember { mutableStateOf<String?>(null) }
+    // Seeded with the ack the process-wide repo already holds: a recreated activity (swiped away,
+    // process alive) is not an event for an ack that landed before it existed, and replayed the
+    // set-logged tick / PR wash every time it reopened.
+    var consumedAckId by remember { mutableStateOf(repo.lastAck.value?.commandId) }
     LaunchedEffect(lastAck) {
         val ack = lastAck ?: return@LaunchedEffect
         if (ack.commandId == consumedAckId) return@LaunchedEffect

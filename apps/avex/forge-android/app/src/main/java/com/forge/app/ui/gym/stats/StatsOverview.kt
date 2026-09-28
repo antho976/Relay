@@ -101,17 +101,23 @@ internal fun ColumnScope.StatsHeroContent(state: StatsUiState, weightUnit: Weigh
         // Always drawn: at zero it's the faint silhouette (the section's own visual at zero), so the hero
         // carries a mark before the first log instead of a gap (§12).
         Spacer(Modifier.width(16.dp))
-        BodyHeatmap(
-            setsByMuscle = state.weeklySetsByMuscle.associate { it.muscle to it.sets },
-            accent = c.accent,
-            faint = c.outline.copy(alpha = 0.35f),
-            silhouette = c.outline.copy(alpha = 0.25f),
-            labelColor = c.muted,
-            figureHeight = 104.dp,
-            showLegend = false,
-            showTitles = false,
-            modifier = Modifier.width(108.dp)
-        )
+        // The map counts a rolling 7 days, while the figures beside it are the calendar week, so it
+        // says so rather than sitting silently under "This week".
+        Column(Modifier.width(108.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            BodyHeatmap(
+                setsByMuscle = state.weeklySetsByMuscle.associate { it.muscle to it.sets },
+                accent = c.accent,
+                faint = c.outline.copy(alpha = 0.35f),
+                silhouette = c.outline.copy(alpha = 0.25f),
+                labelColor = c.muted,
+                figureHeight = 104.dp,
+                showLegend = false,
+                showTitles = false,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(4.dp))
+            Text("LAST 7 DAYS", style = MaterialTheme.typography.labelSmall, color = c.muted.copy(alpha = 0.65f))
+        }
     }
     if (state.readinessPulse != null && state.readinessThreshold != null) {
         Spacer(Modifier.height(16.dp))
@@ -125,7 +131,9 @@ internal fun ColumnScope.RecordsContent(
     records: List<PrRecord>,
     weightUnit: WeightUnit,
     c: StatsColors,
-    onOpenLift: (String) -> Unit = {}
+    onOpenLift: (String) -> Unit = {},
+    /** Lifts whose Strength row can expand; a record outside it isn't tappable. Null = all are. */
+    drillableIds: Set<String>? = null
 ) {
     val fmt = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
     val shown = records.take(6)
@@ -136,7 +144,11 @@ internal fun ColumnScope.RecordsContent(
                 Modifier.fillMaxWidth()
                     .clip(rowShape(i, shown.size))
                     .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .clickableLabeled("Show estimated 1RM trend for ${r.exerciseName}") { onOpenLift(r.exerciseId) }
+                    .then(
+                        if (drillableIds == null || r.exerciseId in drillableIds)
+                            Modifier.clickableLabeled("Show estimated 1RM trend for ${r.exerciseName}") { onOpenLift(r.exerciseId) }
+                        else Modifier
+                    )
                     .padding(horizontal = ROW_H, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {

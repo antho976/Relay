@@ -20,9 +20,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.db.entities.BodyMeasurementEntry
+import com.forge.app.domain.measurement.BodyMeasurementType
 import com.forge.app.domain.units.lengthInputValue
 import com.forge.app.domain.units.lengthUnitLabel
 import com.forge.app.domain.units.toDisplayLength
@@ -85,6 +88,8 @@ fun BodyMeasurementsScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var showSheet by remember { mutableStateOf(false) }
+    // The site whose readings are open for removal (a long-press on its row); null when closed.
+    var managing by remember { mutableStateOf<BodyMeasurementType?>(null) }
 
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -171,6 +176,7 @@ fun BodyMeasurementsScreen(
                             series = series,
                             useCm = state.useCm,
                             onTap = { showSheet = true },
+                            onLongPress = { managing = series.type },
                             onBg = onBg,
                             muted = muted,
                             accent = accent,
@@ -183,6 +189,17 @@ fun BodyMeasurementsScreen(
                 }
             }
         }
+    }
+
+    managing?.let { type ->
+        val readings = state.series.firstOrNull { it.type == type }?.entries.orEmpty()
+        if (readings.isNotEmpty()) MeasurementReadingsDialog(
+            type = type,
+            readings = readings,
+            useCm = state.useCm,
+            onDelete = { managing = null; viewModel.delete(it) },
+            onDismiss = { managing = null }
+        )
     }
 
     if (showSheet) {
@@ -255,6 +272,7 @@ private fun MeasurementRow(
     series: MeasurementSeries,
     useCm: Boolean,
     onTap: () -> Unit,
+    onLongPress: () -> Unit,
     onBg: Color,
     muted: Color,
     accent: Color,
@@ -273,7 +291,12 @@ private fun MeasurementRow(
     Row(
         modifier
             .fillMaxWidth()
-            .bounceCombinedClick(onClickLabel = "Log ${series.type.label}", onClick = onTap)
+            .bounceCombinedClick(
+                onClickLabel = "Log ${series.type.label}",
+                onLongClickLabel = "Remove a ${series.type.label} reading",
+                onLongClick = onLongPress,
+                onClick = onTap
+            )
             .padding(horizontal = ROW_H, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -324,6 +347,49 @@ private fun MeasurementRow(
             )
         }
     }
+}
+
+/**
+ * Every reading of one site, newest first, each with a Delete. The log sheet only ever writes today,
+ * so without this a mistyped reading from an earlier day could never be corrected or removed — it
+ * stayed the latest figure, skewed the trend and became the "since" baseline. Deleting closes the
+ * dialog and hands the reading to the Undo snackbar; re-log the right value afterwards from the sheet.
+ */
+@Composable
+private fun MeasurementReadingsDialog(
+    type: BodyMeasurementType,
+    readings: List<BodyMeasurementEntry>,
+    useCm: Boolean,
+    onDelete: (BodyMeasurementEntry) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val today = remember { LocalDate.now() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { DialogTitle(type.label) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                readings.asReversed().forEach { entry ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            monoDate(entry, today),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            "${lengthInputValue(entry.valueCm, useCm)} ${lengthUnitLabel(useCm)}",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        TextButton(onClick = { onDelete(entry) }) {
+                            Text("Delete", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } }
+    )
 }
 
 /**

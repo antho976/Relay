@@ -447,7 +447,7 @@ class BackupRepository @Inject constructor(
         // never diverge from what the user sees in-app (one place to fix tie-breaking / attribution).
         buildHallOfFame(sets).forEach { pr ->
             val date = dateFmt.format(Instant.ofEpochMilli(pr.sessionDate).atZone(zone))
-            sb.appendLine("${csv(pr.exerciseName)},${csv(pr.muscle.displayName)},${pr.maxWeightLb},${pr.bestReps},$date")
+            sb.appendLine("${csv(pr.exerciseName)},${csv(pr.muscle?.displayName.orEmpty())},${pr.maxWeightLb},${pr.bestReps},$date")
         }
         publishExport("avex_prs.csv", sb.toString())
     }
@@ -506,7 +506,19 @@ class BackupRepository @Inject constructor(
      * copy, and copies are kept at least [MIN_GENERATION_SPACING_MS] apart so tapping "Back up now"
      * a few times refreshes the newest instead of pushing every older one out.
      */
-    suspend fun autoBackup(folderUri: Uri? = null): File = withContext(Dispatchers.IO) {
+    suspend fun autoBackup(folderUri: Uri? = null): File = autoBackupWithFolderStatus(folderUri).file
+
+    /** What one [autoBackupWithFolderStatus] run did: the internal copy always exists, the folder's may not. */
+    data class AutoBackupResult(val file: File, val folderFailed: Boolean)
+
+    /**
+     * [autoBackup], reporting whether the picked-folder mirror failed. The folder write never fails
+     * the backup, since the internal copy already succeeded; but "Back up now" must not tell the
+     * user an off-device copy exists when a revoked grant, a removed card or a full provider meant
+     * none was written. The automatic worker keeps calling [autoBackup] and ignores it.
+     */
+    suspend fun autoBackupWithFolderStatus(folderUri: Uri? = null): AutoBackupResult = withContext(Dispatchers.IO) {
+        var folderFailed = false
         val file = generationFile(0)
         val tmp = File(context.filesDir, AUTO_BACKUP_TMP_NAME)
         // Resolved before the snapshot: with a password set but its key unreadable, this throws
@@ -548,7 +560,9 @@ class BackupRepository @Inject constructor(
             }
             // Also mirror into a user-picked folder so the backup survives an uninstall (GYMAP-67). A
             // folder write must not fail the whole backup — the internal copy already succeeded.
-            if (folderUri != null) runCatching { writeZipToFolder(folderUri, snap, key) }
+            if (folderUri != null) {
+                folderFailed = !runCatching { writeZipToFolder(folderUri, snap, key) }.getOrDefault(false)
+            }
         } finally {
             tmp.delete()
             snap.delete()
@@ -558,7 +572,7 @@ class BackupRepository @Inject constructor(
         File(context.filesDir, LEGACY_AUTO_BACKUP_JSON).delete()
         // A successful write clears any prior "last backup failed" marker.
         File(context.filesDir, AUTO_BACKUP_FAILED_MARKER).delete()
-        file
+        AutoBackupResult(file, folderFailed)
     }
 
     /** The internal slot for [generation] copies back; 0 keeps the name the single slot always had. */
@@ -611,9 +625,12 @@ class BackupRepository @Inject constructor(
         false
     }
 
-    /** Write the full backup zip into a user-granted SAF tree, keeping older copies (GYMAP-67). */
-    private fun writeZipToFolder(folderUri: Uri, snap: File, key: BackupCrypto.MasterKey?) {
-        val tree = DocumentFile.fromTreeUri(context, folderUri) ?: return
+    /**
+     * Write the full backup zip into a user-granted SAF tree, keeping older copies (GYMAP-67).
+     * Returns false when no verified copy ended up under [AUTO_BACKUP_NAME], so the caller can say so.
+     */
+    private fun writeZipToFolder(folderUri: Uri, snap: File, key: BackupCrypto.MasterKey?): Boolean {
+        val tree = DocumentFile.fromTreeUri(context, folderUri) ?: return false
         // Write the replacement under a temp name FIRST, then retire the old one. Deleting the
         // previous backup before creating its replacement (the old order) meant any failure below
         // left the folder with NO backup: createFile returning null on a revoked grant,
@@ -621,7 +638,7 @@ class BackupRepository @Inject constructor(
         // in runCatching and clears the "backup failed" marker regardless, so the user was told
         // the backup succeeded while their off-device copy had just been deleted.
         tree.findFile(FOLDER_TMP_NAME)?.delete()
-        val tmp = tree.createFile("application/zip", FOLDER_TMP_NAME) ?: return
+        val tmp = tree.createFile("application/zip", FOLDER_TMP_NAME) ?: return false
         val wrote = runCatching {
             val out = context.contentResolver.openOutputStream(tmp.uri) ?: return@runCatching false
             out.use { writeBackupZip(it, snap, key) }
@@ -632,7 +649,7 @@ class BackupRepository @Inject constructor(
         val verified = wrote && runCatching {
             context.contentResolver.openInputStream(tmp.uri)?.use { verifyBackup(it, key) } ?: false
         }.getOrDefault(false)
-        if (!verified) { tmp.delete(); return }
+        if (!verified) { tmp.delete(); return false }
         // The replacement is complete and checked: only now move the older copies back and take
         // the newest name. If a rename fails the data is still present under its old name, so
         // leave it rather than deleting a copy in this folder.
@@ -644,8 +661,47 @@ class BackupRepository @Inject constructor(
                 if (!src.renameTo(generationName(g))) break
             }
         }
-        tree.findFile(AUTO_BACKUP_NAME)?.delete()
-        tmp.renameTo(AUTO_BACKUP_NAME)
+        // The old newest copy is set aside rather than deleted, and only removed once the new one
+        // holds its name: a provider whose rename fails would otherwise have lost the old copy for
+        // a verified one stranded under the .part name that restore never offers.
+        val current = tree.findFile(AUTO_BACKUP_NAME)
+        if (current != null) {
+            tree.findFile(FOLDER_OLD_NAME)?.delete()
+            if (!current.renameTo(FOLDER_OLD_NAME)) { tmp.delete(); return false }
+        }
+        if (!tmp.renameTo(AUTO_BACKUP_NAME)) {
+            tree.findFile(FOLDER_OLD_NAME)?.renameTo(AUTO_BACKUP_NAME)
+            tmp.delete()
+            return false
+        }
+        tree.findFile(FOLDER_OLD_NAME)?.delete()
+        return true
+    }
+
+    /**
+     * How many kept auto-backup copies, on this phone and in [folderUri], are NOT password-protected.
+     * Enabling a password only seals the copy written next, so older generations stay readable
+     * without it until they rotate out; the caller says so rather than claim everything is protected.
+     * Never deletes anything: files in the user's folder are theirs.
+     */
+    suspend fun unprotectedBackupCopies(folderUri: Uri?): Int = withContext(Dispatchers.IO) {
+        var count = (0 until BACKUP_GENERATIONS).count { g ->
+            generationFile(g).let { it.exists() && !BackupCrypto.isEncrypted(it) }
+        }
+        val tree = folderUri?.let { runCatching { DocumentFile.fromTreeUri(context, it) }.getOrNull() }
+        if (tree != null) {
+            count += (0 until BACKUP_GENERATIONS).count { g ->
+                runCatching {
+                    val doc = tree.findFile(generationName(g)) ?: return@runCatching false
+                    val head = ByteArray(16) // the container magic is shorter than this
+                    val read = context.contentResolver.openInputStream(doc.uri)?.use { ins ->
+                        java.io.DataInputStream(ins).readFully(head); true
+                    } ?: false
+                    read && !BackupCrypto.hasMagic(head)
+                }.getOrDefault(false)
+            }
+        }
+        count
     }
 
     /**
@@ -1346,14 +1402,22 @@ class BackupRepository @Inject constructor(
         }
     }.getOrDefault(false)
 
-    /** This phone's protections as they stand, read through the same sentinel-backed flows as the
-     *  lock itself, so a store that can't be read keeps what the user last chose. */
-    private suspend fun currentProtections() = KeptProtections(
-        privacyMode = settingsRepo.privacyMode.first(),
-        appLockEnabled = settingsRepo.appLockEnabled.first(),
-        galleryLockEnabled = settingsRepo.galleryLockEnabled.first(),
-        appLockTimeoutSec = settingsRepo.appLockTimeoutSec.first(),
-    )
+    /** This phone's protections and folder grants as they stand. The three protections come through the
+     *  sentinel-backed flows the lock itself uses, so a store that can't be read keeps what the user last
+     *  chose. The folder URIs have no sentinel: a failed read reports them as null, which is not "no folder",
+     *  so they are marked unknown and the restore leaves them as the backup has them instead of removing them. */
+    private suspend fun currentProtections(): KeptProtections {
+        val protections = settingsRepo.protections.first()
+        return KeptProtections(
+            privacyMode = protections.privacyMode,
+            appLockEnabled = protections.appLockEnabled,
+            galleryLockEnabled = protections.galleryLockEnabled,
+            appLockTimeoutSec = settingsRepo.appLockTimeoutSec.first(),
+            backupFolderUri = settingsRepo.backupFolderUri.first(),
+            importFolderUri = settingsRepo.importFolderUri.first(),
+            folderUrisKnown = !protections.fromFailedRead,
+        )
+    }
 
     /** The SQLite user_version (Room schema version) of a candidate DB file; MAX if unreadable (→ rejected). */
     private fun databaseUserVersion(file: File): Int = runCatching {
@@ -1460,6 +1524,8 @@ class BackupRepository @Inject constructor(
          *  the previous good backup. Internal storage and the user-picked SAF folder each need one. */
         private const val AUTO_BACKUP_TMP_NAME = "forge_auto_backup.zip.tmp"
         private const val FOLDER_TMP_NAME = "forge_auto_backup.zip.part"
+        /** The previous newest folder copy, held aside for the instant its replacement takes the name. */
+        private const val FOLDER_OLD_NAME = "forge_auto_backup.zip.old"
         /** The lossy JSON slot earlier builds wrote; [autoBackup] and [deleteLocalCopies] remove it. */
         private const val LEGACY_AUTO_BACKUP_JSON = "forge_auto_backup.json"
         /** Where ForgeApp's uncaught-exception logger writes, under filesDir. One name for all readers. */
@@ -1564,12 +1630,19 @@ internal class ExtractionBudget(private val maxTotalBytes: Long, private val max
     fun countPhoto(): Boolean = ++photos <= maxPhotos
 }
 
-/** The settings a restore never takes from the backup: the same four "Reset app settings" keeps. */
+/** The settings a restore never takes from the backup: the four "Reset app settings" keeps, plus the two folder URIs. */
 internal data class KeptProtections(
     val privacyMode: Boolean,
     val appLockEnabled: Boolean,
     val galleryLockEnabled: Boolean,
     val appLockTimeoutSec: Int,
+    /** Device-local: a folder grant belongs to the install that took it, so a backup's value would
+     *  name a folder this install holds no grant for (and orphan the grant it does hold). */
+    val backupFolderUri: String?,
+    val importFolderUri: String?,
+    /** False when this phone's settings could not be read, so the two URIs above are not real values:
+     *  the backup's own folder keys are then left as they are rather than removed. */
+    val folderUrisKnown: Boolean = true,
 )
 
 /**
@@ -1599,6 +1672,12 @@ internal suspend fun stageRestoredPreferences(
                 prefs[PreferenceKeys.APP_LOCK_ENABLED] = keep.appLockEnabled
                 prefs[PreferenceKeys.GALLERY_LOCK_ENABLED] = keep.galleryLockEnabled
                 prefs[PreferenceKeys.APP_LOCK_TIMEOUT_SEC] = keep.appLockTimeoutSec
+                if (keep.folderUrisKnown) {
+                    if (keep.backupFolderUri != null) prefs[PreferenceKeys.BACKUP_FOLDER_URI] = keep.backupFolderUri
+                    else prefs.remove(PreferenceKeys.BACKUP_FOLDER_URI)
+                    if (keep.importFolderUri != null) prefs[PreferenceKeys.IMPORT_FOLDER_URI] = keep.importFolderUri
+                    else prefs.remove(PreferenceKeys.IMPORT_FOLDER_URI)
+                }
             }
             probe.copyTo(dest, overwrite = true)
             true

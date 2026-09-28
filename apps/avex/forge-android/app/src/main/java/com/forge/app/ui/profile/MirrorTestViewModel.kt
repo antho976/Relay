@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.data.repo.ProgressPhotoRepository
+import com.forge.app.ui.common.SnackbarController
 import com.forge.app.ui.common.launchDurable
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,7 +24,8 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class MirrorTestViewModel @Inject constructor(
-    private val photoRepo: ProgressPhotoRepository
+    private val photoRepo: ProgressPhotoRepository,
+    private val snackbar: SnackbarController
 ) : ViewModel() {
 
     /** One album folder for the gallery's top level — its photo count and newest-photo cover. */
@@ -104,14 +106,22 @@ class MirrorTestViewModel @Inject constructor(
      * the shared JSON index under the repository's write lock, so running them concurrently would
      * only contend for that lock. One `revision` bump per photo keeps the grid filling in as they
      * land rather than appearing all at once at the end.
+     *
+     * Durable, so leaving the gallery mid-import doesn't cancel the rest of the selection, and a
+     * photo that could not be imported (too large, not an image) is counted and reported on the
+     * app-root snackbar rather than dropped without a word.
      */
     fun addPhotos(
         uris: List<Uri>,
         album: String,
         pose: String = "",
         muscles: List<String> = emptyList()
-    ) = viewModelScope.launch {
-        uris.forEach { photoRepo.add(it, album = album, pose = pose, muscles = muscles) }
+    ) = viewModelScope.launchDurable {
+        var failed = 0
+        uris.forEach { if (photoRepo.add(it, album = album, pose = pose, muscles = muscles) == null) failed++ }
+        if (failed > 0) {
+            snackbar.show(if (failed == 1) "1 photo couldn't be imported." else "$failed photos couldn't be imported.")
+        }
     }
 
     // Durable: the viewer commits a typed title, note or weight as it is DISMISSED, and Back out of
@@ -123,15 +133,17 @@ class MirrorTestViewModel @Inject constructor(
     fun setMuscles(photo: ProgressPhoto, muscles: List<String>) = viewModelScope.launchDurable { photoRepo.setMuscles(photo, muscles) }
     fun setTags(photo: ProgressPhoto, tags: List<String>) = viewModelScope.launchDurable { photoRepo.setTags(photo, tags) }
     fun setWeight(photo: ProgressPhoto, weightLb: Double?) = viewModelScope.launchDurable { photoRepo.setWeight(photo, weightLb) }
-    fun setTakenAt(photo: ProgressPhoto, takenAtMs: Long) = viewModelScope.launchDurable { photoRepo.setTakenAt(photo, takenAtMs) }
-    fun deletePhoto(photo: ProgressPhoto) = viewModelScope.launch { photoRepo.delete(photo) }
+    /** Re-date [photo]; [onStored] gets the entry as written (its re-snapshotted weight), on the main thread. */
+    fun setTakenAt(photo: ProgressPhoto, takenAtMs: Long, onStored: (ProgressPhoto) -> Unit = {}) =
+        viewModelScope.launchDurable { photoRepo.setTakenAt(photo, takenAtMs)?.let(onStored) }
+    fun deletePhoto(photo: ProgressPhoto) = viewModelScope.launchDurable { photoRepo.delete(photo) }
 
     /** Multi-select delete. Sequential for the same reason as [addPhotos]: one index, one lock. */
-    fun deletePhotos(photos: List<ProgressPhoto>) = viewModelScope.launch { photos.forEach { photoRepo.delete(it) } }
+    fun deletePhotos(photos: List<ProgressPhoto>) = viewModelScope.launchDurable { photos.forEach { photoRepo.delete(it) } }
 
     /** Multi-select move. "" takes the photos out of every album. */
     fun moveToAlbum(photos: List<ProgressPhoto>, album: String) =
-        viewModelScope.launch { photos.forEach { photoRepo.setAlbum(it, album) } }
+        viewModelScope.launchDurable { photos.forEach { photoRepo.setAlbum(it, album) } }
 
     fun fileFor(photo: ProgressPhoto): File = photoRepo.fileFor(photo)
 }

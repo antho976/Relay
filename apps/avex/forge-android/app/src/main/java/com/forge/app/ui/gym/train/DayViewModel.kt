@@ -95,6 +95,14 @@ class DayViewModel @Inject constructor(
     /** The rest interval being measured right now: opened on set log, closed by the next set. */
     internal var openRestEvent: OpenRestEvent? = null
 
+    /**
+     * Logged-set id → the suggestion-outcome row its logging recorded (first set of an exercise
+     * while a suggestion chip showed). Undoing or deleting that set removes the sample, so a mis-tap
+     * that is then corrected leaves only the corrected set's outcome for the coach's step
+     * calibration. Touched only on the main dispatcher.
+     */
+    internal val suggestionOutcomeBySetId = mutableMapOf<Long, Long>()
+
     /** "Not this workout" suppression for the post-swap dislike prompt — resets with the VM (i.e. when
      *  the training screen is left and re-entered), matching a per-session scope without persisting. */
     internal var dislikePromptSuppressedThisSession = false

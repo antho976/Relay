@@ -107,6 +107,16 @@ class ResetRepository @Inject constructor(
         // Marked first, cleared last: see [finishInterruptedFactoryReset].
         withContext(Dispatchers.IO) { pendingResetMarker().createNewFile() }
         withContext(Dispatchers.IO) { db.clearAllTables() }
+        eraseOutsideTheStores()
+        settingsRepo.resetAll()
+        withContext(Dispatchers.IO) { pendingResetMarker().delete() }
+    }
+
+    /**
+     * Everything [factoryReset] erases besides the database and the settings store. It opens
+     * neither, so the boot path can run it while both are still held shut by the startup gate.
+     */
+    private suspend fun eraseOutsideTheStores() {
         photoRepo.deleteAll() // progress photos live as files outside the DB — clear them too (#138).
         avatarRepo.clear()    // the avatar is an app-private file too.
         // The auto-backup ZIP (database, preferences AND photos), exports, crash logs and a staged
@@ -119,8 +129,22 @@ class ResetRepository @Inject constructor(
         // this app's own records, so nothing of another app's is touched. Before the preference
         // wipe so the reset's external half runs while the grants and opt-ins still describe it.
         health.deleteAllAvexRecords(clock.nowMs())
-        settingsRepo.resetAll()
-        withContext(Dispatchers.IO) { pendingResetMarker().delete() }
+        releaseFolderGrants()
+    }
+
+    /**
+     * The preference wipe forgets the backup and import folders, and a persisted grant outlives
+     * the setting that named it, so the reset gives up every tree Avex holds (M-18). They are the
+     * only persisted grants the app ever takes ([PersistedTreeGrants.take]).
+     */
+    private fun releaseFolderGrants() {
+        val resolver = context.contentResolver
+        resolver.persistedUriPermissions.toList().forEach { held ->
+            var flags = 0
+            if (held.isReadPermission) flags = flags or android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            if (held.isWritePermission) flags = flags or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            if (flags != 0) runCatching { resolver.releasePersistableUriPermission(held.uri, flags) }
+        }
     }
 
     /**
@@ -132,12 +156,26 @@ class ResetRepository @Inject constructor(
      * done over an empty database: the full app, with no program and none of the history. The
      * user confirmed a clean slate, so the boot completes it. One attempt only: the marker goes
      * whatever happens, so a reset that fails here can never wipe what is logged afterwards.
+     *
+     * This runs BEFORE the startup gate opens, and Room's open helper and the settings DataStore
+     * both wait on that gate, so calling [factoryReset] here waited for itself: every later launch
+     * sat on "Preparing Avex…" for good. Neither store has been opened yet, so their files are
+     * deleted instead — the same file-level approach [com.forge.app.RestoreApply] takes at boot —
+     * and Room and DataStore start empty when the gate lets them open.
      */
     suspend fun finishInterruptedFactoryReset() {
         val marker = pendingResetMarker()
         if (!withContext(Dispatchers.IO) { marker.exists() }) return
         try {
-            factoryReset()
+            // Both stores first, together: they are what keeps "onboarded" off an empty database,
+            // and nothing in the rest of the sweep can then stop them going before the marker does.
+            withContext(Dispatchers.IO) {
+                context.deleteDatabase(DATABASE_NAME)
+                java.io.File(context.filesDir, com.forge.app.RestoreApply.PREFS_PATH).delete()
+                // What [SettingsRepository.resetAll] does after its clear, for the same reason.
+                com.forge.app.security.ProtectionSentinel.forget(context)
+            }
+            eraseOutsideTheStores()
         } finally {
             withContext(Dispatchers.IO) { marker.delete() }
         }
@@ -151,5 +189,8 @@ class ResetRepository @Inject constructor(
          * refuse to publish a snapshot while a reset is erasing the data it copied.
          */
         internal const val PENDING_FACTORY_RESET = "factory_reset_pending"
+
+        /** Must match the name `DatabaseModule` builds the live database with. */
+        private const val DATABASE_NAME = "forge.db"
     }
 }

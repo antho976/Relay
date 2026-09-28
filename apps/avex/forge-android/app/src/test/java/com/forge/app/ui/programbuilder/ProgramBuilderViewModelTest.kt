@@ -51,6 +51,8 @@ class ProgramBuilderViewModelTest {
         }
         override suspend fun setFreestyleMode(v: Boolean) {}
         override suspend fun guardProgramChange(action: suspend () -> Unit) = action()
+        var deload = false
+        override suspend fun deloadWeekRunning(): Boolean = deload
     }
 
     @Before
@@ -193,6 +195,22 @@ class ProgramBuilderViewModelTest {
     }
 
     @Test
+    fun `editing the saved program during a deload week flags its reduced sets`() {
+        val store = FakeStore().apply {
+            dayRows = listOf(ProgramDay(id = "day-a", position = 0, name = "Push", word = "PUSH", accentHex = "#E85D4A", archetype = "push"))
+            deload = true
+        }
+        val vm = ProgramBuilderViewModel(store, SavedStateHandle())
+        vm.loadIfNeeded(blank = false)
+        assertTrue(vm.deloadWeekRunning)
+
+        // A blank plan carries none of the deload's rows, so there is nothing to warn about.
+        val blank = ProgramBuilderViewModel(store, SavedStateHandle())
+        blank.loadIfNeeded(blank = true)
+        assertFalse(blank.deloadWeekRunning)
+    }
+
+    @Test
     fun `a weekday holds one workout and claiming it moves it`() {
         val vm = ProgramBuilderViewModel(FakeStore(), SavedStateHandle())
         vm.loadIfNeeded(blank = true)
@@ -220,5 +238,36 @@ class ProgramBuilderViewModelTest {
         vm.toggleDayWeekday(a, 2)
         vm.duplicateDay(a)
         assertEquals(listOf(setOf(2), emptySet<Int>()), vm.days.map { it.weekdays })
+    }
+
+    @Test
+    fun `undoing a removed day leaves a weekday another day has claimed since with that day`() {
+        val vm = ProgramBuilderViewModel(FakeStore(), SavedStateHandle())
+        vm.loadIfNeeded(blank = true)
+        vm.addDay()
+        vm.addDay()
+        val (a, b) = vm.days.map { it.uid }
+        vm.toggleDayWeekday(a, 0)
+        vm.toggleDayWeekday(a, 4)
+        vm.removeDay(a)
+        vm.toggleDayWeekday(b, 0)
+        vm.undoRemove()
+        assertEquals(2, vm.days.size)
+        assertEquals(setOf(0), vm.day(b)!!.weekdays)
+        assertEquals("only the free weekday comes back", setOf(4), vm.day(a)!!.weekdays)
+    }
+
+    @Test
+    fun `an undo tapped after save does nothing`() {
+        val vm = ProgramBuilderViewModel(FakeStore(), SavedStateHandle())
+        vm.loadIfNeeded(blank = true)
+        vm.addDay()
+        vm.addDay()
+        vm.removeDay(vm.days.first().uid)
+        vm.save {}
+        assertEquals(1, vm.days.size)
+        vm.undoRemove()
+        assertEquals("the saved program is what stays on screen", 1, vm.days.size)
+        assertFalse(vm.dirty)
     }
 }

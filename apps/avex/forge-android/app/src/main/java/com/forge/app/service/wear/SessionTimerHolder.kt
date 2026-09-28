@@ -4,6 +4,7 @@ import com.forge.app.core.time.Clock
 import com.forge.app.core.time.ElapsedClock
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.timer.RestTimerController
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -39,6 +40,9 @@ class SessionTimerHolder @Inject constructor(
 
     val controller = RestTimerController(scope, elapsed)
 
+    // Declared before init: Main.immediate can run the restore launch synchronously.
+    private val restoreDone = CompletableDeferred<Unit>()
+
     init {
         // Written on every structural change (start / pause / resume / ±30s / stop) and never on a
         // tick, so this is a handful of small writes per rest, not one a second.
@@ -56,8 +60,16 @@ class SessionTimerHolder @Inject constructor(
                 }
             }
         }
-        scope.launch { runCatching { restoreSaved() } }
+        scope.launch {
+            try { runCatching { restoreSaved() } } finally { restoreDone.complete(Unit) }
+        }
     }
+
+    /**
+     * Suspends until the persisted rest (if any) has been restored into [controller] or dropped.
+     * Until then the controller's null means "not read yet", not "no rest".
+     */
+    suspend fun awaitRestore() = restoreDone.await()
 
     /**
      * Rebuild a rest that outlived its process. A PAUSED timer restores at exactly the seconds it

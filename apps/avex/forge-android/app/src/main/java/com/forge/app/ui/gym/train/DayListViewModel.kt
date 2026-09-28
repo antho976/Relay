@@ -103,7 +103,8 @@ class DayListViewModel @Inject constructor(
             .filter { it.finishedAt != null && java.time.Instant.ofEpochMilli(it.finishedAt!!).atZone(zone).toLocalDate() == today }
             .map { it.dayKey }.toSet()
         val lastFinishedDayKey = recentSessions
-            .filter { it.finishedAt != null }.maxByOrNull { it.finishedAt!! }?.dayKey
+            .filter { it.finishedAt != null && it.dayKey != Program.FREESTYLE_DAY_KEY }
+            .maxByOrNull { it.finishedAt!! }?.dayKey
         val nextUpKey = when {
             activeSession != null -> activeSession.dayKey
             else -> com.forge.app.domain.schedule.WeeklySchedule.resolveNextUp(

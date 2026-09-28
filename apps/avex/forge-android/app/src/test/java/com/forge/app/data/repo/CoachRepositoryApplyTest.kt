@@ -269,6 +269,24 @@ class CoachRepositoryApplyTest {
     }
 
     @Test
+    fun undoingAChainedSwap_restoresTheEarlierCoachSwapAsCoachOwned() = runTest {
+        val other = ExerciseLibrary.all.first {
+            it.muscle == slot.muscle && it.name != slot.name && it.id != replacement.id
+        }
+        val first = proposed("swap", payload = replacement.id)
+        repo.applyDecision(first)
+        val second = proposed("swap", payload = other.id)
+        repo.applyDecision(second)
+
+        repo.undoDecision(second)
+
+        val swap = customizationRepo.getSwap(slot.id)!!
+        assertEquals(replacement.name, swap.swappedName)
+        // Still the coach's: tagged USER it would lock the slot and outlive its own decision.
+        assertEquals(OverlaySource.COACH, swap.source)
+    }
+
+    @Test
     fun repShift_failureAfterTheOverlayWrite_leavesNoOverrideBehind() = runTest {
         val id = proposed("rep_shift", payload = newRange)
 

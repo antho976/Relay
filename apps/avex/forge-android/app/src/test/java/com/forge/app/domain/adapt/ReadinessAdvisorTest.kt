@@ -42,6 +42,14 @@ class ReadinessAdvisorTest {
     }
 
     @Test
+    fun freshSpacing_countsOnlyTheRestDaysBetweenSessions() {
+        // Last session 3 calendar days ago: two full days in between, not three.
+        val r = ReadinessAdvisor.evaluate(sessions(3), emptyList(), now)
+        assertNotNull(r)
+        assertTrue(r!!.reason, r.reason.contains("fresh after 2 rest days"))
+    }
+
+    @Test
     fun netZeroSignals_staySilentInsteadOfEmittingZero() {
         // Trained yesterday at normal volume, spacing neutral → no scale, no noise.
         assertNull(ReadinessAdvisor.evaluate(sessions(1), emptyList(), now))
@@ -53,8 +61,8 @@ class ReadinessAdvisorTest {
     fun freshSpacing_readsPositive() {
         val r = ReadinessAdvisor.evaluate(sessions(2), emptyList(), now)
         assertNotNull(r)
-        assertEquals(1, r!!.percent) // +1 fresh after 2 rest days
-        assertTrue(r.reason.contains("fresh after 2 rest days"))
+        assertEquals(1, r!!.percent) // +1 fresh after 1 rest day (Mon to Wed: only Tuesday)
+        assertTrue(r.reason.contains("fresh after 1 rest day"))
     }
 
     @Test
@@ -366,7 +374,7 @@ class ReadinessAdvisorTest {
             layoff = LifeEvents.Layoff(days = 28, away = false, returning = false, returnedAtMs = now - 10 * day, gapStartMs = now - 38 * day)
         )
         val r = ReadinessAdvisor.evaluate(sessions(2), emptyList(), now, lifeEvents = expired)
-        assertTrue(r!!.reason, r.reason.contains("fresh after 2 rest days"))
+        assertTrue(r!!.reason, r.reason.contains("fresh after 1 rest day"))
         assertTrue(!r.reason.contains("first week back"))
         assertEquals(ReadinessAdvisor.evaluate(sessions(2), emptyList(), now)!!.percent, r.percent)
     }

@@ -10,6 +10,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.cardio.RoutePoint
+import kotlin.math.cos
 
 /**
  * An offline, shape-only render of a recorded GPS track — the path's outline drawn as a
@@ -33,19 +34,26 @@ internal fun RouteThumbnail(
         val lngs = route.map { it.lng }
         val minLat = lats.min(); val maxLat = lats.max()
         val minLng = lngs.min(); val maxLng = lngs.max()
-        // Guard a degenerate (straight-line) track so we never divide by ~0.
+        // A degree of longitude is shorter than one of latitude by cos(lat), so squeeze lng by it and
+        // then use ONE scale for both axes — scaling each to fill the box stretched an east-west run
+        // into a tall zig-zag. Guard a degenerate (straight-line) track so we never divide by ~0.
+        val lngScale = cos(Math.toRadians((minLat + maxLat) / 2)).coerceAtLeast(1e-6)
         val latRange = (maxLat - minLat).coerceAtLeast(1e-9)
-        val lngRange = (maxLng - minLng).coerceAtLeast(1e-9)
+        val lngRange = ((maxLng - minLng) * lngScale).coerceAtLeast(1e-9)
 
         val pad = 3.dp.toPx()
         val w = (size.width - pad * 2).coerceAtLeast(0f)
         val h = (size.height - pad * 2).coerceAtLeast(0f)
+        val scale = minOf(w / lngRange, h / latRange)
+        // Centre the (now aspect-correct) path in the box.
+        val offsetX = pad + (w - lngRange * scale).toFloat() / 2f
+        val offsetY = pad + (h - latRange * scale).toFloat() / 2f
 
         val path = Path()
         route.forEachIndexed { i, p ->
-            val x = pad + ((p.lng - minLng) / lngRange * w).toFloat()
+            val x = offsetX + ((p.lng - minLng) * lngScale * scale).toFloat()
             // Latitude grows northward → invert Y so north renders at the top.
-            val y = pad + ((maxLat - p.lat) / latRange * h).toFloat()
+            val y = offsetY + ((maxLat - p.lat) * scale).toFloat()
             if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
         }
         drawPath(
