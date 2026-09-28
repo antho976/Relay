@@ -4,6 +4,7 @@ import com.forge.app.core.time.ElapsedClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,12 +24,11 @@ data class RestTimerState(
 }
 
 /**
- * Standalone rest-timer state machine, owned by [com.forge.app.ui.gym.train.DayViewModel]
- * so the VM doesn't carry the tick-job bookkeeping itself.
+ * Standalone rest-timer state machine. The phone owns ONE app-scoped instance (`SessionTimerHolder`),
+ * shared by the day screen, the wear publisher and the wrist's timer commands.
  *
- * The controller takes the scope it should run in via the constructor — passing
- * `viewModelScope` means the tick coroutine is cleaned up automatically when the
- * VM is cleared. No need for explicit dispose.
+ * The controller takes the scope it should run in via the constructor, so the tick coroutine
+ * lives exactly as long as that scope. No need for explicit dispose.
  *
  * Remaining time is derived from an end INSTANT rather than by decrementing a counter once per
  * `delay(1000)`. This means the countdown stays accurate across scheduling drift and app
@@ -155,10 +155,15 @@ class RestTimerController(
     /**
      * Rebuild a timer that outlived its process. [remainingSeconds] is what is left of
      * [totalSeconds]; a paused timer is restored frozen at that value.
+     *
+     * A no-op while a timer exists. The persisted record is read asynchronously, and a rest started
+     * meanwhile — a wrist "start" or "+30s" on a cold start the watch woke, or the day screen — is
+     * newer than anything on disk; restoring over it replaced the rest the user just began.
      */
     @Synchronized
     fun restore(totalSeconds: Int, remainingSeconds: Int, paused: Boolean) {
         if (totalSeconds <= 0 || remainingSeconds <= 0) return
+        if (_state.value != null) return
         endAtElapsedMs = elapsed.elapsedMs() + remainingSeconds * 1000L
         _state.value = RestTimerState(
             // A restored remaining can't exceed its total, or the progress ring reads past full.
@@ -190,16 +195,26 @@ class RestTimerController(
         tickJob?.cancel()
         tickJob = scope.launch {
             while (true) {
-                val current = _state.value ?: break
-                if (current.isPaused) break
-                val remaining = remainingNow(current)
-                if (remaining <= 0) {
-                    _state.value = current.copy(secondsRemaining = 0, isPaused = true)
-                    break
+                // The read-check-write runs under the mutators' lock, and only while this loop is
+                // still the live one. A wrist "skip" or "+30s" arrives on a binder thread and
+                // cancels this job inside that lock, but cancellation only lands at the next
+                // suspension: a tick that had already read the old state could write it back
+                // afterwards — resurrecting a skipped timer as running, with no loop left to finish it.
+                val keepTicking = synchronized(this@RestTimerController) {
+                    if (!isActive) return@synchronized false
+                    val current = _state.value ?: return@synchronized false
+                    if (current.isPaused) return@synchronized false
+                    val remaining = remainingNow(current)
+                    if (remaining <= 0) {
+                        _state.value = current.copy(secondsRemaining = 0, isPaused = true)
+                        return@synchronized false
+                    }
+                    if (remaining != current.secondsRemaining) {
+                        _state.value = current.copy(secondsRemaining = remaining)
+                    }
+                    true
                 }
-                if (remaining != current.secondsRemaining) {
-                    _state.value = current.copy(secondsRemaining = remaining)
-                }
+                if (!keepTicking) break
                 delay(1_000)
             }
         }

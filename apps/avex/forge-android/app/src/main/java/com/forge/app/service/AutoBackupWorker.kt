@@ -14,6 +14,7 @@ import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.BackupRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 
@@ -37,6 +38,11 @@ class AutoBackupWorker @AssistedInject constructor(
             backupRepo.autoBackup(folder)
             Result.success()
         }
+    } catch (e: CancellationException) {
+        // A stop (constraints lost, the system reclaiming the worker) is not a failed backup: it
+        // must neither burn an attempt nor, on the last one, record a failure that Settings then
+        // warns about.
+        throw e
     } catch (e: Exception) {
         // Bound the retries: a permanent failure (corrupt DB, no free storage) shouldn't
         // keep retrying with backoff forever. Give up after a few attempts — and on giving up,

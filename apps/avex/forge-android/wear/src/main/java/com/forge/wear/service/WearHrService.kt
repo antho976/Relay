@@ -49,14 +49,27 @@ class WearHrService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val pending = ArrayDeque<HrBatchDto.Sample>()
     @Volatile private var totalKcal: Double? = null
+    /** The exercise's cumulative calories when the CURRENT session began streaming on it. */
+    @Volatile private var kcalAtSessionStart: Double = 0.0
     @Volatile private var sessionId: Long = -1L
     private var exerciseStarted = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        sessionId = intent?.getLongExtra(EXTRA_SESSION_ID, -1L) ?: -1L
-        if (sessionId <= 0) { stopSelf(); return START_NOT_STICKY }
+        val requested = intent?.getLongExtra(EXTRA_SESSION_ID, -1L) ?: -1L
+        if (requested <= 0) { stopSelf(); return START_NOT_STICKY }
+        // A direct A → B transition (latest-wins DataItems can skip the null between two sessions
+        // while the watch is out of range) reuses the running exercise. Without this, A's unsent
+        // samples went out labelled B, and A's calories were reported as B's. Under the buffer's
+        // lock, so the batch loop reads the session and its samples as one.
+        synchronized(pending) {
+            if (exerciseStarted && requested != sessionId) {
+                pending.clear()
+                kcalAtSessionStart = totalKcal ?: 0.0
+            }
+            sessionId = requested
+        }
         // Checked HERE, not only at the call site. START_STICKY means the system recreates this
         // service on its own after the process is reclaimed, and a Data Layer wake can start it
         // from a path that never consulted the permission at all — by which time the user may have
@@ -67,7 +80,16 @@ class WearHrService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startInForeground()
+        // From API 34 a health-typed service must also be while-in-use eligible at this moment, which
+        // a session that arrives while the app is in the background is not: startForeground throws,
+        // and uncaught that is a crash in a process nobody is looking at. No HR is the
+        // works-without state; the next visible activity re-applies the session (MainActivity).
+        try {
+            startInForeground()
+        } catch (_: RuntimeException) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (!exerciseStarted) {
             exerciseStarted = true
             scope.launch { runExercise() }
@@ -142,10 +164,12 @@ class WearHrService : Service() {
             // Bluetooth range silently lost ~36 batches, while the PENDING_CAP buffer that exists to
             // ride out exactly that was emptied before it could help. The samples are keyed
             // (session_id, at_ms) with IGNORE-on-conflict, so a re-send is free.
-            val batch = synchronized(pending) { pending.toList() }
+            // Session and samples read together, so a session switch mid-send cannot relabel them.
+            val (batchSessionId, batch) = synchronized(pending) { sessionId to pending.toList() }
             if (batch.isEmpty()) continue
+            val sessionKcal = totalKcal?.let { (it - kcalAtSessionStart).coerceAtLeast(0.0) }
             for (chunk in batch.chunked(com.forge.shared.protocol.WearProtocol.HR_SEND_BATCH_SIZE)) {
-                if (!repo.sendHrBatchAwait(sessionId, chunk, totalKcal)) break
+                if (!repo.sendHrBatchAwait(batchSessionId, chunk, sessionKcal)) break
                 val delivered = chunk.mapTo(HashSet(chunk.size)) { it.atMs }
                 synchronized(pending) { pending.removeAll { it.atMs in delivered } }
             }

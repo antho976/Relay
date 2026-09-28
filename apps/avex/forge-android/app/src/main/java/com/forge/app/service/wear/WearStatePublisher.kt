@@ -169,6 +169,11 @@ class WearStatePublisher @Inject constructor(
         putItem(WearProtocol.PATH_GLANCE_TODAY, WearCodec.encode(dto))
     }
 
+    /** Confirm an HR batch reached Room (or was terminally discarded), so the wrist can drop it. */
+    suspend fun publishHrAck(ack: com.forge.shared.protocol.HrBatchAckDto) {
+        putItem(WearProtocol.PATH_HR_ACK, WearCodec.encode(ack))
+    }
+
     /**
      * Ack a wrist command, at that command's OWN path so a later ack can never supersede an
      * unsynced earlier one (see [WearProtocol.PATH_CMD_ACK]).
@@ -177,10 +182,6 @@ class WearStatePublisher @Inject constructor(
      * once [ACK_HISTORY] newer ones exist — long past any plausible sync delay, and never the item
      * just written.
      */
-    suspend fun publishHrAck(ack: com.forge.shared.protocol.HrBatchAckDto) {
-        putItem(WearProtocol.PATH_HR_ACK, WearCodec.encode(ack))
-    }
-
     suspend fun publishAck(ack: CmdAckDto) {
         val path = WearProtocol.ackPath(ack.commandId)
         putItem(path, WearCodec.encode(ack))

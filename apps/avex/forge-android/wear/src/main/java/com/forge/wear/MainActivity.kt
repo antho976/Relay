@@ -67,6 +67,20 @@ class MainActivity : ComponentActivity() {
         setContent { WearRoot(repo, haptics) }
     }
 
+    /**
+     * Re-apply the live session while the app is actually in front of the user.
+     *
+     * A session that arrived while the app was in the background cannot start the health service
+     * — from API 34 that needs the app to be while-in-use eligible, so it is refused — and the
+     * Application's collector keys on the session id, so nothing retried it when the user then
+     * opened the app with every permission already granted. Idempotent: the chip re-posts and the
+     * service ignores a start for the session it is already streaming.
+     */
+    override fun onResume() {
+        super.onResume()
+        WearDataRepository.instance(this).session.value?.let { WearApp.applySession(this, it) }
+    }
+
     /** Backgrounding is never a reason to hold the display: the collector above stops, so clear it. */
     override fun onStop() {
         super.onStop()

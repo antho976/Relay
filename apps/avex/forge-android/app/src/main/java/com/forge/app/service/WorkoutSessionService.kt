@@ -85,8 +85,12 @@ class WorkoutSessionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Show placeholder notification immediately — required before any async work
-        val placeholder = buildSessionNotification("Workout", "Starting…")
+        // Show a notification immediately — required before any async work. A repeat start (the
+        // service already running, a new sitting) shows the live session rather than regressing it
+        // to "Starting…": the collector below may already have posted it, and would not re-post
+        // until the next minute's refresh.
+        val placeholder = bridge.sessionState.value?.let(::sessionNotification)
+            ?: buildSessionNotification("Workout", "Starting…")
         // The typed startForeground is only required on API 34+, where the "specialUse"
         // FGS type is defined. "specialUse" needs no runtime permission, unlike "health"
         // (which threw SecurityException on Android 14+ because we hold no health permission).
@@ -143,11 +147,15 @@ class WorkoutSessionService : Service() {
     }
 
     private fun updateSessionNotification(state: SessionNotifState) {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIF_SESSION, sessionNotification(state))
+    }
+
+    private fun sessionNotification(state: SessionNotifState): Notification {
         val elapsedMin = ((System.currentTimeMillis() - state.startedAtMs) / 60_000).toInt()
             .coerceAtLeast(0)
         val text = if (elapsedMin < 1) "Just started" else "$elapsedMin min"
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIF_SESSION, buildSessionNotification(state.dayName, text))
+        return buildSessionNotification(state.dayName, text)
     }
 
     private fun buildSessionNotification(title: String, text: String): Notification {

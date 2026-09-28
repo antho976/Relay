@@ -58,7 +58,10 @@ class WeeklyRecapWorker @AssistedInject constructor(
         // Arm next Monday FIRST, under its own name, so a batch that throws or retries can't end
         // the chain and this run is never the unfinished work a re-arm cancels. Not schedule():
         // on an upgraded install this run can still BE the legacy periodic that schedule() cancels.
-        armNext(ctx)
+        // Looked up from a few minutes ahead: a run that fires just before noon (the wall clock
+        // corrected backwards since it was armed) would otherwise name THIS Monday — its own name,
+        // still RUNNING — and KEEP would drop the successor, ending the chain.
+        armNext(ctx, lookAhead = EARLY_RUN_SLACK)
         if (!com.forge.app.program.Program.isLoaded) programRepo.ensureLoaded()
         // Quiet hours: defer (retry) the whole batch rather than dropping it. Each nudge below has
         // its own opt-out: the coach-brief push and the come-back nudge are SEPARATE features with
@@ -163,11 +166,11 @@ class WeeklyRecapWorker @AssistedInject constructor(
         return Result.success()
     }
 
-    /** True if today's date falls inside any saved holiday range (yyyy-MM-dd compares lexicographically). */
+    /** True if today's date falls inside any saved holiday range — the app's one vacation rule
+     *  ([com.forge.app.domain.vacation.VacationCalendar]), which also tolerates a reversed range. */
     private suspend fun isOnVacationToday(): Boolean {
-        val today = LocalDate.now(ZoneId.systemDefault()).toString() // yyyy-MM-dd
-        return vacationRepo.observeAll().firstOrNull().orEmpty()
-            .any { today >= it.startDate && today <= it.endDate }
+        val periods = vacationRepo.observeAll().firstOrNull().orEmpty()
+        return com.forge.app.domain.vacation.VacationCalendar.onVacation(periods)(LocalDate.now(ZoneId.systemDefault()))
     }
 
     companion object {
@@ -187,6 +190,9 @@ class WeeklyRecapWorker @AssistedInject constructor(
          *  push it later. */
         private const val RECAP_HOUR = 12
 
+        /** How far past its own noon a run looks for the NEXT Monday — see [doWork]. */
+        internal val EARLY_RUN_SLACK: Duration = Duration.ofMinutes(5)
+
         /**
          * Arm the recap for the next Monday [RECAP_HOUR]:00, keeping one already armed for it.
          *
@@ -202,10 +208,10 @@ class WeeklyRecapWorker @AssistedInject constructor(
             armNext(context)
         }
 
-        private fun armNext(context: Context) {
+        private fun armNext(context: Context, lookAhead: Duration = Duration.ZERO) {
             val zone = ZoneId.systemDefault()
             val now = ZonedDateTime.now(zone)
-            val runAt = nextRecapAt(now)
+            val runAt = nextRecapAt(now.plus(lookAhead))
             val request = OneTimeWorkRequestBuilder<WeeklyRecapWorker>()
                 .setConstraints(Constraints.Builder().setRequiresBatteryNotLow(true).build())
                 // ZonedDateTime, not LocalDateTime, so the delay spans real elapsed time across a

@@ -7,19 +7,23 @@ import android.content.Context
 import androidx.wear.protolayout.ColorBuilders.argb
 import androidx.wear.protolayout.DimensionBuilders.dp
 import androidx.wear.protolayout.LayoutElementBuilders
-import androidx.wear.protolayout.ModifiersBuilders
 import androidx.wear.protolayout.ResourceBuilders
 import androidx.wear.protolayout.TimelineBuilders
-import androidx.wear.protolayout.material.Colors
 import androidx.wear.protolayout.material.Text
 import androidx.wear.protolayout.material.Typography
 import androidx.wear.tiles.RequestBuilders
 import androidx.wear.tiles.TileBuilders
 import androidx.wear.tiles.TileService
+import com.forge.shared.protocol.ConfigDto
 import com.forge.shared.protocol.GlanceTodayDto
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.Futures
-import kotlinx.coroutines.runBlocking
+import com.google.common.util.concurrent.SettableFuture
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The swipe-right glances (W4), rendered from /glance/today — always stamped with data age,
@@ -30,21 +34,36 @@ abstract class AvexTileService : TileService() {
 
     abstract fun layout(context: Context, glance: GlanceTodayDto?, accent: Int): LayoutElementBuilders.LayoutElement
 
+    /** Every job here is bounded by [READ_TIMEOUT_MS] plus a layout build, so nothing outlives a render. */
+    private val tileScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     override fun onTileRequest(requestParams: RequestBuilders.TileRequest): ListenableFuture<TileBuilders.Tile> {
-        // Tile requests arrive on a binder thread; the DataItem fetch is a local IPC — bounded.
-        val (glance, accent) = runBlocking {
-            val g = WearGlanceStore.glance(this@AvexTileService)
-            val c = WearGlanceStore.config(this@AvexTileService)
-            g to accentArgb(c.accentHex, c.accentEnabled)
+        // TileService calls this on the MAIN thread (the tiles binary marks it @MainThread). It used
+        // to runBlocking two sequential Data Layer IPC reads right here, holding the watch's UI
+        // thread for as long as Play services took to answer. The future is returned at once and
+        // completed off the main thread, and the reads are bounded: a stalled Data Layer renders the
+        // "open Avex" placeholder rather than a tile that never answers.
+        val future = SettableFuture.create<TileBuilders.Tile>()
+        tileScope.launch {
+            try {
+                val (glance, config) = withTimeoutOrNull(READ_TIMEOUT_MS) {
+                    WearGlanceStore.glance(this@AvexTileService) to WearGlanceStore.config(this@AvexTileService)
+                } ?: (null to ConfigDto())
+                val accent = accentArgb(config.accentHex, config.accentEnabled)
+                future.set(
+                    TileBuilders.Tile.Builder()
+                        .setResourcesVersion(RESOURCES_VERSION)
+                        .setTileTimeline(
+                            TimelineBuilders.Timeline.fromLayoutElement(layout(this@AvexTileService, glance, accent))
+                        )
+                        .setFreshnessIntervalMillis(30 * 60_000L)
+                        .build()
+                )
+            } catch (t: Throwable) {
+                future.setException(t)
+            }
         }
-        val tile = TileBuilders.Tile.Builder()
-            .setResourcesVersion(RESOURCES_VERSION)
-            .setTileTimeline(
-                TimelineBuilders.Timeline.fromLayoutElement(layout(this, glance, accent))
-            )
-            .setFreshnessIntervalMillis(30 * 60_000L)
-            .build()
-        return Futures.immediateFuture(tile)
+        return future
     }
 
     override fun onTileResourcesRequest(
@@ -81,6 +100,8 @@ abstract class AvexTileService : TileService() {
 
     protected companion object {
         const val RESOURCES_VERSION = "1"
+        /** Upper bound on the Data Layer reads behind one tile render. */
+        const val READ_TIMEOUT_MS = 5_000L
         const val ON_BG = 0xFFF2EFEA.toInt()
         const val MUTED = 0xFFBFB6AA.toInt()
 

@@ -28,7 +28,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.material.Text
-import com.forge.shared.protocol.CmdAckDto
 import com.forge.shared.protocol.SessionLiveDto
 import com.forge.wear.data.WearDataRepository
 import com.forge.wear.data.WristEdit

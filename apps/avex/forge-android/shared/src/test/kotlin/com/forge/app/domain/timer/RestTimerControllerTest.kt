@@ -249,6 +249,23 @@ class RestTimerControllerTest {
     }
 
     @Test
+    fun restoreNeverReplacesALiveTimer() {
+        // The saved record is read asynchronously at startup; a rest started in the meantime is
+        // newer than anything on disk and must survive the late restore.
+        val scope = newScope()
+        val c = RestTimerController(scope, FakeClock(0))
+        c.start(90)
+
+        c.restore(totalSeconds = 150, remainingSeconds = 40, paused = true)
+
+        val s = c.state.value!!
+        assertEquals(90, s.totalSeconds)
+        assertEquals(90, s.secondsRemaining)
+        assertFalse(s.isPaused)
+        scope.cancel()
+    }
+
+    @Test
     fun aRestoredRemainderNeverExceedsItsTotal() {
         // Guards the progress ring: remaining > total reads as past-full.
         val scope = newScope()

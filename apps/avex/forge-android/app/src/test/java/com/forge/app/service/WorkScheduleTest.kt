@@ -88,6 +88,16 @@ class WorkScheduleTest {
     }
 
     @Test
+    fun `a Monday run that fires just before noon still arms next Monday`() {
+        // The wall clock corrected backwards since arming: the run starts two seconds "early",
+        // and naming this Monday again would be the RUNNING work's own name, which KEEP drops.
+        val thisRun = at(2026, 9, 14, 12)
+        val next = WeeklyRecapWorker.nextRecapAt(thisRun.minusSeconds(2).plus(WeeklyRecapWorker.EARLY_RUN_SLACK))
+        assertEquals(at(2026, 9, 21, 12), next)
+        assertNotEquals(WeeklyRecapWorker.workNameFor(thisRun), WeeklyRecapWorker.workNameFor(next))
+    }
+
+    @Test
     fun `the recap stays at Monday noon across a DST change`() {
         // Toronto springs forward on Sunday 2026-03-08.
         assertEquals(at(2026, 3, 9, 12), WeeklyRecapWorker.nextRecapAt(at(2026, 3, 7, 9)))
@@ -104,6 +114,24 @@ class WorkScheduleTest {
         val successor = WidgetMidnightWorker.nextMidnightMs(midnight, toronto)
         assertEquals(at(2026, 9, 28, 0).toInstant().toEpochMilli(), successor)
         assertNotEquals(WidgetMidnightWorker.workNameFor(armed), WidgetMidnightWorker.workNameFor(successor))
+    }
+
+    @Test
+    fun `a midnight run that fires just early arms the following midnight`() {
+        val midnight = at(2026, 9, 27, 0).toInstant().toEpochMilli()
+        val successor = WidgetMidnightWorker.successorMidnightMs(midnight - 2_000, toronto)
+        assertEquals(at(2026, 9, 28, 0).toInstant().toEpochMilli(), successor)
+        assertNotEquals(WidgetMidnightWorker.workNameFor(midnight), WidgetMidnightWorker.workNameFor(successor))
+    }
+
+    @Test
+    fun `the fall-back day's midnight is armed at its real 25-hour distance`() {
+        // Toronto falls back on Sunday 2026-11-01: that day is 25 hours long. A one-day cap ran the
+        // redraw at 23:00, and the midnight it re-armed from there was its own name.
+        val start = at(2026, 11, 1, 0).toInstant().toEpochMilli()
+        val next = WidgetMidnightWorker.successorMidnightMs(start, toronto)
+        assertEquals(at(2026, 11, 2, 0).toInstant().toEpochMilli(), next)
+        assertEquals(25 * 60 * 60_000L, WidgetMidnightWorker.delayUntilMs(next, start))
     }
 
     @Test
