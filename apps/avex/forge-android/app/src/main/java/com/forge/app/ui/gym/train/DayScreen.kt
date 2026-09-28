@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.Button
@@ -147,7 +148,10 @@ fun DayScreen(
                 (timer ?: lastTimer)?.let { t ->
                     RestTimerBubble(state = t,
                         onOpenControls = { viewModel.onEvent(DayUiEvent.RestTimerOpen) },
-                        onLongClick = { viewModel.onEvent(DayUiEvent.RestTimerAddSeconds(30)) })
+                        onLongClick = { viewModel.onEvent(DayUiEvent.RestTimerAddSeconds(30)) },
+                        // Edge-to-edge, the Scaffold's FAB slot sits under an open keyboard; ride
+                        // above it instead of vanishing while the next set's numbers are typed.
+                        modifier = Modifier.imePadding())
                 }
             }
         },
@@ -190,7 +194,15 @@ fun DayScreen(
             onSkip = { viewModel.onEvent(DayUiEvent.RestTimerSkip) },
             onAddSeconds = { s -> viewModel.onEvent(DayUiEvent.RestTimerAddSeconds(s)) },
             onDismiss = { viewModel.onEvent(DayUiEvent.RestTimerClose) },
-            reason = state.restTimerReason
+            reason = state.restTimerReason,
+            onSetSeconds = { s -> viewModel.onEvent(DayUiEvent.RestTimerSetTo(s)) },
+            onMakeDefault = state.restTimerExerciseId?.let { id ->
+                { viewModel.onEvent(DayUiEvent.SetRestTimerOverride(id, timer.totalSeconds)) }
+            },
+            exerciseName = state.restTimerExerciseId?.let { id -> state.exercises.firstOrNull { it.plan.id == id }?.effectiveName },
+            onClearDefault = state.restTimerExerciseId
+                ?.takeIf { id -> state.exercises.firstOrNull { it.plan.id == id }?.restTimerOverrideSeconds != null }
+                ?.let { id -> { viewModel.onEvent(DayUiEvent.SetRestTimerOverride(id, null)) } }
         )
     }
 

@@ -67,6 +67,8 @@ fun ExerciseCard(
      *  Empty hides the rail. */
     sessionDone: List<Boolean> = emptyList(),
     restTimerState: RestTimerState? = null,
+    /** When every other exercise's sets this session were logged — see [restBetweenSeconds]. */
+    otherSetTimes: List<Long> = emptyList(),
     sessionStartedAtMs: Long? = null,
     onToggle: () -> Unit,
     onLogSet: (weightText: String, reps: Int, durationSeconds: Int?) -> Unit,
@@ -331,8 +333,7 @@ fun ExerciseCard(
                     // Air between set rows, no rule (grouped-surface pass, 2026-09-27).
                     val next = state.loggedSets.getOrNull(i + 1)
                     if (next != null) {
-                        val restSec = ((next.completedAt - set.completedAt) / 1000L).toInt()
-                        RestBetweenSets(restSec)
+                        restBetweenSeconds(set, next, otherSetTimes)?.let { RestBetweenSets(it) }
                     }
                 }
 

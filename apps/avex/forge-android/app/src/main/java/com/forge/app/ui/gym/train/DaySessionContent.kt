@@ -103,7 +103,6 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
         return
     }
 
-    var restTimerSetterForId by remember { mutableStateOf<String?>(null) }
     var chartForExerciseId by remember { mutableStateOf<String?>(null) }
     // rememberSaveable so a rotation while the note editor is open keeps it open (its text is saved too).
     var showNoteEditor by rememberSaveable { mutableStateOf(false) }
@@ -127,16 +126,6 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
         }
     }
 
-    restTimerSetterForId?.let { exId ->
-        val exercise = state.exercises.firstOrNull { it.plan.id == exId }
-        RestTimerSetterDialog(
-            exerciseName = exercise?.effectiveName ?: exId,
-            currentSeconds = exercise?.restTimerOverrideSeconds,
-            onSet = { secs -> onEvent(DayUiEvent.SetRestTimerOverride(exId, secs)); restTimerSetterForId = null },
-            onClear = { onEvent(DayUiEvent.SetRestTimerOverride(exId, null)); restTimerSetterForId = null },
-            onDismiss = { restTimerSetterForId = null }
-        )
-    }
 
     val weightUnit = LocalForgeSettings.current.weightUnit
 
@@ -286,6 +275,8 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 // not far below it — passed off state.restTimer so it appears the
                                 // instant a set is logged (plan.id is unchanged → no re-animation).
                                 restTimerState = state.restTimer,
+                                otherSetTimes = state.exercises.filter { it.plan.id != id }
+                                    .flatMap { other -> other.loggedSets.map { it.completedAt } },
                                 sessionStartedAtMs = state.elapsedAnchorMs,
                                 advanceLabel = if (exNextId != null) "MOVE TO NEXT →" else "FINISH WORKOUT →",
                                 onAdvance = { if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout) },
@@ -330,7 +321,11 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 onOpenSwapPicker = { onEvent(DayUiEvent.OpenSwapPicker(id)) },
                                 onOpenGoalSetter = { onEvent(DayUiEvent.OpenGoalSetter(id)) },
                                 onLongPress = { onEvent(DayUiEvent.LongPressExercise(id)) },
-                                onOpenRestTimerSetter = { restTimerSetterForId = id },
+                                // The inline timer opens the LIVE rest controls. It used to open the
+                                // per-exercise default dialog, which saved a permanent override and
+                                // left the running rest untouched; "always rest this long" is now an
+                                // explicit link inside the controls.
+                                onOpenRestTimerSetter = { onEvent(DayUiEvent.RestTimerOpen) },
                                 onSkipRest = { onEvent(DayUiEvent.RestTimerSkip) },
                                 onSetExerciseUnit = { unit -> onEvent(DayUiEvent.SetExerciseUnit(id, unit)) },
                                 onPinNote = { note -> onEvent(DayUiEvent.SetPinnedNote(id, note)) },

@@ -73,6 +73,8 @@ data class DayUiState(
     val showTimerControls: Boolean = false,
     /** How the running rest duration was derived (engine System 2) — shown in the timer dialog. */
     val restTimerReason: String? = null,
+    /** The slot (plan id) whose set started the running rest — what "always rest this long" saves to. */
+    val restTimerExerciseId: String? = null,
     /**
      * Pre-session fatigue-aware reorder proposal (engine System 3). Non-null only before
      * any set is logged; cleared on apply/dismiss. Applying reorders the in-memory list

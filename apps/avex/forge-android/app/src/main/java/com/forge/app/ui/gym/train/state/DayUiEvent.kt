@@ -54,6 +54,8 @@ sealed interface DayUiEvent {
     data object RestTimerReset : DayUiEvent
     data object RestTimerSkip : DayUiEvent
     data class RestTimerAddSeconds(val seconds: Int) : DayUiEvent
+    /** Restart the running rest at exactly [seconds] — the controls' "rest for" presets. */
+    data class RestTimerSetTo(val seconds: Int) : DayUiEvent
 
     // Session lifecycle
     data object FinishWorkout : DayUiEvent

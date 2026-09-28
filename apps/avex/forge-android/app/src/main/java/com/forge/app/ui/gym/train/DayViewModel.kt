@@ -327,7 +327,7 @@ class DayViewModel @Inject constructor(
             is DayUiEvent.RestTimerOpen, is DayUiEvent.RestTimerClose,
             is DayUiEvent.RestTimerPause, is DayUiEvent.RestTimerResume,
             is DayUiEvent.RestTimerReset, is DayUiEvent.RestTimerSkip,
-            is DayUiEvent.RestTimerAddSeconds -> handleTimerEvent(event)
+            is DayUiEvent.RestTimerAddSeconds, is DayUiEvent.RestTimerSetTo -> handleTimerEvent(event)
 
             is DayUiEvent.FinishWorkout, is DayUiEvent.DismissSummary,
             is DayUiEvent.RequestBack, is DayUiEvent.ConfirmDiscard,

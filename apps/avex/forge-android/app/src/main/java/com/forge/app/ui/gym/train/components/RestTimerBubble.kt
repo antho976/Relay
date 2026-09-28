@@ -1,5 +1,6 @@
 package com.forge.app.ui.gym.train.components
 
+import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.foundation.layout.heightIn
 
 import androidx.compose.animation.core.Animatable
@@ -255,7 +256,15 @@ fun RestTimerControlsDialog(
     onAddSeconds: (Int) -> Unit,
     onDismiss: () -> Unit,
     /** How this duration was derived (adaptation engine) — every prescription is explainable. */
-    reason: String? = null
+    reason: String? = null,
+    /** Restart the rest at exactly this many seconds (the "rest for" presets). */
+    onSetSeconds: (Int) -> Unit = {},
+    /** Save the current length as this exercise's default rest; null hides the link. */
+    onMakeDefault: (() -> Unit)? = null,
+    /** The exercise [onMakeDefault] applies to, for its label. */
+    exerciseName: String? = null,
+    /** Drop this exercise's saved rest and go back to the automatic one; null when none is saved. */
+    onClearDefault: (() -> Unit)? = null
 ) {
     Dialog(onDismissRequest = onDismiss) {
         val onBg = MaterialTheme.colorScheme.onBackground
@@ -306,28 +315,44 @@ fun RestTimerControlsDialog(
                 )
             }
 
-            // −30s trims an over-long rest; the rest add time. addSeconds clamps at 0, so −30s
-            // with under 30s left simply ends the rest.
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(-30 to "−30s", 60 to "+1 min", 120 to "+2 min", 300 to "+5 min").forEach { (s, label) ->
-                    // Filled capsules on the dialog, not outlined boxes.
-                    Box(
-                        modifier = Modifier
-                            .heightIn(min = 40.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                            .clickable { onAddSeconds(s) }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            label,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = muted,
-                            letterSpacing = 0.5.sp
-                        )
-                    }
+            // "Rest for" SETS the rest to that length, counted from now. These used to be
+            // "+1 min / +2 min / +5 min" and ADD to what was left, so tapping "+5 min" two minutes
+            // into a rest, meaning "rest five minutes", ran a seven-minute rest. The ±30s nudges
+            // below are the only additive controls, and they say so with their sign.
+            Text("REST FOR", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.sp)
+            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                REST_PRESETS.forEach { secs ->
+                    TimerCapsule(formatTime(secs), "Rest for ${formatTime(secs)}", muted) { onSetSeconds(secs) }
                 }
+            }
+            // addSeconds clamps at 0, so −30s with under 30s left simply ends the rest.
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TimerCapsule("−30s", "Take 30 seconds off", muted) { onAddSeconds(-30) }
+                TimerCapsule("+30s", "Add 30 seconds", muted) { onAddSeconds(30) }
+            }
+            if (onMakeDefault != null) {
+                Text(
+                    "Always rest ${formatTime(state.totalSeconds)}" + (exerciseName?.let { " on $it" } ?: " on this exercise"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted,
+                    modifier = Modifier
+                        .clickableLabeled("Save ${formatTime(state.totalSeconds)} as this exercise's rest") { onMakeDefault() }
+                        .padding(vertical = 4.dp)
+                )
+            }
+            if (onClearDefault != null) {
+                Text(
+                    "Use the automatic rest again",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted,
+                    modifier = Modifier
+                        .clickableLabeled("Clear this exercise's saved rest") { onClearDefault() }
+                        .padding(vertical = 4.dp)
+                )
             }
 
             Row(
@@ -357,6 +382,25 @@ fun RestTimerControlsDialog(
                 )
             }
         }
+    }
+}
+
+/** The controls' "rest for" lengths, in seconds. */
+private val REST_PRESETS = listOf(60, 90, 120, 180, 300)
+
+/** A filled capsule on the controls dialog. */
+@Composable
+private fun TimerCapsule(label: String, a11y: String, color: androidx.compose.ui.graphics.Color, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .heightIn(min = 40.dp)
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickableLabeled(a11y, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = color, letterSpacing = 0.5.sp)
     }
 }
 

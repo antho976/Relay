@@ -13,7 +13,8 @@ object SessionEstimate {
     private val BIG_MUSCLES = setOf(
         MuscleGroup.CHEST, MuscleGroup.BACK, MuscleGroup.QUADS, MuscleGroup.HAMSTRINGS, MuscleGroup.GLUTES
     )
-    private const val WORK_SECONDS_PER_SET = 45
+    /** What one working set is assumed to take on the clock, when nothing measured it. */
+    const val WORK_SECONDS_PER_SET = 45
     private const val WARMUP_SECONDS = 300
     /** Canonical rest bases (seconds) — also the defaults a user's Session-settings override falls back to. */
     const val COMPOUND_REST = 120

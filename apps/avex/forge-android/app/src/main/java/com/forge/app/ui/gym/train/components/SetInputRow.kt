@@ -135,6 +135,18 @@ fun SetInputRow(
     var reps by rememberSaveable(nextSetNumber) { mutableStateOf(seedReps) }
     val repsFocus = remember { FocusRequester() }
     val haptic = LocalHapticFeedback.current
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    /**
+     * A logged set starts a rest, and the rest timer draws right where the keyboard sits: with the
+     * app edge-to-edge, a keyboard left open after typing the first set's numbers covered both the
+     * floating bubble and the inline timer, so the timer seemed to appear only from the second set
+     * (the first one you didn't have to type). Nothing is being typed during a rest, so put it away.
+     */
+    fun doneTyping() {
+        focusManager.clearFocus()
+        keyboard?.hide()
+    }
 
     // ── Timed-hold state (GYMAP-51) — only exercised when isTimed ────────────────
     // durationSec is the held time in seconds; it's driven by a clock-anchored count-up stopwatch
@@ -224,6 +236,7 @@ fun SetInputRow(
             // Weight is optional on a hold (weighted plank/hang); bodyweight or blank logs "BW".
             val wt = if (isBodyweight || weight.isBlank()) "BW" else untouchedSeedOrTyped()
             onSubmit(wt, 0, d)
+            doneTyping()
             return
         }
         val r = reps.toIntOrNull()?.takeIf { it > 0 } ?: return
@@ -233,6 +246,7 @@ fun SetInputRow(
             if (weight.isBlank()) return
             onSubmit(untouchedSeedOrTyped(), r, null)
         }
+        doneTyping()
         // Fields re-seed from the next set's prior automatically (keyed on the set number) (#8).
     }
 
