@@ -5,9 +5,14 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 import java.time.LocalDate
 
 /** Planned rest vs missed training, judged by the schedule in force on the day. */
+// Robolectric: the round-trips go through org.json, which the plain JVM only has as android.jar
+// stubs that throw, so these tests could never pass outside it.
+@RunWith(RobolectricTestRunner::class)
 class ScheduleHistoryTest {
 
     private val weekday = WeeklySchedule.MODE_WEEKDAY

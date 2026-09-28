@@ -35,6 +35,7 @@ import com.forge.app.program.Equipment
 import com.forge.app.program.GenerationParams
 import com.forge.app.program.Program
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -288,9 +289,17 @@ class WorkoutRepository @Inject constructor(
         // in the rotation (a DataStore read failure, a generation error) skipped the Health Connect
         // mirrors AND the widget refresh, and the finish itself then reported a failure to a caller
         // whose local data was already correctly committed.
-        finishSideEffect { maybeRotateProgram() }
-        finishSideEffect { writeFinishMirrors(outcome.session, endMs = now, activeSeconds = outcome.activeSeconds) }
-        finishSideEffect { refreshWidget() }
+        //
+        // The Health Connect mirrors run BESIDE the rotation and widget rather than after them: they
+        // are several permission and write IPCs the finish summary was waiting on in sequence. The
+        // widget still follows the rotation, since it names the next day the rotation may change.
+        kotlinx.coroutines.coroutineScope {
+            launch {
+                finishSideEffect { writeFinishMirrors(outcome.session, endMs = now, activeSeconds = outcome.activeSeconds) }
+            }
+            finishSideEffect { maybeRotateProgram() }
+            finishSideEffect { refreshWidget() }
+        }
         return outcome.activeSeconds
     }
 

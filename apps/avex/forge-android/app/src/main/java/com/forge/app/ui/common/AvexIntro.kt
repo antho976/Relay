@@ -115,9 +115,11 @@ fun AvexIntro(
             // Holds are raw delays Compose does not clock, so they take the animator scale here to stay
             // in step with the tweens (which Compose scales itself); the reduced-motion hold is a fixed
             // still beat, not motion, and is left alone.
+            // The plain hold is short on purpose: the intro covers a screen that is already composed
+            // and usable beneath it, so every millisecond here is time-to-first-tap (it was 700).
             delay(
                 if (reduceMotion) 450L
-                else ForgeMotion.scaledDuration((if (choreographedExit) 570 else 700) + mascotHold).toLong()
+                else ForgeMotion.scaledDuration((if (choreographedExit) 570 else 350) + mascotHold).toLong()
             )
             if (choreographedExit) {
                 // The death starts first; the plate fade joins in later so the destruction reads before

@@ -3,8 +3,13 @@ package com.forge.app.ui.programbuilder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 /** The plan editor's "Day of the week" picks, as they become the weekly schedule. */
+// Robolectric: the round-trips go through org.json, which the plain JVM only has as android.jar
+// stubs that throw, so these tests could never pass outside it.
+@RunWith(RobolectricTestRunner::class)
 class ProgramBuilderWeekdayTest {
 
     private fun day(key: String, weekdays: Set<Int> = emptySet()) = BuilderDay(
