@@ -29,7 +29,10 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
@@ -63,6 +66,9 @@ fun DayScreen(
     viewModel: DayViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Held as a State and read only where the timer is drawn (FAB bubble, inline slot, controls):
+    // reading it here would recompose the whole screen every second of every rest.
+    val restTimer = viewModel.restTimerState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val hapticStrength = LocalForgeSettings.current.hapticStrength
 
@@ -99,15 +105,21 @@ fun DayScreen(
     // not buzz them. Seeding the tracker with the current reading means a screen rebuilt mid-rest
     // (rotation) or opened onto an already-finished timer never re-buzzes / re-announces (A4).
     val restCues = remember {
-        RestTimerHapticCues(state.restTimer?.secondsRemaining, state.restTimer?.isFinished == true)
+        RestTimerHapticCues(restTimer.value?.secondsRemaining, restTimer.value?.isFinished == true)
     }
-    LaunchedEffect(state.restTimer?.secondsRemaining, state.restTimer?.isFinished) {
-        val timer = state.restTimer
-        restCues.advance(timer?.secondsRemaining, timer?.isFinished == true).forEach { cue ->
-            view.forgeHaptic(cue, hapticStrength)
-            // A4: spoken even with the phone face-down.
-            if (cue == ForgeHapticType.PR_OR_FINISH) view.announceForAccessibility("Rest complete")
-        }
+    val currentHapticStrength by rememberUpdatedState(hapticStrength)
+    LaunchedEffect(restCues) {
+        // Collected in the effect rather than keyed on the reading, so the ticks never pass through
+        // this screen's composition. Same inputs as before: advance on each change of (seconds, done).
+        snapshotFlow { restTimer.value?.secondsRemaining to (restTimer.value?.isFinished == true) }
+            .distinctUntilChanged()
+            .collect { (seconds, finished) ->
+                restCues.advance(seconds, finished).forEach { cue ->
+                    view.forgeHaptic(cue, currentHapticStrength)
+                    // A4: spoken even with the phone face-down.
+                    if (cue == ForgeHapticType.PR_OR_FINISH) view.announceForAccessibility("Rest complete")
+                }
+            }
     }
 
     LaunchedEffect(state.undoableSetId) {
@@ -133,7 +145,7 @@ fun DayScreen(
         floatingActionButton = {
             // Retain the last timer so the bubble can animate OUT (scale + fade) when the rest
             // ends instead of snapping away. Enter is handled by the bubble's own pop-in spring.
-            val timer = state.restTimer
+            val timer = restTimer.value
             var lastTimer by remember { mutableStateOf(timer) }
             LaunchedEffect(timer) { if (timer != null) lastTimer = timer }
             AnimatedVisibility(
@@ -154,7 +166,7 @@ fun DayScreen(
         containerColor = Color.Transparent
     ) { inner ->
         Box(Modifier.fillMaxSize().padding(inner)) {
-            DayContent(state = state, onEvent = viewModel::onEvent)
+            DayContent(state = state, onEvent = viewModel::onEvent, restTimer = restTimer)
             if (showPrBurst) {
                 // PR celebration is now just the confetti burst (over the live screen) plus the gold
                 // ★/text on the record set row — no full-screen "PERSONAL RECORD" takeover.
@@ -180,8 +192,9 @@ fun DayScreen(
         )
     }
 
-    val timer = state.restTimer
-    if (state.showTimerControls && timer != null) {
+    // Read only while the dialog is open, so a closed dialog adds no per-tick recomposition.
+    val timer = if (state.showTimerControls) restTimer.value else null
+    if (timer != null) {
         RestTimerControlsDialog(
             state = timer,
             onPause = { viewModel.onEvent(DayUiEvent.RestTimerPause) },

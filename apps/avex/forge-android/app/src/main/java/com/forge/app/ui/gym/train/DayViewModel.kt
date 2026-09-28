@@ -68,6 +68,13 @@ class DayViewModel @Inject constructor(
     // from VM-scope death to the explicit session end (stopSessionService stops it).
     internal val restTimer = timerHolder.controller
 
+    /**
+     * The running rest, exposed on its own rather than copied into [state]: it ticks every second,
+     * and a copy per tick recomposed the whole day screen once a second for most of a workout.
+     */
+    val restTimerState: kotlinx.coroutines.flow.StateFlow<com.forge.app.domain.timer.RestTimerState?> =
+        restTimer.state
+
     /** Personal rest-correction factors (engine System 2). Neutral until the init load lands. */
     internal var restTuning: com.forge.app.domain.adapt.RestTuning =
         com.forge.app.domain.adapt.RestTuning.NEUTRAL
@@ -169,7 +176,6 @@ class DayViewModel @Inject constructor(
                 val justFinished = !prevTimerFinished && (timer?.isFinished == true)
                 prevTimerFinished = timer?.isFinished == true
                 if (justFinished) bridge.notifyTimerDone()
-                _state.update { it.copy(restTimer = timer) }
             }
         }
         beginJob = viewModelScope.launch {

@@ -109,5 +109,5 @@ internal fun DayViewModel.updateRestForLatestEffort(exerciseId: String, setId: L
         if (timer.isPaused) restTimer.pause()
     }
     openRestEvent = open.copy(plannedSeconds = prescription.seconds)
-    _state.update { it.copy(restTimer = restTimer.state.value, restTimerReason = prescription.reason) }
+    _state.update { it.copy(restTimerReason = prescription.reason) }
 }

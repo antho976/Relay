@@ -18,6 +18,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.heading
@@ -106,9 +109,13 @@ fun SessionHistoryScreen(
 
             Spacer(Modifier.height(18.dp))
             // ── Search: the filled rounded search row ──────────
+            // The field owns its text. Bound to state.query, each keystroke reached the field only
+            // after a thread hop and a full re-filter of the history, so fast typing lagged and could
+            // drop or reorder characters. The view model is only told; it never writes the query back.
+            var queryText by rememberSaveable { mutableStateOf(viewModel.currentQuery()) }
             GymSearchRow(
-                query = state.query,
-                onQueryChange = viewModel::setQuery,
+                query = queryText,
+                onQueryChange = { queryText = it; viewModel.setQuery(it) },
                 placeholder = "Search day, exercise or note",
                 modifier = Modifier.padding(horizontal = 24.dp)
             )
@@ -150,7 +157,10 @@ fun SessionHistoryScreen(
                 }
             }
 
-            if (state.isEmpty) {
+            if (!state.loaded) {
+                // Nothing until the first read lands: "No sessions yet" flashed for a frame or two
+                // on every open, before the list it claimed was missing appeared.
+            } else if (state.isEmpty) {
                 // Quiet italic hint — no boxed empty-state card (§12).
                 val hint = if (state.anyFilterActive)
                     "No sessions match. Try a different search or clear a filter."

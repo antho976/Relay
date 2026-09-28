@@ -39,11 +39,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import com.forge.app.domain.timer.RestTimerState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -87,8 +89,22 @@ internal fun upcomingExercises(
         .map { it.index to it.value }
 }
 
+/** No rest running — the default for callers with no timer to show. */
+private val NoRestTimer: State<RestTimerState?> = object : State<RestTimerState?> {
+    override val value: RestTimerState? get() = null
+}
+
+/**
+ * @param restTimer the live rest timer, kept OUT of [state]: it ticks every second, and copied into
+ *   the day's state it recomposed this whole screen — list, cards, hero — once a second for most of
+ *   a workout. Passed as a [State] and read only in the slot that draws it.
+ */
 @Composable
-internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
+internal fun DayContent(
+    state: DayUiState,
+    onEvent: (DayUiEvent) -> Unit,
+    restTimer: State<RestTimerState?> = NoRestTimer
+) {
     if (state.isLoading) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Loading session…", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -263,13 +279,15 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 state = ex.copy(isExpanded = true),
                                 isNow = exIsNow,
                                 totalExercises = state.exercises.size,
-                                sessionDone = state.exercises.map { it.isComplete },
+                                sessionDone = remember(state.exercises) { state.exercises.map { it.isComplete } },
                                 // The rest timer renders inside the card (right under the set log),
-                                // not far below it — passed off state.restTimer so it appears the
+                                // not far below it — passed the live timer so it appears the
                                 // instant a set is logged (plan.id is unchanged → no re-animation).
-                                restTimerState = state.restTimer,
-                                otherSetTimes = state.exercises.filter { it.plan.id != id }
-                                    .flatMap { other -> other.loggedSets.map { it.completedAt } },
+                                restTimerState = restTimer,
+                                otherSetTimes = remember(state.exercises, id) {
+                                    state.exercises.filter { it.plan.id != id }
+                                        .flatMap { other -> other.loggedSets.map { it.completedAt } }
+                                },
                                 sessionStartedAtMs = state.elapsedAnchorMs,
                                 advanceLabel = if (exNextId != null) "MOVE TO NEXT →" else "FINISH WORKOUT →",
                                 onAdvance = { if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout) },

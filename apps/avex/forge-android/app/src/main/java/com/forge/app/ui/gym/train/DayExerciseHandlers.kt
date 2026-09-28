@@ -328,10 +328,10 @@ internal fun DayViewModel.logSet(
             )
             val rest = computeRestPrescription(restPlan, currentUi.difficulty, currentUi.restTimerOverrideSeconds, performed)
             restTimer.start(rest.seconds)
-            // Push the started timer into UI state synchronously so it's visible before refreshExercise
-            // re-renders — don't wait for the collector coroutine to forward the first emission.
+            // The timer itself is visible at once through restTimerState (a StateFlow, already
+            // holding the started value); only the reason and owning slot live in UI state.
             _state.update {
-                it.copy(restTimer = restTimer.state.value, restTimerReason = rest.reason, restTimerExerciseId = exerciseId)
+                it.copy(restTimerReason = rest.reason, restTimerExerciseId = exerciseId)
             }
 
             closeOpenRestEvent(sessionId, restEndedAtMs)
