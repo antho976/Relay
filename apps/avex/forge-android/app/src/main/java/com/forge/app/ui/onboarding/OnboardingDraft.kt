@@ -35,7 +35,11 @@ internal data class OnboardingDraft(
     /** Explicit coach opt-in / opt-out; null = untouched, so the mode's default applies. */
     val coachChoice: Boolean?,
     /** Minutes per session; null = never answered, 0 = explicitly "Any" (no ceiling). */
-    val sessionMinutes: Int? = null
+    val sessionMinutes: Int? = null,
+    /** Fixed weekdays (true) or "whenever I can" (false); null = not answered yet. */
+    val fixedDays: Boolean? = null,
+    /** Weekdays picked for fixed days, 0 = Monday. */
+    val weekdays: Set<Int> = emptySet()
 ) {
     fun toJson(): String = JSONObject().apply {
         put("schema", SCHEMA)
@@ -60,14 +64,17 @@ internal data class OnboardingDraft(
         put("appLock", appLock)
         coachChoice?.let { put("coachChoice", it) }       // absent = never touched
         sessionMinutes?.let { put("sessionMinutes", it) } // absent = never answered
+        fixedDays?.let { put("fixedDays", it) }           // absent = never answered
+        put("weekdays", JSONArray(weekdays.sorted()))
     }.toString()
 
     companion object {
         /** Bump whenever the flow's shape changes so a draft written by an older build — whose
          *  cursor now points at a different step — is discarded rather than resumed mid-flow onto
          *  the wrong screen. The answer fields are name-keyed and would survive, but the cursor
-         *  wouldn't. 4 = the 2026-08-22 rebuild, which also renamed `page` to `step`. */
-        private const val SCHEMA = 4
+         *  wouldn't. 4 = the 2026-08-22 rebuild, which also renamed `page` to `step`. 5 = the
+         *  weekday step after the day count. */
+        private const val SCHEMA = 5
 
         /** Null on any parse failure or a stale schema — the draft just restarts onboarding cleanly. */
         fun fromJson(json: String): OnboardingDraft? = runCatching {
@@ -94,7 +101,10 @@ internal data class OnboardingDraft(
                 previewSeed = o.getLong("previewSeed"),
                 appLock = o.optBoolean("appLock", false),
                 coachChoice = if (o.has("coachChoice")) o.getBoolean("coachChoice") else null,
-                sessionMinutes = if (o.has("sessionMinutes")) o.getInt("sessionMinutes") else null
+                sessionMinutes = if (o.has("sessionMinutes")) o.getInt("sessionMinutes") else null,
+                fixedDays = if (o.has("fixedDays")) o.getBoolean("fixedDays") else null,
+                weekdays = o.optJSONArray("weekdays")?.let { a -> (0 until a.length()).map { a.getInt(it) }.toSet() }
+                    ?: emptySet()
             )
         }.getOrNull()
 

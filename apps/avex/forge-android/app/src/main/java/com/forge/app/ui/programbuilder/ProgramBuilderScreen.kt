@@ -138,6 +138,8 @@ fun ProgramBuilderScreen(
             onRename = { viewModel.renameDay(editingDay.uid, it) },
             onSetType = { viewModel.setDayType(editingDay.uid, it) },
             onSetAccent = { viewModel.setDayAccent(editingDay.uid, it) },
+            onToggleWeekday = { viewModel.toggleDayWeekday(editingDay.uid, it) },
+            onClearWeekdays = { viewModel.clearDayWeekdays(editingDay.uid) },
             onAddExercises = { viewModel.addExercises(editingDay.uid, it) },
             onRemoveExercise = { exUid ->
                 viewModel.removeExercise(editingDay.uid, exUid)
@@ -354,11 +356,14 @@ internal fun OpenDay(day: BuilderDay, showSets: Boolean, onEdit: (() -> Unit)?) 
         Box(Modifier.padding(horizontal = 4.dp)) {
             ForgeGroupLabel(
                 text = day.name,
-                meta = when {
-                    exercises.isEmpty() -> null
-                    showSets -> "${exercises.size} moves · ${day.totalSets} sets"
-                    else -> "${exercises.size} moves"
-                }
+                meta = listOfNotNull(
+                    day.weekdayLabel(),
+                    when {
+                        exercises.isEmpty() -> null
+                        showSets -> "${exercises.size} moves · ${day.totalSets} sets"
+                        else -> "${exercises.size} moves"
+                    }
+                ).joinToString(" · ").ifEmpty { null }
             )
         }
         if (exercises.isEmpty()) {

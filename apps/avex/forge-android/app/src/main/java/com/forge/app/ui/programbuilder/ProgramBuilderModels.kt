@@ -25,7 +25,12 @@ data class BuilderDay(
     val archetype: String,
     val accentHex: String,
     val exercises: List<BuilderExercise>,
-    val word: String = ""
+    val word: String = "",
+    /**
+     * Weekdays this day is trained on (0 = Monday … 6 = Sunday); empty = no fixed day. A set, not
+     * one value, because the schedule allows the same workout twice a week.
+     */
+    val weekdays: Set<Int> = emptySet()
 )
 
 /**
@@ -104,3 +109,20 @@ fun List<BuilderDay>.toEntities(): Pair<List<ProgramDay>, List<ProgramSlot>> {
     }
     return days to slots
 }
+
+/**
+ * The weekly schedule the builder's weekday picks describe, or null when no day has one (the plan
+ * then runs in sequence). One weekday holds one day — [ProgramBuilderViewModel.toggleDayWeekday]
+ * keeps that true — so this is a straight placement. Pure — testable.
+ */
+fun List<BuilderDay>.toSchedule(): List<String>? {
+    if (all { it.weekdays.isEmpty() }) return null
+    val slots = MutableList(com.forge.app.domain.schedule.WeeklySchedule.SLOTS) { "" }
+    forEach { d -> d.weekdays.filter { it in slots.indices }.forEach { slots[it] = d.key } }
+    return slots
+}
+
+/** Short weekday list for a day ("Mon · Thu"), or null when it has no fixed day. */
+fun BuilderDay.weekdayLabel(): String? =
+    weekdays.sorted().takeIf { it.isNotEmpty() }
+        ?.joinToString(" · ") { com.forge.app.domain.schedule.WeeklySchedule.WEEKDAY_SHORT[it] }

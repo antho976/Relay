@@ -276,8 +276,21 @@ class ProgramRepository @Inject constructor(
         settings.setDeloadWeekStartMs(if (params.deload) intent.atMs else 0L)
         settings.setProgramGenerationSeed(effectiveSeed)
         settings.clearProgramGenerationIntent()
+        keepWeekdaysFor(days.map { it.id })
         loadIntoFacade(refreshWidget = true)
         true
+    }
+
+    /**
+     * A fixed-weekday lifter keeps their weekdays across a regenerate. A new split has new day keys,
+     * and a schedule naming the old ones resolves to nothing — the app quietly stopped knowing which
+     * day was today's. See [com.forge.app.domain.schedule.WeeklySchedule.remap].
+     */
+    private suspend fun keepWeekdaysFor(newKeys: List<String>) {
+        if (settings.scheduleMode.first() != com.forge.app.domain.schedule.WeeklySchedule.MODE_WEEKDAY) return
+        val old = settings.weeklySchedule.first()
+        val next = com.forge.app.domain.schedule.WeeklySchedule.remap(old, newKeys)
+        if (next != old) settings.setWeeklySchedule(next)
     }
 
     /**

@@ -191,4 +191,34 @@ class ProgramBuilderViewModelTest {
         assertEquals(listOf("Push"), vm.days.map { it.name })
         assertFalse(vm.dirty)
     }
+
+    @Test
+    fun `a weekday holds one workout and claiming it moves it`() {
+        val vm = ProgramBuilderViewModel(FakeStore(), SavedStateHandle())
+        vm.loadIfNeeded(blank = true)
+        vm.addDay()
+        vm.addDay()
+        val (a, b) = vm.days.map { it.uid }
+        vm.toggleDayWeekday(a, 0)
+        vm.toggleDayWeekday(a, 3)
+        vm.toggleDayWeekday(b, 3)
+        assertEquals(setOf(0), vm.day(a)!!.weekdays)
+        assertEquals(setOf(3), vm.day(b)!!.weekdays)
+        vm.toggleDayWeekday(b, 3)
+        assertTrue("tapping a picked weekday clears it", vm.day(b)!!.weekdays.isEmpty())
+        vm.clearDayWeekdays(a)
+        assertTrue(vm.day(a)!!.weekdays.isEmpty())
+        assertTrue(vm.dirty)
+    }
+
+    @Test
+    fun `a duplicated day starts without the original's weekdays`() {
+        val vm = ProgramBuilderViewModel(FakeStore(), SavedStateHandle())
+        vm.loadIfNeeded(blank = true)
+        vm.addDay()
+        val a = vm.days.single().uid
+        vm.toggleDayWeekday(a, 2)
+        vm.duplicateDay(a)
+        assertEquals(listOf(setOf(2), emptySet<Int>()), vm.days.map { it.weekdays })
+    }
 }

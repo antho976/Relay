@@ -10,6 +10,7 @@ import com.forge.app.data.db.entities.ProgramDay
 import com.forge.app.data.db.entities.ProgramSlot
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.ProgramRepository
+import com.forge.app.domain.schedule.WeeklySchedule
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.ui.common.ProgramChangeGuard
 import com.forge.app.ui.common.moved
@@ -17,6 +18,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -35,6 +37,10 @@ internal interface ProgramBuilderStore {
     suspend fun setFreestyleMode(v: Boolean)
     /** Run [action] through the shared program-change guard (confirm first when a workout is active). */
     suspend fun guardProgramChange(action: suspend () -> Unit)
+    /** Weekdays each day key is scheduled on, when the plan runs on fixed weekdays; empty otherwise. */
+    suspend fun scheduledWeekdays(): Map<String, Set<Int>> = emptyMap()
+    /** Make [schedule] the weekly schedule and switch to fixed weekdays; null = run in sequence. */
+    suspend fun saveSchedule(schedule: List<String>?) {}
 }
 
 internal class RepositoryProgramBuilderStore(
@@ -53,6 +59,21 @@ internal class RepositoryProgramBuilderStore(
     }
     override suspend fun guardProgramChange(action: suspend () -> Unit) {
         programChangeGuard.run(action = action)
+    }
+    override suspend fun scheduledWeekdays(): Map<String, Set<Int>> {
+        if (settingsRepo.scheduleMode.first() != WeeklySchedule.MODE_WEEKDAY) return emptyMap()
+        return settingsRepo.weeklySchedule.first().withIndex()
+            .filter { it.value.isNotBlank() }
+            .groupBy({ it.value }, { it.index })
+            .mapValues { it.value.toSet() }
+    }
+    override suspend fun saveSchedule(schedule: List<String>?) {
+        if (schedule == null) {
+            settingsRepo.setScheduleMode(WeeklySchedule.MODE_SEQUENCE)
+        } else {
+            settingsRepo.setWeeklySchedule(schedule)
+            settingsRepo.setScheduleMode(WeeklySchedule.MODE_WEEKDAY)
+        }
     }
 }
 
@@ -211,12 +232,13 @@ class ProgramBuilderViewModel internal constructor(
         savedStateHandle.remove<String>(KEY_DRAFT)
     }
 
-    private suspend fun loadDays(): List<BuilderDay> =
-        store.currentDayRows().map { pd ->
+    private suspend fun loadDays(): List<BuilderDay> {
+        val weekdays = store.scheduledWeekdays()
+        return store.currentDayRows().map { pd ->
             val slots = store.slotRowsForDay(pd.id)
             BuilderDay(
                 uid = uid(), key = pd.id, name = pd.name, archetype = pd.archetype,
-                accentHex = pd.accentHex, word = pd.word,
+                accentHex = pd.accentHex, word = pd.word, weekdays = weekdays[pd.id].orEmpty(),
                 exercises = slots.map { s ->
                     val def = ExerciseLibrary.byId(s.exerciseLibId)
                     BuilderExercise(uid(), s.exerciseLibId, def?.name ?: s.exerciseLibId,
@@ -224,6 +246,7 @@ class ProgramBuilderViewModel internal constructor(
                 }
             )
         }
+    }
 
     private fun mutate(block: (List<BuilderDay>) -> List<BuilderDay>) {
         days = block(days)
@@ -267,6 +290,8 @@ class ProgramBuilderViewModel internal constructor(
         val copy = src.copy(
             uid = uid(), key = "day-${uid()}",
             name = copyName(src.name, list.map { it.name }.toSet()),
+            // A weekday holds one workout, so the copy starts without the original's days.
+            weekdays = emptySet(),
             exercises = src.exercises.map { it.copy(uid = uid()) }
         )
         list.toMutableList().apply { add(i + 1, copy) }
@@ -276,6 +301,25 @@ class ProgramBuilderViewModel internal constructor(
     fun setDayType(dayUid: String, archetype: String) = mutateDay(dayUid) { it.copy(archetype = archetype) }
     fun setDayAccent(dayUid: String, hex: String) = mutateDay(dayUid) { it.copy(accentHex = hex) }
     fun moveDay(from: Int, to: Int) = mutate { it.moved(from, to) }
+
+    /**
+     * Put [dayUid] on [weekday] (0 = Monday), or take it off if it's already there. A weekday holds
+     * one workout, so claiming it moves it off whichever day had it.
+     */
+    fun toggleDayWeekday(dayUid: String, weekday: Int) = mutate { list ->
+        if (weekday !in 0 until WeeklySchedule.SLOTS) return@mutate list
+        val on = list.firstOrNull { it.uid == dayUid }?.let { weekday in it.weekdays } ?: return@mutate list
+        list.map { d ->
+            when {
+                d.uid == dayUid -> d.copy(weekdays = if (on) d.weekdays - weekday else d.weekdays + weekday)
+                !on -> d.copy(weekdays = d.weekdays - weekday)
+                else -> d
+            }
+        }
+    }
+
+    /** Clear [dayUid]'s fixed weekdays: it runs whenever it comes up. */
+    fun clearDayWeekdays(dayUid: String) = mutateDay(dayUid) { it.copy(weekdays = emptySet()) }
 
     fun addExercises(dayUid: String, libIds: Collection<String>) = mutateDay(dayUid) { day ->
         val added = libIds.mapNotNull { id ->
@@ -339,6 +383,8 @@ class ProgramBuilderViewModel internal constructor(
                 // builder stays open (dirty), so nothing is lost.
                 store.guardProgramChange {
                     store.saveCustomProgram(dayRows, slotRows)
+                    // After the rows, so the schedule never names a day the program doesn't have yet.
+                    store.saveSchedule(days.toSchedule())
                     store.setFreestyleMode(false)
                     dirty = false
                     // The saved program IS the document now; a recreation reloads it from Room.

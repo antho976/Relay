@@ -32,6 +32,7 @@ internal data class ProgramBuilderDraft(
                 put("archetype", d.archetype)
                 put("accent", d.accentHex)
                 if (d.word.isNotEmpty()) put("word", d.word)
+                if (d.weekdays.isNotEmpty()) put("weekdays", JSONArray(d.weekdays.sorted()))
                 put("exercises", JSONArray(d.exercises.map { e ->
                     JSONObject().apply {
                         put("uid", e.uid)
@@ -93,6 +94,8 @@ internal data class ProgramBuilderDraft(
                     archetype = d.getString("archetype"),
                     accentHex = d.getString("accent"),
                     word = d.optString("word", ""),
+                    weekdays = d.optJSONArray("weekdays")?.let { a -> (0 until a.length()).map { a.getInt(it) }.toSet() }
+                        ?: emptySet(),
                     exercises = (0 until exArr.length()).map { j ->
                         val e = exArr.getJSONObject(j)
                         BuilderExercise(
