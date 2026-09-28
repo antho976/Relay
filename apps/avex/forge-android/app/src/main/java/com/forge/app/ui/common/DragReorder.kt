@@ -11,6 +11,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -56,10 +57,14 @@ fun rememberDragDropState(
     firstDraggableIndex: Int = 0,
     draggableItemCount: Int = Int.MAX_VALUE,
     onMove: (Int, Int) -> Unit
-): DragDropState =
-    remember(lazyListState, firstDraggableIndex, draggableItemCount) {
-        DragDropState(lazyListState, firstDraggableIndex, draggableItemCount, onMove)
+): DragDropState {
+    // The state outlives recompositions, so it must not hold the FIRST onMove it was handed: a caller
+    // whose lambda captures anything that changes would have every later drag applied to stale data.
+    val currentOnMove by rememberUpdatedState(onMove)
+    return remember(lazyListState, firstDraggableIndex, draggableItemCount) {
+        DragDropState(lazyListState, firstDraggableIndex, draggableItemCount) { from, to -> currentOnMove(from, to) }
     }
+}
 
 class DragDropState internal constructor(
     private val state: LazyListState,
@@ -151,7 +156,8 @@ fun LazyItemScope.DraggableItem(
     val dragging = dragDropState.isDragging(index)
     val itemModifier =
         if (dragging) Modifier.zIndex(1f).graphicsLayer { translationY = dragDropState.draggingItemOffset }
-        else Modifier.animateItem()
+        // The shared list motion, not a bare animateItem(): its default springs ignore reduced motion.
+        else forgeItemMotion()
     Box(modifier.then(itemModifier)) { content(dragging) }
 }
 

@@ -6,7 +6,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 /**
  * Real Room migrations. The schema is **locked from v12 onward** — every change from here
  * needs a Migration object here (and a bumped [ForgeDatabase] version). Versions ≤11 predate
- * the lock and still reset destructively (see [com.forge.app.di.DatabaseModule]); v12+ preserve
+ * the lock and still reset destructively (see [forgeDatabaseBuilder]); v12+ preserve
  * data. If a future version bump ships without a matching migration, Room throws loudly at
  * startup — that's intentional, and far better than silently wiping the user's history.
  *

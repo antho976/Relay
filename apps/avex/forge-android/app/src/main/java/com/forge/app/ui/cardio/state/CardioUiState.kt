@@ -4,7 +4,6 @@ import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.domain.cardio.CardioActivityRecord
 import com.forge.app.domain.cardio.CardioPaceSeries
-import com.forge.app.domain.cardio.CardioWeekAggregate
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
 
@@ -49,8 +48,6 @@ data class CardioUiState(
     /** Per-activity pace series (GYMAP-35) — the PROGRESS lens's pace-trend chart. A type appears once
      *  it has two paced sessions; empty until then. */
     val cardioPaceSeries: List<CardioPaceSeries> = emptyList(),
-    /** This week's Mon–Sun minutes and totals — the hero's own week, split by activity for BY ACTIVITY. */
-    val weekAggregate: CardioWeekAggregate? = null,
     /** Which lens the overview is showing. Transient, so it resets when the tab is left and re-entered. */
     val lens: CardioLens = CardioLens.WEEK,
     val entries: List<CardioEntry> = emptyList(),
@@ -72,8 +69,6 @@ data class CardioUiState(
     val sessionWatch: com.forge.app.domain.health.WatchWorkout? = null,
     /** Watch workouts with no matching entry — the "recorded with your watch, import?" rows (W5). */
     val importSuggestions: List<com.forge.app.domain.health.WatchWorkout> = emptyList(),
-    /** Avex holds the HeartRateRecord read grant (W5) — the session HR graph can load. */
-    val hrConnected: Boolean = false,
     /** False → the main list shows only the 5 most-recent entries; true → the full history. */
     val historyExpanded: Boolean = false,
     /** Avex holds the StepsRecord read grant — drives the steps placeholder (and hides the banner). */
@@ -82,8 +77,6 @@ data class CardioUiState(
      *  no watch is connected or the read failed, so a non-null value (incl. zero steps) means
      *  "connected, draw it"; [stepsConnected] alone draws the ghost bars while the first sync lands. */
     val todayWearable: CardioWearableDay? = null,
-    /** Avex holds the ExerciseSession read grant — for GPS-route matching (also hides the banner). */
-    val routesConnected: Boolean = false,
     /** Distance/pace unit — true shows miles, false km. Derives from the weight unit when unset. */
     val useMiles: Boolean = false,
     /** The last cardio activity code logged (GYMAP-40); the log sheet seeds a new entry to it instead

@@ -206,6 +206,33 @@ class WeightFormatterTest {
     }
 
     @Test
+    fun typedStonesCompoundIsHonouredOutsideStonesMode() {
+        // "12 st 4 lb" matched no branch in lb or kg mode and was stored weightless.
+        assertEquals("172", toStoredWeightText("12 st 4 lb", WeightUnit.LB))
+        assertEquals("172", toStoredWeightText("12 st 4", WeightUnit.KG))
+        assertEquals(172.0, parseToLb("12 st 4 lb", WeightUnit.KG)!!, 0.001)
+    }
+
+    @Test
+    fun aWholeKiloEntryReadsBackWhole() {
+        // 100 kg is stored as "220.5" lb, which converts back to 100.017 kg. Testing for a whole
+        // number before rounding rendered that as "100.0 kg" and seeded "100.0" into the field.
+        val stored = toStoredWeightText("100", WeightUnit.KG)
+        val lb = parseToLb(stored, WeightUnit.LB)!!
+        assertEquals("100 kg", formatWeight(lb, WeightUnit.KG))
+        assertEquals("100", weightInputValue(lb, WeightUnit.KG))
+        assertEquals("4 kg", formatWeightDelta(8.8, WeightUnit.KG)) // 3.99 kg
+    }
+
+    @Test
+    fun aLossRoundsLikeTheEqualGain() {
+        // Half away from zero, as "%.1f" did: rounding the signed value put -1.25 on "-1.2".
+        assertEquals("1.3 lb", formatWeightDelta(1.25, WeightUnit.LB))
+        assertEquals("-1.3 lb", formatWeightDelta(-1.25, WeightUnit.LB))
+        assertEquals("0 lb", formatWeightDelta(-0.04, WeightUnit.LB)) // no "-0"
+    }
+
+    @Test
     fun aTypedPoundSuffixInPoundModeIsJustTheNumber() {
         assertEquals("135", toStoredWeightText("135 lb", WeightUnit.LB))
     }

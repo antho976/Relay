@@ -26,7 +26,6 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioActivityRecord
-import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.WHO_WEEKLY_ACTIVITY_MIN
 import com.forge.app.domain.cardio.pacePerUnit
 import com.forge.app.domain.units.distanceUnitLabel
@@ -307,8 +306,8 @@ internal fun CardioRecordsSection(
 
 /**
  * The Mon–Sun bar row — accent bars scale with each day's minutes; a rest day reads as a low muted
- * stub, today-so-far as a dashed slot, untouched days as ghost track marks. The whole strip is one
- * tap target ([onClick]) opening this week's page; passing null leaves it passive.
+ * stub, today-so-far as a dashed slot, untouched days as ghost track marks. Passive: the hero's
+ * panel around it is the one tap target that opens this week's page.
  */
 @Composable
 internal fun WeekBoxRow(
@@ -317,8 +316,7 @@ internal fun WeekBoxRow(
     onBg: Color,
     muted: Color,
     outline: Color,
-    accent: Color,
-    onClick: (() -> Unit)? = null
+    accent: Color
 ) {
     val dayLetters = listOf("M", "T", "W", "T", "F", "S", "S")
     val maxMin = (days.maxOfOrNull { it.minutes } ?: 0).coerceAtLeast(1)
@@ -339,10 +337,6 @@ internal fun WeekBoxRow(
         trackHeight = 48.dp,
         modifier = Modifier
             .fillMaxWidth()
-            .then(
-                if (onClick != null) Modifier.clickableLabeled("Open this week", onClick = onClick)
-                else Modifier
-            )
             // The strip's own value, so TalkBack reads the week rather than "button" (§14).
             .semantics(mergeDescendants = true) { contentDescription = reading }
             // Padding, not bar height, carries the ≥48dp touch target (§14) — the bars are 48dp of

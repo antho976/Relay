@@ -5,7 +5,6 @@ import com.forge.app.data.db.dao.CoachProjectDao
 import com.forge.app.data.db.entities.CoachProject
 import com.forge.app.domain.coach.PersonalProfile
 import com.forge.app.domain.coach.ProjectScanner
-import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -24,11 +23,7 @@ class ProjectRepository @Inject constructor(
     private val clock: Clock
 ) {
 
-    fun observeActive(): Flow<CoachProject?> = projectDao.observeActive()
-
     suspend fun active(): CoachProject? = projectDao.active()
-
-    suspend fun history(): List<CoachProject> = projectDao.all()
 
     /**
      * The project the coach would propose next, or null when nothing is worth interrupting for.

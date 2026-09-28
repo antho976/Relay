@@ -1,7 +1,5 @@
 package com.forge.app.domain.units
 
-import java.util.Locale
-
 private const val CM_PER_INCH = 2.54
 
 // Length (body measurements) mirrors WeightFormatter: values are stored canonically in cm and
@@ -16,20 +14,14 @@ fun toDisplayLength(cm: Double, useCm: Boolean): Double = if (useCm) cm else cm 
 fun lengthUnitLabel(useCm: Boolean): String = if (useCm) "cm" else "in"
 
 /** A stored cm value converted to the display unit and formatted WITH a unit suffix ("81 cm" / "32.5 in"). */
-fun formatLength(cm: Double, useCm: Boolean): String {
-    val v = toDisplayLength(cm, useCm)
-    val num = if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(Locale.US, "%.1f", v)
-    return "$num ${lengthUnitLabel(useCm)}"
-}
+fun formatLength(cm: Double, useCm: Boolean): String =
+    "${trimDecimal(toDisplayLength(cm, useCm))} ${lengthUnitLabel(useCm)}"
 
 /**
  * The value in the display unit with NO unit suffix — for seeding an editable measurement field.
  * Pairs with [parseToCm] so tapping into the log sheet round-trips the stored value exactly.
  */
-fun lengthInputValue(cm: Double, useCm: Boolean): String {
-    val v = toDisplayLength(cm, useCm)
-    return if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(Locale.US, "%.1f", v)
-}
+fun lengthInputValue(cm: Double, useCm: Boolean): String = trimDecimal(toDisplayLength(cm, useCm))
 
 /**
  * Converts a user-entered string in the display unit back to cm for storage. Tolerates a trailing

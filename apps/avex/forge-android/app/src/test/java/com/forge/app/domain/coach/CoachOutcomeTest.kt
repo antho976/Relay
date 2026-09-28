@@ -25,6 +25,12 @@ class CoachOutcomeTest {
     }
 
     @Test
+    fun notFollowed_isAFinalVerdictNotStillWatching() {
+        assertEquals("not judged", CoachOutcome.label("applied", "not_followed", now - 20 * day, now))
+        assertEquals("not judged", CoachOutcome.label("applied", "not_followed", now - 4 * day, now))
+    }
+
+    @Test
     fun windowClosedButStillPending_dropsTheCountdown() {
         assertEquals("still watching", CoachOutcome.label("applied", "pending", now - 20 * day, now))
     }

@@ -46,8 +46,8 @@ object InsightEngine {
     private val PUSH = setOf(MuscleGroup.CHEST, MuscleGroup.SHOULDERS, MuscleGroup.TRICEPS)
     private val PULL = setOf(MuscleGroup.BACK, MuscleGroup.REAR_DELTS, MuscleGroup.BICEPS)
 
-    /** One bout reduced to what the Tier-5 strength rules need: when, how many working sets, best e1RM. */
-    private data class BoutE1rm(val startedAt: Long, val workingSets: Int, val best: Double)
+    /** One bout reduced to what the Tier-5 strength rules need: when, and its best working e1RM. */
+    private data class BoutE1rm(val startedAt: Long, val best: Double)
 
     fun evaluate(s: AdaptationSnapshot, t: AdaptThresholds = AdaptThresholds()): List<Recommendation.Insight> {
         val slots = s.program.flatMap { it.slots }.associateBy { it.exerciseId }
@@ -55,11 +55,14 @@ object InsightEngine {
         // Per-lift bout e1RM series, computed ONCE — the lagging-lift / time-of-day rules both read
         // it instead of each re-walking exerciseHistory and re-running Epley per set. (Volume
         // response reads the shared [VolumeResponse] model instead, which the cap learner also uses.)
+        //
+        // Through the shared working-strength contract ([bestE1rm]) and ordinary training bouts only,
+        // like every other strength read in the engine: a hand-rolled "weighted and unassisted"
+        // filter admitted timed holds (a 45 lb, 90 s plank read as a 180 lb single), and a test-day
+        // single is a measurement, not the trend.
         val boutE1rms: Map<String, List<BoutE1rm>> = s.exerciseHistory.mapValues { (_, bouts) ->
-            bouts.filter { !it.skipped }.mapNotNull { b ->
-                val working = b.sets.filter { it.weightLb != null && !it.isAssisted }
-                if (working.isEmpty()) null
-                else BoutE1rm(b.sessionStartedAt, working.size, working.maxOf { E1rm.epley(it.weightLb!!, it.reps) })
+            bouts.filter { !it.skipped && it.countsForProgression }.mapNotNull { b ->
+                b.bestE1rm()?.let { BoutE1rm(b.sessionStartedAt, it) }
             }
         }
         return listOfNotNull(
@@ -123,7 +126,9 @@ object InsightEngine {
         val best = s.exerciseHistory.mapNotNull { (exerciseId, bouts) ->
             val name = slots[exerciseId]?.name ?: return@mapNotNull null
             val perSession = bouts
-                .filter { it.sessionStartedAt >= since && !it.skipped }
+                // Ordinary training only: a test-day single is the heaviest thing ever lifted on the
+                // lift by design, and read as a session's top weight it manufactured the gain.
+                .filter { it.sessionStartedAt >= since && !it.skipped && it.countsForProgression }
                 // Assisted sets are excluded from every other strength read in this engine
                 // (bestWorkingE1rm, E1rm, WeeklyReview.prs) and they belong out of this one too: a
                 // band-assisted pull-up logged with the band's weight anchored "most improved", so
@@ -249,7 +254,7 @@ object InsightEngine {
 
     private fun recoverySignalsBuilding(s: AdaptationSnapshot, t: AdaptThresholds): Recommendation.Insight? {
         val f = DeloadAdvisor.fatigue(s, t) ?: return null
-        if (f.score >= t.deloadScoreThreshold || f.score < t.deloadScoreThreshold - 2) return null
+        if (f.score >= t.deloadScoreThreshold || f.score < t.deloadScoreThreshold - t.consolidateBandPoints) return null
         return insight(
             "recovery", "Recovery signals building",
             "Not deload territory yet, but: ${f.drivers.joinToString(" · ")}."
@@ -316,8 +321,11 @@ object InsightEngine {
         data class Cand(val name: String, val label: String, val total: Int)
         val best = s.exerciseHistory.mapNotNull { (id, bouts) ->
             val name = slots[id]?.name ?: return@mapNotNull null
-            val sets = bouts.filter { !it.skipped }.flatMap { it.sets }
-                .filter { it.weightLb != null && !it.isAssisted && it.reps > 0 }
+            // Working sets of ordinary training only. A timed hold's `reps` is seconds (a 60 s plank
+            // landed in the 16+ bucket as a 60-rep set), and warm-ups filled the lighter buckets
+            // with numbers that say nothing about strength at that rep count.
+            val sets = bouts.filter { !it.skipped && it.countsForProgression }.flatMap { it.sets }
+                .filter { it.isWorkingStrengthSet() && it.setType != EffortModel.SET_TYPE_WARMUP && it.reps > 0 }
             val scored = sets.groupBy { repBucket(it.reps) }
                 .mapNotNull { (bucket, grp) ->
                     if (bucket != null && grp.size >= t.insightSweetSpotMinSetsPerBucket)
@@ -475,7 +483,12 @@ object InsightEngine {
         val rows = ordered.zipWithNext { prev, cur ->
             val mean = dayMean[cur.dayKey] ?: 0.0
             if (mean <= 0) return@zipWithNext null
-            val gapDays = ((cur.startedAt - prev.startedAt) / DAY_MS).toInt()
+            // Calendar days in the user's zone, like every other spacing the coach states: truncated
+            // elapsed time filed a Monday-evening → Wednesday-morning gap as one day's rest.
+            val gapDays = java.time.temporal.ChronoUnit.DAYS.between(
+                Instant.ofEpochMilli(prev.startedAt).atZone(s.zoneId).toLocalDate(),
+                Instant.ofEpochMilli(cur.startedAt).atZone(s.zoneId).toLocalDate()
+            ).toInt()
             gapDays to (cur.totalVolumeLb!! / mean)
         }.filterNotNull()
         if (rows.size < t.insightRestMinSessions) return null

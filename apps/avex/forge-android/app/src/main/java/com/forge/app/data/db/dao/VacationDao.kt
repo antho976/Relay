@@ -22,7 +22,4 @@ interface VacationDao {
 
     @Query("SELECT * FROM vacation_period ORDER BY start_date DESC")
     suspend fun all(): List<VacationPeriod>
-
-    @Query("DELETE FROM vacation_period")
-    suspend fun deleteAll()
 }

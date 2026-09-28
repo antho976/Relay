@@ -48,7 +48,6 @@ import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -125,9 +124,6 @@ fun SetRow(
     onLongPress: (() -> Unit)? = null,
     onToggleDifficultyTag: ((String?) -> Unit)? = null,
     onSetRpe: ((Double?) -> Unit)? = null,
-    onToggleAmrap: (() -> Unit)? = null,
-    onToggleAssisted: (() -> Unit)? = null,
-    onToggleFailure: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val weightUnit = LocalForgeSettings.current.weightUnit

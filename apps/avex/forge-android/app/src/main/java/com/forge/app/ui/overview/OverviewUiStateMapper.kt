@@ -14,11 +14,11 @@ import com.forge.app.domain.notify.Milestones
 import com.forge.app.ui.overview.state.MilestoneEvent
 import com.forge.app.ui.overview.state.OverviewRecentItem
 import com.forge.app.ui.overview.state.OverviewUiState
-import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.util.Locale
 
@@ -33,8 +33,7 @@ internal fun buildOverviewUiState(
     recentCardio: List<CardioEntry>,
     shown: Set<String>,
     dayVolStats: Map<String, SessionDao.DayVolumeStats>,
-    weightUnit: WeightUnit = WeightUnit.LB,
-    useMiles: Boolean = false
+    weightUnit: WeightUnit = WeightUnit.LB
 ): OverviewUiState {
     val gymItems = stats.recentGymSessions.map { session ->
         val day = Program.days.firstOrNull { it.key == session.dayKey }
@@ -45,7 +44,10 @@ internal fun buildOverviewUiState(
             if (session.setCount > 0) "${session.setCount} sets" else null,
             durationMin?.let { "${it} min" }
         ).joinToString(" · ")
-        val volStats = dayVolStats[session.dayKey]
+        // The day averages are TRACKED-only (avgMaxVolumeByDayKey), so an untracked session was never
+        // in the sum it would be compared against: subtracting it skewed the % and it could be badged
+        // BEST over the sessions that count. It stays in the list as history, without a comparison.
+        val volStats = dayVolStats[session.dayKey]?.takeUnless { session.isUntracked }
         // Compare against the average of the OTHER sessions for this day type, not an average that
         // includes this very session (which diluted the % and read 0% for a day's only session).
         val vsAvgPct = if (volStats != null && session.totalVolumeLb != null && volStats.sessionCount > 1) {
@@ -94,25 +96,11 @@ internal fun buildOverviewUiState(
         .take(3)
         .map { it.second }
 
-    val zone2 = ZoneId.systemDefault()
-    val todayLocal = LocalDate.now(zone2)
-    val isoWeekStart = todayLocal.with(DayOfWeek.MONDAY)
-    val cardioWeekDays = recentCardio.mapNotNull { entry ->
-        val d = Instant.ofEpochMilli(entry.date).atZone(zone2).toLocalDate()
-        if (!d.isBefore(isoWeekStart) && !d.isAfter(todayLocal)) d.dayOfWeek.value - 1 else null
-    }.toSet()
     return OverviewUiState(
-        workoutsThisWeek = stats.workouts,
-        volumeThisWeekLb = stats.volumeLb,
-        cardioMinutesThisWeek = stats.cardioMinutes,
-        totalFinishedSessions = stats.totalFinishedSessions,
-        streakDays = stats.streakDays,
-        bestSessionThisWeekLb = stats.bestSessionThisWeekLb,
         pendingMilestone = computePendingMilestone(stats, shown, weightUnit),
         nextUpDayKey = stats.nextUpDayKey,
         weekDaysTrained = stats.weekDaysTrained,
         weekRestDays = stats.weekRestDays,
-        cardioWeekDays = cardioWeekDays,
         recentItems = recentItems
     )
 }
@@ -149,10 +137,14 @@ private fun relativeDay(epochMs: Long): String {
     val zone = ZoneId.systemDefault()
     val date = Instant.ofEpochMilli(epochMs).atZone(zone).toLocalDate()
     val today = LocalDate.now(zone)
-    return when (date) {
-        today -> "TODAY"
-        today.minusDays(1) -> "YESTERDAY"
-        else -> date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault()).uppercase()
+    return when {
+        date == today -> "TODAY"
+        date == today.minusDays(1) -> "YESTERDAY"
+        // A bare weekday only names a day of the last week. RECENT holds the last three sessions
+        // however old they are, and one from 9 days ago read "TUE", as if it were this week's.
+        date.isAfter(today.minusDays(7)) ->
+            date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault()).uppercase()
+        else -> date.format(DateTimeFormatter.ofPattern("MMM d", Locale.getDefault())).uppercase()
     }
 }
 

@@ -23,8 +23,9 @@ object WearProtocol {
     const val HR_SEND_BATCH_SIZE = 64
     const val HR_MAX_RECEIVE_BATCH_SIZE = 240
     const val PATH_GLANCE_TODAY = "/glance/today"
-    /** Command acknowledgements, keyed by commandId — the watch's pending→confirmed signal. */
     /**
+     * Command acknowledgements, keyed by commandId — the watch's pending→confirmed signal.
+     *
      * Ack path PREFIX — each ack lands at `"$PATH_CMD_ACK/$commandId"`, never at the bare path.
      *
      * The Data Layer is a key-value store with latest-wins semantics per path and no guarantee that
@@ -48,9 +49,6 @@ object WearProtocol {
     const val PATH_HR_BATCH = "/hr/batch"
     /** The watch felt the timer-done buzz — lets the phone stay silent (one buzz, one body part). */
     const val PATH_HAPTIC_ACK = "/haptic/ack"
-
-    /** The DataMap key every DataItem stores its serialized payload under. */
-    const val KEY_PAYLOAD = "payload"
 
     /** Capability the wear app declares — the phone checks reachability against it. */
     const val CAPABILITY_WEAR_APP = "avex_wear_app"

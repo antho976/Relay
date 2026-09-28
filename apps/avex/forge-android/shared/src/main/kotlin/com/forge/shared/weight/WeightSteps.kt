@@ -26,7 +26,6 @@ enum class ProtocolWeightUnit {
 object WeightSteps {
 
     const val PLATE_STEP = 0.5
-    const val REP_STEP = 1
 
     fun weightStep(unit: ProtocolWeightUnit, isPlates: Boolean): Double = when {
         isPlates -> PLATE_STEP

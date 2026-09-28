@@ -108,10 +108,6 @@ class OverviewViewModel @Inject constructor(
     val freestyleMode: StateFlow<Boolean> =
         settingsRepo.freestyleMode.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), false)
 
-    /** Whether the coach is surfaced on the home — off hides all coach banners/cards (declined in onboarding). */
-    val coachEnabled: StateFlow<Boolean> =
-        settingsRepo.coachEnabled.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), true)
-
     /** True when there is no program at all (build-your-own, not yet built) — home offers "build a plan".
      *  Seeds from the already-loaded facade so a no-plan user never flashes the "Start session" branch
      *  (with an empty day key) before the first revision tick arrives. */
@@ -154,37 +150,26 @@ class OverviewViewModel @Inject constructor(
             lift to custom
         }.flowOn(Dispatchers.Default)
 
-    // P-15: six inputs, each of which reaches something Home draws. Three more were subscribed for
+    // P-15: five inputs, each of which reaches something Home draws. Others were subscribed for
     // state fields no composable read — the unlocked-trophy ID LIST (collected only to take its
-    // size), the week's cardio distance, and the cardio weekly target — so every trophy unlock,
-    // every cardio row and every settings change woke this combine and rebuilt the whole Home state
-    // to fill fields that were then thrown away. The fields are gone with them; a surface that
-    // wants them adds the input back beside the field it feeds.
+    // size), the week's cardio distance, the cardio weekly target, and the distance unit (which the
+    // rows read from LocalForgeSettings, not from this state) — so every trophy unlock, every cardio
+    // row and every settings change woke this combine and rebuilt the whole Home state to fill
+    // fields that were then thrown away. The fields are gone with them; a surface that wants them
+    // adds the input back beside the field it feeds.
     val state: StateFlow<OverviewUiState> = combine(
         statsRepo.observeWeeklyStats(),
         cardioRepo.observeRecent(7),
         settingsRepo.shownMilestones,
         statsRepo.observeDayVolumeStats(),
-        settingsRepo.weightUnit,
-        settingsRepo.useMiles
-    ) { args ->
-        val stats = args[0] as StatsRepository.WeeklyStats
-        @Suppress("UNCHECKED_CAST")
-        val recentCardio = args[1] as List<com.forge.app.data.db.entities.CardioEntry>
-        @Suppress("UNCHECKED_CAST")
-        val shown = args[2] as Set<String>
-        @Suppress("UNCHECKED_CAST")
-        val dayVolStats = args[3] as Map<String, SessionDao.DayVolumeStats>
-        val weightUnit = args[4] as WeightUnit
-        val useMiles = args[5] as Boolean
-
+        settingsRepo.weightUnit
+    ) { stats, recentCardio, shown, dayVolStats, weightUnit ->
         buildOverviewUiState(
             stats = stats,
             recentCardio = recentCardio,
             shown = shown,
             dayVolStats = dayVolStats,
-            weightUnit = weightUnit,
-            useMiles = useMiles
+            weightUnit = weightUnit
         )
     }.combine(customizationRepo.observeAllDayNames()) { s, names ->
         val customName = names.firstOrNull { it.dayKey == s.nextUpDayKey }?.customName

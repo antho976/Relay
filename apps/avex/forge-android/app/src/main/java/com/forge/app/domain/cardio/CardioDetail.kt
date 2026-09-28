@@ -27,7 +27,8 @@ fun cardioDetailParts(
     entry.intervalCount?.takeIf { it > 0 }?.let { add("$it intervals") }
     // formatDistance pins Locale.US so the '.' separator matches what the log form parses (it only
     // accepts '.'); a comma-decimal device locale would otherwise render "5,0 km".
-    entry.distanceKm?.let { add(formatDistance(it, useMiles)) }
+    // A zero distance is "none" (pace already treats it so), not a "0.0 km" chip.
+    entry.distanceKm?.takeIf { it > 0.0 }?.let { add(formatDistance(it, useMiles)) }
     pacePerUnit(entry.durationMin, entry.distanceKm, useMiles)?.let { add("$it /${distanceUnitLabel(useMiles)}") }
     // Per-type fields (GYMAP-38) — at most one applies to a given activity, so this adds ≤1 chip.
     entry.laps?.takeIf { it > 0 }?.let { add("$it laps") }

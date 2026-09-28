@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -26,7 +25,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.GROUP_OUTER
 import com.forge.app.ui.common.ROW_H
@@ -117,34 +115,6 @@ internal fun GymSearchRow(
             Box(Modifier.size(12.dp))
         }
     }
-}
-
-/**
- * A filled capsule with free content, for the live surfaces that need a glyph or a running time
- * inside (steppers, the stopwatch, the date). Same fill as `ForgeSecondaryCapsule`; the 48dp target
- * comes from [minHeight] and the padding, never a fixed height, so it grows with font scale.
- */
-@Composable
-internal fun GymFilledPill(
-    onClick: (() -> Unit)?,
-    label: String?,
-    modifier: Modifier = Modifier,
-    minHeight: Dp = 44.dp,
-    fill: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    content: @Composable RowScope.() -> Unit
-) {
-    Row(
-        modifier = modifier
-            .heightIn(min = minHeight)
-            .clip(RoundedCornerShape(50))
-            .background(fill)
-            .then(if (onClick != null) Modifier.bounceClick(onClick = onClick) else Modifier)
-            .then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-        content = content
-    )
 }
 
 /**

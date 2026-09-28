@@ -18,9 +18,6 @@ interface UnlockedTrophyDao {
     fun observeAll(): Flow<List<UnlockedTrophy>>
 
     @Query("SELECT trophy_id FROM unlocked_trophy")
-    fun observeUnlockedIds(): Flow<List<String>>
-
-    @Query("SELECT trophy_id FROM unlocked_trophy")
     suspend fun unlockedIds(): List<String>
 
     @Query("SELECT * FROM unlocked_trophy")

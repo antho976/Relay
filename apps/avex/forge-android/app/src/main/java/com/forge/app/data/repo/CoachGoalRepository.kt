@@ -5,7 +5,6 @@ import com.forge.app.data.db.dao.CoachGoalDao
 import com.forge.app.data.db.entities.CoachGoal
 import com.forge.app.domain.coach.CoachGoalKind
 import com.forge.app.domain.coach.GoalPortfolio
-import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,8 +22,6 @@ class CoachGoalRepository @Inject constructor(
     private val adaptationRepository: AdaptationRepository,
     private val clock: Clock
 ) {
-
-    fun observeActive(): Flow<List<CoachGoal>> = coachGoalDao.observeActive()
 
     suspend fun active(): List<CoachGoal> = coachGoalDao.active()
 

@@ -93,7 +93,11 @@ object WeeklyReview {
             count
         }
 
-        val stalled = ProgressionAdvisor.evaluate(s, t).map { it.id }.distinct().size
+        // The block's phase, as the weekly pass reads it: a deload week escalates nothing, so this
+        // must not count stalls the coach has deliberately set aside and then tell the athlete to
+        // chase them in the one week meant for backing off.
+        val phase = block?.takeIf { it.isActive }?.let { BlockPhase.fromCode(it.phase) }
+        val stalled = ProgressionAdvisor.evaluate(s, t, phase).map { it.id }.distinct().size
         val tracked = s.exerciseHistory.count { (_, bouts) ->
             bouts.count { b -> !b.skipped && b.sets.any { it.isWorkingStrengthSet() } } > t.plateauMinBouts
         }
@@ -102,7 +106,7 @@ object WeeklyReview {
         val band = when {
             fatigue == null -> "No read yet"
             fatigue.score >= t.deloadScoreThreshold -> "Deload soon"
-            fatigue.score >= t.deloadScoreThreshold - 2 -> "Building"
+            fatigue.score >= t.deloadScoreThreshold - t.consolidateBandPoints -> "Building"
             else -> "Fresh"
         }
 

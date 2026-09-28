@@ -104,10 +104,13 @@ adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 || true
 # Foreground detection, two ways, because the field name differs across platform versions and the
 # component reported is the ALIAS (com.forge.app.icon.Default), never MainActivity — matching on the
 # activity class would fail on a launch that worked perfectly.
+#
+# `grep > /dev/null`, not `grep -q`: under pipefail a -q that exits at its first match leaves dumpsys
+# writing into a closed pipe, and the SIGPIPE status makes a match read as a miss.
 is_foreground() {
-  adb shell dumpsys window 2>/dev/null | grep -q "mCurrentFocus.*$APP_ID" ||
+  adb shell dumpsys window 2>/dev/null | grep "mCurrentFocus.*$APP_ID" > /dev/null ||
     adb shell dumpsys activity activities 2>/dev/null |
-      grep -qE "(mResumedActivity|topResumedActivity).*$APP_ID"
+      grep -E "(mResumedActivity|topResumedActivity).*$APP_ID" > /dev/null
 }
 
 # Give it a real chance to get past its first frame before judging. A crash-on-launch usually lands

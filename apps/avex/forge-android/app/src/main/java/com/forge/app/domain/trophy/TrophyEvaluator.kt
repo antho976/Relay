@@ -105,7 +105,8 @@ object TrophyEvaluator {
         is UnlockRule.NightOwlSessionsAtLeast -> (s.nightOwlSessions.toFloat() / rule.n).coerceIn(0f, 1f)
         is UnlockRule.SundaysTrainedAtLeast -> (s.sundaysTrainedCount.toFloat() / rule.n).coerceIn(0f, 1f)
         is UnlockRule.SessionDurationAtLeast -> (s.maxSessionDurationMinutes.toFloat() / rule.minutes).coerceIn(0f, 1f)
-        is UnlockRule.SessionDurationAtMost -> if (s.minFinishedSessionDurationMinutes <= rule.minutes) 1f else 0f
+        // Same 5-minute floor as [isUnlocked], so a sub-5-minute session can't fill a locked bar.
+        is UnlockRule.SessionDurationAtMost -> if (s.minFinishedSessionDurationMinutes in 5..rule.minutes) 1f else 0f
         is UnlockRule.MaxSingleExerciseRepsAtLeast -> (s.maxSingleExerciseReps.toFloat() / rule.n).coerceIn(0f, 1f)
         is UnlockRule.ComebackKidRule -> if (s.comebackKidEarned) 1f else 0f
         is UnlockRule.ConsistencyKingRule -> if (s.consistencyKingEarned) 1f else 0f

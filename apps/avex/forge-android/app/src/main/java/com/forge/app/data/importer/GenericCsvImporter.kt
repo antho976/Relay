@@ -95,9 +95,11 @@ class GenericCsvImporter : GymImporter {
         val exercise = ImportParsing.findCol(idx, "exercise", "movement", "lift") ?: return null
         // Exclude a per-row "Bodyweight" column: it holds the user's bodyweight, not the lift load,
         // yet contains the substring "weight" and would otherwise be picked as the weight column.
+        // A "Weight Unit" column is excluded for the same reason: placed before "Weight" it was
+        // picked as the load, and every set read "kg" as its weight, i.e. none at all.
         val weight = idx.entries
             .firstOrNull { e ->
-                !e.key.contains("bodyweight") && !e.key.contains("body weight") &&
+                !e.key.contains("bodyweight") && !e.key.contains("body weight") && !e.key.contains("unit") &&
                     listOf("weight", "load", "kg", "lbs").any { e.key.contains(it) }
             }?.value
         val reps = ImportParsing.findCol(idx, "reps", "rep")

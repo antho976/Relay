@@ -8,7 +8,7 @@ import com.forge.app.data.db.entities.LessonEvent
  *
  * Two rules hold this together, and both are enforced here rather than by convention:
  *  - **No lesson without a moment.** A lesson exists because a coach reason or an app moment
- *    unlocks it ([Lesson.unlockedBy] is user-facing, [unlockKeyFor] is the machine side).
+ *    unlocks it ([Lesson.unlock] is user-facing, [unlockKeyFor] is the machine side).
  *  - **State is recomputed, never mutated.** [stateFrom] derives everything from the append-only
  *    `lesson_event` ledger, the same idempotent pattern as `CoachGenBias.from(decisions)`, so
  *    read state can't drift or double-count.

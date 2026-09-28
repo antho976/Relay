@@ -1,6 +1,5 @@
 package com.forge.wear.ui
 
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -16,8 +15,6 @@ import com.forge.shared.protocol.ConfigDto
  */
 data class WearColors(
     val accent: Color,
-    val accentDim: Color,
-    val accentWash: Color,
     val onBg: Color = Color(0xFFF2EFEA),
     val muted: Color = Color(0xFFBFB6AA),
     val outline: Color = Color(0xFF38302A),
@@ -30,11 +27,7 @@ val LocalWearColors = staticCompositionLocalOf { wearColors(ConfigDto()) }
 fun wearColors(config: ConfigDto): WearColors {
     val accent = if (!config.accentEnabled) Color(0xFFF2EFEA)
     else parseHex(config.accentHex) ?: Color(0xFFE23D3D) // Red default, like the phone (app's AccentRed).
-    return WearColors(
-        accent = accent,
-        accentDim = accent.copy(alpha = 0.6f),
-        accentWash = accent.copy(alpha = 0.15f)
-    )
+    return WearColors(accent = accent)
 }
 
 private fun parseHex(hex: String): Color? {

@@ -36,6 +36,19 @@ class WearSyncService : WearableListenerService() {
         // The Data Layer delivers on a binder thread and keeps the service alive for the handler's
         // duration; the work here is a few Room writes / a DataItem put, so a bounded runBlocking
         // is the honest shape (returning early would let the process die mid-write).
+        //
+        // A failure is contained here. This is a binder thread in a process the Data Layer woke in
+        // the background, so anything rethrown — a SQLiteFullException from an HR batch, a stored
+        // ack that no longer decodes — crashed Avex, and the watch's retry of the same message
+        // crashed it again. Dropping is safe: the ledger's transaction rolled the command back and
+        // published no ack, so the wrist's same-id retry (or its unacked HR batch) re-runs it.
+        try {
+            dispatch(event)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun dispatch(event: MessageEvent) {
         when (event.path) {
             WearProtocol.PATH_HAPTIC_ACK -> {
                 val ack = WearCodec.decode<HapticAckDto>(event.data)

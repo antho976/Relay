@@ -14,7 +14,6 @@ import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.mood.Mood
 import com.forge.app.program.Program
-import java.time.LocalDate
 import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -39,7 +38,9 @@ class SampleDataSeeder @Inject constructor(
 
     suspend fun seed() {
         val zone = ZoneId.systemDefault()
-        val today = LocalDate.now(zone)
+        // The injected clock (it was injected and never read): the seeded weeks end on the same
+        // "today" as every window that will then read them.
+        val today = java.time.Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
         val rng = Random(42)
 
         // 8 weeks of training, Mon/Tue/Thu/Fri each week, rotating through the days the

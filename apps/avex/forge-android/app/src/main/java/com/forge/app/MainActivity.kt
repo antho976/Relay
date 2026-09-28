@@ -9,7 +9,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -127,9 +126,6 @@ class MainActivity : FragmentActivity() {
     }
     private var privacyPolicyRequest by mutableStateOf(0)
 
-    /** Emits volume-down presses for the "log same as last set" shortcut (#151). */
-    var onVolumeDown: (() -> Unit)? = null
-
     /** The chosen app-icon key, seeded in onCreate and kept live by a collector so [onStop] never has to
      *  block on a DataStore read. @Volatile because onStop (main thread) reads what the collector writes. */
     @Volatile private var appIconKey: String = ""
@@ -162,11 +158,18 @@ class MainActivity : FragmentActivity() {
     private fun confirmPendingImport() {
         val uri = pendingImportUri ?: return
         pendingImportUri = null
-        lifecycleScope.launch {
-            val result = runCatching { importRepo.import(uri) }.getOrDefault(ImportResult.ReadError)
+        // App-lifetime scope, not lifecycleScope: the request is already cleared, so a rotation while
+        // the file is read used to cancel the import part way and drop its notice. Locals, so the
+        // coroutine does not hold this Activity.
+        val importer = importRepo
+        val settings = settingsRepo
+        ((application as? ForgeApp)?.appScope ?: lifecycleScope).launch {
+            val result = runCatching { importer.import(uri) }
+                .onFailure { if (it is CancellationException) throw it }
+                .getOrDefault(ImportResult.ReadError)
             // Queued for the notifications feed rather than thrown up as an OK dialog over whatever
             // screen the share landed on (2026-07-27, DESIGN §4.6).
-            settingsRepo.addSystemNotice(NotificationFeed.NOTICE_IMPORT, result.userMessage())
+            settings.addSystemNotice(NotificationFeed.NOTICE_IMPORT, result.userMessage())
         }
     }
 
@@ -192,13 +195,6 @@ class MainActivity : FragmentActivity() {
             outState.putString(WIDGET_REQUEST_DAY_KEY, it.dayKey)
         }
         super.onSaveInstanceState(outState)
-    }
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            onVolumeDown?.invoke()?.let { return true }
-        }
-        return super.onKeyDown(keyCode, event)
     }
 
     /** The user pressed Home/Recents — the app is genuinely leaving the foreground (not just being

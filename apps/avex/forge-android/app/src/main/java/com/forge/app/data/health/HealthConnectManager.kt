@@ -488,9 +488,12 @@ class HealthConnectManager @Inject constructor(
         val range = TimeRangeFilter.between(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(nowMs))
 
         val recoveryGranted = granted.containsAll(permissions)
+        // Every page, not the first: `readRecords` returns the OLDEST 1000 rows of a 90-day window,
+        // and a watch that writes HRV or resting HR several times a night passes that, so the
+        // newest nights — the ones the recovery read is about — were the ones cut (see readAllPages).
         val sleep = if (!recoveryGranted) emptyList() else hcCatching {
-            client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, timeRangeFilter = range))
-                .records.mapNotNull { rec ->
+            client.readAllPages(SleepSessionRecord::class, range)
+                .mapNotNull { rec ->
                     // Drop corrupt records (a third-party app can write endTime <= startTime) and cap
                     // absurd spans (a forgotten wearable can log a multi-day "night") so one bad row
                     // can't skew DeloadAdvisor's sleep average up or down.
@@ -504,8 +507,8 @@ class HealthConnectManager @Inject constructor(
                 }
         }.orEmpty()
         val hr = if (!recoveryGranted) emptyList() else hcCatching {
-            client.readRecords(ReadRecordsRequest(RestingHeartRateRecord::class, timeRangeFilter = range))
-                .records.mapNotNull {
+            client.readAllPages(RestingHeartRateRecord::class, range)
+                .mapNotNull {
                     // Ignore physiologically impossible readings (0 bpm corrupt rows would distort the baseline).
                     val bpm = it.beatsPerMinute.toInt()
                     if (bpm in MIN_BPM..MAX_BPM) RestingHrSample(timeMs = it.time.toEpochMilli(), bpm = bpm) else null
@@ -514,8 +517,8 @@ class HealthConnectManager @Inject constructor(
 
         val hrvGranted = HealthPermission.getReadPermission(HeartRateVariabilityRmssdRecord::class) in granted
         val hrv = if (!hrvGranted) emptyList() else hcCatching {
-            client.readRecords(ReadRecordsRequest(HeartRateVariabilityRmssdRecord::class, timeRangeFilter = range))
-                .records.mapNotNull {
+            client.readAllPages(HeartRateVariabilityRmssdRecord::class, range)
+                .mapNotNull {
                     val rmssd = it.heartRateVariabilityMillis
                     if (rmssd > 0.0 && rmssd < MAX_RMSSD_MS) HrvSample(timeMs = it.time.toEpochMilli(), rmssdMs = rmssd) else null
                 }
@@ -913,7 +916,8 @@ class HealthConnectManager @Inject constructor(
         dayEndMs: Long
     ): WatchWorkout? = withContext(Dispatchers.IO) {
         val client = clientOrNull() ?: return@withContext null
-        if (!canReadExercise()) return@withContext null
+        val granted = grantedPermissions()
+        if (HealthPermission.getReadPermission(ExerciseSessionRecord::class) !in granted) return@withContext null
         hcCatching {
             val range = TimeRangeFilter.between(Instant.ofEpochMilli(dayStartMs), Instant.ofEpochMilli(dayEndMs))
             val records = client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, timeRangeFilter = range))
@@ -922,7 +926,7 @@ class HealthConnectManager @Inject constructor(
                 SessionWindow(index = i, startMs = r.startTime.toEpochMilli(), endMs = r.endTime.toEpochMilli())
             }
             val idx = bestSessionMatch(entryStartMs, entryDurationMin, windows) ?: return@hcCatching null
-            records[idx].toWatchWorkout(client)
+            records[idx].toWatchWorkout(client, granted)
         }
     }
 
@@ -934,7 +938,10 @@ class HealthConnectManager @Inject constructor(
     suspend fun recentWatchWorkouts(sinceMs: Long, nowMs: Long, limit: Int = 10): List<WatchWorkout> =
         withContext(Dispatchers.IO) {
             val client = clientOrNull() ?: return@withContext emptyList()
-            if (!canReadExercise()) return@withContext emptyList()
+            // Read once for the whole list: each summary below used to fetch the grants again, a
+            // binder round trip per candidate.
+            val granted = grantedPermissions()
+            if (HealthPermission.getReadPermission(ExerciseSessionRecord::class) !in granted) return@withContext emptyList()
             hcCatching {
                 val range = TimeRangeFilter.between(Instant.ofEpochMilli(sinceMs), Instant.ofEpochMilli(nowMs))
                 // PAGE until [limit] non-self records are found, rather than filtering one fixed
@@ -959,13 +966,12 @@ class HealthConnectManager @Inject constructor(
                     token = resp.pageToken
                     pages++
                 } while (token != null && resp.records.isNotEmpty() && out.size < limit && pages < WATCH_WORKOUT_MAX_PAGES)
-                out.map { it.toWatchWorkout(client) }
+                out.map { it.toWatchWorkout(client, granted) }
             }.orEmpty()
         }
 
-    /** Summarise one HC session with its measured distance/calories (each gated + fail-soft). */
-    private suspend fun ExerciseSessionRecord.toWatchWorkout(client: HealthConnectClient): WatchWorkout {
-        val granted = grantedPermissions()
+    /** Summarise one HC session with its measured distance/calories (each gated on [granted] + fail-soft). */
+    private suspend fun ExerciseSessionRecord.toWatchWorkout(client: HealthConnectClient, granted: Set<String>): WatchWorkout {
         val start = startTime.toEpochMilli()
         val end = endTime.toEpochMilli()
         val metrics = buildSet {

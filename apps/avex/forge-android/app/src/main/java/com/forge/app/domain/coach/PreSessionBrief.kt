@@ -2,7 +2,6 @@ package com.forge.app.domain.coach
 
 import com.forge.app.domain.adapt.workingStrengthSets
 import com.forge.app.domain.adapt.isWorkingStrengthSet
-import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.adapt.EffortModel
 import com.forge.app.domain.adapt.ProgramSlotSnap
@@ -78,8 +77,7 @@ object PreSessionBrief {
          * readiness and life events alone — so a Deload week and a Peak week opened with the same
          * numbers as an Accumulate one, contradicting the phase the Coach tab was showing them.
          */
-        phase: BlockPhase? = null,
-        t: AdaptThresholds = AdaptThresholds()
+        phase: BlockPhase? = null
     ): Brief? {
         val day = s.program.firstOrNull { it.dayKey == dayKey } ?: return null
         val readinessScale = 1 + (readiness?.percent ?: 0) / 100.0
@@ -90,7 +88,7 @@ object PreSessionBrief {
         val targets = day.slots
             // An injured movement isn't "eased", it's off today's session entirely.
             .filterNot { life.isRestricted(it.exerciseId) || life.isRestricted(it.muscle) }
-            .map { slot -> target(s, slot, loadScale, life, weightUnit, t) }
+            .map { slot -> target(s, slot, loadScale, life, weightUnit) }
 
         return Brief(
             dayKey = dayKey,
@@ -104,8 +102,7 @@ object PreSessionBrief {
         slot: ProgramSlotSnap,
         loadScale: Double,
         life: LifeEvents.State,
-        weightUnit: ProtocolWeightUnit,
-        t: AdaptThresholds
+        weightUnit: ProtocolWeightUnit
     ): ExerciseTarget {
         val sore = slot.muscle in life.soreMuscles
         val bouts = TodayDirective.trainingBouts(s, slot.exerciseId)

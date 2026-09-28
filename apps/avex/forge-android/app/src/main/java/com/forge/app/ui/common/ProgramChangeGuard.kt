@@ -84,8 +84,16 @@ class ProgramChangeGuard @Inject constructor(
 /** Bridges the singleton [ProgramChangeGuard] into Compose for the root host. */
 @HiltViewModel
 class ProgramChangeGuardViewModel @Inject constructor(
-    val guard: ProgramChangeGuard
+    val guard: ProgramChangeGuard,
+    private val snackbar: SnackbarController
 ) : ViewModel() {
-    fun confirm() = viewModelScope.launch { runCatching { guard.confirm() } }
+    // The dialog is already gone by the time the staged action runs, so a failure swallowed here
+    // read as "done" while neither the discard nor the program change had happened.
+    fun confirm() = viewModelScope.launch {
+        runCatching { guard.confirm() }.onFailure {
+            if (it is kotlinx.coroutines.CancellationException) throw it
+            snackbar.show("Couldn't change your program. Try again.")
+        }
+    }
     fun cancel() = guard.cancel()
 }

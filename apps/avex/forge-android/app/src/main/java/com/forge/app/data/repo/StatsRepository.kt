@@ -46,6 +46,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.roundToInt
 
 /**
  * Aggregates the rolling-window stats that feed the Overview screen.
@@ -551,7 +552,8 @@ class StatsRepository @Inject constructor(
             val latestBwLb = bw.firstOrNull()?.weightLb
             val hallOfFame = if (latestBwLb != null && latestBwLb > 0)
                 stats.hallOfFame.map {
-                    it.copy(relativeStrength = (it.maxWeightLb / latestBwLb * 10).toInt() / 10.0)
+                    // Rounded, not truncated, like buildHallOfFame: toInt() rendered 1.99x as "1.9x".
+                    it.copy(relativeStrength = (it.maxWeightLb / latestBwLb * 10).roundToInt() / 10.0)
                 }
             else stats.hallOfFame
             stats.copy(bodyweightPoints = points, hallOfFame = hallOfFame)

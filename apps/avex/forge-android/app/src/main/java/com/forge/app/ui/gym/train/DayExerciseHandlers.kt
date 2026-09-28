@@ -102,8 +102,10 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
         is DayUiEvent.SetExerciseUnit -> viewModelScope.launch {
             val existing = customizationRepo.getSwap(event.exerciseId)
             if (event.unit == null) {
+                // Either/or: clearing a unit-only row and then re-upserting it recreated the blank row
+                // clearSwap had just removed.
                 if (existing?.swappedName?.isBlank() == true) customizationRepo.clearSwap(event.exerciseId)
-                existing?.let { customizationRepo.setSwap(it.exerciseId, it.swappedName, "") }
+                else existing?.let { customizationRepo.setSwap(it.exerciseId, it.swappedName, "") }
             } else {
                 customizationRepo.setSwap(event.exerciseId, existing?.swappedName ?: "", event.unit)
             }
@@ -117,7 +119,7 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             val warning = _state.value.pendingWeightJumpWarning ?: return
             _state.update { it.copy(pendingWeightJumpWarning = null) }
             // Bypass the jump check — the user already confirmed; otherwise it re-triggers.
-            logSet(warning.exerciseId, warning.weightText, warning.reps, skipJumpCheck = true)
+            logSet(warning.exerciseId, warning.weightText, warning.reps, warning.durationSeconds, skipJumpCheck = true)
         }
         is DayUiEvent.DismissWeightJump -> _state.update { it.copy(pendingWeightJumpWarning = null) }
         is DayUiEvent.UpdateJournal -> {
@@ -284,7 +286,7 @@ internal fun DayViewModel.logSet(
                     val newLabel = if (isPlates) formatPlates(newWeightLb, plateLb) else formatWeight(newWeightLb, weightUnit)
                     val percent = ((newWeightLb / lastWeightLb - 1) * 100).toInt()
                     _state.update {
-                        it.copy(pendingWeightJumpWarning = WeightJumpWarning(exerciseId, weightText, reps, lastLabel, newLabel, percent))
+                        it.copy(pendingWeightJumpWarning = WeightJumpWarning(exerciseId, weightText, reps, lastLabel, newLabel, percent, durationSeconds))
                     }
                     return@launch
                 }

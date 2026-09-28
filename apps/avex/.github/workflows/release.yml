@@ -182,6 +182,11 @@ jobs:
           # Grepping for the verdict line is what actually distinguishes signed from unsigned.
           # Both bundles, because both are uploaded: a Wear AAB that silently went out unsigned
           # would be refused by Play at the one moment nobody is looking at the build.
+          #
+          # `grep > /dev/null`, not `grep -q`: -q exits at the first match, and jarsigner prints its
+          # certificate warnings AFTER "jar verified." — for a self-signed upload key it always has
+          # some. tee then writes into a closed pipe, dies of SIGPIPE, and under pipefail a
+          # correctly signed bundle fails the release.
           for module in app wear; do
             aab=$(find "forge-android/$module/build/outputs/bundle/release" -name '*.aab' -print -quit)
             if [ -z "$aab" ]; then
@@ -189,7 +194,7 @@ jobs:
               exit 1
             fi
             echo "== $aab"
-            jarsigner -verify "$aab" | tee /dev/stderr | grep -q "jar verified"
+            jarsigner -verify "$aab" | tee /dev/stderr | grep "jar verified" > /dev/null
           done
 
       - name: Collect the artifacts

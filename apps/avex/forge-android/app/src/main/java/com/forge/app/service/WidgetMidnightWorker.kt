@@ -35,7 +35,7 @@ class WidgetMidnightWorker(
         // Re-arm FIRST: a redraw that throws must not end the chain, or the widget stops rolling
         // over for the life of the install with nothing to show that it did. The successor is named
         // for the NEXT midnight, so arming it no longer cancels this run mid-redraw.
-        schedule(applicationContext)
+        arm(applicationContext, successorMidnightMs(System.currentTimeMillis(), ZoneId.systemDefault()))
         refreshForgeWidgets(applicationContext)
         return Result.success()
     }
@@ -46,7 +46,7 @@ class WidgetMidnightWorker(
         /**
          * Arm the redraw for the next local midnight, keeping one already armed for it.
          *
-         * This used to REPLACE one unique name, and [doWork] calls it before its own redraw, so the
+         * This used to REPLACE one unique name, and [doWork] arms before its own redraw, so the
          * run that armed its successor was the unfinished work REPLACE cancels: the midnight redraw
          * could be cut off inside `refreshForgeWidgets` (2026-09-26 audit, 11 / domain D3). Each
          * midnight now has its own name, enqueued with KEEP: a launch in the same zone is a no-op,
@@ -54,18 +54,17 @@ class WidgetMidnightWorker(
          * one spare redraw and re-arms onto the same name the new chain already holds.
          */
         fun schedule(context: Context) {
-            val now = System.currentTimeMillis()
-            val nextMidnight = nextMidnightMs(now, ZoneId.systemDefault())
-            // A floor of one minute keeps a wrong-clock device from queueing a zero/negative delay
-            // in a tight loop; the ceiling of a day bounds a clock that reads far in the past.
-            val delayMs = (nextMidnight - now).coerceIn(60_000L, TimeUnit.DAYS.toMillis(1))
+            arm(context, nextMidnightMs(System.currentTimeMillis(), ZoneId.systemDefault()))
+        }
+
+        private fun arm(context: Context, midnightMs: Long) {
             val request = OneTimeWorkRequestBuilder<WidgetMidnightWorker>()
                 .addTag(TAG)
-                .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
+                .setInitialDelay(delayUntilMs(midnightMs, System.currentTimeMillis()), TimeUnit.MILLISECONDS)
                 .build()
             runCatching {
                 WorkManager.getInstance(context)
-                    .enqueueUniqueWork(workNameFor(nextMidnight), ExistingWorkPolicy.KEEP, request)
+                    .enqueueUniqueWork(workNameFor(midnightMs), ExistingWorkPolicy.KEEP, request)
             }
         }
 
@@ -73,6 +72,33 @@ class WidgetMidnightWorker(
         internal fun nextMidnightMs(nowMs: Long, zone: ZoneId): Long =
             Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
                 .plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+
+        /**
+         * The midnight a run at [nowMs] arms: the one after its OWN.
+         *
+         * A run can fire a little before the midnight it was armed for — the wall clock corrected
+         * backwards since. The nearest midnight is then this run's own, whose unique name is this
+         * RUNNING work's, and KEEP silently drops the successor: the chain ends until the next app
+         * launch. Looking [EARLY_RUN_SLACK_MS] ahead steps past it.
+         */
+        internal fun successorMidnightMs(nowMs: Long, zone: ZoneId): Long =
+            nextMidnightMs(nowMs + EARLY_RUN_SLACK_MS, zone)
+
+        /**
+         * Delay from [nowMs] to [midnightMs]. The floor keeps a wrong-clock device from queueing a
+         * zero/negative delay in a tight loop.
+         *
+         * The ceiling has to admit a 25-hour day. It used to be exactly one day, so on a DST
+         * fall-back day the redraw ran at 23:00 instead of midnight, and the "next midnight" it
+         * re-armed from there was its own name — KEEP dropped it and the chain ended.
+         */
+        internal fun delayUntilMs(midnightMs: Long, nowMs: Long): Long =
+            (midnightMs - nowMs).coerceIn(MIN_DELAY_MS, MAX_DELAY_MS)
+
+        private const val EARLY_RUN_SLACK_MS = 5 * 60_000L
+        private const val MIN_DELAY_MS = 60_000L
+        /** A 25-hour fall-back day plus [EARLY_RUN_SLACK_MS], with room to spare. */
+        private const val MAX_DELAY_MS = 26 * 60 * 60_000L
 
         /** One unique name per midnight instant. */
         internal fun workNameFor(midnightMs: Long): String = "$TAG@$midnightMs"

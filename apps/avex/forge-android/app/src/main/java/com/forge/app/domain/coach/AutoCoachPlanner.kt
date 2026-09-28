@@ -116,13 +116,11 @@ object AutoCoachPlanner {
     private const val GAP_HOLD_DAYS = 14
     /** Per-muscle net applied-volume drift cap, in sets (hardening 11). */
     private const val VOLUME_DRIFT_CAP = 2
-    /** Never push a slot past this many sets (mirrors VolumeModel.MAX_SETS). */
-    /** Ceiling on sets the coach will drive a slot to. Also read by CoachRepository, which
-     *  re-derives the adjustment at apply time and must respect the same bound. */
+    /** Ceiling on sets the coach will drive a slot to (mirrors VolumeModel.MAX_SETS). Also read by
+     *  CoachRepository, which re-derives the adjustment at apply time and must respect the same bound. */
     internal const val MAX_SLOT_SETS = 5
     /** An exercise skipped this often in its last 4 bouts is oversized — drop a set. */
     private const val SKIP_DOWNSIZE_COUNT = 3
-    private const val DAY_MS = 24L * 60 * 60 * 1000
 
     fun evaluate(
         s: AdaptationSnapshot,
@@ -134,7 +132,14 @@ object AutoCoachPlanner {
                 "the weekly calls start at $MIN_SESSIONS."
         )
         val lastSessionAt = s.sessions.maxOf { it.startedAt }
-        if (s.nowMs - lastSessionAt >= GAP_HOLD_DAYS * DAY_MS) return hold(
+        // CALENDAR days, the way LifeEvents counts the same break: elapsed 24 h blocks truncated,
+        // so a gap LifeEvents already reported as a 14-day layoff read as 13 here and the pass
+        // restructured the plan of someone it was telling to ease back in.
+        val daysAway = java.time.temporal.ChronoUnit.DAYS.between(
+            java.time.Instant.ofEpochMilli(lastSessionAt).atZone(s.zoneId).toLocalDate(),
+            java.time.Instant.ofEpochMilli(s.nowMs).atZone(s.zoneId).toLocalDate()
+        )
+        if (daysAway >= GAP_HOLD_DAYS) return hold(
             "First week back after a break. Run the plan as it is and ease in; " +
                 "changes resume once there's fresh data."
         )
@@ -145,10 +150,15 @@ object AutoCoachPlanner {
         // it isn't, the pass proposes the same deload rather than letting the week go by unserved.
         if (inputs.blockPhase == BlockPhase.DELOAD) return blockDeloadPass(s)
 
+        // Read once: it decides the deload call below AND the +1-volume freshness gate and the
+        // consolidation band further down. Each read walks every fatigue driver plus the whole
+        // plateau ladder, and this pass used to take two.
+        val fatigue = DeloadAdvisor.fatigue(s, t)
+
         // A deload call supersedes everything else (mirrors the arbiter's suppression rule):
         // restructuring a plan the same week you're told to recover is noise. Pending reverts
         // are deliberately not carried into a deload week — the regeneration resets the slate.
-        DeloadAdvisor.evaluate(s, t)?.let { deload ->
+        DeloadAdvisor.suggestionFrom(fatigue, t)?.let { deload ->
             return CoachPassResult(
                 CoachPassStatus.SHADOW, null,
                 listOf(
@@ -213,8 +223,6 @@ object AutoCoachPlanner {
             }
         }.sortedBy { it.first }.map { it.second }
 
-        // Computed once and shared by the +1-volume freshness gate and the consolidation-band check below.
-        val fatigue = DeloadAdvisor.fatigue(s, t)
         val volume = volumeDecisions(s, inputs, stalledIds, fatigue, t)
 
         val candidates = inputs.revertProposals + structural + volume
@@ -314,7 +322,7 @@ object AutoCoachPlanner {
         // ── +1: one muscle that's earning more ────────────────────────────────
         // A block phase that isn't accumulating never adds, whatever the freshness read says.
         val phaseAllowsMore = phaseDelta == null || phaseDelta > 0
-        val fresh = phaseAllowsMore && (fatigue == null || fatigue.score < t.deloadScoreThreshold - 2)
+        val fresh = phaseAllowsMore && (fatigue == null || fatigue.score < t.deloadScoreThreshold - t.consolidateBandPoints)
         // The week that ENDED, not the one in progress.
         //
         // Moving this off a rolling 7 x 24 h window onto the ISO week fixed the boundary and left

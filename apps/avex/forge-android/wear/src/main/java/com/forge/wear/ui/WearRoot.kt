@@ -97,13 +97,17 @@ fun WearRoot(repo: WearDataRepository, haptics: WristHaptics) {
             t == null -> runningEndAt = 0L
             !t.paused && t.endAtMs != 0L -> {
                 runningEndAt = t.endAtMs
-                // publishedAtMs makes this a DURATION measured on this watch, instead of a phone
-                // wall-clock instant counted down against the watch's own — which made every
-                // millisecond of skew between the devices a millisecond of error.
-                val remainingMs = if (t.publishedAtMs > 0L) t.endAtMs - t.publishedAtMs
-                    else t.endAtMs - System.currentTimeMillis()
+                // The countdown's own arithmetic (RestCountdown): a duration measured on this watch
+                // from when it first RECEIVED this payload, so clock skew between the devices is
+                // cancelled. That receipt is persisted, so a reopened app waits out what is LEFT of
+                // the rest. Measuring from publish alone waited the whole rest again on every
+                // reopen, and the buzz landed long after the figure it belongs to read 0:00.
+                val remainingMs = RestCountdown.remainingMs(t, System.currentTimeMillis(), repo.timerReceivedAt(t))
                 if (remainingMs > 0) delay(remainingMs)
-                fireTimerDone()
+                // A rest that ran out well before this effect started — the app reopened on a
+                // payload the phone never got to republish — is no longer a cue: consume it quietly
+                // so neither this nor the phone's paused-at-zero republish buzzes for it now.
+                if (remainingMs < -STALE_EXPIRY_MS) buzzedForEndAt = t.endAtMs else fireTimerDone()
             }
             // Paused with nothing left is the phone telling us the rest expired. A manual pause
             // keeps its remaining seconds, so it can't be mistaken for one.
@@ -142,6 +146,9 @@ fun WearRoot(repo: WearDataRepository, haptics: WristHaptics) {
         }
     }
 }
+
+/** How long past its expiry a running payload still earns the rest-done buzz when first seen. */
+private const val STALE_EXPIRY_MS = 10_000L
 
 /** The session just ended — one quiet beat pointing at the phone for the rest (notes, details). */
 @Composable

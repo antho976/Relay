@@ -411,6 +411,15 @@ class ProgressionAdvisorTest {
     }
 
     @Test
+    fun plateau_repShiftKeepsPerSideNotation() {
+        // "10-12/leg" shifted to a bare "8-10" read as eight to ten reps IN TOTAL.
+        val high = ProgressionAdvisor.evaluate(snapshot(stalledBouts(6), slot(reps = "10-12/leg")))
+        assertEquals("8-10/leg", (high.single() as Recommendation.RepRangeShift).toReps)
+        val low = ProgressionAdvisor.evaluate(snapshot(stalledBouts(6), slot(reps = "8/arm")))
+        assertEquals("12-15/arm", (low.single() as Recommendation.RepRangeShift).toReps)
+    }
+
+    @Test
     fun plateau_eightStalled_escalatesToVariationSwap_cappedCandidates() {
         val recs = ProgressionAdvisor.evaluate(snapshot(stalledBouts(8)))
         val r = recs.single() as Recommendation.VariationSwap

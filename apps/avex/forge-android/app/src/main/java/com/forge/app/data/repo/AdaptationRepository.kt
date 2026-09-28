@@ -325,9 +325,6 @@ class AdaptationRepository @Inject constructor(
         CoachFeed(arbitrated, building, t.deloadScoreThreshold, restingHrSpike)
     }
 
-    /** Just the actionable recommendations (kept for callers that don't need the fatigue read). */
-    suspend fun coachRecommendations(): List<Recommendation> = coachFeed().recommendations
-
     /**
      * Just the deload call off ONE snapshot — for the weekly worker, which only needs this and
      * shouldn't pay for the plateau ladder + arbitration [coachFeed] builds for the Overview.

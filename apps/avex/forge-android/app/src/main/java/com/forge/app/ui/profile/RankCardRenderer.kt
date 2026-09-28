@@ -11,7 +11,6 @@ import android.graphics.Shader
 import android.graphics.Typeface
 import android.net.Uri
 import androidx.core.content.FileProvider
-import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
 import com.forge.app.core.io.exportFile

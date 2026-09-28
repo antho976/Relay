@@ -206,7 +206,6 @@ interface LoggedExerciseDao {
     """)
     fun observeAllForFinishedSessions(): Flow<List<LoggedExercise>>
 
-    /** Set superset group for an exercise (#38). */
     /**
      * Single-column writes, so two of these racing can't clobber each other.
      *

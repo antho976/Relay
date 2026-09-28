@@ -26,7 +26,6 @@ import com.forge.app.ui.gym.history.SessionRow
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.util.Locale
 
 /**
  * # "What did I do that day?"
@@ -80,8 +79,10 @@ fun DayLogSheet(
     onDismiss: () -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
-    val dayLine = remember(log.date) {
-        log.date.format(DateTimeFormatter.ofPattern("EEEE · MMMM d, yyyy", Locale.getDefault())).uppercase()
+    // The composition's locale, not the process default, so a per-app language change reformats it.
+    val locale = currentLocale()
+    val dayLine = remember(log.date, locale) {
+        log.date.format(DateTimeFormatter.ofPattern("EEEE · MMMM d, yyyy", locale)).uppercase(locale)
     }
     val workouts = log.items.count { it is HistoryItem.Workout }
     val cardio = log.items.count { it is HistoryItem.Cardio }

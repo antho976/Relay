@@ -260,7 +260,7 @@ fun CardioSessionDetailSheet(
             if (!activity.isRest && (wearable?.hasData == true || wearableConnected)) {
                 item("steps") {
                     Spacer(Modifier.height(SECTION_GAP))
-                    StepsByHourSection(wearable = wearable, connected = wearableConnected, onBg = onBg, muted = muted, outline = outline, accent = accent)
+                    StepsByHourSection(wearable = wearable, connected = wearableConnected, muted = muted, outline = outline, accent = accent)
                 }
             }
 

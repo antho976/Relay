@@ -52,7 +52,8 @@ fun TimerView(
     // devices a millisecond of error in the countdown. With publishedAtMs the payload carries a
     // DURATION we can measure locally instead. A phone too old to send it leaves it 0 and we fall
     // back to the raw instant, exactly as before.
-    val receivedAtMs = repo.timerReceivedAt(timer)
+    // Once per payload, not per 1 Hz recomposition: the anchor is keyed by re-serializing the DTO.
+    val receivedAtMs = remember(timer) { repo.timerReceivedAt(timer) }
     // One undo per logged set: reset when a new set's ack arrives.
     var undoSent by remember(lastLog?.setId) { mutableStateOf(false) }
 

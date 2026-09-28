@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -18,7 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
-import com.forge.app.ui.common.GROUP_OUTER
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -237,8 +235,7 @@ internal fun ProfileActivityMonth(
                     icon = Icons.Filled.ChevronLeft,
                     label = "Earlier month",
                     enabled = canGoBack,
-                    onBg = onBg,
-                    muted = muted
+                    onBg = onBg
                 ) { monthsBack++ }
                 Text(
                     "$monthName ${month.year}",
@@ -254,8 +251,7 @@ internal fun ProfileActivityMonth(
                     icon = Icons.Filled.ChevronRight,
                     label = "Later month",
                     enabled = canGoForward,
-                    onBg = onBg,
-                    muted = muted
+                    onBg = onBg
                 ) { monthsBack-- }
             }
         }
@@ -414,7 +410,6 @@ private fun MonthStep(
     label: String,
     enabled: Boolean,
     onBg: Color,
-    muted: Color,
     onClick: () -> Unit
 ) {
     ProfileIconCapsule(icon, label, enabled = enabled, tint = onBg, onClick = onClick)

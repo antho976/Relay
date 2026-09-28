@@ -33,8 +33,9 @@ class ForgeApp : Application(), Configuration.Provider {
     private val startupGate = StartupGate()
     internal suspend fun awaitStorageReady() = startupGate.await()
 
-    /** App-lifetime work that should survive any screen (the wear publisher's collectors, W1). */
-    private val appScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
+    /** App-lifetime work that should survive any screen (the wear publisher's collectors, W1; a
+     *  confirmed share-to-app import, which a rotation must not cancel half way). */
+    internal val appScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
@@ -63,8 +64,11 @@ class ForgeApp : Application(), Configuration.Provider {
         WeeklyRecapWorker.schedule(this)
         // Seed-if-empty + load the DB-backed active program into the Program facade (program-unlock Phase 1).
         // Re-arm the daily training reminder from its persisted setting (no-op when it's off).
-        CoroutineScope(Dispatchers.IO).launch {
-            programRepository.ensureLoaded()
+        appScope.launch(Dispatchers.IO) {
+            // ensureLoaded marks the program FAILED before rethrowing, and every later reader retries
+            // the load, so a boot-time failure is logged here rather than crashing the process from
+            // this root coroutine — and the reminder below is still re-armed.
+            runCatching { programRepository.ensureLoaded() }.onFailure { runCatching { writeCrashLog(it) } }
             // Finish any regeneration that died between its program transaction and the deload
             // marker beside it (M-06). Two stores, no shared transaction: this is what stops them
             // disagreeing forever. Fail-soft — a reconciliation that throws must not stop startup.

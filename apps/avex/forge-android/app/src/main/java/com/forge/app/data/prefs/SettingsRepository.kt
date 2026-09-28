@@ -593,8 +593,6 @@ class SettingsRepository @Inject constructor(
         else com.forge.app.appicon.AppIcon.fromKey(prefs[PreferenceKeys.APP_ICON] ?: "").accentHex ?: picked
     }
 
-    val fontChoice: Flow<String> = pref { it[PreferenceKeys.FONT_CHOICE] ?: "default" }
-
     // ─── Locale (#116) ────────────────────────────────────────────────────────
 
     val dateFormat: Flow<String> = pref { it[PreferenceKeys.DATE_FORMAT] ?: "MMM d, yyyy" }
@@ -671,11 +669,6 @@ class SettingsRepository @Inject constructor(
     suspend fun setTrainingReminderEnabled(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.TRAINING_REMINDER_ENABLED] = value }
 
-    /** Whether the one-time "how your coach learns" card has been dismissed (CO6). */
-    val coachBriefIntroSeen: Flow<Boolean> = pref { it[PreferenceKeys.COACH_BRIEF_INTRO_SEEN] ?: false }
-    suspend fun setCoachBriefIntroSeen() =
-        context.forgePreferences.edit { it[PreferenceKeys.COACH_BRIEF_INTRO_SEEN] = true }
-
     /** Hour-of-day (0–23) the reminder fires; default 18 (6pm). */
     val trainingReminderHour: Flow<Int> = pref { it[PreferenceKeys.TRAINING_REMINDER_HOUR] ?: 18 }
     suspend fun setTrainingReminderHour(hour: Int) =
@@ -703,12 +696,6 @@ class SettingsRepository @Inject constructor(
     val firstWorkoutDone: Flow<Boolean> = pref { it[PreferenceKeys.FIRST_WORKOUT_DONE] ?: false }
     suspend fun setFirstWorkoutDone() =
         context.forgePreferences.edit { it[PreferenceKeys.FIRST_WORKOUT_DONE] = true }
-
-    // ─── Monthly PR target (#84) ──────────────────────────────────────────────
-
-    val monthlyPrTarget: Flow<Int> = pref { it[PreferenceKeys.MONTHLY_PR_TARGET] ?: 0 }
-    suspend fun setMonthlyPrTarget(target: Int) =
-        context.forgePreferences.edit { it[PreferenceKeys.MONTHLY_PR_TARGET] = target }
 
     // ─── Equipment context (#44) ──────────────────────────────────────────────
 
@@ -758,27 +745,11 @@ class SettingsRepository @Inject constructor(
     val likedExercises: Flow<Set<String>> = pref { it[PreferenceKeys.LIKED_EXERCISES] ?: emptySet() }
     val dislikedExercises: Flow<Set<String>> = pref { it[PreferenceKeys.DISLIKED_EXERCISES] ?: emptySet() }
 
-    /** Like is mutually exclusive with dislike (and vice-versa) — setting one clears the other. */
-    suspend fun setExerciseLiked(libId: String, liked: Boolean) =
-        context.forgePreferences.edit { prefs ->
-            val cur = prefs[PreferenceKeys.LIKED_EXERCISES] ?: emptySet()
-            prefs[PreferenceKeys.LIKED_EXERCISES] = if (liked) cur + libId else cur - libId
-            if (liked) prefs[PreferenceKeys.DISLIKED_EXERCISES] =
-                (prefs[PreferenceKeys.DISLIKED_EXERCISES] ?: emptySet()) - libId
-        }
-
-    suspend fun setExerciseDisliked(libId: String, disliked: Boolean) =
-        context.forgePreferences.edit { prefs ->
-            val cur = prefs[PreferenceKeys.DISLIKED_EXERCISES] ?: emptySet()
-            prefs[PreferenceKeys.DISLIKED_EXERCISES] = if (disliked) cur + libId else cur - libId
-            if (disliked) prefs[PreferenceKeys.LIKED_EXERCISES] =
-                (prefs[PreferenceKeys.LIKED_EXERCISES] ?: emptySet()) - libId
-        }
-
     /**
      * Batch absolute set — a custom exercise spans several `custom_…` ids (one per day it's on), so the
-     * post-swap dislike prompt hides every copy in one edit. Mutual exclusion still holds. (Likes/dislikes
-     * driven by the picker chips go through the [toggleExercisesLiked]/[toggleExercisesDisliked] toggles.)
+     * post-swap dislike prompt hides every copy in one edit. Like and dislike are mutually exclusive:
+     * disliking clears the like. (Likes/dislikes driven by the picker chips go through the
+     * [toggleExercisesLiked]/[toggleExercisesDisliked] toggles.)
      */
     suspend fun setExercisesDisliked(ids: Set<String>, disliked: Boolean) =
         context.forgePreferences.edit { prefs ->

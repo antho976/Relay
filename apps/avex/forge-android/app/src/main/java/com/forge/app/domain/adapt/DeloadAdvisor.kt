@@ -77,9 +77,16 @@ object DeloadAdvisor {
         val checks: List<FatigueCheck> = emptyList()
     )
 
-    fun evaluate(s: AdaptationSnapshot, t: AdaptThresholds = AdaptThresholds()): Recommendation.DeloadSuggestion? {
-        val f = fatigue(s, t) ?: return null
-        if (f.score < t.deloadScoreThreshold) return null
+    fun evaluate(s: AdaptationSnapshot, t: AdaptThresholds = AdaptThresholds()): Recommendation.DeloadSuggestion? =
+        suggestionFrom(fatigue(s, t), t)
+
+    /**
+     * The deload call for an assessment the caller already holds — [fatigue] walks every driver
+     * (and System 1's whole plateau ladder), so a caller that needs both the assessment and the
+     * suggestion reads it once instead of twice.
+     */
+    fun suggestionFrom(f: FatigueAssessment?, t: AdaptThresholds = AdaptThresholds()): Recommendation.DeloadSuggestion? {
+        if (f == null || f.score < t.deloadScoreThreshold) return null
         return Recommendation.DeloadSuggestion(
             score = f.score,
             drivers = f.drivers,
@@ -162,8 +169,10 @@ object DeloadAdvisor {
         val dropoffs = windowBouts.mapNotNull { bout ->
             // Rep sets only. A timed hold's `reps` is a duration in disguise, so a plank in the
             // middle of a bout read as a colossal rep drop-off and fed the deload score. Bodyweight
-            // sets stay: their reps are real, and rep fade is exactly what this is measuring.
-            val sets = bout.sets.filter { it.isRepSet() }
+            // sets stay: their reps are real, and rep fade is exactly what this is measuring. Warm-up
+            // rows go too: a 12-rep warm-up ahead of 5, 5, 5 is not the first working set, and read
+            // as one it was a 58% "fade" (EffortModel: warm-ups say nothing about working effort).
+            val sets = bout.sets.filter { it.isRepSet() && it.setType != EffortModel.SET_TYPE_WARMUP }
             if (sets.size < 3) return@mapNotNull null
             val first = sets.first().reps
             if (first <= 0) return@mapNotNull null
@@ -181,13 +190,18 @@ object DeloadAdvisor {
         )
 
         // ── e1RM regression on multiple lifts ──────────────────────────────────────
-        val regressing = s.exerciseHistory.values.count { bouts ->
-            val training = bouts.filter { it.countsForProgression && !it.skipped }
-            val inWindow = training.filter { it.sessionStartedAt >= windowStart }
-            val prior = training.filter { it.sessionStartedAt in priorStart until windowStart }
-            val windowBest = bestE1rm(inWindow) ?: return@count false
-            val priorBest = bestE1rm(prior) ?: return@count false
-            windowBest < priorBest * t.deloadRegressionFraction
+        // Compared within the lift actually PERFORMED (H-06). History is filed by slot, so a swap
+        // puts a different exercise under the same key: a barbell row's prior best (~160) against a
+        // dumbbell row's window best (~62) read as a regression that never happened.
+        val regressing = s.exerciseHistory.entries.sumOf { (slotId, bouts) ->
+            bouts.filter { it.countsForProgression && !it.skipped }
+                .groupBy { it.performedExerciseId ?: slotId }
+                .values.count { lift ->
+                    val windowBest = bestE1rm(lift.filter { it.sessionStartedAt >= windowStart }) ?: return@count false
+                    val priorBest = bestE1rm(lift.filter { it.sessionStartedAt in priorStart until windowStart })
+                        ?: return@count false
+                    windowBest < priorBest * t.deloadRegressionFraction
+                }
         }
         val regressionFired = regressing >= t.deloadRegressionLifts
         checks += FatigueCheck(
@@ -236,10 +250,10 @@ object DeloadAdvisor {
         // month's average. Compared against each user's OWN baseline, never an absolute number.
         val windowHr = s.health.restingHr.filter { it.timeMs >= windowStart }
         val priorHr = s.health.restingHr.filter { it.timeMs in priorStart until windowStart }
-        val hrGated = windowHr.size >= t.deloadMinRestingHrSamples && priorHr.size >= t.deloadMinRestingHrSamples
-        val hrDelta = if (hrGated) windowHr.map { it.bpm }.average() - priorHr.map { it.bpm }.average() else 0.0
-        val hrFired = hrGated && priorHr.map { it.bpm }.average() > 0 && hrDelta >= t.deloadRestingHrDeltaBpm
-        val hrBuilding = windowHr.isNotEmpty() && !hrGated
+        val hrReady = windowHr.size >= t.deloadMinRestingHrSamples && priorHr.size >= t.deloadMinRestingHrSamples
+        val hrDelta = if (hrReady) windowHr.map { it.bpm }.average() - priorHr.map { it.bpm }.average() else 0.0
+        val hrFired = hrReady && priorHr.map { it.bpm }.average() > 0 && hrDelta >= t.deloadRestingHrDeltaBpm
+        val hrBuilding = windowHr.isNotEmpty() && !hrReady
         checks += FatigueCheck(
             "Resting heart rate",
             when {

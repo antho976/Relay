@@ -66,6 +66,7 @@ import java.time.format.TextStyle
 import java.util.Locale
 import kotlin.math.roundToInt
 import com.forge.app.domain.units.filterDecimalInput
+import com.forge.app.domain.units.storedUnlessEdited
 
 /**
  * Quick-log sheet for bodyweight — lives on the Profile's BODYWEIGHT section (moved from the old
@@ -150,7 +151,15 @@ internal fun BodyweightLogSheet(
             val lb = (stInput.toIntOrNull() ?: 0) * 14.0 + (lbInput.toIntOrNull() ?: 0)
             if (stInput.isNotBlank() || lbInput.isNotBlank()) lb.takeIf { it in MIN_BODYWEIGHT_LB..MAX_BODYWEIGHT_LB } else null
         }
-    } else parseSaneBodyweightLb(input, weightUnit == WeightUnit.KG)  // non-stones branch is kg or lb
+    } else {
+        // kg or lb. The same rule as the stones pair above: the field is seeded at 0.1 in the
+        // display unit, so an untouched Save re-parsed 180.47 lb as 180.5 (or, in kg, as the lb
+        // equivalent of 81.9) and quantised the stored weigh-in.
+        val seedText = seedLb?.let { weightInputValue(it, weightUnit) }
+        storedUnlessEdited(input, seedText, seedLb?.takeIf { it in MIN_BODYWEIGHT_LB..MAX_BODYWEIGHT_LB }) {
+            parseSaneBodyweightLb(it, weightUnit == WeightUnit.KG)
+        }
+    }
     val anyInput = if (stones) stInput.isNotBlank() || lbInput.isNotBlank() else input.isNotBlank()
     val invalid = anyInput && parsed == null
     val minDisp = toDisplayWeight(MIN_BODYWEIGHT_LB, weightUnit).roundToInt()

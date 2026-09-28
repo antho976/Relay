@@ -60,17 +60,12 @@ import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeightDelta
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
+import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.ForgeLastGreen
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.ExerciseUnit
-import com.forge.app.ui.gym.stats.components.Sparkline
-import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
 import com.forge.app.ui.gym.train.state.ExerciseUiState
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.Locale
 
 /**
  * A YouTube search for how to perform [exerciseName] — no per-exercise link curation needed.
@@ -83,6 +78,20 @@ internal fun youTubeSearchIntent(exerciseName: String, machine: Boolean = false)
         Intent.ACTION_VIEW,
         Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(query))
     ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+}
+
+/**
+ * A prior set's load for the "last …" hints, as a bare number in the user's unit. Stored weight text
+ * is always lb (toStoredWeightText), so printing it raw told a kg user their 100 kg was "220.5". A
+ * plate machine's text is already a plate count, and a weightless set keeps its text ("BW").
+ */
+internal fun priorWeightLabel(
+    set: com.forge.app.data.db.entities.LoggedSet,
+    isPlates: Boolean,
+    weightUnit: WeightUnit
+): String {
+    val lb = set.weightLb
+    return if (isPlates || lb == null) set.weightText else weightInputValue(lb, weightUnit)
 }
 
 @Composable
@@ -125,8 +134,10 @@ internal fun CollapsedRow(
                 textDecoration = if (state.skipped) TextDecoration.LineThrough else TextDecoration.None
             )
             val priorLastSet = state.priorSets.lastOrNull()
+            val weightUnit = LocalForgeSettings.current.weightUnit
             val lastPart = when {
-                priorLastSet != null -> "  ·  last ${priorLastSet.weightText} × ${priorLastSet.reps}"
+                priorLastSet != null ->
+                    "  ·  last ${priorWeightLabel(priorLastSet, state.effectiveUnit == ExerciseUnit.PLATES, weightUnit)} × ${priorLastSet.reps}"
                 else -> "  ·  never done"
             }
             Text(

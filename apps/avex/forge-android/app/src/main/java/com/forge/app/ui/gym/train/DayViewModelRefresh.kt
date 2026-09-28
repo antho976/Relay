@@ -1,7 +1,6 @@
 package com.forge.app.ui.gym.train
 
 import android.content.Intent
-import com.forge.app.program.Program
 import com.forge.app.service.SessionNotifState
 import com.forge.app.service.WorkoutSessionService
 import kotlinx.coroutines.async

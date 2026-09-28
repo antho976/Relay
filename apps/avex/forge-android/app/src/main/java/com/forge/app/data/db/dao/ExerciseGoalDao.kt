@@ -14,9 +14,6 @@ interface ExerciseGoalDao {
     suspend fun upsert(goal: ExerciseGoal)
 
     @Query("SELECT * FROM exercise_goal WHERE exercise_id = :exerciseId")
-    fun observe(exerciseId: String): Flow<ExerciseGoal?>
-
-    @Query("SELECT * FROM exercise_goal WHERE exercise_id = :exerciseId")
     suspend fun get(exerciseId: String): ExerciseGoal?
 
     @Query("DELETE FROM exercise_goal WHERE exercise_id = :exerciseId")

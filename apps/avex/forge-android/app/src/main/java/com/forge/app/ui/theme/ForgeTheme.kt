@@ -29,9 +29,13 @@ fun ForgeTheme(
             ?: AccentRed
     }
 
-    val scheme = pearlColorScheme(accent, amoledMode)
+    // Remembered: ColorScheme compares by identity, so a scheme rebuilt on every pass through here
+    // re-provided MaterialTheme's colours and invalidated every reader in the app each time the root
+    // recomposed, with nothing about the colours having changed.
+    val scheme = remember(accent, amoledMode) { pearlColorScheme(accent, amoledMode) }
 
     val (gradTop, gradBottom) = forgeBackgroundGradient(amoledMode)
+    val ground = remember(gradTop, gradBottom) { Brush.verticalGradient(listOf(gradTop, gradBottom)) }
 
     MaterialTheme(
         colorScheme = scheme,
@@ -41,7 +45,7 @@ fun ForgeTheme(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Brush.verticalGradient(listOf(gradTop, gradBottom)))
+                .background(ground)
         ) {
             content()
         }

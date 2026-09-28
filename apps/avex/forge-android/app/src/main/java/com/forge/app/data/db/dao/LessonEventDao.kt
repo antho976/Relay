@@ -27,7 +27,4 @@ interface LessonEventDao {
     /** True when this lesson already has an event of this kind — the idempotence guard for unlocks. */
     @Query("SELECT COUNT(*) > 0 FROM lesson_event WHERE lesson_id = :lessonId AND kind = :kind")
     suspend fun has(lessonId: String, kind: String): Boolean
-
-    @Query("DELETE FROM lesson_event")
-    suspend fun deleteAll()
 }

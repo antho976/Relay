@@ -456,15 +456,6 @@ class ProgressPhotoRepository @Inject constructor(
     }
 
     /**
-     * The image's EXIF capture date in epoch millis, or null if absent/implausible. AndroidX
-     * ExifInterface so HEIC (iPhone transfers, most modern phones), PNG and WebP dates are read on
-     * every API level, not just JPEG. The timestamp is interpreted in the device's current zone —
-     * EXIF times are camera-local and near-always shot on this same phone; being wrong by a zone
-     * beats every photo landing on import day. A fresh non-lenient format per call ("0000:00:00…"
-     * placeholders must fail to parse; SimpleDateFormat isn't thread-safe), then a plausibility
-     * window so corrupt EXIF can't file a photo in 1970 or the future.
-     */
-    /**
      * Does this file actually contain a decodable image?
      *
      * The copy was bounded and the partial output cleaned up, but ANY non-empty byte stream was
@@ -528,6 +519,15 @@ class ProgressPhotoRepository @Inject constructor(
         true
     }.getOrDefault(false)
 
+    /**
+     * The image's EXIF capture date in epoch millis, or null if absent/implausible. AndroidX
+     * ExifInterface so HEIC (iPhone transfers, most modern phones), PNG and WebP dates are read on
+     * every API level, not just JPEG. The timestamp is interpreted in the device's current zone —
+     * EXIF times are camera-local and near-always shot on this same phone; being wrong by a zone
+     * beats every photo landing on import day. A fresh non-lenient format per call ("0000:00:00…"
+     * placeholders must fail to parse; SimpleDateFormat isn't thread-safe), then a plausibility
+     * window so corrupt EXIF can't file a photo in 1970 or the future.
+     */
     private fun exifTakenAtMs(file: File): Long? = runCatching {
         val exif = ExifInterface(file)
         val raw = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)

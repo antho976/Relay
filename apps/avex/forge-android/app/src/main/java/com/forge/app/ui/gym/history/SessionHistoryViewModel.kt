@@ -41,10 +41,6 @@ data class SessionHistoryUiState(
         get() = query.isNotBlank() || tagFilter != null || durationFilter != null || volumeFilter != null
 
     val isEmpty: Boolean get() = days.isEmpty()
-
-    /** Whether any PILL is narrowing the list — the search box has its own clear, so it is excluded. */
-    val anyPillActive: Boolean
-        get() = tagFilter != null || durationFilter != null || volumeFilter != null
 }
 
 @HiltViewModel

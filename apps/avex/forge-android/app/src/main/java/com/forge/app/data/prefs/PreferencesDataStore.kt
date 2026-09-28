@@ -220,10 +220,6 @@ object PreferenceKeys {
      *  never reappear for a returning user — it lives in DataStore, so it survives a DB wipe/restore. */
     val FIRST_WORKOUT_DONE = booleanPreferencesKey("first_workout_done")
 
-    // ─── Monthly PR target (#84) ──────────────────────────────────────────────
-    /** Target PRs per calendar month. 0 = no goal set. */
-    val MONTHLY_PR_TARGET = intPreferencesKey("monthly_pr_target")
-
     // ─── Equipment context (#44) ──────────────────────────────────────────────
     /** Set of Equipment code strings the user has available. Empty = all equipment assumed available. */
     val AVAILABLE_EQUIPMENT = stringSetPreferencesKey("available_equipment")

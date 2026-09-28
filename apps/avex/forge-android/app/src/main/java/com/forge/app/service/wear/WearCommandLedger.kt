@@ -52,13 +52,25 @@ class WearCommandLedger(
             else -> error("Stored watch outcome cannot be decoded")
         }
 
-    private fun legacyAck(id: String): CmdAckDto? {
-        if (!file.isFile) return null
-        return runCatching {
-            WearCodec.json.parseToJsonElement(file.readText()).jsonObject["entries"]?.jsonArray
-                ?.firstOrNull { it.jsonObject["commandId"]?.jsonPrimitive?.contentOrNull == id }
-                ?.jsonObject?.get("ack")?.let { decodeAck(it.toString()) }
-        }.getOrNull()
+    private fun legacyAck(id: String): CmdAckDto? = legacyAcks[id]
+
+    /**
+     * The pre-Room ledger's outcomes, read once per process. Nothing writes that file any more, so
+     * reading and re-parsing all of it inside every command's transaction bought nothing.
+     */
+    private val legacyAcks: Map<String, CmdAckDto> by lazy {
+        if (!file.isFile) return@lazy emptyMap()
+        runCatching {
+            val acks = LinkedHashMap<String, CmdAckDto>()
+            WearCodec.json.parseToJsonElement(file.readText()).jsonObject["entries"]?.jsonArray?.forEach { entry ->
+                runCatching {
+                    val id = entry.jsonObject["commandId"]?.jsonPrimitive?.contentOrNull
+                    val ack = entry.jsonObject["ack"]?.let { decodeAck(it.toString()) }
+                    if (id != null && ack != null) acks.putIfAbsent(id, ack)
+                }
+            }
+            acks
+        }.getOrDefault(emptyMap())
     }
 
     companion object { const val FILE_NAME = "wear_command_ledger.json" }

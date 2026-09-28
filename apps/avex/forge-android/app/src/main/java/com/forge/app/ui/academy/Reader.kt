@@ -85,7 +85,6 @@ fun ReaderScreen(
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
 
     val listState = rememberLazyListState()
     // The tail spacer is the last item, so seeing it means the whole piece has cleared the fold.
@@ -157,7 +156,7 @@ fun ReaderScreen(
                 item("next") {
                     Column(Modifier.fillMaxWidth().padding(horizontal = GUTTER)) {
                         Spacer(Modifier.height(40.dp))
-                        NextBlock(next, onBg, muted, accent) { onOpenNext(next.id) }
+                        NextBlock(next, onBg, muted) { onOpenNext(next.id) }
                     }
                 }
             }
@@ -176,7 +175,6 @@ private fun NextBlock(
     next: NextPiece,
     onBg: Color,
     muted: Color,
-    accent: Color,
     onClick: () -> Unit
 ) {
     Column(Modifier.fillMaxWidth()) {

@@ -42,9 +42,19 @@ enum class WeightUnit(val label: String) {
  */
 private fun Double.finiteOrZero(): Double = if (isFinite()) this else 0.0
 
-private fun trimDecimal(raw: Double): String {
-    val v = raw.finiteOrZero()
-    return if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(Locale.US, "%.1f", v)
+/**
+ * One decimal, with a whole value shown bare ("100" not "100.0"). Rounds to the shown precision
+ * BEFORE asking whether the value is whole: 100 kg is stored as 220.5 lb, which reads back as
+ * 100.017 kg — not whole, so it rendered "100.0 kg" and seeded "100.0" into the edit field.
+ * Shared by the length/distance/incline/standing readouts, which had the same pattern.
+ */
+internal fun trimDecimal(raw: Double): String {
+    val x = raw.finiteOrZero()
+    // Half away from zero on the magnitude, like the "%.1f" this replaced: Math.round alone rounds
+    // half toward +∞, so a −1.25 lb delta read "-1.2" beside a +1.25 lb one's "1.3".
+    val r = Math.round(abs(x) * 10.0) / 10.0
+    val v = if (x < 0) -r else r
+    return if (v % 1.0 == 0.0) "${v.toLong()}" else String.format(Locale.US, "%.1f", v)
 }
 
 /** A non-negative lb value as a stone+lb compound: "12 st 4 lb" / "12 st" / "8 lb" (rounded to lb). */
@@ -63,12 +73,9 @@ private fun formatStoneLb(lb: Double): String {
 fun formatWeight(lb: Double, unit: WeightUnit): String {
     val v = lb.finiteOrZero()
     return when (unit) {
-        WeightUnit.KG -> {
-            val kg = v * KG_PER_LB
-            if (kg % 1.0 == 0.0) "${kg.toInt()} kg" else String.format(Locale.US, "%.1f kg", kg)
-        }
+        WeightUnit.KG -> "${trimDecimal(v * KG_PER_LB)} kg"
         WeightUnit.ST -> formatStoneLb(v)
-        WeightUnit.LB -> if (v % 1.0 == 0.0) "${v.toInt()} lb" else String.format(Locale.US, "%.1f lb", v)
+        WeightUnit.LB -> "${trimDecimal(v)} lb"
     }
 }
 
@@ -136,13 +143,16 @@ private val STONE_LB_REGEX =
 /** Parse a typed stones value to lb: compound "12 st 4 lb"/"12 st 4"/"12 st", or bare decimal
  *  stones "9.6"/"9.6 st" (the single-field lift input). */
 private fun parseStonesToLb(s: String): Double? {
-    STONE_LB_REGEX.matchEntire(s)?.let { m ->
-        val st = m.groupValues[1].toDoubleOrNull() ?: return null
-        val lb = m.groupValues[2].toDoubleOrNull() ?: 0.0
-        return st * LB_PER_STONE + lb
-    }
+    STONE_LB_REGEX.matchEntire(s)?.let { return stonesMatchToLb(it) }
     val bare = s.removeSuffix("st").trim().toDoubleOrNull() ?: return null
     return bare * LB_PER_STONE
+}
+
+/** A [STONE_LB_REGEX] match ("12 st 4 lb" / "12 st 4" / "12 st") to lb. */
+private fun stonesMatchToLb(m: MatchResult): Double? {
+    val st = m.groupValues[1].toDoubleOrNull() ?: return null
+    val lb = m.groupValues[2].toDoubleOrNull() ?: 0.0
+    return st * LB_PER_STONE + lb
 }
 
 /**
@@ -169,7 +179,10 @@ fun parseToLb(input: String, unit: WeightUnit): Double? {
 /** `"20 kg"` / `"9.6 st"` / `"135lb"` → lb, whatever the display unit is. Null when the text carries
  *  no unit of its own (the overwhelmingly common case), leaving the setting to decide. */
 private fun explicitUnitToLb(cleaned: String): Double? {
-    val m = EXPLICIT_UNIT_REGEX.matchEntire(cleaned) ?: return null
+    val m = EXPLICIT_UNIT_REGEX.matchEntire(cleaned)
+        // The stones compound ("12 st 4 lb") names its unit just as plainly as "12 st" does, but
+        // matched nothing outside stones mode, so it was stored as a weightless set in lb or kg.
+        ?: return STONE_LB_REGEX.matchEntire(cleaned)?.let(::stonesMatchToLb)
     val value = m.groupValues[1].toDoubleOrNull() ?: return null
     return when (m.groupValues[2]) {
         "kg", "kgs" -> value / KG_PER_LB

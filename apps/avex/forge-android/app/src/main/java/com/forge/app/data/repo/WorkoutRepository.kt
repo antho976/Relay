@@ -201,88 +201,6 @@ class WorkoutRepository @Inject constructor(
     }
 
     /**
-     * Create a fresh freestyle ("go with the flow") session and return its id. Unlike
-     * [startOrResumeSession] this never resumes an existing active session — a freestyle log is a
-     * self-contained, log-after-the-fact workout that the caller fills and finishes in one go. Keyed
-     * by [Program.FREESTYLE_DAY_KEY], which resolves to "Open workout" on display surfaces.
-     *
-     * [startedAt] is when the user opened the logger; since a freestyle log opens no active sitting
-     * segment, [finishSession] falls back to wall-clock (finish − [startedAt]) for the duration — so
-     * passing the open time records the real time spent logging instead of ~0.
-     */
-    /**
-     * Run [block] in one database transaction — for callers that compose several of this
-     * repository's writes into a single unit of work (the freestyle logger writes a session, its
-     * exercises and every set). Without it, a failure or a cancellation part-way through leaves a
-     * torn session in history.
-     */
-    suspend fun <T> inTransaction(block: suspend () -> T): T = database.withTransaction(block)
-
-    suspend fun createFreestyleSession(startedAt: Long = clock.nowMs()): Long {
-        val session = Session(
-            dayKey = Program.FREESTYLE_DAY_KEY, startedAt = startedAt, finishedAt = null
-        )
-        return sessionDao.insert(session)
-    }
-
-    /**
-     * "Log again today" (GYMAP-36): duplicate a past finished session as a fresh freestyle session dated
-     * now — a full-fidelity copy so a repeated workout can be re-logged without re-entering it. Every
-     * non-skipped logged exercise and each of its sets is copied verbatim (weight, reps, set type, RPE,
-     * timed hold, drop/AMRAP/failure/assist markers), preserving order; only per-session EVALUATIONS are
-     * dropped (difficulty rating, hit-target, PR flag, and the day-specific exercise note) since those
-     * are re-earned on the real day, not repeated. Keyed freestyle ("Open workout") like every other
-     * re-log-a-past-workout path (GYMAP-48), so slotId — a program-slot link meaningless in a freestyle
-     * log — is dropped too.
-     *
-     * Stamped finished with denormalised volume/setCount but WITHOUT [finishSession]'s side effects (no
-     * program rotation, no Health Connect calorie mirror) — a re-log is data entry, not a live finish.
-     * prCount is 0 by construction: a copy of existing history can only ever TIE an all-time max it is
-     * duplicating, never beat it, so no copied set is a PR. Returns the new session id, or null when the
-     * source is missing or logged nothing to copy (the caller then has nothing to re-log).
-     */
-    suspend fun reLogSession(sourceSessionId: Long, startedAt: Long = clock.nowMs()): Long? =
-        database.withTransaction {
-            val source = sessionDao.get(sourceSessionId) ?: return@withTransaction null
-            val sourceExercises = loggedExerciseDao.forSession(sourceSessionId).filterNot { it.skipped }
-            if (sourceExercises.isEmpty()) return@withTransaction null
-
-            val newSession = Session(dayKey = Program.FREESTYLE_DAY_KEY, startedAt = startedAt, finishedAt = null)
-            val newSessionId = sessionDao.insert(newSession)
-            sourceExercises.forEach { le ->
-                val newLeId = loggedExerciseDao.insert(
-                    LoggedExercise(
-                        sessionId = newSessionId,
-                        exerciseId = le.exerciseId,
-                        orderIndex = le.orderIndex,
-                        // Keep the performed name/unit override + superset grouping so the copy reads
-                        // identically; drop slotId + every per-session evaluation (see kdoc).
-                        swappedName = le.swappedName,
-                        swappedUnit = le.swappedUnit,
-                        supersetGroup = le.supersetGroup
-                    )
-                )
-                val copies = loggedSetDao.forLoggedExercise(le.id)
-                    .map { it.copy(id = 0, loggedExerciseId = newLeId, completedAt = startedAt) }
-                if (copies.isNotEmpty()) loggedSetDao.insertAll(copies)
-            }
-
-            val newSets = loggedSetDao.allForSession(newSessionId)
-            sessionDao.update(
-                newSession.copy(
-                    id = newSessionId,
-                    finishedAt = clock.nowMs(),
-                    totalVolumeLb = VolumeCalculator.sessionVolumeLb(newSets),
-                    setCount = newSets.size,
-                    // Inherit the original's active time so the re-log shows a realistic duration
-                    // (a duplicated workout took about as long) instead of ~0.
-                    activeSeconds = source.activeSeconds
-                )
-            )
-            newSessionId
-        }
-
-    /**
      * The sets from the most recent OTHER time this exercise was performed — powers the freestyle
      * logger's "copy last time" panel. Empty when it has never been logged before. excludeSessionId is
      * -1 because a freestyle log has no persisted session id while it's being filled in.
@@ -589,9 +507,6 @@ class WorkoutRepository @Inject constructor(
             .mapNotNull { seg -> seg.endedAt?.let { (it - seg.startedAt).coerceAtLeast(0) } }
             .sum()
 
-    /** All segments of a session, oldest first — the export breakdown. */
-    suspend fun sessionSegments(sessionId: Long) = sessionSegmentDao.forSession(sessionId)
-
     /** Rotation (program-unlock Phase 3): re-roll the program every N finished sessions, if enabled. */
     private suspend fun maybeRotateProgram() {
         // A freestyle user has no plan to rotate — and rerollAll() would silently generate one that
@@ -748,10 +663,6 @@ class WorkoutRepository @Inject constructor(
             slotId = slotId
         )
     )
-
-    /** This session's existing row for a program slot, or null. See [LoggedExerciseDao.forSessionSlot]. */
-    suspend fun loggedExerciseForSlot(sessionId: Long, slotId: String): Long? =
-        loggedExerciseDao.forSessionSlot(sessionId, slotId)?.id
 
     /**
      * The row for one program slot in one session, creating it if it does not exist yet — as ONE
@@ -915,8 +826,24 @@ class WorkoutRepository @Inject constructor(
 
     suspend fun deleteSet(set: LoggedSet) = loggedSetDao.delete(set)
 
-    suspend fun updateSet(set: LoggedSet) =
-        loggedSetDao.update(set.copy(reps = sanitizeReps(set.reps), weightLb = sanitizeWeightLb(set.weightLb)))
+    /**
+     * Edit a logged set, through the same clamps as [logSet] — including its weight TEXT. Only the
+     * number was clamped here, so an edit typed as "1000000000" stored 2000 lb beside the absurd
+     * text, and the next edit of that set re-parsed the text straight back to it. The hold clamp
+     * [logSet] applies is carried over too.
+     */
+    suspend fun updateSet(set: LoggedSet) {
+        val safeLb = sanitizeWeightLb(set.weightLb)
+        loggedSetDao.update(
+            set.copy(
+                reps = sanitizeReps(set.reps),
+                weightLb = safeLb,
+                weightText = if (safeLb != null && set.weightLb != null && safeLb != set.weightLb)
+                    com.forge.app.domain.units.weightInputValue(safeLb, useKg = false) else set.weightText,
+                durationSeconds = set.durationSeconds?.coerceIn(0, MAX_HOLD_SECONDS)
+            )
+        )
+    }
 
     /**
      * Bounded all-time-history reads — replace loading every set ever logged for an

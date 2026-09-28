@@ -50,15 +50,31 @@ class OnboardingViewModel @Inject constructor(
         daysPerWeek: Int, equipment: Set<String>, goal: String, experience: String,
         problemAreas: Set<String>, frozenIds: Set<String>?, seed: Long, sessionMinutes: Int? = null
     ): List<GeneratedDay> = ProgramGenerator.generate(
-        GenerationParams(
-            daysPerWeek = daysPerWeek, goal = goal, experience = experience,
-            problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet(),
-            frozenIds = frozenIds,
-            sessionMinutes = sessionMinutes?.takeIf { it > 0 }
-        ),
-        equipment.mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
+        generationParams(daysPerWeek, goal, experience, problemAreas, frozenIds, sessionMinutes),
+        equipmentOf(equipment),
         emptySet(), emptySet(), seed = seed
     )
+
+    /**
+     * The generator inputs the preview and the persisted week share. ONE builder, because the saved
+     * week must be the previewed one (same seed + inputs): two hand-kept copies of this could drift
+     * apart without either call site looking wrong.
+     */
+    private fun generationParams(
+        daysPerWeek: Int, goal: String, experience: String,
+        problemAreas: Set<String>, frozenIds: Set<String>?, sessionMinutes: Int?
+    ) = GenerationParams(
+        daysPerWeek = daysPerWeek, goal = goal, experience = experience,
+        problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet(),
+        frozenIds = frozenIds,
+        sessionMinutes = sessionMinutes?.takeIf { it > 0 }
+    )
+
+    private fun equipmentOf(codes: Set<String>): Set<Equipment> =
+        codes.mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet()
+
+    /** Set by the first [complete]; a second tap on the finishing CTA must not run it again. */
+    private var completing = false
 
     /**
      * Finish onboarding. [planMode] drives what program (if any) is built:
@@ -95,6 +111,10 @@ class OnboardingViewModel @Inject constructor(
         /** Weekdays to pin the generated days to (0 = Monday); null = "whenever I can" (sequence). */
         trainingWeekdays: Set<Int>? = null
     ) {
+        // The CTA stays tappable until ONBOARDING_DONE flips the UI, which is after the whole
+        // generation below, so a double tap started a second, concurrent completion.
+        if (completing) return
+        completing = true
         // Stop the resume-draft autosaver before the completion write removes the draft.
         drafts.stopWrites()
         viewModelScope.launch {
@@ -178,15 +198,10 @@ class OnboardingViewModel @Inject constructor(
         programRepository.generate(
             // Onboarding doesn't collect emphasis / priorityMuscles / pinned / dbMaxLb (the dumbbell
             // ceiling) — they take their no-op defaults (balanced / none / none / no ceiling) and are
-            // refined later in Settings → Program. MUST stay identical to [buildPreview] so the saved
+            // refined later in Settings → Program. The same builder as [buildPreview], so the saved
             // week matches the previewed one (same seed + inputs).
-            GenerationParams(
-                daysPerWeek = daysPerWeek, goal = goal, experience = experience,
-                problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet(),
-                frozenIds = frozenIds,
-                sessionMinutes = sessionMinutes?.takeIf { it > 0 }
-            ),
-            equipment.mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
+            generationParams(daysPerWeek, goal, experience, problemAreas, frozenIds, sessionMinutes),
+            equipmentOf(equipment),
             emptySet(), emptySet(), seed = seed
         )
     }

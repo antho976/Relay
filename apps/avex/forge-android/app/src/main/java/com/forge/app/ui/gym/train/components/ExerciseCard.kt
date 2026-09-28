@@ -4,7 +4,6 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -94,8 +93,6 @@ fun ExerciseCard(
      *  skipped, then advances). Shown only once ≥1 set is logged and targets aren't met. */
     finishEarlyLabel: String = "",
     onFinishEarly: () -> Unit = {},
-    onMoveUp: (() -> Unit)? = null,
-    onMoveDown: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -215,7 +212,7 @@ fun ExerciseCard(
                     withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
                         append("${state.plan.sets} × ${state.plan.reps}")
                         if (priorLastSet != null) {
-                            append(" · last ${priorLastSet.weightText} × ${priorLastSet.reps}")
+                            append(" · last ${priorWeightLabel(priorLastSet, isPlates, weightUnit)} × ${priorLastSet.reps}")
                         } else {
                             append(" · first time")
                         }
@@ -301,7 +298,7 @@ fun ExerciseCard(
                         else Modifier.width(SetTable.SET_COL_W)
                     )
                     Text(
-                        when { isBodyweight -> "BODYWEIGHT"; isPlates -> "PLATES"; else -> "WEIGHT · LB" },
+                        when { isBodyweight -> "BODYWEIGHT"; isPlates -> "PLATES"; else -> "WEIGHT · ${unitLabel(weightUnit).uppercase()}" },
                         style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.weight(1f)
                     )
                     if (!stacked) {

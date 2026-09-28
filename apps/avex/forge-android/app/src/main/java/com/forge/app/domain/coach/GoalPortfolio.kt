@@ -69,8 +69,7 @@ object GoalPortfolio {
     /**
      * Conflicts among the active goals. Pure pair scan — the set is tiny (a portfolio of 8 would be
      * a lot), so an O(n²) walk is the honest implementation.
-     */
-    /**
+     *
      * @param s the snapshot, so a bodyweight goal's DIRECTION can be read from its target against
      *   the athlete's current weight. Optional only so existing tests can omit it; without it the
      *   direction falls back to the stored phase, and an unknown direction claims no conflict.

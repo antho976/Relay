@@ -89,14 +89,15 @@ internal object RestoreApply {
      */
     private enum class Commit { LANDED, ALREADY, FAILED }
 
-    /**
-     * @return true when a restore reached a fully-applied state on this boot — either one staged
-     *   here, or one a previous boot left part-way through and this boot finished. The only case
-     *   that may be reported to the user as a successful restore.
-     */
+    /** True while a journal, set record or recovery record is on disk: live storage must not open. */
     fun hasUnsettledRecovery(filesDir: File): Boolean =
         listOf(JOURNAL, SET_RECORD, RECOVERY).any { File(filesDir, it).exists() }
 
+    /**
+     * @return true when a set has landed and awaits database validation — staged here, finished
+     *   here after an earlier boot was interrupted, or landed by an earlier boot that never
+     *   validated it. Only a validated set ([confirm]) may be reported to the user as restored.
+     */
     fun apply(filesDir: File, liveDb: File): Boolean {
         if (File(filesDir, RECOVERY).exists()) {
             check(resumeRecovery(filesDir, liveDb)) { "Restore recovery is incomplete" }

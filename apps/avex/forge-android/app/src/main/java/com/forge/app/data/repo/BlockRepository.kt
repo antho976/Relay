@@ -11,7 +11,6 @@ import com.forge.app.domain.adapt.DeloadAdvisor
 import com.forge.app.domain.coach.BlockPhase
 import com.forge.app.domain.coach.BlockPlanner
 import com.forge.app.domain.coach.CoachGoalKind
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -43,8 +42,6 @@ class BlockRepository @Inject constructor(
      */
     private val lifecycleMutex = Mutex()
 
-    fun observeActive(): Flow<TrainingBlock?> = blockDao.observeActive()
-
     /**
      * The live block, repairing the singleton invariant on the way: any extra open row is ended in
      * the same transaction, so a duplicate left behind by an older build cannot outlive the block
@@ -56,8 +53,6 @@ class BlockRepository @Inject constructor(
         if (open.size > 1) blockDao.endAllExcept(keepId = visible.id, endedAt = clock.nowMs())
         visible
     }
-
-    suspend fun history(): List<TrainingBlock> = blockDao.all()
 
     /** The phase the coach should plan against, or null when no block is running. */
     suspend fun phase(): BlockPhase? = active()?.let { BlockPhase.fromCode(it.phase) }

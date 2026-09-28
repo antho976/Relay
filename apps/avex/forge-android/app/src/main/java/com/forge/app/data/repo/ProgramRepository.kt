@@ -389,11 +389,6 @@ class ProgramRepository @Inject constructor(
         .mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet()
 
     /**
-     * Re-roll the WHOLE program using the user's full saved generation profile (goal, experience,
-     * emphasis, problem areas, priority muscles, pinned). Used by automatic rotation, so a rotated
-     * program reflects the same inputs a manual re-roll would — including avoiding flagged injuries.
-     */
-    /**
      * Return the program to full volume once a deload week has run its course, keeping the same
      * exercises.
      *
@@ -411,6 +406,11 @@ class ProgramRepository @Inject constructor(
             keepPicks = true, unlessWorkoutOpen = unlessWorkoutOpen
         )
 
+    /**
+     * Re-roll the WHOLE program using the user's full saved generation profile (goal, experience,
+     * emphasis, problem areas, priority muscles, pinned). Used by automatic rotation, so a rotated
+     * program reflects the same inputs a manual re-roll would — including avoiding flagged injuries.
+     */
     suspend fun rerollAll(unlessWorkoutOpen: Boolean = false): Boolean {
         val recent = Program.days.flatMap { it.exercises }.map { it.id }.toSet()
         return generate(
@@ -420,8 +420,14 @@ class ProgramRepository @Inject constructor(
         )
     }
 
-    /** Re-roll just one day's exercises (anti-repeating its current picks), keeping the rest intact. */
-    suspend fun rerollDay(dayKey: String) {
+    /**
+     * Re-roll just one day's exercises (anti-repeating its current picks), keeping the rest intact.
+     *
+     * Under [mutationMutex] like every other program write: it rewrites a day's slots, and landing
+     * inside a generate's saga (between its intent and its transaction) wrote the old program's day
+     * onto the new one and broke the signature comparison the boot reconciliation relies on.
+     */
+    suspend fun rerollDay(dayKey: String): Unit = mutationMutex.withLock {
         // Anti-repeat this day's own picks (recent), and seed the generator's week-repeat penalty
         // with what the OTHER, unchanged days actually use — it used to generate a phantom week and
         // de-duplicate against that instead of the real one (2026-09-21).
@@ -440,7 +446,7 @@ class ProgramRepository @Inject constructor(
             recent, System.nanoTime(),
             usedElsewhere = usedElsewhere, onlyDay = dayKey
         )
-        val day = fresh.firstOrNull { it.key == dayKey } ?: return
+        val day = fresh.firstOrNull { it.key == dayKey } ?: return@withLock
         // Positional set carry-over is only meaningful when the day kept its shape; a day that
         // gained or lost a slot takes the generator's own counts rather than shifted ones.
         val carrySets = effectiveSets.size == day.exercises.size

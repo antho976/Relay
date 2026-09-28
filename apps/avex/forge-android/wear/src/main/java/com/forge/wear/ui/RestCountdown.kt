@@ -64,7 +64,8 @@ internal object RestCountdown {
     /** The idle cadence, for a timer with no boundary left to land on. */
     const val TICK_MS = 1_000L
 
-    private fun remainingMs(timer: TimerStateDto, nowMs: Long, receivedAtMs: Long): Long =
+    /** Milliseconds still to run on a RUNNING timer (negative once expired); see [remainingSeconds]. */
+    fun remainingMs(timer: TimerStateDto, nowMs: Long, receivedAtMs: Long): Long =
         if (timer.publishedAtMs > 0L) (timer.endAtMs - timer.publishedAtMs) - (nowMs - receivedAtMs)
         else timer.endAtMs - nowMs
 

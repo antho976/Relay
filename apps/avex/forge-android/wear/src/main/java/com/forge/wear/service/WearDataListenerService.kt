@@ -25,17 +25,24 @@ class WearDataListenerService : WearableListenerService() {
     override fun onDataChanged(events: DataEventBuffer) {
         WearDataRepository.instance(this)
         var glanceChanged = false
+        var configChanged = false
         var timerChanged = false
         for (event in events) {
             if (event.type != DataEvent.TYPE_CHANGED && event.type != DataEvent.TYPE_DELETED) continue
             when (event.dataItem.uri.path) {
                 WearProtocol.PATH_GLANCE_TODAY -> glanceChanged = true
+                WearProtocol.PATH_CONFIG -> configChanged = true
                 WearProtocol.PATH_TIMER_STATE -> timerChanged = true
             }
         }
-        if (glanceChanged) {
+        // The tiles paint their figure in the phone's accent from /config, so a new accent (or
+        // monochrome) has to redraw them too — otherwise the old colour held until the next glance
+        // publish or the tile's 30-minute freshness expiry.
+        if (glanceChanged || configChanged) {
             runCatching { TileService.getUpdater(this).requestUpdate(TodayTileService::class.java) }
             runCatching { TileService.getUpdater(this).requestUpdate(WeekTileService::class.java) }
+        }
+        if (glanceChanged) {
             requestComplication(ReadinessComplicationService::class.java)
             requestComplication(NextSessionComplicationService::class.java)
         }

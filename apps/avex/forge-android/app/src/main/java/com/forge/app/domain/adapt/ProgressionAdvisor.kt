@@ -506,7 +506,10 @@ object ProgressionAdvisor {
         }
         if (stall >= t.repShiftAfterStalledBouts) {
             val range = RepRange.parse(slot.repsText)
-            val to = if (range != null && range.max >= 12) "8-10" else "12-15"
+            // Per-side notation survives the shift: "10-12/leg" → "8-10/leg". Dropping it turned a
+            // per-leg prescription into an ambiguous total.
+            val perSide = if (range == null) "" else PER_SIDE_SUFFIX.find(slot.repsText.trim())?.value.orEmpty()
+            val to = (if (range != null && range.max >= 12) "8-10" else "12-15") + perSide
             return Recommendation.RepRangeShift(
                 exerciseId = slot.exerciseId,
                 exerciseName = slot.name,
@@ -666,6 +669,9 @@ object ProgressionAdvisor {
 
     /** A scale closer to 1 than this is "unscaled": the weight is returned as lifted. */
     private const val SCALE_EPSILON = 1e-6
+
+    /** The per-side tail [RepRange.parse] accepts ("/leg", "/arm"), kept on a shifted range. */
+    private val PER_SIDE_SUFFIX = Regex("""/\s*[a-z]+$""", RegexOption.IGNORE_CASE)
 
     /**
      * One decimal, never a raw Double. `"$v"` printed the full binary expansion, so a target

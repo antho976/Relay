@@ -282,19 +282,26 @@ object ImportParsing {
         return row.getOrNull(i)?.trim() ?: ""
     }
 
-    private val HM_REGEX = Regex("(?:(\\d+)\\s*h)?\\s*(?:(\\d+)\\s*m)?", RegexOption.IGNORE_CASE)
+    // `h[a-z]*` so "1 hr 15 min" / "1 hour 30 minutes" keep their minutes: a bare `h` stopped the
+    // match at the "r", and the minutes group then never ran.
+    private val HM_REGEX = Regex("(?:(\\d+)\\s*h[a-z]*)?\\s*(?:(\\d+)\\s*m)?", RegexOption.IGNORE_CASE)
 
-    /** Parse a duration like "1h 15m", "45m", "45 min", or "1:15:00" to millis, or null. */
+    /** Parse a duration like "1h 15m", "1 hr 15 min", "45m", "45 min", or "1:15:00" to millis, or null. */
     fun parseDurationToMillis(raw: String): Long? {
         val s = raw.trim()
         if (s.isBlank()) return null
         if (s.contains(':')) {
-            val parts = s.split(':').mapNotNull { it.trim().toIntOrNull() }
-            return when (parts.size) {
-                3 -> (parts[0] * 3600L + parts[1] * 60L + parts[2]) * 1000L
-                2 -> (parts[0] * 60L + parts[1]) * 1000L
-                else -> null
+            // Every part must read, and fractional seconds are allowed: dropping an unreadable part
+            // (the old mapNotNull) turned "1:15:00.5" into two parts, i.e. 75 SECONDS, not 75 minutes.
+            val parts = s.split(':').map { part ->
+                part.trim().toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0.0 } ?: return null
             }
+            val seconds = when (parts.size) {
+                3 -> parts[0] * 3600.0 + parts[1] * 60.0 + parts[2]
+                2 -> parts[0] * 60.0 + parts[1]
+                else -> return null
+            }
+            return (seconds * 1000.0).toLong()
         }
         val m = HM_REGEX.find(s) ?: return null
         val h = m.groupValues[1].toIntOrNull() ?: 0

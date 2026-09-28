@@ -32,7 +32,7 @@ object ActiveCalorieEstimator {
      * Estimated active kilocalories for [activeMinutes] of training at [bodyweightLb] and the given
      * [intensity], or null when [activeMinutes] or [bodyweightLb] is non-positive (no estimate possible).
      * Minutes are a Double so the caller can pass fractional minutes (e.g. activeSeconds / 60.0) instead
-     * of truncating a sub-minute remainder to zero. Shares [MetCalories] with the cardio estimator.
+     * of truncating a sub-minute remainder to zero. The formula itself lives in [MetCalories].
      */
     fun estimate(activeMinutes: Double, bodyweightLb: Double, intensity: String): Double? {
         if (activeMinutes <= 0.0 || bodyweightLb <= 0.0) return null

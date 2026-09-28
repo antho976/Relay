@@ -16,7 +16,6 @@ import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Column
 import androidx.glance.layout.fillMaxSize
-import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.padding
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
@@ -43,24 +42,19 @@ import com.forge.app.ui.theme.PearlOnBg
 /** Intent extra key carrying the next-up dayKey — read by MainActivity to open that day. */
 const val EXTRA_START_DAY_KEY = "forge.widget.START_DAY_KEY"
 
-/** Intent extra key set when the widget tap is for an active/in-progress session resume. */
-const val EXTRA_RESUME_SESSION = "forge.widget.RESUME_SESSION"
-
-/** The same two keys as Glance ActionParameters — Glance writes these into the launch INTENT, so
- *  MainActivity reads them back with plain `getStringExtra` / `getBooleanExtra`. */
+/** The same key as a Glance ActionParameter — Glance writes it into the launch INTENT, so
+ *  MainActivity reads it back with a plain `getStringExtra`. */
 private val startDayKeyParam = androidx.glance.action.ActionParameters.Key<String>(EXTRA_START_DAY_KEY)
-private val resumeSessionParam = androidx.glance.action.ActionParameters.Key<Boolean>(EXTRA_RESUME_SESSION)
 
 /**
  * Home screen widget showing next planned workout day + main exercises (#146).
  * Uses Glance API. Data is fetched synchronously on update.
  *
  * Tap behaviour:
- *  - Active session in progress → launches MainActivity with EXTRA_RESUME_SESSION=true,
- *    landing on Overview which will surface the active-session card.
- *  - Next day resolved → launches MainActivity with EXTRA_START_DAY_KEY=<dayKey>.
- *    Currently lands on Overview; a future pass can handle the extra to navigate
- *    directly into the day screen once deep-link plumbing exists in ForgeNavHost.
+ *  - Active session in progress → launches MainActivity with EXTRA_START_DAY_KEY=<its dayKey>,
+ *    which opens (resumes) that day on top of Overview.
+ *  - Next day resolved → launches MainActivity with EXTRA_START_DAY_KEY=<dayKey>, opening that day.
+ *    Never in freestyle mode, which has no plan to name a day from.
  *  - No next day → launches MainActivity (Overview / first-workout prompt).
  */
 class ForgeWidget : GlanceAppWidget() {
@@ -79,9 +73,6 @@ class ForgeWidget : GlanceAppWidget() {
         // getActiveSession() returns the unique unfinished session row if one exists.
         // Entirely self-contained in the widget's existing WidgetEntryPoint; no shared-file edits.
         val activeSession = entryPoint.sessionDao().getActiveSession()
-        val activeDayPlan = activeSession?.let { s ->
-            Program.days.firstOrNull { it.key == s.dayKey }
-        }
 
         // Next day via the shared resolver — calendar-aware in weekday mode, legacy day-after-last
         // otherwise — so the widget agrees with the day list and Overview.
@@ -96,14 +87,17 @@ class ForgeWidget : GlanceAppWidget() {
         val monday = today.with(java.time.DayOfWeek.MONDAY)
         val mondayMs = monday.atStartOfDay(zone).toInstant().toEpochMilli()
         val todayStartMs = today.atStartOfDay(zone).toInstant().toEpochMilli()
-        val trainedTodayKeys = entryPoint.sessionDao().finishedDayKeysSince(todayStartMs).toSet()
-        val nextDayKey = com.forge.app.domain.schedule.WeeklySchedule.resolveNextUp(
+        // "Go with the flow" deliberately keeps the seed program around, so resolving next-up here
+        // would name — and the tap would open — a planned day the user explicitly opted out of.
+        // Read first so freestyle skips the resolution entirely, like the reminder and the wrist tile.
+        val freestyleMode = settings.freestyleMode.first()
+        val nextDayKey = if (freestyleMode) null else com.forge.app.domain.schedule.WeeklySchedule.resolveNextUp(
             mode = settings.scheduleMode.first(),
             todayIndex = today.dayOfWeek.value - 1,
             schedule = settings.weeklySchedule.first(),
             dayKeys = Program.dayKeys,
             lastFinishedDayKey = entryPoint.sessionDao().lastFinishedDayKey(),
-            trainedTodayKeys = trainedTodayKeys,
+            trainedTodayKeys = entryPoint.sessionDao().finishedDayKeysSince(todayStartMs).toSet(),
             recoveryDays = com.forge.app.domain.schedule.TrainingRecovery.daysUntilRecovered(
                 Program.days,
                 entryPoint.sessionDao().finishedForRecoverySince(
@@ -114,8 +108,6 @@ class ForgeWidget : GlanceAppWidget() {
             )
         )
         val nextDayPlan = nextDayKey?.let { key -> Program.days.firstOrNull { it.key == key } }
-        // "Go with the flow" — drives the fallback copy below so the widget doesn't claim a plan exists.
-        val freestyleMode = settings.freestyleMode.first()
 
         // --- Item 1: what the tap should carry ---
         // Active session → resume it; otherwise open the next-up day; otherwise just Overview.
@@ -128,10 +120,7 @@ class ForgeWidget : GlanceAppWidget() {
         // widget's whole tap purpose — open Pull B — silently landed on Overview instead, and
         // "Tap to resume" could never resume anything.
         val tapParameters = when {
-            activeSession != null -> actionParametersOf(
-                resumeSessionParam to true,
-                startDayKeyParam to activeSession.dayKey
-            )
+            activeSession != null -> actionParametersOf(startDayKeyParam to activeSession.dayKey)
             nextDayKey != null -> actionParametersOf(startDayKeyParam to nextDayKey)
             else -> actionParametersOf()
         }
@@ -193,7 +182,9 @@ class ForgeWidget : GlanceAppWidget() {
                                 color = ColorProvider(Color(accentArgb), Color(accentArgb))
                             )
                         )
-                        val label = activeDayPlan?.defaultName?.uppercase() ?: activeSession.dayKey.uppercase()
+                        // The display name, never the raw key: a day removed from the plan (or an
+                        // open workout) has no plan entry, and its key is a slug, not a title.
+                        val label = Program.dayDisplayName(activeSession.dayKey).uppercase()
                         Text(
                             label,
                             style = TextStyle(

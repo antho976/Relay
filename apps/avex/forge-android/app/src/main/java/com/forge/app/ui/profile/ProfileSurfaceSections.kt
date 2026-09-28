@@ -1,22 +1,16 @@
 package com.forge.app.ui.profile
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,8 +22,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -48,13 +40,10 @@ import com.forge.app.domain.units.toDisplayLength
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.common.ForgeGlyphBadge
-import com.forge.app.ui.common.GROUP_SEAM
-import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.common.rowShape
 import com.forge.app.ui.experiment.HeroFigure
 import com.forge.app.ui.experiment.SurfaceSparkline
-import com.forge.app.ui.nav.NavIcons
 import com.forge.app.ui.settings.SettingsIcons
 import com.forge.app.ui.theme.LocalForgeSettings
 import kotlin.math.abs
@@ -101,9 +90,6 @@ import kotlin.math.roundToInt
 
 /** The gap after a row's glyph badge. */
 private val ROW_ICON_GAP = 12.dp
-
-/** The all-time tallies' glyph, one rung down: it labels a caption there, not a row. */
-private val TALLY_ICON = 13.dp
 
 /** A row's minimum height — the 48dp touch target the tappable BODY rows owe Material. */
 private val ROW_MIN_HEIGHT = 48.dp

@@ -32,10 +32,6 @@ data class ForgeUiSettings(
     val plateWeightLb: Double = 15.0,        // weight of one plate (lb) for plate-loaded exercises
     /** True once the user has finished a workout — first-touch onboarding cards hide once set. */
     val firstWorkoutDone: Boolean = false
-) {
-    /** Legacy convenience — true only for kilograms (lb/stones read false). Prefer [weightUnit];
-     *  kept so sites not yet migrated off the boolean unit flag still compile. */
-    val useKg: Boolean get() = weightUnit == WeightUnit.KG
-}
+)
 
 val LocalForgeSettings = compositionLocalOf { ForgeUiSettings() }
