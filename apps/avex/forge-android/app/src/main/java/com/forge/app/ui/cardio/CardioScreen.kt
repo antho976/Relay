@@ -1,5 +1,6 @@
 package com.forge.app.ui.cardio
 
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Arrangement
@@ -135,6 +136,10 @@ fun CardioScreen(
         if (state.sheetOpen) viewModel.closeSheet() else viewModel.closeSessionDetail()
     }
 
+    // The overview leaves composition while a sheet or a session is up. Its saveable state — scroll
+    // position, and the entrance cascade's "already played" flag — is held here, so coming back
+    // lands where the user was instead of at the top with every section animating in again.
+    val overviewState = rememberSaveableStateHolder()
     when {
         state.sheetOpen -> CardioLogSheet(
             onDismiss = viewModel::closeSheet,
@@ -159,7 +164,7 @@ fun CardioScreen(
             onDelete = { viewModel.deleteEntry(sessionEntry.id) },
             onBack = viewModel::closeSessionDetail
         )
-        else -> CardioListContent(
+        else -> overviewState.SaveableStateProvider("overview") { CardioListContent(
             state = state,
             weekLabel = weekLabel,
             weekStartMs = isoWeekStartMs,
@@ -178,7 +183,7 @@ fun CardioScreen(
             onOpenGoals = onOpenGoals,
             onImportWatch = viewModel::importWatchWorkout,
             onDismissImports = viewModel::dismissWatchImports
-        )
+        ) }
     }
 }
 

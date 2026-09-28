@@ -197,6 +197,14 @@ class SettingsRepository @Inject constructor(
     private fun <T> pref(read: (Preferences) -> T): Flow<T> =
         allPreferences.map(read).distinctUntilChanged()
 
+    /**
+     * [pref] for a JSON-backed key: dedupes on the RAW stored string before parsing, so a write to
+     * any other key (the rest timer's, once per set; a draft autosave, every few hundred ms) no
+     * longer re-parses this value in every collector just to find it unchanged.
+     */
+    private fun <T> prefJson(key: Preferences.Key<String>, parse: (String?) -> T): Flow<T> =
+        allPreferences.map { it[key] }.distinctUntilChanged().map(parse)
+
     /** Typed reads over one snapshot. The flows below read through here too, so the Settings
      *  screen's one-snapshot state and each single flow can never disagree on a default. */
     fun values(prefs: Preferences): PreferenceValues = PreferenceValues(prefs)
@@ -949,7 +957,7 @@ class SettingsRepository @Inject constructor(
      * finds one knows a regeneration was interrupted and can finish deciding what it meant.
      */
     val programGenerationIntent: Flow<ProgramGenerationIntent?> =
-        pref { ProgramGenerationIntent.fromJson(it[PreferenceKeys.PROGRAM_GENERATION_INTENT]) }
+        prefJson(PreferenceKeys.PROGRAM_GENERATION_INTENT) { ProgramGenerationIntent.fromJson(it) }
 
     suspend fun setProgramGenerationIntent(intent: ProgramGenerationIntent) =
         context.forgePreferences.edit { it[PreferenceKeys.PROGRAM_GENERATION_INTENT] = intent.toJson() }
@@ -970,7 +978,7 @@ class SettingsRepository @Inject constructor(
 
     /** Every schedule change with the day it took effect — see [com.forge.app.domain.schedule.ScheduleHistory]. */
     val scheduleHistory: Flow<List<com.forge.app.domain.schedule.ScheduleHistory.Entry>> =
-        pref { com.forge.app.domain.schedule.ScheduleHistory.parse(it[PreferenceKeys.SCHEDULE_HISTORY]) }
+        prefJson(PreferenceKeys.SCHEDULE_HISTORY) { com.forge.app.domain.schedule.ScheduleHistory.parse(it) }
 
     /**
      * Start the history for a user whose fixed-weekday schedule predates it (set before the history
@@ -1049,7 +1057,7 @@ class SettingsRepository @Inject constructor(
     // ─── Custom cardio activity types (GYMAP-37) ──────────────────────────────
     /** The user's defined cardio activities, decoded from the JSON blob (empty when none). */
     val customCardioTypes: Flow<List<com.forge.app.domain.cardio.CustomCardioType>> =
-        pref { com.forge.app.domain.cardio.CustomCardioType.listFromJson(it[PreferenceKeys.CUSTOM_CARDIO_TYPES]) }
+        prefJson(PreferenceKeys.CUSTOM_CARDIO_TYPES) { com.forge.app.domain.cardio.CustomCardioType.listFromJson(it) }
 
     /** Append a new activity (deduped by code — its code is freshly minted so this is just a guard). */
     suspend fun addCustomCardioType(type: com.forge.app.domain.cardio.CustomCardioType) =
@@ -1078,7 +1086,7 @@ class SettingsRepository @Inject constructor(
     // ─── Custom (user-created) freestyle exercises ───────────────────────────
     /** Every custom exercise the user has created or saved, decoded from the JSON blob (empty when none). */
     val customExercises: Flow<List<com.forge.app.program.CustomExerciseDef>> =
-        pref { com.forge.app.program.CustomExerciseDef.listFromJson(it[PreferenceKeys.CUSTOM_EXERCISES]) }
+        prefJson(PreferenceKeys.CUSTOM_EXERCISES) { com.forge.app.program.CustomExerciseDef.listFromJson(it) }
 
     /**
      * Record (or re-record) a custom exercise's identity, keyed by its id. Written when the move is

@@ -10,10 +10,13 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -101,7 +104,18 @@ fun HubScreen(
     }
 
     // Back from any non-Home hub returns to Home; on Home it falls through to the system (exit).
-    BackHandler(enabled = pagerState.currentPage != homeIndex) { goTo(homeIndex) }
+    // Derived, so a page change recomposes this screen only when it crosses Home, not on every page.
+    val awayFromHome by remember(homeIndex) { derivedStateOf { pagerState.currentPage != homeIndex } }
+    BackHandler(enabled = awayFromHome) { goTo(homeIndex) }
+
+    // Once Home has had its first frames to itself, keep one page composed either side of the
+    // current one. Otherwise the first swipe to each hub composed the whole screen and started its
+    // view model's loads mid-gesture, and swiping back two pages rebuilt Home from scratch.
+    var beyondViewport by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(HUB_PREWARM_DELAY_MS)
+        beyondViewport = 1
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -119,6 +133,7 @@ fun HubScreen(
     ) { innerPadding ->
         HorizontalPager(
             state = pagerState,
+            beyondViewportPageCount = beyondViewport,
             // Reserve the bar's height, and mark it consumed so each page's own Scaffold doesn't add
             // a second bottom inset on top of it.
             modifier = Modifier
@@ -193,3 +208,6 @@ fun HubScreen(
         }
     }
 }
+
+/** How long Home has the device to itself before its neighbouring hub pages compose. */
+private const val HUB_PREWARM_DELAY_MS = 1_500L
