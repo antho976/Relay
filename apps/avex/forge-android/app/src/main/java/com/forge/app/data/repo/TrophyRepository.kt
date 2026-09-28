@@ -44,7 +44,6 @@ class TrophyRepository @Inject constructor(
     private val settingsRepo: com.forge.app.data.prefs.SettingsRepository
 ) {
     fun observeAll(): Flow<List<UnlockedTrophy>> = unlockedDao.observeAll()
-    fun observeUnlockedIds(): Flow<List<String>> = unlockedDao.observeUnlockedIds()
     suspend fun unlockedIds(): Set<String> = unlockedDao.unlockedIds().toSet()
 
     /** trophyId → when it was unlocked (epoch ms), for surfacing the earned date. */
@@ -252,7 +251,10 @@ class TrophyRepository @Inject constructor(
 
     private fun checkConsistencyKing(sessions: List<Session>, zone: ZoneId): Boolean {
         if (sessions.isEmpty()) return false
-        val today = LocalDate.now(zone)
+        // The injected clock, like every other window in [snapshot] (whose nowMs is the same read):
+        // LocalDate.now() is the system clock, so under a FakeClock this trophy judged a different
+        // three months from the rest of the evaluation.
+        val today = Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
         val threeMonthsAgo = today.minusMonths(3)
         val trainingDays = sessions.mapTo(mutableSetOf()) {
             Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate()
@@ -280,11 +282,14 @@ class TrophyRepository @Inject constructor(
         val dates = byDate.keys.sorted()
         for (i in dates.indices) {
             val windowEnd = dates[i].plusDays(6)
-            val dayKeysInWindow = dates
-                .filter { !it.isBefore(dates[i]) && !it.isAfter(windowEnd) }
-                .flatMap { byDate[it]!! }
-                .map { it.dayKey }
-                .toSet()
+            // The dates are sorted, so the window is the run starting at i: walk it instead of
+            // re-filtering every training date for every start (quadratic over a long history).
+            val dayKeysInWindow = HashSet<String>()
+            var j = i
+            while (j < dates.size && !dates[j].isAfter(windowEnd)) {
+                byDate.getValue(dates[j]).mapTo(dayKeysInWindow) { it.dayKey }
+                j++
+            }
             if (Program.dayKeys.all { it in dayKeysInWindow }) return true
         }
         return false

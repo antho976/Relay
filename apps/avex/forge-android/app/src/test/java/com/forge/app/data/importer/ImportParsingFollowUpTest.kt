@@ -47,4 +47,16 @@ class ImportParsingFollowUpTest {
         assertNull(ImportParsing.cardioRowType("Farmer's Walk", null, null, 45, null))
         assertEquals("walk", ImportParsing.cardioRowType("Walking", null, null, 1800, null))
     }
+
+    @Test
+    fun durations_keepTheirMinutesAndTheirSeconds() {
+        // "1 hr 15 min" stopped matching at the "r" and lost the minutes.
+        assertEquals(75 * 60_000L, ImportParsing.parseDurationToMillis("1 hr 15 min"))
+        assertEquals(90 * 60_000L, ImportParsing.parseDurationToMillis("1 hour 30 minutes"))
+        assertEquals(62 * 60_000L, ImportParsing.parseDurationToMillis("1h 2m"))
+        // A fractional seconds part used to be dropped, reading "1:15:00.5" as 1 min 15 s.
+        assertEquals(4_500_500L, ImportParsing.parseDurationToMillis("1:15:00.5"))
+        assertEquals(90_000L, ImportParsing.parseDurationToMillis("1:30"))
+        assertNull(ImportParsing.parseDurationToMillis("1:x:00"))
+    }
 }

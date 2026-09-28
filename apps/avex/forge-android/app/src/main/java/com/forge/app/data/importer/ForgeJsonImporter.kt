@@ -44,15 +44,34 @@ class ForgeJsonImporter : GymImporter {
      */
     override fun formatVersion(text: String): Int? = versionOf(text)
 
-    override fun parse(text: String, assumeKg: Boolean): List<ImportedSession> {
-        // Only a malformed document is "no sessions here". An OutOfMemoryError from building the
-        // tree is a different fact and must reach the caller, which reports it as a file too large
-        // to import rather than as an empty one.
-        val root = try {
-            JSONObject(text)
-        } catch (e: org.json.JSONException) {
-            return emptyList()
-        }
+    override fun parse(text: String, assumeKg: Boolean): List<ImportedSession> =
+        rootOf(text)?.let { sessionsOf(it) }.orEmpty()
+
+    override fun parseExtras(text: String, assumeKg: Boolean): ImportedExtras =
+        rootOf(text)?.let { extrasOf(it) } ?: ImportedExtras()
+
+    /**
+     * Sessions and extras from ONE tree. The interface default calls [parse] and [parseExtras],
+     * which built the whole document twice — on a multi-year export, twice the parse time and twice
+     * the garbage of the largest allocation the import makes.
+     */
+    override fun read(text: String, assumeKg: Boolean): ParsedImport {
+        val root = rootOf(text) ?: return ParsedImport(emptyList())
+        return ParsedImport(sessionsOf(root), extrasOf(root))
+    }
+
+    /**
+     * The parsed document, or null when it is malformed. Only a malformed document is "nothing
+     * here": an OutOfMemoryError from building the tree is a different fact and must reach the
+     * caller, which reports it as a file too large to import rather than as an empty one.
+     */
+    private fun rootOf(text: String): JSONObject? = try {
+        JSONObject(text)
+    } catch (e: org.json.JSONException) {
+        null
+    }
+
+    private fun sessionsOf(root: JSONObject): List<ImportedSession> {
         // Full and weekly exports nest an array under "sessions"; the per-session export nests one
         // object under "session". Reading the singular as a one-element list means both files go
         // through exactly the same row-building code below.
@@ -168,12 +187,7 @@ class ForgeJsonImporter : GymImporter {
      * existed and read by nobody: a user migrating via the JSON export lost every cardio session and
      * every goal, and the summary line ("Imported 612 workouts · 24,918 sets") never mentioned it.
      */
-    override fun parseExtras(text: String, assumeKg: Boolean): ImportedExtras {
-        val root = try {
-            JSONObject(text)
-        } catch (e: org.json.JSONException) {
-            return ImportedExtras()
-        }
+    private fun extrasOf(root: JSONObject): ImportedExtras {
         val cardio = ArrayList<ImportedCardio>()
         root.optJSONArray("cardio")?.let { arr ->
             for (i in 0 until arr.length()) {

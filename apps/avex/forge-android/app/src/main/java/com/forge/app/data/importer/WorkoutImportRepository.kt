@@ -116,14 +116,6 @@ class WorkoutImportRepository @Inject constructor(
     }
 
     /**
-     * Auto-find gym-app exports in a folder the user granted (usually Downloads). Enumerates the tree,
-     * sniffs each `.csv/.json/.txt` with the detectors, and returns the ones a parser recognises —
-     * newest first — so the Import screen can list them for a one-tap pick (#GYMAP-17). A light parse
-     * gives the workout count; the actual insert happens later via [import].
-     */
-    suspend fun scanFolder(treeUri: Uri): List<FoundImport> = scanFolders(listOf(treeUri)).imports
-
-    /**
      * Everything the Import screen can offer from the folders Avex may read: the import folder and
      * the backup folder. Each is searched [MAX_SCAN_DEPTH] levels down, because exports rarely sit
      * at the top: an app that saves into `Download/Strong/`, or a user who files them by month, used
@@ -137,7 +129,7 @@ class WorkoutImportRepository @Inject constructor(
             .distinctBy { it.uri }
         val backups = files
             .filter { it.name?.lowercase()?.endsWith(".zip") == true }
-            .sortedByDescending { it.lastModified() }
+            .newestFirst()
             .take(MAX_SCAN_FILES)
             .mapNotNull(::sniffBackup)
         FolderScan(imports = scanImports(files), backups = backups)
@@ -161,11 +153,20 @@ class WorkoutImportRepository @Inject constructor(
         return FoundBackup(doc.uri, doc.name ?: "backup.zip", doc.lastModified(), encrypted)
     }
 
+    /**
+     * Newest first, reading each file's modification time ONCE. A tree [DocumentFile]'s
+     * `lastModified()` is a content-provider query, and `sortedByDescending { it.lastModified() }`
+     * evaluates its selector on every comparison: a Downloads folder of a few hundred files cost
+     * thousands of provider round trips per scan, on every visit to the Import screen.
+     */
+    private fun List<DocumentFile>.newestFirst(): List<DocumentFile> =
+        map { it to it.lastModified() }.sortedByDescending { it.second }.map { it.first }
+
     private suspend fun scanImports(files: List<DocumentFile>): List<FoundImport> {
         val assumeKg = settingsRepo.useKg.first()
         val candidates = files
             .filter { it.name?.lowercase()?.let { n -> IMPORTABLE_EXTENSIONS.any(n::endsWith) } == true }
-            .sortedByDescending { it.lastModified() }
+            .newestFirst()
             .take(MAX_SCAN_FILES)
         val found = ArrayList<FoundImport>()
         for (doc in candidates) {
@@ -345,8 +346,9 @@ class WorkoutImportRepository @Inject constructor(
                 // them; repeated here because this total is written beside the sets and must
                 // never disagree with them).
                 val volumeLb = session.exercises.sumOf { ex ->
-                    ex.sets.filter { it.durationSeconds == null }
-                        .sumOf { (ImportBounds.weightLb(it.weightLb) ?: 0.0) * ImportBounds.reps(it.reps) }
+                    ex.sets.sumOf {
+                        VolumeCalculator.setVolumeLb(ImportBounds.weightLb(it.weightLb), ImportBounds.reps(it.reps), it.durationSeconds)
+                    }
                 }
 
                 // Duplicate guard (#GYMAP-17): a workout already logged at this start time WITH THE
@@ -1037,7 +1039,7 @@ data class FolderScan(val imports: List<FoundImport>, val backups: List<FoundBac
 /** An Avex backup found by [WorkoutImportRepository.scanFolders], ready to restore with one tap. */
 data class FoundBackup(val uri: Uri, val name: String, val lastModified: Long, val passwordProtected: Boolean)
 
-/** A gym-app export found by [WorkoutImportRepository.scanFolder], ready to import with one tap. */
+/** A gym-app export found by [WorkoutImportRepository.scanFolders], ready to import with one tap. */
 data class FoundImport(
     val uri: Uri,
     val name: String,

@@ -29,7 +29,11 @@ object CsvParser {
      * Returns null when there is no header, or no data row beneath it.
      */
     fun parseHeader(text: String): List<String>? {
-        val clean = text.removePrefix("\uFEFF").trimStart('\n', '\r')
+        // All leading whitespace, not just newlines: a whitespace-only line above the header made
+        // the "first record" that blank line, so the header came back null and a file [parse]
+        // reads fine (it drops blank rows) was reported as unrecognised. Header cells are trimmed
+        // by every caller, so trimming the header line's own indent changes nothing else.
+        val clean = text.removePrefix("\uFEFF").trimStart()
         if (clean.isBlank()) return null
         // A header with nothing under it is not an importable file, and the callers' resolve()
         // used to establish that from `rows.size < 2`.

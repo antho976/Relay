@@ -345,6 +345,9 @@ class BackupRepository @Inject constructor(
     suspend fun exportSessionJson(sessionId: Long): File? = withContext(Dispatchers.IO) {
         val s = sessionDao.get(sessionId) ?: return@withContext null
         val exercises = loggedExerciseDao.forSession(s.id)
+        // One query for every exercise's sets (P-01), ordered by set_index within each exercise.
+        val setsByExercise = if (exercises.isEmpty()) emptyMap()
+        else loggedSetDao.forLoggedExercises(exercises.map { it.id }).groupBy { it.loggedExerciseId }
         val root = JSONObject().apply {
             put("exportVersion", 1)
             put("exportedAt", dateFmt.format(Instant.now().atZone(zone)))
@@ -354,7 +357,7 @@ class BackupRepository @Inject constructor(
                 put("segments", segmentsJson(db.sessionSegmentDao().forSession(s.id)))
                 val exArr = JSONArray()
                 exercises.forEach { ex ->
-                    val sets = loggedSetDao.forLoggedExercise(ex.id)
+                    val sets = setsByExercise[ex.id].orEmpty()
                     exArr.put(JSONObject(exportExerciseFields(ex)).apply {
                         val setArr = JSONArray()
                         sets.forEach { set ->
@@ -1515,10 +1518,10 @@ class BackupRepository @Inject constructor(
         /** How many progress photos one archive may carry. Well past a decade of weekly shots. */
         private const val MAX_RESTORE_PHOTOS = 5_000
 
-        /** Cache scratch this class creates, all timestamp-named. Swept by [sweepStaleTemps]. */
         /** First characters that make a spreadsheet evaluate a cell; see [csv]. */
         private val FORMULA_TRIGGERS = setOf('=', '+', '-', '@', '\t', '\r')
 
+        /** Cache scratch this class creates, all timestamp-named. Swept by [sweepStaleTemps]. */
         private val TEMP_PREFIXES = listOf("forge_snapshot_", "forge_restore_")
         /** Nothing this old can still belong to a running backup or restore. */
         private const val TEMP_STALE_MS = 6L * 60 * 60 * 1000 // 6 hours

@@ -354,9 +354,6 @@ class CoachRepository @Inject constructor(
     /** Coach history: recent passes with their decisions, newest first. */
     data class CoachHistoryEntry(val pass: CoachPass, val decisions: List<CoachDecision>)
 
-    suspend fun history(limit: Int = 12): List<CoachHistoryEntry> =
-        coachDao.recentPasses(limit).map { CoachHistoryEntry(it, coachDao.decisionsFor(it.weekId)) }
-
     /**
      * The Coach learning timeline (Tier 6): earned trust + journey milestones + the week-by-week
      * record, all from the coach's own ledger. One read for the whole narrative screen.
@@ -849,7 +846,12 @@ class CoachRepository @Inject constructor(
                         // A corrupt/blank undo record would otherwise restore a BLANK exercise name into
                         // the slot (renders as an empty name on the session screen). Drop the coach overlay
                         // entirely instead, so the slot falls back to the real base-program exercise (#11).
-                        if (name.isBlank()) customizationRepo.clearSwap(d.targetKey)
+                        //
+                        // Only when the UNIT is blank too. A blank name with a unit is the unit-only
+                        // override the apply path deliberately records (finding 11) — blank name means
+                        // "no swap" everywhere — and clearing it destroyed the very override that
+                        // record exists to put back.
+                        if (name.isBlank() && unit.isBlank()) customizationRepo.clearSwap(d.targetKey)
                         else customizationRepo.restoreSwap(
                             d.targetKey, name, unit,
                             source = OverlaySource.USER,

@@ -17,7 +17,6 @@ class GoalRepository @Inject constructor(
     private val settingsRepository: com.forge.app.data.prefs.SettingsRepository,
     private val clock: Clock
 ) {
-    fun observe(exerciseId: String): Flow<ExerciseGoal?> = goalDao.observe(exerciseId)
     fun observeAll(): Flow<List<ExerciseGoal>> = goalDao.observeAll()
 
     suspend fun get(exerciseId: String): ExerciseGoal? = goalDao.get(exerciseId)

@@ -26,8 +26,13 @@ internal fun buildPrEntries(
     // Match each PR row to its exact owning LoggedExercise via loggedExerciseId, so an
     // exercise logged twice in one session resolves to the right set (was matched on
     // session date + exercise id, which picked whichever instance weighed more).
+    //
+    // Grouped in ONE pass over the whole-history set list, restricted to the PR rows' entries,
+    // rather than re-filtering that list once per row on every Stats emission.
+    val wanted = rows.mapTo(HashSet()) { it.loggedExerciseId }
+    val setsByEntry = allSets.filter { it.loggedExerciseId in wanted }.groupBy { it.loggedExerciseId }
     return rows.mapNotNull { row ->
-        val candidateSets = allSets.filter { it.loggedExerciseId == row.loggedExerciseId }
+        val candidateSets = setsByEntry[row.loggedExerciseId].orEmpty()
         // No matching set in the tracked/non-skipped/unassisted population (e.g. the PR's sets were
         // filtered out) — drop the row rather than render a blank "— / 0 reps" entry.
         val prSet = candidateSets.maxByOrNull { it.weightLb ?: 0.0 } ?: return@mapNotNull null
