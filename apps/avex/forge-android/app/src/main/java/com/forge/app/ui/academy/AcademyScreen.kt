@@ -28,15 +28,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -46,7 +40,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.heading
@@ -57,6 +50,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.academy.AcademyRegistry
 import com.forge.app.domain.academy.LessonTrack
 import com.forge.app.domain.academy.readMinutes
+import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.LocalTouchExplorationEnabled
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.ForgeMotion
@@ -116,28 +110,10 @@ fun AcademyContent(
         !ForgeMotion.animationsOff &&
         !LocalTouchExplorationEnabled.current
 
-    // Transparent while the page sits at the top, so the drawing reads as the head of the page; solid
-    // the moment anything scrolls under it. Without that, lesson text slid under the clock and the
-    // battery in the status bar (Antho, 2026-09-26).
-    val bar = TopAppBarDefaults.pinnedScrollBehavior()
+    // The list is padded below the bar, so nothing scrolls under it and the bar needs no fill.
     Scaffold(
-        modifier = Modifier.nestedScroll(bar.nestedScrollConnection),
         topBar = {
-            if (onBack != null) {
-                TopAppBar(
-                    title = {},
-                    navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = Color.Transparent,
-                        scrolledContainerColor = MaterialTheme.colorScheme.background
-                    ),
-                    scrollBehavior = bar
-                )
-            }
+            if (onBack != null) ForgeTopBar(onBack = onBack)
         },
         containerColor = Color.Transparent
     ) { inner ->
@@ -294,7 +270,7 @@ private fun FeaturedRotator(
                     style = MaterialTheme.typography.labelMedium,
                     color = muted.copy(alpha = 0.65f)
                 )
-                Text("read →", style = MaterialTheme.typography.labelMedium, color = accent)
+                ReadCapsule()
             }
         }
     }

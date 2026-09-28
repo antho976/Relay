@@ -45,7 +45,8 @@ class OverviewViewModel @Inject constructor(
     private val programRepo: com.forge.app.data.repo.ProgramRepository,
     private val healthConnectManager: com.forge.app.data.health.HealthConnectManager,
     private val timeSignals: com.forge.app.core.time.TimeSignals,
-    private val clock: Clock
+    private val clock: Clock,
+    private val snackbar: com.forge.app.ui.common.SnackbarController
 ) : ViewModel() {
 
     // ── design/surface-experiment (2026-08-15) ────────────────────────────────────────────────
@@ -280,6 +281,18 @@ class OverviewViewModel @Inject constructor(
             else flow { emit(statsRepo.getSessionExerciseLines(item.id)) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /**
+     * Take the Goals section off Home (2026-09-27). It rides the existing hidden-tile set under
+     * [HOME_GOALS_TILE], comes back from Settings → Appearance, and offers an Undo right away so a
+     * mis-tap costs nothing.
+     */
+    fun hideHomeGoals() {
+        viewModelScope.launch {
+            settingsRepo.setTileHidden(HOME_GOALS_TILE, true)
+            snackbar.showUndo("Goals hidden from Home") { settingsRepo.setTileHidden(HOME_GOALS_TILE, false) }
+        }
+    }
+
     fun selectRecentItem(item: OverviewRecentItem) { _selectedItem.value = item }
     fun clearSelectedItem() { _selectedItem.value = null }
 
@@ -312,3 +325,6 @@ class OverviewViewModel @Inject constructor(
         return "${top.exerciseName} $wText × ${top.topReps ?: 0}"
     }
 }
+
+/** Hidden-tile id for Home's Goals section, shared with the Settings switch that brings it back. */
+const val HOME_GOALS_TILE = "goals"

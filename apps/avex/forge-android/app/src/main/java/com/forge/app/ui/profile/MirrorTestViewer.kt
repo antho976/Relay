@@ -30,10 +30,12 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -43,13 +45,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
@@ -68,9 +66,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
@@ -88,6 +89,9 @@ import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.program.MuscleGroup
+import com.forge.app.ui.common.ForgeFieldRow
+import com.forge.app.ui.common.ForgeRowGroup
+import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.onboarding.MAX_BODYWEIGHT_LB
 import com.forge.app.ui.onboarding.MIN_BODYWEIGHT_LB
@@ -331,22 +335,18 @@ internal fun GalleryViewerPager(
                         }
 
                         Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = titleInput,
-                            onValueChange = { titleInput = it.take(60) },
-                            label = { Text("Title") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = noteInput,
-                            onValueChange = { noteInput = it.take(140) },
-                            label = { Text("Note") },
-                            supportingText = { Text("${noteInput.length} / 140") },
-                            minLines = 2,
-                            modifier = Modifier.fillMaxWidth()
+                        // Title and note typed inline on one group of filled rows.
+                        ForgeRowGroup(
+                            {
+                                ForgeFieldRow(
+                                    label = "Title",
+                                    value = titleInput,
+                                    onValueChange = { titleInput = it.take(60) },
+                                    placeholder = "Untitled",
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
+                                )
+                            },
+                            { NoteFieldRow(noteInput) { noteInput = it.take(140) } }
                         )
 
                         // POSE: where the camera stood. One per photo; tap the picked one to clear it.
@@ -375,62 +375,73 @@ internal fun GalleryViewerPager(
                         // the library, so the vocabulary converges instead of sprouting spellings.
                         EditorField("Tags", muted) {
                             currentTags.forEach { t ->
-                                InputChip(
+                                ProfileFilledChip(
+                                    text = PhotoTag.display(t),
                                     selected = true,
                                     onClick = {
                                         val next = currentTags - t
                                         record(baseline(current).copy(tags = next))
                                         onSetTags(current, next)
                                     },
-                                    label = { Text(PhotoTag.display(t)) },
-                                    trailingIcon = {
-                                        Icon(Icons.Filled.Close, contentDescription = "Remove ${PhotoTag.display(t)}", Modifier.size(18.dp))
+                                    trailing = {
+                                        Icon(Icons.Filled.Close, contentDescription = "Remove ${PhotoTag.display(t)}", Modifier.size(16.dp))
                                     }
                                 )
                             }
                             knownTags.filter { it !in currentTags }.take(6).forEach { t ->
-                                SuggestionChip(
+                                ProfileFilledChip(
+                                    text = PhotoTag.display(t),
+                                    selected = false,
                                     onClick = {
                                         val next = PhotoTag.added(currentTags, t)
                                         record(baseline(current).copy(tags = next))
                                         onSetTags(current, next)
                                     },
-                                    label = { Text(PhotoTag.display(t)) }
+                                    leading = { Icon(Icons.Filled.Add, contentDescription = null, Modifier.size(16.dp)) }
                                 )
                             }
                         }
                         if (currentTags.size < PhotoTag.MAX_PER_PHOTO) {
                             Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = tagInput,
-                                onValueChange = { tagInput = it.take(PhotoTag.MAX_LENGTH + 1) },
-                                label = { Text("Add a tag") },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                                keyboardActions = KeyboardActions(onDone = {
-                                    val next = PhotoTag.added(currentTags, tagInput)
-                                    tagInput = ""
-                                    if (next != currentTags) {
-                                        record(baseline(current).copy(tags = next))
-                                        onSetTags(current, next)
-                                    }
-                                }),
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                            ForgeRowGroup({
+                                ForgeFieldRow(
+                                    label = "Add a tag",
+                                    value = tagInput,
+                                    onValueChange = { tagInput = it.take(PhotoTag.MAX_LENGTH + 1) },
+                                    placeholder = "Tag",
+                                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                    keyboardActions = KeyboardActions(onDone = {
+                                        val next = PhotoTag.added(currentTags, tagInput)
+                                        tagInput = ""
+                                        if (next != currentTags) {
+                                            record(baseline(current).copy(tags = next))
+                                            onSetTags(current, next)
+                                        }
+                                    })
+                                )
+                            })
                         }
 
-                        Spacer(Modifier.height(12.dp))
-                        OutlinedTextField(
-                            value = weightInput,
-                            onValueChange = { weightInput = it.filter { c -> c.isDigit() || c == '.' }.take(6) },
-                            label = { Text("Bodyweight") },
-                            suffix = { Text(unitLabel(weightUnit)) },
-                            singleLine = true,
-                            isError = weightInvalid,
-                            supportingText = if (weightInvalid) ({ Text(weightRangeText) }) else null,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        Spacer(Modifier.height(16.dp))
+                        ForgeRowGroup({
+                            ForgeFieldRow(
+                                label = "Bodyweight",
+                                value = weightInput,
+                                onValueChange = { weightInput = it.filter { c -> c.isDigit() || c == '.' }.take(6) },
+                                placeholder = "0",
+                                suffix = unitLabel(weightUnit),
+                                isError = weightInvalid,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                            )
+                        })
+                        if (weightInvalid) {
+                            Text(
+                                weightRangeText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+                            )
+                        }
 
                         EditorField("Album", muted) {
                             EditorChip("No album", selected = currentAlbum.isBlank()) {
@@ -539,18 +550,52 @@ private fun EditorField(label: String, muted: Color, chips: @Composable () -> Un
     Spacer(Modifier.height(16.dp))
     Text(label, style = MaterialTheme.typography.titleSmall, color = muted)
     Spacer(Modifier.height(4.dp))
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { chips() }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { chips() }
 }
 
 /** A toggle chip in the editor, with a check when on so the state never rests on colour alone. */
 @Composable
 private fun EditorChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    FilterChip(
+    ProfileFilledChip(
+        text = label,
         selected = selected,
         onClick = onClick,
-        label = { Text(label) },
-        leadingIcon = if (selected) ({ Icon(Icons.Filled.Check, contentDescription = null, Modifier.size(18.dp)) }) else null
+        leading = if (selected) ({ Icon(Icons.Filled.Check, contentDescription = null, Modifier.size(16.dp)) }) else null
     )
+}
+
+/**
+ * The photo's note typed on its own group member: multi-line, so it stacks its label over the text
+ * rather than sitting at the row's end, with the 140-character count as a quiet reading.
+ */
+@Composable
+private fun NoteFieldRow(value: String, onValueChange: (String) -> Unit) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = ROW_H, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Note", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.weight(1f))
+            Text("${value.length} / 140", style = MaterialTheme.typography.labelSmall, color = muted)
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            minLines = 2,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onBackground),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Note" },
+            decorationBox = { field ->
+                Box {
+                    if (value.isEmpty()) {
+                        Text("What to notice in this shot", style = MaterialTheme.typography.bodyMedium, color = muted.copy(alpha = 0.6f))
+                    }
+                    field()
+                }
+            }
+        )
+    }
 }
 
 /**

@@ -40,16 +40,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -66,6 +60,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.forge.app.domain.units.WeightUnit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 
@@ -131,21 +126,7 @@ fun CoachScreen(
                 // The top bar never names the screen — just, on a routed entry, the back arrow. Hosted
                 // as a hub pager page there is no back arrow and no action, so the bar has NO content
                 // and is not drawn at all: an empty app bar above the account is a void to scroll past.
-                if (onBack != null) {
-                    TopAppBar(
-                        title = {},
-                        navigationIcon = {
-                            IconButton(onClick = onBack) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = "Back",
-                                    tint = c.muted
-                                )
-                            }
-                        },
-                        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-                    )
-                }
+                if (onBack != null) ForgeTopBar(onBack = onBack)
             },
             containerColor = Color.Transparent
         ) { inner ->
@@ -289,9 +270,9 @@ private fun LazyListScope.coachTracking(
     item("tracking") {
         Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(6)) {
             Spacer(Modifier.height(30.dp))
-            // onBg, not accent: accent-as-text clears AA on two of the five accents only (§14),
-            // and the arrow already marks the line as the action.
-            CoachAction("Hide advanced tracking →", c.onBg, "Hide advanced tracking") {
+            // A small filled capsule: the fill marks it as the action, so it needs neither the
+            // accent (which clears AA on two of the five accents only, §14) nor an arrow.
+            CoachCapsuleAction("Hide advanced tracking", "Hide advanced tracking", c) {
                 onSetAdvanced(false)
             }
         }

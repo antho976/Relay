@@ -1,6 +1,12 @@
 package com.forge.app.ui.onboarding
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
@@ -11,6 +17,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.forge.app.program.DayArchetype
 import com.forge.app.program.GeneratedDay
+import com.forge.app.ui.common.GROUP_OUTER
 import com.forge.app.ui.common.WeekBarRail
 
 /**
@@ -69,19 +76,29 @@ internal fun PlanLedger(
 
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         StepSectionLabel(label, meta = "${sets.sum()} sets")
-        // The bars themselves live in ui/common so Your program draws the same week (2026-09-25).
-        WeekBarRail(
-            names = archetypes.map { it.name },
-            sets = sets,
-            // When the bars are tappable each one announces itself, so a readout on the parent would
-            // talk over its own children; the whole-week reading only stands in for the passive mark.
-            modifier = if (onSelect == null) {
-                Modifier.semantics { contentDescription = weekReadout(archetypes, sets) }
-            } else Modifier,
-            trackHeight = trackHeight,
-            selectedIndex = selectedIndex,
-            onSelect = onSelect
-        )
+        // The bars sit on the flow's raised surface, the same rounded group every answer on these
+        // pages lives in. The bars themselves live in ui/common so Your program draws the same week.
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(GROUP_OUTER))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .padding(horizontal = 16.dp, vertical = 18.dp)
+        ) {
+            WeekBarRail(
+                names = archetypes.map { it.name },
+                sets = sets,
+                // When the bars are tappable each one announces itself, so a readout on the parent
+                // would talk over its own children; the whole-week reading only stands in for the
+                // passive mark.
+                modifier = if (onSelect == null) {
+                    Modifier.semantics { contentDescription = weekReadout(archetypes, sets) }
+                } else Modifier,
+                trackHeight = trackHeight,
+                selectedIndex = selectedIndex,
+                onSelect = onSelect
+            )
+        }
     }
 }
 

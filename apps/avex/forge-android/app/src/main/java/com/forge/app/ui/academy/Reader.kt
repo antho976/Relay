@@ -19,15 +19,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -36,7 +33,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
@@ -44,7 +42,9 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.academy.LessonBlock
 import com.forge.app.domain.academy.Source
+import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.theme.ForgeMotion
 
 /**
  * # The reader: one lesson on its own page
@@ -100,28 +100,18 @@ fun ReaderScreen(
     // Transparent while the page sits at the top, so the drawing reads as the head of the page; solid
     // the moment anything scrolls under it. Without that, lesson text slid under the clock and the
     // battery in the status bar (Antho, 2026-09-26).
-    val bar = TopAppBarDefaults.pinnedScrollBehavior()
+    val scrolled by remember {
+        derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 }
+    }
+    val barFill by animateColorAsState(
+        if (scrolled) MaterialTheme.colorScheme.background else Color.Transparent,
+        ForgeMotion.standardTween(ForgeMotion.DurationFast),
+        label = "reader_bar"
+    )
     Scaffold(
-        modifier = Modifier.nestedScroll(bar.nestedScrollConnection),
         topBar = {
-            TopAppBar(
-                // §4.6: chrome only. The piece names itself in its own serif hero below.
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = muted
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent,
-                    scrolledContainerColor = MaterialTheme.colorScheme.background
-                ),
-                scrollBehavior = bar
-            )
+            // §4.6: chrome only. The piece names itself in its own serif hero below.
+            ForgeTopBar(onBack = onBack, modifier = Modifier.background(barFill))
         },
         containerColor = Color.Transparent
     ) { inner ->
@@ -215,10 +205,28 @@ private fun NextBlock(
                         style = MaterialTheme.typography.labelMedium,
                         color = muted.copy(alpha = 0.65f)
                     )
-                    Text("read →", style = MaterialTheme.typography.labelMedium, color = accent)
+                    ReadCapsule()
                 }
             }
         }
+    }
+}
+
+/**
+ * The "read" cue on a whole-card tap target: a small filled capsule drawn inside the card, so the
+ * card reads as a button without a second, nested target (the card's own tap opens the lesson).
+ * It replaced the accent `read →` text link (2026-09-27).
+ */
+@Composable
+internal fun ReadCapsule() {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clearAndSetSemantics { }
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+    ) {
+        Text("Read", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onBackground)
     }
 }
 

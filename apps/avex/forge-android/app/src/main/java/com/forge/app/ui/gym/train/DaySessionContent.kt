@@ -1,5 +1,14 @@
 package com.forge.app.ui.gym.train
 
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.lazy.itemsIndexed
+import com.forge.app.ui.gym.train.components.GymNoteBox
+import com.forge.app.ui.gym.train.components.groupMember
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ForgeChromeIconButton
+import com.forge.app.ui.common.ForgeChromeButton
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -49,7 +58,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.toStoredWeightText
 import com.forge.app.program.ExerciseUnit
-import com.forge.app.ui.common.FirstTouchTip
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.gym.train.components.CollapsedRow
 import com.forge.app.ui.gym.train.components.ExerciseCard
@@ -131,7 +139,6 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
     }
 
     val weightUnit = LocalForgeSettings.current.weightUnit
-    val firstWorkoutDone = LocalForgeSettings.current.firstWorkoutDone
 
     // Single-exercise focus. The shown exercise is an explicit selection — it does NOT
     // auto-advance when sets complete. The user advances manually via the "MOVE TO NEXT"
@@ -174,20 +181,6 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                 )
             }
 
-            // First-touch (D8/D10): a brand-new user opens to a list of names with no obvious action.
-            // Gated on the lifetime "first workout done" flag (not per-exercise history) so it shows only
-            // for a genuinely new user — never for a returning user starting an all-new program. Auto-hides
-            // after the first set of this session.
-            if (!firstWorkoutDone && state.exercises.isNotEmpty() && state.exercises.all { it.loggedSets.isEmpty() }) {
-                item(key = "first-time-tip", contentType = "tip") {
-                    FirstTouchTip(
-                        "Your week starts here.",
-                        "Tap an exercise to open it, then log each set with the weight and reps you hit. The coach starts learning from your very first session.",
-                        Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-                    )
-                }
-            }
-
             // ── Suggested order (engine System 3) — pre-work only ────────────
             val ordering = state.orderingSuggestion
             if (ordering != null && state.exercises.all { it.loggedSets.isEmpty() }) {
@@ -206,23 +199,32 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                         Spacer(Modifier.height(2.dp))
                         Text(ordering.reason, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.8f))
                         Spacer(Modifier.height(6.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                            Text(
-                                "Apply →",
-                                style = MaterialTheme.typography.labelSmall, color = accent,
-                                modifier = Modifier.clickableLabeled("Apply the suggested order") { onEvent(DayUiEvent.ApplyOrderingSuggestion) }.padding(vertical = 2.dp)
-                            )
-                            Text(
-                                "dismiss",
-                                style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f),
-                                modifier = Modifier.clickableLabeled("Dismiss the suggestion") { onEvent(DayUiEvent.DismissOrderingSuggestion) }.padding(vertical = 2.dp)
-                            )
+                        // Small filled capsules, not bare text links (grouped-surface pass).
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ForgeChromeButton(
+                                onClick = { onEvent(DayUiEvent.ApplyOrderingSuggestion) },
+                                label = "Apply the suggested order"
+                            ) {
+                                Text(
+                                    "Apply",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onBackground,
+                                    modifier = Modifier.padding(horizontal = 16.dp)
+                                )
+                            }
+                            ForgeChromeButton(
+                                onClick = { onEvent(DayUiEvent.DismissOrderingSuggestion) },
+                                label = "Dismiss the suggestion"
+                            ) {
+                                Text(
+                                    "Dismiss",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = muted,
+                                    modifier = Modifier.padding(horizontal = 16.dp)
+                                )
+                            }
                         }
                     }
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 24.dp),
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
-                    )
                 }
             }
 
@@ -352,31 +354,31 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                 }
                 if (done.isNotEmpty()) {
                     item(key = "done-header", contentType = "done-header") {
-                        val outline = MaterialTheme.colorScheme.outline
-                        HorizontalDivider(color = outline.copy(alpha = 0.2f))
                         Text(
                             "DONE / SKIPPED",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 9.sp,
-                            modifier = Modifier.padding(start = 24.dp, top = 14.dp, bottom = 2.dp)
+                            modifier = Modifier.padding(start = 24.dp, top = 14.dp, bottom = 10.dp)
                         )
                     }
                     // Key by position, not exercise id — a day can legitimately hold the same exercise
                     // twice (a tiny equipment pool), and duplicate keys crash LazyColumn.
-                    items(done, key = { "done-${it.index}" }, contentType = { "done-row" }) { entry ->
+                    // One group of filled members, 2dp seams, instead of rows split by hairlines.
+                    itemsIndexed(done, key = { _, it -> "done-${it.index}" }, contentType = { _, _ -> "done-row" }) { pos, entry ->
                         val ex = entry.value
-                        CollapsedRow(
-                            exerciseIndex = entry.index,
-                            state = ex,
-                            isNow = false,
-                            onToggle = { shownExerciseId = ex.plan.id },
-                            onOpenSwapPicker = { onEvent(DayUiEvent.OpenSwapPicker(ex.plan.id)) }
-                        )
-                        HorizontalDivider(
-                            modifier = Modifier.padding(horizontal = 24.dp),
-                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)
-                        )
+                        Column(Modifier.padding(horizontal = 16.dp)) {
+                            if (pos > 0) Spacer(Modifier.height(GROUP_SEAM))
+                            CollapsedRow(
+                                exerciseIndex = entry.index,
+                                state = ex,
+                                isNow = false,
+                                onToggle = { shownExerciseId = ex.plan.id },
+                                onOpenSwapPicker = { onEvent(DayUiEvent.OpenSwapPicker(ex.plan.id)) },
+                                modifier = Modifier.groupMember(pos, done.size),
+                                horizontalPadding = ROW_H
+                            )
+                        }
                     }
                     item(key = "done-bottom", contentType = "done-bottom") { Spacer(Modifier.height(16.dp)) }
                 }
@@ -396,12 +398,13 @@ private fun SessionNoteDialog(initial: String, onSave: (String) -> Unit, onDismi
         onDismissRequest = onDismiss,
         title = { Text("Session note") },
         text = {
-            OutlinedTextField(
+            GymNoteBox(
                 value = text,
                 onValueChange = { text = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Anything to remember about today's session…") },
-                minLines = 3
+                placeholder = "Anything to remember about today's session…",
+                minLines = 3,
+                // One rung above the dialog's own surface, or the well would vanish into it.
+                fill = MaterialTheme.colorScheme.surfaceContainerHighest
             )
         },
         confirmButton = { TextButton(onClick = { onSave(text) }) { Text("Save") } },
@@ -432,9 +435,8 @@ internal fun SessionHero(state: DayUiState, onBack: () -> Unit, onFinish: () -> 
                 modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onBack, modifier = Modifier.padding(end = 2.dp)) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = onBg)
-                }
+                ForgeChromeIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack)
+                Spacer(Modifier.width(8.dp))
                 Text(
                     state.displayName.uppercase(),
                     style = MaterialTheme.typography.labelSmall,
@@ -445,19 +447,24 @@ internal fun SessionHero(state: DayUiState, onBack: () -> Unit, onFinish: () -> 
             }
             Spacer(Modifier.width(4.dp))
             // Quick session note — jot a thought mid-workout; tinted when the journal has content.
-            IconButton(onClick = onEditNote, modifier = Modifier.size(36.dp)) {
-                Icon(
-                    Icons.Filled.EditNote,
-                    contentDescription = if (state.sessionJournal.isBlank()) "Add session note" else "Edit session note",
-                    tint = if (state.sessionJournal.isNotBlank()) accent else muted
-                )
-            }
+            ForgeChromeIconButton(
+                Icons.Filled.EditNote,
+                if (state.sessionJournal.isBlank()) "Add session note" else "Edit session note",
+                onEditNote,
+                tint = if (state.sessionJournal.isNotBlank()) accent else muted
+            )
             Spacer(Modifier.width(4.dp))
-            Box(modifier = Modifier.border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp)) {
-                Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, maxLines = 1)
+            // Passive date: a filled capsule, no outline.
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1)
             }
             Spacer(Modifier.width(8.dp))
-            Box(modifier = Modifier.background(accent, RoundedCornerShape(50)).clickableLabeled("Finish session") { onFinish() }.padding(horizontal = 16.dp, vertical = 7.dp)) {
+            Box(modifier = Modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(50)).background(accent).clickableLabeled("Finish session") { onFinish() }.padding(horizontal = 16.dp, vertical = 7.dp), contentAlignment = Alignment.Center) {
                 Text("FINISH", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary, maxLines = 1)
             }
         }
@@ -485,6 +492,5 @@ internal fun SessionHero(state: DayUiState, onBack: () -> Unit, onFinish: () -> 
                 )
             }
         }
-        HorizontalDivider(color = outline.copy(alpha = 0.2f))
     }
 }

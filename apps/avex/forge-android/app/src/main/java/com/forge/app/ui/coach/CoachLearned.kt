@@ -64,17 +64,17 @@ internal fun LazyListScope.coachLearned(
                     )
                 }
                 Spacer(Modifier.height(10.dp))
-                Text(
-                    if (on) "On. A change applies on its own once its type has earned it."
-                    else "Off. Earned changes still wait for your tap.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = c.onBg
+                // The state line and each type's trust as one filled group. Each type carries its
+                // own distinct reading, which is what earns these a list.
+                CoachRowGroup(
+                    listOf<@Composable () -> Unit>({
+                        CoachGroupRow(
+                            if (on) "On. A change applies on its own once its type has earned it."
+                            else "Off. Earned changes still wait for your tap.",
+                            c
+                        )
+                    }) + trust.map { t -> @Composable { TrustRow(t, c) } }
                 )
-                Spacer(Modifier.height(14.dp))
-                // Each type carries its own distinct reading, which is what earns these a list.
-                // They used to carry a segmented bar each as well: three identical rails stacked,
-                // saying nothing the reading beside them did not already say.
-                trust.forEach { t -> TrustRow(t, c) }
             }
 
             // ── The biases it carries ────────────────────────────────────────
@@ -88,12 +88,7 @@ internal fun LazyListScope.coachLearned(
                     color = c.muted
                 )
                 Spacer(Modifier.height(12.dp))
-                biases.forEach { b ->
-                    Column(Modifier.padding(bottom = 10.dp)) {
-                        Text(b.label, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
-                        Text(b.detail, style = MaterialTheme.typography.bodySmall, color = c.muted)
-                    }
-                }
+                CoachRowGroup(biases.map { b -> @Composable { CoachGroupRow(b.label, c, sub = b.detail) } })
             }
 
             // ── The numbers it measured about you ────────────────────────────
@@ -110,43 +105,20 @@ internal fun LazyListScope.coachLearned(
 /** One change type's trust: its label and how close it is to applying itself. */
 @Composable
 private fun TrustRow(t: TypeTrust, c: CoachColors) {
-    Column(Modifier.fillMaxWidth().padding(vertical = COACH_ROW_PAD)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                t.label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = c.onBg,
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                if (t.earned) "AUTO" else "${t.streak} OF ${t.required}",
-                style = MaterialTheme.typography.labelSmall,
-                color = c.muted
-            )
-        }
-    }
+    CoachGroupRow(t.label, c, value = if (t.earned) "AUTO" else "${t.streak} OF ${t.required}")
 }
 
-/** What the coach has measured about this athlete — the numbers that replaced its defaults. */
+/** What the coach has measured about this athlete, the numbers that replaced its defaults. */
 @Composable
 private fun ProfileReadout(profile: PersonalProfile.Profile, c: CoachColors) {
-    Column(Modifier.fillMaxWidth()) {
-        profile.recoveryDays?.let { days ->
-            Text(
-                "Best spacing: $days ${if (days == 1) "day" else "days"} between sessions",
-                style = MaterialTheme.typography.bodyMedium,
-                color = c.onBg,
-                modifier = Modifier.padding(vertical = 3.dp)
-            )
-        }
-        profile.volumeCaps.entries.take(3).forEach { (muscle, cap) ->
-            Text(
-                "${muscle.displayName}: up to $cap sets a week",
-                style = MaterialTheme.typography.bodyMedium,
-                color = c.onBg,
-                modifier = Modifier.padding(vertical = 3.dp)
-            )
+    val rows = mutableListOf<@Composable () -> Unit>()
+    profile.recoveryDays?.let { days ->
+        rows += {
+            CoachGroupRow("Best spacing: $days ${if (days == 1) "day" else "days"} between sessions", c)
         }
     }
+    profile.volumeCaps.entries.take(3).forEach { (muscle, cap) ->
+        rows += { CoachGroupRow("${muscle.displayName}: up to $cap sets a week", c) }
+    }
+    CoachRowGroup(rows)
 }

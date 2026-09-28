@@ -12,20 +12,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -38,8 +28,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.ui.common.EditorialFigure
 import com.forge.app.ui.common.InlineEmptyHint
-import com.forge.app.ui.common.SegmentPill
+import com.forge.app.ui.common.ForgeChoiceChip
+import com.forge.app.ui.common.ForgeSlidingSegments
+import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.forgeItemMotion
+import com.forge.app.ui.gym.train.components.GymSearchRow
 import com.forge.app.ui.theme.LocalForgeSettings
 
 /**
@@ -60,6 +53,9 @@ import com.forge.app.ui.theme.LocalForgeSettings
  *    two figures under the title read the CURRENT filter, so tapping "Heavy" is answered by the
  *    numbers moving rather than by a list you have to count.
  *
+ * 2026-09-27: search is the filled rounded row and the duration filter a sliding segment. The rows
+ * stay plain under their date; a filled group per day was tried and read as a stack of cards.
+ *
  * The "All" pill is now always present. It used to appear only for users who had tagged a session,
  * which meant everyone else could turn a filter on and had no drawn way to turn it back off.
  */
@@ -76,14 +72,7 @@ fun SessionHistoryScreen(
     val weightUnit = LocalForgeSettings.current.weightUnit
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                // §4.6: back only, never the screen's name — the serif hero below carries it.
-                title = {},
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
-        },
+        topBar = { ForgeTopBar(onBack = onBack) },
         containerColor = Color.Transparent
     ) { inner ->
         Column(modifier = Modifier.fillMaxSize().padding(inner)) {
@@ -116,42 +105,48 @@ fun SessionHistoryScreen(
             }
 
             Spacer(Modifier.height(18.dp))
-            // ── Search field — interactive control, keep bordered (§13) ──────────
-            SearchField(
+            // ── Search: the filled rounded search row ──────────
+            GymSearchRow(
                 query = state.query,
                 onQueryChange = viewModel::setQuery,
+                placeholder = "Search day, exercise or note",
+                modifier = Modifier.padding(horizontal = 24.dp)
+            )
+
+            // ── Duration is one pick of three, so it is a sliding segment. "All" still takes every
+            // pill filter back off, as it always has.
+            Spacer(Modifier.height(12.dp))
+            ForgeSlidingSegments(
+                options = listOf("All", "Short", "Long"),
+                selectedIndex = when (state.durationFilter) {
+                    SessionHistoryFilter.SHORT -> 1
+                    SessionHistoryFilter.LONG -> 2
+                    else -> 0
+                },
+                onSelect = { i ->
+                    when (i) {
+                        1 -> viewModel.setDurationFilter(SessionHistoryFilter.SHORT)
+                        2 -> viewModel.setDurationFilter(SessionHistoryFilter.LONG)
+                        else -> viewModel.clearPillFilters()
+                    }
+                },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
             )
 
-            // ── Filter pills — the shared SegmentPill, one short word each (§4) ────
+            // Heavy and the user's own tags combine with the duration pick, so they stay toggles.
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 item {
-                    // Always drawn, so a filter can always be taken back off — not only by the
-                    // users who happen to have tagged a session.
-                    HistoryFilterPill("All", !state.anyPillActive) { viewModel.clearPillFilters() }
-                }
-                item {
-                    HistoryFilterPill("Short", state.durationFilter == SessionHistoryFilter.SHORT) {
-                        viewModel.setDurationFilter(if (state.durationFilter == SessionHistoryFilter.SHORT) null else SessionHistoryFilter.SHORT)
-                    }
-                }
-                item {
-                    HistoryFilterPill("Long", state.durationFilter == SessionHistoryFilter.LONG) {
-                        viewModel.setDurationFilter(if (state.durationFilter == SessionHistoryFilter.LONG) null else SessionHistoryFilter.LONG)
-                    }
-                }
-                item {
-                    HistoryFilterPill("Heavy", state.volumeFilter == SessionHistoryFilter.HIGH_VOLUME) {
+                    ForgeChoiceChip("Heavy", state.volumeFilter == SessionHistoryFilter.HIGH_VOLUME, {
                         viewModel.setVolumeFilter(if (state.volumeFilter == SessionHistoryFilter.HIGH_VOLUME) null else SessionHistoryFilter.HIGH_VOLUME)
-                    }
+                    })
                 }
                 items(state.availableTags) { tag ->
-                    HistoryFilterPill("#$tag", state.tagFilter == tag) {
+                    ForgeChoiceChip("#$tag", state.tagFilter == tag, {
                         viewModel.setTagFilter(if (state.tagFilter == tag) null else tag)
-                    }
+                    })
                 }
             }
 
@@ -167,6 +162,8 @@ fun SessionHistoryScreen(
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp)
                 )
             } else {
+                // Plain rows under each day's date: a log reads as a list, not a stack of cards
+                // (the grouped-rows pass was reverted here on 2026-09-27).
                 LazyColumn(contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = 32.dp)) {
                     state.days.forEachIndexed { index, day ->
                         item(key = "day:${day.label}", contentType = "day") {
@@ -205,48 +202,8 @@ private fun DayAnchor(label: String, first: Boolean, modifier: Modifier = Modifi
             label,
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.semantics { heading() }
+            modifier = Modifier.padding(horizontal = 4.dp).semantics { heading() }
         )
         Spacer(Modifier.height(8.dp))
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SearchField(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    OutlinedTextField(
-        value = query,
-        onValueChange = onQueryChange,
-        modifier = modifier,
-        placeholder = { Text("Search day, exercise or note…") },
-        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-        trailingIcon = {
-            if (query.isNotEmpty()) {
-                IconButton(onClick = { onQueryChange("") }) {
-                    Icon(Icons.Filled.Close, contentDescription = "Clear search")
-                }
-            }
-        },
-        singleLine = true,
-        shape = RoundedCornerShape(12.dp)
-    )
-}
-
-/** One home for the screen's filter pills — all route through the shared [SegmentPill]. */
-@Composable
-private fun HistoryFilterPill(text: String, selected: Boolean, onClick: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    SegmentPill(
-        text = text,
-        selected = selected,
-        onClick = onClick,
-        accent = cs.primary,
-        onBg = cs.onBackground,
-        muted = cs.onSurfaceVariant,
-        outline = cs.outline
-    )
 }

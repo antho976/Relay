@@ -18,6 +18,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.forge.app.ui.common.Corners
+import com.forge.app.ui.common.GROUP_OUTER
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.memberFill
+import com.forge.app.ui.common.memberShape
+import com.forge.app.ui.gym.train.components.groupMember
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -136,17 +143,17 @@ private fun FsRow(
     onClick: () -> Unit,
     leading: @Composable () -> Unit,
     detail: String? = null,
+    modifier: Modifier = Modifier,
     trailing: @Composable () -> Unit = {}
 ) {
     val cs = MaterialTheme.colorScheme
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .heightIn(min = 64.dp)
-            .clip(RoundedCornerShape(12.dp))
             .bounceCombinedClick(onClickLabel = clickLabel, onClick = onClick)
             .semantics(mergeDescendants = true) { role = Role.Button }
-            .padding(vertical = 8.dp),
+            .padding(start = 12.dp, end = ROW_H, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         leading()
@@ -187,8 +194,13 @@ internal fun FsStartPage(
         if (recent.isNotEmpty()) {
             Spacer(Modifier.height(28.dp))
             FsSection("Your moves")
-            Spacer(Modifier.height(6.dp))
-            recent.forEach { move -> FsRecentRow(move, onClick = { onAdd(move.libId) }) }
+            Spacer(Modifier.height(10.dp))
+            // One group of filled rows, 2dp seams.
+            Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
+                recent.forEachIndexed { i, move ->
+                    FsRecentRow(move, onClick = { onAdd(move.libId) }, modifier = Modifier.groupMember(i, recent.size))
+                }
+            }
         }
 
         if (templates.isNotEmpty()) {
@@ -198,9 +210,12 @@ internal fun FsStartPage(
                 action = if (templates.size > REPEAT_LIMIT) "all \u2192" else null,
                 onAction = if (templates.size > REPEAT_LIMIT) onAllTemplates else null
             )
-            Spacer(Modifier.height(6.dp))
-            templates.take(REPEAT_LIMIT).forEach { t ->
-                FsTemplateRow(t, nowMs, onClick = { onRepeat(t.sessionId) })
+            Spacer(Modifier.height(10.dp))
+            val shown = templates.take(REPEAT_LIMIT)
+            Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
+                shown.forEachIndexed { i, t ->
+                    FsTemplateRow(t, nowMs, onClick = { onRepeat(t.sessionId) }, modifier = Modifier.groupMember(i, shown.size))
+                }
             }
         }
 
@@ -214,7 +229,7 @@ internal fun FsStartPage(
 
 /** One recent move: figure, name, last time's top set and when, and the accent add button. */
 @Composable
-private fun FsRecentRow(move: FsRecentMove, onClick: () -> Unit) {
+private fun FsRecentRow(move: FsRecentMove, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val meta = buildString {
         append(move.muscle.displayName.uppercase())
         move.lastReading?.let { append(" · LAST $it") }
@@ -226,6 +241,7 @@ private fun FsRecentRow(move: FsRecentMove, onClick: () -> Unit) {
         clickLabel = "Add ${move.name}",
         onClick = onClick,
         leading = { FsThumb(move.muscle, Modifier.width(40.dp).height(44.dp)) },
+        modifier = modifier,
         trailing = { FsAddDot() }
     )
 }
@@ -241,11 +257,11 @@ private fun FsSearchLauncher(label: String, onClick: () -> Unit, modifier: Modif
         modifier
             .fillMaxWidth()
             .heightIn(min = 52.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(cs.surfaceVariant)
+            .clip(RoundedCornerShape(GROUP_OUTER))
+            .background(cs.surfaceContainerHigh)
             .bounceCombinedClick(pressedScale = 0.98f, onClickLabel = label, onClick = onClick)
             .semantics { role = Role.Button }
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = ROW_H),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(Icons.Filled.Search, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp))
@@ -256,7 +272,7 @@ private fun FsSearchLauncher(label: String, onClick: () -> Unit, modifier: Modif
 
 /** One past workout: when, how big, what it held. The whole row brings every set back. */
 @Composable
-private fun FsTemplateRow(template: FreestyleTemplateSummary, nowMs: Long, onClick: () -> Unit) {
+private fun FsTemplateRow(template: FreestyleTemplateSummary, nowMs: Long, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val moves = template.exerciseNames.distinct()
     val meta = buildString {
         append(lastDoneLabel(template.startedAtMs, nowMs))
@@ -269,7 +285,8 @@ private fun FsTemplateRow(template: FreestyleTemplateSummary, nowMs: Long, onCli
         detail = moves.joinToString(" · "),
         clickLabel = "Repeat ${template.title}",
         onClick = onClick,
-        leading = { FsMark(FsIcons.Repeat) }
+        leading = { FsMark(FsIcons.Repeat) },
+        modifier = modifier
     )
 }
 
@@ -316,26 +333,31 @@ internal fun FsAddFooter(recent: List<FsRecentMove>, onSearch: () -> Unit, onAdd
             // Intrinsic height so every tile matches the tallest (a two-line name), not a fixed guess.
             Row(
                 Modifier.fillMaxWidth().height(IntrinsicSize.Max).horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                // One connected strip: 2dp seams, only its two ends round out.
+                horizontalArrangement = Arrangement.spacedBy(GROUP_SEAM)
             ) {
-                recent.forEach { move -> FsRecentTile(move, onClick = { onAdd(move.libId) }) }
+                recent.forEachIndexed { i, move ->
+                    val first = i == 0
+                    val last = i == recent.lastIndex
+                    FsRecentTile(move, Corners(first, last, first, last), onClick = { onAdd(move.libId) })
+                }
             }
         }
     }
 }
 
 @Composable
-private fun FsRecentTile(move: FsRecentMove, onClick: () -> Unit) {
+private fun FsRecentTile(move: FsRecentMove, corners: Corners, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
+    val shape = memberShape(corners, selected = false)
     Box(
         Modifier
             .width(136.dp)
             .fillMaxHeight()
-            .clip(RoundedCornerShape(12.dp))
-            .background(cs.surfaceVariant)
+            .memberFill(shape, selected = false)
             .bounceCombinedClick(onClickLabel = "Add ${move.name}", onClick = onClick)
             .semantics(mergeDescendants = true) { role = Role.Button }
-            .padding(12.dp)
+            .padding(14.dp)
     ) {
         Column {
             FsThumb(move.muscle, Modifier.width(30.dp).height(34.dp))

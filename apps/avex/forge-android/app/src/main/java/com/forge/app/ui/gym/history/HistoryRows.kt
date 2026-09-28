@@ -25,6 +25,8 @@ import com.forge.app.domain.session.SessionType
 import com.forge.app.domain.units.formatDistance
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.program.Program
+import com.forge.app.ui.common.ForgeGlyphBadge
+import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.settings.SettingsIcons
 import com.forge.app.ui.theme.LocalForgeSettings
@@ -80,7 +82,9 @@ private val HISTORY_ROW_PAD = 8.dp
 internal fun SessionRow(
     session: Session,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Drawn as a member of a filled group: the row insets its content and badges its glyph. */
+    grouped: Boolean = false
 ) {
     val weightUnit = LocalForgeSettings.current.weightUnit
     val dayName = Program.dayDisplayName(session.dayKey)
@@ -109,7 +113,8 @@ internal fun SessionRow(
         figureNote = session.prCount.takeIf { it > 0 }?.let { "$it PR" },
         clickLabel = "Open $dayName",
         onClick = onClick,
-        modifier = modifier
+        modifier = modifier,
+        grouped = grouped
     )
 }
 
@@ -118,7 +123,8 @@ internal fun SessionRow(
 internal fun CardioHistoryRow(
     entry: CardioEntry,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    grouped: Boolean = false
 ) {
     val activity = CardioActivity.resolve(entry.type, com.forge.app.ui.cardio.LocalCardioTypes.current)
     val useMiles = LocalForgeSettings.current.useMiles
@@ -132,7 +138,8 @@ internal fun CardioHistoryRow(
         figureNote = null,
         clickLabel = "Open ${activity.displayName}",
         onClick = onClick,
-        modifier = modifier
+        modifier = modifier,
+        grouped = grouped
     )
 }
 
@@ -151,7 +158,8 @@ private fun HistoryRow(
     figureNote: String?,
     clickLabel: String,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    grouped: Boolean = false
 ) {
     val cs = MaterialTheme.colorScheme
     val muted = cs.onSurfaceVariant
@@ -162,16 +170,24 @@ private fun HistoryRow(
             .bounceCombinedClick(onClickLabel = clickLabel, onClick = onClick)
             // Touch target from padding, never a fixed height — the row grows with font scale (§14).
             .heightIn(min = 48.dp)
-            .padding(vertical = HISTORY_ROW_PAD),
+            .padding(
+                horizontal = if (grouped) ROW_H else 0.dp,
+                vertical = if (grouped) 12.dp else HISTORY_ROW_PAD
+            ),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = muted,
-            modifier = Modifier.size(GLYPH)
-        )
-        Spacer(Modifier.width(GLYPH_GAP))
+        if (grouped) {
+            ForgeGlyphBadge(icon, selected = false, size = 34.dp)
+            Spacer(Modifier.width(14.dp))
+        } else {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = muted,
+                modifier = Modifier.size(GLYPH)
+            )
+            Spacer(Modifier.width(GLYPH_GAP))
+        }
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(2.dp)

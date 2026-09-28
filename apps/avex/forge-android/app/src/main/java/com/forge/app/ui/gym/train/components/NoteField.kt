@@ -8,12 +8,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.forge.app.ui.common.ForgeChromeButton
+import com.forge.app.ui.common.GROUP_OUTER
+import com.forge.app.ui.common.ROW_H
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -98,39 +106,77 @@ fun NoteField(
         if (showTemplates && templates.isNotEmpty()) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 templates.forEach { template ->
-                    FilterChip(
-                        selected = false,
+                    // An insert action, so a small filled capsule rather than a filter chip.
+                    ForgeChromeButton(
                         onClick = {
                             val next =
                                 if (field.text.isBlank()) "$template "
                                 else field.text.trimEnd() + "\n" + template + " "
                             field = TextFieldValue(next, TextRange(next.length))
                         },
-                        label = { Text(template, style = MaterialTheme.typography.labelSmall) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        label = "Insert $template"
+                    ) {
+                        Text(
+                            template,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.padding(horizontal = 12.dp)
                         )
-                    )
+                    }
                 }
             }
         }
 
-        OutlinedTextField(
+        // The filled notes well (grouped-surface pass, 2026-09-27): no outline, the raised fill and
+        // its mono label say what it is.
+        val onBg = MaterialTheme.colorScheme.onBackground
+        val muted = MaterialTheme.colorScheme.onSurfaceVariant
+        BasicTextField(
             value = field,
             onValueChange = { field = it },
-            modifier = modifier.fillMaxWidth().heightIn(min = 56.dp),
-            label = { Text("Notes") },
-            placeholder = {
-                Text("Form cues, how it felt, what to try next time…", style = MaterialTheme.typography.bodySmall)
-            },
+            modifier = modifier.fillMaxWidth().semantics { contentDescription = "Notes" },
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             minLines = 1,
-            maxLines = 4
+            maxLines = 4,
+            decorationBox = { inner ->
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 56.dp)
+                        .clip(RoundedCornerShape(GROUP_OUTER))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .padding(horizontal = ROW_H, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("NOTES", style = MaterialTheme.typography.labelSmall, color = muted)
+                    Box {
+                        if (field.text.isEmpty()) {
+                            Text(
+                                "Form cues, how it felt, what to try next time…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = muted.copy(alpha = 0.6f)
+                            )
+                        }
+                        inner()
+                    }
+                }
+            }
         )
 
         if (field.text.isNotBlank()) {
             Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                TextButton(onClick = { onPinNote(if (currentPinnedNote == field.text.trim()) "" else field.text.trim()) }) {
-                    Text(if (currentPinnedNote == field.text.trim()) "Unpin cue" else "Pin as cue")
+                val pinned = currentPinnedNote == field.text.trim()
+                ForgeChromeButton(
+                    onClick = { onPinNote(if (pinned) "" else field.text.trim()) },
+                    label = if (pinned) "Unpin cue" else "Pin as cue"
+                ) {
+                    Text(
+                        if (pinned) "Unpin cue" else "Pin as cue",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
                 }
             }
         }

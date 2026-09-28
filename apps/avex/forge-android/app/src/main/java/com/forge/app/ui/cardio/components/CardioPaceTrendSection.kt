@@ -26,7 +26,9 @@ import com.forge.app.domain.cardio.paceSecPerUnit
 import com.forge.app.domain.units.distanceUnitLabel
 import com.forge.app.ui.cardio.LocalCardioTypes
 import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.SegmentPill
+import com.forge.app.ui.common.ForgeSlidingSegments
+import com.forge.app.ui.cardio.CardioChartPanel
+import com.forge.app.ui.cardio.CardioFilledChip
 import com.forge.app.ui.gym.stats.components.LineChart
 import com.forge.app.ui.gym.stats.components.olsTrend
 import com.forge.app.ui.common.rememberDrawProgress
@@ -67,36 +69,44 @@ internal fun CardioPaceTrendSection(
         EditorialHeader(label = "Pace trend", muted = muted, accent = accent)
         Spacer(Modifier.height(10.dp))
         if (series.size > 1) {
-            // The lens over which activity's pace to read (§4.4 SegmentPill).
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                series.forEachIndexed { i, s ->
-                    SegmentPill(
-                        text = CardioActivity.resolve(s.typeCode, customs).displayName,
-                        selected = i == selected,
-                        onClick = { selected = i },
-                        accent = accent, onBg = onBg, muted = muted, outline = outline
-                    )
+            // The lens over which activity's pace to read: a few activities are one segmented
+            // control; a longer set wraps as filled chips rather than squeezing the cells.
+            val names = series.map { CardioActivity.resolve(it.typeCode, customs).displayName }
+            if (names.size <= 3) {
+                ForgeSlidingSegments(
+                    options = names,
+                    selectedIndex = selected,
+                    onSelect = { selected = it },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    names.forEachIndexed { i, name ->
+                        CardioFilledChip(name, selected = i == selected, onClick = { selected = i })
+                    }
                 }
             }
             Spacer(Modifier.height(12.dp))
         }
         if (paces.size >= 2) {
-            LineChart(
-                values = paces.map { it.toDouble() },
-                lineColor = accent,
-                trendColor = secondary,
-                modifier = Modifier.fillMaxWidth().height(100.dp),
-                progress = progress
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                paceTrendCaption(paces, unit),
-                style = MaterialTheme.typography.labelSmall,
-                color = muted, fontSize = 9.sp
-            )
+            CardioChartPanel {
+                LineChart(
+                    values = paces.map { it.toDouble() },
+                    lineColor = accent,
+                    trendColor = secondary,
+                    modifier = Modifier.fillMaxWidth().height(100.dp),
+                    progress = progress
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    paceTrendCaption(paces, unit),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted, fontSize = 9.sp
+                )
+            }
         }
     }
 }

@@ -7,9 +7,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -30,7 +29,10 @@ import com.forge.app.domain.units.clockPattern
 import com.forge.app.domain.units.formatClockHourShort
 import com.forge.app.ui.cardio.LocalCardioTypes
 import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.ForgeGlyphBadge
+import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.cardio.CardioChartPanel
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
 import java.time.ZoneId
@@ -46,7 +48,9 @@ internal fun SessionTimelineRow(
     zone: ZoneId,
     onBg: Color,
     muted: Color,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    /** Outer placement and the member fill, when the row sits in a group. */
+    modifier: Modifier = Modifier
 ) {
     // Resolved through the user's custom activities, as CardioEntryRow and the detail sheet do. The
     // built-in enum alone maps every `custom_` code to Other, so a custom activity that read "Padel"
@@ -66,12 +70,12 @@ internal fun SessionTimelineRow(
         cardioDetailParts(entry, useMiles = useMiles).joinToString(" · ")
     }
     Row(
-        modifier = Modifier.fillMaxWidth().clickableLabeled("View session details", onClick = onClick).padding(horizontal = 24.dp, vertical = 12.dp),
+        modifier = modifier.fillMaxWidth().clickableLabeled("View session details", onClick = onClick).padding(horizontal = ROW_H, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(dayLabel, style = MaterialTheme.typography.labelMedium, color = muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(32.dp))
-        Icon(type.icon, contentDescription = null, tint = onBg, modifier = Modifier.size(20.dp))
+        Text(dayLabel, style = MaterialTheme.typography.labelMedium, color = muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.widthIn(min = 32.dp))
+        ForgeGlyphBadge(type.icon, selected = false, size = 34.dp)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(type.displayName, style = MaterialTheme.typography.bodyMedium, color = onBg)
@@ -107,7 +111,8 @@ internal fun StepsByHourSection(
     if (!hasData && !connected) return
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
         EditorialHeader(label = "Steps through the day", muted = muted, accent = accent)
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(12.dp))
+        CardioChartPanel {
         if (hasData) {
             HourlyStepsBars(wearable!!, muted = muted, outline = outline, accent = accent)
         } else {
@@ -125,6 +130,7 @@ internal fun StepsByHourSection(
                 "No steps from your watch for this day yet.",
                 style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
             )
+        }
         }
     }
 }

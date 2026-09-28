@@ -1,5 +1,10 @@
 package com.forge.app.ui.onboarding
 
+import com.forge.app.ui.common.ForgeChoice
+import com.forge.app.ui.common.ForgeChoiceList
+import com.forge.app.ui.common.ForgeGroupSection
+import com.forge.app.ui.common.ForgeRowGroup
+import com.forge.app.ui.common.ForgeSlidingSegments
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -71,26 +76,27 @@ internal fun StepPlanMode(selected: String, onSelect: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         StepTitle("How do you want to train?")
         StepCaption("Nothing here is permanent. Change it later in Settings.")
-        Spacer(Modifier.height(2.dp))
-        PLAN_MODE_DETAILS.forEach { (key, label, desc) ->
-            OptionCard(
-                label = label,
-                description = desc,
-                selected = selected == key,
+        Spacer(Modifier.height(6.dp))
+        ForgeChoiceList(
+            choices = PLAN_MODE_DETAILS.map { (key, label, desc) ->
                 // Maturity tags: the generated path is the pick; custom has shipped (no tag);
                 // freestyle is still earlier-stage but out of alpha now.
-                meta = when (key) {
-                    PLAN_GENERATED -> "Recommended"
-                    PLAN_CUSTOM -> null
-                    else -> "Beta"
-                },
-                onClick = {
-                    replays[key] = (replays[key] ?: 0) + 1
-                    onSelect(key)
-                },
-                topContent = { PlanModeMedia(key, videoSync, replays[key] ?: 0) }
-            )
-        }
+                ForgeChoice(
+                    key, label, desc,
+                    meta = when (key) {
+                        PLAN_GENERATED -> "Recommended"
+                        PLAN_CUSTOM -> null
+                        else -> "Beta"
+                    }
+                )
+            },
+            selected = selected,
+            onSelect = { key ->
+                replays[key] = (replays[key] ?: 0) + 1
+                onSelect(key)
+            },
+            topContent = { PlanModeMedia(it.key, videoSync, replays[it.key] ?: 0) }
+        )
     }
 }
 
@@ -99,15 +105,14 @@ internal fun StepGoal(selected: String, onSelect: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         StepTitle("What's your main goal?")
         StepCaption("Same exercises, different loading. Switch it anytime.")
-        Spacer(Modifier.height(2.dp))
-        GOAL_DETAILS.forEach { (key, label, desc, meta) ->
-            OptionCard(
-                label = label, description = desc, meta = meta,
-                icon = OnboardingIcons.forGoal(key),
-                selected = selected == key,
-                onClick = { onSelect(key) }
-            )
-        }
+        Spacer(Modifier.height(6.dp))
+        ForgeChoiceList(
+            choices = GOAL_DETAILS.map { (key, label, desc, meta) ->
+                ForgeChoice(key, label, desc, meta, OnboardingIcons.forGoal(key))
+            },
+            selected = selected,
+            onSelect = onSelect
+        )
     }
 }
 
@@ -116,21 +121,22 @@ internal fun StepExperience(selected: String, onSelect: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         StepTitle("How long have you been training?")
         StepCaption("Sets your volume and which movements you're given.")
-        Spacer(Modifier.height(2.dp))
-        EXPERIENCE_DETAILS.forEach { (key, label, desc, meta) ->
-            OptionCard(
-                label = label, description = desc, meta = meta,
-                selected = selected == key,
-                onClick = { onSelect(key) }
-            )
-        }
+        Spacer(Modifier.height(6.dp))
+        ForgeChoiceList(
+            choices = EXPERIENCE_DETAILS.map { (key, label, desc, meta) ->
+                ForgeChoice(key, label, desc, meta, OnboardingIcons.forExperience(key))
+            },
+            selected = selected,
+            onSelect = onSelect
+        )
     }
 }
 
 /**
  * The first step the [PlanLedger] answers. The split readout that used to sit here as a line of
  * text ("PUSH · PULL · LEGS") is gone: the ledger's meters ARE the split, labelled day by day, and
- * saying it twice broke §4.3's one-home rule.
+ * saying it twice broke the one-home rule. The count is a sliding segmented control in its own
+ * group, the same control every one-of-few answer uses in this flow.
  */
 @Composable
 internal fun StepDays(days: Int, experience: String, onChange: (Int) -> Unit) {
@@ -138,10 +144,20 @@ internal fun StepDays(days: Int, experience: String, onChange: (Int) -> Unit) {
         StepTitle("How many days a week?")
         StepCaption("Your split follows, and it becomes your weekly target on Home.")
         Spacer(Modifier.height(6.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            (1..7).forEach { n -> DayChip(n, days == n) { onChange(n) } }
+        val advice = daysAdvice(days, experience)
+        ForgeGroupSection(
+            label = null,
+            footer = if (advice != null) ({ DaysAdvice(advice) }) else null
+        ) {
+            ForgeRowGroup({
+                ForgeSlidingSegments(
+                    options = (1..7).map { "$it" },
+                    selectedIndex = if (days in 1..7) days - 1 else -1,
+                    onSelect = { onChange(it + 1) },
+                    modifier = Modifier.fillMaxWidth().padding(10.dp)
+                )
+            })
         }
-        daysAdvice(days, experience)?.let { DaysAdvice(it) }
     }
 }
 
@@ -168,7 +184,7 @@ private fun DaysAdvice(text: String) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(top = 4.dp),
+            .padding(top = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Box(

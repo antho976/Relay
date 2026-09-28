@@ -26,10 +26,17 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forge.app.ui.common.bounceClick
+import androidx.compose.foundation.layout.heightIn
+import com.forge.app.ui.common.Corners
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.bounceCombinedClick
+import com.forge.app.ui.common.memberFill
+import com.forge.app.ui.common.memberShape
 import com.forge.app.ui.gym.train.state.DayListItem
 import com.forge.app.ui.common.parseAccentHex
 import java.text.SimpleDateFormat
@@ -40,89 +47,106 @@ import java.time.temporal.ChronoUnit
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun CompactCard(
     item: DayListItem,
     onClick: () -> Unit,
     onLongPress: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    corners: Corners = Corners(true, true, true, true)
 ) {
     // parseAccentHex, not the throwing parser this used to call: the value crosses DataStore
     // (a user-set day colour) and the program_day.accent_hex column, so a restored backup or a
     // blank hex would have taken the whole Train tab down on composition. One parser, non-throwing
     // — the same one ForgeTheme and ForgeWidget already use for the same kind of value.
     val accent = parseAccentHex(item.customAccentHex ?: item.plan.accentHex)
-    val surface = MaterialTheme.colorScheme.surface
-    Surface(
-        modifier = modifier
+    val shape = memberShape(corners, selected = false)
+    Box(
+        modifier
             .fillMaxWidth()
-            .height(96.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .combinedClickable(onClick = onClick, onLongClick = onLongPress)
-            .bounceClick { onClick() },
-        color = Color.Transparent,
-        tonalElevation = 2.dp
+            // Min, never fixed: the card grows with font scale and the spine grows with it.
+            .heightIn(min = 88.dp)
+            .memberFill(shape, selected = false)
+            .bounceCombinedClick(
+                onClickLabel = "Open ${item.displayName}",
+                onLongClickLabel = "Options for ${item.displayName}",
+                onLongClick = onLongPress,
+                onClick = onClick
+            ),
+        contentAlignment = Alignment.CenterStart
     ) {
-        Box(
-            Modifier.fillMaxWidth().background(surface).drawBehind {
-                val radius = size.width * 0.55f
-                drawRect(
-                    brush = Brush.radialGradient(
-                        colorStops = arrayOf(
-                            0.0f to accent.copy(alpha = 0.38f),
-                            0.50f to accent.copy(alpha = 0.12f),
-                            1.0f to Color.Transparent
-                        ),
-                        center = Offset(x = size.width * 0.95f, y = size.height * 0.5f),
-                        radius = radius,
-                        tileMode = TileMode.Clamp
-                    )
-                )
-            }
+        Box(Modifier.matchParentSize()) { SpineStrip(accent = accent, word = item.plan.word) }
+        Row(Modifier.fillMaxWidth().padding(start = SPINE_W), verticalAlignment = Alignment.CenterVertically) {
+        Column(
+            Modifier.weight(1f).padding(horizontal = ROW_H, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            Row(Modifier.fillMaxWidth().fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
-                SpineStrip(accent = accent, word = item.plan.word)
-                Column(
-                    Modifier.weight(1f).padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(3.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(item.displayName, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                        if (item.isActive) ActiveDot(accent)
-                    }
-                    Text(
-                        buildString {
-                            append(item.lastFinishedAt?.let { formatRelative(it) } ?: "Never trained")
-                            append(" · ${item.exerciseCount} exercises")
-                            val mins = item.estimatedMinutes
-                                ?: com.forge.app.program.SessionEstimate.estimateMinutes(item.plan)
-                            if (mins > 0) append(" · ~$mins min")
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Text("→", modifier = Modifier.padding(end = 16.dp), style = MaterialTheme.typography.titleMedium, color = accent.copy(alpha = 0.70f))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(item.displayName, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                if (item.isActive) ActiveDot(accent)
             }
+            Text(
+                buildString {
+                    append(item.lastFinishedAt?.let { formatRelative(it) } ?: "Never trained")
+                    append(" · ${item.exerciseCount} exercises")
+                    val mins = item.estimatedMinutes
+                        ?: com.forge.app.program.SessionEstimate.estimateMinutes(item.plan)
+                    if (mins > 0) append(" · ~$mins min")
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Text("→", modifier = Modifier.padding(end = ROW_H), style = MaterialTheme.typography.titleMedium, color = accent.copy(alpha = 0.70f))
         }
     }
 }
 
 @Composable
 internal fun NextUpPill(accent: Color) {
-    Surface(shape = RoundedCornerShape(6.dp), color = accent.copy(alpha = 0.18f)) {
-        Text("NEXT UP", modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp), color = accent, fontWeight = FontWeight.Black, fontSize = 10.sp, letterSpacing = 1.5.sp)
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(accent.copy(alpha = 0.15f))
+    ) {
+        Text(
+            "NEXT UP",
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = accent,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 1.5.sp
+        )
     }
 }
+
+/** The day-colour spine down a day card's leading edge. */
+internal val SPINE_W = 44.dp
 
 @Composable
 internal fun SpineStrip(accent: Color, word: String) {
     Box(
-        Modifier.width(44.dp).fillMaxHeight().background(accent.copy(alpha = 0.18f)),
+        Modifier.width(SPINE_W).fillMaxHeight().background(accent.copy(alpha = 0.15f)),
         contentAlignment = Alignment.Center
     ) {
-        Text(text = word, color = accent, fontWeight = FontWeight.Black, fontSize = 12.sp, letterSpacing = 3.sp, modifier = Modifier.graphicsLayer { rotationZ = -90f })
+        Text(
+            text = word,
+            color = accent,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 3.sp,
+            maxLines = 1,
+            // Measured unrotated at its natural width, then laid out with width and height swapped,
+            // so the rotated word reads whole instead of wrapping inside the 44dp strip.
+            modifier = Modifier
+                .layout { measurable, _ ->
+                    val p = measurable.measure(Constraints())
+                    layout(p.height, p.width) {
+                        p.place((p.height - p.width) / 2, (p.width - p.height) / 2)
+                    }
+                }
+                .graphicsLayer { rotationZ = -90f }
+        )
     }
 }
 
@@ -130,7 +154,7 @@ internal fun SpineStrip(accent: Color, word: String) {
 internal fun ActiveDot(color: Color) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         Box(Modifier.width(6.dp).height(6.dp).clip(RoundedCornerShape(50)).background(color))
-        Text("ACTIVE", color = color, fontSize = 9.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
+        Text("ACTIVE", color = color, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
     }
 }
 

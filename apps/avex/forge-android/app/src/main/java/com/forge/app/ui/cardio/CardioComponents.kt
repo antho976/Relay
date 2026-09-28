@@ -1,7 +1,10 @@
 package com.forge.app.ui.cardio
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -35,7 +39,10 @@ import com.forge.app.ui.cardio.components.VerticalBarRow
 import com.forge.app.ui.cardio.state.CardioDayCell
 import com.forge.app.ui.common.EditorialFigure
 import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.rowShape
 import com.forge.app.ui.goals.GoalProgressLine
 import com.forge.app.ui.goals.customGoalTitle
 import com.forge.app.ui.goals.customGoalValueLine
@@ -90,17 +97,11 @@ internal fun CardioHero(
             Text(
                 "THIS WEEK · $weekLabel",
                 style = MaterialTheme.typography.labelSmall,
-                color = muted, letterSpacing = 1.sp
+                color = muted, letterSpacing = 1.sp,
+                modifier = Modifier.weight(1f)
             )
-            // §2③ — navigation is the mono accent `action →`, with its own touch target.
-            Text(
-                "weeks →",
-                style = MaterialTheme.typography.labelMedium,
-                color = accent,
-                modifier = Modifier
-                    .clickableLabeled("Browse earlier weeks", onClick = onOpenWeeks)
-                    .padding(horizontal = 4.dp, vertical = 8.dp)
-            )
+            // Navigation is a small filled capsule with its own touch target.
+            CardioLinkCapsule("Weeks", "Browse earlier weeks", onOpenWeeks)
         }
         Spacer(Modifier.height(10.dp))
         // Figures wrap rather than clip at large font scales (§14) — four of them never fit one line
@@ -139,12 +140,16 @@ internal fun CardioHero(
             }
         }
         Spacer(Modifier.height(18.dp))
-        WeekBoxRow(
-            days = days,
-            todayDow = todayDow,
-            onBg = onBg, muted = muted, outline = outline, accent = accent,
-            onClick = onOpenThisWeek
-        )
+        // The strip opens this week, so it sits on a filled panel: the surface is earned by the tap.
+        CardioChartPanel(
+            Modifier.clickableLabeled("Open this week", onClick = onOpenThisWeek)
+        ) {
+            WeekBoxRow(
+                days = days,
+                todayDow = todayDow,
+                onBg = onBg, muted = muted, outline = outline, accent = accent
+            )
+        }
         Spacer(Modifier.height(16.dp))
         // A personal minutes target fills its goal meter; without one, the WHO 150-min/week reference
         // takes its place (GYMAP-42) so the week always reads against a baseline, never empty space.
@@ -187,11 +192,10 @@ internal fun CardioGoalsSection(
 ) {
     val settings = LocalForgeSettings.current
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-        EditorialHeader(
+        CardioSectionHeader(
             label = "Goals",
-            muted = muted,
-            accent = accent,
-            action = if (goals.size > 3) "all ${goals.size} →" else "view all →",
+            action = if (goals.size > 3) "All ${goals.size}" else "View all",
+            actionLabel = "Open all goals",
             onAction = onOpenGoals
         )
         Spacer(Modifier.height(12.dp))
@@ -205,8 +209,14 @@ internal fun CardioGoalsSection(
         // the day as well as on the goals, because a period boundary changes what the caption should
         // say without changing any goal's numbers.
         val now = remember(preview, todayStartMs) { System.currentTimeMillis() }
-        Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            preview.forEach { g ->
+        Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
+            preview.forEachIndexed { i, g ->
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(rowShape(i, preview.size))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                ) {
                 GoalProgressLine(
                     title = customGoalTitle(g),
                     valueLine = customGoalValueLine(g, settings.weightUnit, settings.useMiles),
@@ -221,8 +231,10 @@ internal fun CardioGoalsSection(
                         weightUnit = settings.weightUnit,
                         nowMs = now,
                     ),
-                    onClick = onOpenGoals
+                    onClick = onOpenGoals,
+                    contentPadding = PaddingValues(horizontal = ROW_H, vertical = 14.dp)
                 )
+                }
             }
         }
     }
@@ -257,8 +269,9 @@ internal fun CardioRecordsSection(
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         EditorialHeader(label = "Records", muted = muted, accent = accent)
         Spacer(Modifier.height(12.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            records.take(4).forEach { r ->
+        val shown = records.take(4)
+        Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
+            shown.forEachIndexed { i, r ->
                 val name = CardioActivity.resolve(r.typeCode, customs).displayName
                 val longestKm = r.longestEntry.distanceKm ?: 0.0
                 val pace = pacePerUnit(r.fastestEntry.durationMin, r.fastestEntry.distanceKm, useMiles)
@@ -266,8 +279,10 @@ internal fun CardioRecordsSection(
                     // The WHOLE row is the tap target (§2③) — never a nested one.
                     Modifier
                         .fillMaxWidth()
+                        .clip(rowShape(i, shown.size))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                         .clickableLabeled("Show your longest $name") { onOpenSession(r.longestEntry.id) }
-                        .padding(vertical = 2.dp)
+                        .padding(horizontal = ROW_H, vertical = 14.dp)
                 ) {
                     RankedBarRow(
                         label = name,

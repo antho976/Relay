@@ -1,5 +1,7 @@
 package com.forge.app.ui.experiment
 
+import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.GROUP_OUTER
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -47,7 +49,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.sparklineSeries
 import com.forge.app.ui.common.bounceCombinedClick
-import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.rememberDrawProgress
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
@@ -120,7 +121,9 @@ fun surfacePalette(): SurfacePalette {
     return SurfacePalette(
         // On AMOLED the ground is pure black, so the card steps DOWN rather than up — a lit slab on
         // black reads as a panel, the opposite of one quiet elevation.
-        card = if (settings.amoledMode) Color(0xFF120F0C) else Color(0xFF1A1512),
+        // The grouped-surface fill (`surfaceContainerHigh`), so a Home or Profile card and an
+        // onboarding group are the same object (2026-09-27).
+        card = if (settings.amoledMode) Color(0xFF111111) else Color(0xFF221C16),
         // Warm white, not neutral white: a 6% pure-white edge on a brown-black page reads blue.
         hairline = Color(0xFFFFF3E8).copy(alpha = 0.055f),
         positive = if (mono) onBg else Color(0xFF7FB08C),
@@ -134,14 +137,14 @@ fun surfacePalette(): SurfacePalette {
     )
 }
 
-/** Radius near 18dp — deliberately off `Shape.kt`'s 4/8/12/16/24 scale (§7). */
-val CardShape = RoundedCornerShape(18.dp)
+/** The group radius, so a card and a grouped list share one corner. */
+val CardShape = RoundedCornerShape(GROUP_OUTER)
 
 // ── The card ──────────────────────────────────────────────────────────────────────────────────
 
 /**
- * One card. Fill + hairline + 18dp radius, no shadow: separation comes from the fill step, not a
- * blur. [onClick] is optional — under this experiment a card is a container rather than a promise
+ * One card. Fill + 20dp radius, no border and no shadow: separation comes from the fill step alone,
+ * the grouped-surface look (the 1dp hairline it used to wear went 2026-09-27). [onClick] is optional — under this experiment a card is a container rather than a promise
  * of a tap, which is precisely the §1 claim being tested.
  */
 @Composable
@@ -158,7 +161,6 @@ fun SurfaceCard(
         modifier
             .clip(CardShape)
             .background(palette.card)
-            .border(1.dp, palette.hairline, CardShape)
             .then(
                 if (onClick != null) {
                     Modifier.bounceCombinedClick(onClickLabel = clickLabel, onClick = onClick)
@@ -352,7 +354,7 @@ private class SparklineGeometry {
  * warm blobs under a warm CTA, and the accent would stop meaning anything (§5). One lit dot in a row
  * of seven says "you are here" at a glance and spends one unit of colour to do it.
  *
- * Works at zero — an untrained week is seven hollow rings with one lit today, which is a real
+ * Works at zero — an untrained week is seven open cells with one lit today, which is a real
  * reading, not an empty state (§12).
  */
 @Composable
@@ -376,10 +378,12 @@ fun WeekStrip(
         repeat(7) { i ->
             val done = i in trained
             val isToday = i == todayIndex
-            // Past-but-untrained and still-ahead are both hollow, but the future recedes: a missed
-            // day should read as a gap, an unreached one as simply not yet. Both were dimmer in the
-            // first cut and the whole strip read as "too quiet" (Antho, 2026-08-16).
-            val ringAlpha = if (i < todayIndex) 0.55f else 0.30f
+            // Past-but-untrained and still-ahead are both open cells, but the future recedes: a
+            // missed day should read as a gap, an unreached one as simply not yet. They are FILLED
+            // cells now, the week meter's look (2026-09-27), not 1.5dp rings: a missed day is the
+            // raised badge fill, a day still ahead is that fill at the 0.6 rung.
+            val openFill = MaterialTheme.colorScheme.surfaceContainerHighest
+                .copy(alpha = if (i < todayIndex) 1f else 0.6f)
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.weight(1f)
@@ -399,11 +403,11 @@ fun WeekStrip(
                         // constraint and grows at 200% (§14). 34dp, up from 26 — see above.
                         .sizeIn(minWidth = 34.dp, minHeight = 34.dp)
                         .clip(CellShape)
-                        .then(
+                        .background(
                             when {
-                                done -> Modifier.background(onBg)
-                                isToday -> Modifier.background(accent)
-                                else -> Modifier.border(1.5.dp, muted.copy(alpha = ringAlpha), CellShape)
+                                done -> onBg
+                                isToday -> accent
+                                else -> openFill
                             }
                         )
                         // A trained TODAY is filled like any other trained day, so the accent ring
@@ -528,7 +532,11 @@ fun SectionAnchor(
      * set — a section head carries one thing on its right, not two.
      */
     meta: String? = null,
-    onAction: (() -> Unit)? = null
+    onAction: (() -> Unit)? = null,
+    /** A second, quieter link before [action] (Home's Goals "hide"), or alone when there is no [action]. */
+    secondaryAction: String? = null,
+    secondaryActionLabel: String = "",
+    onSecondaryAction: (() -> Unit)? = null
 ) {
     Row(
         modifier.fillMaxWidth(),
@@ -542,7 +550,14 @@ fun SectionAnchor(
             modifier = Modifier.semantics { heading() }
         )
         when {
+            action != null && onAction != null && secondaryAction != null && onSecondaryAction != null ->
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CardLink(secondaryAction, secondaryActionLabel, muted, onSecondaryAction, arrow = false)
+                    CardLink(action, actionLabel, onBg, onAction)
+                }
             action != null && onAction != null -> CardLink(action, actionLabel, onBg, onAction)
+            secondaryAction != null && onSecondaryAction != null ->
+                CardLink(secondaryAction, secondaryActionLabel, muted, onSecondaryAction, arrow = false)
             meta != null -> Text(
                 meta,
                 style = MaterialTheme.typography.labelMedium,
@@ -553,23 +568,22 @@ fun SectionAnchor(
 }
 
 /**
- * A quiet navigation link inside a card — mono, on `onBg` rather than accent. §14 records accent
- * text as failing AA (2.35:1) and forbids adding new accent body text until that is resolved, and
- * the card fill makes the ratio worse, not better.
+ * A quiet text link beside a section anchor: mono, on `onBg` rather than accent (accent text fails
+ * AA, §14). It was a filled capsule for a day (2026-09-27) and read as a button competing with the
+ * section it belongs to, so it is text again. [arrow] marks navigation; an in-place act ("hide")
+ * goes without one. Touch comes from padding: 48dp tall however short the word.
  */
 @Composable
-fun CardLink(text: String, label: String, onBg: Color, onClick: () -> Unit) {
+fun CardLink(text: String, label: String, onBg: Color, onClick: () -> Unit, arrow: Boolean = true) {
     Box(
-        // §14: touch comes from padding, not from the glyph. "view all" is the most-tapped control
-        // on Home and it was ~24dp tall.
         Modifier
             .clickableLabeled(label, onClick = onClick)
             .heightIn(min = 48.dp)
-            .padding(vertical = 4.dp),
+            .padding(horizontal = 4.dp, vertical = 4.dp),
         contentAlignment = Alignment.CenterEnd
     ) {
         Text(
-            "$text →",
+            if (arrow) "$text →" else text,
             style = MaterialTheme.typography.labelMedium,
             color = onBg,
             maxLines = 1

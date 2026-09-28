@@ -1,31 +1,19 @@
 package com.forge.app.ui.onboarding
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import com.forge.app.ui.common.ForgeGroupSection
+import com.forge.app.ui.common.ForgeLabelTile
+import com.forge.app.ui.common.ForgeTileGrid
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.Equipment
 import com.forge.app.program.ProblemArea
-import com.forge.app.ui.common.bounceClick
-import com.forge.app.ui.theme.ForgeMotion
 
 /**
  * The sore / injured spots step, its own page since 2026-08-22 (it was four words and a chip cloud
@@ -72,9 +60,10 @@ internal fun StepSoreSpots(
         StepTitle("Any sore or injured spots?")
         StepCaption("Avex steers away from what loads them. A preference, not a ban.")
         Spacer(Modifier.height(6.dp))
-        SpotGroup("Upper body", UPPER_SPOTS, selected, loadedBy, onToggle)
-        Spacer(Modifier.height(8.dp))
-        SpotGroup("Lower body", LOWER_SPOTS, selected, loadedBy, onToggle)
+        Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+            SpotGroup("Upper body", UPPER_SPOTS, selected, loadedBy, onToggle)
+            SpotGroup("Lower body", LOWER_SPOTS, selected, loadedBy, onToggle)
+        }
     }
 }
 
@@ -86,71 +75,20 @@ private fun SpotGroup(
     loadedBy: Map<ProblemArea, Int>,
     onToggle: (String) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        StepSectionLabel(label, meta = "${spots.count { it.code in selected }} flagged")
-        spots.chunked(2).forEach { pair ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                pair.forEach { area ->
-                    SpotTile(
-                        label = area.displayName,
-                        loaded = loadedBy[area] ?: 0,
-                        selected = area.code in selected,
-                        onClick = { onToggle(area.code) },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                if (pair.size == 1) Spacer(Modifier.weight(1f))
-            }
+    ForgeGroupSection(label, meta = "${spots.count { it.code in selected }} flagged") {
+        ForgeTileGrid(spots, cols = 2) { area, corners, modifier ->
+            val loaded = loadedBy[area] ?: 0
+            // The count is a reading, never a state word, so a flagged tile says how much work is
+            // being steered rather than announcing that it is on (the accent wash does that). Zero is
+            // drawn honestly: a gym that never loads your ankles is worth knowing.
+            ForgeLabelTile(
+                label = area.displayName,
+                meta = if (loaded == 1) "1 movement" else "$loaded movements",
+                selected = area.code in selected,
+                corners = corners,
+                onClick = { onToggle(area.code) },
+                modifier = modifier
+            )
         }
-    }
-}
-
-/**
- * One spot: the joint, and the count of movements in the current week that load it. The count is the
- * §2① "qualifies a row that already exists" case — a reading, never a state word, so a flagged tile
- * says how much work is being steered rather than announcing that it is on (the accent wash does
- * that). Zero is drawn honestly: a week that never loads your ankles is worth knowing.
- */
-@Composable
-private fun SpotTile(
-    label: String,
-    loaded: Int,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val border by animateColorAsState(
-        if (selected) MaterialTheme.colorScheme.primary
-        else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-        ForgeMotion.standardTween(ForgeMotion.DurationFast),
-        label = "spot_border"
-    )
-    val fill by animateColorAsState(
-        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-        else androidx.compose.ui.graphics.Color.Transparent,
-        ForgeMotion.standardTween(ForgeMotion.DurationFast),
-        label = "spot_fill"
-    )
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, border, RoundedCornerShape(12.dp))
-            .background(fill)
-            .bounceClick(onClick = onClick)
-            .semantics { this.selected = selected }
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        Text(
-            if (loaded == 1) "1 MOVEMENT" else "$loaded MOVEMENTS",
-            style = MaterialTheme.typography.labelSmall,
-            color = if (selected) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }

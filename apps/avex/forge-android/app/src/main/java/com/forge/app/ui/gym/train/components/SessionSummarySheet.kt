@@ -1,5 +1,11 @@
 package com.forge.app.ui.gym.train.components
 
+import com.forge.app.ui.common.ForgePrimaryCapsule
+
+import androidx.compose.foundation.layout.height
+
+import androidx.compose.foundation.layout.Spacer
+
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -161,7 +167,7 @@ fun SessionSummarySheet(
 
                 // Recap — what you worked on: the muscle map + the exercise list.
                 if (summary.setsByMuscle.isNotEmpty() || summary.highlights.isNotEmpty()) {
-                    HorizontalDivider(color = outline.copy(alpha = 0.2f))
+                    Spacer(Modifier.height(4.dp))
                     Text("WHAT YOU WORKED", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
                     if (summary.setsByMuscle.isNotEmpty()) {
                         BodyHeatmap(
@@ -190,23 +196,14 @@ fun SessionSummarySheet(
 
                 // Complete button — only way to dismiss. Tags/mood are gone; the mid-session journal
                 // flows straight through so it's still persisted on finish.
-                Box(
+                // The sheet's one do-it-now action: the standard light capsule.
+                ForgePrimaryCapsule(
+                    "Complete",
+                    onClick = { onDismiss(null, emptyList(), summary.initialJournal) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 4.dp, bottom = 16.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .border(0.5.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
-                        .bounceClick { onDismiss(null, emptyList(), summary.initialJournal) }
-                        .padding(vertical = 16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "COMPLETE",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = onBg,
-                        letterSpacing = 1.5.sp
-                    )
-                }
+                )
             }
 
             // PR confetti: fires once when the sheet opens on a session with a new PR.

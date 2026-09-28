@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -17,8 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import com.forge.app.ui.common.GROUP_OUTER
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -203,12 +203,14 @@ internal fun ProfileActivityMonth(
     Column(modifier.fillMaxWidth()) {
         // Not `SectionAnchor`: its trailing slot is a navigation link ("view all →"), and the month
         // name is not somewhere to go — it is the caption for what is drawn, and now also the
-        // readout of a stepper. Chevrons in `IconButton`s, matching Stats' heatmap pager exactly,
-        // because it is the same control over the same kind of grid.
-        Row(
+        // readout of a stepper. Chevrons on filled chrome capsules ([ProfileIconCapsule]), which
+        // dim and go inert at a bound.
+        // Flows rather than rows: at 200% the anchor and the stepper do not fit one line, and a Row
+        // pushed the later-month capsule off the edge. The stepper drops under the anchor instead.
+        FlowRow(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            itemVerticalAlignment = Alignment.CenterVertically
         ) {
             Text("ACTIVITY", style = MonoSectionAnchor, color = muted)
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -238,7 +240,10 @@ internal fun ProfileActivityMonth(
                 ) { monthsBack-- }
             }
         }
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(12.dp))
+        // Open on the page, like All time: no panel behind the calendar (a filled panel was tried
+        // on 2026-09-27 and made the page read as a stack of grey boxes).
+        Column(Modifier.fillMaxWidth()) {
         // Header and grid share one width so the weekday labels stay centred over their columns.
         Column(Modifier.fillMaxWidth()) {
             WeekdayHeader(muted)
@@ -338,6 +343,7 @@ internal fun ProfileActivityMonth(
                 )
             }
         }
+        }
     }
 }
 
@@ -379,9 +385,7 @@ private fun MonthStep(
     muted: Color,
     onClick: () -> Unit
 ) {
-    IconButton(onClick = onClick, enabled = enabled) {
-        Icon(icon, contentDescription = label, tint = if (enabled) onBg else muted.copy(alpha = 0.35f))
-    }
+    ProfileIconCapsule(icon, label, enabled = enabled, tint = onBg, onClick = onClick)
 }
 
 /** What TalkBack says on one day cell: the date, then what is on it. */

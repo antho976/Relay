@@ -22,35 +22,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.common.ForgeChoiceChip
-import com.forge.app.ui.common.ForgeDayChip
-import com.forge.app.ui.common.ForgeIconTile
-import com.forge.app.ui.common.ForgeOptionCard
-import com.forge.app.ui.common.ForgeOutlineCapsule
-import com.forge.app.ui.common.ForgePresetTile
 import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.ForgeSwitch
-import com.forge.app.ui.common.bounceClick
-import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.theme.ForgeMotion
 
 /**
- * Onboarding building blocks. Settings/form archetype (DESIGN §3): a serif question carries each
- * step on its own — the mono chapter eyebrow that used to sit above it is gone (2026-08-22), since
- * the segmented [StepRail] already says where you are and the question already says what it wants.
- * Every selectable shares ONE tile formula — border `outline`@0.35 unselected, accent border +
- * accent@0.15 wash selected (the SegmentPill formula at card size). Alphas only from the §5 ladder;
- * buttons are the §8 capsule levels.
+ * Onboarding building blocks: the question, its caption, section anchors, the step rail and the
+ * CTA capsules. The answers themselves (grouped rows, tile grids, segmented controls) live in
+ * `OnboardingGroups.kt`, so every page shares one surface language.
  */
 
 /** The step's question — the page title voice (serif, no terminal period). */
@@ -97,40 +82,10 @@ internal fun StepSectionLabel(text: String, meta: String? = null) {
     }
 }
 
-/**
- * The selectables live in `ui/common/Selectables.kt` since 2026-09-25 — promoted on their third
- * screen (Settings → Program, Units, Session, Coach, Wearable). These names stay so the steps read
- * in onboarding's own vocabulary; each is the shared drawing, not a copy of it.
- */
-@Composable
-internal fun OptionCard(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    description: String? = null,
-    icon: ImageVector? = null,
-    meta: String? = null,
-    topContent: (@Composable () -> Unit)? = null
-) = ForgeOptionCard(label, selected, onClick, description = description, icon = icon, meta = meta, topContent = topContent)
-
 /** A capsule choice chip (plates, refresh cadence, sore spots, sex, watch). */
 @Composable
 internal fun ChoiceChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) =
     ForgeChoiceChip(label, selected, onClick, modifier)
-
-/** A square-ish icon tile for the equipment fine-tune grid. */
-@Composable
-internal fun EquipmentTile(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) =
-    ForgeIconTile(icon, label, selected, onClick, modifier)
-
-/** A preset tile: glyph, name, and a mono piece-count meta line. */
-@Composable
-internal fun PresetTile(icon: ImageVector, label: String, meta: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) =
-    ForgePresetTile(icon, label, meta, selected, onClick, modifier)
-
-/** The 40dp round day-count chip. */
-@Composable
-internal fun DayChip(n: Int, selected: Boolean, onClick: () -> Unit) = ForgeDayChip(n, selected, onClick)
 
 /**
  * The step rail: one cell per step of the path you are actually on, accent behind you, hollow ahead
@@ -155,7 +110,7 @@ internal fun StepRail(step: Int, total: Int, modifier: Modifier = Modifier) {
             Box(
                 Modifier
                     .weight(1f)
-                    .height(3.dp)
+                    .height(4.dp)
                     .clip(RoundedCornerShape(50))
                     .background(color)
             )
@@ -173,78 +128,3 @@ internal fun PrimaryCapsule(
     modifier: Modifier = Modifier,
     enabled: Boolean = true
 ) = ForgePrimaryCapsule(label = label, onClick = onClick, modifier = modifier, enabled = enabled)
-
-/** §8 level ② — the outlined sidekick capsule (Re-roll). Delegates to the shared [ForgeOutlineCapsule]. */
-@Composable
-internal fun OutlineCapsule(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) =
-    ForgeOutlineCapsule(label = label, onClick = onClick, modifier = modifier)
-
-/** §8 level ③ — the mono accent navigation link (skip →). */
-@Composable
-internal fun SkipLink(onClick: () -> Unit) {
-    Text(
-        "skip →",
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier
-            .clickableLabeled("Skip setup", onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 12.dp)
-    )
-}
-
-/** The quiet italic brand aside — the offline promise, said once, on the last page. */
-@Composable
-internal fun BrandAside(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.bodyMedium,
-        fontStyle = FontStyle.Italic,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-}
-
-/**
- * A boolean with its one-line explainer (§4.3) and a drawn [ForgeSwitch]. The WHOLE row is the tap
- * target and the switch is passive — never a nested tap (§14). Disabled rows render inert rather
- * than tappable-but-dead (§2③).
- */
-@Composable
-internal fun ToggleRow(
-    label: String,
-    description: String,
-    checked: Boolean,
-    onToggle: (Boolean) -> Unit,
-    enabled: Boolean = true
-) {
-    val alpha = if (enabled) 1f else 0.35f
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                if (enabled) Modifier.clickableLabeled(label) { onToggle(!checked) }
-                else Modifier
-            )
-            // The switch itself is drawn, not focusable, so the row has to announce the state or
-            // TalkBack reads a name with no value (§14).
-            .semantics { stateDescription = if (checked && enabled) "On" else "Off" }
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                label,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = alpha)
-            )
-            Text(
-                description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-            )
-        }
-        Box(Modifier.clearAndSetSemantics { }) {
-            ForgeSwitch(checked = checked && enabled, onCheckedChange = null, enabled = enabled)
-        }
-    }
-}

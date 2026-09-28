@@ -200,7 +200,7 @@ internal fun RankSection(
 
         Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("HOW XP WORKS →", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 9.sp)
+            Text("HOW XP WORKS", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 9.sp)
             // Next milestone = the immediate next sub-rank (closer + more motivating than the far-off
             // tier). Sourced from RankInfo so the UI never re-derives the ladder structure.
             val tail = if (rank.isMax) "MAX RANK" else "${rank.xpToNextRank} TO ${rank.nextRankName?.uppercase()}"

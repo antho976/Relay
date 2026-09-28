@@ -6,6 +6,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,15 +16,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,7 +30,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -46,6 +43,8 @@ import com.forge.app.Features
 import com.forge.app.security.LocalAppLock
 import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.common.DayLogSheet
+import com.forge.app.ui.common.ForgeChromeIconButton
+import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.experiment.SectionAnchor
 import com.forge.app.ui.experiment.SurfaceCard
@@ -121,59 +120,12 @@ import kotlinx.coroutines.withContext
 /** The page gutter (§7). Sections apply it themselves so the strips can break out full-bleed. */
 private val GUTTER = 24.dp
 
-/**
- * What keeps a white control legible over an arbitrary cover photo (Antho, 2026-08-24: the back
- * arrow "is hard to see when you have a white background").
- *
- * ## Why a halo and not a colour test
- *
- * The obvious reading of "make it background-aware" is to measure the photo and flip the glyph to
- * black over a bright one. That fails in two ways this page will actually hit. A photograph is not
- * one colour: this cover is a bright misty sky in its top third and near-black forest below, so a
- * single luminance sample decides the whole control on whichever half it happened to land in — and
- * a flipped-to-black arrow would then sit directly above a white "Athlete" that never flips, on the
- * same image, which reads as two different apps.
- *
- * So the answer is the one the cover already uses for every other mark on it: keep the glyph white
- * and put a dark halo behind it. [NameShadow] and [MetaShadow] in [ProfileHeaderCard] are the same
- * decision for text, made 2026-07-24 for the same reason. This is genuinely background-aware where
- * it counts — it darkens what is behind the glyph whatever that is, so it cannot pick wrong — and
- * over a dark photo it costs nothing visible.
- *
- * ## It goes on the BUTTON, not on the glyph
- *
- * Hung on the `Icon`, this drew a flat grey disc with a hard rim — the exact chip the paragraph
- * above says not to make, and widening the gradient only made the rim crisper. The rim was never
- * the gradient: Material's `IconButton` clips its content to a 48dp circle for its ripple, so a
- * halo drawn inside it is cut off at 24dp from centre while it is still around 0.15 alpha, and that
- * cut IS the edge you see. The falloff was working; it was being amputated.
- *
- * Applied to the button instead, the halo sits ahead of that clip in the modifier chain and fades
- * out on its own terms. A draw modifier is only clipped by a `clip` that comes AFTER it.
- *
- * The rest is tail. It runs to 0.85× the 48dp target and gives its outer third to the last rung, so
- * it reaches the background with room to spare — over a bright sky even a sixth of black still
- * reads, and a fade that only arrives at zero at its own edge hands the eye an edge to find.
- *
- * The stops are §5 ladder rungs (0.6 / 0.35 / 0.15), not values picked for the curve. A gradient is
- * the one place a one-off alpha could hide — nobody reads a stop as a tone — which is exactly why
- * it should not: the ladder costs nothing here, and an exception granted where it would not have
- * been noticed is how a system stops being one.
+/*
+ * What keeps the top bar legible over an arbitrary cover photo (Antho, 2026-08-24: the back arrow
+ * "is hard to see when you have a white background"). It used to be a white glyph on a radial dark
+ * halo; since 2026-09-27 the controls are [ForgeTopBar]'s filled chrome capsules, which carry their
+ * own ground, so a bright sky or a dark forest behind them reads the same.
  */
-private fun Modifier.coverHalo(): Modifier = drawBehind {
-    val r = size.maxDimension * 0.85f
-    drawCircle(
-        brush = Brush.radialGradient(
-            0f to Color.Black.copy(alpha = 0.6f),
-            0.30f to Color.Black.copy(alpha = 0.35f),
-            0.62f to Color.Black.copy(alpha = 0.15f),
-            1f to Color.Transparent,
-            center = center,
-            radius = r
-        ),
-        radius = r
-    )
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -238,41 +190,37 @@ fun ProfileScreen(
         }
         Scaffold(
             topBar = {
-                TopAppBar(
-                    // §4.6: never the screen's own name. The cover's bumped name below is the identity.
-                    title = {},
-                    navigationIcon = {
-                        if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.coverHalo()) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
-                        }
-                    },
-                    actions = {
-                        if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
-                            IconButton(onClick = {
-                                scope.launch {
-                                    val uri = withContext(Dispatchers.Default) {
-                                        RankCardRenderer.render(
-                                            context, state.name, r.displayName, r.roman, r.xpTotal, r.tier.colorArgb,
-                                            standingLine = state.standings.minByOrNull { it.topPercent }
-                                                ?.let { s -> "Top ${s.topPercent}% · ${s.label}" }
-                                        )
-                                    }
-                                    uri?.let { RankCardRenderer.share(context, it) }
+                // §4.6: never the screen's own name. The cover's bumped name below is the identity.
+                // The chrome capsules carry their own fill, so the white-on-photo halo is no longer
+                // needed to keep them legible over a bright cover: the capsule is the contrast.
+                ForgeTopBar(onBack = onBack) {
+                    if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
+                        ForgeChromeIconButton(Icons.Filled.Share, "Share rank card", onClick = {
+                            scope.launch {
+                                val uri = withContext(Dispatchers.Default) {
+                                    RankCardRenderer.render(
+                                        context, state.name, r.displayName, r.roman, r.xpTotal, r.tier.colorArgb,
+                                        standingLine = state.standings.minByOrNull { it.topPercent }
+                                            ?.let { s -> "Top ${s.topPercent}% · ${s.label}" }
+                                    )
                                 }
-                            }, modifier = Modifier.coverHalo()) {
-                                Icon(Icons.Filled.Share, contentDescription = "Share rank card", tint = Color.White)
+                                uri?.let { RankCardRenderer.share(context, it) }
                             }
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-                )
+                        })
+                    }
+                }
             },
             containerColor = Color.Transparent
         ) { inner ->
+            // The cover grows upward by the bar's inset. [ForgeTopBar] is shorter than the stock bar
+            // when it has no back capsule (the hub page), so the inset keeps the stock bar's 64dp
+            // floor and the cover stays the same height either way.
+            val statusInset = TopAppBarDefaults.windowInsets.asPaddingValues().calculateTopPadding()
+            val coverInset = maxOf(inner.calculateTopPadding(), statusInset + 64.dp)
             if (state.loading) {
                 ProfileSkeleton(
                     Modifier.fillMaxSize().padding(bottom = inner.calculateBottomPadding()),
-                    topInset = inner.calculateTopPadding()
+                    topInset = coverInset
                 )
             } else Column(
                 // Don't apply the TOP inset — the cover banner draws to the very top of the screen
@@ -290,7 +238,7 @@ fun ProfileScreen(
                         onSetName = viewModel::setUserName,
                         onPickAvatar = { viewModel.dismissAvatarHint(); showAvatarSheet = true },
                         onBg = onBg, muted = muted, accent = accent,
-                        topInset = inner.calculateTopPadding()
+                        topInset = coverInset
                     )
                 }
 
@@ -321,6 +269,7 @@ fun ProfileScreen(
                 Spacer(Modifier.height(28.dp))
                 SectionAnchor("All time", muted, onBg, modifier = pad)
                 Spacer(Modifier.height(12.dp))
+                // Open on the page, no card: All time is the rest of the profile, not a widget.
                 ProfileAllTime(
                     totalVolumeLb = state.lifetimeVolumeSeriesLb.lastOrNull() ?: state.totalVolumeLb,
                     series = state.lifetimeVolumeSeriesLb,

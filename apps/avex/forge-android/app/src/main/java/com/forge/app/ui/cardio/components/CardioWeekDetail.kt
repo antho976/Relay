@@ -1,5 +1,6 @@
 package com.forge.app.ui.cardio.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -11,19 +12,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -38,7 +34,11 @@ import com.forge.app.domain.units.distanceUnitLabel
 import com.forge.app.domain.units.toDisplayDistance
 import com.forge.app.ui.common.EditorialFigure
 import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.GROUP_SEAM
 import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.common.rowShape
+import com.forge.app.ui.cardio.CardioChartPanel
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -97,15 +97,7 @@ internal fun CardioWeekDetail(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            ForgeTopBar(onBack = onBack)
         },
         containerColor = Color.Transparent
     ) { inner ->
@@ -120,11 +112,13 @@ internal fun CardioWeekDetail(
                     Spacer(Modifier.height(6.dp))
                     Text(title, style = MaterialTheme.typography.headlineMedium, color = onBg)
                     Spacer(Modifier.height(18.dp))
-                    PerDayBars(
-                        perDayMinutes = agg.perDayMinutes,
-                        todayDow = todayDow,
-                        onBg = onBg, muted = muted, outline = outline, accent = accent
-                    )
+                    CardioChartPanel {
+                        PerDayBars(
+                            perDayMinutes = agg.perDayMinutes,
+                            todayDow = todayDow,
+                            onBg = onBg, muted = muted, outline = outline, accent = accent
+                        )
+                    }
                     Spacer(Modifier.height(20.dp))
                 }
             }
@@ -185,7 +179,7 @@ internal fun CardioWeekDetail(
                     accent = accent,
                     modifier = Modifier.padding(horizontal = 24.dp)
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(12.dp))
             }
             if (weekEntries.isEmpty()) {
                 item("sessions-empty") {
@@ -200,10 +194,16 @@ internal fun CardioWeekDetail(
             }
             items(weekEntries.size, key = { weekEntries[it].id }) { i ->
                 val entry = weekEntries[i]
+                // One group of filled rows, 2dp seams between them.
                 SessionTimelineRow(
                     entry = entry, useMiles = useMiles, zone = zone,
                     onBg = onBg, muted = muted,
-                    onClick = { onOpenSession(entry.id) }
+                    onClick = { onOpenSession(entry.id) },
+                    modifier = Modifier
+                        .padding(horizontal = 24.dp)
+                        .padding(top = if (i == 0) 0.dp else GROUP_SEAM)
+                        .clip(rowShape(i, weekEntries.size))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                 )
             }
         }

@@ -20,11 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -72,10 +69,12 @@ internal fun GalleryFilterRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (filter.activeFacets > 0) {
-            AssistChip(
+            ProfileFilledChip(
+                text = "Clear",
+                selected = false,
                 onClick = onClearAll,
-                label = { Text("Clear") },
-                leadingIcon = { Icon(Icons.Filled.Close, contentDescription = null, Modifier.size(18.dp)) }
+                leading = { Icon(Icons.Filled.Close, contentDescription = null, Modifier.size(16.dp)) },
+                role = Role.Button
             )
         }
         if (hasAlbums || filter.album != null) {
@@ -99,16 +98,13 @@ internal fun GalleryFilterRow(
 
 @Composable
 private fun FacetChip(label: String, active: Boolean, onClick: () -> Unit) {
-    FilterChip(
+    // Filled, with the accent ring and wash once the facet is narrowing the grid.
+    ProfileFilledChip(
+        text = label,
         selected = active,
         onClick = onClick,
-        label = { Text(label) },
-        trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, Modifier.size(18.dp)) },
-        colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer
-        )
+        trailing = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, Modifier.size(18.dp)) },
+        role = Role.DropdownList
     )
 }
 

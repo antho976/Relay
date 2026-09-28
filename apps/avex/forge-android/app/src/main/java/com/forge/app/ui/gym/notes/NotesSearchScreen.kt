@@ -7,18 +7,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -28,7 +23,12 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.program.Program
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.GROUP_SEAM
 import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.gym.train.components.GymSearchRow
+import com.forge.app.ui.gym.train.components.groupMember
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -42,14 +42,8 @@ fun NotesSearchScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                // §4.6: bell + back, never the screen's name — the serif hero below carries it.
-                title = {},
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
-        },
+        // §4.6: back only, never the screen's name; the serif hero below carries it.
+        topBar = { ForgeTopBar(onBack = onBack) },
         containerColor = Color.Transparent
     ) { inner ->
         Column(modifier = Modifier.fillMaxSize().padding(inner)) {
@@ -60,13 +54,14 @@ fun NotesSearchScreen(
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.padding(horizontal = 24.dp)
             )
-            OutlinedTextField(
-                value = state.query,
-                onValueChange = viewModel::setQuery,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
-                placeholder = { Text("Search your notes…") },
-                singleLine = true
+            Spacer(Modifier.height(16.dp))
+            GymSearchRow(
+                query = state.query,
+                onQueryChange = viewModel::setQuery,
+                placeholder = "Search your notes",
+                modifier = Modifier.padding(horizontal = 16.dp)
             )
+            Spacer(Modifier.height(16.dp))
 
             when {
                 state.query.isBlank() -> InlineEmptyHint(
@@ -87,12 +82,13 @@ fun NotesSearchScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
                 )
+                // The hits are one group of filled members, 2dp seams, no lines.
                 else -> LazyColumn(
-                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 32.dp),
+                    verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)
                 ) {
-                    items(state.results) { result ->
-                        NoteResultRow(result = result)
+                    itemsIndexed(state.results) { i, result ->
+                        NoteResultRow(result = result, modifier = Modifier.groupMember(i, state.results.size))
                     }
                 }
             }
@@ -100,12 +96,15 @@ fun NotesSearchScreen(
     }
 }
 
-/** Passive search hit — open on the page (§1: no box without interactivity), air between rows. */
+/** One search hit, a member of the results group. */
 @Composable
-private fun NoteResultRow(result: com.forge.app.data.db.dao.LoggedExerciseDao.NoteSearchResult) {
+private fun NoteResultRow(
+    result: com.forge.app.data.db.dao.LoggedExerciseDao.NoteSearchResult,
+    modifier: Modifier = Modifier
+) {
     val exerciseName = Program.exerciseDisplayName(result.exerciseId, result.swappedName)
     Column(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        modifier = modifier.padding(horizontal = ROW_H, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Text(exerciseName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)

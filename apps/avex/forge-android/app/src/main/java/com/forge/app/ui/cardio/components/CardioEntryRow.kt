@@ -22,12 +22,16 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.ui.common.ForgeGlyphBadge
+import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioRestReason
@@ -53,7 +57,9 @@ fun CardioEntryRow(
     useMiles: Boolean,
     onRequestDelete: () -> Unit,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Its member shape when the row sits in a group of filled rows; null draws it bare. */
+    shape: Shape? = null
 ) {
     val activity = CardioActivity.resolve(entry.type, LocalCardioTypes.current)
     val onBg = MaterialTheme.colorScheme.onBackground
@@ -94,14 +100,17 @@ fun CardioEntryRow(
                 }
             }
         },
-        modifier = modifier
+        modifier = if (shape != null) modifier.clip(shape) else modifier
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.background)
+                .background(
+                    if (shape != null) MaterialTheme.colorScheme.surfaceContainerHigh
+                    else MaterialTheme.colorScheme.background
+                )
                 .clickableLabeled("View session details", onClick = onClick)
-                .padding(horizontal = 24.dp, vertical = 14.dp),
+                .padding(horizontal = if (shape != null) ROW_H else 24.dp, vertical = if (shape != null) 12.dp else 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -113,12 +122,16 @@ fun CardioEntryRow(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.width(56.dp)
             )
-            Icon(
-                activity.icon,
-                contentDescription = null,
-                tint = onBg,
-                modifier = Modifier.size(20.dp)
-            )
+            if (shape != null) {
+                ForgeGlyphBadge(activity.icon, selected = false, size = 34.dp)
+            } else {
+                Icon(
+                    activity.icon,
+                    contentDescription = null,
+                    tint = onBg,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(activity.displayName, style = MaterialTheme.typography.bodyMedium, color = onBg)
                 if (summary.isNotBlank()) {

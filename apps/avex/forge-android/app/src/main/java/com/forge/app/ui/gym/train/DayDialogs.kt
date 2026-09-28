@@ -76,7 +76,8 @@ internal fun RestTimerSetterDialog(
             @OptIn(ExperimentalLayoutApi::class)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 presets.forEach { (secs, label) ->
-                    FilterChip(selected = selected == secs, onClick = { selected = secs }, label = { Text(label) })
+                    // Six options, pick one: the app's shared selectable chip.
+                    com.forge.app.ui.common.ForgeChoiceChip(label, selected = selected == secs, onClick = { selected = secs })
                 }
             }
         },

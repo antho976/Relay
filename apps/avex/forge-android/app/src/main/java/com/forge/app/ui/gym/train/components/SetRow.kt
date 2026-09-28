@@ -1,5 +1,19 @@
 package com.forge.app.ui.gym.train.components
 
+import com.forge.app.ui.common.GROUP_SEAM
+
+import com.forge.app.ui.common.ForgeChromeButton
+
+import androidx.compose.ui.draw.clip
+
+import androidx.compose.foundation.layout.Spacer
+
+import androidx.compose.foundation.layout.heightIn
+
+import androidx.compose.ui.graphics.SolidColor
+
+import androidx.compose.foundation.text.BasicTextField
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -185,24 +199,24 @@ fun SetRow(
             Box(modifier = Modifier.width(SetTable.SET_COL_W)) {
                 Text("%02d".format(setIndex), style = MaterialTheme.typography.labelSmall, color = muted)
             }
-            OutlinedTextField(
+            // Inline filled fields (grouped-surface pass, 2026-09-27): the raised fill says "editable",
+            // no outline.
+            InlineEditField(
                 value = editWeight,
                 onValueChange = { editWeight = it },
-                modifier = Modifier.weight(1f),
-                label = { Text("Weight") },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next)
+                label = "Weight",
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
+                modifier = Modifier.weight(1f)
             )
-            OutlinedTextField(
+            Spacer(Modifier.width(GROUP_SEAM))
+            InlineEditField(
                 value = editReps,
                 onValueChange = { if (it.all { c -> c.isDigit() }) editReps = it.take(MAX_REPS_DIGITS) },
-                modifier = Modifier.width(SetTable.REPS_COL_W + 24.dp),
-                label = { Text("Reps") },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done)
+                label = "Reps",
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                modifier = Modifier.width(SetTable.REPS_COL_W + 24.dp)
             )
+            Spacer(Modifier.width(6.dp))
             IconButton(
                 onClick = {
                     if (canConfirm) {
@@ -289,14 +303,15 @@ fun SetRow(
             if (onSetRpe != null) {
                 Box(
                     modifier = Modifier
-                        .border(0.5.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(3.dp))
+                        .clip(RoundedCornerShape(50))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                         .combinedClickable(onClick = { showRpePicker = !showRpePicker }, onLongClick = { onSetRpe(null) })
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
                 ) {
                     Text(
                         set.rpe?.let { rpeLabel(it) } ?: "—",
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (set.rpe != null) onBg else muted.copy(alpha = 0.4f),
+                        color = if (set.rpe != null) onBg else muted.copy(alpha = 0.35f),
                         fontSize = 11.sp
                     )
                 }
@@ -503,25 +518,23 @@ private fun InlineEffortPicker(
             // Always a visible dismiss: "clear" removes a set rating (and closes); "close" just
             // collapses the picker when nothing's rated yet (so it's never stuck open).
             if (current != null) {
-                Text(
-                    "clear",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.7f),
-                    fontSize = 10.sp,
-                    modifier = Modifier
-                        .clickableLabeled("Clear effort rating") { onClear() }
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                )
+                ForgeChromeButton(onClick = onClear, label = "Clear effort rating") {
+                    Text(
+                        "clear",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted,
+                        modifier = Modifier.padding(horizontal = 12.dp)
+                    )
+                }
             } else {
-                Text(
-                    "close",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.7f),
-                    fontSize = 10.sp,
-                    modifier = Modifier
-                        .clickableLabeled("Close effort picker") { onDismiss() }
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                )
+                ForgeChromeButton(onClick = onDismiss, label = "Close effort picker") {
+                    Text(
+                        "close",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted,
+                        modifier = Modifier.padding(horizontal = 12.dp)
+                    )
+                }
             }
         }
         FlowRow(
@@ -533,14 +546,15 @@ private fun InlineEffortPicker(
                 // Tapping a rating pops the chip with a spring overshoot — a tactile "got it" that
                 // confirms the pick as the panel collapses. Reduced-motion-safe (bouncy() → snap()).
                 val pop by animateFloatAsState(if (selected) 1.08f else 1f, ForgeMotion.bouncy(), label = "rpe-pop")
+                // Filled tiles; the pick wears the app's selectable ring and wash.
+                val tileShape = RoundedCornerShape(12.dp)
                 Column(
                     modifier = Modifier
                         .graphicsLayer { scaleX = pop; scaleY = pop }
-                        .border(
-                            1.dp,
-                            if (selected) onBg else outline.copy(alpha = 0.4f),
-                            RoundedCornerShape(6.dp)
-                        )
+                        .clip(tileShape)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else Color.Transparent)
+                        .border(1.5.dp, if (selected) MaterialTheme.colorScheme.primary else Color.Transparent, tileShape)
                         .clickableLabeled("RPE ${rpeLabel(v)}, ${rirLabel(v)} reps in reserve") { onPick(v) }
                         .sizeIn(minWidth = 44.dp)
                         .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -557,4 +571,43 @@ private fun InlineEffortPicker(
             }
         }
     }
+}
+
+/**
+ * The inline set editor's field: a filled rounded well with its mono label over the value, in place
+ * of an outlined text field. Tapping anywhere in the well focuses it.
+ */
+@Composable
+private fun InlineEditField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    keyboardOptions: KeyboardOptions,
+    modifier: Modifier = Modifier
+) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = MaterialTheme.typography.titleMedium.copy(color = onBg),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        keyboardOptions = keyboardOptions,
+        modifier = modifier.semantics { contentDescription = label },
+        decorationBox = { inner ->
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted)
+                inner()
+            }
+        }
+    )
 }

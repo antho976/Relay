@@ -72,6 +72,13 @@ internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modif
         ToggleRow("AMOLED pure black", "Pure-black backgrounds. Saves battery on OLED screens; on an LCD phone it just looks darker.", state.amoledMode, vm::setAmoledMode)
         ToggleRow("Privacy mode", "Hide the app preview in recent apps & block screenshots", state.privacyMode, vm::setPrivacyMode)
 
+        SettingsSectionHeader("Home")
+        ToggleRow(
+            "Goals on Home",
+            "Your pinned goals under the week strip. Goals stay in the Goals screen either way.",
+            com.forge.app.ui.overview.HOME_GOALS_TILE !in state.hiddenOverviewTiles
+        ) { vm.setTileHidden(com.forge.app.ui.overview.HOME_GOALS_TILE, !it) }
+
         SettingsSectionHeader("Accent")
         ToggleRow(
             "Use accent color",

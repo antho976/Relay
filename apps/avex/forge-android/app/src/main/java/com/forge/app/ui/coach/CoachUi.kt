@@ -27,7 +27,14 @@ import com.forge.app.data.db.entities.CoachDecision
 import com.forge.app.data.repo.CoachRepository
 import com.forge.app.domain.coach.AutoCoachPlanner
 import com.forge.app.domain.coach.CoachOutcome
+import com.forge.app.ui.common.ForgeChromeButton
+import com.forge.app.ui.common.ForgeRowGroup
+import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.clickableLabeled
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.ui.draw.clip
 import com.forge.app.ui.theme.MonoSectionAnchor
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -301,5 +308,88 @@ internal fun CoachFlagDot(color: Color?, modifier: Modifier = Modifier) {
                     .drawBehind { drawCircle(color, size.minDimension / 2f) }
             )
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The grouped-surface pieces (2026-09-27): rows that belong together sit in one filled group.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Rows stacked into one filled group: 2dp seams, 20dp outer and 6dp inner corners. */
+@Composable
+internal fun CoachRowGroup(rows: List<@Composable () -> Unit>) {
+    if (rows.isEmpty()) return
+    ForgeRowGroup(*rows.toTypedArray())
+}
+
+/**
+ * One member of a [CoachRowGroup]: a label with its reading at the end, and an optional sentence
+ * under the label. The reading is mono uppercase, the label and sentence sans.
+ */
+@Composable
+internal fun CoachGroupRow(
+    label: String,
+    c: CoachColors,
+    value: String? = null,
+    sub: String? = null,
+    labelColor: Color = c.onBg
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = ROW_H, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium, color = labelColor)
+            if (sub != null) {
+                Text(sub, style = MaterialTheme.typography.bodySmall, color = c.muted)
+            }
+        }
+        if (value != null) {
+            Spacer(Modifier.width(12.dp))
+            Text(value.uppercase(), style = MaterialTheme.typography.labelSmall, color = c.muted)
+        }
+    }
+}
+
+/**
+ * A page action as a small filled capsule, the grouped kit's chrome button carrying its text. It
+ * replaced the "Start →" text links: the fill says it can be tapped, so neither an arrow nor the
+ * accent has to. [enabled] false draws it muted and inert (an action already in flight).
+ */
+@Composable
+internal fun CoachCapsuleAction(
+    text: String,
+    contentDescription: String,
+    c: CoachColors,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    ForgeChromeButton(onClick = { if (enabled) onClick() }, label = contentDescription) {
+        Text(
+            text,
+            style = MaterialTheme.typography.titleSmall,
+            color = if (enabled) c.onBg else c.muted,
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
+        )
+    }
+}
+
+/**
+ * A small filled capsule INSIDE a group member ("Undo", "Connect"), one step brighter than the
+ * member it sits on so it still reads as a control. [onClick] null draws it passive: the row it
+ * sits on is then the tap target.
+ */
+@Composable
+internal fun CoachRowButton(text: String, c: CoachColors, label: String = text, onClick: (() -> Unit)? = null) {
+    Box(
+        Modifier
+            .then(if (onClick != null) Modifier.minimumInteractiveComponentSize() else Modifier)
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .then(if (onClick != null) Modifier.clickableLabeled(label, onClick = onClick) else Modifier)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text, style = MaterialTheme.typography.labelLarge, color = c.onBg)
     }
 }

@@ -27,7 +27,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,6 +46,12 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.gym.stats.StatsContent
 import com.forge.app.ui.gym.train.components.DayCard
+import androidx.compose.foundation.layout.windowInsetsPadding
+import com.forge.app.ui.common.Corners
+import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.ForgeSecondaryCapsule
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.GROUP_SEAM
 
 /**
  * Gym hub. Hosts two tabs: **Train** (the day list, Phase 3) and **Stats** (Phase 5).
@@ -79,23 +84,18 @@ fun DayListScreen(
 ) {
     Scaffold(
         topBar = {
-            TopAppBar(
-                // The bar insets its title 16dp; the extra 8 lands it on the 24dp page gutter the
-                // content below (and every other screen) sits on, so the name and the page line up.
-                title = {
-                    Text(
-                        title,
-                        style = MaterialTheme.typography.headlineLarge,
-                        modifier = Modifier.padding(start = if (onBack == null) 8.dp else 0.dp)
-                    )
-                },
-                navigationIcon = {
-                    if (onBack != null) IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            Column {
+                // Back capsule only when pushed as a deep route; a hub page has system back.
+                if (onBack != null) ForgeTopBar(onBack = onBack)
+                Text(
+                    title,
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier
+                        .then(if (onBack == null) Modifier.windowInsetsPadding(TopAppBarDefaults.windowInsets) else Modifier)
+                        .padding(start = 24.dp, end = 24.dp, top = if (onBack == null) 12.dp else 0.dp, bottom = 8.dp)
+                )
+            }
         },
         containerColor = Color.Transparent
     ) { inner ->
@@ -176,7 +176,7 @@ private fun TrainTab(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Button(onClick = onBuildPlan, modifier = Modifier.fillMaxWidth()) { Text("Build a plan") }
+                ForgePrimaryCapsule("Build a plan", onClick = onBuildPlan, modifier = Modifier.fillMaxWidth())
             }
         } else {
             Text(
@@ -189,35 +189,37 @@ private fun TrainTab(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            state.days.forEach { item ->
-                DayCard(
-                    item = item,
-                    onClick = {
-                        if (item.plan.key.startsWith("cardio")) {
-                            onOpenCardio()
-                        } else {
-                            val active = state.activeSession
-                            if (active != null && active.dayKey != item.plan.key) {
-                                pendingOpenDayKey = item.plan.key
+            // The days are one group: filled members joined by 2dp seams, not a stack of cards.
+            Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
+                state.days.forEachIndexed { index, item ->
+                    DayCard(
+                        item = item,
+                        corners = Corners.ofRow(index, state.days.size),
+                        onClick = {
+                            if (item.plan.key.startsWith("cardio")) {
+                                onOpenCardio()
                             } else {
-                                onOpenDay(item.plan.key)
+                                val active = state.activeSession
+                                if (active != null && active.dayKey != item.plan.key) {
+                                    pendingOpenDayKey = item.plan.key
+                                } else {
+                                    onOpenDay(item.plan.key)
+                                }
                             }
-                        }
-                    },
-                    onQuickStart = if (item.isNextUp && !item.isActive && !item.plan.key.startsWith("cardio")) {
-                        { onOpenDayQuick(item.plan.key) }
-                    } else null,
-                    onLongPress = { longPressMenuForDayKey = item.plan.key }
-                )
+                        },
+                        onQuickStart = if (item.isNextUp && !item.isActive && !item.plan.key.startsWith("cardio")) {
+                            { onOpenDayQuick(item.plan.key) }
+                        } else null,
+                        onLongPress = { longPressMenuForDayKey = item.plan.key }
+                    )
+                }
             }
-            OutlinedButton(onClick = onBuildPlan, modifier = Modifier.fillMaxWidth()) { Text("Edit plan") }
+            ForgeSecondaryCapsule("Edit plan", onClick = onBuildPlan, modifier = Modifier.fillMaxWidth())
         }
         // Freestyle logging belongs to the "go with the flow" user only. Plan modes (generated / custom)
         // train from their days, so a no-plan logger here would just muddy the screen.
         if (state.freestyleMode) {
-            OutlinedButton(onClick = onLogFreestyle, modifier = Modifier.fillMaxWidth()) {
-                Text("Log a workout")
-            }
+            ForgeSecondaryCapsule("Log a workout", onClick = onLogFreestyle, modifier = Modifier.fillMaxWidth())
         }
     }
 

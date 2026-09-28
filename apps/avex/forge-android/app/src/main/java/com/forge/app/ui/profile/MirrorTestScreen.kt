@@ -10,6 +10,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -17,6 +19,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -53,7 +59,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -68,6 +74,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -77,11 +84,17 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.repo.ProgressPhoto
+import com.forge.app.ui.common.ForgeChromeIconButton
+import com.forge.app.ui.common.ForgeGroupCaption
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.GROUP_OUTER
 import com.forge.app.ui.common.window.AlertDialog
 import com.forge.app.ui.common.window.DropdownMenu
 import com.forge.app.ui.common.window.ModalBottomSheet
@@ -479,13 +492,10 @@ internal fun GalleryScreen(
 
 // ── Top bars ─────────────────────────────────────────────────────────────────
 
-@Composable
-private fun galleryBarColors() = TopAppBarDefaults.topAppBarColors(
-    containerColor = MaterialTheme.colorScheme.background,
-    scrolledContainerColor = MaterialTheme.colorScheme.background
-)
-
-/** The resting bar: back, the screen's name over its count, then search, import and the menu. */
+/**
+ * The resting bar: back, then search, import and the menu as filled chrome capsules; under it the
+ * screen's name over its count (the bar itself never names the screen, §4.6).
+ */
 @Composable
 private fun LibraryTopBar(
     loading: Boolean,
@@ -505,29 +515,14 @@ private fun LibraryTopBar(
     onDeleteAlbum: (String) -> Unit
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    TopAppBar(
-        title = {
-            GalleryBarTitle(
-                title = "Gallery",
-                subtitle = when {
-                    loading -> null
-                    narrowed -> "$shown of ${photoCountLabel(total)}"
-                    else -> photoCountLabel(total)
-                }
-            )
-        },
-        navigationIcon = {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
-        },
-        actions = {
+    Column {
+        ForgeTopBar(onBack = onBack) {
             if (!libraryEmpty && !loading) {
-                IconButton(onClick = onSearch) { Icon(Icons.Filled.Search, contentDescription = "Search photos") }
+                ForgeChromeIconButton(Icons.Filled.Search, "Search photos", onSearch)
             }
-            IconButton(onClick = onImport) {
-                Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = "Import from phone")
-            }
+            ForgeChromeIconButton(Icons.Outlined.AddPhotoAlternate, "Import from phone", onImport)
             Box {
-                IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "More options") }
+                ForgeChromeIconButton(Icons.Filled.MoreVert, "More options", { menuOpen = true })
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     fun pick(action: () -> Unit) { menuOpen = false; action() }
                     if (!libraryEmpty) {
@@ -556,9 +551,16 @@ private fun LibraryTopBar(
                     }
                 }
             }
-        },
-        colors = galleryBarColors()
-    )
+        }
+        GalleryPageTitle(
+            title = "Gallery",
+            subtitle = when {
+                loading -> null
+                narrowed -> "$shown of ${photoCountLabel(total)}"
+                else -> photoCountLabel(total)
+            }
+        )
+    }
 }
 
 @Composable
@@ -572,8 +574,9 @@ private fun MenuItem(label: String, icon: androidx.compose.ui.graphics.vector.Im
 }
 
 /**
- * The bar while photos are being picked: the count, and what the selection can do. Compare asks for
- * exactly two, and the bar says so while one is picked instead of leaving a dead button to decode.
+ * The bar while photos are being picked: the count (the one live value a top bar may carry), and
+ * what the selection can do. Compare asks for exactly two, and the line under the bar says so while
+ * one is picked instead of leaving a dead button to decode.
  */
 @Composable
 private fun SelectionTopBar(
@@ -584,44 +587,55 @@ private fun SelectionTopBar(
     onMove: () -> Unit,
     onDelete: () -> Unit
 ) {
-    TopAppBar(
-        title = {
-            GalleryBarTitle(
-                title = "$count selected",
-                subtitle = when (count) {
-                    0 -> "Tap photos to select them"
-                    1 -> "Pick one more to compare"
-                    else -> null
-                }
-            )
-        },
-        navigationIcon = {
-            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Cancel selection") }
-        },
-        actions = {
-            IconButton(onClick = onSelectAll) { Icon(Icons.Outlined.SelectAll, contentDescription = "Select all shown") }
-            IconButton(onClick = onCompare, enabled = count == 2) {
-                Icon(Icons.Outlined.Compare, contentDescription = "Compare the two selected photos")
-            }
-            IconButton(onClick = onMove, enabled = count > 0) {
-                Icon(Icons.Outlined.PhotoAlbum, contentDescription = "Move to album")
-            }
-            IconButton(onClick = onDelete, enabled = count > 0) {
-                Icon(Icons.Outlined.Delete, contentDescription = "Delete selected photos")
-            }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
-    )
+    Column {
+        ForgeTopBar(onBack = onClose, backLabel = "Cancel selection", title = "$count selected") {
+            ProfileIconCapsule(Icons.Outlined.SelectAll, "Select all shown", onClick = onSelectAll)
+            ProfileIconCapsule(Icons.Outlined.Compare, "Compare the two selected photos", enabled = count == 2, onClick = onCompare)
+            ProfileIconCapsule(Icons.Outlined.PhotoAlbum, "Move to album", enabled = count > 0, onClick = onMove)
+            ProfileIconCapsule(Icons.Outlined.Delete, "Delete selected photos", enabled = count > 0, onClick = onDelete)
+        }
+        val hint = when (count) {
+            0 -> "Tap photos to select them"
+            1 -> "Pick one more to compare"
+            else -> null
+        }
+        if (hint != null) {
+            ForgeGroupCaption(hint, Modifier.padding(horizontal = 24.dp).padding(bottom = 6.dp))
+        }
+    }
 }
 
-/** The bar while searching: the field takes the title's place and opens with the keyboard up. */
+/**
+ * The bar while searching: back, then a filled rounded search row that opens with the keyboard up
+ * (the grouped-surface search box, as in the freestyle template picker).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SearchTopBar(query: String, onQueryChange: (String) -> Unit, onClose: () -> Unit) {
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    TopAppBar(
-        title = {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(TopAppBarDefaults.windowInsets)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        ForgeChromeIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Close search", onClose)
+        Row(
+            Modifier
+                .weight(1f)
+                .heightIn(min = 48.dp)
+                .clip(RoundedCornerShape(GROUP_OUTER))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .padding(start = 14.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(Icons.Filled.Search, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
             BasicTextField(
                 value = query,
                 onValueChange = onQueryChange,
@@ -636,36 +650,36 @@ private fun SearchTopBar(query: String, onQueryChange: (String) -> Unit, onClose
                             Text(
                                 "Search titles, notes, tags, dates",
                                 style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = muted.copy(alpha = 0.6f)
                             )
                         }
                         field()
                     }
                 },
-                modifier = Modifier.fillMaxWidth().focusRequester(focus)
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 12.dp)
+                    .focusRequester(focus)
+                    .semantics { contentDescription = "Search photos" }
             )
-        },
-        navigationIcon = {
-            IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search") }
-        },
-        actions = {
             if (query.isNotEmpty()) {
-                IconButton(onClick = { onQueryChange("") }) { Icon(Icons.Filled.Close, contentDescription = "Clear search") }
+                IconButton(onClick = { onQueryChange("") }) {
+                    Icon(Icons.Filled.Close, contentDescription = "Clear search", tint = muted)
+                }
             }
-        },
-        colors = galleryBarColors()
-    )
+        }
+    }
 }
 
 /**
- * A bar title with an optional quieter second line. The second line drops at large font scales,
- * where two lines no longer fit the bar's fixed height and the title itself would be clipped.
+ * The screen's name over its count, under the bar. The second line drops at large font scales,
+ * where the two would crowd the grid's first row.
  */
 @Composable
-private fun GalleryBarTitle(title: String, subtitle: String?) {
+private fun GalleryPageTitle(title: String, subtitle: String?) {
     val roomForTwo = LocalDensity.current.fontScale <= 1.3f
-    Column {
-        Text(title, style = MaterialTheme.typography.titleLarge)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 8.dp)) {
+        Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground)
         if (subtitle != null && roomForTwo) {
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

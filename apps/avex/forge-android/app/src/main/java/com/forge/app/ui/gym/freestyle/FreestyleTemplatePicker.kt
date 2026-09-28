@@ -16,7 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -44,7 +44,12 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.GROUP_SEAM
 import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.gym.train.components.GymSearchRow
+import com.forge.app.ui.gym.train.components.groupMember
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.gym.history.formatHistoryDate
 
@@ -80,45 +85,48 @@ fun FreestyleTemplatePicker(
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(gradTop, gradBottom)))) {
         Scaffold(
             containerColor = Color.Transparent,
-            topBar = {
-                TopAppBar(
-                    // §4.6: bell + back, never the screen's name.
-                    title = {},
-                    navigationIcon = {
-                        IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close") }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-                )
-            }
+            // §4.6: back only, never the screen's name.
+            topBar = { ForgeTopBar(onBack = onClose, backLabel = "Close") }
         ) { inner ->
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(inner),
-                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp)
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
+                // The past workouts are one group: filled members, 2dp seams.
+                verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)
             ) {
                 item {
-                    Column {
-                        Text(
-                            "START FROM",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            letterSpacing = 1.sp
-                        )
-                        Text(
-                            "Past workouts",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                    Column(Modifier.padding(bottom = 14.dp)) {
+                        Column(Modifier.padding(horizontal = 8.dp)) {
+                            Text(
+                                "START FROM",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                "Past workouts",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                         Spacer(Modifier.height(12.dp))
-                        TemplateSearchField(query = query, onQueryChange = { query = it })
-                        Spacer(Modifier.height(8.dp))
+                        GymSearchRow(query = query, onQueryChange = { query = it }, placeholder = "Search past workouts")
                     }
                 }
-                items(results, key = { it.sessionId }) { t ->
-                    TemplateRow(template = t, onClick = { onPick(t.sessionId) })
+                itemsIndexed(results, key = { _, it -> it.sessionId }) { i, t ->
+                    TemplateRow(
+                        template = t,
+                        onClick = { onPick(t.sessionId) },
+                        modifier = Modifier.groupMember(i, results.size)
+                    )
                 }
                 if (results.isEmpty()) {
                     item {
-                        InlineEmptyHint("No workouts match.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        InlineEmptyHint(
+                            "No workouts match.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp)
+                        )
                     }
                 }
             }
@@ -128,14 +136,13 @@ fun FreestyleTemplatePicker(
 
 /** One template row: mono date eyebrow → day name → the moves it holds, with a set-count figure right. */
 @Composable
-private fun TemplateRow(template: FreestyleTemplateSummary, onClick: () -> Unit) {
+private fun TemplateRow(template: FreestyleTemplateSummary, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     val muted = cs.onSurfaceVariant
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
+        modifier = modifier
             .clickableLabeled("Start from ${template.title}, ${formatHistoryDate(template.startedAtMs)}", onClick = onClick)
-            .padding(vertical = 14.dp),
+            .padding(horizontal = ROW_H, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -163,48 +170,6 @@ private fun TemplateRow(template: FreestyleTemplateSummary, onClick: () -> Unit)
                 Text(template.setCount.toString(), style = MaterialTheme.typography.bodyMedium, color = cs.onSurface)
                 Text("SETS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
             }
-        }
-    }
-}
-
-/** Filled, rounded search field (§13) — leading magnifier, trailing clear, muted ghost placeholder. */
-@Composable
-private fun TemplateSearchField(query: String, onQueryChange: (String) -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onSurface
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Icon(Icons.Filled.Search, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
-        BasicTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
-            cursorBrush = SolidColor(onBg),
-            singleLine = true,
-            modifier = Modifier.weight(1f),
-            decorationBox = { inner ->
-                Box {
-                    if (query.isEmpty()) {
-                        Text("Search past workouts", style = MaterialTheme.typography.bodyMedium, color = muted.copy(alpha = 0.6f))
-                    }
-                    inner()
-                }
-            }
-        )
-        if (query.isNotEmpty()) {
-            Icon(
-                Icons.Filled.Close,
-                contentDescription = "Clear search",
-                tint = muted,
-                modifier = Modifier.size(20.dp).clip(RoundedCornerShape(50)).clickableLabeled("Clear search") { onQueryChange("") }
-            )
         }
     }
 }

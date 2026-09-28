@@ -8,16 +8,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -34,6 +29,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.gym.session.state.SessionChartStyle
 import com.forge.app.ui.gym.session.state.SessionMetric
+import com.forge.app.ui.common.ForgeChromeIconButton
+import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.statsEntrance
 
 /**
@@ -95,23 +92,16 @@ fun SessionDetailScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
-                    }
-                },
-                actions = {
-                    // Save just this session's data as a JSON file (opens the share sheet).
-                    if (state.data != null) {
-                        IconButton(onClick = { viewModel.exportSession() }) {
-                            Icon(Icons.Default.IosShare, contentDescription = "Save this session as JSON", tint = muted)
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            ForgeTopBar(onBack = onBack) {
+                // Save just this session's data as a JSON file (opens the share sheet).
+                if (state.data != null) {
+                    ForgeChromeIconButton(
+                        Icons.Default.IosShare,
+                        "Save this session as JSON",
+                        onClick = { viewModel.exportSession() }
+                    )
+                }
+            }
         },
         containerColor = Color.Transparent
     ) { inner ->

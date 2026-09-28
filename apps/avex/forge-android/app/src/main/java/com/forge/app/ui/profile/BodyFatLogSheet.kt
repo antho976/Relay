@@ -1,18 +1,17 @@
 package com.forge.app.ui.profile
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import com.forge.app.ui.common.window.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -21,13 +20,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.forge.app.data.db.entities.BodyFatEntry
-import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgeFieldRow
+import com.forge.app.ui.common.ForgeGroupSection
 import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.ForgeRowGroup
+import com.forge.app.ui.common.ForgeSecondaryCapsule
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
@@ -65,8 +68,8 @@ internal fun BodyFatLogSheet(
     val cs = MaterialTheme.colorScheme
     val onBg = cs.onBackground
     val muted = cs.onSurfaceVariant
-    val accent = cs.primary
     val sheetState = rememberModalBottomSheetState()
+    val focus = LocalFocusManager.current
 
     val today = remember { LocalDate.now() }
     var date by remember { mutableStateOf(today) }
@@ -117,52 +120,48 @@ internal fun BodyFatLogSheet(
                 .verticalScroll(rememberScrollState())
                 .imePadding()
                 .padding(horizontal = 24.dp)
-                .padding(bottom = 32.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            Text("Log body fat", style = MaterialTheme.typography.headlineSmall, color = onBg)
-            Spacer(Modifier.height(8.dp))
-            // Accent mono = the tappable idiom (§5): tap to backdate to any past day.
-            Text(
-                dateLabel,
-                style = MaterialTheme.typography.labelMedium,
-                color = accent,
-                modifier = Modifier.bounceClick { showDatePicker = true }.padding(vertical = 6.dp)
-            )
-            Spacer(Modifier.height(12.dp))
-            OutlinedTextField(
-                value = input,
-                onValueChange = { v -> input = filterDecimalInput(v) },
-                label = { Text("Body fat (%)") },
-                singleLine = true,
-                isError = invalid,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                shape = BodyLogFieldShape,
-                colors = bodyLogFieldColors(),
-                modifier = Modifier.fillMaxWidth()
-            )
-            // On the page gutter rather than in the field's own `supportingText` slot, so the
-            // explainer keeps the sheet's 24dp rhythm (§7) and matches the bodyweight sheet.
-            BodyLogSupportingLine(supportingLine, invalid)
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Log body fat", style = MaterialTheme.typography.headlineSmall, color = onBg)
+                // The day is a filled capsule, the tappable idiom: tap to backdate to any past day.
+                BodyLogDateCapsule(dateLabel) { showDatePicker = true }
+            }
+            // The same group-and-footnote shape as the bodyweight sheet, so the two never drift.
+            ForgeGroupSection(label = null, footer = { BodyLogSupportingLine(supportingLine, invalid) }) {
+                ForgeRowGroup({
+                    ForgeFieldRow(
+                        label = "Body fat",
+                        value = input,
+                        onValueChange = { v -> input = filterDecimalInput(v) },
+                        placeholder = "0",
+                        suffix = "%",
+                        isError = invalid,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { focus.clearFocus() })
+                    )
+                })
+            }
             // §8: the page's actions group at the END — one filled do-it-now capsule ① and its
-            // outlined sidekick ②, nothing else.
-            Spacer(Modifier.height(20.dp))
-            ForgePrimaryCapsule(
-                label = "Save",
-                onClick = { parsed?.let { onSave(it, date) } },
-                enabled = parsed != null,
-                modifier = Modifier.fillMaxWidth()
-            )
-            // Import pulls the newest HC reading (dated by HC) — only meaningful on today, hidden while backdating.
-            if (canImport && isToday) {
-                Spacer(Modifier.height(10.dp))
-                ForgeOutlineCapsule(
-                    label = "Import latest from Health Connect",
-                    onClick = onImport,
+            // filled sidekick ②, nothing else.
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ForgePrimaryCapsule(
+                    label = "Save",
+                    onClick = { parsed?.let { onSave(it, date) } },
+                    enabled = parsed != null,
                     modifier = Modifier.fillMaxWidth()
                 )
+                // Import pulls the newest HC reading (dated by HC) — only meaningful on today, hidden while backdating.
+                if (canImport && isToday) {
+                    ForgeSecondaryCapsule(
+                        label = "Import latest from Health Connect",
+                        onClick = onImport,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
             message?.let {
-                Spacer(Modifier.height(12.dp))
                 Text(it, style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
             }
         }

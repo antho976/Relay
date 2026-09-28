@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
@@ -30,8 +31,14 @@ import androidx.compose.ui.unit.dp
 import com.forge.app.domain.warmup.WarmupDrill
 import com.forge.app.domain.warmup.WarmupProtocol
 import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.Corners
+import com.forge.app.ui.common.ForgeChromeButton
+import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.memberFill
+import com.forge.app.ui.common.memberShape
 
 /**
  * The pre-session warmup: one screen, one button.
@@ -41,9 +48,9 @@ import com.forge.app.ui.common.clickableLabeled
  * required, nothing is stored, and the button works from the first frame. There is exactly one
  * button because "start" and "skip" were the same action wearing two labels.
  *
- * The button is DIMMED while drills remain and comes up to full accent once they are all ticked.
- * That is emphasis, not enforcement — it still starts the session at any tick count. A full-strength
- * accent slab from frame one made the drills above it look optional.
+ * Grouped-surface pass (2026-09-27): the drills are one group of filled members (a ticked one wears
+ * the accent ring and wash), the start is the standard light [ForgePrimaryCapsule], and the two
+ * opt-outs are small filled chrome capsules.
  */
 @Composable
 fun WarmupFlow(
@@ -56,58 +63,40 @@ fun WarmupFlow(
     modifier: Modifier = Modifier
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
-    val bg = MaterialTheme.colorScheme.background
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
 
     val prep = protocol.steps.filterIsInstance<WarmupDrill>()
 
-    Column(modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+    Column(modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
 
         // The gate draws with no top bar above it, so it owns its own clearance from the status bar.
         Spacer(Modifier.height(24.dp))
-        EditorialHeader(label = "Warm-up", muted = muted, accent = accent)
+        Box(Modifier.padding(horizontal = 8.dp)) {
+            EditorialHeader(label = "Warm-up", muted = muted, accent = accent)
+        }
 
         if (prep.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
-            prep.forEach {
-                WarmupRow(it.name, it.prescription, it.id in checked, onBg, muted, accent) {
-                    onToggle(it.id)
+            Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
+                prep.forEachIndexed { i, drill ->
+                    WarmupRow(
+                        drill.name, drill.prescription, drill.id in checked,
+                        Corners.ofRow(i, prep.size), onBg, muted, accent
+                    ) { onToggle(drill.id) }
                 }
             }
         }
 
         Spacer(Modifier.height(24.dp))
 
-        // Dimmed until every drill is ticked, then it comes up to full accent. Still a button the
-        // whole time — nothing is gated, it just stops shouting over the drills it is asking you to
-        // do first. At full strength from the first frame it read as the only thing on the screen
-        // worth touching, which is the opposite of what a warmup screen is for. Both colours
-        // animate, so ticking the last row is visibly what lit it.
-        //
-        // The FILL dims, not the button: fading the whole slab took the label down with it, and
-        // `onPrimary` is a dark tone — dark text on a 35% accent wash over a near-black ground is
-        // unreadable, not quiet. So the dim state composites the accent at 0.35 over the background
-        // and hands the label `onBackground` instead, which keeps it at full contrast the whole way.
-        val allTicked = prep.all { it.id in checked }
-        val ctaFill by animateColorAsState(
-            targetValue = if (allTicked) accent else accent.copy(alpha = 0.35f).compositeOver(bg),
-            label = "warmupCtaFill"
-        )
-        val ctaLabel by animateColorAsState(
-            targetValue = if (allTicked) MaterialTheme.colorScheme.onPrimary else onBg,
-            label = "warmupCtaLabel"
-        )
-
-        // Accent-filled, matching Home's start CTA: this is the same act, so it wears the same coat.
-        StartButton(label = "Start lifting", fill = ctaFill, labelColor = ctaLabel, onClick = onStart)
+        // It starts the session at any tick count; nothing here is gated.
+        ForgePrimaryCapsule("Start lifting", onClick = onStart, modifier = Modifier.fillMaxWidth())
 
         Spacer(Modifier.height(12.dp))
-        // Separated by air rather than a mid dot: at mono's baseline the dot reads as a full stop
-        // between two labels, which turns the pair into one broken sentence.
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically
         ) {
             OptOut("NOT TODAY", muted, onDisableToday)
@@ -118,41 +107,53 @@ fun WarmupFlow(
 }
 
 /**
- * One tickable warmup row: a check disc, what to do, and its dose as right-hand meta. The whole row
- * is the tap target, so there is never a nested tap (§14).
+ * One tickable warmup row, a member of the drill group: a check disc, what to do, and its dose as
+ * right-hand meta. The whole row is the tap target, so there is never a nested tap (§14). A ticked
+ * row keeps the group's corners (pick-many) and wears the ring and wash alone.
  */
 @Composable
 private fun WarmupRow(
     label: String,
     meta: String,
     checked: Boolean,
+    corners: Corners,
     onBg: Color,
     muted: Color,
     accent: Color,
     onToggle: () -> Unit
 ) {
+    val shape = memberShape(corners, selected = false)
     Row(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
+            .heightIn(min = 56.dp)
+            .memberFill(shape, checked)
             .clickableLabeled(
                 label = if (checked) "Untick $label" else "Tick $label",
                 role = Role.Checkbox,
                 onClick = onToggle
             )
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = ROW_H, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         CheckDisc(checked, muted, accent)
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (checked) muted else onBg,
-            modifier = Modifier.weight(1f)
-        )
-        if (meta.isNotBlank()) {
-            Text(meta, style = MaterialTheme.typography.labelMedium, color = muted)
+        // At a large font scale the dose drops under the drill rather than squeezing its name.
+        if (LocalDensity.current.fontScale > 1.3f) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(label, style = MaterialTheme.typography.bodyLarge, color = if (checked) muted else onBg)
+                if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.labelMedium, color = muted)
+            }
+        } else {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (checked) muted else onBg,
+                modifier = Modifier.weight(1f)
+            )
+            if (meta.isNotBlank()) {
+                Text(meta, style = MaterialTheme.typography.labelMedium, color = muted)
+            }
         }
     }
 }
@@ -162,7 +163,7 @@ private fun WarmupRow(
 private fun CheckDisc(checked: Boolean, muted: Color, accent: Color) {
     Box(
         Modifier
-            .size(18.dp)
+            .size(20.dp)
             .clip(CircleShape)
             .then(
                 if (checked) Modifier.background(accent)
@@ -171,47 +172,15 @@ private fun CheckDisc(checked: Boolean, muted: Color, accent: Color) {
     )
 }
 
-/**
- * The one action, sized like Home's start CTA.
- *
- * [fill] and [labelColor] are passed in rather than read here because the button carries two
- * states: dimmed while drills remain, full accent once they are done. Neither is a disabled state —
- * it starts the session at any tick count.
- */
+/** A persistent opt-out: a small filled chrome capsule with its mono label. */
 @Composable
-private fun StartButton(label: String, fill: Color, labelColor: Color, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 56.dp)
-            .clip(StartShape)
-            .background(fill)
-            .bounceClick(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 14.dp),
-        contentAlignment = Alignment.Center
-    ) {
+private fun OptOut(label: String, muted: Color, onClick: () -> Unit) {
+    ForgeChromeButton(onClick = onClick, label = label) {
         Text(
             label,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold,
-            color = labelColor
+            style = MaterialTheme.typography.labelMedium,
+            color = muted,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
         )
     }
 }
-
-/** A persistent opt-out. Mono micro-label, with the 48dp target coming from its own padding (§14). */
-@Composable
-private fun OptOut(label: String, muted: Color, onClick: () -> Unit) {
-    Text(
-        label,
-        style = MaterialTheme.typography.labelMedium,
-        color = muted,
-        modifier = Modifier
-            .heightIn(min = 48.dp)
-            .clickableLabeled(label = label, onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 15.dp)
-    )
-}
-
-/** Matches Home's CTA corner so the two start buttons read as the same control. */
-private val StartShape = RoundedCornerShape(12.dp)

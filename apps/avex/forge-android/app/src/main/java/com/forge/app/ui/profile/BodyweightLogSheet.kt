@@ -3,28 +3,27 @@ package com.forge.app.ui.profile
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDefaults
 import com.forge.app.ui.common.window.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import com.forge.app.ui.common.window.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextFieldColors
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -33,8 +32,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.forge.app.data.db.entities.BodyweightEntry
@@ -43,9 +47,12 @@ import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
-import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgeChromeButton
+import com.forge.app.ui.common.ForgeFieldRow
+import com.forge.app.ui.common.ForgeGroupSection
 import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.ForgeRowGroup
+import com.forge.app.ui.common.ForgeSecondaryCapsule
 import com.forge.app.ui.onboarding.MAX_BODYWEIGHT_LB
 import com.forge.app.ui.onboarding.MIN_BODYWEIGHT_LB
 import com.forge.app.ui.onboarding.parseSaneBodyweightLb
@@ -87,8 +94,10 @@ internal fun BodyweightLogSheet(
     val cs = MaterialTheme.colorScheme
     val onBg = cs.onBackground
     val muted = cs.onSurfaceVariant
-    val accent = cs.primary
     val sheetState = rememberModalBottomSheetState()
+    val focus = LocalFocusManager.current
+    val poundsFocus = remember { FocusRequester() }
+    val noteFocus = remember { FocusRequester() }
 
     val today = remember { LocalDate.now() }
     var date by remember { mutableStateOf(today) }
@@ -178,90 +187,98 @@ internal fun BodyweightLogSheet(
                 .verticalScroll(rememberScrollState())
                 .imePadding()
                 .padding(horizontal = 24.dp)
-                .padding(bottom = 32.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            Text("Log bodyweight", style = MaterialTheme.typography.headlineSmall, color = onBg)
-            Spacer(Modifier.height(8.dp))
-            // Accent mono = the tappable idiom (§5): tap to backdate to any past day.
-            Text(
-                dateLabel,
-                style = MaterialTheme.typography.labelMedium,
-                color = accent,
-                modifier = Modifier.bounceClick { showDatePicker = true }.padding(vertical = 6.dp)
-            )
-            Spacer(Modifier.height(12.dp))
-            if (stones) {
-                // Stone + pounds pair — the British compound entry. The two fields sum to lb on Save.
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                    OutlinedTextField(
-                        value = stInput,
-                        onValueChange = { stInput = it.filter { ch -> ch.isDigit() }.take(2) },
-                        label = { Text("Stone") },
-                        singleLine = true,
-                        isError = invalid,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        shape = BodyLogFieldShape,
-                        colors = bodyLogFieldColors(),
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = lbInput,
-                        onValueChange = { lbInput = it.filter { ch -> ch.isDigit() }.take(2) },
-                        label = { Text("Pounds") },
-                        singleLine = true,
-                        isError = invalid,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        shape = BodyLogFieldShape,
-                        colors = bodyLogFieldColors(),
-                        modifier = Modifier.weight(1f)
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Log bodyweight", style = MaterialTheme.typography.headlineSmall, color = onBg)
+                // The day is a filled capsule, the tappable idiom: tap to backdate to any past day.
+                BodyLogDateCapsule(dateLabel) { showDatePicker = true }
+            }
+            // ONE group of inline rows: the reading, then its note. The explainer (or the range, when
+            // the typed value is out of it) sits under the group as its footnote.
+            ForgeGroupSection(label = null, footer = { BodyLogSupportingLine(supportingLine, invalid) }) {
+                val noteRow: @Composable () -> Unit = {
+                    ForgeFieldRow(
+                        label = "Note",
+                        value = note,
+                        onValueChange = { note = it.take(140); noteTouched = true },
+                        placeholder = "Optional",
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
+                        focusRequester = noteFocus
                     )
                 }
-            } else {
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { v -> input = filterDecimalInput(v) },
-                    label = { Text("Weight (${unitLabel(weightUnit)})") },
-                    singleLine = true,
-                    isError = invalid,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    shape = BodyLogFieldShape,
-                    colors = bodyLogFieldColors(),
-                    modifier = Modifier.fillMaxWidth()
-                )
+                if (stones) {
+                    // Stone + pounds pair — the British compound entry. The two rows sum to lb on Save.
+                    ForgeRowGroup(
+                        {
+                            ForgeFieldRow(
+                                label = "Stone",
+                                value = stInput,
+                                onValueChange = { stInput = it.filter { ch -> ch.isDigit() }.take(2) },
+                                placeholder = "0",
+                                suffix = "st",
+                                isError = invalid,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                                keyboardActions = KeyboardActions(onNext = { poundsFocus.requestFocus() })
+                            )
+                        },
+                        {
+                            ForgeFieldRow(
+                                label = "Pounds",
+                                value = lbInput,
+                                onValueChange = { lbInput = it.filter { ch -> ch.isDigit() }.take(2) },
+                                placeholder = "0",
+                                suffix = "lb",
+                                isError = invalid,
+                                focusRequester = poundsFocus,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                                keyboardActions = KeyboardActions(onNext = { noteFocus.requestFocus() })
+                            )
+                        },
+                        noteRow
+                    )
+                } else {
+                    ForgeRowGroup(
+                        {
+                            ForgeFieldRow(
+                                label = "Weight",
+                                value = input,
+                                onValueChange = { v -> input = filterDecimalInput(v) },
+                                placeholder = "0",
+                                suffix = unitLabel(weightUnit),
+                                isError = invalid,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
+                                keyboardActions = KeyboardActions(onNext = { noteFocus.requestFocus() })
+                            )
+                        },
+                        noteRow
+                    )
+                }
             }
-            // The explainer sits on the page gutter in BOTH unit branches (§7 rhythm) rather than
-            // inside one field's `supportingText` slot, which would indent it off the 24dp rhythm.
-            BodyLogSupportingLine(supportingLine, invalid)
-            Spacer(Modifier.height(12.dp))
-            OutlinedTextField(
-                value = note,
-                onValueChange = { note = it.take(140); noteTouched = true },
-                label = { Text("Note (optional)") },
-                singleLine = true,
-                shape = BodyLogFieldShape,
-                colors = bodyLogFieldColors(),
-                modifier = Modifier.fillMaxWidth()
-            )
             // §8: the page's actions group at the END — one filled do-it-now capsule ① and its
-            // outlined sidekick ②, nothing else.
-            Spacer(Modifier.height(20.dp))
-            ForgePrimaryCapsule(
-                label = "Save",
-                onClick = { parsed?.let { onSave(it, date, note.takeIf { noteTouched }) } },
-                enabled = parsed != null,
-                modifier = Modifier.fillMaxWidth()
-            )
-            // Import pulls the newest HC reading (dated by HC) — only meaningful on today, hidden while backdating.
-            if (canImport && isToday) {
-                Spacer(Modifier.height(10.dp))
-                ForgeOutlineCapsule(
-                    label = "Import latest from Health Connect",
-                    onClick = onImport,
+            // filled sidekick ②, nothing else.
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ForgePrimaryCapsule(
+                    label = "Save",
+                    onClick = { parsed?.let { onSave(it, date, note.takeIf { noteTouched }) } },
+                    enabled = parsed != null,
                     modifier = Modifier.fillMaxWidth()
                 )
+                // Import pulls the newest HC reading (dated by HC) — only meaningful on today, hidden while backdating.
+                if (canImport && isToday) {
+                    ForgeSecondaryCapsule(
+                        label = "Import latest from Health Connect",
+                        onClick = onImport,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
             message?.let {
-                Spacer(Modifier.height(12.dp))
                 Text(it, style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
             }
         }
@@ -278,33 +295,35 @@ internal fun BodyweightLogSheet(
 
 // ── Shared body-log sheet furniture ───────────────────────────────────────────
 // Used by BodyweightLogSheet + BodyFatLogSheet. Both are the same modal (§3): one dated reading,
-// one field, one Save. If a third sheet needs these, promote them to `ui/common` (§8).
-
-/** §7: fields are interactive tiles, radius 12 — not M3's 4dp extra-small corner. */
-internal val BodyLogFieldShape = RoundedCornerShape(12.dp)
+// one group of inline fields, one Save. If a third sheet needs these, promote them to `ui/common` (§8).
 
 /**
- * §13's text-input treatment on the Pearl ground: unfocused border at the outline rung (§5 — 0.35),
- * focus and cursor on the accent, value text at onBackground. M3's own defaults draw the resting
- * border at full-strength `outline`, a rung brighter than the ladder allows. Mirrors the treatment
- * already used by the cardio `CustomActivityDialog`.
+ * The sheet's day as a small filled capsule — the tap target that opens [BodyLogDatePickerDialog]
+ * to backdate the reading. It was accent mono text, which read as a link rather than a control.
  */
 @Composable
-internal fun bodyLogFieldColors(): TextFieldColors = OutlinedTextFieldDefaults.colors(
-    focusedBorderColor = MaterialTheme.colorScheme.primary,
-    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-    cursorColor = MaterialTheme.colorScheme.primary,
-    focusedTextColor = MaterialTheme.colorScheme.onBackground,
-    unfocusedTextColor = MaterialTheme.colorScheme.onBackground,
-    focusedLabelColor = MaterialTheme.colorScheme.primary,
-    unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
-)
+internal fun BodyLogDateCapsule(dateLabel: String, onClick: () -> Unit) {
+    ForgeChromeButton(onClick = onClick, label = "Pick date") {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(dateLabel, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onBackground)
+            Icon(
+                Icons.Filled.KeyboardArrowDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
 
-/** The one-line explainer under a log field (§13) — caption rung (muted 0.7), full `error` when the
- *  typed value is out of range. §7 keeps it ≥8dp off the field it belongs to. */
+/** The one-line explainer under a log sheet's group (§13) — caption rung (muted 0.7), full `error`
+ *  when the typed value is out of range. */
 @Composable
 internal fun BodyLogSupportingLine(text: String, invalid: Boolean) {
-    Spacer(Modifier.height(8.dp))
     Text(
         text,
         style = MaterialTheme.typography.bodySmall,

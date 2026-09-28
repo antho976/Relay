@@ -35,7 +35,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgeSecondaryCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.theme.ForgeMotion
 import kotlinx.coroutines.delay
@@ -128,7 +128,7 @@ internal fun CoachAdvancedPrompt(
                     itemVerticalAlignment = Alignment.CenterVertically
                 ) {
                     ForgePrimaryCapsule("Turn on", onClick = onTurnOn)
-                    ForgeOutlineCapsule("Remind me later", onClick = onRemindLater)
+                    ForgeSecondaryCapsule("Remind me later", onClick = onRemindLater)
                     CoachAction("Ignore", muted, "Ignore advanced tracking", onIgnore)
                 }
             }

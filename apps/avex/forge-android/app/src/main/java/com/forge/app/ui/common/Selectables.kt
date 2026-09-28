@@ -134,11 +134,28 @@ fun ForgeOptionCard(
         topContent?.invoke()
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             if (icon != null) {
-                Icon(
-                    icon, contentDescription = null,
-                    tint = if (selected) MaterialTheme.colorScheme.onBackground else muted,
-                    modifier = Modifier.size(22.dp)
+                // The glyph sits on its own rounded badge, so a list of options reads as a set of
+                // things rather than a column of loose line art. Picked, the badge takes the accent.
+                val badge by animateColorAsState(
+                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                    else MaterialTheme.colorScheme.surfaceContainerHigh,
+                    ForgeMotion.standardTween(ForgeMotion.DurationFast),
+                    label = "option_badge"
                 )
+                val glyph by animateColorAsState(
+                    if (selected) MaterialTheme.colorScheme.primary else muted,
+                    ForgeMotion.standardTween(ForgeMotion.DurationFast),
+                    label = "option_glyph"
+                )
+                Box(
+                    Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(badge),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(icon, contentDescription = null, tint = glyph, modifier = Modifier.size(22.dp))
+                }
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)

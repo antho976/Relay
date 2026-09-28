@@ -50,6 +50,7 @@ import com.forge.app.domain.units.toStoredWeightText
 import com.forge.app.ui.common.DraggableItem
 import com.forge.app.ui.common.ForgeHapticType
 import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.dragContainer
 import com.forge.app.ui.common.forgeHaptic
 import com.forge.app.ui.common.moved
@@ -325,16 +326,8 @@ fun FreestyleLogScreen(
 
     Box(Modifier.fillMaxSize()) {
         Scaffold(
-            topBar = {
-                TopAppBar(
-                    // §4.6: back only, never the screen's name; the header below says where you are.
-                    title = {},
-                    navigationIcon = {
-                        IconButton(onClick = { leave() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-                )
-            },
+            // §4.6: back only, never the screen's name; the header below says where you are.
+            topBar = { ForgeTopBar(onBack = { leave() }) },
             bottomBar = {
                 // Hidden while the keyboard is up: typing a set is not the moment to finish, and the
                 // bar would sit on top of the slab being typed into.

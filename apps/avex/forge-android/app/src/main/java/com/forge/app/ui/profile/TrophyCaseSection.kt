@@ -2,7 +2,6 @@ package com.forge.app.ui.profile
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -78,7 +77,7 @@ internal fun TrophyCaseSection(
     outline: Color
 ) {
     var selected by remember { mutableStateOf<Int?>(null) }
-    ProfileBlock("TROPHY CASE", muted, accent, outline, action = "$unlocked / $total  →", onAction = onOpenTrophies) {
+    ProfileBlock("TROPHY CASE", muted, accent, outline, action = "$unlocked / $total", onAction = onOpenTrophies) {
         grid.chunked(6).forEachIndexed { rowIdx, row ->
             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEachIndexed { colIdx, cell ->
@@ -180,7 +179,7 @@ private fun TrophyPopup(
     onBg: Color,
     onDismiss: () -> Unit
 ) {
-    val surface = MaterialTheme.colorScheme.surface
+    val surface = MaterialTheme.colorScheme.surfaceContainerHighest
     val density = LocalDensity.current
     val gapPx = with(density) { 8.dp.roundToPx() }
     val edgePx = with(density) { 12.dp.roundToPx() }
@@ -198,7 +197,6 @@ private fun TrophyPopup(
                     .width(POPUP_WIDTH)
                     .clip(RoundedCornerShape(12.dp))
                     .background(surface)
-                    .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
                 Text(cell.name, style = MaterialTheme.typography.labelLarge, color = accent, fontWeight = FontWeight.SemiBold)

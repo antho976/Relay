@@ -20,7 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -60,7 +60,15 @@ import com.forge.app.program.ExerciseDef
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.Corners
+import com.forge.app.ui.common.ForgeChoiceChip
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.GROUP_OUTER
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.memberFill
+import com.forge.app.ui.common.memberShape
+import com.forge.app.ui.gym.train.components.GymSearchRow
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.bounceClick
@@ -191,16 +199,8 @@ fun ExerciseBrowserScreen(
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(gradTop, gradBottom)))) {
         Scaffold(
             containerColor = Color.Transparent,
-            topBar = {
-                TopAppBar(
-                    // §4.6: bell + back, never the screen's name.
-                    title = {},
-                    navigationIcon = {
-                        IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close") }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-                )
-            },
+            // §4.6: back only, never the screen's name.
+            topBar = { ForgeTopBar(onBack = onClose, backLabel = "Close") },
             bottomBar = {
                 ForgePrimaryCapsule(
                     if (picked.isEmpty()) "Add" else "Add ${picked.size}",
@@ -213,15 +213,16 @@ fun ExerciseBrowserScreen(
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
                 modifier = Modifier.fillMaxSize().padding(inner),
-                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                // The tiles are one connected group: 2dp seams. Section items add their own air.
+                horizontalArrangement = Arrangement.spacedBy(GROUP_SEAM),
+                verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)
             ) {
                 val full: androidx.compose.foundation.lazy.grid.LazyGridItemSpanScope.() -> GridItemSpan =
                     { GridItemSpan(maxLineSpan) }
 
                 item(span = full) {
-                    Column {
+                    Column(Modifier.padding(horizontal = 8.dp).padding(bottom = 10.dp)) {
                         Text(
                             "ADD TO YOUR LOG",
                             style = MaterialTheme.typography.labelMedium,
@@ -236,31 +237,44 @@ fun ExerciseBrowserScreen(
                     }
                 }
                 item(span = full) {
+                    Box(Modifier.padding(bottom = 10.dp)) {
                     MuscleFilterRow(
                         selected = muscle,
                         favoritesOnly = favoritesOnly,
                         onSelectMuscle = { m -> muscle = m; favoritesOnly = false },
                         onToggleFavorites = { favoritesOnly = !favoritesOnly; if (favoritesOnly) muscle = null }
                     )
+                    }
                 }
                 item(span = full) {
-                    BrowserSearchField(query = query, onQueryChange = { query = it })
+                    GymSearchRow(
+                        query = query,
+                        onQueryChange = { query = it },
+                        placeholder = "Search exercises or muscles",
+                        modifier = Modifier.padding(bottom = 18.dp)
+                    )
                 }
                 if (showRecent) {
                     item(span = full) {
-                        Column {
-                            EditorialHeader(
-                                "Recently performed",
-                                muted = MaterialTheme.colorScheme.onSurfaceVariant,
-                                accent = MaterialTheme.colorScheme.primary
-                            )
+                        Column(Modifier.padding(bottom = 18.dp)) {
+                            Box(Modifier.padding(horizontal = 8.dp)) {
+                                EditorialHeader(
+                                    "Recently performed",
+                                    muted = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    accent = MaterialTheme.colorScheme.primary
+                                )
+                            }
                             Spacer(Modifier.height(10.dp))
+                            // One connected strip: only its two ends round out.
                             Row(
                                 Modifier.horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                horizontalArrangement = Arrangement.spacedBy(GROUP_SEAM)
                             ) {
-                                recentShown.forEach { def ->
+                                recentShown.forEachIndexed { i, def ->
+                                    val first = i == 0
+                                    val last = i == recentShown.lastIndex
                                     ExerciseTile(
+                                        corners = Corners(first, last, first, last),
                                         def = def,
                                         selected = def.id in picked,
                                         favorite = def.id in favorites,
@@ -274,15 +288,17 @@ fun ExerciseBrowserScreen(
                     }
                 }
                 item(span = full) {
-                    Spacer(Modifier.height(2.dp))
-                    EditorialHeader(
-                        sectionLabel,
-                        muted = MaterialTheme.colorScheme.onSurfaceVariant,
-                        accent = MaterialTheme.colorScheme.primary
-                    )
+                    Box(Modifier.padding(start = 8.dp, end = 8.dp, bottom = 8.dp)) {
+                        EditorialHeader(
+                            sectionLabel,
+                            muted = MaterialTheme.colorScheme.onSurfaceVariant,
+                            accent = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
-                items(results, key = { it.id }) { def ->
+                itemsIndexed(results, key = { _, it -> it.id }) { i, def ->
                     ExerciseTile(
+                        corners = Corners.ofGrid(i, results.size, 2),
                         def = def,
                         selected = def.id in picked,
                         favorite = def.id in favorites,
@@ -292,6 +308,7 @@ fun ExerciseBrowserScreen(
                 }
                 if (results.isEmpty()) {
                     item(span = full) {
+                        Box(Modifier.padding(horizontal = 0.dp)) {
                         // A search that finds nothing is the moment to offer a custom move — the
                         // library will never cover every gym, and the log shouldn't dead-end here.
                         if (query.isNotBlank() && customExerciseId(query.trim()) in exclude) {
@@ -299,7 +316,8 @@ fun ExerciseBrowserScreen(
                             // rather than offering a "Create" that would silently do nothing.
                             InlineEmptyHint(
                                 "\u201C${query.trim()}\u201D is already in your log.",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 8.dp)
                             )
                         } else if (query.isNotBlank()) {
                             CreateCustomCard(
@@ -312,8 +330,10 @@ fun ExerciseBrowserScreen(
                             InlineEmptyHint(
                                 if (favoritesOnly) "No favorites yet. Tap a star to bookmark a move."
                                 else "No exercises match.",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 8.dp)
                             )
+                        }
                         }
                     }
                 }
@@ -334,9 +354,9 @@ private fun CreateCustomCard(name: String, initialMuscle: MuscleGroup, onCreate:
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(cs.surfaceVariant)
-            .padding(16.dp)
+            .clip(RoundedCornerShape(GROUP_OUTER))
+            .background(cs.surfaceContainerHigh)
+            .padding(horizontal = ROW_H, vertical = 16.dp)
     ) {
         Text(
             "No exercises match \u201C$name\u201D",
@@ -358,27 +378,18 @@ private fun CreateCustomCard(name: String, initialMuscle: MuscleGroup, onCreate:
             letterSpacing = 1.sp
         )
         Spacer(Modifier.height(8.dp))
+        // Many options, pick one: the shared selectable chips, scrolled.
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             MuscleGroup.entries.forEach { m ->
-                val sel = m == picked
-                Text(
-                    m.displayName,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (sel) cs.primary else cs.onSurfaceVariant,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(if (sel) cs.primaryContainer else Color.Transparent)
-                        .then(if (sel) Modifier.border(1.dp, cs.primary, RoundedCornerShape(50)) else Modifier)
-                        .clickableLabeled("${m.displayName} target", role = Role.RadioButton) { picked = m }
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                )
+                ForgeChoiceChip(m.displayName, selected = m == picked, onClick = { picked = m })
             }
         }
         Spacer(Modifier.height(14.dp))
-        ForgeOutlineCapsule(
+        // The card's one do-it-now action.
+        ForgePrimaryCapsule(
             "Create \u201C$name\u201D",
             onClick = { onCreate(picked) },
             modifier = Modifier.fillMaxWidth()
@@ -482,6 +493,7 @@ private fun GlyphFilterChip(glyph: String, label: String, selected: Boolean, onC
 /** One exercise tile: anatomy thumbnail (target muscle lit) + name + muscle, with a bookmark star. */
 @Composable
 private fun ExerciseTile(
+    corners: Corners,
     def: ExerciseDef,
     selected: Boolean,
     favorite: Boolean,
@@ -490,18 +502,18 @@ private fun ExerciseTile(
     modifier: Modifier = Modifier
 ) {
     val cs = MaterialTheme.colorScheme
+    // Pick-many: a picked tile keeps the group's corners and wears the ring and wash alone.
+    val shape = memberShape(corners, selected = false)
     Column(
         modifier = modifier
-            .height(190.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (selected) cs.primaryContainer else cs.surfaceVariant)
-            .then(if (selected) Modifier.border(1.dp, cs.primary, RoundedCornerShape(12.dp)) else Modifier)
+            .memberFill(shape, selected)
             .bounceClick { onSelect() }
             .semantics { contentDescription = "${def.name}, ${def.muscle.displayName}${if (selected) ", selected" else ""}" }
             .padding(14.dp)
     ) {
-        // The figure claims the flexible top space so every tile is the same height regardless of name.
-        Box(Modifier.fillMaxWidth().weight(1f)) {
+        // A fixed figure plus a two-line name reserve keeps a row of tiles one height, while the
+        // tile itself still grows with font scale (no fixed height on a text container, §14).
+        Box(Modifier.fillMaxWidth().height(104.dp)) {
             MuscleFigure(
                 muscle = def.muscle,
                 // Lift the accent toward onBg so the muscle reads on the grey body (muted navy vanished).
@@ -537,47 +549,5 @@ private fun ExerciseTile(
             style = MaterialTheme.typography.labelMedium,
             color = cs.onSurfaceVariant
         )
-    }
-}
-
-/** Filled, rounded search field (§13) — leading magnifier, trailing clear, muted ghost placeholder. */
-@Composable
-private fun BrowserSearchField(query: String, onQueryChange: (String) -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onSurface
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Icon(Icons.Filled.Search, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
-        BasicTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
-            cursorBrush = SolidColor(onBg),
-            singleLine = true,
-            modifier = Modifier.weight(1f),
-            decorationBox = { inner ->
-                Box {
-                    if (query.isEmpty()) {
-                        Text("Search exercises or muscles", style = MaterialTheme.typography.bodyMedium, color = muted.copy(alpha = 0.6f))
-                    }
-                    inner()
-                }
-            }
-        )
-        if (query.isNotEmpty()) {
-            Icon(
-                Icons.Filled.Close,
-                contentDescription = "Clear search",
-                tint = muted,
-                modifier = Modifier.size(20.dp).clip(RoundedCornerShape(50)).clickableLabeled("Clear search") { onQueryChange("") }
-            )
-        }
     }
 }

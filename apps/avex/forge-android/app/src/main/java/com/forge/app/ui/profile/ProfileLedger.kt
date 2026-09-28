@@ -34,7 +34,6 @@ import com.forge.app.Features
 import com.forge.app.domain.rank.StandingMetric
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.domain.units.WeightUnit
-import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.ForgeMotion
 
 /**
@@ -56,12 +55,13 @@ internal fun ProfileBlock(
     // Air + the mono header separate sections (§1) — no hairline strip.
     Spacer(Modifier.height(if (compact) 22.dp else 28.dp))
     Row(
-        Modifier.fillMaxWidth().then(if (onAction != null) Modifier.bounceClick { onAction() } else Modifier),
+        Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = muted)
-        if (action != null) Text(action, style = MaterialTheme.typography.labelSmall, color = accent)
+        // The action is a small filled capsule, not an accent text link.
+        if (action != null && onAction != null) ProfileTextCapsule(action, onAction, label = "$label, $action")
     }
     Spacer(Modifier.height(if (compact) 8.dp else 12.dp))
     Column(content = content)
