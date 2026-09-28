@@ -23,8 +23,10 @@ import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -158,10 +160,14 @@ fun OnboardingScreen(
     // below), so the `remember` initialisers that follow — which re-run whenever the Activity is
     // recreated under a retained ViewModel: rotation, multi-window resize — rehydrate every field,
     // the step cursor and the preview seed from the answers the user last gave, not from defaults.
-    val draftLoad by viewModel.draftLoad.collectAsState()
-    val load = draftLoad
-    if (load !is DraftLoad.Ready) return
-    val draft = load.draft
+    //
+    // The root subscribes only to WHETHER the draft has loaded. Every answer moves the draft, so
+    // observing its value here recomposed the whole flow a second time per tap; the value itself is
+    // read without a subscription, since only the one-time initialisers below use it.
+    val draftLoad = viewModel.draftLoad.collectAsState()
+    val loaded by remember { derivedStateOf { draftLoad.value is DraftLoad.Ready } }
+    if (!loaded) return
+    val draft = (viewModel.draftLoad.value as? DraftLoad.Ready)?.draft
 
     // A draft written by this same schema always points inside its own path, but coerce anyway so a
     // corrupt cursor restarts the flow instead of indexing off the end.
@@ -239,12 +245,21 @@ fun OnboardingScreen(
             sessionMinutes?.takeIf { it > 0 }
         ) else emptyList()
     }
-    // Pure preview — recomputed whenever an input or the re-roll seed changes. Null until there is
-    // gear to build from: the ledger draws empty tracks rather than inventing a week (§12).
-    val previewDays = remember(previewSeed, daysPerWeek, equipment, frozenIds, goal, experience, problemAreas, sessionMinutes) {
-        if (equipment.isEmpty() || daysPerWeek !in 1..7) null
-        else viewModel.buildPreview(daysPerWeek, equipment, goal, experience, problemAreas, frozenIds, previewSeed, sessionMinutes)
+    // The preview week, built by the ViewModel off the main thread. Null until there is gear to
+    // build from: the ledger draws empty tracks rather than inventing a week (§12).
+    val previewInputs = if (equipment.isEmpty() || daysPerWeek !in 1..7) null else PreviewInputs(
+        daysPerWeek, equipment, goal, experience, problemAreas, frozenIds, previewSeed, sessionMinutes
+    )
+    // Asked for only on the pages that draw the week, plus sore spots, the page before it, so the
+    // week page opens on a finished week instead of building one as it arrives.
+    val wantsPreview = page == PAGE_DAYS || page == PAGE_SPOTS || page == PAGE_WEEK
+    LaunchedEffect(previewInputs, wantsPreview) {
+        if (wantsPreview && previewInputs != null) viewModel.requestPreview(previewInputs)
     }
+    val preview by viewModel.preview.collectAsState()
+    // A week built from other answers is not this week, with one exception: a re-roll keeps the
+    // week on screen until the new one lands, rather than blanking the page between the two.
+    val previewDays = preview?.takeIf { previewInputs != null && it.inputs.copy(seed = previewSeed) == previewInputs }?.days
 
     fun finish() {
         val bwLb = parseSaneBodyweightLb(bodyweightInput, useKg)
@@ -398,7 +413,7 @@ fun OnboardingScreen(
                                 problemAreas = if (code in problemAreas) problemAreas - code else problemAreas + code
                             }
                         )
-                        PAGE_WEEK -> StepWeek(archetypes = archetypes, plannedSets = plannedSets, days = previewDays.orEmpty())
+                        PAGE_WEEK -> StepWeek(archetypes = archetypes, plannedSets = plannedSets, days = previewDays)
                         else -> StepExtras(
                             generated = isGenerated,
                             // One conversion-aware transition: the typed bodyweight is re-expressed

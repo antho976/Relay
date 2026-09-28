@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
@@ -145,10 +146,23 @@ fun ReaderScreen(
                 }
             }
 
-            item("body") {
-                Column(Modifier.fillMaxWidth().padding(horizontal = GUTTER)) {
-                    BlockBody(blocks, examples)
-                    if (sources.isNotEmpty()) SourceList(sources)
+            // One item per block, so opening a lesson composes only the blocks on screen instead of
+            // every paragraph, figure and explorer in the navigation frame.
+            itemsIndexed(
+                blocks,
+                key = { i, _ -> "b$i" },
+                contentType = { _, block -> block::class }
+            ) { _, block ->
+                Box(Modifier.fillMaxWidth().padding(horizontal = GUTTER)) {
+                    LessonBlockView(block, examples)
+                }
+            }
+
+            if (sources.isNotEmpty()) {
+                item("sources") {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = GUTTER)) {
+                        SourceList(sources)
+                    }
                 }
             }
 

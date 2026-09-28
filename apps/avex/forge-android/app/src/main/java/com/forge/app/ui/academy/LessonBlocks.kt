@@ -44,8 +44,8 @@ import com.forge.app.ui.common.EditorialHeader
  *    serif figure with a mono label, not a line of body text with a label in front of it.
  */
 @Composable
-internal fun BlockBody(
-    blocks: List<LessonBlock>,
+internal fun LessonBlockView(
+    block: LessonBlock,
     /** Live values for [LessonBlock.Example] slots, by key. Missing keys fall back gracefully. */
     examples: Map<String, String> = emptyMap()
 ) {
@@ -53,83 +53,84 @@ internal fun BlockBody(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
 
+    // One block per lazy item in the reader, so a lesson composes only what is on screen. Each block
+    // owns the air around it and none depends on its neighbours, so stacking items reads exactly as
+    // the single column did.
     Column(Modifier.fillMaxWidth()) {
-        blocks.forEach { block ->
-            when (block) {
-                is LessonBlock.Heading -> {
-                    Spacer(Modifier.height(24.dp))
-                    EditorialHeader(label = block.text, muted = muted, accent = accent)
-                    Spacer(Modifier.height(10.dp))
-                }
+        when (block) {
+            is LessonBlock.Heading -> {
+                Spacer(Modifier.height(24.dp))
+                EditorialHeader(label = block.text, muted = muted, accent = accent)
+                Spacer(Modifier.height(10.dp))
+            }
 
-                is LessonBlock.Paragraph -> {
-                    Text(
-                        block.text,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = onBg
-                    )
-                    Spacer(Modifier.height(14.dp))
-                }
+            is LessonBlock.Paragraph -> {
+                Text(
+                    block.text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = onBg
+                )
+                Spacer(Modifier.height(14.dp))
+            }
 
-                is LessonBlock.Bullets -> {
-                    block.items.forEach { item ->
-                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                            // The one glyph the doctrine allows in content, carrying structure.
-                            Text("·", style = MaterialTheme.typography.bodyLarge, color = accent)
-                            Spacer(Modifier.width(12.dp))
-                            Text(
-                                item,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = onBg
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(14.dp))
-                }
-
-                is LessonBlock.Callout -> {
-                    // The one thing to take away, set as a pull-quote. Air and a change of voice do
-                    // the work a box used to do badly.
-                    Spacer(Modifier.height(14.dp))
-                    Text(
-                        block.text,
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = onBg,
-                        modifier = Modifier.fillMaxWidth().padding(end = 12.dp)
-                    )
-                    Spacer(Modifier.height(24.dp))
-                }
-
-                is LessonBlock.Figure -> {
-                    Spacer(Modifier.height(10.dp))
-                    LessonFigure(block.key, block.caption)
-                    Spacer(Modifier.height(28.dp))
-                }
-
-                is LessonBlock.Example -> {
-                    val value = examples[block.key]
-                    Spacer(Modifier.height(6.dp))
-                    Column(Modifier.fillMaxWidth()) {
+            is LessonBlock.Bullets -> {
+                block.items.forEach { item ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        // The one glyph the doctrine allows in content, carrying structure.
+                        Text("·", style = MaterialTheme.typography.bodyLarge, color = accent)
+                        Spacer(Modifier.width(12.dp))
                         Text(
-                            block.label.uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = muted,
-                            letterSpacing = 1.5.sp
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        // The reader's own number is a serif figure (§2①). Without one, the
-                        // fallback stays in the aside voice so a placeholder never impersonates
-                        // real data (§12: ghost visuals yes, ghost numbers no).
-                        Text(
-                            value ?: block.fallback,
-                            style = if (value != null) MaterialTheme.typography.headlineSmall
-                            else MaterialTheme.typography.bodyMedium,
-                            color = if (value != null) onBg else muted,
-                            fontStyle = if (value != null) FontStyle.Normal else FontStyle.Italic
+                            item,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = onBg
                         )
                     }
-                    Spacer(Modifier.height(18.dp))
                 }
+                Spacer(Modifier.height(14.dp))
+            }
+
+            is LessonBlock.Callout -> {
+                // The one thing to take away, set as a pull-quote. Air and a change of voice do
+                // the work a box used to do badly.
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    block.text,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = onBg,
+                    modifier = Modifier.fillMaxWidth().padding(end = 12.dp)
+                )
+                Spacer(Modifier.height(24.dp))
+            }
+
+            is LessonBlock.Figure -> {
+                Spacer(Modifier.height(10.dp))
+                LessonFigure(block.key, block.caption)
+                Spacer(Modifier.height(28.dp))
+            }
+
+            is LessonBlock.Example -> {
+                val value = examples[block.key]
+                Spacer(Modifier.height(6.dp))
+                Column(Modifier.fillMaxWidth()) {
+                    Text(
+                        block.label.uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted,
+                        letterSpacing = 1.5.sp
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    // The reader's own number is a serif figure (§2①). Without one, the
+                    // fallback stays in the aside voice so a placeholder never impersonates
+                    // real data (§12: ghost visuals yes, ghost numbers no).
+                    Text(
+                        value ?: block.fallback,
+                        style = if (value != null) MaterialTheme.typography.headlineSmall
+                        else MaterialTheme.typography.bodyMedium,
+                        color = if (value != null) onBg else muted,
+                        fontStyle = if (value != null) FontStyle.Normal else FontStyle.Italic
+                    )
+                }
+                Spacer(Modifier.height(18.dp))
             }
         }
     }

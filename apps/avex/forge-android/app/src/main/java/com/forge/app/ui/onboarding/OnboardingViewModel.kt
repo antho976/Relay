@@ -13,14 +13,36 @@ import com.forge.app.program.ProgramGenerator
 import com.forge.app.program.SplitTemplates
 import com.forge.app.domain.schedule.WeeklySchedule
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /** Plan-mode keys chosen on the onboarding plan-mode step. */
 const val PLAN_GENERATED = "generated"
 const val PLAN_CUSTOM = "custom"
 const val PLAN_FREESTYLE = "freestyle"
+
+/** Every answer the week preview is built from, [seed] included, so equal inputs mean an equal week. */
+internal data class PreviewInputs(
+    val daysPerWeek: Int,
+    val equipment: Set<String>,
+    val goal: String,
+    val experience: String,
+    val problemAreas: Set<String>,
+    val frozenIds: Set<String>?,
+    val seed: Long,
+    val sessionMinutes: Int?
+)
+
+/** A built preview week and the answers it was built from. */
+internal class WeekPreview(val inputs: PreviewInputs, val days: List<GeneratedDay>)
 
 @HiltViewModel
 class OnboardingViewModel @Inject constructor(
@@ -44,6 +66,34 @@ class OnboardingViewModel @Inject constructor(
     /** Record the current answers — cheap to call on every recomposition (an unchanged snapshot is
      *  a no-op). The ViewModel state moves immediately; the disk write is debounced behind it. */
     internal fun saveDraft(draft: OnboardingDraft) = drafts.update(draft)
+
+    /**
+     * The week preview, built off the main thread. The screen hands over its answers only while a
+     * page that draws the week is up; building it in composition used to run the whole generator on
+     * every gear or sore-spot tap, on pages that never showed it. [mapLatest] drops a week the next
+     * answer has already replaced. Each result carries the answers it was built from, so the screen
+     * can tell a current week from one still catching up.
+     */
+    private val previewInputs = MutableStateFlow<PreviewInputs?>(null)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    internal val preview: StateFlow<WeekPreview?> = previewInputs
+        .filterNotNull()
+        .mapLatest { inputs ->
+            val days = withContext(Dispatchers.Default) {
+                buildPreview(
+                    inputs.daysPerWeek, inputs.equipment, inputs.goal, inputs.experience,
+                    inputs.problemAreas, inputs.frozenIds, inputs.seed, inputs.sessionMinutes
+                )
+            }
+            WeekPreview(inputs, days)
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** Ask for the week these answers build. Repeating the same answers is a no-op. */
+    internal fun requestPreview(inputs: PreviewInputs) {
+        previewInputs.value = inputs
+    }
 
     /** Pure, side-effect-free week for the preview step — the same [seed] is persisted on finish. */
     fun buildPreview(

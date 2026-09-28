@@ -41,6 +41,7 @@ import com.forge.app.domain.academy.AcademyCoachLessons
 import com.forge.app.domain.academy.AcademyRegistry
 import com.forge.app.domain.academy.AcademyTraining
 import com.forge.app.ui.theme.ForgeMotion
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.exp
@@ -590,7 +591,7 @@ internal fun sketch(description: String, body: Choreo.() -> Unit): Sketch =
     Choreo().apply(body).build(description)
 
 /**
- * The twelve drawings, one per lesson, built once.
+ * The twelve drawings, one per lesson, each built once on first use.
  *
  * Each is an exact diagram of the lesson's single idea, with the accent on the answer. The numbers
  * drawn are the lesson's own (10 sets, 1.6 g per kg, 48 to 72 hours); the series they sit on are
@@ -598,28 +599,32 @@ internal fun sketch(description: String, body: Choreo.() -> Unit): Sketch =
  */
 object AcademySketches {
 
-    private val byId: Map<String, Sketch> by lazy {
+    // Built per lesson on first use and kept, so opening one lesson builds only its own drawing.
+    private val builders: Map<String, () -> Sketch> by lazy {
         mapOf(
-            AcademyTraining.gettingStronger.id to gettingStronger(),
-            AcademyTraining.effort.id to effort(),
-            AcademyTraining.volume.id to volume(),
-            AcademyTraining.form.id to warmupRamp(),
-            AcademyTraining.recovery.id to recovery(),
-            AcademyTraining.soreness.id to soreness(),
-            AcademyTraining.protein.id to protein(),
-            AcademyCoachLessons.howItDecides.id to coachLoop(),
-            AcademyCoachLessons.readiness.id to readiness(),
-            AcademyCoachLessons.blocks.id to block(),
-            AcademyCardio.zone2.id to zones(),
-            AcademyCardio.intervals.id to intervals()
+            AcademyTraining.gettingStronger.id to { gettingStronger() },
+            AcademyTraining.effort.id to { effort() },
+            AcademyTraining.volume.id to { volume() },
+            AcademyTraining.form.id to { warmupRamp() },
+            AcademyTraining.recovery.id to { recovery() },
+            AcademyTraining.soreness.id to { soreness() },
+            AcademyTraining.protein.id to { protein() },
+            AcademyCoachLessons.howItDecides.id to { coachLoop() },
+            AcademyCoachLessons.readiness.id to { readiness() },
+            AcademyCoachLessons.blocks.id to { block() },
+            AcademyCardio.zone2.id to { zones() },
+            AcademyCardio.intervals.id to { intervals() }
         )
     }
+    private val cache = ConcurrentHashMap<String, Sketch>()
+
+    private fun cached(key: String): Sketch? = builders[key]?.let { build -> cache.getOrPut(key, build) }
 
     /** Every shipped lesson has a drawing; `AcademySketchesTest` holds that true. */
-    fun has(lessonId: String): Boolean = AcademyRegistry.canonical(lessonId) in byId
+    fun has(lessonId: String): Boolean = AcademyRegistry.canonical(lessonId) in builders
 
     fun forLesson(lessonId: String): Sketch =
-        byId[AcademyRegistry.canonical(lessonId)] ?: Sketch(emptyList(), "")
+        cached(AcademyRegistry.canonical(lessonId)) ?: Sketch(emptyList(), "")
 
     // ── Geometry ─────────────────────────────────────────────────────────────
 

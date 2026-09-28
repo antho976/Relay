@@ -47,7 +47,16 @@ class BlockRepository @Inject constructor(
      * the same transaction, so a duplicate left behind by an older build cannot outlive the block
      * the user can see and reappear after they end it.
      */
-    suspend fun active(): TrainingBlock? = database.withTransaction {
+    suspend fun active(): TrainingBlock? {
+        // The common case is a plain read. The writer transaction below is only for the repair, and
+        // taking it on every call queued this read — made on every day-screen open, directive and
+        // coach load — behind whatever was writing (a set being logged, an import).
+        val open = blockDao.allActive()
+        if (open.size <= 1) return open.firstOrNull()
+        return repairActive()
+    }
+
+    private suspend fun repairActive(): TrainingBlock? = database.withTransaction {
         val open = blockDao.allActive()
         val visible = open.firstOrNull() ?: return@withTransaction null
         if (open.size > 1) blockDao.endAllExcept(keepId = visible.id, endedAt = clock.nowMs())

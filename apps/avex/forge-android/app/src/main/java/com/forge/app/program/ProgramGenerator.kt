@@ -1,5 +1,6 @@
 package com.forge.app.program
 
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 
 /** Inputs that drive generation (program-unlock Phase 2). */
@@ -340,7 +341,7 @@ object ProgramGenerator {
         val ranked = eligible.filterNot { it.fallbackOnly }.ifEmpty { eligible }
         return ranked.sortedByDescending { def ->
             val role = if ((ExerciseTag.COMPOUND in def.tags) == currentCompound) 1.0 else SWAP_ROLE_MISMATCH
-            val load = if (currentCompound) loadTier(def) * (if (def.defaultReps.matches(NUMERIC_REPS)) 1.0 else ROLE_NON_LOADABLE) else 1.0
+            val load = if (currentCompound) loadTier(def) * (if (isNumericReps(def.defaultReps)) 1.0 else ROLE_NON_LOADABLE) else 1.0
             val pattern = if (ExerciseLibrary.patternOf(def) == currentPattern) SWAP_SAME_PATTERN else 1.0
             role * load * pattern * def.pickBias
         }
@@ -356,7 +357,7 @@ object ProgramGenerator {
         RepScheme.STRENGTH -> when {
             ExerciseTag.COMPOUND !in def.tags -> ROLE_MISMATCH
             isUnilateral(def) -> ROLE_UNILATERAL
-            !def.defaultReps.matches(NUMERIC_REPS) -> ROLE_NON_LOADABLE
+            !isNumericReps(def.defaultReps) -> ROLE_NON_LOADABLE
             else -> ROLE_MATCH * loadTier(def)
         }
         RepScheme.PUMP -> if (ExerciseTag.ISOLATION in def.tags) 2.0 else 0.5
@@ -381,13 +382,20 @@ object ProgramGenerator {
     /** Numeric ranges like "8-10" / "15" take the goal-adjusted scheme reps; "AMRAP"/"30-60s"/"10/leg" stay. */
     private val NUMERIC_REPS = Regex("""^\d+(-\d+)?$""")
 
+    // Asked for every candidate of every slot, and the library only holds a handful of distinct rep
+    // strings, so each string runs the regex once. Keyed by the string itself, so it can't go stale.
+    private val numericRepsMemo = ConcurrentHashMap<String, Boolean>()
+
+    private fun isNumericReps(reps: String): Boolean =
+        numericRepsMemo.getOrPut(reps) { reps.matches(NUMERIC_REPS) }
+
     /**
      * Reps for [def] in a [scheme] slot. Non-numeric and [ExerciseDef.fixedReps] movements keep their
      * own range. An isolation that ends up in a STRENGTH slot (nothing compound was available) is
      * prescribed the HYPERTROPHY range, never a heavy 6-10 wall sit or leg curl (2026-09-21).
      */
     private fun repsFor(def: ExerciseDef, scheme: RepScheme, goal: String): String =
-        if (!def.defaultReps.matches(NUMERIC_REPS) || def.fixedReps) def.defaultReps
+        if (!isNumericReps(def.defaultReps) || def.fixedReps) def.defaultReps
         else if (ExerciseTag.COMPOUND !in def.tags && goal == "get_stronger") {
             if (scheme == RepScheme.PUMP) "12-15" else "8-12"
         } else if (ExerciseTag.COMPOUND !in def.tags && scheme == RepScheme.STRENGTH) {

@@ -143,14 +143,15 @@ private fun presetMeta(preset: EquipmentPreset): String = when {
 internal fun StepWeek(
     archetypes: List<DayArchetype>,
     plannedSets: List<Int>,
-    days: List<GeneratedDay>
+    /** Null while the week is still being built; the bars stand on the planned volume meanwhile. */
+    days: List<GeneratedDay>?
 ) {
     // Which day is open. Survives a re-roll on purpose — the split is unchanged, so the user stays
     // on the day they were reading and watches its movements change under them. Coerced rather than
     // reset, so it can never index off a shorter week.
     var picked by rememberSaveable { mutableIntStateOf(0) }
     val index = picked.coerceIn(0, (archetypes.size - 1).coerceAtLeast(0))
-    val day = days.getOrNull(index)
+    val day = days?.getOrNull(index)
     // A one-day week has nothing to move between, so it gets no tap affordance and no line telling
     // the user to use one. Its single bar IS the week, which is also why the day below drops its set
     // count: at one day that number and the week total are the same fact (§4.3).
@@ -187,7 +188,8 @@ internal fun StepWeek(
             WeekDay(
                 shown,
                 fallbackName = archetypes.getOrNull(index)?.name.orEmpty(),
-                showSets = many
+                showSets = many,
+                building = days == null
             )
         }
     }
@@ -199,7 +201,7 @@ internal fun StepWeek(
  * the quiet mono rung so the movement names carry the row.
  */
 @Composable
-private fun WeekDay(day: GeneratedDay?, fallbackName: String, showSets: Boolean) {
+private fun WeekDay(day: GeneratedDay?, fallbackName: String, showSets: Boolean, building: Boolean = false) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val exercises = day?.exercises.orEmpty()
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -211,7 +213,9 @@ private fun WeekDay(day: GeneratedDay?, fallbackName: String, showSets: Boolean)
                 else -> "${exercises.size} moves"
             }
         )
-        if (exercises.isEmpty()) {
+        // While the week is still being built the day shows its name alone: "nothing your gear
+        // covers" would be a false statement about a week that doesn't exist yet.
+        if (exercises.isEmpty() && !building) {
             // Effectively unreachable (the generator keeps a last-resort bodyweight fill), but a
             // blank day must still say what it means rather than mislabel itself.
             Text(

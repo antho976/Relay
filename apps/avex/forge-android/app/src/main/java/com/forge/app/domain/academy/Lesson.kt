@@ -27,7 +27,14 @@ data class Lesson(
      * lessons that explain what the coach does rather than what the literature says.
      */
     val sources: List<Source> = emptyList()
-)
+) {
+    /**
+     * [blocks]' reading time, counted once. The contents page asks for every lesson's on each
+     * composition, and counting means splitting all the prose into words. Declared in the body, so it
+     * stays out of equality and `copy`.
+     */
+    val readMinutes: Int by lazy(LazyThreadSafetyMode.PUBLICATION) { blocks.readMinutes() }
+}
 
 /**
  * What opens a lesson, written for the reader rather than for the ledger.

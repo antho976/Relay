@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -57,7 +58,8 @@ class TrophiesViewModel @Inject constructor(
             filter = filter,
             weightUnit = weightUnit
         )
-    }.stateIn(
+    // Off Main: trophiesStateFor walks every trophy against the whole-history snapshot.
+    }.flowOn(kotlinx.coroutines.Dispatchers.Default).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
         initialValue = TrophiesUiState(totalCount = Trophies.all.size)

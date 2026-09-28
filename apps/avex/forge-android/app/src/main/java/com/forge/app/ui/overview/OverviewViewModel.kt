@@ -19,7 +19,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -216,7 +215,9 @@ class OverviewViewModel @Inject constructor(
         // Backfill the first-touch flag for users who already have history, so the onboarding cards
         // never reappear for a returning user (e.g. after a data wipe). finishWorkout() sets it going forward.
         viewModelScope.launch {
-            if (statsRepo.observeWeeklyStats().first().totalFinishedSessions > 0) settingsRepo.setFirstWorkoutDone()
+            // One count, not a second subscription to the whole weekly-stats fan-out (about a dozen
+            // flows, including every finished timestamp) just to read this one number off it.
+            if (sessionDao.trackedFinishedCount() > 0) settingsRepo.setFirstWorkoutDone()
         }
         // Detect + resolve a zombie active session (force-stop / regenerate artifact) so it can't drive
         // a misleading resume or block a fresh start; surface what happened once (E8). Await ensureLoaded

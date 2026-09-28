@@ -49,7 +49,13 @@ class AcademyViewModel @Inject constructor(
          * `emptyList()` opened the Academy on "0 PIECES" for a frame, which §12 calls a state
          * nobody drew rather than a loading state.
          */
-        val all: List<AcademyRegistry.LessonState> = AcademyRegistry.stateFrom(emptyList())
+        val all: List<AcademyRegistry.LessonState> = AcademyRegistry.stateFrom(emptyList()),
+        /**
+         * Whether [all] carries the ledger's read marks yet. The seeded list reads as all unread, so
+         * the opening drawing waits for this rather than picking from it and reshuffling a moment
+         * later. True by default so a state built by hand (a preview) renders in full.
+         */
+        val loaded: Boolean = true
     ) {
         val newCount: Int get() = all.count { it.isNew }
 
@@ -67,19 +73,27 @@ class AcademyViewModel @Inject constructor(
             all.filter { it.lesson.track == track }
     }
 
-    private val _state = MutableStateFlow(UiState())
+    private val _state = MutableStateFlow(UiState(loaded = false))
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     init {
         // Observed rather than fetched once: a lesson is read on its own screen now, so the marks
         // change while this page is on the back stack and have to be true again when it returns.
+        // Side by side, not one after the other: the sync builds an engine snapshot, and the read
+        // marks in the contents list should not wait on it.
         viewModelScope.launch {
-            runCatching { academyRepo.syncCoachMoments() }
             runCatching {
                 academyRepo.observeStates().collect { states ->
                     _state.update { it.copy(all = states) }
                 }
             }
+        }
+        // The opening drawing picks from what the coach has flagged, so it holds until the sync has
+        // run and its unlocks are read back, rather than choosing from a list about to change.
+        viewModelScope.launch {
+            runCatching { academyRepo.syncCoachMoments() }
+            val synced = runCatching { academyRepo.states() }.getOrNull()
+            _state.update { if (synced != null) it.copy(all = synced, loaded = true) else it.copy(loaded = true) }
         }
     }
 }
