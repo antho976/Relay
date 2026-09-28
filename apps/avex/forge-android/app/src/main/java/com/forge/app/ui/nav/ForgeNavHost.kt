@@ -338,8 +338,8 @@ fun ForgeNavHost(
             val initialPage = com.forge.app.ui.settings.SettingsPage.entries.firstOrNull { it.name == pageArg }
             SettingsScreen(
                 onBack = { nav.popBackStack() },
-                onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) },
-                onOpenBuilder = { nav.navigate(Routes.programBuilder()) },
+                onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) { launchSingleTop = true } },
+                onOpenBuilder = { nav.navigate(Routes.programBuilder()) { launchSingleTop = true } },
                 initialPage = initialPage
             )
         }
