@@ -93,8 +93,10 @@ object OutcomeWatcher {
                     // An "ok" needs evidence: at least one non-skipped bout of the changed slot since
                     // the apply. An empty window used to fall through to ok, so a swap the athlete never
                     // actually performed was recorded as a success and counted toward auto-apply trust
-                    // (audit M-08). No exposure is neither a win nor a loss — NOT FOLLOWED.
-                    windowClosed && boutsSince.none { !it.skipped } -> WatchVerdict(
+                    // (audit M-08). No exposure is neither a win nor a loss — NOT FOLLOWED. And a bout
+                    // is exposure only if work was logged in it: a row carrying just a note, or a
+                    // rating with no sets, is not the swapped movement having been trained.
+                    windowClosed && boutsSince.none { !it.skipped && it.sets.isNotEmpty() } -> WatchVerdict(
                         d.id, CoachDecision.OUTCOME_NOT_FOLLOWED,
                         "${d.targetName} wasn't trained during the watch window, so the change isn't judged"
                     )

@@ -17,6 +17,18 @@ class RestEffortPolicyTest {
         assertEquals(90, RestAdvisor.restSeconds(compound.copy(tags = listOf(ExerciseTag.ISOLATION)), null, null).seconds)
     }
 
+    @Test fun anEasySetNeverLengthensAShortRest() {
+        val iso = compound.copy(tags = listOf(ExerciseTag.ISOLATION))
+        // A 45 s base is already under the minute floor: EASY leaves it alone, and says nothing.
+        val short = RestAdvisor.restSeconds(iso, EffortRating.EASY, null, isolationBase = 45)
+        assertEquals(45, short.seconds)
+        assertFalse(short.reason.contains("easy"))
+        // 75 s eases to the floor, and the label states the real cut.
+        val mid = RestAdvisor.restSeconds(iso, EffortRating.EASY, null, isolationBase = 75)
+        assertEquals(60, mid.seconds)
+        assertTrue(mid.reason.contains("−15s after an easy set"))
+    }
+
     @Test fun heavyBonusFollowsTheSetPerformedNotJustThePlan() {
         // A 4-6 prescription performed for 12 reps at a working weight is not a heavy set: 2:00, not 3:00.
         val heavyPlan = compound.copy(reps = "4-6")

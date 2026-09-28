@@ -134,10 +134,6 @@ data class AdaptThresholds(
     val readinessMinSessions: Int = 3,
     /** The scale is bounded to ±this percent — autoregulation nudges, never lurches. */
     val readinessMaxPercent: Int = 5,
-    /** Active (non-rest) cardio minutes in the last day past which it reads as a recovery cost. */
-    val readinessCardioLoadMinutes: Int = 60,
-    /** Percent shaved off readiness when [readinessCardioLoadMinutes] is exceeded in the last day. */
-    val readinessCardioLoadPenalty: Int = 1,
     /** Mood window (A1): how far back a post-session mood still speaks about today's readiness. */
     val readinessMoodHours: Int = 48,
     /** Readiness at/below −this reads as "today should not be a hard session" (B2 directive). */
@@ -154,7 +150,9 @@ data class AdaptThresholds(
     /** Resting-HR readiness read: prior-fortnight samples needed, and the bpm rise that speaks. */
     val readinessMinRestingHrSamples: Int = 4,
     val readinessRestingHrDeltaBpm: Int = 5,
-    /** HRV drop (%) below your own fortnight baseline that shaves a readiness point (F). */
+    /** HRV readiness read: prior-fortnight samples needed, and the drop (%) below that baseline
+     *  that shaves a readiness point (F). */
+    val readinessMinHrvSamples: Int = 4,
     val readinessHrvDropPercent: Int = 12,
     /** Steps yesterday past which a long day on your feet counts against today's session. */
     val readinessHighStepDay: Int = 18_000,

@@ -171,8 +171,13 @@ object RestAdvisor {
             parts += "light set (≤$pct% of your working weight) · capped at ${mmss(t.lightSetRestSeconds)}"
         }
         if (lastEffort == EffortRating.EASY) {
-            seconds = (seconds - 30).coerceAtLeast(60)
-            parts += "−30s after an easy set"
+            // Never below a minute, and never ABOVE where it was: `coerceAtLeast(60)` lengthened a
+            // base already under a minute (a 45 s isolation rest became 60 s) under a "−30s" label.
+            val eased = maxOf(seconds - 30, minOf(seconds, 60))
+            if (eased < seconds) {
+                parts += "−${seconds - eased}s after an easy set"
+                seconds = eased
+            }
         } else if (lastEffort == EffortRating.HARD) {
             seconds += 15
             parts += "+15s after a hard set"
@@ -222,5 +227,7 @@ object RestAdvisor {
     private fun roundTo(value: Double, step: Int): Int =
         ((value / step).roundToInt() * step).coerceAtLeast(step)
 
-    private fun mmss(seconds: Int): String = "${seconds / 60}:" + "%02d".format(seconds % 60)
+    // padStart, not "%02d".format: that formats in the default locale, so an ar/fa/bn device printed
+    // the seconds in its own digits beside ASCII minutes ("2:٠٠").
+    private fun mmss(seconds: Int): String = "${seconds / 60}:" + (seconds % 60).toString().padStart(2, '0')
 }

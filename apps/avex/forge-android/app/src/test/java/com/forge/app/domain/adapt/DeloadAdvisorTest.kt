@@ -361,6 +361,33 @@ class DeloadAdvisorTest {
         assertTrue(f.drivers.any { it.contains("2 lifts below last month's strength") })
     }
 
+    @Test
+    fun aSwapInsideTheSlotIsNotARegression() {
+        // Barbell row in the prior month (e1RM ~213), then a dumbbell row swapped into the same slot
+        // (~83). Two different lifts under one key — neither one lost strength (H-06).
+        fun swapped() = listOf(
+            bout(startDay = 36, effort = null, sets = listOf(set(160.0, 8))).copy(performedExerciseId = "bb-row"),
+            bout(startDay = 50, effort = null, sets = listOf(set(62.5, 8))).copy(performedExerciseId = "db-row")
+        )
+        val f = DeloadAdvisor.fatigue(
+            snapshot(history = mapOf("ua1" to calmBouts(), "ua2" to swapped(), "ua3" to swapped()))
+        )
+        assertNotNull(f)
+        assertEquals(0, f!!.score)
+    }
+
+    @Test
+    fun aWarmUpIsNotTheFirstSetOfARepDropOff() {
+        // 12-rep warm-up, then 5, 5, 5 working: no fade at all, but read from the warm-up it is 58%.
+        val warmup = set(95.0, 12).copy(setType = EffortModel.SET_TYPE_WARMUP)
+        val bouts = (0 until 6).map {
+            bout(startDay = 48 + it * 2, effort = EffortRating.JUST_RIGHT, sets = listOf(warmup) + List(3) { set(185.0, 5) })
+        }
+        val f = DeloadAdvisor.fatigue(snapshot(history = mapOf("ua1" to bouts)))
+        assertNotNull(f)
+        assertTrue(f!!.drivers.none { it.contains("reps dropping") })
+    }
+
     // ── Determinism ────────────────────────────────────────────────────────────
 
     @Test

@@ -26,8 +26,6 @@ import kotlin.math.abs
  */
 object PersonalProfile {
 
-    private const val DAY_MS = 24L * 60 * 60 * 1000
-
     /** How far a personal weekly cap may move from the population default, as a fraction. */
     const val CAP_BAND = 0.35
 
@@ -66,9 +64,13 @@ object PersonalProfile {
         fun capFor(muscle: MuscleGroup): Int =
             volumeCaps[muscle] ?: VolumeModel.weeklyCap[muscle] ?: DEFAULT_CAP
 
-        /** True when anything at all has been personalised — what the UI gates its section on. */
+        /**
+         * True when a personalised number the Coach readout SHOWS exists — what the UI gates its
+         * "Your numbers" section on. Only the caps and the spacing are rendered, so counting
+         * [sweetSpotReps] here drew the section's heading over an empty table.
+         */
         val hasPersonalData: Boolean
-            get() = volumeCaps.isNotEmpty() || recoveryDays != null || sweetSpotReps.isNotEmpty()
+            get() = volumeCaps.isNotEmpty() || recoveryDays != null
 
         companion object {
             const val DEFAULT_CAP = 16
@@ -132,7 +134,12 @@ object PersonalProfile {
             .sortedBy { it.startedAt }
         if (finished.size < MIN_GAPS_FOR_SPACING + 1) return null
         val pairs = finished.zipWithNext().mapNotNull { (prev, next) ->
-            val gapDays = ((next.startedAt - prev.startedAt) / DAY_MS).toInt()
+            // Calendar days, as the readout prints them ("2 days between sessions"). Truncated
+            // elapsed time read a Monday-evening → Wednesday-morning spacing as ONE day.
+            val gapDays = java.time.temporal.ChronoUnit.DAYS.between(
+                Instant.ofEpochMilli(prev.startedAt).atZone(s.zoneId).toLocalDate(),
+                Instant.ofEpochMilli(next.startedAt).atZone(s.zoneId).toLocalDate()
+            ).toInt()
             val volume = next.totalVolumeLb ?: return@mapNotNull null
             if (gapDays !in 1..7 || volume <= 0) null else gapDays to volume
         }

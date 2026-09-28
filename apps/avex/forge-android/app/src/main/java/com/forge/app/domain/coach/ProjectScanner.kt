@@ -131,7 +131,9 @@ object ProjectScanner {
     }
 
     private fun shortSleep(health: HealthSnap): List<Candidate> {
-        val nights = health.sleepNights.takeLast(14)
+        // HealthSnap carries nights in ANY order, so "the last fortnight" has to be sorted for:
+        // an unsorted takeLast averaged whichever fourteen nights the provider listed last.
+        val nights = health.sleepNights.sortedBy { it.endedAtMs }.takeLast(14)
         if (nights.size < 7) return emptyList()
         val avg = nights.map { it.durationMin }.average()
         if (avg > 390) return emptyList()
@@ -173,6 +175,7 @@ object ProjectScanner {
 
     // ── Shared ────────────────────────────────────────────────────────────────
 
+    /** Working sets per muscle, TOTALLED over the last [weeks] weeks (callers set gates to match). */
     private fun setsByMuscle(s: AdaptationSnapshot, weeks: Int): Map<MuscleGroup, Int> {
         val since = s.nowMs - weeks * WEEK_MS
         val byMuscle = HashMap<MuscleGroup, Int>()
@@ -182,8 +185,9 @@ object ProjectScanner {
                     .sumOf { bout -> bout.sets.count { it.durationSeconds == null } }
                 if (sets > 0) byMuscle[slot.muscle] = (byMuscle[slot.muscle] ?: 0) + sets
         }
-        // Per-week average when the window is longer than a week, so thresholds read the same way.
-        return if (weeks <= 1) byMuscle else byMuscle.mapValues { it.value }
+        // A total, not a per-week average. The branch that claimed to average was an identity
+        // `mapValues`, and the imbalance gate (8 sets a side over four weeks) is calibrated on it.
+        return byMuscle
     }
 
     private val BalancePair.readableName: String

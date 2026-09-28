@@ -322,6 +322,17 @@ class OutcomeWatcherTest {
     }
 
     @Test
+    fun swap_windowClosed_onlySetlessBouts_isNotFollowed() {
+        // A row carrying a rating or a note and no logged set is not the swapped movement trained.
+        val empty = bout(48).copy(sets = emptyList())
+        val verdict = OutcomeWatcher.evaluate(
+            listOf(decision(appliedAtDay = 44)),
+            snapshot(mapOf("ua1" to listOf(empty, bout(52).copy(sets = emptyList()))))
+        ).single()
+        assertEquals(CoachDecision.OUTCOME_NOT_FOLLOWED, verdict.outcome)
+    }
+
+    @Test
     fun swap_insideWindow_neverTrained_isStillPending() {
         // The neutral close only lands once the window shuts — a live window stays undecided.
         assertTrue(OutcomeWatcher.evaluate(listOf(decision(appliedAtDay = 50)), snapshot()).isEmpty())

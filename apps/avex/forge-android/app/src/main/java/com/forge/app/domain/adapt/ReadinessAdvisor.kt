@@ -16,8 +16,8 @@ import java.time.ZoneOffset
  * System 6, rebuilt (Coach v3 B1): daily readiness from everything the app knows about today.
  *
  * V1 read two things — session spacing and cardio rest flags. V2 reads the morning check-in, last
- * night's sleep, resting HR against your own baseline, post-session mood, acute load, off-gym
- * movement, bodyweight flux and life events, and it names every part it used. The output is still
+ * night's sleep, resting HR and HRV against your own baseline, post-session mood, acute load,
+ * off-gym movement and life events, and it names every part it used. The output is still
  * a small bounded scale on today's targets: readiness *shapes* the session, it never cancels it.
  *
  * **One signal, one computation** (plan M6). Illness now arrives through [LifeEvents] rather than a
@@ -56,7 +56,6 @@ object ReadinessAdvisor {
         moods: List<MoodEntry> = emptyList(),
         checkins: List<CheckinEntry> = emptyList(),
         health: HealthSnap = HealthSnap(),
-        bodyweightFlux: Boolean = false,
         lifeEvents: LifeEvents.State = LifeEvents.State.NONE,
         t: AdaptThresholds = AdaptThresholds()
     ): Readiness {
@@ -226,12 +225,6 @@ object ReadinessAdvisor {
             }
         }
 
-        // ── Bodyweight flux ───────────────────────────────────────────────────────
-        if (bodyweightFlux) {
-            percent -= 1
-            parts += "weight swinging"
-        }
-
         val clamped = percent.coerceIn(-t.readinessMaxPercent, t.readinessMaxPercent)
         val scale = if (clamped == 0) null else Recommendation.ReadinessScale(
             percent = clamped,
@@ -286,7 +279,7 @@ object ReadinessAdvisor {
     private fun hrvDrop(health: HealthSnap, nowMs: Long, t: AdaptThresholds): Int? {
         val recent = health.hrv.filter { it.timeMs >= nowMs - 2 * DAY_MS }
         val baseline = health.hrv.filter { it.timeMs in (nowMs - 16 * DAY_MS) until (nowMs - 2 * DAY_MS) }
-        if (recent.isEmpty() || baseline.size < t.readinessMinRestingHrSamples) return null
+        if (recent.isEmpty() || baseline.size < t.readinessMinHrvSamples) return null
         val today = recent.map { it.rmssdMs }.average()
         val normal = baseline.map { it.rmssdMs }.average()
         if (normal <= 0) return null

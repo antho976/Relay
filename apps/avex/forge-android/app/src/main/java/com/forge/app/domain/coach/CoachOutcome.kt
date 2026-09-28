@@ -19,6 +19,9 @@ object CoachOutcome {
         "applied", "folded" -> when (outcome) {
             "ok" -> "worked"
             "failed" -> "didn't stick"
+            // A FINAL verdict — the window closed on an absence, an illness or no logged work. It
+            // fell to the pending branch and read "still watching" forever after the watcher ruled.
+            com.forge.app.data.db.entities.CoachDecision.OUTCOME_NOT_FOLLOWED -> "not judged"
             else -> {
                 // Counted the same way OutcomeWatcher closes the window — in calendar days. The
                 // elapsed-ms form truncated, so this line said "~0 days left" for a whole week

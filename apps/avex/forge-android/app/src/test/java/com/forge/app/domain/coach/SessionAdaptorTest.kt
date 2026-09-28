@@ -29,50 +29,7 @@ class SessionAdaptorTest {
         slot("calf", MuscleGroup.CALVES, sets = 3)
     )
 
-    // ── "I have N minutes" ─────────────────────────────────────────────────────
-
-    @Test
-    fun plentyOfTimeKeepsEverything() {
-        val t = SessionAdaptor.triage(session, minutesAvailable = 120)
-        assertEquals(session.size, t.keep.size)
-        assertTrue(t.drop.isEmpty())
-        assertTrue(t.reason.contains("fits"))
-    }
-
-    @Test
-    fun halfTheTimeKeepsTheCompounds() {
-        val t = SessionAdaptor.triage(session, minutesAvailable = 30)
-        assertTrue(t.keep.isNotEmpty())
-        assertTrue("compounds survive", t.keep.any { it.exerciseId == "bench" || it.exerciseId == "row" })
-        assertTrue("isolation goes first", t.drop.any { it.exerciseId == "calf" })
-    }
-
-    @Test
-    fun goalMusclesSurviveAheadOfEverything() {
-        val t = SessionAdaptor.triage(
-            session, minutesAvailable = 20, goalMuscles = setOf(MuscleGroup.BICEPS)
-        )
-        assertTrue("the goal muscle's work is protected", t.keep.any { it.muscle == MuscleGroup.BICEPS })
-    }
-
-    @Test
-    fun aSessionIsNeverTriagedToNothing() {
-        val t = SessionAdaptor.triage(session, minutesAvailable = 1)
-        assertTrue(t.keep.size >= SessionAdaptor.MIN_EXERCISES)
-    }
-
-    @Test
-    fun whatSurvivesKeepsTheOriginalOrder() {
-        val t = SessionAdaptor.triage(session, minutesAvailable = 30)
-        val originalOrder = session.filter { it in t.keep }.map { it.exerciseId }
-        assertEquals(originalOrder, t.keep.map { it.exerciseId })
-    }
-
-    @Test
-    fun anEmptySessionIsHandled() {
-        val t = SessionAdaptor.triage(emptyList(), minutesAvailable = 45)
-        assertTrue(t.keep.isEmpty())
-    }
+    // "I have N minutes" is SessionAdaptor.fitToTime, covered by SessionTimeFitTest.
 
     // ── "The rack is taken" ────────────────────────────────────────────────────
 
@@ -124,8 +81,8 @@ class SessionAdaptorTest {
     @Test
     fun deterministic() {
         assertEquals(
-            SessionAdaptor.triage(session, 30),
-            SessionAdaptor.triage(session, 30)
+            SessionAdaptor.soreReroute(session, MuscleGroup.CHEST, LifeEvents.State.NONE),
+            SessionAdaptor.soreReroute(session, MuscleGroup.CHEST, LifeEvents.State.NONE)
         )
     }
 }
