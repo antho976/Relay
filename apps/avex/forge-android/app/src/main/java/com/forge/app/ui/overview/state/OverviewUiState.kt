@@ -80,6 +80,8 @@ data class OverviewUiState(
     val nextUpDayKey: String = "upper-a",
     /** Day indices in the user's week order (`userWeekDayIndex`) that had a gym session this week. */
     val weekDaysTrained: Set<Int> = emptySet(),
+    /** Planned rest days this week, same indices as [weekDaysTrained]; empty without fixed weekdays. */
+    val weekRestDays: Set<Int> = emptySet(),
     /** 0=Mon..6=Sun indices that had a cardio entry this ISO week. */
     val cardioWeekDays: Set<Int> = emptySet(),
     /** Custom name for the next-up day set by the user, or null if using the program default. */

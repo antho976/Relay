@@ -633,7 +633,12 @@ fun OverviewScreen(
                 trained = state.weekDaysTrained,
                 todayIndex = todayDow,
                 dayLabels = if (settings.firstDayMonday) WEEK_INITIALS_MONDAY else WEEK_INITIALS_SUNDAY,
-                reading = "This week, ${state.weekDaysTrained.size} of 7 days trained",
+                reading = "This week, ${state.weekDaysTrained.size} of 7 days trained" + when (val r = state.weekRestDays.size) {
+                    0 -> ""
+                    1 -> ", 1 planned rest day"
+                    else -> ", $r planned rest days"
+                },
+                rest = state.weekRestDays,
                 modifier = Modifier.fillMaxWidth()
             )
 

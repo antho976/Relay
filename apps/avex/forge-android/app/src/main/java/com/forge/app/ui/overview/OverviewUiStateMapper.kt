@@ -111,6 +111,7 @@ internal fun buildOverviewUiState(
         pendingMilestone = computePendingMilestone(stats, shown, weightUnit),
         nextUpDayKey = stats.nextUpDayKey,
         weekDaysTrained = stats.weekDaysTrained,
+        weekRestDays = stats.weekRestDays,
         cardioWeekDays = cardioWeekDays,
         recentItems = recentItems
     )

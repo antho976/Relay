@@ -356,6 +356,16 @@ private class SparklineGeometry {
  *
  * Works at zero — an untrained week is seven open cells with one lit today, which is a real
  * reading, not an empty state (§12).
+ *
+ * ## Rest days (2026-09-28)
+ *
+ * With fixed training weekdays, an untrained day is one of two very different things: a rest day
+ * the plan asked for, or a session that didn't happen. They used to draw the same open cell, so a
+ * 4-day week always looked three-sevenths failed. A planned rest day now draws UNFILLED with a short
+ * rest bar — present, so the week keeps its seven columns and its calendar shape, but visibly not a
+ * gap. The filled open cell keeps meaning "a training day, not done (yet)". All seven stay: hiding
+ * rest days would make the strip a different width every week and the day letters stop lining up
+ * with the calendar underneath the user's thumb.
  */
 @Composable
 fun WeekStrip(
@@ -365,7 +375,9 @@ fun WeekStrip(
     /** Day initials in the same order as [trained], supplied by the caller so the first-day setting stays its call. */
     dayLabels: List<String>,
     reading: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Planned rest days, same indices as [trained]. A rest day you trained anyway draws as trained. */
+    rest: Set<Int> = emptySet()
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val onBg = MaterialTheme.colorScheme.onBackground
@@ -378,6 +390,7 @@ fun WeekStrip(
         repeat(7) { i ->
             val done = i in trained
             val isToday = i == todayIndex
+            val isRest = i in rest && !done
             // Past-but-untrained and still-ahead are both open cells, but the future recedes: a
             // missed day should read as a gap, an unreached one as simply not yet. They are FILLED
             // cells now, the week meter's look (2026-09-27), not 1.5dp rings: a missed day is the
@@ -406,19 +419,24 @@ fun WeekStrip(
                         .background(
                             when {
                                 done -> onBg
-                                isToday -> accent
+                                // Today stays lit on a rest day too: "you are here" outranks "rest".
+                                isToday && !isRest -> accent
+                                isRest -> Color.Transparent
                                 else -> openFill
                             }
                         )
                         // A trained TODAY is filled like any other trained day, so the accent ring
                         // around it is what still says "you are here".
                         .then(
-                            if (done && isToday) Modifier.border(2.dp, accent, CellShape) else Modifier
+                            if ((done || isRest) && isToday) Modifier.border(2.dp, accent, CellShape) else Modifier
                         ),
                     contentAlignment = Alignment.Center
                 ) {
                     if (done) {
                         Text("✓", style = MaterialTheme.typography.titleSmall, color = bg, maxLines = 1)
+                    } else if (isRest) {
+                        // The rest mark: a short bar, the glyph for "nothing planned here".
+                        Box(Modifier.size(width = 12.dp, height = 3.dp).clip(CircleShape).background(muted))
                     }
                 }
             }

@@ -874,7 +874,35 @@ class SettingsRepository @Inject constructor(
     /** "sequence" (default — day after the last finished) or "weekday" (fixed Mon..Sun plan). */
     val scheduleMode: Flow<String> = pref { it[PreferenceKeys.SCHEDULE_MODE] ?: com.forge.app.domain.schedule.WeeklySchedule.MODE_SEQUENCE }
     suspend fun setScheduleMode(v: String) =
-        context.forgePreferences.edit { it[PreferenceKeys.SCHEDULE_MODE] = v }
+        context.forgePreferences.edit { it[PreferenceKeys.SCHEDULE_MODE] = v; recordSchedule(it) }
+
+    /** Every schedule change with the day it took effect — see [com.forge.app.domain.schedule.ScheduleHistory]. */
+    val scheduleHistory: Flow<List<com.forge.app.domain.schedule.ScheduleHistory.Entry>> =
+        pref { com.forge.app.domain.schedule.ScheduleHistory.parse(it[PreferenceKeys.SCHEDULE_HISTORY]) }
+
+    /**
+     * Start the history for a user whose fixed-weekday schedule predates it (set before the history
+     * was recorded). From today on, not backwards: what the plan was before today isn't known.
+     */
+    suspend fun ensureScheduleHistory() = context.forgePreferences.edit { prefs ->
+        if (prefs[PreferenceKeys.SCHEDULE_HISTORY].isNullOrBlank() &&
+            prefs[PreferenceKeys.SCHEDULE_MODE] == com.forge.app.domain.schedule.WeeklySchedule.MODE_WEEKDAY
+        ) recordSchedule(prefs)
+    }
+
+    /** Append the schedule [prefs] now holds to the history, effective today. Inside the caller's edit. */
+    private fun recordSchedule(prefs: androidx.datastore.preferences.core.MutablePreferences) {
+        val mode = prefs[PreferenceKeys.SCHEDULE_MODE] ?: com.forge.app.domain.schedule.WeeklySchedule.MODE_SEQUENCE
+        val slots = prefs[PreferenceKeys.SCHEDULE_WEEKLY]
+            ?.let { stored -> com.forge.app.domain.schedule.WeeklySchedule.parse(stored) }
+            ?: com.forge.app.domain.schedule.WeeklySchedule.defaultFor(com.forge.app.program.Program.dayKeys)
+        val today = java.time.Instant.ofEpochMilli(clock.nowMs())
+            .atZone(java.time.ZoneId.systemDefault()).toLocalDate().toEpochDay()
+        val history = com.forge.app.domain.schedule.ScheduleHistory
+        prefs[PreferenceKeys.SCHEDULE_HISTORY] = history.encode(
+            history.record(history.parse(prefs[PreferenceKeys.SCHEDULE_HISTORY]), today, mode, slots)
+        )
+    }
 
     /** The 7-slot weekly schedule (Mon..Sun; "" = rest). Defaults to program days on the first weekdays. */
     val weeklySchedule: Flow<List<String>> = pref {
@@ -885,6 +913,7 @@ class SettingsRepository @Inject constructor(
     suspend fun setWeeklySchedule(slots: List<String>) =
         context.forgePreferences.edit {
             it[PreferenceKeys.SCHEDULE_WEEKLY] = com.forge.app.domain.schedule.WeeklySchedule.encode(slots)
+            recordSchedule(it)
         }
 
     /**
@@ -907,6 +936,7 @@ class SettingsRepository @Inject constructor(
             prefs[PreferenceKeys.SCHEDULE_WEEKLY] = com.forge.app.domain.schedule.WeeklySchedule.encode(
                 slots.mapIndexed { index, slot -> if (index == weekdayIndex) dayKey else slot }
             )
+            recordSchedule(prefs)
         }
     }
 

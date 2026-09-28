@@ -69,6 +69,8 @@ class ForgeApp : Application(), Configuration.Provider {
             // marker beside it (M-06). Two stores, no shared transaction: this is what stops them
             // disagreeing forever. Fail-soft — a reconciliation that throws must not stop startup.
             runCatching { programRepository.reconcilePendingGeneration() }
+            // A fixed-weekday schedule set before rest days were recorded starts its record today.
+            runCatching { settingsRepository.ensureScheduleHistory() }
             reminderScheduler.ensureScheduled(
                 settingsRepository.trainingReminderEnabled.first(),
                 settingsRepository.trainingReminderHour.first()

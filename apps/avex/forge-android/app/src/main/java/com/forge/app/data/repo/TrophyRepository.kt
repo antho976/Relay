@@ -20,6 +20,7 @@ import com.forge.app.program.Trophy
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -39,7 +40,8 @@ class TrophyRepository @Inject constructor(
     private val vacationDao: com.forge.app.data.db.dao.VacationDao,
     private val cardioDao: com.forge.app.data.db.dao.CardioDao,
     private val goalRepository: GoalRepository,
-    private val clock: Clock
+    private val clock: Clock,
+    private val settingsRepo: com.forge.app.data.prefs.SettingsRepository
 ) {
     fun observeAll(): Flow<List<UnlockedTrophy>> = unlockedDao.observeAll()
     fun observeUnlockedIds(): Flow<List<String>> = unlockedDao.observeUnlockedIds()
@@ -83,7 +85,13 @@ class TrophyRepository @Inject constructor(
 
         val allSessions = allSessionsD.await()
         val zone = ZoneId.systemDefault()
-        val onVacation = com.forge.app.domain.vacation.VacationCalendar.onVacation(vacationD.await())
+        val vacation = com.forge.app.domain.vacation.VacationCalendar.onVacation(vacationD.await())
+        // Planned rest days bridge the longest streak exactly as they bridge the live one
+        // (StatsRepository.streakBridge), so BEST can never read lower than a run the user was on.
+        val restHistory = settingsRepo.scheduleHistory.first()
+        val onVacation: (LocalDate) -> Boolean = { d ->
+            vacation(d) || com.forge.app.domain.schedule.ScheduleHistory.isPlannedRest(restHistory, d)
+        }
         // TRACKED sessions are the input to every trophy figure below, not just the two that
         // already used them. `Session.isUntracked` says an untracked session is "excluded from
         // streak, trophies, suggestions"; tonnage and first-session honoured that while the streak,

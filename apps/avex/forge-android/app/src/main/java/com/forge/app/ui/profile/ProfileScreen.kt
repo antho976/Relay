@@ -144,6 +144,7 @@ fun ProfileScreen(
     val dayLog by viewModel.dayLog.collectAsStateWithLifecycle()
     val galleryLocked by LocalAppLock.current.galleryLocked.collectAsStateWithLifecycle()
     val showRankUpCelebration by viewModel.showRankUpCelebration.collectAsStateWithLifecycle()
+    val scheduleHistory by viewModel.scheduleHistory.collectAsStateWithLifecycle()
     val bodyweight by viewModel.bodyweight.collectAsStateWithLifecycle()
     val bodyweightGoalLb by viewModel.bodyweightGoalLb.collectAsStateWithLifecycle()
     val weightConnected by viewModel.weightConnected.collectAsStateWithLifecycle()
@@ -315,7 +316,8 @@ fun ProfileScreen(
                     // the rest of the app rather than needing a branch here.
                     hue = accent,
                     onDayTap = viewModel::openDay,
-                    modifier = pad.statsEntrance(2)
+                    modifier = pad.statsEntrance(2),
+                    planOn = { date -> com.forge.app.domain.schedule.ScheduleHistory.planOn(scheduleHistory, date) }
                 )
 
                 // ── BODY as open rows (index 3) ─────────────────────────────────
