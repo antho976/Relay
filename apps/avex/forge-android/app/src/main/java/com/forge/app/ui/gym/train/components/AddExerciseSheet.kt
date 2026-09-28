@@ -1,6 +1,16 @@
 package com.forge.app.ui.gym.train.components
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.ui.Alignment
+import com.forge.app.ui.common.ForgeGroupLabel
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import com.forge.app.ui.common.window.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -65,48 +74,55 @@ fun AddExerciseSheet(
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
             )
-            androidx.compose.material3.OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                placeholder = { Text("Search exercises…") },
-                singleLine = true
+            GymSearchRow(
+                query = query,
+                onQueryChange = { query = it },
+                placeholder = "Search exercises",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
             )
-            LazyColumn(modifier = Modifier.fillMaxWidth()) {
+            // Each muscle is one group of filled rows, 2dp seams, no lines.
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp)
+            ) {
                 grouped.forEach { (muscle, exercises) ->
                     item(key = "h-$muscle") {
-                        Text(
-                            muscle.uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-                        )
+                        Box(Modifier.padding(start = 4.dp, end = 4.dp, top = 18.dp, bottom = 10.dp)) {
+                            ForgeGroupLabel(muscle)
+                        }
                     }
-                    items(exercises, key = { it.id }) { plan ->
+                    itemsIndexed(exercises, key = { _, it -> it.id }) { i, plan ->
                         val alreadyAdded = plan.id in alreadyAddedIds
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable(enabled = !alreadyAdded) { onPick(plan.id) }
-                                .padding(horizontal = 20.dp, vertical = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                plan.name,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = if (alreadyAdded) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                                        else MaterialTheme.colorScheme.onSurface
-                            )
-                            if (alreadyAdded) {
+                        val dim = if (alreadyAdded) 0.35f else 1f
+                        Column {
+                            if (i > 0) Spacer(Modifier.height(GROUP_SEAM))
+                            Row(
+                                modifier = Modifier
+                                    .groupMember(i, exercises.size)
+                                    .then(
+                                        if (alreadyAdded) Modifier
+                                        else Modifier.clickableLabeled("Add ${plan.name}") { onPick(plan.id) }
+                                    )
+                                    .heightIn(min = 52.dp)
+                                    .padding(horizontal = ROW_H, vertical = 14.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
-                                    "Added",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                    plan.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = dim),
+                                    modifier = Modifier.weight(1f)
                                 )
+                                if (alreadyAdded) {
+                                    Text(
+                                        "ADDED",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
                     }
                 }
             }

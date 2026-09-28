@@ -12,16 +12,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -51,8 +45,10 @@ import com.forge.app.domain.units.formatDistance
 import com.forge.app.domain.units.formatElevation
 import com.forge.app.ui.common.EditorialFigure
 import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.ForgeOutlineCapsule
-import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.ForgeSecondaryCapsule
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.cardio.CardioChartPanel
+import com.forge.app.ui.cardio.CardioLinkCapsule
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -116,15 +112,7 @@ fun CardioSessionDetailSheet(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            ForgeTopBar(onBack = onBack)
         },
         containerColor = Color.Transparent
     ) { inner ->
@@ -248,8 +236,10 @@ fun CardioSessionDetailSheet(
                     Column(Modifier.padding(horizontal = 24.dp)) {
                         EditorialHeader(label = "Route", muted = muted, accent = accent)
                         Spacer(Modifier.height(12.dp))
-                        Box(modifier = Modifier.fillMaxWidth().height(160.dp)) {
-                            RouteThumbnail(route = route, color = onBg, modifier = Modifier.fillMaxSize().padding(8.dp))
+                        CardioChartPanel {
+                            Box(modifier = Modifier.fillMaxWidth().height(160.dp)) {
+                                RouteThumbnail(route = route, color = onBg, modifier = Modifier.fillMaxSize().padding(8.dp))
+                            }
                         }
                     }
                 }
@@ -260,7 +250,7 @@ fun CardioSessionDetailSheet(
                     Column(Modifier.padding(horizontal = 24.dp)) {
                         EditorialHeader(label = "Route", muted = muted, accent = accent)
                         Spacer(Modifier.height(12.dp))
-                        ForgeOutlineCapsule(label = "Show GPS route", onClick = onShowRoute)
+                        ForgeSecondaryCapsule(label = "Show GPS route", onClick = onShowRoute)
                     }
                 }
             }
@@ -293,14 +283,10 @@ fun CardioSessionDetailSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    ForgeOutlineCapsule(label = "Edit", onClick = onEdit)
-                    // A destructive one-shot is level ② tinted error, paired with the Undo snackbar —
-                    // never a filled red button, and never accent- or error-coloured body text (§14).
-                    ForgeOutlineCapsule(
-                        label = "Delete",
-                        onClick = onDelete,
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
+                    ForgeSecondaryCapsule(label = "Edit", onClick = onEdit)
+                    // A destructive one-shot keeps its error-tinted label on the filled capsule, paired
+                    // with the Undo snackbar; never a filled red button (§14).
+                    ForgeSecondaryCapsule(label = "Delete", onClick = onDelete, destructive = true)
                 }
             }
         }
@@ -433,11 +419,13 @@ private fun HeartRateSection(
             }
         }
         Spacer(Modifier.height(12.dp))
-        com.forge.app.ui.gym.stats.components.LineChart(
-            values = hr.map { it.bpm.toDouble() },
-            lineColor = accent,
-            modifier = Modifier.fillMaxWidth().height(96.dp)
-        )
+        CardioChartPanel {
+            com.forge.app.ui.gym.stats.components.LineChart(
+                values = hr.map { it.bpm.toDouble() },
+                lineColor = accent,
+                modifier = Modifier.fillMaxWidth().height(96.dp)
+            )
+        }
         // The watch's own reading of this workout, offered beside the logged values (§4.9). The
         // adopt link renders only when it would actually change something.
         val watchParts = watchStats?.let { w ->
@@ -464,14 +452,7 @@ private fun HeartRateSection(
                 if (onAdoptWatchStats != null &&
                     watchParts.any { !it.endsWith("kcal") } // kcal alone isn't adoptable onto the entry
                 ) {
-                    Text(
-                        "use watch stats →",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = accent,
-                        modifier = Modifier
-                            .clickableLabeled("Use watch stats", onClick = onAdoptWatchStats)
-                            .padding(vertical = 2.dp)
-                    )
+                    CardioLinkCapsule("Use watch stats", "Use watch stats", onAdoptWatchStats)
                 }
             }
         }

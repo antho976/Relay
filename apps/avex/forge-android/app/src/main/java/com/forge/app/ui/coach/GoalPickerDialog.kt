@@ -1,17 +1,14 @@
 package com.forge.app.ui.coach
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -19,18 +16,21 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.text.KeyboardOptions
 import com.forge.app.domain.coach.BalancePair
 import com.forge.app.domain.coach.CoachGoalKind
 import com.forge.app.program.MuscleGroup
 import com.forge.app.program.Program
-import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.ForgeChoice
+import com.forge.app.ui.common.ForgeChoiceList
+import com.forge.app.ui.common.ForgeFieldRow
+import com.forge.app.ui.common.ForgeGroupSection
+import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.ForgeRowGroup
+import com.forge.app.ui.common.ForgeSecondaryCapsule
 import com.forge.app.domain.units.filterDecimalInput
 
 /**
@@ -47,12 +47,11 @@ internal fun GoalPickerDialog(
     onDismiss: () -> Unit
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accentWash = MaterialTheme.colorScheme.primaryContainer
 
     var kind by remember { mutableStateOf<CoachGoalKind?>(null) }
     var targetKey by remember { mutableStateOf("") }
     var targetText by remember { mutableStateOf("") }
+    val focus = LocalFocusManager.current
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -65,59 +64,65 @@ internal fun GoalPickerDialog(
             )
         },
         text = {
-            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+            // Each step is one pick-one group of filled rows ([ForgeChoiceList]); the chosen row
+            // lifts out of the group in the accent, the same "picked" as onboarding.
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
                 val chosen = kind
                 if (chosen == null) {
-                    CoachGoalKind.entries.forEach { k ->
-                        PickRow(k.displayName, selected = false, onBg = onBg, wash = accentWash) {
-                            kind = k
+                    ForgeChoiceList(
+                        choices = CoachGoalKind.entries.map { ForgeChoice(it.name, it.displayName) },
+                        selected = "",
+                        onSelect = { key ->
+                            kind = CoachGoalKind.entries.first { it.name == key }
                             targetKey = ""
                         }
-                    }
+                    )
                 } else {
                     when (chosen.scope) {
                         CoachGoalKind.Scope.EXERCISE -> {
-                            Text(
-                                "Which lift",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = muted,
-                                fontSize = 12.sp
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Program.days.flatMap { it.exercises }.distinctBy { it.id }.take(24).forEach { plan ->
-                                PickRow(plan.name, selected = targetKey == plan.id, onBg = onBg, wash = accentWash) {
-                                    targetKey = plan.id
-                                }
+                            ForgeGroupSection("Which lift") {
+                                ForgeChoiceList(
+                                    choices = Program.days.flatMap { it.exercises }.distinctBy { it.id }.take(24)
+                                        .map { ForgeChoice(it.id, it.name) },
+                                    selected = targetKey,
+                                    onSelect = { targetKey = it }
+                                )
                             }
                         }
                         CoachGoalKind.Scope.MUSCLE -> {
-                            MuscleGroup.entries.forEach { m ->
-                                PickRow(m.displayName, selected = targetKey == m.code, onBg = onBg, wash = accentWash) {
-                                    targetKey = m.code
-                                }
-                            }
+                            ForgeChoiceList(
+                                choices = MuscleGroup.entries.map { ForgeChoice(it.code, it.displayName) },
+                                selected = targetKey,
+                                onSelect = { targetKey = it }
+                            )
                         }
                         CoachGoalKind.Scope.BALANCE_PAIR -> {
-                            BalancePair.entries.forEach { pair ->
-                                val label = if (pair == BalancePair.PUSH_PULL) "Push and pull" else "Quads and hamstrings"
-                                PickRow(label, selected = targetKey == pair.code, onBg = onBg, wash = accentWash) {
-                                    targetKey = pair.code
-                                }
-                            }
+                            ForgeChoiceList(
+                                choices = BalancePair.entries.map { pair ->
+                                    val label = if (pair == BalancePair.PUSH_PULL) "Push and pull" else "Quads and hamstrings"
+                                    ForgeChoice(pair.code, label)
+                                },
+                                selected = targetKey,
+                                onSelect = { targetKey = it }
+                            )
                         }
                         CoachGoalKind.Scope.NONE -> Unit
                     }
                     if (chosen.scope != CoachGoalKind.Scope.BALANCE_PAIR) {
-                        Spacer(Modifier.height(12.dp))
-                        OutlinedTextField(
-                            value = targetText,
-                            onValueChange = { targetText = filterDecimalInput(it) },
-                            label = { Text("Target (${chosen.unit})") },
-                            placeholder = { Text("optional") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        ForgeRowGroup({
+                            ForgeFieldRow(
+                                label = "Target",
+                                value = targetText,
+                                onValueChange = { targetText = filterDecimalInput(it) },
+                                placeholder = "Optional",
+                                suffix = chosen.unit,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(onDone = { focus.clearFocus() })
+                            )
+                        })
                     }
                 }
             }
@@ -126,54 +131,19 @@ internal fun GoalPickerDialog(
             val chosen = kind
             val ready = chosen != null &&
                 (chosen.scope == CoachGoalKind.Scope.NONE || targetKey.isNotBlank())
-            Text(
+            ForgePrimaryCapsule(
                 "Add",
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (ready) MaterialTheme.colorScheme.primary else muted.copy(alpha = 0.4f),
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .then(
-                        if (ready) Modifier.clickableLabeled("Add goal") {
-                            onPick(chosen!!, targetKey, targetText.toDoubleOrNull())
-                            onDismiss()
-                        } else Modifier
-                    )
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                onClick = {
+                    if (chosen != null) {
+                        onPick(chosen, targetKey, targetText.toDoubleOrNull())
+                        onDismiss()
+                    }
+                },
+                enabled = ready
             )
         },
         dismissButton = {
-            Text(
-                "Cancel",
-                style = MaterialTheme.typography.bodyMedium,
-                color = muted,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .clickableLabeled("Cancel") { onDismiss() }
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            )
+            ForgeSecondaryCapsule("Cancel", onClick = onDismiss)
         }
-    )
-}
-
-@Composable
-private fun PickRow(
-    label: String,
-    selected: Boolean,
-    onBg: Color,
-    wash: Color,
-    onClick: () -> Unit
-) {
-    Text(
-        label,
-        style = MaterialTheme.typography.bodyLarge,
-        color = onBg,
-        fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (selected) wash else Color.Transparent)
-            .clickableLabeled(label) { onClick() }
-            .padding(horizontal = 14.dp, vertical = 12.dp)
     )
 }

@@ -2,6 +2,21 @@
 
 package com.forge.app.ui.recipes
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.rowShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -71,15 +86,8 @@ fun ListRecipe(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            // The shared bar: a filled back capsule, never the screen's name.
+            ForgeTopBar(onBack = onBack)
         },
         containerColor = Color.Transparent
     ) { inner ->
@@ -102,24 +110,38 @@ fun ListRecipe(
             }
 
             item {
-                // §13: interactive → bordered. Unfocused sits at the outline rung, focused at
-                // accent, and the placeholder may dim below the muted floor because it is a ghost
-                // affordance rather than content (§5).
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    placeholder = { Text("Search", color = muted.copy(alpha = 0.5f)) },
-                    singleLine = true,
-                    shape = RoundedCornerShape(50),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = accent,
-                        unfocusedBorderColor = outline.copy(alpha = 0.35f),
-                        focusedTextColor = onBg,
-                        unfocusedTextColor = onBg,
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(8.dp))
+                // Search is a filled rounded field on the group surface, never an outlined box
+                // (grouped-surface kit, 2026-09-27). The placeholder may dim below the muted floor:
+                // it is a ghost affordance, not content.
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(Icons.Filled.Search, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
+                    BasicTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = onBg),
+                        cursorBrush = SolidColor(accent),
+                        modifier = Modifier.weight(1f).semantics { contentDescription = "Search" },
+                        decorationBox = { field ->
+                            Box {
+                                if (query.isEmpty()) {
+                                    Text("Search", style = MaterialTheme.typography.bodyLarge, color = muted.copy(alpha = 0.6f))
+                                }
+                                field()
+                            }
+                        }
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
             }
 
             if (rows.isEmpty()) {
@@ -131,12 +153,18 @@ fun ListRecipe(
                     InlineEmptyHint("No sessions match that", muted.copy(alpha = 0.65f))
                 }
             } else {
-                items(rows, key = { it }) { row ->
-                    // §9: LISTS get a light stagger only — never the overview's entrance cascade
-                    // or a chart draw-in.
-                    // `forgeItemMotion()` is an extension on LazyItemScope (the `items` lambda
-                    // receiver) that RETURNS a Modifier — not a Modifier extension.
-                    SessionRow(row, forgeItemMotion())
+                itemsIndexed(rows, key = { _, it -> it }) { i, row ->
+                    // Lists get a light stagger only, never the overview's entrance cascade or a
+                    // chart draw-in. `forgeItemMotion()` is an extension on LazyItemScope that
+                    // RETURNS a Modifier. Each row is one member of a connected group: its own
+                    // fill, 2dp seam, and the group's outer corners only at the ends.
+                    SessionRow(
+                        row,
+                        forgeItemMotion()
+                            .padding(bottom = GROUP_SEAM)
+                            .clip(rowShape(i, rows.size))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    )
                 }
             }
 
@@ -156,7 +184,7 @@ private fun SessionRow(text: String, modifier: Modifier = Modifier) {
             // §2③: the WHOLE row is the tap target. Adding a button inside it would be a nested
             // tap, which is why "log again" lives on the detail page rather than on this row.
             .bounceClick { }
-            .padding(vertical = 12.dp),
+            .padding(horizontal = ROW_H, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {

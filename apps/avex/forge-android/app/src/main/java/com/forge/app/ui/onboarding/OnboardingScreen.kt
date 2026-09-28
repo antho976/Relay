@@ -44,6 +44,7 @@ import com.forge.app.domain.units.weightInputValue
 import com.forge.app.program.Equipment
 import com.forge.app.program.ProgramGenerator
 import com.forge.app.program.SplitTemplates
+import com.forge.app.ui.common.ForgeSecondaryCapsule
 import com.forge.app.ui.theme.ForgeMotion
 import kotlin.random.Random
 
@@ -314,7 +315,7 @@ fun OnboardingScreen(
         bottomBar = {
             if (page == PAGE_WEEK) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlineCapsule("Re-roll", onClick = { previewSeed = Random.nextLong() })
+                    ForgeSecondaryCapsule("Re-roll", onClick = { previewSeed = Random.nextLong() })
                     PrimaryCapsule(ctaLabel, onClick = onCta, modifier = Modifier.weight(1f))
                 }
             } else {

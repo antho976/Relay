@@ -55,6 +55,15 @@ internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, onBac
             )
         }
 
+        SettingsGroup("Home") {
+            SettingsSwitchRow(
+                "Goals on Home",
+                "Your pinned goals under the week strip. They stay in Goals either way.",
+                com.forge.app.ui.overview.HOME_GOALS_TILE !in state.hiddenOverviewTiles,
+                onCheckedChange = { vm.setTileHidden(com.forge.app.ui.overview.HOME_GOALS_TILE, !it) }
+            )
+        }
+
         SettingsGroup("Accent color", headerTrailing = if (state.accentEnabled) accentName(state.accentColorHex) else null) {
             SettingsSwitchRow(
                 "Use an accent color",

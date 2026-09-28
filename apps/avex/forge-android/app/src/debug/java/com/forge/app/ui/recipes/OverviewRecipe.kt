@@ -2,6 +2,8 @@
 
 package com.forge.app.ui.recipes
 
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.ForgeSlidingSegments
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -76,12 +78,9 @@ fun OverviewRecipe(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                // §4.6 — the bar carries NO title. NEVER the screen's own name: the serif hero
-                // below names the screen, or nothing does.
-                title = {},
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            // The bar carries NO title. NEVER the screen's own name: the serif hero below names the
+            // screen, or nothing does. A hub tab has no back, so the bar holds only its actions.
+            ForgeTopBar(onBack = null)
         },
         containerColor = Color.Transparent
     ) { inner ->
@@ -124,21 +123,16 @@ fun OverviewRecipe(
             }
 
             // ── Lens pills ──────────────────────────────────────────────────────────────────────
-            // §4.4: sub-paging is pills, labels ONE short word. Not buttons, not tabs.
+            // Sub-paging is one sliding segmented control, labels ONE short word. Not buttons, not
+            // tabs, not a row of separate pills (grouped-surface kit, 2026-09-27).
             Spacer(Modifier.height(28.dp))
-            Row(
-                Modifier.statsEntrance(2),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                listOf("Week", "Month", "Year").forEach { name ->
-                    SegmentPill(
-                        text = name,
-                        selected = lens == name,
-                        onClick = { lens = name },
-                        accent = accent, onBg = onBg, muted = muted, outline = outline
-                    )
-                }
-            }
+            val lenses = listOf("Week", "Month", "Year")
+            ForgeSlidingSegments(
+                options = lenses,
+                selectedIndex = lenses.indexOf(lens),
+                onSelect = { lens = lenses[it] },
+                modifier = Modifier.fillMaxWidth().statsEntrance(2)
+            )
 
             // ── A section that leads with a MARK ─────────────────────────────────────────────────
             // §7 rhythm: 28 → mono header → 10 → content. No hairline, no card — air separates.

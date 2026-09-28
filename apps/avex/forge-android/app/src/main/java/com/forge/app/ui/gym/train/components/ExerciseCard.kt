@@ -328,12 +328,12 @@ fun ExerciseCard(
                             onSetRpe = { rpe -> onSetRpe(set.id, rpe) }
                         )
                     }
+                    // Air between set rows, no rule (grouped-surface pass, 2026-09-27).
                     val next = state.loggedSets.getOrNull(i + 1)
                     if (next != null) {
                         val restSec = ((next.completedAt - set.completedAt) / 1000L).toInt()
                         RestBetweenSets(restSec)
                     }
-                    HorizontalDivider(color = outline.copy(alpha = 0.12f))
                 }
 
                 // Live rest timer — sits directly below the last logged set and above the next-set
@@ -390,8 +390,6 @@ fun ExerciseCard(
                 )
             }
         }
-
-        HorizontalDivider(color = outline.copy(alpha = 0.2f))
     }
 }
 

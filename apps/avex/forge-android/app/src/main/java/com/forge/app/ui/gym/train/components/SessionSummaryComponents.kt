@@ -1,6 +1,14 @@
 @file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.forge.app.ui.gym.train.components
 
+import com.forge.app.ui.common.ROW_H
+
+import com.forge.app.ui.common.GROUP_OUTER
+
+import androidx.compose.foundation.layout.height
+
+import androidx.compose.foundation.layout.Spacer
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -72,7 +80,8 @@ internal fun CoachReadSection(
 ) {
     // Nothing logged → nothing for the coach to read.
     if (coachOpinion == null && exercisesLogged == 0) return
-    HorizontalDivider(color = outline.copy(alpha = 0.2f))
+    // Air, not a rule, above the section (grouped-surface pass, 2026-09-27).
+    Spacer(Modifier.height(4.dp))
     Column(
         modifier = Modifier.fillMaxWidth().statsEntrance(1),
         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -115,10 +124,9 @@ private fun CoachCaptureNudge(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(onBg.copy(alpha = 0.05f))
-            .border(0.5.dp, outline.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .clip(RoundedCornerShape(GROUP_OUTER))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(horizontal = ROW_H, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         if (complete) {

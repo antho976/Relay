@@ -1,5 +1,11 @@
 package com.forge.app.ui.gym.train.components
 
+import androidx.compose.foundation.layout.heightIn
+import com.forge.app.ui.common.Corners
+import com.forge.app.ui.common.ForgeTileGrid
+import com.forge.app.ui.common.memberFill
+import com.forge.app.ui.common.memberShape
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -37,20 +43,16 @@ fun DifficultyRater(
 ) {
     // 2×2 grid so labels like "Just Right" never overflow on narrow phones.
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        EffortRating.entries.chunked(2).forEach { pair ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                pair.forEach { rating ->
-                    RatingChip(
-                        rating = rating,
-                        isSelected = selected == rating,
-                        onClick = { onSelect(rating) },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
+        // One connected pick-one group of tiles (2dp seams); the pick rounds out and wears the ring.
+        val ratings = EffortRating.entries
+        ForgeTileGrid(ratings, cols = 2) { rating, corners, m ->
+            RatingChip(
+                rating = rating,
+                isSelected = selected == rating,
+                corners = corners,
+                onClick = { onSelect(rating) },
+                modifier = m
+            )
         }
     }
 }
@@ -59,30 +61,24 @@ fun DifficultyRater(
 private fun RatingChip(
     rating: EffortRating,
     isSelected: Boolean,
+    corners: Corners,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val containerColor = if (isSelected) {
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-    }
-    val borderColor = if (isSelected) MaterialTheme.colorScheme.primary
-                      else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-    val textColor = if (isSelected) MaterialTheme.colorScheme.primary
+    val textColor = if (isSelected) MaterialTheme.colorScheme.onBackground
                     else MaterialTheme.colorScheme.onSurfaceVariant
+    val shape = memberShape(corners, isSelected)
 
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(containerColor)
-            .border(width = 1.dp, color = borderColor, shape = RoundedCornerShape(8.dp))
+            .heightIn(min = 48.dp)
+            .memberFill(shape, isSelected)
             .semantics {
-                role = Role.Button
+                role = Role.RadioButton
                 this.selected = isSelected
             }
             .clickable(onClickLabel = rating.displayName, onClick = onClick)
-            .padding(vertical = 8.dp, horizontal = 4.dp),
+            .padding(vertical = 12.dp, horizontal = 8.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -90,8 +86,6 @@ private fun RatingChip(
             text = rating.displayName,
             color = textColor,
             style = MaterialTheme.typography.labelMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center
         )
     }

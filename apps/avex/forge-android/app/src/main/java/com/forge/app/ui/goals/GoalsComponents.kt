@@ -5,11 +5,19 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -20,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -36,10 +45,12 @@ import com.forge.app.domain.units.distanceUnitLabel
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.ExerciseIcons
+import com.forge.app.ui.common.ForgeChromeIconButton
+import com.forge.app.ui.common.ForgeGlyphBadge
+import com.forge.app.ui.common.GROUP_OUTER
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.experiment.CardMark
 import com.forge.app.ui.nav.NavIcons
-import com.forge.app.ui.settings.SettingsIcons
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.DayOfWeek
 import java.time.Instant
@@ -208,6 +219,10 @@ internal fun GoalProgressLine(
      * is the same kind and a column of identical glyphs would say nothing.
      */
     icon: ImageVector? = null,
+    /** Inset inside the tap target, for a row that sits on a filled group member (Goals screen). */
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+    /** Lead with a [ForgeGlyphBadge] rather than the hue [CardMark]: the grouped-surface rows. */
+    badge: Boolean = false,
     onClick: () -> Unit
 ) {
     val frac = fraction.coerceIn(0f, 1f)
@@ -226,9 +241,11 @@ internal fun GoalProgressLine(
                     caption
                 ).joinToString(", ")
             }
+            .padding(contentPadding)
     ) {
         if (icon != null) {
-            CardMark(icon, onBg, size = 38.dp, glyphSize = 20.dp)
+            if (badge) ForgeGlyphBadge(icon, selected = false)
+            else CardMark(icon, onBg, size = 38.dp, glyphSize = 20.dp)
             Spacer(Modifier.width(14.dp))
         }
         // The bar starts at the TEXT column, not at the mark: that shared left rail is what makes a
@@ -300,10 +317,11 @@ private fun GoalMeter(frac: Float, accent: Color, outline: Color) {
 
 /** A custom goal's glyph: its domain, since it has no implement. */
 internal fun goalGlyph(metric: GoalMetric): ImageVector = when (metric) {
-    GoalMetric.SESSIONS -> SettingsIcons.Session
+    GoalMetric.SESSIONS -> GoalIcons.CalendarCheck
     GoalMetric.VOLUME -> NavIcons.Stats
-    GoalMetric.CARDIO_DISTANCE, GoalMetric.CARDIO_MINUTES -> NavIcons.Cardio
-    GoalMetric.BODYWEIGHT -> ExerciseIcons.Bodyweight
+    GoalMetric.CARDIO_DISTANCE -> GoalIcons.Route
+    GoalMetric.CARDIO_MINUTES -> GoalIcons.Stopwatch
+    GoalMetric.BODYWEIGHT -> GoalIcons.Scale
 }
 
 /**
@@ -326,6 +344,8 @@ internal fun LiftGoalRow(
     g: GoalRepository.GoalProgress,
     onBg: Color, muted: Color, accent: Color, outline: Color,
     modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+    badge: Boolean = false,
     onClick: () -> Unit
 ) {
     val weightUnit = LocalForgeSettings.current.weightUnit
@@ -339,6 +359,8 @@ internal fun LiftGoalRow(
         // A lift target has no window and no baseline: it is done or it is not.
         caption = if (g.achieved) "Reached" else null,
         icon = liftGoalGlyph(g.exerciseId),
+        contentPadding = contentPadding,
+        badge = badge,
         onClick = onClick
     )
 }
@@ -350,6 +372,8 @@ internal fun CustomGoalRow(
     /** Local midnight of today, from state — see the memo below. */
     todayStartMs: Long,
     modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+    badge: Boolean = false,
     onClick: () -> Unit
 ) {
     val settings = LocalForgeSettings.current
@@ -377,6 +401,58 @@ internal fun CustomGoalRow(
         modifier = modifier,
         caption = caption,
         icon = goalGlyph(g.metric),
+        contentPadding = contentPadding,
+        badge = badge,
         onClick = onClick
     )
+}
+
+// ─── Search (Goals list + the editor's exercise picker) ─────────────────────
+
+/**
+ * The grouped-surface search row: one filled, fully rounded member with a leading magnifier, the
+ * query typed inline, and a clear capsule once there is something to clear. It replaced two outlined
+ * M3 fields (2026-09-27) so the app's searches read as the same filled control as its forms.
+ */
+@Composable
+internal fun GoalSearchRow(query: String, onQueryChange: (String) -> Unit, placeholder: String) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val onBg = MaterialTheme.colorScheme.onBackground
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(GROUP_OUTER))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(start = 18.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(Icons.Filled.Search, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
+        BasicTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = onBg),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            singleLine = true,
+            modifier = Modifier
+                .weight(1f)
+                .padding(vertical = 14.dp)
+                .semantics { contentDescription = placeholder },
+            decorationBox = { inner ->
+                Box {
+                    // A placeholder may sit under the muted floor: a ghost affordance, not content.
+                    if (query.isEmpty()) {
+                        Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = muted.copy(alpha = 0.6f))
+                    }
+                    inner()
+                }
+            }
+        )
+        if (query.isNotEmpty()) {
+            ForgeChromeIconButton(Icons.Filled.Close, "Clear search", { onQueryChange("") }, tint = muted)
+        } else {
+            // Holds the row's height steady so it does not jump when the clear capsule appears.
+            Spacer(Modifier.size(48.dp))
+        }
+    }
 }

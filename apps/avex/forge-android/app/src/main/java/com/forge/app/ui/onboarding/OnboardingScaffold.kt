@@ -1,6 +1,16 @@
 package com.forge.app.ui.onboarding
 
+import com.forge.app.ui.common.ForgeChromeButton
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -56,19 +66,30 @@ internal fun OnboardingScaffold(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 if (onBack != null) {
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clickableLabeled("Back", onClick = onBack),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("←", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                    ForgeChromeButton(onClick = onBack, label = "Back") {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 } else {
-                    Spacer(Modifier.width(48.dp))
+                    Spacer(Modifier.width(44.dp))
                 }
                 StepRail(step = step, total = total, modifier = Modifier.weight(1f))
-                if (onSkip != null) SkipLink(onSkip) else Spacer(Modifier.width(36.dp))
+                if (onSkip != null) {
+                    ForgeChromeButton(onClick = onSkip, label = "Skip setup") {
+                        Text(
+                            "Skip",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 14.dp)
+                        )
+                    }
+                } else {
+                    Spacer(Modifier.width(44.dp))
+                }
             }
             Spacer(Modifier.height(24.dp))
 

@@ -13,14 +13,13 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.SearchOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import com.forge.app.ui.common.ForgeSecondaryCapsule
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -73,7 +72,10 @@ internal fun LazyListScope.galleryLibrary(
                     "Select photos in the grid and choose Move to album to fill it."
                 } else null
             ) {
-                OutlinedButton(onClick = onClearFilters) { Text(if (filter.searching) "Clear search and filters" else "Clear filters") }
+                ForgeSecondaryCapsule(
+                    label = if (filter.searching) "Clear search and filters" else "Clear filters",
+                    onClick = onClearFilters
+                )
             }
         }
         return
@@ -105,11 +107,7 @@ private fun EmptyLibrary(onTakePhoto: () -> Unit, onImport: () -> Unit) {
             Spacer(Modifier.size(ButtonDefaults.IconSpacing))
             Text("Take photo")
         }
-        OutlinedButton(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null, Modifier.size(ButtonDefaults.IconSize))
-            Spacer(Modifier.size(ButtonDefaults.IconSpacing))
-            Text("Import from phone")
-        }
+        ForgeSecondaryCapsule(label = "Import from phone", onClick = onImport, modifier = Modifier.fillMaxWidth())
     }
 }
 

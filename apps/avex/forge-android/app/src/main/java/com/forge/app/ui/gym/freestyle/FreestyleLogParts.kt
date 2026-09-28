@@ -57,7 +57,18 @@ import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.ForgeChoiceChip
 import com.forge.app.ui.common.ForgeHeroAction
-import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.Corners
+import com.forge.app.ui.common.ForgeChromeButton
+import com.forge.app.ui.common.ForgeSecondaryCapsule
+import com.forge.app.ui.common.ForgeSlidingSegments
+import com.forge.app.ui.common.GROUP_OUTER
+import com.forge.app.ui.common.GROUP_SEAM
+import androidx.compose.ui.graphics.Color
+import com.forge.app.ui.common.memberShape
+import com.forge.app.ui.gym.train.components.GymSecondaryCapsule
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.ForgeRowPill
 import com.forge.app.ui.common.GlyphButton
@@ -163,7 +174,7 @@ internal fun FsResumePrompt(
         Spacer(Modifier.height(20.dp))
         ForgeHeroAction("Resume log", onClick = onResume, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
-        ForgeOutlineCapsule("Start fresh", onClick = onStartFresh, modifier = Modifier.fillMaxWidth())
+        ForgeSecondaryCapsule("Start fresh", onClick = onStartFresh, modifier = Modifier.fillMaxWidth())
     }
 }
 
@@ -371,26 +382,27 @@ private fun FsLastTimeRow(
                     .clickableLabeled("Use $reading") { onUse(s) },
                 contentAlignment = Alignment.Center
             ) {
+                // A filled pill, not an outlined one: the raised fill is the tap affordance.
                 Text(
                     reading,
                     style = MaterialTheme.typography.labelMedium,
                     color = cs.onSurface,
                     modifier = Modifier
-                        .border(1.dp, cs.outline.copy(alpha = 0.35f), RoundedCornerShape(50))
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(cs.surfaceContainerHigh)
+                        .padding(horizontal = 12.dp, vertical = 7.dp)
                 )
             }
         }
         if (showRepeat) {
-            Text(
-                "Repeat all \u2192",
-                style = MaterialTheme.typography.labelLarge,
-                color = cs.primary,
-                modifier = Modifier
-                    .minimumInteractiveComponentSize()
-                    .clickableLabeled("Log every set from last time", onClick = onRepeat)
-                    .padding(horizontal = 6.dp)
-            )
+            ForgeChromeButton(onClick = onRepeat, label = "Log every set from last time") {
+                Text(
+                    "Repeat all",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = cs.onBackground,
+                    modifier = Modifier.padding(horizontal = 14.dp)
+                )
+            }
         }
     }
 }
@@ -468,8 +480,8 @@ private fun FsEntrySlab(
 
     Column(
         Modifier.fillMaxWidth()
-            .background(cs.surfaceVariant, RoundedCornerShape(12.dp))
-            .padding(horizontal = 12.dp, vertical = 12.dp)
+            .background(cs.surfaceContainerHigh, RoundedCornerShape(GROUP_OUTER))
+            .padding(horizontal = 14.dp, vertical = 14.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -551,16 +563,13 @@ private fun FsEntrySlab(
         }
 
         if (exercise.timed) {
-            Spacer(Modifier.height(4.dp))
-            Text(
+            Spacer(Modifier.height(8.dp))
+            GymSecondaryCapsule(
                 if (stopwatchElapsedSec != null) "Stop timer" else "Start timer",
-                style = MaterialTheme.typography.labelLarge,
-                color = cs.primary,
+                onClick = onToggleStopwatch,
                 modifier = Modifier
                     .align(Alignment.CenterHorizontally)
-                    .minimumInteractiveComponentSize()
-                    .clickableLabeled(if (stopwatchElapsedSec != null) "Stop the hold timer" else "Start the hold timer", onClick = onToggleStopwatch)
-                    .padding(horizontal = 8.dp)
+                    .semantics { contentDescription = if (stopwatchElapsedSec != null) "Stop the hold timer" else "Start the hold timer" }
             )
         }
 
@@ -591,8 +600,8 @@ private fun FsEntrySlab(
         Spacer(Modifier.height(8.dp))
         if (editing != null) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ForgeOutlineCapsule("Delete", onClick = onDelete, contentColor = cs.error, modifier = Modifier.weight(1f))
-                ForgeOutlineCapsule("Cancel", onClick = onCancelEdit, modifier = Modifier.weight(1f))
+                GymSecondaryCapsule("Delete", onClick = onDelete, destructive = true, modifier = Modifier.weight(1f))
+                GymSecondaryCapsule("Cancel", onClick = onCancelEdit, modifier = Modifier.weight(1f))
             }
             Spacer(Modifier.height(8.dp))
             ForgePrimaryCapsule("Update set", onClick = onLog, enabled = canLog, accent = true, modifier = Modifier.fillMaxWidth())
@@ -667,10 +676,12 @@ private fun FsStepperField(
 @Composable
 private fun FsStepButton(symbol: String, label: String, enabled: Boolean, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
+    // A filled round step, one rung above the slab it sits on.
     Box(
         Modifier
-            .sizeIn(minWidth = 44.dp, minHeight = 48.dp)
+            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
             .clip(RoundedCornerShape(50))
+            .background(cs.surfaceContainerHighest)
             .bounceClick(enabled = enabled, onClick = onClick)
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center
@@ -692,16 +703,28 @@ private fun FsTagTray(set: FsSet, onChange: (FsSet) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val rpeOptions = generateSequence(6.0) { it + 0.5 }.takeWhile { it <= 10.0 }.toList()
     Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            ForgeChoiceChip("Warm-up", selected = set.setType == "warmup", onClick = {
-                onChange(set.copy(setType = if (set.setType == "warmup") null else "warmup"))
-            })
-            ForgeChoiceChip("Drop set", selected = set.setType == "drop", onClick = {
-                onChange(set.copy(setType = if (set.setType == "drop") null else "drop"))
-            })
-            ForgeChoiceChip("AMRAP", selected = set.isAmrap, onClick = { onChange(set.copy(isAmrap = !set.isAmrap)) })
-            ForgeChoiceChip("To failure", selected = set.toFailure, onClick = { onChange(set.copy(toFailure = !set.toFailure)) })
+        // The set's shape is one pick of three, so it is a sliding segment; AMRAP and failure are
+        // independent flags, so they are two toggle tiles in one group.
+        ForgeSlidingSegments(
+            options = listOf("Normal", "Warm-up", "Drop set"),
+            selectedIndex = when (set.setType) {
+                "warmup" -> 1
+                "drop" -> 2
+                else -> 0
+            },
+            onSelect = { i -> onChange(set.copy(setType = when (i) { 1 -> "warmup"; 2 -> "drop"; else -> null })) },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
+            FsFlagTile("AMRAP", set.isAmrap, Corners(true, false, true, false), Modifier.weight(1f)) {
+                onChange(set.copy(isAmrap = !set.isAmrap))
+            }
+            FsFlagTile("To failure", set.toFailure, Corners(false, true, false, true), Modifier.weight(1f)) {
+                onChange(set.copy(toFailure = !set.toFailure))
+            }
         }
+        Spacer(Modifier.height(10.dp))
         Spacer(Modifier.height(6.dp))
         val rpe = set.rpe
         Text(
@@ -719,5 +742,32 @@ private fun FsTagTray(set: FsSet, onChange: (FsSet) -> Unit) {
                 )
             }
         }
+    }
+}
+
+/** One independent set flag, a member of a two-tile toggle group on the entry slab. */
+@Composable
+private fun FsFlagTile(label: String, on: Boolean, corners: Corners, modifier: Modifier, onToggle: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val shape = memberShape(corners, selected = false)
+    Box(
+        modifier
+            .heightIn(min = 48.dp)
+            // The member formula one rung up, since the slab under it is already the raised fill.
+            .clip(shape)
+            .background(cs.surfaceContainerHighest)
+            .background(if (on) cs.primary.copy(alpha = 0.15f) else Color.Transparent)
+            .border(1.5.dp, if (on) cs.primary else Color.Transparent, shape)
+            .bounceClick(onClick = onToggle)
+            .semantics { selected = on; role = Role.Checkbox; contentDescription = label }
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (on) cs.onBackground else cs.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
     }
 }

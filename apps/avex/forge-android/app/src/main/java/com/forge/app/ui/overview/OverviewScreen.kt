@@ -1,11 +1,14 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.forge.app.ui.overview
 
+import com.forge.app.ui.goals.GoalProgressLine
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -39,6 +43,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import com.forge.app.core.time.userWeekDayIndex
 import com.forge.app.ui.settings.SettingsIcons
 import com.forge.app.ui.common.NotificationBell
@@ -58,13 +65,17 @@ import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.Program
 import com.forge.app.ui.common.ForgeHeroAction
+import com.forge.app.ui.common.ForgeGlyphBadge
+import com.forge.app.ui.common.GROUP_OUTER
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.rowShape
 import com.forge.app.ui.experiment.CellShape
 import com.forge.app.ui.experiment.SectionAnchor
 import com.forge.app.ui.experiment.SurfaceListRow
 import com.forge.app.ui.experiment.SurfacePalette
 import com.forge.app.ui.experiment.WeekStrip
 import com.forge.app.ui.experiment.surfacePalette
-import com.forge.app.ui.goals.GoalProgressLine
 import com.forge.app.ui.goals.customGoalTitle
 import com.forge.app.ui.goals.customGoalValueLine
 import com.forge.app.ui.goals.goalCaption
@@ -117,7 +128,9 @@ private fun HomePlanAction(text: String, onClick: () -> Unit) {
         modifier = Modifier
             .heightIn(min = 56.dp)
             .clip(HomeCapsuleShape)
-            .border(1.dp, MaterialTheme.colorScheme.outline, HomeCapsuleShape)
+            // Filled, not outlined (2026-09-27): the grouped kit's raised fill is what a secondary
+            // control wears now, beside the light primary.
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             // Bounce, not a bare clickable: this capsule sits shoulder to shoulder with the primary
             // and a control that does not answer the press reads as the disabled one (§9).
             .bounceCombinedClick(onClickLabel = text, onClick = onClick)
@@ -615,6 +628,7 @@ fun OverviewScreen(
                 }
             )
             Spacer(Modifier.height(12.dp))
+            // Open on the page: a filled panel around the strip boxed a mark that needs no frame.
             WeekStrip(
                 trained = state.weekDaysTrained,
                 todayIndex = todayDow,
@@ -628,35 +642,42 @@ fun OverviewScreen(
                 MovementLine(currentMovement, onBg = onBg, muted = muted, outline = outline, accent = accent)
             }
 
-            Spacer(Modifier.height(28.dp))
-            val goals = pinnedGoals(state, settings.pinnedGoalKeys)
-            SectionAnchor(
-                label = "Goals",
-                muted = muted,
-                onBg = onBg,
-                action = if (goals.isEmpty()) null else "view all",
-                actionLabel = "Open goals",
-                onAction = onOpenGoals
-            )
-            Spacer(Modifier.height(12.dp))
-            if (goals.isEmpty()) {
-                PromptLine("Pin a goal", "Pin a goal", onOpenGoals)
-            } else {
-                goals.forEachIndexed { index, goal ->
-                    GoalProgressLine(
-                        title = goal.title,
-                        valueLine = goal.valueLine,
-                        fraction = goal.fraction,
-                        achieved = goal.achieved,
-                        onBg = onBg,
-                        muted = muted,
-                        accent = accent,
-                        outline = outline,
-                        caption = goal.caption,
-                        icon = goal.icon,
-                        onClick = onOpenGoals
-                    )
-                    if (index != goals.lastIndex) Spacer(Modifier.height(16.dp))
+            // Goals can be taken off Home (2026-09-27): "hide" sits beside "view all", Undo follows,
+            // and Settings → Appearance brings the section back.
+            if (HOME_GOALS_TILE !in settings.hiddenOverviewTiles) {
+                Spacer(Modifier.height(28.dp))
+                val goals = pinnedGoals(state, settings.pinnedGoalKeys)
+                SectionAnchor(
+                    label = "Goals",
+                    muted = muted,
+                    onBg = onBg,
+                    action = if (goals.isEmpty()) null else "view all",
+                    actionLabel = "Open goals",
+                    onAction = onOpenGoals,
+                    secondaryAction = "hide",
+                    secondaryActionLabel = "Hide goals from Home",
+                    onSecondaryAction = viewModel::hideHomeGoals
+                )
+                Spacer(Modifier.height(12.dp))
+                if (goals.isEmpty()) {
+                    PromptLine("Pin a goal", "Pin a goal", onOpenGoals)
+                } else {
+                    goals.forEachIndexed { index, goal ->
+                        GoalProgressLine(
+                            title = goal.title,
+                            valueLine = goal.valueLine,
+                            fraction = goal.fraction,
+                            achieved = goal.achieved,
+                            onBg = onBg,
+                            muted = muted,
+                            accent = accent,
+                            outline = outline,
+                            caption = goal.caption,
+                            icon = goal.icon,
+                            onClick = onOpenGoals
+                        )
+                        if (index != goals.lastIndex) Spacer(Modifier.height(16.dp))
+                    }
                 }
             }
 

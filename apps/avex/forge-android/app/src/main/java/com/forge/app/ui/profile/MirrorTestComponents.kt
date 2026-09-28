@@ -25,7 +25,6 @@ import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -38,7 +37,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import com.forge.app.ui.common.ForgeFieldRow
+import com.forge.app.ui.common.GROUP_OUTER
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -293,15 +294,23 @@ internal fun NameDialog(
         onDismissRequest = onDismiss,
         title = { DialogTitle(title) },
         text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it.take(30) },
-                label = { Text("Album name") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { if (text.isNotBlank()) onConfirm(text.trim()) }),
-                modifier = Modifier.fillMaxWidth().focusRequester(focus)
-            )
+            // An inline field on one filled row, one step above the dialog's own surface.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(GROUP_OUTER))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            ) {
+                ForgeFieldRow(
+                    label = "Album name",
+                    value = text,
+                    onValueChange = { text = it.take(30) },
+                    placeholder = "Name",
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { if (text.isNotBlank()) onConfirm(text.trim()) }),
+                    focusRequester = focus
+                )
+            }
         },
         confirmButton = {
             TextButton(enabled = text.isNotBlank(), onClick = { onConfirm(text.trim()) }) { Text(confirmLabel) }

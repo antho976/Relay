@@ -1,5 +1,9 @@
 package com.forge.app.ui.gym.train.components
 
+import com.forge.app.ui.common.ROW_H
+
+import com.forge.app.ui.common.GROUP_SEAM
+
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -129,7 +133,7 @@ fun ExerciseChartSheet(
                 )
             }
 
-            HorizontalDivider(color = outline.copy(alpha = 0.2f))
+            Spacer(Modifier.height(4.dp))
             Text(
                 "RECENT SESSIONS",
                 style = MaterialTheme.typography.labelSmall,
@@ -147,13 +151,15 @@ fun ExerciseChartSheet(
                 )
             }
 
-            history.take(5).forEach { pt ->
+            // One group of filled rows, 2dp seams, instead of separately outlined boxes.
+            val recent = history.take(5)
+            Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
+            recent.forEachIndexed { i, pt ->
                 val dateStr = Instant.ofEpochMilli(pt.sessionStartedAt).atZone(zone).toLocalDate().format(dateFmt)
                 Row(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .border(0.5.dp, outline.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                        .groupMember(i, recent.size)
+                        .padding(horizontal = ROW_H, vertical = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -172,6 +178,7 @@ fun ExerciseChartSheet(
                     }
                     Text(formatVolume(pt.volumeLb, weightUnit), style = MaterialTheme.typography.bodyMedium, color = accent, fontWeight = FontWeight.SemiBold)
                 }
+            }
             }
 
             Spacer(Modifier.height(32.dp))

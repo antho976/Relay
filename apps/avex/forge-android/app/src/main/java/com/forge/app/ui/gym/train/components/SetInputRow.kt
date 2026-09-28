@@ -5,6 +5,8 @@
 
 package com.forge.app.ui.gym.train.components
 
+import androidx.compose.ui.graphics.Color
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,6 +43,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.GROUP_OUTER
+import com.forge.app.ui.common.bounceClick
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
@@ -333,7 +337,7 @@ fun SetInputRow(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(GROUP_OUTER))
                         .padding(horizontal = 12.dp, vertical = 10.dp)
                 ) {
                 Row(verticalAlignment = Alignment.Bottom) {
@@ -431,7 +435,7 @@ fun SetInputRow(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(GROUP_OUTER))
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.Bottom
                 ) {
@@ -493,11 +497,13 @@ fun SetInputRow(
                 // Targets hit — the input row (with its inline "+ SET") is gone, so
                 // "add a bonus set" takes the full-width slot, then the filled advance
                 // CTA moves to the next exercise.
+                // Filled secondary capsule, the same height the outlined one had.
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(1.dp, outline.copy(alpha = 0.35f), ctaShape)
-                        .then(if (onAddSet != null) Modifier.clickable { onAddSet() } else Modifier)
+                        .clip(ctaShape)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .then(if (onAddSet != null) Modifier.bounceClick { onAddSet() } else Modifier)
                         .padding(vertical = 14.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -515,11 +521,13 @@ fun SetInputRow(
                 // under DONE, not skipped) and move on. It's the sidekick to LOG SET, so it's a
                 // full-width OUTLINED button in the prominent slot (§8 ②) — not a stretched text
                 // link. Sits where "+ ADD A SET" used to. Shown only once ≥1 set is logged.
+                // Filled secondary capsule (grouped-surface pass, 2026-09-27), same height.
                 if (onFinishEarly != null) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(1.dp, outline.copy(alpha = 0.35f), ctaShape)
+                            .clip(ctaShape)
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                             .clickableLabeled(finishEarlyLabel) { onFinishEarly() }
                             .padding(vertical = 14.dp),
                         contentAlignment = Alignment.Center
@@ -689,7 +697,8 @@ private fun AddSetPill(onAdd: (() -> Unit)?) {
     Box(
         modifier = Modifier
             .sizeIn(minHeight = 40.dp)
-            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .then(if (onAdd != null) Modifier.clickableLabeled("Add a set") { onAdd() } else Modifier)
             .padding(horizontal = 18.dp),
         contentAlignment = Alignment.Center
@@ -699,8 +708,8 @@ private fun AddSetPill(onAdd: (() -> Unit)?) {
 }
 
 /**
- * Start/Stop control for a timed hold (GYMAP-51) — a 44dp capsule in the row's own language: an
- * outline when idle ("Start hold"), an accent wash + accent border + accent label while the count-up
+ * Start/Stop control for a timed hold (GYMAP-51) — a 44dp capsule in the row's own language: the
+ * raised fill when idle ("Start hold"), the accent wash + ring + accent label while the count-up
  * runs ("Stop"). The whole capsule is the tap target with a spoken a11y label.
  */
 @Composable
@@ -714,8 +723,9 @@ private fun StopwatchButton(
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .then(if (running) Modifier.background(accent.copy(alpha = 0.15f)) else Modifier)
-            .border(1.dp, if (running) accent else outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+            .border(1.dp, if (running) accent else Color.Transparent, RoundedCornerShape(50))
             .clickableLabeled(if (running) "Stop the hold timer" else "Start the hold timer") { onToggle() }
             .sizeIn(minWidth = 96.dp, minHeight = 44.dp)
             .padding(horizontal = 16.dp),
@@ -742,7 +752,9 @@ private fun StepperPill(
     val outline = MaterialTheme.colorScheme.outline
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
     ) {
         Box(
             modifier = Modifier

@@ -1,8 +1,11 @@
 package com.forge.app.ui.onboarding
 
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathBuilder
+import androidx.compose.ui.graphics.vector.path
 import com.forge.app.program.Equipment
 import com.forge.app.ui.common.circle
 import com.forge.app.ui.common.fillPath
@@ -66,17 +69,21 @@ object OnboardingIcons {
         }
     }
 
-    /** Barbell — a full-width bar loaded with a big and a small plate each side, and a collar. */
+    /** Barbell — side on: a big and a small plate each side, butted together, the sleeve showing
+     *  past them and the bar bare between. Four masses and a line; the collars and the gaps between
+     *  plates were cut because at 26dp they turned the bar into a comb. */
     val Barbell: ImageVector by lazy {
         icon("OnbBarbell") {
-            strokePath(LIMB) { seg(1.6f, 12f, 22.4f, 12f) }
+            strokePath(LIMB) {
+                seg(1.4f, 12f, 3.0f, 12f)                    // sleeves
+                seg(21.0f, 12f, 22.6f, 12f)
+                seg(8.8f, 12f, 15.2f, 12f)                   // the bar
+            }
             fillPath {
-                roundRect(6.2f, 5.0f, 8.6f, 19.0f, 1.2f)     // big plates
-                roundRect(15.4f, 5.0f, 17.8f, 19.0f, 1.2f)
-                roundRect(3.6f, 7.8f, 5.6f, 16.2f, 1.0f)     // small plates
-                roundRect(18.4f, 7.8f, 20.4f, 16.2f, 1.0f)
-                roundRect(9.0f, 10.2f, 10.2f, 13.8f, 0.5f)   // collars
-                roundRect(13.8f, 10.2f, 15.0f, 13.8f, 0.5f)
+                roundRect(5.6f, 4.4f, 8.8f, 19.6f, 1.4f)     // big plates
+                roundRect(15.2f, 4.4f, 18.4f, 19.6f, 1.4f)
+                roundRect(3.0f, 7.6f, 5.6f, 16.4f, 1.1f)     // small plates
+                roundRect(18.4f, 7.6f, 21.0f, 16.4f, 1.1f)
             }
         }
     }
@@ -181,21 +188,24 @@ object OnboardingIcons {
         }
     }
 
-    /** Cable machine — a column with its arm out to a pulley, the cable dropping to a stirrup
-     *  handle. The pulley and the hanging handle are the read; the weight stack is [Machine]'s. */
+    /** Cable machine — the pulley itself: a wheel, the stack hanging off one side of the cable and
+     *  the stirrup handle off the other. The whole mechanism in one glyph; a column with an arm out
+     *  read as a gallows. */
     val Cable: ImageVector by lazy {
         icon("OnbCable") {
-            fillPath {
-                roundRect(3.2f, 2.8f, 5.6f, 21.0f, 1.0f)     // column
-                roundRect(2.0f, 19.2f, 10.8f, 21.0f, 0.9f)   // foot
-                roundRect(3.2f, 2.8f, 15.6f, 5.0f, 1.0f)     // arm
-                roundRect(14.8f, 18.2f, 22.0f, 20.4f, 1.1f)  // handle grip
-            }
             strokePath(LIMB) {
-                circle(17.4f, 5.4f, 2.0f)                    // pulley
-                seg(18.4f, 7.2f, 18.4f, 13.8f)               // cable
-                moveTo(16.0f, 18.4f); lineTo(18.4f, 13.8f); lineTo(20.8f, 18.4f)  // stirrup
+                circle(12f, 5.8f, 3.6f)                      // pulley wheel
+                seg(8.4f, 5.8f, 8.4f, 12.0f)                 // cable to the stack
+                seg(15.6f, 5.8f, 15.6f, 12.6f)               // cable to the handle
+                moveTo(15.6f, 12.6f); lineTo(13.0f, 17.8f)   // stirrup
+                moveTo(15.6f, 12.6f); lineTo(18.2f, 17.8f)
             }
+            fillPath {
+                circle(12f, 5.8f, 1.2f)                      // hub
+                roundRect(4.8f, 12.0f, 12.0f, 15.2f, 1.0f)   // stack
+                roundRect(4.8f, 16.0f, 12.0f, 19.2f, 1.0f)
+            }
+            strokePath(MASS_THIN) { seg(12.8f, 19.0f, 18.4f, 19.0f) }                   // handle grip
         }
     }
 
@@ -213,17 +223,21 @@ object OnboardingIcons {
         }
     }
 
-    /** Flat bench — side view: one thick pad, two posts, a foot under each. */
+    /** Flat bench — side on, with the bar racked in its uprights at the head end, seen end-on as a
+     *  plate. A bare bench in profile is a table; the racked plate is what makes it a bench you
+     *  press on, and keeps it clear of [InclineBench]'s raised back. */
     val Bench: ImageVector by lazy {
         icon("OnbBench") {
-            strokePath(MASS_THIN) {
-                seg(4.2f, 9.6f, 19.8f, 9.6f)                 // pad
-                seg(4.4f, 19.8f, 9.8f, 19.8f)                // feet
-                seg(14.2f, 19.8f, 19.6f, 19.8f)
+            strokePath(3.4f) { seg(2.8f, 13.2f, 15.6f, 13.2f) }                         // pad
+            strokePath(LIMB_BOLD) {
+                seg(5.2f, 15.0f, 5.2f, 20.4f)                // legs
+                seg(13.2f, 15.0f, 13.2f, 20.4f)
+                seg(19.2f, 9.6f, 19.2f, 20.4f)               // upright
+                seg(2.8f, 20.4f, 21.6f, 20.4f)               // floor rail
             }
-            fillPath {
-                roundRect(6.2f, 10.8f, 8.0f, 19.0f, 0.6f)    // posts
-                roundRect(16.0f, 10.8f, 17.8f, 19.0f, 0.6f)
+            fillPath(PathFillType.EvenOdd) {
+                circle(19.2f, 6.4f, 3.8f)                    // racked plate, end-on
+                circle(19.2f, 6.4f, 1.1f)
             }
         }
     }
@@ -306,30 +320,32 @@ object OnboardingIcons {
         }
     }
 
-    /** Machine — a selectorized stack: top cap, guide rods, four plates and the pin. */
+    /** Machine — a seated station: the stack tower with its lift rod on one side, the seat and its
+     *  back on the other. The seat is the read; a stack alone looked like a bookshelf, and the
+     *  hanging stack is already [Cable]'s. */
     val Machine: ImageVector by lazy {
         icon("OnbMachine") {
             strokePath(LIMB) {
-                seg(7.8f, 4.8f, 7.8f, 20.4f)                 // guide rods
-                seg(16.2f, 4.8f, 16.2f, 20.4f)
-                seg(12f, 4.8f, 12f, 8.4f)                    // lift rod
+                moveTo(3.0f, 20.8f); lineTo(3.0f, 3.0f); lineTo(11.0f, 3.0f); lineTo(11.0f, 20.8f)  // tower
+                seg(7.0f, 3.0f, 7.0f, 8.8f)                  // lift rod
+                seg(1.8f, 20.8f, 22.2f, 20.8f)               // base
+                seg(17.6f, 15.6f, 17.6f, 20.8f)              // seat post
             }
-            strokePath(2.0f) { seg(18.2f, 13.0f, 20.6f, 13.0f) }                        // pin
             fillPath {
-                roundRect(4.4f, 2.6f, 19.6f, 4.8f, 1.0f)     // top cap
-                roundRect(5.4f, 8.4f, 18.6f, 10.8f, 0.8f)    // plates
-                roundRect(5.4f, 11.8f, 18.6f, 14.2f, 0.8f)
-                roundRect(5.4f, 15.2f, 18.6f, 17.6f, 0.8f)
-                roundRect(5.4f, 18.6f, 18.6f, 21.0f, 0.8f)
-                circle(21.0f, 13.0f, 1.3f)                   // pin knob
+                roundRect(4.4f, 8.8f, 9.6f, 11.2f, 0.7f)     // stack
+                roundRect(4.4f, 12.0f, 9.6f, 14.4f, 0.7f)
+                roundRect(4.4f, 15.2f, 9.6f, 17.6f, 0.7f)
+            }
+            strokePath(MASS_THIN) {
+                moveTo(20.6f, 4.8f); lineTo(19.8f, 14.0f); lineTo(14.4f, 14.0f)          // back + seat
             }
         }
     }
 
     // ── Preset glyphs ─────────────────────────────────────────────────────────
     // Presets are PLACES, so they get their own glyphs rather than borrowing a piece of gear: a
-    // commercial building for the full gym, a house with the defining piece inside for the three
-    // home setups. The single-kit presets (dumbbells, bands, bodyweight) keep their kit's glyph.
+    // commercial building for the full gym, a roofline over the defining piece for the three home
+    // setups. The single-kit presets (dumbbells, bands, bodyweight) keep their kit's glyph.
 
     /** Everything gym — a commercial building: flat roof, a dumbbell sign, a wide entrance. */
     val Building: ImageVector by lazy {
@@ -347,89 +363,178 @@ object OnboardingIcons {
         }
     }
 
-    private fun ImageVector.Builder.house() = strokePath(LIMB) {
-        moveTo(2.6f, 11.2f); lineTo(12f, 3.4f); lineTo(21.4f, 11.2f)
-        moveTo(5.0f, 9.2f); lineTo(5.0f, 20.6f); lineTo(19.0f, 20.6f); lineTo(19.0f, 9.2f)
+    /** The home roofline: a pitched roof and its chimney, and no walls. Walls boxed the gear into a
+     *  third of the tile, so the piece inside shrank to a sticker; under an open roof it is drawn
+     *  at full size and the roof alone says "home". */
+    private fun ImageVector.Builder.roof() = strokePath(LIMB_BOLD) {
+        moveTo(2.6f, 10.0f); lineTo(12f, 3.0f); lineTo(21.4f, 10.0f)
+        seg(17.6f, 7.2f, 17.6f, 3.6f)                        // chimney
     }
 
-    /** Home gym, big — a house with a loaded barbell inside. */
+    /** Home gym, big — a full barbell under the roof. */
     val HouseBarbell: ImageVector by lazy {
         icon("OnbHouseBarbell") {
-            house()
-            strokePath(1.4f) { seg(7.0f, 15.6f, 17.0f, 15.6f) }
+            roof()
+            strokePath(LIMB) {
+                seg(1.8f, 16.6f, 2.8f, 16.6f)
+                seg(7.6f, 16.6f, 16.4f, 16.6f)
+                seg(21.2f, 16.6f, 22.2f, 16.6f)
+            }
             fillPath {
-                roundRect(8.4f, 12.2f, 10.2f, 19.0f, 0.8f)
-                roundRect(13.8f, 12.2f, 15.6f, 19.0f, 0.8f)
+                roundRect(4.6f, 12.2f, 7.6f, 21.0f, 1.2f)
+                roundRect(16.4f, 12.2f, 19.4f, 21.0f, 1.2f)
+                roundRect(2.8f, 14.0f, 4.6f, 19.2f, 0.9f)
+                roundRect(19.4f, 14.0f, 21.2f, 19.2f, 0.9f)
             }
         }
     }
 
-    /** Home gym, small — a house with a dumbbell inside, tilted like [Dumbbell]. */
+    /** Home gym, small — a dumbbell under the roof, level and short so it never reads as the bar. */
     val HouseDumbbell: ImageVector by lazy {
         icon("OnbHouseDumbbell") {
-            house()
-            strokePath(1.8f) { seg(10.6f, 16.8f, 13.4f, 14.0f) }
-            strokePath(3.0f) {
-                seg(8.6f, 16.2f, 10.8f, 18.4f)
-                seg(13.2f, 11.6f, 15.4f, 13.8f)
+            roof()
+            strokePath(LIMB_BOLD) { seg(9.6f, 16.6f, 14.4f, 16.6f) }
+            fillPath {
+                roundRect(6.4f, 12.4f, 9.6f, 20.8f, 1.4f)
+                roundRect(14.4f, 12.4f, 17.6f, 20.8f, 1.4f)
+                roundRect(4.6f, 14.2f, 6.4f, 19.0f, 0.9f)
+                roundRect(17.6f, 14.2f, 19.4f, 19.0f, 0.9f)
             }
         }
     }
 
-    /** Home machine gym — a house with a weight stack inside. */
+    /** Home machine gym — a weight stack hanging on its rod from the ridge. */
     val HouseMachine: ImageVector by lazy {
         icon("OnbHouseMachine") {
-            house()
+            roof()
+            strokePath(LIMB) { seg(12f, 9.0f, 12f, 12.0f) }
             fillPath {
-                roundRect(8.4f, 11.6f, 15.6f, 13.4f, 0.6f)
-                roundRect(8.4f, 14.2f, 15.6f, 16.0f, 0.6f)
-                roundRect(8.4f, 16.8f, 15.6f, 18.6f, 0.6f)
+                roundRect(7.0f, 12.0f, 17.0f, 14.6f, 0.9f)
+                roundRect(7.0f, 15.4f, 17.0f, 18.0f, 0.9f)
+                roundRect(7.0f, 18.8f, 17.0f, 21.4f, 0.9f)
             }
         }
     }
 
     // ── Goal glyphs ───────────────────────────────────────────────────────────
+    // The four goals are one set, drawn as outlines at [LIMB] so none of them outweighs the others in
+    // the option list: two were solid silhouettes and one a bare line until 2026-09-26, and the eye
+    // ranked the goals by ink. The lifter is the one figure, drawn at [LIMB_BOLD] like the family's
+    // other figures ([PullUpBar], [DipStation]).
 
-    /** Build muscle — a flexed arm: upper arm, forearm, and the bicep between them. */
+    /** Build muscle — a flexed arm in the pose everyone knows from the emoji: the forearm up the
+     *  left with the fist curled in at the top, the bicep a big round peak on the right, and the
+     *  crease where they fold together. Redrawn 2026-09-27: the side-on arm before it (a flat upper
+     *  arm with the forearm rising off its end) read as a swan, neck and head. */
     val Muscle: ImageVector by lazy {
         icon("OnbMuscle") {
-            // The arm is a MASS, so it is drawn at a mass's weight, not at [LIMB].
-            strokePath(4.4f) {
-                moveTo(5.2f, 17.8f); lineTo(12.6f, 17.8f)      // upper arm
-                moveTo(12.6f, 17.8f); lineTo(17.0f, 9.8f)      // forearm
-            }
-            fillPath {
-                circle(17.4f, 8.4f, 2.9f)                      // fist
-                circle(9.8f, 14.2f, 3.9f)                      // bicep, clear above the arm
+            strokePath(LIMB) {
+                moveTo(12.0f, 13.4f)                                  // bicep, from the crease
+                curveTo(13.6f, 10.2f, 19.4f, 9.8f, 21.0f, 13.8f)
+                curveTo(22.2f, 16.8f, 20.2f, 21.2f, 14.0f, 21.2f)    // round under to the elbow
+                lineTo(6.0f, 21.2f)
+                curveTo(4.2f, 21.2f, 2.8f, 20.0f, 2.8f, 18.2f)       // elbow
+                curveTo(2.8f, 11.4f, 4.6f, 3.8f, 8.6f, 2.8f)         // back of the forearm
+                curveTo(10.8f, 2.2f, 13.2f, 3.0f, 13.2f, 5.0f)       // fist
+                curveTo(13.2f, 6.4f, 12.0f, 7.2f, 10.6f, 7.0f)
+                curveTo(9.8f, 6.9f, 9.2f, 6.4f, 9.0f, 5.8f)          // curled fingers
+                moveTo(10.2f, 7.0f)                                   // inside of the forearm
+                curveTo(8.6f, 9.4f, 8.8f, 13.0f, 7.8f, 15.8f)
+                moveTo(15.2f, 14.8f)                                  // the fold
+                curveTo(12.8f, 13.8f, 9.8f, 14.6f, 7.8f, 16.8f)
             }
         }
     }
 
-    /** Lose weight — a flame with a hollow core. */
+    /** Get stronger — a lifter with the bar locked out overhead. Its own glyph rather than the
+     *  [Barbell] from the gear grid, so a goal never reads as a piece of equipment. */
+    val Lifter: ImageVector by lazy {
+        icon("OnbLifter") {
+            fillPath {
+                circle(12f, 9.0f, 2.1f)                      // head
+                roundRect(2.4f, 1.6f, 4.8f, 8.4f, 1.1f)      // plates
+                roundRect(19.2f, 1.6f, 21.6f, 8.4f, 1.1f)
+            }
+            strokePath(LIMB) { seg(1.4f, 5.0f, 22.6f, 5.0f) }                           // the bar
+            strokePath(LIMB_BOLD) {
+                moveTo(7.4f, 5.0f); lineTo(9.4f, 12.0f); lineTo(14.6f, 12.0f); lineTo(16.6f, 5.0f)  // arms
+                seg(12f, 12.0f, 12f, 15.6f)                  // torso
+                moveTo(8.2f, 21.2f); lineTo(12f, 15.6f); lineTo(15.8f, 21.2f)  // legs
+            }
+        }
+    }
+
+    /** Lose weight — a flame with a second flame inside it, both as outlines. */
     val Flame: ImageVector by lazy {
         icon("OnbFlame") {
-            fillPath(PathFillType.EvenOdd) {
-                moveTo(12f, 2.8f)
-                curveTo(13.6f, 6.4f, 18.6f, 8.2f, 18.6f, 12.8f)
-                curveTo(18.6f, 17.4f, 15.6f, 20.6f, 12f, 20.6f)
-                curveTo(8.4f, 20.6f, 5.4f, 17.4f, 5.4f, 12.8f)
-                curveTo(5.4f, 10.0f, 6.8f, 7.9f, 8.6f, 6.2f)
-                curveTo(9.2f, 8.4f, 10.6f, 9.6f, 12f, 9.6f)
-                curveTo(13.1f, 9.6f, 12.5f, 6.4f, 12f, 2.8f)
+            strokePath(LIMB) {
+                moveTo(12f, 2.4f)
+                curveTo(12.8f, 5.8f, 19.0f, 8.4f, 19.0f, 14.2f)
+                curveTo(19.0f, 18.4f, 15.9f, 21.6f, 12f, 21.6f)
+                curveTo(8.1f, 21.6f, 5.0f, 18.4f, 5.0f, 14.2f)
+                curveTo(5.0f, 11.2f, 6.5f, 9.1f, 8.4f, 7.4f)
+                curveTo(8.4f, 9.2f, 9.2f, 10.4f, 10.5f, 10.8f)
+                curveTo(9.9f, 7.6f, 10.8f, 4.8f, 12f, 2.4f)
                 close()
-                circle(12f, 15.4f, 2.8f)
+                moveTo(12f, 13.0f)                                    // inner flame
+                curveTo(13.0f, 14.4f, 14.4f, 15.2f, 14.4f, 16.7f)
+                curveTo(14.4f, 18.0f, 13.3f, 18.9f, 12f, 18.9f)
+                curveTo(10.7f, 18.9f, 9.6f, 18.0f, 9.6f, 16.7f)
+                curveTo(9.6f, 15.3f, 11.0f, 14.4f, 12f, 13.0f)
+                close()
             }
         }
     }
 
-    /** General fitness — a heartbeat trace. */
-    val Pulse: ImageVector by lazy {
-        icon("OnbPulse") {
+    /** General fitness — a heart with a heartbeat running through it. */
+    val Heartbeat: ImageVector by lazy {
+        icon("OnbHeartbeat") {
             strokePath(LIMB) {
-                moveTo(2.4f, 12.6f); lineTo(8.0f, 12.6f); lineTo(10.0f, 6.8f)
-                lineTo(13.6f, 17.6f); lineTo(15.6f, 12.6f); lineTo(21.6f, 12.6f)
+                moveTo(12f, 20.2f)
+                curveTo(12f, 20.2f, 3.0f, 15.0f, 3.0f, 8.9f)
+                curveTo(3.0f, 6.1f, 5.1f, 4.0f, 7.6f, 4.0f)
+                curveTo(9.5f, 4.0f, 11.1f, 5.1f, 12f, 6.6f)
+                curveTo(12.9f, 5.1f, 14.5f, 4.0f, 16.4f, 4.0f)
+                curveTo(18.9f, 4.0f, 21.0f, 6.1f, 21.0f, 8.9f)
+                curveTo(21.0f, 15.0f, 12f, 20.2f, 12f, 20.2f)
+                close()
+                moveTo(6.2f, 12.2f); lineTo(9.0f, 12.2f); lineTo(10.4f, 9.4f)          // trace
+                lineTo(12.8f, 15.0f); lineTo(14.4f, 12.2f); lineTo(17.8f, 12.2f)
             }
         }
+    }
+
+    // ── Experience glyphs ─────────────────────────────────────────────────────
+    // Three rising bars that fill as experience grows: solid up to the level, ghosted past it, the
+    // way a signal meter reads. The first draft outlined the unfilled bars instead, and at 22dp a
+    // 4-unit bar outlined at [LIMB] is solid, so all three answers wore the same full meter.
+
+    /** A mass drawn at the ghost rung: still the glyph's colour under any tint, at a third of the ink. */
+    private fun ImageVector.Builder.ghostPath(block: PathBuilder.() -> Unit) {
+        path(fill = SolidColor(Color.Black), fillAlpha = 0.35f, pathBuilder = block)
+    }
+
+    private fun ImageVector.Builder.levelBars(filled: Int) {
+        val bars = listOf(
+            floatArrayOf(3.0f, 14.0f, 8.0f, 21.0f),
+            floatArrayOf(9.5f, 9.0f, 14.5f, 21.0f),
+            floatArrayOf(16.0f, 3.0f, 21.0f, 21.0f)
+        )
+        fillPath { bars.take(filled).forEach { (l, t, r, b) -> roundRect(l, t, r, b, 1.4f) } }
+        if (filled < bars.size) {
+            ghostPath { bars.drop(filled).forEach { (l, t, r, b) -> roundRect(l, t, r, b, 1.4f) } }
+        }
+    }
+
+    val Level1: ImageVector by lazy { icon("OnbLevel1") { levelBars(1) } }
+    val Level2: ImageVector by lazy { icon("OnbLevel2") { levelBars(2) } }
+    val Level3: ImageVector by lazy { icon("OnbLevel3") { levelBars(3) } }
+
+    /** Experience key → glyph. */
+    fun forExperience(key: String): ImageVector = when (key) {
+        "beginner" -> Level1
+        "advanced" -> Level3
+        else -> Level2
     }
 
     /** Exhaustive equipment → glyph mapping. */
@@ -469,9 +574,9 @@ object OnboardingIcons {
     /** Goal key → glyph. */
     fun forGoal(key: String): ImageVector = when (key) {
         "build_muscle" -> Muscle
-        "get_stronger" -> Barbell
+        "get_stronger" -> Lifter
         "lose_weight" -> Flame
-        else -> Pulse
+        else -> Heartbeat
     }
 }
 

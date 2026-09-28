@@ -6,25 +6,32 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import com.forge.app.ui.common.window.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.measurement.BodyMeasurementType
 import com.forge.app.domain.units.lengthInputValue
 import com.forge.app.domain.units.lengthUnitLabel
 import com.forge.app.domain.units.parseToCm
+import com.forge.app.ui.common.ForgeFieldRow
+import com.forge.app.ui.common.ForgeGroupCaption
+import com.forge.app.ui.common.ForgeGroupSection
 import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.ForgeRowGroup
 import com.forge.app.domain.units.filterDecimalInput
 
 /**
@@ -41,7 +48,6 @@ internal fun BodyMeasurementLogSheet(
     onDismiss: () -> Unit
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val sheetState = rememberModalBottomSheetState()
     val unit = lengthUnitLabel(useCm)
 
@@ -83,6 +89,9 @@ internal fun BodyMeasurementLogSheet(
         // §5: a modal is a `surface` fill — M3 defaults to the unthemed `surfaceContainerLow`.
         containerColor = MaterialTheme.colorScheme.surface
     ) {
+        val types = BodyMeasurementType.entries
+        val focusers = remember { types.map { FocusRequester() } }
+        val focus = LocalFocusManager.current
         Column(
             Modifier
                 .fillMaxWidth()
@@ -90,25 +99,38 @@ internal fun BodyMeasurementLogSheet(
                 .imePadding()
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             Text("Log measurements", style = MaterialTheme.typography.headlineSmall, color = onBg)
-            BodyMeasurementType.entries.forEach { type ->
-                OutlinedTextField(
-                    value = inputs[type].orEmpty(),
-                    onValueChange = { v -> inputs[type] = filterDecimalInput(v) },
-                    label = { Text("${type.label} ($unit)") },
-                    singleLine = true,
-                    isError = isInvalid(type),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.fillMaxWidth()
-                )
+            // ONE group of inline rows, a site per row, with its unit at the end. Next walks the
+            // group top to bottom; the last row closes the keyboard.
+            ForgeGroupSection(
+                label = null,
+                footer = { ForgeGroupCaption("One entry per measurement per day, saving replaces today's.") }
+            ) {
+                ForgeRowGroup(*types.mapIndexed { i, type ->
+                    @Composable {
+                        val last = i == types.lastIndex
+                        ForgeFieldRow(
+                            label = type.label,
+                            value = inputs[type].orEmpty(),
+                            onValueChange = { v -> inputs[type] = filterDecimalInput(v) },
+                            placeholder = "0",
+                            suffix = unit,
+                            isError = isInvalid(type),
+                            focusRequester = focusers[i],
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Decimal,
+                                imeAction = if (last) ImeAction.Done else ImeAction.Next
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onNext = { focusers.getOrNull(i + 1)?.requestFocus() },
+                                onDone = { focus.clearFocus() }
+                            )
+                        )
+                    }
+                }.toTypedArray())
             }
-            Text(
-                "One entry per measurement per day, saving replaces today's.",
-                style = MaterialTheme.typography.bodySmall,
-                color = muted
-            )
             ForgePrimaryCapsule(
                 label = "Save",
                 onClick = { onSave(toSave) },

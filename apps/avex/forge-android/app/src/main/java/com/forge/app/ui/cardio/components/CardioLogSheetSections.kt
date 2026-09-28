@@ -2,14 +2,12 @@ package com.forge.app.ui.cardio.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import com.forge.app.ui.common.window.AlertDialog
 import androidx.compose.material3.DatePicker
 import com.forge.app.ui.common.window.DatePickerDialog
@@ -24,7 +22,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.cardio.CardioActivity
@@ -32,8 +31,12 @@ import com.forge.app.domain.cardio.CardioCondition
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioField
 import com.forge.app.domain.units.elevationUnitLabel
-import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgeChoiceRow
+import com.forge.app.ui.common.ForgeFieldRow
 import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.ForgeRowGroup
+import com.forge.app.ui.common.ForgeSecondaryCapsule
+import com.forge.app.ui.common.ForgeTileGrid
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
@@ -42,8 +45,11 @@ import java.time.ZoneOffset
  * The optional cardio details (effort / HR zone / intervals / per-type fields / conditions), tucked
  * behind a "More" expander so the common case (just time + distance) stays short. Added as LazyColumn
  * items by [CardioLogSheet].
+ *
+ * Grouped-surface form (2026-09-27): effort and HR zone are label + segmented-control rows, and the
+ * per-type numbers are inline field rows, all in ONE group; the weather tags are a connected tile
+ * grid under it. A tapped-again segment clears its answer, as the pills did.
  */
-@OptIn(ExperimentalLayoutApi::class)
 internal fun LazyListScope.cardioMoreItems(
     moreOpen: Boolean,
     onToggleMore: () -> Unit,
@@ -64,134 +70,91 @@ internal fun LazyListScope.cardioMoreItems(
     conditions: Set<CardioCondition>,
     onToggleCondition: (CardioCondition) -> Unit,
     /** Distance/elevation unit — true = miles + feet, false = km + metres. */
-    useMiles: Boolean,
-    onBg: Color,
-    bg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color
+    useMiles: Boolean
 ) {
     item("more") {
-        ExpanderHeader(
-            label = "More",
-            expanded = moreOpen,
-            muted = muted, onBg = onBg, outline = outline,
-            onToggle = onToggleMore
-        )
+        ExpanderHeader(label = "More", expanded = moreOpen, onToggle = onToggleMore)
     }
     if (!moreOpen) return
 
-    item("effort") {
-        FormSection(label = "Effort", optional = true, muted = muted, onBg = onBg, outline = outline) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CardioEffort.entries.forEach { e ->
-                    PillChip(
-                        label = e.displayName.uppercase(),
-                        selected = effort == e,
-                        onClick = { onEffort(if (effort == e) null else e) },
-                        onBg = onBg, bg = bg, muted = muted, outline = outline
-                    )
+    item("details") {
+        FormSection(label = "Details", optional = true) {
+            val rows = buildList<@Composable () -> Unit> {
+                add {
+                    val efforts = CardioEffort.entries
+                    ForgeChoiceRow("Effort", efforts.map { it.displayName }, efforts.indexOf(effort)) { i ->
+                        onEffort(if (effort == efforts[i]) null else efforts[i])
+                    }
+                }
+                add {
+                    val zones = (1..5).map { it.toString() }
+                    ForgeChoiceRow("HR zone", zones.map { "Z$it" }, zones.indexOf(hrZone)) { i ->
+                        onHrZone(if (hrZone == zones[i]) null else zones[i])
+                    }
+                }
+                // Interval count — only meaningful for HIIT / interval work.
+                if (activity.isHiit) {
+                    add { NumberRow("Intervals", intervalText, onIntervalChange, "8", "intervals", KeyboardType.Number) }
+                }
+                // Per-type fields (GYMAP-38) — each shows only for the activities it fits (belt
+                // grade, pool laps, outdoor climb), so the form never carries a field the activity
+                // can't use.
+                if (CardioField.INCLINE in activity.optionalFields) {
+                    add { NumberRow("Incline", inclineText, onInclineChange, "6", "%", KeyboardType.Decimal) }
+                }
+                if (CardioField.LAPS in activity.optionalFields) {
+                    add { NumberRow("Laps", lapsText, onLapsChange, "20", "laps", KeyboardType.Number) }
+                }
+                if (CardioField.ELEVATION in activity.optionalFields) {
+                    add {
+                        NumberRow(
+                            "Elevation gain", elevationText, onElevationChange, "120",
+                            elevationUnitLabel(useMiles), KeyboardType.Number
+                        )
+                    }
                 }
             }
-        }
-    }
-
-    item("hr-zone") {
-        FormSection(label = "HR zone", optional = true, muted = muted, onBg = onBg, outline = outline) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                (1..5).forEach { z ->
-                    val code = z.toString()
-                    PillChip(
-                        label = "Z$z",
-                        selected = hrZone == code,
-                        onClick = { onHrZone(if (hrZone == code) null else code) },
-                        onBg = onBg, bg = bg, muted = muted, outline = outline
-                    )
-                }
-            }
+            ForgeRowGroup(*rows.toTypedArray())
         }
     }
 
     // Conditions (GYMAP-39) — the weather the session was done in, multi-select. Applies to any active
     // session (the whole More block is hidden on a rest day), so it's not gated by activity type.
     item("conditions") {
-        FormSection(label = "Conditions", optional = true, muted = muted, onBg = onBg, outline = outline) {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                CardioCondition.entries.forEach { c ->
-                    PillChip(
-                        label = c.displayName.uppercase(),
-                        selected = c in conditions,
-                        onClick = { onToggleCondition(c) },
-                        onBg = onBg, bg = bg, muted = muted, outline = outline
-                    )
-                }
+        FormSection(label = "Conditions", optional = true) {
+            ForgeTileGrid(CardioCondition.entries, cols = 4) { c, corners, modifier ->
+                CardioTextTile(
+                    label = c.displayName,
+                    selected = c in conditions,
+                    corners = corners,
+                    onClick = { onToggleCondition(c) },
+                    modifier = modifier
+                )
             }
         }
     }
+}
 
-    // Interval count — only meaningful for HIIT / interval work.
-    if (activity.isHiit) {
-        item("intervals") {
-            FormSection(label = "Intervals", optional = true, muted = muted, onBg = onBg, outline = outline) {
-                NumberInputRow(
-                    value = intervalText,
-                    onValueChange = onIntervalChange,
-                    placeholder = "8",
-                    unit = "intervals",
-                    keyboardType = KeyboardType.Number,
-                    onBg = onBg, muted = muted, accent = accent, outline = outline
-                )
-            }
-        }
-    }
-
-    // Per-type fields (GYMAP-38) — each shows only for the activities it fits (belt grade, pool
-    // laps, outdoor climb), so the form never carries a field the activity can't use.
-    if (CardioField.INCLINE in activity.optionalFields) {
-        item("incline") {
-            FormSection(label = "Incline", optional = true, muted = muted, onBg = onBg, outline = outline) {
-                NumberInputRow(
-                    value = inclineText,
-                    onValueChange = onInclineChange,
-                    placeholder = "6",
-                    unit = "%",
-                    keyboardType = KeyboardType.Decimal,
-                    onBg = onBg, muted = muted, accent = accent, outline = outline
-                )
-            }
-        }
-    }
-    if (CardioField.LAPS in activity.optionalFields) {
-        item("laps") {
-            FormSection(label = "Laps", optional = true, muted = muted, onBg = onBg, outline = outline) {
-                NumberInputRow(
-                    value = lapsText,
-                    onValueChange = onLapsChange,
-                    placeholder = "20",
-                    unit = "laps",
-                    keyboardType = KeyboardType.Number,
-                    onBg = onBg, muted = muted, accent = accent, outline = outline
-                )
-            }
-        }
-    }
-    if (CardioField.ELEVATION in activity.optionalFields) {
-        item("elevation") {
-            FormSection(label = "Elevation gain", optional = true, muted = muted, onBg = onBg, outline = outline) {
-                NumberInputRow(
-                    value = elevationText,
-                    onValueChange = onElevationChange,
-                    placeholder = "120",
-                    unit = elevationUnitLabel(useMiles),
-                    keyboardType = KeyboardType.Number,
-                    onBg = onBg, muted = muted, accent = accent, outline = outline
-                )
-            }
-        }
-    }
+/** One optional number, typed inline at its row's end. */
+@Composable
+private fun NumberRow(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    unit: String,
+    keyboardType: KeyboardType
+) {
+    val focus = LocalFocusManager.current
+    ForgeFieldRow(
+        label = label,
+        value = value,
+        onValueChange = onValueChange,
+        placeholder = placeholder,
+        suffix = unit,
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { focus.clearFocus() })
+    )
 }
 
 /** The save / cancel action row at the foot of the cardio log sheet. */
@@ -200,17 +163,13 @@ internal fun LazyListScope.cardioSaveActionsItem(
     activity: CardioActivity,
     canSubmit: Boolean,
     onSubmit: () -> Unit,
-    onCancel: () -> Unit,
-    onBg: Color,
-    bg: Color,
-    muted: Color
+    onCancel: () -> Unit
 ) {
     item("actions") {
-        Spacer(Modifier.height(16.dp))
         Row(
-            modifier = Modifier.padding(horizontal = 24.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(top = 28.dp, bottom = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(20.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // The one do-it-now action — a filled light capsule (§8); disabled = dimmed, no border swap.
             ForgePrimaryCapsule(
@@ -220,11 +179,11 @@ internal fun LazyListScope.cardioSaveActionsItem(
                     else -> "Save entry"
                 },
                 onClick = onSubmit,
-                enabled = canSubmit
+                enabled = canSubmit,
+                modifier = Modifier.weight(1f)
             )
-            ForgeOutlineCapsule(label = "Cancel", onClick = onCancel)
+            ForgeSecondaryCapsule(label = "Cancel", onClick = onCancel, modifier = Modifier.weight(1f))
         }
-        Spacer(Modifier.height(16.dp))
     }
 }
 

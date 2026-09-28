@@ -1,31 +1,16 @@
 package com.forge.app.ui.cardio.components
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -34,12 +19,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.ForgeFieldRow
+import com.forge.app.ui.common.ForgeGroupCaption
+import com.forge.app.ui.common.ForgeRowGroup
+import com.forge.app.ui.common.ForgeSlidingSegments
+import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioCondition
@@ -171,12 +161,7 @@ fun CardioLogSheet(
     val lapsValue = lapsText.toIntOrNull()
     val elevationValue = storedUnlessEdited(elevationText, elevationSeed, editing?.elevationM) { parseToMeters(it, useMiles) }
     val canSubmit = if (type.isRest) restReason != null else durationInt > 0
-
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val outline = MaterialTheme.colorScheme.outline
-    val bg = MaterialTheme.colorScheme.background
-    val accent = MaterialTheme.colorScheme.primary
+    val distanceFocus = remember { FocusRequester() }
 
     // "MON · JUL 6" — the year only appears once it differs from today's (backdating that far is rare).
     // Keyed on dateMs so the formatters aren't rebuilt on every recomposition (e.g. each keystroke).
@@ -196,18 +181,9 @@ fun CardioLogSheet(
             .format(Date(dateMs)).uppercase()
     }
 
+    val focus = LocalFocusManager.current
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
-        },
+        topBar = { ForgeTopBar(onBack = onDismiss) },
         containerColor = Color.Transparent
     ) { inner ->
         LazyColumn(
@@ -219,66 +195,71 @@ fun CardioLogSheet(
                     dateHeader = dateHeader,
                     timeHeader = timeHeader,
                     showTime = !type.isRest,
-                    muted = muted, onBg = onBg, outline = outline,
                     onPickDate = { showDatePicker = true },
                     onPickTime = { showTimePicker = true }
                 )
             }
 
             item("type") {
-                FormSection(label = "Activity", optional = false, muted = muted, onBg = onBg, outline = outline) {
+                FormSection(label = "Activity", optional = false) {
                     ActivityDropdown(
                         selected = type,
                         onSelect = { typeCode = it.code; typePicked = true },
-                        onAddCustom = { showCreateCustom = true },
-                        onBg = onBg, muted = muted, outline = outline
+                        onAddCustom = { showCreateCustom = true }
                     )
                 }
             }
 
             if (!type.isRest) {
-                // Duration (required) + distance (optional) sit side-by-side on one compact row, with
-                // the live calorie + pace readouts underneath — far shorter than two full sections.
+                // Duration (required) + distance (optional) as one group of inline rows, with the
+                // duration quick-picks as a member between them and the live pace under the group.
                 item("metrics") {
-                    Column(Modifier.padding(horizontal = 24.dp)) {
-                        Spacer(Modifier.height(12.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                            CompactNumberField(
-                                caption = "Duration",
-                                value = durationText,
-                                onValueChange = { durationText = sanitizeDuration(it) },
-                                placeholder = "30",
-                                // Reflects how the typed value reads: plain minutes, or an H:MM clock (GYMAP-41).
-                                unit = if (durationText.contains(':')) "h:mm" else "min",
-                                keyboardType = KeyboardType.Number,
-                                onBg = onBg, muted = muted, accent = accent, outline = outline,
-                                modifier = Modifier.weight(1f)
-                            )
-                            CompactNumberField(
-                                caption = "Distance",
-                                value = distanceText,
-                                onValueChange = { distanceText = sanitizeDecimal(it) },
-                                placeholder = "0",
-                                unit = distanceUnitLabel(useMiles),
-                                keyboardType = KeyboardType.Decimal,
-                                onBg = onBg, muted = muted, accent = accent, outline = outline,
-                                modifier = Modifier.weight(1f)
-                            )
+                    val pace = pacePerUnit(durationInt, distanceKm, useMiles)
+                    FormSection(
+                        label = "Session",
+                        optional = false,
+                        footer = pace?.let { p ->
+                            { ForgeGroupCaption("$p /${distanceUnitLabel(useMiles)}") }
                         }
-                        Spacer(Modifier.height(12.dp))
-                        // §13 — the hot-path number gets its quick-picks; the field stays typeable.
-                        DurationQuickPicks(
-                            current = durationText,
-                            onPick = { durationText = it },
-                            onBg = onBg, bg = bg, muted = muted, outline = outline
+                    ) {
+                        val quick = listOf(20, 30, 45, 60)
+                        ForgeRowGroup(
+                            {
+                                ForgeFieldRow(
+                                    label = "Duration",
+                                    value = durationText,
+                                    onValueChange = { durationText = sanitizeDuration(it) },
+                                    placeholder = "30",
+                                    // Reflects how the typed value reads: plain minutes, or an H:MM clock (GYMAP-41).
+                                    suffix = if (durationText.contains(':')) "h:mm" else "min",
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                                    keyboardActions = KeyboardActions(onNext = { distanceFocus.requestFocus() })
+                                )
+                            },
+                            {
+                                // §13 — the hot-path number gets its quick-picks; the field stays typeable.
+                                Box(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                                    ForgeSlidingSegments(
+                                        options = quick.map { "$it" },
+                                        selectedIndex = quick.indexOfFirst { durationText == it.toString() },
+                                        onSelect = { durationText = quick[it].toString() },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                            },
+                            {
+                                ForgeFieldRow(
+                                    label = "Distance",
+                                    value = distanceText,
+                                    onValueChange = { distanceText = sanitizeDecimal(it) },
+                                    placeholder = "0",
+                                    suffix = distanceUnitLabel(useMiles),
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                                    keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
+                                    focusRequester = distanceFocus
+                                )
+                            }
                         )
-                        // Live pace readout once both fields are in — the instant sanity check.
-                        val pace = pacePerUnit(durationInt, distanceKm, useMiles)
-                        if (pace != null) {
-                            Spacer(Modifier.height(8.dp))
-                            Text("$pace /${distanceUnitLabel(useMiles)}", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
-                        }
-                        Spacer(Modifier.height(10.dp))
                     }
                 }
 
@@ -303,53 +284,25 @@ fun CardioLogSheet(
                             if (c in conditions) conditions - c else conditions + c
                         )
                     },
-                    useMiles = useMiles,
-                    onBg = onBg, bg = bg, muted = muted, accent = accent, outline = outline
+                    useMiles = useMiles
                 )
             } else {
                 item("rest-reason") {
-                    FormSection(label = "Rest", optional = false, muted = muted, onBg = onBg, outline = outline) {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            CardioRestReason.entries.forEach { r ->
-                                PillChip(
-                                    label = r.displayName.uppercase(),
-                                    selected = restReason == r,
-                                    onClick = { restReasonCode = r.code },
-                                    onBg = onBg, bg = bg, muted = muted, outline = outline
-                                )
-                            }
-                        }
+                    FormSection(label = "Rest", optional = false) {
+                        val reasons = CardioRestReason.entries
+                        ForgeSlidingSegments(
+                            options = reasons.map { it.displayName },
+                            selectedIndex = reasons.indexOf(restReason),
+                            onSelect = { restReasonCode = reasons[it].code },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
             }
 
             item("note") {
-                FormSection(label = "Note", optional = true, muted = muted, onBg = onBg, outline = outline) {
-                    BasicTextField(
-                        value = note,
-                        onValueChange = { note = it.take(300) },
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
-                        cursorBrush = SolidColor(accent),
-                        minLines = 2,
-                        maxLines = 5,
-                        decorationBox = { inner ->
-                            Box {
-                                if (note.isEmpty()) {
-                                    Text(
-                                        "jot a few words...",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = muted.copy(alpha = 0.45f),
-                                        fontStyle = FontStyle.Italic
-                                    )
-                                }
-                                inner()
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                FormSection(label = "Note", optional = true) {
+                    FilledNoteField(note, { note = it.take(300) }, "jot a few words...")
                 }
             }
 
@@ -374,8 +327,7 @@ fun CardioLogSheet(
                         if (type.isRest) emptySet() else conditions
                     )
                 },
-                onCancel = onDismiss,
-                onBg = onBg, bg = bg, muted = muted
+                onCancel = onDismiss
             )
         }
     }

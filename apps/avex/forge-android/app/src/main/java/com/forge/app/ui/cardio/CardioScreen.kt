@@ -13,21 +13,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -46,8 +41,10 @@ import com.forge.app.ui.cardio.state.CardioUiState
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgeHeroAction
 import com.forge.app.ui.common.InlineEmptyHint
-import com.forge.app.ui.common.SegmentPill
-import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.ForgeSlidingSegments
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.rowShape
 import com.forge.app.ui.common.forgeItemMotion
 import com.forge.app.ui.common.statsEntrance
 import java.time.Instant
@@ -229,15 +226,7 @@ private fun CardioListContent(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {},
-                navigationIcon = {
-                    if (onBack != null) IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            ForgeTopBar(onBack = onBack)
         },
         containerColor = Color.Transparent
     ) { inner ->
@@ -282,22 +271,16 @@ private fun CardioListContent(
 
             item("lenses") {
                 Spacer(Modifier.height(24.dp))
-                Row(
+                val lenses = CardioLens.entries
+                ForgeSlidingSegments(
+                    options = lenses.map { it.label },
+                    selectedIndex = lenses.indexOf(state.lens),
+                    onSelect = { onSetLens(lenses[it]) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 24.dp)
-                        .statsEntrance(2),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CardioLens.entries.forEach { lens ->
-                        SegmentPill(
-                            text = lens.label.uppercase(),
-                            selected = state.lens == lens,
-                            onClick = { onSetLens(lens) },
-                            accent = accent, onBg = onBg, muted = muted, outline = outline
-                        )
-                    }
-                }
+                        .statsEntrance(2)
+                )
             }
 
             when (state.lens) {
@@ -371,7 +354,7 @@ private fun LazyListScope.weekLens(
             accent = accent,
             modifier = Modifier.padding(horizontal = 24.dp)
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(12.dp))
     }
     if (weekEntries.isEmpty() && !state.isLoading) {
         item("sessions-empty") {
@@ -393,14 +376,16 @@ private fun LazyListScope.weekLens(
             }
         }
     }
-    items(weekEntries, key = { it.id }) { entry ->
+    // The week's sessions are one group of filled rows, 2dp seams between them (no rules).
+    itemsIndexed(weekEntries, key = { _, e -> e.id }) { i, entry ->
         CardioEntryRow(
             entry = entry,
             today = today,
             useMiles = state.useMiles,
             onRequestDelete = { onRequestDelete(entry.id) },
             onClick = { onOpenSession(entry.id) },
-            modifier = forgeItemMotion()
+            shape = rowShape(i, weekEntries.size),
+            modifier = forgeItemMotion().padding(horizontal = 24.dp).padding(top = if (i == 0) 0.dp else GROUP_SEAM)
         )
     }
     // §12 overflow — a trim with `view all →` beside it, never a bare link.
@@ -417,14 +402,16 @@ private fun LazyListScope.weekLens(
     }
     // The inline-expand fallback (no History route wired) grows the list in place with the older rows.
     if (seeAllExpands && state.historyExpanded) {
-        items(state.entries.filter { it.date < weekStartMs }, key = { it.id }) { entry ->
+        val older = state.entries.filter { it.date < weekStartMs }
+        itemsIndexed(older, key = { _, e -> e.id }) { i, entry ->
             CardioEntryRow(
                 entry = entry,
                 today = today,
                 useMiles = state.useMiles,
                 onRequestDelete = { onRequestDelete(entry.id) },
                 onClick = { onOpenSession(entry.id) },
-                modifier = forgeItemMotion()
+                shape = rowShape(i, older.size),
+                modifier = forgeItemMotion().padding(horizontal = 24.dp).padding(top = if (i == 0) 0.dp else GROUP_SEAM)
             )
         }
     }
@@ -540,12 +527,12 @@ private fun LastSessionLine(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickableLabeled("Open your last session", onClick = onClick)
-            .padding(horizontal = 24.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
+            .padding(horizontal = 24.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = muted)
-        Text("open →", style = MaterialTheme.typography.labelMedium, color = accent)
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = muted, modifier = Modifier.weight(1f))
+        CardioLinkCapsule("Open", "Open your last session", onClick)
     }
 }
 
@@ -557,14 +544,14 @@ private fun SeeAllRow(
     onClick: () -> Unit,
     accent: Color
 ) {
-    // Inline-expand mode toggles "show less"; navigate mode (and collapsed) reads "view all … →".
-    val label = if (expands && expanded) "show less ↑" else "view all $total →"
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickableLabeled("View all sessions", onClick = onClick)
-            .padding(horizontal = 24.dp, vertical = 14.dp)
-    ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = accent)
+    // Inline-expand mode toggles "Show less"; navigate mode (and collapsed) reads "View all N".
+    val less = expands && expanded
+    Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(top = 8.dp)) {
+        CardioLinkCapsule(
+            text = if (less) "Show less" else "View all $total",
+            label = if (less) "Show fewer sessions" else "View all sessions",
+            onClick = onClick,
+            arrow = !less
+        )
     }
 }

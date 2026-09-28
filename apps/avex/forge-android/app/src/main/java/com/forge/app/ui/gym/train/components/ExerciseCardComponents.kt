@@ -38,6 +38,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -88,16 +91,19 @@ internal fun CollapsedRow(
     state: ExerciseUiState,
     isNow: Boolean,
     onToggle: () -> Unit,
-    onOpenSwapPicker: () -> Unit
+    onOpenSwapPicker: () -> Unit,
+    /** A group member passes its fill here and the row's gutter drops to the group's. */
+    modifier: Modifier = Modifier,
+    horizontalPadding: Dp = 24.dp
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
     val context = LocalContext.current
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 14.dp),
+            .padding(horizontal = horizontalPadding, vertical = 14.dp),
         verticalAlignment = Alignment.Top
     ) {
         Text(
@@ -252,9 +258,11 @@ internal fun LastSessionStrip(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+            // Filled, not outlined: the raised fill is what says "tap for the chart".
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 9.dp),
+            .padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
@@ -421,9 +429,8 @@ internal fun ExerciseCardFooter(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
 
-    Spacer(Modifier.height(8.dp))
-    HorizontalDivider(color = outline.copy(alpha = 0.2f))
-    Spacer(Modifier.height(12.dp))
+    // Air, not a rule, between the set log and the footer.
+    Spacer(Modifier.height(16.dp))
 
     val context = LocalContext.current
     var showNote by remember(state.effectiveName) { mutableStateOf(!state.note.isNullOrBlank()) }
@@ -502,15 +509,22 @@ internal fun UpNextBubble(
     val outline = MaterialTheme.colorScheme.outline
     var expanded by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxWidth().animateContentSize()) {
-        // Collapsed header — always visible, toggles the list.
+    // One group: the header, then (expanded) each upcoming exercise and the add row as members
+    // joined by 2dp seams, instead of an outlined box over a hairline-split list.
+    val memberCount = if (expanded) upcoming.size + 2 else 1
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)
+    ) {
+        // Header — always visible, toggles the list.
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp)
-                .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
+                .groupMember(0, memberCount)
                 .clickable { expanded = !expanded }
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(horizontal = ROW_H, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -535,22 +549,19 @@ internal fun UpNextBubble(
                     )
                 }
             }
-            Text(if (expanded) "▲" else "▾", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
+            Text(if (expanded) "▲" else "▾", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.35f))
         }
 
         if (expanded) {
-            Spacer(Modifier.height(8.dp))
-            upcoming.forEach { (idx, ex) ->
+            upcoming.forEachIndexed { i, (idx, ex) ->
                 CollapsedRow(
                     exerciseIndex = idx,
                     state = ex,
                     isNow = false,
                     onToggle = { onSelectExercise(ex.plan.id); expanded = false },
-                    onOpenSwapPicker = { onOpenSwapPicker(ex.plan.id) }
-                )
-                HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = 24.dp),
-                    color = outline.copy(alpha = 0.12f)
+                    onOpenSwapPicker = { onOpenSwapPicker(ex.plan.id) },
+                    modifier = Modifier.groupMember(i + 1, memberCount),
+                    horizontalPadding = ROW_H
                 )
             }
             Text(
@@ -558,9 +569,9 @@ internal fun UpNextBubble(
                 style = MaterialTheme.typography.bodyMedium,
                 color = muted,
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .groupMember(memberCount - 1, memberCount)
                     .clickableLabeled("Add an exercise") { onAddExercise() }
-                    .padding(horizontal = 24.dp, vertical = 16.dp)
+                    .padding(horizontal = ROW_H, vertical = 16.dp)
             )
         }
     }

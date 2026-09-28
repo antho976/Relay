@@ -20,7 +20,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgeRowGroup
+import com.forge.app.ui.common.ForgeSecondaryCapsule
+import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.theme.ForgeTheme
 
@@ -78,18 +80,21 @@ fun ModalRecipeContent(
         )
 
         Spacer(Modifier.height(16.dp))
-        SheetRow("Sets", "12")
-        SheetRow("Volume", "4,480 kg")
-        SheetRow("Best e1RM", "88.7 kg")
+        // Readings sit in one connected group of filled rows, never bare rows split by lines.
+        ForgeRowGroup(
+            { SheetRow("Sets", "12") },
+            { SheetRow("Volume", "4,480 kg") },
+            { SheetRow("Best e1RM", "88.7 kg") }
+        )
 
-        // §8: actions at the END, ① filled with its ② outlined sidekick. Never two filled capsules.
+        // Actions at the END: the light primary with its filled secondary sidekick.
         Spacer(Modifier.height(24.dp))
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             ForgePrimaryCapsule("Open session", onConfirm, Modifier.weight(1f))
-            ForgeOutlineCapsule("Close", onDismiss, Modifier.weight(1f))
+            ForgeSecondaryCapsule("Close", onDismiss, Modifier.weight(1f))
         }
         Spacer(Modifier.height(8.dp))
     }
@@ -100,7 +105,7 @@ private fun SheetRow(label: String, value: String) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 6.dp),   // §7: one padding for all rows here
+        Modifier.fillMaxWidth().padding(horizontal = ROW_H, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {

@@ -48,7 +48,10 @@ import com.forge.app.domain.units.formatHoldLabel
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.program.MuscleGroup
-import com.forge.app.ui.common.EditorialHairline
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.rowShape
+import androidx.compose.foundation.layout.widthIn
 import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.session.state.ExerciseDetail
@@ -340,20 +343,28 @@ private fun exerciseSummary(ex: ExerciseDetail, weightUnit: WeightUnit): String 
     }.joinToString(" · ")
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SetTable(sets: List<SetDetail>, onBg: Color, muted: Color, outline: Color) {
     val weightUnit = LocalForgeSettings.current.weightUnit
-    Column {
+    // One filled group, a member per set, 2dp seams instead of table rules (2026-09-27).
+    Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
         sets.forEachIndexed { i, s ->
-            // Table rule — one of the few sanctioned lines (§1: a line exists only as data).
-            if (i > 0) EditorialHairline(outline)
             Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(rowShape(i, sets.size))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .padding(horizontal = ROW_H, vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("${s.number}", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f), fontSize = 10.sp, modifier = Modifier.width(14.dp))
+                Row(
+                    Modifier.weight(1f, fill = false),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("${s.number}", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f), modifier = Modifier.widthIn(min = 14.dp))
                     Text(
                         // A timed hold reads its held time (0:45); every other set reads "weight × reps".
                         if (s.durationSeconds != null) formatHoldLabel(s.durationSeconds) else "${weightLabel(s, weightUnit)} × ${s.reps}",
@@ -363,7 +374,11 @@ private fun SetTable(sets: List<SetDetail>, onBg: Color, muted: Color, outline: 
                         fontWeight = if (s.isTopSet) FontWeight.SemiBold else FontWeight.Normal
                     )
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Spacer(Modifier.width(10.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
+                    itemVerticalAlignment = Alignment.CenterVertically
+                ) {
                     if (s.setType == "warmup") SetTag("WARM", muted)
                     if (s.isAmrap) SetTag("AMRAP", muted)
                     if (s.toFailure) SetTag("FAIL", muted)
@@ -372,7 +387,7 @@ private fun SetTable(sets: List<SetDetail>, onBg: Color, muted: Color, outline: 
                     // extra detail, so the badge keys off either (freestyle drops carry no annotation).
                     if (s.setType == "drop" || !s.dropAnnotation.isNullOrBlank()) SetTag("DROP", muted)
                     s.rpe?.let {
-                        Text("RPE ${rpeLabel(it)}", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                        Text("RPE ${rpeLabel(it)}", style = MaterialTheme.typography.labelSmall, color = muted)
                     }
                 }
             }

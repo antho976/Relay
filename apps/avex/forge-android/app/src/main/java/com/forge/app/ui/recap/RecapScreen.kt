@@ -13,22 +13,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -36,7 +32,10 @@ import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.ui.common.EditorialFigure
 import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.ForgeRowGroup
 import com.forge.app.ui.common.ForgeShimmerHost
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.forgeShimmer
 import com.forge.app.ui.theme.LocalForgeSettings
 
@@ -55,14 +54,8 @@ fun RecapScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                // §4.6: bell + back, never the screen's name — the serif hero below carries it.
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            // §4.6: chrome only, never the screen's name; the serif hero below carries it.
+            ForgeTopBar(onBack = onBack)
         },
         containerColor = Color.Transparent
     ) { inner ->
@@ -99,9 +92,14 @@ fun RecapScreen(
                         ),
                         onBg = onBg, muted = muted, accent = accent
                     )
-                    if (recap.topExercise != null) RecapRow("Most trained", recap.topExercise, onBg, muted)
-                    if (recap.avgDurationMin > 0) RecapRow("Avg session", "${recap.avgDurationMin} min", onBg, muted)
-                    if (recap.bestDayName != null) RecapRow("Best PR day", recap.bestDayName, onBg, muted)
+                    RecapRows(
+                        listOfNotNull(
+                            recap.topExercise?.let { "Most trained" to it },
+                            ("Avg session" to "${recap.avgDurationMin} min").takeIf { recap.avgDurationMin > 0 },
+                            recap.bestDayName?.let { "Best PR day" to it }
+                        ),
+                        onBg, muted
+                    )
                 }
             } ?: RecapSection(title = "THIS MONTH", muted = muted, accent = accent) {
                 // §12: an empty period shows the same figures at honest zeros, never a hidden section.
@@ -133,9 +131,15 @@ fun RecapScreen(
                         ),
                         onBg = onBg, muted = muted, accent = accent
                     )
-                    if (recap.avgWeeklyVolume > 0) RecapRow("Avg weekly volume", formatRecapVolume(recap.avgWeeklyVolume, weightUnit), onBg, muted)
-                    if (recap.topExercise != null) RecapRow("Most trained exercise", recap.topExercise, onBg, muted)
-                    if (recap.bestMonthName != null) RecapRow("Best month", recap.bestMonthName, onBg, muted)
+                    RecapRows(
+                        listOfNotNull(
+                            ("Avg weekly volume" to formatRecapVolume(recap.avgWeeklyVolume, weightUnit))
+                                .takeIf { recap.avgWeeklyVolume > 0 },
+                            recap.topExercise?.let { "Most trained exercise" to it },
+                            recap.bestMonthName?.let { "Best month" to it }
+                        ),
+                        onBg, muted
+                    )
                 }
             } ?: RecapSection(title = "THIS YEAR", muted = muted, accent = accent) {
                 // §12: honest zeros, same vocabulary as the populated section.
@@ -223,6 +227,18 @@ private fun RecapFiguresRow(
 /** Volume for the recap sections: "12.5k lb" for big numbers, the exact value under 1000 lb (no "0k"). */
 private fun formatRecapVolume(lb: Double, weightUnit: WeightUnit): String = formatVolumeCompact(lb, weightUnit)
 
+/** The period's label and value readings as one group of filled rows, 2dp seams between them. */
+@Composable
+private fun RecapRows(rows: List<Pair<String, String>>, onBg: Color, muted: Color) {
+    if (rows.isEmpty()) return
+    Spacer(Modifier.height(6.dp))
+    ForgeRowGroup(
+        *rows.map { (label, value) ->
+            @Composable { RecapRow(label, value, onBg, muted) }
+        }.toTypedArray()
+    )
+}
+
 @Composable
 private fun RecapRow(
     label: String,
@@ -230,10 +246,19 @@ private fun RecapRow(
     onBg: Color,
     muted: Color
 ) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.bodySmall, color = muted)
-        Text(value, style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold, color = onBg)
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = ROW_H, vertical = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = muted, modifier = Modifier.weight(1f))
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = onBg,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1f, fill = false)
+        )
     }
-    Spacer(Modifier.height(6.dp))
 }

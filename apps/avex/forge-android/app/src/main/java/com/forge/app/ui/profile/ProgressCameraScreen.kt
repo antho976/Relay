@@ -58,7 +58,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.content.ContextCompat
 import com.forge.app.domain.photo.PhotoPose
-import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgeSecondaryCapsule
 import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.bounceClick
 import kotlinx.coroutines.delay
@@ -273,7 +273,7 @@ private fun PermissionFallback(denied: Boolean, onAllow: () -> Unit, onBack: () 
         )
         if (denied) {
             Spacer(Modifier.height(20.dp))
-            ForgeOutlineCapsule("Allow camera", onClick = onAllow, contentColor = Color.White)
+            ForgeSecondaryCapsule("Allow camera", onClick = onAllow)
             Spacer(Modifier.height(10.dp))
             Text("Back", style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.6f),
                 modifier = Modifier.bounceClick { onBack() }.padding(12.dp))

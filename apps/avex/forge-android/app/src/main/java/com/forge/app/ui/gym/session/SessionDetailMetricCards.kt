@@ -1,7 +1,6 @@
 package com.forge.app.ui.gym.session
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,6 +10,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.platform.LocalDensity
+import com.forge.app.ui.common.GROUP_OUTER
+import com.forge.app.ui.common.ROW_H
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -98,7 +101,10 @@ private fun StyleToggle(
         isSelected = { it == style },
         label = { it.label },
         onSelect = onStyle,
-        onBg = onBg, muted = muted, accent = accent, outline = outline
+        onBg = onBg, muted = muted, accent = accent, outline = outline,
+        // A compact two-way pill beside the section anchor; wider at a large font scale so the
+        // two words stay whole.
+        modifier = Modifier.width(if (LocalDensity.current.fontScale > 1.3f) 200.dp else 132.dp)
     )
 }
 
@@ -283,12 +289,14 @@ private fun ExercisePicker(
     var open by remember { mutableStateOf(false) }
     Box {
         Row(
+            // A filled row of the grouped kit, not an outlined box (2026-09-27).
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                .heightIn(min = 48.dp)
+                .clip(RoundedCornerShape(GROUP_OUTER))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .clickable(onClickLabel = "Choose exercise") { open = true }
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(horizontal = ROW_H, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {

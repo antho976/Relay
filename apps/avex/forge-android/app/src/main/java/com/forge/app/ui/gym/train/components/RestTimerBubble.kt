@@ -1,5 +1,7 @@
 package com.forge.app.ui.gym.train.components
 
+import androidx.compose.foundation.layout.heightIn
+
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -304,17 +306,18 @@ fun RestTimerControlsDialog(
                 )
             }
 
-            HorizontalDivider(color = outline.copy(alpha = 0.2f))
-
             // −30s trims an over-long rest; the rest add time. addSeconds clamps at 0, so −30s
             // with under 30s left simply ends the rest.
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(-30 to "−30s", 60 to "+1 min", 120 to "+2 min", 300 to "+5 min").forEach { (s, label) ->
+                    // Filled capsules on the dialog, not outlined boxes.
                     Box(
                         modifier = Modifier
-                            .border(1.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                            .heightIn(min = 40.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                             .clickable { onAddSeconds(s) }
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(

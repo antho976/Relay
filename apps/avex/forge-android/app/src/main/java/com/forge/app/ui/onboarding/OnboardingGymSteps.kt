@@ -1,6 +1,12 @@
 @file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.forge.app.ui.onboarding
 
+import com.forge.app.ui.common.ForgeGearTile
+import com.forge.app.ui.common.ForgeGlyphBadge
+import com.forge.app.ui.common.ForgeGroupSection
+import com.forge.app.ui.common.ForgeLabelTile
+import com.forge.app.ui.common.ForgeRowGroup
+import com.forge.app.ui.common.ForgeTileGrid
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -13,6 +19,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -50,49 +58,48 @@ internal fun StepGymPresets(
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         StepTitle("What's in your gym?")
         StepCaption("Pick the closest setup. You fine-tune every piece next.")
-        Spacer(Modifier.height(2.dp))
-        equipmentPresets.chunked(2).forEach { rowPresets ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                rowPresets.forEach { preset ->
-                    PresetTile(
-                        icon = OnboardingIcons.forPreset(preset.id),
-                        label = preset.label,
-                        meta = presetMeta(preset),
-                        selected = selected == preset.equipment && frozenIds == preset.frozenIds,
-                        onClick = { onSelectPreset(preset) },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                if (rowPresets.size == 1) Spacer(Modifier.weight(1f))
-            }
+        Spacer(Modifier.height(6.dp))
+        ForgeTileGrid(equipmentPresets, cols = 2) { preset, corners, modifier ->
+            ForgeLabelTile(
+                label = preset.label,
+                meta = presetMeta(preset),
+                selected = selected == preset.equipment && frozenIds == preset.frozenIds,
+                corners = corners,
+                onClick = { onSelectPreset(preset) },
+                modifier = modifier,
+                role = Role.RadioButton,
+                icon = OnboardingIcons.forPreset(preset.id)
+            )
         }
         // The "in this setup" mono gear dump that used to close this page is gone (2026-08-22): the
-        // ledger below now answers what the preset DID to the week, and the fine-tune page next lists
-        // every piece with its own on/off state. Two readouts of one answer broke §4.3's one home.
+        // fine-tune page next lists every piece with its own on/off state. Two readouts of one
+        // answer broke the one-home rule.
     }
 }
 
-/** GYMAP-20 step 2 of 2: every piece of gear, grouped, toggleable. */
+/** GYMAP-20 step 2 of 2: every piece of gear, grouped, toggleable. Each group is one connected
+ *  grid of tiles under its anchor, so the page reads as four objects rather than seventeen. */
 @Composable
 internal fun StepFineTune(selected: Set<String>, onToggle: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         StepTitle("Fine-tune your gear")
         StepCaption("Toggle anything the preset got wrong. Plans use only what's on.")
-        Spacer(Modifier.height(2.dp))
-        equipmentGroups.forEach { (group, items) ->
-            StepSectionLabel(group, meta = "${items.count { it.name in selected }} on")
-            items.chunked(3).forEach { rowGear ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    rowGear.forEach { e ->
-                        EquipmentTile(
+        Spacer(Modifier.height(6.dp))
+        // Three across until the names would break mid-word ("Dumbbell / s"), then two.
+        val cols = if (LocalDensity.current.fontScale > 1.3f) 2 else 3
+        Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+            equipmentGroups.forEach { (group, items) ->
+                ForgeGroupSection(group, meta = "${items.count { it.name in selected }} on") {
+                    ForgeTileGrid(items, cols = cols) { e, corners, modifier ->
+                        ForgeGearTile(
                             icon = OnboardingIcons.forEquipment(e),
                             label = e.display,
                             selected = e.name in selected,
+                            corners = corners,
                             onClick = { onToggle(e.name) },
-                            modifier = Modifier.weight(1f)
+                            modifier = modifier
                         )
                     }
-                    repeat(3 - rowGear.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
         }
@@ -214,31 +221,30 @@ private fun WeekDay(day: GeneratedDay?, fallbackName: String, showSets: Boolean)
                 color = muted
             )
         }
-        exercises.forEach { ex ->
-            val def = ExerciseLibrary.byId(ex.libId)
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    ExerciseIcons.forEquipment(def?.equipment.orEmpty()),
-                    contentDescription = null,
-                    tint = muted,
-                    modifier = Modifier.size(20.dp)
-                )
-                Text(
-                    def?.name ?: ex.libId,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    "${ex.sets} × ${ex.reps}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = muted
-                )
+        // The day's movements as one group of rows, the list language of the rest of the flow.
+        val rows: List<@Composable () -> Unit> = exercises.map { ex ->
+            {
+                val def = ExerciseLibrary.byId(ex.libId)
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ForgeGlyphBadge(ExerciseIcons.forEquipment(def?.equipment.orEmpty()), selected = false, size = 34.dp)
+                    Text(
+                        def?.name ?: ex.libId,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        "${ex.sets} × ${ex.reps}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = muted
+                    )
+                }
             }
         }
+        ForgeRowGroup(*rows.toTypedArray())
     }
 }

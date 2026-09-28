@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
-import com.forge.app.ui.common.SegmentPill
+import com.forge.app.ui.common.ForgeSlidingSegments
 import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.session.state.ExerciseDetail
 import com.forge.app.ui.gym.session.state.SessionChartStyle
@@ -53,10 +53,14 @@ internal fun formatMetricValue(value: Double, metric: SessionMetric, weightUnit:
 // ─── Page controls ────────────────────────────────────────────────────────────
 
 /**
- * One segmented toggle row, reused for the page-level metric picker (Weight/Volume/Reps/RPE) and the
- * per-card bars/line style toggle. The bars/line toggle now lives on each metric card rather than
- * being a single page-wide switch, so each "stat" carries its own style.
+ * One segmented control, reused for the page-level metric picker (Weight/Volume/Reps/RPE), the
+ * Stats lens picker and the per-card bars/line style toggle. It is the grouped kit's
+ * [ForgeSlidingSegments] (2026-09-27): a recessed track with one thumb that glides to the pick, in
+ * place of a row of separate pills. [modifier] sizes the track; the default spans the row.
+ *
+ * The colour parameters are kept for the call sites; the control reads the theme.
  */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 internal fun <T> SegmentRow(
     items: List<T>,
@@ -66,18 +70,15 @@ internal fun <T> SegmentRow(
     onBg: Color,
     muted: Color,
     accent: Color,
-    outline: Color
+    outline: Color,
+    modifier: Modifier = Modifier.fillMaxWidth()
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        items.forEach { item ->
-            SegmentPill(
-                text = label(item),
-                selected = isSelected(item),
-                onClick = { onSelect(item) },
-                accent = accent, onBg = onBg, muted = muted, outline = outline
-            )
-        }
-    }
+    ForgeSlidingSegments(
+        options = items.map(label),
+        selectedIndex = items.indexOfFirst(isSelected),
+        onSelect = { onSelect(items[it]) },
+        modifier = modifier
+    )
 }
 
 // ─── Per-exercise: chosen metric per set (bars or line) ─────────────────────────

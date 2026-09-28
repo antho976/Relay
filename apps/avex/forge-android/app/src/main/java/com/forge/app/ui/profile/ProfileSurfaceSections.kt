@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -46,7 +47,11 @@ import com.forge.app.domain.units.lengthUnitLabel
 import com.forge.app.domain.units.toDisplayLength
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.common.ForgeGlyphBadge
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.bounceCombinedClick
+import com.forge.app.ui.common.rowShape
 import com.forge.app.ui.experiment.HeroFigure
 import com.forge.app.ui.experiment.SurfaceSparkline
 import com.forge.app.ui.nav.NavIcons
@@ -94,8 +99,7 @@ import kotlin.math.roundToInt
  * Every caption here is back on plain `muted` — one rung darker than it was, and correct.
  */
 
-/** The icon column. One width for every row on the page, so labels align down the whole screen. */
-private val ROW_ICON = 18.dp
+/** The gap after a row's glyph badge. */
 private val ROW_ICON_GAP = 12.dp
 
 /** The all-time tallies' glyph, one rung down: it labels a caption there, not a row. */
@@ -150,7 +154,7 @@ internal fun ProfileAllTime(
         }
         Spacer(Modifier.height(4.dp))
         Text(
-            "LIFETIME VOLUME · ${compactCount(totalSets)} SETS",
+            "LIFETIME VOLUME",
             style = MaterialTheme.typography.labelSmall,
             color = muted
         )
@@ -167,144 +171,51 @@ internal fun ProfileAllTime(
         }
 
         // No rule between the volume and the tallies, and none under them (Antho, 2026-08-22:
-        // "at all time I don't want anything to indicate a new section"). They are not a new
-        // section — they are the rest of ALL TIME, and a hairline across the page said otherwise.
-        // Space does the separating now, which is what the anchor above already implied.
-        Spacer(Modifier.height(34.dp))
+        // "at all time I don't want anything to indicate a new section"). Space does the separating.
+        //
+        // Redrawn 2026-09-27: the tallies were headline figures with a pair of red/grey comparison
+        // bars under each, which put two sizes of big number and four small bars under one anchor
+        // and read as busy. Now three equal figures sit in one row, a size below the lifetime hero,
+        // and the week-over-week reading is one quiet line of words under each that moves.
+        Spacer(Modifier.height(28.dp))
         Row(
-            Modifier.fillMaxWidth().height(IntrinsicSize.Min),
-            horizontalArrangement = Arrangement.spacedBy(20.dp)
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            AllTimeTally(
-                SettingsIcons.Session, "WORKOUTS", "$totalSessions",
-                workoutsThisWeek, workoutsLastWeek, "workouts",
-                accent, onBg, muted, Modifier.weight(1f)
-            )
-            AllTimeTally(
-                NavIcons.Stats, "PRS", "$totalPrs",
-                prsThisWeek, prsLastWeek, "PRs",
-                accent, onBg, muted, Modifier.weight(1f)
-            )
+            AllTimeTally("$totalSessions", "Workouts", workoutsThisWeek, workoutsLastWeek, onBg, muted, Modifier.weight(1f))
+            AllTimeTally("$totalPrs", "PRs", prsThisWeek, prsLastWeek, onBg, muted, Modifier.weight(1f))
+            AllTimeTally(compactCount(totalSets), "Sets", null, null, onBg, muted, Modifier.weight(1f))
         }
     }
 }
 
 /**
- * One tally: the figure first, its glyph and name beneath, and — only when there is a week worth
- * comparing — the two-bar comparison under that.
- *
- * ## Why this is a column and not a row
- *
- * It was a full-width row: glyph and name left, figure right-aligned, hairline above and below.
- * At zero that is a label, a lot of empty middle, and a lone `0` — the shape of an unfinished list,
- * which is what Antho pointed at. The row spent the page's whole width to carry two words and one
- * digit, and the hairlines around it made the emptiness look structural.
- *
- * Paired columns spend that width on both tallies at once. The figure leads at headline size, which
- * is what a lifetime total is for, and the label sits under it where a caption belongs — the same
- * figure-over-label pairing the lifetime volume above uses, so ALL TIME now speaks in one voice
- * instead of two. `IntrinsicSize.Min` on the parent keeps both columns level when only one has bars.
- *
- * The bars carry their own counts as text, so the comparison never depends on reading a bar length,
- * or on colour (§14).
+ * One lifetime tally: the figure, its name under it, and (when either week has any) a single line of
+ * words comparing this week with last. Words, not bars: the counts are small, and a pair of bars for
+ * "3 vs 4" spent a whole mark on what one line says outright. A tally with no week to compare, or a
+ * quiet fortnight, simply stops at its name.
  */
 @Composable
 private fun AllTimeTally(
-    icon: ImageVector,
-    label: String,
     figure: String,
-    thisWeek: Int,
-    lastWeek: Int,
-    noun: String,
-    accent: Color,
+    label: String,
+    thisWeek: Int?,
+    lastWeek: Int?,
     onBg: Color,
     muted: Color,
     modifier: Modifier = Modifier
 ) {
-    Column(modifier) {
-        Text(figure, style = MaterialTheme.typography.headlineLarge, color = onBg, maxLines = 1)
-        Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            // Decorative (§14): the label beside it already says the word.
-            Icon(icon, contentDescription = null, tint = muted, modifier = Modifier.size(TALLY_ICON))
-            Spacer(Modifier.width(7.dp))
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(figure, style = MaterialTheme.typography.headlineSmall, color = onBg, maxLines = 1)
+        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted)
+        if (thisWeek != null && lastWeek != null && (thisWeek > 0 || lastWeek > 0)) {
+            Spacer(Modifier.height(4.dp))
             Text(
-                label,
-                style = MaterialTheme.typography.labelSmall,
-                color = muted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                "$thisWeek this week · $lastWeek last",
+                style = MaterialTheme.typography.bodySmall,
+                color = muted.copy(alpha = 0.7f)
             )
         }
-        // Nothing either week → draw NOTHING. Two empty tracks over "0 THIS WK · 0 LAST" was the
-        // first thing Antho flagged (2026-08-15): §12 says an all-ghost group drops its mark,
-        // because a pair of flat lines reads as broken rather than as empty. The tally still answers
-        // honestly above — a real 0 — and gains its bars the moment there is a week to compare.
-        if (thisWeek == 0 && lastWeek == 0) return@Column
-        Spacer(Modifier.height(14.dp))
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .semantics(mergeDescendants = true) {
-                    contentDescription = "$thisWeek $noun this week, $lastWeek last week"
-                },
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            val peak = maxOf(thisWeek, lastWeek, 1)
-            // The lit bar is THIS week; last week is the same bar unlit. That is the pairing
-            // Home's MOVEMENT line already uses (accent fill, outline track) and the one Stats'
-            // week bars use — the accent marks the reading you are being asked to act on.
-            ComparisonBar("THIS WK", thisWeek, thisWeek.toFloat() / peak, accent, onBg, muted)
-            ComparisonBar("LAST WK", lastWeek, lastWeek.toFloat() / peak, muted.copy(alpha = 0.35f), onBg, muted)
-        }
-    }
-}
-
-/** `THIS WK ▬▬▬▬▬▬ 4` — a named track with its count, so the bar is a second channel, never the only one. */
-@Composable
-private fun ComparisonBar(
-    label: String,
-    count: Int,
-    fraction: Float,
-    color: Color,
-    onBg: Color,
-    muted: Color
-) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            color = muted,
-            maxLines = 1,
-            modifier = Modifier.width(50.dp)
-        )
-        Box(
-            Modifier
-                .weight(1f)
-                .height(4.dp)
-                .clip(RoundedCornerShape(50))
-                .background(muted.copy(alpha = 0.15f))
-        ) {
-            val f = fraction.coerceIn(0f, 1f)
-            if (f > 0f) {
-                Box(
-                    Modifier
-                        .fillMaxWidth(f)
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(50))
-                        .background(color)
-                )
-            }
-        }
-        Spacer(Modifier.width(10.dp))
-        Text(
-            "$count",
-            style = MaterialTheme.typography.labelSmall,
-            color = onBg,
-            maxLines = 1,
-            textAlign = TextAlign.End,
-            modifier = Modifier.width(24.dp)
-        )
     }
 }
 
@@ -333,7 +244,7 @@ internal data class BodyMetric(
 )
 
 /**
- * BODY as a stack of open rows — glyph, name, trend, reading — separated by hairlines.
+ * BODY as one group of filled rows (glyph badge, name, trend, reading), joined by 2dp seams.
  *
  * This replaces the swipeable card strip (2026-08-22). The strip gave each metric its own figure,
  * delta and sparkline at a generous size, and charged the section its scanability: you had to swipe
@@ -384,9 +295,10 @@ internal fun ProfileBodyRows(
         // white line, BODY FAT a muted one and SIZES a fainter one still, which reads as a ranking
         // of the three metrics — and there is no such ranking. A trend line is a trend line, and on
         // every other screen in the app a trend line is drawn in the accent.
-        metrics.forEach { metric ->
+        metrics.forEachIndexed { i, metric ->
             BodyMetricRow(
                 metric = metric,
+                shape = rowShape(i, metrics.size),
                 accent = accent,
                 onBg = onBg,
                 muted = muted
@@ -396,16 +308,18 @@ internal fun ProfileBodyRows(
 }
 
 @Composable
-private fun BodyMetricRow(metric: BodyMetric, accent: Color, onBg: Color, muted: Color) {
+private fun BodyMetricRow(metric: BodyMetric, shape: Shape, accent: Color, onBg: Color, muted: Color) {
     Row(
         Modifier
             .fillMaxWidth()
+            .clip(shape)
             .heightIn(min = ROW_MIN_HEIGHT)
             .bounceCombinedClick(onClickLabel = "${metric.action} ${metric.label.lowercase()}") { metric.onOpen() }
-            .padding(vertical = 14.dp),
+            // Plain rows on the page gutter, no fill: Profile has no grey backdrops (2026-09-27).
+            .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(metric.icon, contentDescription = null, tint = muted, modifier = Modifier.size(ROW_ICON))
+        ForgeGlyphBadge(metric.icon, selected = false, size = 34.dp)
         Spacer(Modifier.width(ROW_ICON_GAP))
         // widthIn, NOT width. A fixed 84dp column aligned the labels beautifully at 1.0 and clipped
         // "BODY FAT" to "BODY F…" at the 1.3 font scale — measured on device. The minimum keeps the

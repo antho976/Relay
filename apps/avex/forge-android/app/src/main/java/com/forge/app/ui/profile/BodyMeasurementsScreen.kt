@@ -19,15 +19,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,7 +43,13 @@ import com.forge.app.data.db.entities.BodyMeasurementEntry
 import com.forge.app.domain.units.lengthInputValue
 import com.forge.app.domain.units.lengthUnitLabel
 import com.forge.app.domain.units.toDisplayLength
+import com.forge.app.ui.common.ForgeChromeIconButton
+import com.forge.app.ui.common.ForgeGroupLabel
 import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.rowShape
 import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.common.statsEntrance
 import java.time.LocalDate
@@ -95,22 +96,12 @@ fun BodyMeasurementsScreen(
     val untracked = state.series.filter { it.entries.isEmpty() }
 
     Scaffold(
+        // §4.6: back and the one action in the chrome — the serif "Measurements" hero below names
+        // the screen.
         topBar = {
-            TopAppBar(
-                // §4.6: the bell in the chrome — the serif "Measurements" hero below names the screen.
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showSheet = true }) {
-                        Icon(Icons.Filled.Add, contentDescription = "Log measurements", tint = accent)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            ForgeTopBar(onBack = onBack) {
+                ForgeChromeIconButton(Icons.Filled.Add, "Log measurements", { showSheet = true })
+            }
         },
         containerColor = Color.Transparent
     ) { inner ->
@@ -168,8 +159,13 @@ fun BodyMeasurementsScreen(
                     modifier = Modifier.fillMaxWidth().statsEntrance(2)
                 )
             } else {
-                Box(Modifier.fillMaxWidth().statsEntrance(2)) { SectionHeader("TRACKED", muted) }
-                Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                // The tracked sites are ONE group of filled rows (2dp seams, 20dp outer corners)
+                // under their mono anchor, rather than open rows split by air.
+                Box(Modifier.fillMaxWidth().padding(horizontal = 4.dp).statsEntrance(2)) {
+                    ForgeGroupLabel("Tracked")
+                }
+                Spacer(Modifier.height(10.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
                     tracked.forEachIndexed { i, series ->
                         MeasurementRow(
                             series = series,
@@ -178,7 +174,10 @@ fun BodyMeasurementsScreen(
                             onBg = onBg,
                             muted = muted,
                             accent = accent,
-                            modifier = Modifier.statsEntrance(3 + i)
+                            modifier = Modifier
+                                .statsEntrance(3 + i)
+                                .clip(rowShape(i, tracked.size))
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                         )
                     }
                 }
@@ -274,7 +273,8 @@ private fun MeasurementRow(
     Row(
         modifier
             .fillMaxWidth()
-            .bounceCombinedClick(onClickLabel = "Log ${series.type.label}", onClick = onTap),
+            .bounceCombinedClick(onClickLabel = "Log ${series.type.label}", onClick = onTap)
+            .padding(horizontal = ROW_H, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
@@ -295,7 +295,6 @@ private fun MeasurementRow(
                     lengthUnitLabel(useCm).uppercase(),
                     style = MaterialTheme.typography.labelSmall,
                     color = muted,
-                    fontSize = 9.sp,
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
             }
@@ -321,8 +320,7 @@ private fun MeasurementRow(
             Text(
                 monoDate(last, today),
                 style = MaterialTheme.typography.labelSmall,
-                color = muted,
-                fontSize = 9.sp
+                color = muted
             )
         }
     }

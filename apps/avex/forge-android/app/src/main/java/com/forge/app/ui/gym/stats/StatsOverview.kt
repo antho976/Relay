@@ -25,6 +25,11 @@ import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.common.EditorialFigure
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.rowShape
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 import com.forge.app.ui.gym.stats.components.BodyHeatmap
 import com.forge.app.ui.gym.stats.state.PrRecord
 import com.forge.app.ui.gym.stats.state.StatsUiState
@@ -124,28 +129,31 @@ internal fun ColumnScope.RecordsContent(
 ) {
     val fmt = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
     val shown = records.take(6)
-    shown.forEachIndexed { i, r ->
-        Row(
-            Modifier.fillMaxWidth()
-                .clickableLabeled("Show estimated 1RM trend for ${r.exerciseName}") { onOpenLift(r.exerciseId) }
-                .padding(vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(r.exerciseName, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
-                Spacer(Modifier.height(2.dp))
-                Text(fmt.format(Date(r.sessionDate)).uppercase(), style = MaterialTheme.typography.labelSmall, color = c.muted)
+    // One filled group, a member per record, 2dp seams instead of table rules (2026-09-27).
+    Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
+        shown.forEachIndexed { i, r ->
+            Row(
+                Modifier.fillMaxWidth()
+                    .clip(rowShape(i, shown.size))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .clickableLabeled("Show estimated 1RM trend for ${r.exerciseName}") { onOpenLift(r.exerciseId) }
+                    .padding(horizontal = ROW_H, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(r.exerciseName, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
+                    Spacer(Modifier.height(2.dp))
+                    Text(fmt.format(Date(r.sessionDate)).uppercase(), style = MaterialTheme.typography.labelSmall, color = c.muted)
+                }
+                Spacer(Modifier.width(12.dp))
+                // onBg, not accent: a record is content, and accent body text fails contrast under most
+                // accents (§14). formatWeight keeps the real load, so a 7.5 kg set no longer reads "7 kg".
+                Text(
+                    "${formatWeight(r.maxWeightLb, weightUnit)} × ${r.bestReps}",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = c.onBg
+                )
             }
-            Spacer(Modifier.width(12.dp))
-            // onBg, not accent: a record is content, and accent body text fails contrast under most
-            // accents (§14). formatWeight keeps the real load, so a 7.5 kg set no longer reads "7 kg".
-            Text(
-                "${formatWeight(r.maxWeightLb, weightUnit)} × ${r.bestReps}",
-                style = MaterialTheme.typography.titleSmall,
-                color = c.onBg
-            )
         }
-        // Table rule between record rows — a data line on the §5 hairline rung.
-        if (i < shown.lastIndex) androidx.compose.material3.HorizontalDivider(color = c.outline.copy(alpha = 0.25f))
     }
 }

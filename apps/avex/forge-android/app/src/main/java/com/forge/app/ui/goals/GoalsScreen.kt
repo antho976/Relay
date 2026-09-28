@@ -1,31 +1,19 @@
 package com.forge.app.ui.goals
 
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -42,8 +31,12 @@ import com.forge.app.data.repo.GoalRepository
 import com.forge.app.domain.goal.customPinKey
 import com.forge.app.domain.goal.liftPinKey
 import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.ForgeSlidingSegments
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.GROUP_SEAM
 import com.forge.app.ui.common.InlineEmptyHint
-import com.forge.app.ui.common.SegmentPill
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.rowShape
 import com.forge.app.ui.common.forgeItemMotion
 
 /**
@@ -60,7 +53,7 @@ import com.forge.app.ui.common.forgeItemMotion
  * again by the screen never re-sorting the rows it filtered.
  *
  * So the sections are gone and the rows are one ranked list, closest-first. What splits them now is
- * the [GoalLens] pills, and the reason is worth stating: a finished goal used to announce itself by
+ * the [GoalLens] segments, and the reason is worth stating: a finished goal used to announce itself by
  * putting the word REACHED where its numbers belonged, on every one of its rows. One lens says it
  * once, for all of them, which is §12's collapse-repetition rule applied to a state word.
  *
@@ -117,16 +110,8 @@ fun GoalsScreen(
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                // §4.6: the top bar never names the screen — back alone; the content title does.
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
-        },
+        // §4.6: the top bar never names the screen; the content title does.
+        topBar = { ForgeTopBar(onBack = onBack) },
         containerColor = Color.Transparent
     ) { inner ->
         // No spinners (§13): the local DB is instant, the list simply appears when state lands.
@@ -159,23 +144,19 @@ fun GoalsScreen(
 
             if (lensVisible) {
                 item(key = "lens") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        GoalLens.entries.forEach { l ->
-                            SegmentPill(
-                                text = l.label,
-                                selected = l == lens,
-                                onClick = { chosenLens = l },
-                                accent = accent, onBg = onBg, muted = muted, outline = outline
-                            )
-                        }
-                    }
+                    ForgeSlidingSegments(
+                        options = GoalLens.entries.map { it.label },
+                        selectedIndex = GoalLens.entries.indexOf(lens),
+                        onSelect = { chosenLens = GoalLens.entries[it] },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Spacer(Modifier.height(16.dp))
                 }
             }
 
             if (searchVisible) {
                 item(key = "search") {
-                    GoalSearchField(query, { query = it }, muted, accent, outline, onBg)
+                    GoalSearchRow(query, { query = it }, "Search goals")
                     Spacer(Modifier.height(16.dp))
                 }
             }
@@ -197,19 +178,28 @@ fun GoalsScreen(
                     Spacer(Modifier.height(8.dp))
                 }
             } else {
-                items(rows, key = { it.key }) { row ->
+                // The ladder is ONE group of filled rows (2dp seams, 20dp outer corners), the same
+                // connected-surface shape the forms use, instead of bare rows split by air.
+                itemsIndexed(rows, key = { _, it -> it.key }) { i, row ->
                     // §9: lists get a LIGHT stagger only — never the overview's entrance cascade.
+                    val member = forgeItemMotion()
+                        .clip(rowShape(i, rows.size))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                    val pad = PaddingValues(horizontal = ROW_H, vertical = 18.dp)
                     when (row) {
                         is GoalRow.Lift -> LiftGoalRow(
-                            row.g, onBg, muted, accent, outline, forgeItemMotion()
+                            row.g, onBg, muted, accent, outline, member,
+                            contentPadding = pad, badge = true
                         ) { onEditLift(row.g.exerciseId) }
                         is GoalRow.Custom -> CustomGoalRow(
                             row.g, onBg, muted, accent, outline,
                             todayStartMs = state.todayStartMs,
-                            modifier = forgeItemMotion()
+                            modifier = member,
+                            contentPadding = pad,
+                            badge = true
                         ) { onEditCustom(row.g.id) }
                     }
-                    Spacer(Modifier.height(24.dp))
+                    Spacer(Modifier.height(if (i == rows.lastIndex) 24.dp else GROUP_SEAM))
                 }
             }
 
@@ -279,45 +269,6 @@ private sealed interface GoalRow {
         override fun matches(q: String) =
             g.label.contains(q, ignoreCase = true) || metricDisplayName(g.metric).contains(q, ignoreCase = true)
     }
-}
-
-/**
- * §13's search treatment: bordered because it is interactive, leading magnifier, trailing clear, and
- * a placeholder allowed below the muted floor because it is a ghost affordance rather than content.
- * Shaped to match History's field so the app's two searches read as one control.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun GoalSearchField(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    muted: Color,
-    accent: Color,
-    outline: Color,
-    onBg: Color
-) {
-    OutlinedTextField(
-        value = query,
-        onValueChange = onQueryChange,
-        modifier = Modifier.fillMaxWidth(),
-        placeholder = { Text("Search goals", color = muted.copy(alpha = 0.5f)) },
-        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = muted) },
-        trailingIcon = {
-            if (query.isNotEmpty()) {
-                IconButton(onClick = { onQueryChange("") }) {
-                    Icon(Icons.Filled.Close, contentDescription = "Clear search", tint = muted)
-                }
-            }
-        },
-        singleLine = true,
-        shape = RoundedCornerShape(12.dp),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = accent,
-            unfocusedBorderColor = outline.copy(alpha = 0.35f),
-            focusedTextColor = onBg,
-            unfocusedTextColor = onBg,
-        )
-    )
 }
 
 /**

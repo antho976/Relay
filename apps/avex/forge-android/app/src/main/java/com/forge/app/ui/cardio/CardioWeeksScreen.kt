@@ -12,15 +12,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -29,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -38,7 +36,7 @@ import com.forge.app.domain.cardio.cardioWeekAggregate
 import com.forge.app.ui.cardio.components.CardioWeekBars
 import com.forge.app.ui.cardio.components.CardioWeekDetail
 import com.forge.app.ui.common.EditorialFigure
-import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.ForgeTopBar
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -135,15 +133,7 @@ fun CardioWeeksScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            ForgeTopBar(onBack = onBack)
         },
         containerColor = Color.Transparent
     ) { inner ->
@@ -186,16 +176,18 @@ fun CardioWeeksScreen(
             }
 
             item("chart") {
-                Spacer(Modifier.height(20.dp))
-                CardioWeekBars(
-                    weeks = window,
-                    targetMin = target,
-                    currentWeekStartMs = currentWeekStartMs,
-                    zone = zone,
-                    onOpenWeek = viewModel::openWeek,
-                    onBg = onBg, muted = muted, outline = outline, accent = accent,
-                    modifier = Modifier.padding(horizontal = 24.dp)
-                )
+                Spacer(Modifier.height(16.dp))
+                // The chart stays open, on the filled panel the onboarding week meter uses.
+                CardioChartPanel(Modifier.padding(horizontal = 24.dp)) {
+                    CardioWeekBars(
+                        weeks = window,
+                        targetMin = target,
+                        currentWeekStartMs = currentWeekStartMs,
+                        zone = zone,
+                        onOpenWeek = viewModel::openWeek,
+                        onBg = onBg, muted = muted, outline = outline, accent = accent
+                    )
+                }
             }
 
             item("caption") {
@@ -214,9 +206,9 @@ fun CardioWeeksScreen(
 }
 
 /**
- * The pager: `←` older · the visible range · `→` newer. An arrow that cannot move renders passive —
- * nothing looks tappable while doing nothing (§4.5) — and its touch target comes from padding, not
- * from glyph size (§14).
+ * The pager: an older capsule · the visible range · a newer capsule. An arrow that cannot move
+ * renders passive (nothing looks tappable while doing nothing, §4.5); the capsules carry the 48dp
+ * target (§14).
  */
 @Composable
 private fun WeekRangeNav(
@@ -230,27 +222,19 @@ private fun WeekRangeNav(
     outline: Color
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        CardioPagerButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Earlier weeks", canGoOlder, onOlder)
         Text(
-            "←",
-            style = MaterialTheme.typography.titleMedium,
-            color = if (canGoOlder) onBg else outline.copy(alpha = 0.35f),
-            modifier = Modifier
-                .then(if (canGoOlder) Modifier.clickableLabeled("Earlier weeks", onClick = onOlder) else Modifier)
-                .padding(14.dp)
+            label.uppercase(),
+            style = MaterialTheme.typography.labelMedium,
+            color = muted,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.weight(1f)
         )
-        Text(label.uppercase(), style = MaterialTheme.typography.labelMedium, color = muted)
-        Text(
-            "→",
-            style = MaterialTheme.typography.titleMedium,
-            color = if (canGoNewer) onBg else outline.copy(alpha = 0.35f),
-            modifier = Modifier
-                .then(if (canGoNewer) Modifier.clickableLabeled("Later weeks", onClick = onNewer) else Modifier)
-                .padding(14.dp)
-        )
+        CardioPagerButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Later weeks", canGoNewer, onNewer)
     }
 }
 

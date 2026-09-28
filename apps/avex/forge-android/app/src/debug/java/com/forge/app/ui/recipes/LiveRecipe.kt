@@ -2,6 +2,7 @@
 
 package com.forge.app.ui.recipes
 
+import com.forge.app.ui.common.ForgeTopBar
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -66,10 +67,7 @@ fun LiveRecipe() {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {},
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            ForgeTopBar(onBack = null)
         },
         containerColor = Color.Transparent
     ) { inner ->

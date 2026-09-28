@@ -1,34 +1,32 @@
 package com.forge.app.ui.goals
 
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import com.forge.app.ui.common.ForgeLabelTile
+import com.forge.app.ui.common.ForgeTileGrid
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,8 +37,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -60,16 +62,26 @@ import com.forge.app.domain.units.storedUnlessEdited
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.ExerciseIcons
-import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgeChoiceList
+import com.forge.app.ui.common.ForgeFieldRow
+import com.forge.app.ui.common.ForgeGlyphBadge
+import com.forge.app.ui.common.ForgeGroupCaption
+import com.forge.app.ui.common.ForgeGroupSection
 import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.ForgeSwitch
-import com.forge.app.ui.common.SegmentPill
+import com.forge.app.ui.common.ForgeRowGroup
+import com.forge.app.ui.common.ForgeSecondaryCapsule
+import com.forge.app.ui.common.ForgeSlidingSegments
+import com.forge.app.ui.common.ForgeSwitchRow
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.rowShape
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.filterLibrary
 import com.forge.app.ui.theme.LocalForgeSettings
 
 /** Where the editor is in the add/edit flow. Editing an existing goal jumps straight to its form. */
-private sealed interface EditorStep {
+internal sealed interface EditorStep {
     data object ChooseType : EditorStep
     data object LiftPicker : EditorStep
     /** Set/edit a lift's target weight. [currentTargetLb] null when adding. */
@@ -162,16 +174,8 @@ fun GoalEditorScreen(
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                // §4.6: bell + back, never the step's name — the content title line below carries it.
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = { goBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
-        },
+        // §4.6: back alone, never the step's name; the content title line below carries it.
+        topBar = { ForgeTopBar(onBack = { goBack() }) },
         containerColor = Color.Transparent
     ) { inner ->
         Column(Modifier.fillMaxSize().padding(inner).padding(horizontal = 24.dp)) {
@@ -184,7 +188,6 @@ fun GoalEditorScreen(
                 // No spinners (§13): the edit target resolves instantly from the local DB.
                 null -> Box(Modifier.fillMaxSize())
                 EditorStep.ChooseType -> ChooseTypeStep(
-                    muted = muted,
                     onPickLift = { step = EditorStep.LiftPicker },
                     onPickMetric = { step = EditorStep.CustomNew(it) }
                 )
@@ -223,97 +226,91 @@ fun GoalEditorScreen(
 // ─── Steps ──────────────────────────────────────────────────────────────────
 
 /**
- * Step 1 of adding: pick a lift target or one of the custom-goal metrics.
- *
- * Each option leads with the glyph the goal it creates will carry on every screen afterwards, so
- * the chooser previews its own result. It was six identical text rows — the uniform-row shape §4.10
- * names, and the one list in the flow with no mark on it, sitting one tap before an exercise picker
- * whose every row has one.
+ * Step 1 of adding: what kind of goal. Redrawn 2026-09-27 as a two-across grid of tiles, the
+ * onboarding gym-setup page's shape: every kind leads with the glyph its goal will carry on every
+ * screen afterwards, so the chooser previews its own result, and a short mono line under the name
+ * says what the number counts. Strength kinds first, then consistency and body, then cardio. The
+ * list it replaced left half the page empty and showed cardio distance and time as twins.
  */
 @Composable
-private fun ChooseTypeStep(muted: Color, onPickLift: () -> Unit, onPickMetric: (GoalMetric) -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onBackground
+internal fun ChooseTypeStep(onPickLift: () -> Unit, onPickMetric: (GoalMetric) -> Unit) {
     val useMiles = LocalForgeSettings.current.useMiles
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-        GoalTypeOption(
-            "Lift target", "Hit a target weight on any exercise",
-            // The lift branch has no exercise yet, so it shows the class the picker leads with
-            // rather than a specific implement.
-            ExerciseIcons.Barbell, onBg, muted, onPickLift
-        )
-        customGoalMetrics.forEach { m ->
-            GoalTypeOption(metricDisplayName(m), metricHint(m, useMiles), goalGlyph(m), onBg, muted) { onPickMetric(m) }
+    val kinds = remember(useMiles) {
+        listOf(
+            GoalKind(LIFT_KEY, "Lift target", "One weight, one lift", ExerciseIcons.Barbell),
+            GoalKind(GoalMetric.VOLUME.name, metricDisplayName(GoalMetric.VOLUME), "Lifted per week", goalGlyph(GoalMetric.VOLUME)),
+            GoalKind(GoalMetric.SESSIONS.name, metricDisplayName(GoalMetric.SESSIONS), "Sessions per week", goalGlyph(GoalMetric.SESSIONS)),
+            GoalKind(GoalMetric.BODYWEIGHT.name, metricDisplayName(GoalMetric.BODYWEIGHT), "Up or down", goalGlyph(GoalMetric.BODYWEIGHT)),
+            GoalKind(GoalMetric.CARDIO_DISTANCE.name, metricDisplayName(GoalMetric.CARDIO_DISTANCE), "${distanceUnitLabel(useMiles)} per week", goalGlyph(GoalMetric.CARDIO_DISTANCE)),
+            GoalKind(GoalMetric.CARDIO_MINUTES.name, metricDisplayName(GoalMetric.CARDIO_MINUTES), "Minutes per week", goalGlyph(GoalMetric.CARDIO_MINUTES))
+        ).filter { it.key == LIFT_KEY || GoalMetric.valueOf(it.key) in customGoalMetrics }
+    }
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+        ForgeGroupCaption("Pick what to aim for. You set the number next.")
+        Spacer(Modifier.height(16.dp))
+        ForgeTileGrid(kinds, cols = 2) { kind, corners, modifier ->
+            ForgeLabelTile(
+                label = kind.label,
+                meta = kind.meta,
+                selected = false,
+                corners = corners,
+                onClick = {
+                    if (kind.key == LIFT_KEY) onPickLift()
+                    else GoalMetric.entries.firstOrNull { it.name == kind.key }?.let(onPickMetric)
+                },
+                modifier = modifier,
+                role = Role.Button,
+                icon = kind.icon
+            )
         }
     }
 }
+
+/** One tile of the goal-kind chooser. */
+private data class GoalKind(val key: String, val label: String, val meta: String, val icon: ImageVector)
+
+private const val LIFT_KEY = "lift"
 
 private fun metricHint(metric: GoalMetric, useMiles: Boolean): String = when (metric) {
     GoalMetric.CARDIO_DISTANCE -> "e.g. 5 ${distanceUnitLabel(useMiles)} this week, tracked from your cardio"
     GoalMetric.CARDIO_MINUTES -> "e.g. 90 min this week, tracked from your cardio"
-    GoalMetric.SESSIONS -> "e.g. train 4× this week"
-    GoalMetric.VOLUME -> "total lifted this week or month"
-    GoalMetric.BODYWEIGHT -> "reach a target bodyweight, up or down"
-}
-
-@Composable
-private fun GoalTypeOption(
-    title: String,
-    hint: String,
-    icon: ImageVector,
-    onBg: Color,
-    muted: Color,
-    onClick: () -> Unit
-) {
-    Row(
-        Modifier.fillMaxWidth().clickableLabeled(title, onClick = onClick).padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Matches the picker rows on the next step: a muted leading glyph, never accent-tinted (§8).
-        Icon(icon, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(12.dp))
-        Column {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = onBg)
-            Text(hint, style = MaterialTheme.typography.labelSmall, color = muted)
-        }
-    }
+    GoalMetric.SESSIONS -> "e.g. train 4 times this week"
+    GoalMetric.VOLUME -> "Total lifted this week or month"
+    GoalMetric.BODYWEIGHT -> "Reach a target bodyweight, up or down"
 }
 
 /**
  * Step 2 for a lift target: a searchable single-select over the whole library. [exclude] drops
- * exercises that already have a goal AND ones you've Hidden in Exercise likes.
+ * exercises that already have a goal AND ones you've Hidden in Exercise likes. The results are one
+ * group of filled rows, each led by its equipment badge.
  */
 @Composable
 private fun ColumnScope.LiftPickerStep(exclude: Set<String>, muted: Color, onPick: (id: String, name: String) -> Unit) {
     var query by remember { mutableStateOf("") }
     val results = remember(query, exclude) { filterLibrary(query, exclude) }
     val onBg = MaterialTheme.colorScheme.onBackground
-    OutlinedTextField(
-        value = query,
-        onValueChange = { query = it },
-        modifier = Modifier.fillMaxWidth(),
-        placeholder = { Text("Search exercises or muscles") },
-        singleLine = true
-    )
-    Spacer(Modifier.height(8.dp))
-    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-        items(results, key = { it.id }) { def ->
+    GoalSearchRow(query, { query = it }, "Search exercises or muscles")
+    Spacer(Modifier.height(16.dp))
+    LazyColumn(
+        Modifier.fillMaxWidth().weight(1f),
+        verticalArrangement = Arrangement.spacedBy(GROUP_SEAM),
+        contentPadding = PaddingValues(bottom = 24.dp)
+    ) {
+        itemsIndexed(results, key = { _, def -> def.id }) { i, def ->
             Row(
                 Modifier.fillMaxWidth()
+                    .clip(rowShape(i, results.size))
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                     .clickableLabeled(def.name) { onPick(def.id, def.name) }
-                    .padding(vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = ROW_H, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 // §8: picker rows lead with their equipment-class glyph for wayfinding.
-                Icon(
-                    ExerciseIcons.forEquipment(def.equipment),
-                    contentDescription = null,
-                    tint = muted,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(Modifier.width(12.dp))
-                Column {
+                ForgeGlyphBadge(ExerciseIcons.forEquipment(def.equipment), selected = false, size = 34.dp)
+                Column(Modifier.weight(1f)) {
                     Text(def.name, style = MaterialTheme.typography.bodyLarge, color = onBg)
-                    Text(def.muscle.displayName, style = MaterialTheme.typography.labelSmall, color = muted)
+                    Text(def.muscle.displayName, style = MaterialTheme.typography.bodySmall, color = muted)
                 }
             }
         }
@@ -322,7 +319,7 @@ private fun ColumnScope.LiftPickerStep(exclude: Set<String>, muted: Color, onPic
                 Text(
                     "No matches.",
                     style = MaterialTheme.typography.bodyMedium, color = muted,
-                    modifier = Modifier.padding(vertical = 16.dp)
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 16.dp)
                 )
             }
         }
@@ -336,43 +333,42 @@ private fun ColumnScope.LiftPickerStep(exclude: Set<String>, muted: Color, onPic
  * choice is made — not on the Goals list, where the row is already a single tap target for editing
  * and a second control inside it would be a nested tap in a 48dp row. You are on this screen because
  * you care about this goal, which is exactly when "should it be on Home" is worth asking.
+ *
+ * A [ForgeSwitchRow] member of the form's group: the ROW owns the tap and announces on/off, the
+ * switch is drawn only, so TalkBack never meets a second, unnamed switch.
  */
 @Composable
 private fun HomePinRow(pinned: Boolean, onToggle: () -> Unit) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickableLabeled(if (pinned) "Remove from Home" else "Show on Home", onClick = onToggle)
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                "Show on Home",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                "Home shows three goals at a glance.",
-                style = MaterialTheme.typography.bodySmall,
-                color = muted
-            )
+    ForgeSwitchRow(
+        label = "Show on Home",
+        description = "Home shows three goals at a glance.",
+        checked = pinned,
+        onToggle = { onToggle() }
+    )
+}
+
+/** The form's actions at its end: the do-it-now capsule, and a filled destructive sidekick. */
+@Composable
+private fun EditorActions(
+    primary: String,
+    enabled: Boolean,
+    onPrimary: () -> Unit,
+    destructive: String?,
+    onDestructive: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ForgePrimaryCapsule(primary, onClick = onPrimary, modifier = Modifier.fillMaxWidth(), enabled = enabled)
+        if (destructive != null) {
+            // §8's destructive treatment: the filled sidekick with `error` text, never a filled red
+            // button. Clearing or deleting is undoable (set it again / the list's Undo).
+            ForgeSecondaryCapsule(destructive, onClick = onDestructive, modifier = Modifier.fillMaxWidth(), destructive = true)
         }
-        Spacer(Modifier.width(16.dp))
-        // onCheckedChange = null: the ROW owns the action and the label ("Show on Home" /
-        // "Remove from Home"). A switch with its own handler inside a clickable row is a second
-        // actionable node with no label of its own, so TalkBack read the row and then an unnamed
-        // switch that does the same thing — and a user who found only the switch never heard which
-        // way it was about to go.
-        ForgeSwitch(checked = pinned, onCheckedChange = null)
     }
 }
 
 /** The weight-target form for a lift goal (add or edit). */
 @Composable
-private fun LiftWeightStep(
+internal fun LiftWeightStep(
     step: EditorStep.LiftWeight,
     pinned: Boolean,
     onTogglePin: () -> Unit,
@@ -388,41 +384,38 @@ private fun LiftWeightStep(
     // so 225 lb came back as "102.1" kg, saved as 225.09 lb, and a reached goal read unreached
     // (audit 2026-09-26, 06). Same rule CustomEditStep applies.
     val weightLb = storedUnlessEdited(weightText, seed, step.currentTargetLb) { parseToLb(it, weightUnit) }
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-        OutlinedTextField(
-            value = weightText,
-            // filterDecimalInput keeps a comma-keyboard's "82,5" as 82.5; dropping the comma made
-            // it an 825 kg target (audit 2026-09-26, 06).
-            onValueChange = { weightText = filterDecimalInput(it) },
-            label = { Text("Target (${unitLabel(weightUnit)})") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            modifier = Modifier.fillMaxWidth()
-        )
-        // Only for a goal that already exists: pinning something not yet created has nothing to pin.
-        if (step.currentTargetLb != null) {
-            Spacer(Modifier.height(16.dp))
-            HomePinRow(pinned = pinned, onToggle = onTogglePin)
-        }
-        Spacer(Modifier.height(24.dp))
-        ForgePrimaryCapsule(
-            "Set goal",
-            onClick = { weightLb?.let(onSet) },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = weightLb != null && weightLb > 0
-        )
-        if (step.currentTargetLb != null) {
-            Spacer(Modifier.height(8.dp))
-            // §8's destructive treatment: level ② outlined capsule tinted `error`, never a filled
-            // red button and never bare error-coloured text — §14 measures #BF4040 as text at
-            // 3.67:1, which fails AA on this ground. Clearing a target is reversible (set it again).
-            ForgeOutlineCapsule(
-                "Clear goal",
-                onClick = onClear,
-                modifier = Modifier.fillMaxWidth(),
-                contentColor = MaterialTheme.colorScheme.error
+    val canSet = weightLb != null && weightLb > 0
+    val focus = LocalFocusManager.current
+    Column(
+        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp)
+    ) {
+        val targetRow: @Composable () -> Unit = {
+            ForgeFieldRow(
+                label = "Target",
+                value = weightText,
+                // filterDecimalInput keeps a comma-keyboard's "82,5" as 82.5; dropping the comma made
+                // it an 825 kg target (audit 2026-09-26, 06).
+                onValueChange = { weightText = filterDecimalInput(it) },
+                placeholder = "0",
+                suffix = unitLabel(weightUnit),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focus.clearFocus() })
             )
         }
+        // Only for a goal that already exists: pinning something not yet created has nothing to pin.
+        if (step.currentTargetLb != null) {
+            ForgeRowGroup(targetRow, { HomePinRow(pinned = pinned, onToggle = onTogglePin) })
+        } else {
+            ForgeRowGroup(targetRow)
+        }
+        EditorActions(
+            primary = "Set goal",
+            enabled = canSet,
+            onPrimary = { weightLb?.let(onSet) },
+            destructive = if (step.currentTargetLb != null) "Clear goal" else null,
+            onDestructive = onClear
+        )
     }
 }
 
@@ -432,7 +425,7 @@ private fun LiftWeightStep(
  * canonical unit (km / minutes / sessions / lb).
  */
 @Composable
-private fun CustomNewStep(
+internal fun CustomNewStep(
     metric: GoalMetric,
     muted: Color,
     onConfirm: (period: GoalPeriod, targetCanonical: Double, label: String) -> Unit
@@ -445,43 +438,66 @@ private fun CustomNewStep(
         mutableStateOf(if (metric == GoalMetric.BODYWEIGHT) GoalPeriod.ALL else GoalPeriod.WEEK)
     }
     val target = parseCustomTarget(metric, valueText, settings.weightUnit, settings.useMiles)
+    val nameFocus = remember { FocusRequester() }
+    val focus = LocalFocusManager.current
 
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-        Text(metricHint(metric, settings.useMiles), style = MaterialTheme.typography.bodySmall, color = muted)
-        Spacer(Modifier.height(16.dp))
-        CustomTargetField(metric, valueText) { valueText = it }
-        if (metric.isCumulative) {
-            Spacer(Modifier.height(16.dp))
-            Text("Timeframe", style = MaterialTheme.typography.labelSmall, color = muted)
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                GoalPeriod.entries.forEach { p ->
-                    SegmentPill(
-                        text = periodLabel(p),
-                        selected = p == period,
-                        onClick = { period = p },
-                        accent = MaterialTheme.colorScheme.primary,
-                        onBg = MaterialTheme.colorScheme.onBackground,
-                        muted = muted,
-                        outline = MaterialTheme.colorScheme.outline
+    Column(
+        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp)
+    ) {
+        ForgeGroupSection(
+            label = null,
+            footer = { ForgeGroupCaption(metricHint(metric, settings.useMiles)) }
+        ) {
+            val rows = buildList<@Composable () -> Unit> {
+                add {
+                    CustomTargetRow(
+                        metric, valueText, { valueText = it },
+                        imeAction = ImeAction.Next,
+                        onIme = { nameFocus.requestFocus() }
+                    )
+                }
+                if (metric.isCumulative) {
+                    add {
+                        // Stacked, label over a full-width control: beside a three-way control the
+                        // label had too little room and broke mid-word.
+                        Column(
+                            Modifier.fillMaxWidth().padding(horizontal = ROW_H, vertical = 14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text("Timeframe", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                            ForgeSlidingSegments(
+                                options = GoalPeriod.entries.map(::periodLabel),
+                                selectedIndex = GoalPeriod.entries.indexOf(period),
+                                onSelect = { period = GoalPeriod.entries[it] },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+                add {
+                    ForgeFieldRow(
+                        label = "Name",
+                        value = name,
+                        onValueChange = { name = it },
+                        placeholder = "Optional",
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
+                        focusRequester = nameFocus
                     )
                 }
             }
+            ForgeRowGroup(*rows.toTypedArray())
         }
-        Spacer(Modifier.height(16.dp))
-        OutlinedTextField(
-            value = name,
-            onValueChange = { name = it },
-            label = { Text("Name (optional)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(24.dp))
-        ForgePrimaryCapsule(
-            "Add goal",
-            onClick = { target?.let { onConfirm(period, it, name.trim()) } },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = target != null && target > 0
+        EditorActions(
+            primary = "Add goal",
+            enabled = target != null && target > 0,
+            onPrimary = { target?.let { onConfirm(period, it, name.trim()) } },
+            destructive = null,
+            onDestructive = {}
         )
     }
 }
@@ -508,26 +524,30 @@ private fun CustomEditStep(
     // Only persist a genuinely changed target: re-saving the untouched, unit-rounded seed would drift
     // the stored canonical value (e.g. 100 lb shown as "45.4" kg parses back to 100.09 lb).
     val changed = valueText.trim() != initial.trim()
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-        CustomTargetField(goal.metric, valueText) { valueText = it }
-        Spacer(Modifier.height(16.dp))
-        HomePinRow(pinned = pinned, onToggle = onTogglePin)
-        Spacer(Modifier.height(24.dp))
-        ForgePrimaryCapsule(
-            "Save",
-            onClick = { if (changed) target?.let(onSave) else onUnchanged() },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = target != null && target > 0
+    val focus = LocalFocusManager.current
+    Column(
+        Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp)
+    ) {
+        ForgeRowGroup(
+            {
+                CustomTargetRow(
+                    goal.metric, valueText, { valueText = it },
+                    imeAction = ImeAction.Done,
+                    onIme = { focus.clearFocus() }
+                )
+            },
+            { HomePinRow(pinned = pinned, onToggle = onTogglePin) }
         )
-        Spacer(Modifier.height(8.dp))
         // §13 undo over confirm: delete now (the editor pops), with a short Undo in its place —
         // no confirm dialog. What you logged is untouched either way; only the goal itself is
-        // removed. §8/§14: the sidekick capsule tinted `error`, not error-coloured text.
-        ForgeOutlineCapsule(
-            "Delete goal",
-            onClick = onDelete,
-            modifier = Modifier.fillMaxWidth(),
-            contentColor = MaterialTheme.colorScheme.error
+        // removed.
+        EditorActions(
+            primary = "Save",
+            enabled = target != null && target > 0,
+            onPrimary = { if (changed) target?.let(onSave) else onUnchanged() },
+            destructive = "Delete goal",
+            onDestructive = onDelete
         )
     }
 }
@@ -538,23 +558,31 @@ private fun CustomEditStep(
 private val GoalMetric.acceptsDecimals: Boolean
     get() = this != GoalMetric.CARDIO_MINUTES && this != GoalMetric.SESSIONS
 
-/** The target-entry field shared by the new-goal and edit-goal forms — one home for the digit
- *  filter, keyboard type and unit label so the two forms can't drift apart. */
+/** The target-entry row shared by the new-goal and edit-goal forms — one home for the digit
+ *  filter, keyboard type and unit so the two forms can't drift apart. */
 @Composable
-private fun CustomTargetField(metric: GoalMetric, valueText: String, onValueChange: (String) -> Unit) {
+private fun CustomTargetRow(
+    metric: GoalMetric,
+    valueText: String,
+    onValueChange: (String) -> Unit,
+    imeAction: ImeAction,
+    onIme: () -> Unit
+) {
     val settings = LocalForgeSettings.current
     val decimal = metric.acceptsDecimals
-    OutlinedTextField(
+    ForgeFieldRow(
+        label = "Target",
         value = valueText,
         // A comma-decimal keyboard's "82,5" is kept as 82.5 rather than filtered to 825 (audit
         // 2026-09-26, 06).
         onValueChange = { new -> onValueChange(if (decimal) filterDecimalInput(new) else new.filter { it.isDigit() }) },
-        label = { Text("Target (${customGoalUnitLabel(metric, settings.weightUnit, settings.useMiles)})") },
-        singleLine = true,
+        placeholder = "0",
+        suffix = customGoalUnitLabel(metric, settings.weightUnit, settings.useMiles),
         keyboardOptions = KeyboardOptions(
-            keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number
+            keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number,
+            imeAction = imeAction
         ),
-        modifier = Modifier.fillMaxWidth()
+        keyboardActions = KeyboardActions(onNext = { onIme() }, onDone = { onIme() })
     )
 }
 
@@ -581,7 +609,7 @@ private fun customTargetInputValue(metric: GoalMetric, canonical: Double, weight
         GoalMetric.VOLUME, GoalMetric.BODYWEIGHT -> weightInputValue(canonical, weightUnit)
     }
 
-// §4: lens/segment pills take ONE short word.
+// §4: segment labels take ONE short word.
 private fun periodLabel(period: GoalPeriod): String = when (period) {
     GoalPeriod.WEEK -> "Week"
     GoalPeriod.MONTH -> "Month"

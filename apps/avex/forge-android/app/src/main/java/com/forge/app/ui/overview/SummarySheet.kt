@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import com.forge.app.ui.common.window.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -24,6 +23,9 @@ import com.forge.app.data.repo.StatsRepository
 import com.forge.app.domain.units.formatDistance
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
+import com.forge.app.ui.common.ForgeGroupSection
+import com.forge.app.ui.common.ForgeRowGroup
+import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
@@ -50,7 +52,6 @@ fun SummarySheet(
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val outline = MaterialTheme.colorScheme.outline
     val bg = MaterialTheme.colorScheme.background
 
     ModalBottomSheet(
@@ -104,32 +105,29 @@ fun SummarySheet(
             }
 
             if (isGym && exerciseLines.isNotEmpty()) {
-                Spacer(Modifier.height(20.dp))
-                HorizontalDivider(color = outline.copy(alpha = 0.2f))
-                Spacer(Modifier.height(14.dp))
-
-                Text("EXERCISES", style = MaterialTheme.typography.labelSmall,
-                    color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
-                Spacer(Modifier.height(8.dp))
-
-                exerciseLines.forEach { ex ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            ex.exerciseName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = onBg,
-                            modifier = Modifier.weight(1f)
-                        )
-                        val setInfo = if (ex.topWeightLb != null && ex.topWeightLb > 0)
-                            "${ex.setCount} × ${formatWeight(ex.topWeightLb, weightUnit)}"
-                        else "${ex.setCount} sets"
-                        Text(setInfo, style = MaterialTheme.typography.labelSmall,
-                            color = muted, fontSize = 10.sp)
-                    }
+                Spacer(Modifier.height(24.dp))
+                // One filled group of rows under a mono anchor, no hairline above it (2026-09-27).
+                ForgeGroupSection(label = "Exercises") {
+                    ForgeRowGroup(*exerciseLines.map { ex ->
+                        @Composable {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = ROW_H, vertical = 14.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    ex.exerciseName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = onBg,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                val setInfo = if (ex.topWeightLb != null && ex.topWeightLb > 0)
+                                    "${ex.setCount} × ${formatWeight(ex.topWeightLb, weightUnit)}"
+                                else "${ex.setCount} sets"
+                                Text(setInfo, style = MaterialTheme.typography.labelMedium, color = muted)
+                            }
+                        }
+                    }.toTypedArray())
                 }
             }
 

@@ -2,6 +2,8 @@
 
 package com.forge.app.ui.notifications
 
+import com.forge.app.ui.common.ForgeChromeIconButton
+import com.forge.app.ui.common.ForgeTopBar
 import android.content.Intent
 import android.provider.Settings as AndroidSettings
 import androidx.compose.foundation.background
@@ -24,12 +26,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -120,37 +119,11 @@ fun NotificationsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                // §4.6: the bar carries chrome only. The page names itself in its own hero below,
-                // and the bell isn't repeated here — you are already inside it.
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = muted
-                        )
-                    }
-                },
-                actions = {
-                    Box(
-                        // §14: the ≥44dp target comes from padding, the glyph stays small.
-                        modifier = Modifier
-                            .sizeIn(minWidth = 44.dp, minHeight = 44.dp)
-                            .clickableLabeled("Notification options") { sheetOpen = true },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.Settings,
-                            contentDescription = "Notification options",
-                            tint = muted.copy(alpha = 0.7f),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            // The bar carries chrome only. The page names itself in its own hero below, and the
+            // bell isn't repeated here: you are already inside it.
+            ForgeTopBar(onBack = onBack) {
+                ForgeChromeIconButton(Icons.Default.Settings, "Notification options", onClick = { sheetOpen = true })
+            }
         },
         containerColor = Color.Transparent
     ) { inner ->

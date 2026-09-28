@@ -2,6 +2,8 @@
 
 package com.forge.app.ui.recipes
 
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.ForgeSlidingSegments
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -68,15 +70,7 @@ fun DetailRecipe(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {},
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            ForgeTopBar(onBack = onBack)
         },
         containerColor = Color.Transparent
     ) { inner ->
@@ -101,16 +95,13 @@ fun DetailRecipe(
             // §4.4: these switch the METRIC of this one item. Pills that jump to unrelated views
             // belong on an overview, not here.
             Spacer(Modifier.height(24.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("Weight", "Volume", "e1RM").forEach { name ->
-                    SegmentPill(
-                        text = name,
-                        selected = metric == name,
-                        onClick = { metric = name },
-                        accent = accent, onBg = onBg, muted = muted, outline = outline
-                    )
-                }
-            }
+            val metrics = listOf("Weight", "Volume", "e1RM")
+            ForgeSlidingSegments(
+                options = metrics,
+                selectedIndex = metrics.indexOf(metric),
+                onSelect = { metric = metrics[it] },
+                modifier = Modifier.fillMaxWidth()
+            )
 
             // ── Chart ───────────────────────────────────────────────────────────────────────────
             // §10: open on the page — no plot frame, no boxed card. Draws in ONCE (§9), never
