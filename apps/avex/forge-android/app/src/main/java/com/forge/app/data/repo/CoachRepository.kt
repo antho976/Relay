@@ -908,8 +908,10 @@ class CoachRepository @Inject constructor(
 
     private suspend fun briefFor(pass: CoachPass): CoachBrief {
         val decisions = coachDao.decisionsFor(pass.weekId)
-        // Snapshot once and reuse: feeds the review AND the activation-progress subtitle (CO1).
-        val snapshot = runCatching { adaptationRepository.snapshot() }.getOrNull()
+        // Snapshot once and reuse: feeds the review AND the activation-progress subtitle (CO1). The
+        // cached read: the Coach page asks for the same snapshot right after (lab, readiness,
+        // academy moments), and it is rebuilt whenever an input has changed.
+        val snapshot = runCatching { adaptationRepository.snapshotCached() }.getOrNull()
         val review = snapshot?.let { snap ->
             runCatching {
                 WeeklyReview.assemble(

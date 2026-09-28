@@ -138,7 +138,7 @@ class NotificationFeed @Inject constructor(
         runCatching { academyRepo.syncCoachMoments() }
         coachBrief.value = runCatching { coachRepo.pendingBanner() }.getOrNull()
         wearableConnected.value = runCatching {
-            healthConnect.canReadSteps() || healthConnect.canReadExercise()
+            healthConnect.canReadStepsOrExercise()
         }.getOrDefault(false)
         notificationsAllowed.value = osNotificationsEnabled(context)
     }

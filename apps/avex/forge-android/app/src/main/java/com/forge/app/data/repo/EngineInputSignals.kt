@@ -18,11 +18,10 @@ class EngineInputSignals @Inject constructor(
 ) {
     @OptIn(kotlinx.coroutines.FlowPreview::class)
     fun changes(): Flow<Unit> {
-        val history = combine(
-            db.sessionDao().observeAllFinishedSessions().distinctUntilChanged(),
-            db.loggedExerciseDao().observeAllForFinishedSessions().distinctUntilChanged(),
-            db.loggedSetDao().observeAllForFinishedSessions().distinctUntilChanged()
-        ) { _, _, _ -> Unit }
+        // A one-row fingerprint computed in SQLite, not the three whole tables: those were loaded in
+        // full on every subscription and every write only to be compared and thrown away. Still
+        // blind to the workout in progress, and still sees a same-count edit to a finished set.
+        val history = db.sessionDao().observeFinishedHistoryFingerprint().distinctUntilChanged()
         val preferences = combine(listOf<Flow<Any?>>(
             settings.availableEquipment, settings.likedExercises, settings.dislikedExercises,
             settings.pinnedExercises, settings.frozenExerciseIds, settings.plateWeightLb,

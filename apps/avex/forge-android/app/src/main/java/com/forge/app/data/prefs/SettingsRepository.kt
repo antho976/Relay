@@ -101,6 +101,12 @@ class SettingsRepository @Inject constructor(
         .catch { e -> if (e is IOException) emit(READ_FAILED) else throw e }
 
     /**
+     * Every preference as one immutable value, for callers that key a cache on "has any setting
+     * changed" (the adaptation snapshot) rather than on one key. Equal by content.
+     */
+    suspend fun preferencesSnapshot(): Preferences = allPreferences.first()
+
+    /**
      * The object emitted in place of a failed read.
      *
      * Degrading to defaults is right for the ~100 cosmetic settings above — a wrong accent for one

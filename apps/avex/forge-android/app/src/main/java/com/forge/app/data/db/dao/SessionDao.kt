@@ -374,6 +374,124 @@ interface SessionDao {
         WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL AND s.is_untracked = 0
     """)
     suspend fun prSessionStartTimes(): List<Long>
+
+    /**
+     * One string that changes whenever any FINISHED session, or any exercise or set logged under one,
+     * changes — and not when only the workout in progress does.
+     *
+     * Computed inside SQLite as id-weighted aggregates: a scan, but with nothing materialised, where
+     * the engine used to load all three tables in full only to compare them with the last load.
+     * Weighting every column by the row id means an edit, or two values trading places, still moves
+     * the total. Epoch columns are reduced modulo a prime so the products stay inside a double's
+     * exact range.
+     */
+    @Query("""
+        SELECT
+        IFNULL((SELECT COUNT(*) || ':' || TOTAL(id * (
+            (finished_at % 1000003) * 3 + (started_at % 1000003) * 5 + is_untracked * 7
+            + pr_count * 11 + set_count * 13 + IFNULL(total_volume_lb, 0) * 17 + deload_marked_here * 19
+            + active_seconds * 23 + LENGTH(day_key) * 29 + IFNULL(LENGTH(tags), 0) * 31
+            + IFNULL(LENGTH(session_type), 0) * 37 + IFNULL(LENGTH(intensity), 0) * 41
+            + IFNULL(LENGTH(journal), 0) * 43))
+            FROM session WHERE finished_at IS NOT NULL), '')
+        || '|' ||
+        IFNULL((SELECT COUNT(*) || ':' || TOTAL(le.id * (
+            le.session_id * 3 + le.order_index * 5 + LENGTH(le.exercise_id) * 7
+            + IFNULL(LENGTH(le.swapped_name), 0) * 11 + IFNULL(LENGTH(le.swapped_unit), 0) * 13
+            + IFNULL(LENGTH(le.difficulty), 0) * 17 + le.hit_full_target * 19 + le.was_pr * 23
+            + le.skipped * 29 + IFNULL(LENGTH(le.superset_group), 0) * 31
+            + IFNULL(LENGTH(le.slot_id), 0) * 37 + IFNULL(LENGTH(le.note), 0) * 41))
+            FROM logged_exercise le INNER JOIN session s ON le.session_id = s.id
+            WHERE s.finished_at IS NOT NULL), '')
+        || '|' ||
+        IFNULL((SELECT COUNT(*) || ':' || TOTAL(ls.id * (
+            ls.logged_exercise_id * 3 + ls.set_index * 5 + IFNULL(ls.weight_lb, 0) * 7 + ls.reps * 11
+            + (ls.completed_at % 1000003) * 13 + ls.is_amrap * 17 + ls.is_assisted * 19
+            + ls.to_failure * 23 + IFNULL(ls.rpe, 0) * 29 + IFNULL(ls.duration_seconds, 0) * 31
+            + IFNULL(LENGTH(ls.set_type), 0) * 37 + IFNULL(LENGTH(ls.difficulty_tag), 0) * 41
+            + IFNULL(LENGTH(ls.weight_text), 0) * 43 + IFNULL(LENGTH(ls.drop_annotation), 0) * 47))
+            FROM logged_set ls
+            INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
+            INNER JOIN session s ON le.session_id = s.id
+            WHERE s.finished_at IS NOT NULL), '')
+        AS fingerprint
+    """)
+    suspend fun finishedHistoryFingerprint(): String
+
+    /** [finishedHistoryFingerprint], re-read whenever one of its three tables is written. */
+    @Query("""
+        SELECT
+        IFNULL((SELECT COUNT(*) || ':' || TOTAL(id * (
+            (finished_at % 1000003) * 3 + (started_at % 1000003) * 5 + is_untracked * 7
+            + pr_count * 11 + set_count * 13 + IFNULL(total_volume_lb, 0) * 17 + deload_marked_here * 19
+            + active_seconds * 23 + LENGTH(day_key) * 29 + IFNULL(LENGTH(tags), 0) * 31
+            + IFNULL(LENGTH(session_type), 0) * 37 + IFNULL(LENGTH(intensity), 0) * 41
+            + IFNULL(LENGTH(journal), 0) * 43))
+            FROM session WHERE finished_at IS NOT NULL), '')
+        || '|' ||
+        IFNULL((SELECT COUNT(*) || ':' || TOTAL(le.id * (
+            le.session_id * 3 + le.order_index * 5 + LENGTH(le.exercise_id) * 7
+            + IFNULL(LENGTH(le.swapped_name), 0) * 11 + IFNULL(LENGTH(le.swapped_unit), 0) * 13
+            + IFNULL(LENGTH(le.difficulty), 0) * 17 + le.hit_full_target * 19 + le.was_pr * 23
+            + le.skipped * 29 + IFNULL(LENGTH(le.superset_group), 0) * 31
+            + IFNULL(LENGTH(le.slot_id), 0) * 37 + IFNULL(LENGTH(le.note), 0) * 41))
+            FROM logged_exercise le INNER JOIN session s ON le.session_id = s.id
+            WHERE s.finished_at IS NOT NULL), '')
+        || '|' ||
+        IFNULL((SELECT COUNT(*) || ':' || TOTAL(ls.id * (
+            ls.logged_exercise_id * 3 + ls.set_index * 5 + IFNULL(ls.weight_lb, 0) * 7 + ls.reps * 11
+            + (ls.completed_at % 1000003) * 13 + ls.is_amrap * 17 + ls.is_assisted * 19
+            + ls.to_failure * 23 + IFNULL(ls.rpe, 0) * 29 + IFNULL(ls.duration_seconds, 0) * 31
+            + IFNULL(LENGTH(ls.set_type), 0) * 37 + IFNULL(LENGTH(ls.difficulty_tag), 0) * 41
+            + IFNULL(LENGTH(ls.weight_text), 0) * 43 + IFNULL(LENGTH(ls.drop_annotation), 0) * 47))
+            FROM logged_set ls
+            INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
+            INNER JOIN session s ON le.session_id = s.id
+            WHERE s.finished_at IS NOT NULL), '')
+        AS fingerprint
+    """)
+    fun observeFinishedHistoryFingerprint(): Flow<String>
+
+    /**
+     * The same, for every other table the adaptation snapshot reads: moods, cardio, bodyweight,
+     * check-ins, injuries, vacations and the two customization tables. The larger ones are folded
+     * like [finishedHistoryFingerprint]; the small ones are concatenated whole.
+     */
+    @Query("""
+        SELECT
+        IFNULL((SELECT COUNT(*) || ':' || TOTAL(id * (IFNULL(session_id, 0) * 3 + (recorded_at % 1000003) * 5))
+            || ':' || IFNULL(group_concat(quote(mood) || quote(day_key), ','), '') FROM mood_entry), '')
+        || '|' ||
+        IFNULL((SELECT COUNT(*) || ':' || TOTAL(id * ((date % 1000003) * 3 + duration_min * 5
+            + IFNULL(distance_km, 0) * 7 + IFNULL(interval_count, 0) * 11 + IFNULL(incline_pct, 0) * 13
+            + IFNULL(laps, 0) * 17 + IFNULL(elevation_m, 0) * 19 + IFNULL(LENGTH(note), 0) * 23))
+            || ':' || IFNULL(group_concat(quote(type) || quote(effort) || quote(rest_reason)
+                || quote(hr_zone) || quote(conditions), ','), '') FROM cardio_entry), '')
+        || '|' ||
+        IFNULL((SELECT COUNT(*) || ':' || TOTAL(id * (weight_lb * 3 + (recorded_at % 1000003) * 5
+            + LENGTH(date_key) * 7 + IFNULL(LENGTH(note), 0) * 11)) FROM bodyweight_entry), '')
+        || '|' ||
+        IFNULL((SELECT COUNT(*) || ':' || TOTAL(id * (IFNULL(sleep_quality, 0) * 3 + IFNULL(soreness, 0) * 5
+            + IFNULL(stress, 0) * 7 + IFNULL(motivation, 0) * 11 + sick * 13 + skipped * 17
+            + (recorded_at % 1000003) * 19))
+            || ':' || IFNULL(group_concat(quote(date_key) || quote(sore_muscles), ','), '') FROM checkin_entry), '')
+        || '|' ||
+        IFNULL((SELECT group_concat(quote(id) || quote(scope) || quote(target_key) || quote(note)
+            || quote(started_at) || quote(cleared_at), ',') FROM injury_restriction), '')
+        || '|' ||
+        IFNULL((SELECT group_concat(quote(id) || quote(start_date) || quote(end_date), ',')
+            FROM vacation_period), '')
+        || '|' ||
+        IFNULL((SELECT group_concat(quote(day_key) || quote(exercise_id) || quote(custom_name)
+            || quote(custom_muscle) || quote(rep_range_override) || quote(sets_override)
+            || quote(order_override) || quote(removed) || quote(source), ',') FROM program_customization), '')
+        || '|' ||
+        IFNULL((SELECT group_concat(quote(exercise_id) || quote(swapped_name) || quote(swapped_unit)
+            || quote(rest_timer_override_seconds) || quote(pinned_note) || quote(source)
+            || quote(swapped_exercise_id), ',') FROM exercise_customization), '')
+        AS fingerprint
+    """)
+    suspend fun engineSideTablesFingerprint(): String
 }
 
 /** A session's id and the instant it starts on — [SessionDao.startRefsInRange]. */

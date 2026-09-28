@@ -27,6 +27,8 @@ import com.forge.app.program.Program
 import com.forge.app.program.ProgramGenerator
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -58,6 +60,11 @@ class AdaptationRepository @Inject constructor(
     private val healthConnectManager: com.forge.app.data.health.HealthConnectManager,
     private val clock: Clock
 ) {
+
+    private companion object {
+        /** How long a snapshot with unchanged inputs is reused: bounds Health Connect staleness. */
+        const val SNAPSHOT_TTL_MS = 3L * 60 * 1000
+    }
 
     /** Moods/cardio older than this can't influence any current signal — skip loading them. */
     private val signalWindowMs = 90L * 24 * 60 * 60 * 1000
@@ -92,7 +99,11 @@ class AdaptationRepository @Inject constructor(
      * engine read degrades to no pulse/plateaus. Surfaces that fan out from this but have NO error path
      * of their own use [snapshotOrEmpty] instead.
      */
-    suspend fun snapshot(): AdaptationSnapshot = assembleSnapshot()
+    suspend fun snapshot(): AdaptationSnapshot = snapshotLock.withLock {
+        val key = snapshotKey()
+        val builtAt = clock.nowMs()
+        assembleSnapshot().also { cachedSnapshot = CachedSnapshot(key, builtAt, it) }
+    }
 
     /**
      * Crash-safe snapshot for surfaces with no error handling of their own (the Overview coach feed runs
@@ -241,8 +252,57 @@ class AdaptationRepository @Inject constructor(
         )
     }
 
-    /** Compatibility entry point. Reuse snapshots within one request, never across mutations. */
-    suspend fun snapshotCached(): AdaptationSnapshot = snapshot()
+    /**
+     * The snapshot for read-only surfaces (Coach page, Home directive, Academy, Stats, the
+     * notification feed): the last one built, when none of its inputs has changed since, else a
+     * fresh build.
+     *
+     * Never across a mutation. The key is read at call time, synchronously, from the stores the
+     * snapshot itself reads: one-row fingerprints of every input table computed inside SQLite
+     * ([SessionDao.finishedHistoryFingerprint], [SessionDao.engineSideTablesFingerprint]), the
+     * whole preferences value, the loaded program, and the local day and zone. A write that has
+     * returned is therefore always seen (an invalidation-tracker signal would arrive
+     * asynchronously). What the key cannot see — Health Connect, and `nowMs` drifting within the
+     * day — is bounded by [SNAPSHOT_TTL_MS].
+     *
+     * One build at a time: a Coach open used to assemble four whole-history snapshots back to back
+     * (brief, lab, page, academy moments), and Home's resume another two or three alongside the
+     * notification refresh. Concurrent callers now wait for the build in flight and share it.
+     */
+    suspend fun snapshotCached(): AdaptationSnapshot = snapshotLock.withLock {
+        val key = snapshotKey()
+        val now = clock.nowMs()
+        cachedSnapshot
+            ?.takeIf { it.key == key && now - it.builtAtMs in 0 until SNAPSHOT_TTL_MS }
+            ?.let { return@withLock it.snapshot }
+        assembleSnapshot().also { cachedSnapshot = CachedSnapshot(key, now, it) }
+    }
+
+    /** Everything a snapshot is a function of, except Health Connect and the clock within a day. */
+    private data class SnapshotKey(
+        val tables: String,
+        val preferences: androidx.datastore.preferences.core.Preferences,
+        val program: List<com.forge.app.program.DayPlan>,
+        val day: java.time.LocalDate,
+        val zone: java.time.ZoneId
+    )
+
+    private class CachedSnapshot(val key: SnapshotKey, val builtAtMs: Long, val snapshot: AdaptationSnapshot)
+
+    private val snapshotLock = Mutex()
+    private var cachedSnapshot: CachedSnapshot? = null
+
+    /** Read BEFORE assembling, so a write that lands mid-build makes the next call rebuild. */
+    private suspend fun snapshotKey(): SnapshotKey {
+        val zone = java.time.ZoneId.systemDefault()
+        return SnapshotKey(
+            tables = sessionDao.finishedHistoryFingerprint() + "#" + sessionDao.engineSideTablesFingerprint(),
+            preferences = settingsRepository.preferencesSnapshot(),
+            program = Program.days,
+            day = java.time.Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate(),
+            zone = zone
+        )
+    }
 
     /**
      * Today's readiness scale (System 6), or null below the data gates / at net zero.
@@ -348,7 +408,9 @@ class AdaptationRepository @Inject constructor(
     )
 
     suspend fun engineStatsRead(): EngineStatsRead = withContext(Dispatchers.Default) {
-        val s = snapshot()
+        // Cached: Stats reads this on every open and every input change, and the key rebuilds the
+        // snapshot whenever one of those inputs has actually moved.
+        val s = snapshotCached()
         val t = AdaptThresholds()
         EngineStatsRead(
             fatigue = DeloadAdvisor.fatigue(s, t),
