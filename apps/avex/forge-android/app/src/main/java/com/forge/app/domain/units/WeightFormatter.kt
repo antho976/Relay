@@ -49,7 +49,11 @@ private fun Double.finiteOrZero(): Double = if (isFinite()) this else 0.0
  * Shared by the length/distance/incline/standing readouts, which had the same pattern.
  */
 internal fun trimDecimal(raw: Double): String {
-    val v = Math.round(raw.finiteOrZero() * 10.0) / 10.0
+    val x = raw.finiteOrZero()
+    // Half away from zero on the magnitude, like the "%.1f" this replaced: Math.round alone rounds
+    // half toward +∞, so a −1.25 lb delta read "-1.2" beside a +1.25 lb one's "1.3".
+    val r = Math.round(abs(x) * 10.0) / 10.0
+    val v = if (x < 0) -r else r
     return if (v % 1.0 == 0.0) "${v.toLong()}" else String.format(Locale.US, "%.1f", v)
 }
 

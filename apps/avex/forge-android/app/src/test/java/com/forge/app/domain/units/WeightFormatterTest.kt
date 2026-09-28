@@ -225,6 +225,14 @@ class WeightFormatterTest {
     }
 
     @Test
+    fun aLossRoundsLikeTheEqualGain() {
+        // Half away from zero, as "%.1f" did: rounding the signed value put -1.25 on "-1.2".
+        assertEquals("1.3 lb", formatWeightDelta(1.25, WeightUnit.LB))
+        assertEquals("-1.3 lb", formatWeightDelta(-1.25, WeightUnit.LB))
+        assertEquals("0 lb", formatWeightDelta(-0.04, WeightUnit.LB)) // no "-0"
+    }
+
+    @Test
     fun aTypedPoundSuffixInPoundModeIsJustTheNumber() {
         assertEquals("135", toStoredWeightText("135 lb", WeightUnit.LB))
     }

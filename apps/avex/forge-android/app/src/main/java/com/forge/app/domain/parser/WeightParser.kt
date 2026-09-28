@@ -34,23 +34,24 @@ object WeightParser {
         val text = normalizeDecimalInput(input).lowercase()
         if (text.isEmpty() || text == "bw") return null
 
-        // "N plate" / "N plates" / "Np" — explicit plate notation
+        // "N plate" / "N plates" / "Np" — explicit plate notation. Every branch drops a non-finite
+        // result: a 309-digit number parses to Infinity, and a huge plate count overflows to it.
         val plateMatch = PLATE_REGEX.matchEntire(text)
         if (plateMatch != null) {
             val plates = plateMatch.groupValues[1].toDoubleOrNull() ?: return null
-            return plates * plateLb
+            return (plates * plateLb).takeIf { it.isFinite() }
         }
 
         // "N lb" / "Nlb" — always lb regardless of unit hint
         val lbMatch = LB_REGEX.matchEntire(text)
         if (lbMatch != null) {
-            return lbMatch.groupValues[1].toDoubleOrNull()
+            return lbMatch.groupValues[1].toDoubleOrNull()?.takeIf { it.isFinite() }
         }
 
         // Bare number. On a PLATES exercise it's a plate count (field is labelled "PLATES");
         // otherwise it's literal pounds. Reject negatives and overflow ("1e999" parses to Infinity),
         // either of which would corrupt volume / PRs.
         val n = text.toDoubleOrNull()?.takeIf { it >= 0.0 && it.isFinite() } ?: return null
-        return if (unit == ExerciseUnit.PLATES) n * plateLb else n
+        return (if (unit == ExerciseUnit.PLATES) n * plateLb else n).takeIf { it.isFinite() }
     }
 }

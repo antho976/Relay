@@ -45,6 +45,16 @@ class WeightParserTest {
     }
 
     @Test
+    fun overflowParsesToNullOnEveryBranch() {
+        val huge = "9".repeat(400) // parses to Infinity
+        assertNull(WeightParser.parse(huge, ExerciseUnit.DUMBBELL))
+        assertNull(WeightParser.parse("$huge lb", ExerciseUnit.DUMBBELL))
+        assertNull(WeightParser.parse("$huge plates", ExerciseUnit.PLATES))
+        // Finite on its own, infinite once multiplied by the plate weight.
+        assertNull(WeightParser.parse("1" + "0".repeat(308), ExerciseUnit.PLATES))
+    }
+
+    @Test
     fun garbageParsesToNull() {
         assertNull(WeightParser.parse("heavy", ExerciseUnit.DUMBBELL))
     }
