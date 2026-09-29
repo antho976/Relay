@@ -357,4 +357,20 @@ class WarmupEngineTest {
             assertNotNull(it.id)
         }
     }
+
+    @Test
+    fun `a barbell ramp is never lighter than the empty bar`() {
+        // 95 x 8 used to give 42.5 / 62.5 / 80, and the first rung cannot be set up on a 45 lb bar.
+        val ramp = WarmupEngine.rampFor(exercise(workingLoad = 95.0, targetReps = 8, loadStep = 2.5).copy(barLoad = 45.0))
+        assertTrue(ramp.isNotEmpty())
+        ramp.forEach { assertTrue("rung ${it.load} is below the bar", it.load!! >= 45.0) }
+        assertEquals("rungs are strictly increasing", ramp.map { it.load }, ramp.map { it.load }.sortedBy { it }.distinct())
+        assertTrue("no rung at or above the working load", ramp.all { it.load!! < 95.0 })
+    }
+
+    @Test
+    fun `a barbell working set at the bar earns no ramp rungs`() {
+        val ramp = WarmupEngine.rampFor(exercise(workingLoad = 45.0, targetReps = 10, loadStep = 2.5).copy(barLoad = 45.0))
+        assertTrue(ramp.isEmpty())
+    }
 }

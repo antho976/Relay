@@ -9,6 +9,7 @@ import com.forge.app.core.io.existsAtomically
 import com.forge.app.core.io.readTextAtomically
 import com.forge.app.core.io.writeTextAtomically
 import com.forge.app.data.db.dao.BodyweightDao
+import com.forge.app.data.db.entities.BodyweightEntry
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -352,10 +353,24 @@ class ProgressPhotoRepository @Inject constructor(
     suspend fun setTags(photo: ProgressPhoto, tags: List<String>) =
         updatePhoto(photo) { it.copy(tags = tags.distinct()) }
     suspend fun setWeight(photo: ProgressPhoto, weightLb: Double?) = updatePhoto(photo) { it.copy(weightLb = weightLb) }
-    /** Re-date a photo (its EXIF date was wrong/absent); re-snapshots the bodyweight for the new date. */
-    suspend fun setTakenAt(photo: ProgressPhoto, takenAtMs: Long) {
-        val weight = nearestBodyweightLb(takenAtMs)
-        updatePhoto(photo) { it.copy(takenAtMs = takenAtMs, weightLb = weight) }
+    /**
+     * Re-date a photo (its EXIF date was wrong/absent) and re-snapshot the bodyweight nearest the NEW
+     * date: a photo imported without EXIF was dated "now" and carries today's weigh-in, which is
+     * wrong for the day it is moved to. The one weight kept is one the user typed, recognised as a
+     * non-null weight that is NOT the snapshot for the OLD date.
+     *
+     * Returns the entry as stored (null if the write failed) so the viewer can show the weight that
+     * was actually written rather than the one it opened with.
+     */
+    suspend fun setTakenAt(photo: ProgressPhoto, takenAtMs: Long): ProgressPhoto? {
+        val weighIns = runCatching { bodyweightDao.all() }.getOrDefault(emptyList())
+        var stored: ProgressPhoto? = null
+        updatePhoto(photo) { old ->
+            val typed = old.weightLb != null && old.weightLb != nearestBodyweightLb(weighIns, old.takenAtMs)
+            val weight = if (typed) old.weightLb else nearestBodyweightLb(weighIns, takenAtMs)
+            old.copy(takenAtMs = takenAtMs, weightLb = weight).also { stored = it }
+        }.getOrElse { return null }
+        return stored
     }
 
     /** Move a photo into [album] ("" = Unsorted). The target album need not pre-exist. */
@@ -406,8 +421,12 @@ class ProgressPhotoRepository @Inject constructor(
             writeMutex.withLock {
                 val albums = readAlbums()
                 val photos = readIndex()
-                writeAlbums(albums.map { if (it.equals(old, ignoreCase = true)) n else it }.distinct())
-                writeIndex(photos.map { if (it.album.equals(old, ignoreCase = true)) it.copy(album = n) else it })
+                // Renaming onto ANOTHER album that differs only in case merges into it under its
+                // existing casing, as createAlbum and canonicalAlbum do; otherwise two casings of one
+                // name would split into two folders.
+                val target = albums.firstOrNull { it.equals(n, ignoreCase = true) && !it.equals(old, ignoreCase = true) } ?: n
+                writeAlbums(albums.map { if (it.equals(old, ignoreCase = true)) target else it }.distinctBy { it.lowercase() })
+                writeIndex(photos.map { if (it.album.equals(old, ignoreCase = true)) it.copy(album = target) else it })
                 bump()
             }
         }
@@ -447,13 +466,14 @@ class ProgressPhotoRepository @Inject constructor(
 
     // ── Metadata helpers ───────────────────────────────────────────────────────
     /** Bodyweight (lb) recorded nearest [takenAtMs], within [NEAR_WINDOW_MS]; null if none in range. */
-    private suspend fun nearestBodyweightLb(takenAtMs: Long): Double? {
-        val entries = runCatching { bodyweightDao.all() }.getOrDefault(emptyList())
-        return entries
+    private suspend fun nearestBodyweightLb(takenAtMs: Long): Double? =
+        nearestBodyweightLb(runCatching { bodyweightDao.all() }.getOrDefault(emptyList()), takenAtMs)
+
+    private fun nearestBodyweightLb(entries: List<BodyweightEntry>, takenAtMs: Long): Double? =
+        entries
             .minByOrNull { abs(it.recordedAt - takenAtMs) }
             ?.takeIf { abs(it.recordedAt - takenAtMs) <= NEAR_WINDOW_MS }
             ?.weightLb
-    }
 
     /**
      * Does this file actually contain a decodable image?

@@ -1,5 +1,8 @@
 package com.forge.app.ui.common
 
+import android.content.Context
+import android.os.Build
+import android.view.accessibility.AccessibilityManager
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
@@ -14,10 +17,12 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -46,6 +51,19 @@ fun SnackbarControllerHost(
 ) {
     val hostState = remember { SnackbarHostState() }
     val controller = viewModel.controller
+    // Honour the system "Time to take action" setting for the Undo window (applicationContext: this
+    // lands in a singleton, which must not hold the Activity).
+    val appContext = LocalContext.current.applicationContext
+    SideEffect {
+        controller.windowAdjuster = { windowMs ->
+            val am = appContext.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+            if (am == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) windowMs
+            else am.getRecommendedTimeoutMillis(
+                windowMs.toInt(),
+                AccessibilityManager.FLAG_CONTENT_CONTROLS or AccessibilityManager.FLAG_CONTENT_TEXT
+            ).toLong()
+        }
+    }
     val event by controller.current.collectAsStateWithLifecycle()
     LaunchedEffect(event) {
         val current = event ?: return@LaunchedEffect

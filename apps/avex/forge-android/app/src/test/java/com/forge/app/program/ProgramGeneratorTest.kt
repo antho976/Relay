@@ -426,4 +426,42 @@ class ProgramGeneratorTest {
             .sumOf { it.sets }
         assertTrue("beginner deload should reduce light accessory volume", calfSets(true) < calfSets(false))
     }
+
+    @Test
+    fun beginnerWithOnlyAPullUpBarStillTrainsBack() {
+        // Regression: the non-fallback BACK pool for {PULL_UP_BAR} is pull-up + chin-up (both
+        // ADVANCED). The fallback decision used to be made BEFORE the beginner difficulty ceiling, so
+        // the bodyweight fills were dropped, the ceiling then emptied the pool and BACK vanished.
+        val bar = setOf(Equipment.PULL_UP_BAR)
+        (3..6).forEach { d ->
+            listOf(1L, 2L, 3L).forEach { seed ->
+                val ids = ProgramGenerator.generate(
+                    GenerationParams(d, experience = "beginner"), bar, emptySet(), emptySet(), seed = seed
+                ).flatMap { it.exercises }.map { it.libId }
+                val back = ids.filter { ExerciseLibrary.byId(it)?.muscle == MuscleGroup.BACK }
+                assertTrue("$d-day beginner plan (seed $seed) with only a bar has no back work", back.isNotEmpty())
+                assertTrue("beginner was handed an advanced back move: $back", back.none {
+                    ExerciseLibrary.byId(it)!!.difficulty.ordinal > Difficulty.INTERMEDIATE.ordinal
+                })
+            }
+        }
+    }
+
+    @Test
+    fun bodyweightCompoundsKeepTheirOwnHighReps() {
+        // Regression: bw-squat / bw-good-morning (15-20) were prescribed the goal's strength or
+        // hypertrophy range (4-10), which is no stimulus for an unloaded movement.
+        val bodyweight = setOf(Equipment.BODYWEIGHT_ONLY)
+        listOf("build_muscle", "get_stronger").forEach { goal ->
+            (3..6).forEach { d ->
+                listOf(1L, 2L, 3L).forEach { seed ->
+                    ProgramGenerator.generate(
+                        GenerationParams(d, goal = goal), bodyweight, emptySet(), emptySet(), seed = seed
+                    ).flatMap { it.exercises }
+                        .filter { it.libId == "bw-squat" || it.libId == "bw-good-morning" }
+                        .forEach { assertEquals("${it.libId} ($goal, $d-day, seed $seed)", "15-20", it.reps) }
+                }
+            }
+        }
+    }
 }

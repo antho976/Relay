@@ -18,6 +18,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,11 +32,47 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.forge.app.ui.common.bounceClick
+import kotlinx.coroutines.delay
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAdjusters
+
+/**
+ * Today's local date that stays current while the page is composed: re-read on resume and when the
+ * next local midnight passes. A bare `remember { LocalDate.now() }` froze it at first composition, so a
+ * Stats page left open overnight kept drawing (and windowing its counts) as yesterday.
+ */
+@Composable
+internal fun rememberToday(): LocalDate {
+    var today by remember { mutableStateOf(LocalDate.now()) }
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) today = LocalDate.now()
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
+    // Loops rather than running once per value of `today`: a delay that ends a few ms early, or a
+    // clock change / NTP correction (delay runs on uptime), can wake while LocalDate.now() is still
+    // the old day. Then `today` would not change, the effect would never relaunch, and the page would
+    // stay on yesterday. Each pass re-arms against the next midnight from the CURRENT date.
+    LaunchedEffect(Unit) {
+        while (true) {
+            val zone = ZoneId.systemDefault()
+            val nextMidnightMs = LocalDate.now(zone).plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+            delay((nextMidnightMs - System.currentTimeMillis()).coerceAtLeast(1_000L))
+            today = LocalDate.now()
+        }
+    }
+    return today
+}
 
 /** How many weeks (columns) one page of the heatmap shows; [HEATMAP_WEEKS] divides evenly by this. */
 private const val WEEKS_PER_PAGE = 13
@@ -57,7 +95,7 @@ internal fun CalendarHeatmap(
     modifier: Modifier = Modifier,
     onDayTap: ((LocalDate) -> Unit)? = null
 ) {
-    val today = remember { LocalDate.now() }
+    val today = rememberToday()
     val startMonday = remember(today, weeks) {
         today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).minusWeeks((weeks - 1).toLong())
     }

@@ -65,6 +65,9 @@ data class CardioUiState(
     val sessionRouteConsentId: String? = null,
     /** Downsampled HR series of the open session's matched watch workout (W5); null when none. */
     val sessionHr: List<com.forge.app.domain.health.HrPoint>? = null,
+    /** AVG / MAX bpm of the raw series behind [sessionHr]; the downsampled chart series understates the peak. */
+    val sessionHrAvgBpm: Int? = null,
+    val sessionHrMaxBpm: Int? = null,
     /** The open session's matched watch workout, with measured duration/distance/calories (W5). */
     val sessionWatch: com.forge.app.domain.health.WatchWorkout? = null,
     /** Watch workouts with no matching entry — the "recorded with your watch, import?" rows (W5). */

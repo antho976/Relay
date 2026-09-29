@@ -216,15 +216,23 @@ internal fun LazyListScope.coachInputs(
             CoachAnchor("What it reads", c)
             Spacer(Modifier.height(12.dp))
             watch.recoverySignals.forEach { sig ->
-                SignalRow(sig, c, onConnectHealth)
+                // Health Connect can be connected yet have nothing inside the recent window: the row
+                // then reads "none" rather than offering a Connect for something already connected,
+                // and the stale nights/readings are not charted under it.
+                val hasStaleData = !sig.active && when {
+                    sig.label == "Sleep" -> state.health.sleepSynced
+                    sig.label.contains("heart", ignoreCase = true) -> state.health.restingHrSynced
+                    else -> false
+                }
+                SignalRow(sig, c, onConnectHealth, connected = hasStaleData)
                 // Each input's own chart hangs under the input it belongs to.
                 when {
-                    sig.label == "Sleep" && state.health.sleepHours.isNotEmpty() -> {
+                    sig.label == "Sleep" && sig.active && state.health.sleepHours.isNotEmpty() -> {
                         Spacer(Modifier.height(6.dp))
                         CoachSleepBars(state.health.sleepHours, state.health.sleepFloorHours, c)
                         Spacer(Modifier.height(14.dp))
                     }
-                    sig.label.contains("heart", ignoreCase = true) &&
+                    sig.label.contains("heart", ignoreCase = true) && sig.active &&
                         state.health.restingHr.size >= 2 -> {
                         Spacer(Modifier.height(6.dp))
                         CoachHrLine(state.health.restingHr, state.health.hrBaseline, c)
@@ -396,8 +404,13 @@ private fun FormingLiftsRow(forming: List<TrackedLift>, showGhost: Boolean, c: C
  * the pill is drawn, never independently clickable.
  */
 @Composable
-private fun SignalRow(sig: RecoverySignal, c: CoachColors, onConnectHealth: (() -> Unit)?) {
-    val connectable = !sig.active && onConnectHealth != null &&
+private fun SignalRow(
+    sig: RecoverySignal,
+    c: CoachColors,
+    onConnectHealth: (() -> Unit)?,
+    connected: Boolean = false
+) {
+    val connectable = !sig.active && !connected && onConnectHealth != null &&
         (sig.label == "Sleep" || sig.label.contains("heart", ignoreCase = true))
     Row(
         Modifier

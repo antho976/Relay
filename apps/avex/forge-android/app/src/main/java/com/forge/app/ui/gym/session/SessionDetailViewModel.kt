@@ -52,9 +52,7 @@ class SessionDetailViewModel @Inject constructor(
                 if (samples.isNotEmpty()) {
                     val exercises = workoutRepo.loggedExercisesForSession(sessionId)
                     val nameByLoggedId = exercises.associate { le ->
-                        le.id to (le.swappedName?.takeIf { it.isNotBlank() }
-                            ?: com.forge.app.program.Program.exercise(le.exerciseId)?.name
-                            ?: le.exerciseId)
+                        le.id to com.forge.app.program.Program.exerciseDisplayName(le.exerciseId, le.swappedName)
                     }
                     val sets = workoutRepo.allSetsForSession(sessionId).map {
                         com.forge.app.domain.health.HrSetRef(

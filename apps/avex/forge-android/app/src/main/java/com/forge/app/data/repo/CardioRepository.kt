@@ -20,6 +20,7 @@ class CardioRepository @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val clock: Clock
 ) {
+    /** Newest real cardio sessions; logged rest days are excluded before the limit applies. */
     fun observeRecent(limit: Int = 20): Flow<List<CardioEntry>> = cardioDao.observeRecent(limit)
 
     /** Full cardio history, newest-first (the log list no longer caps at 20). */
@@ -66,6 +67,16 @@ class CardioRepository @Inject constructor(
             health.deleteExerciseSession(clientRecordId(entry.id))
             return
         }
+        val startMs = entry.date
+        val endMs = entry.date + entry.durationMin.coerceAtLeast(0) * 60_000L
+        // A run imported from the watch ("recorded with your watch, import?") already lives in
+        // Health Connect under its own provider; writing an Avex-origin twin made Samsung Health /
+        // Google Fit list it twice. A mirror this entry wrote BEFORE the watch session synced is
+        // dropped too (no-op when never mirrored), else HC keeps a stale Avex twin.
+        if (health.hasOverlappingWatchSession(startMs, endMs)) {
+            health.deleteExerciseSession(clientRecordId(entry.id))
+            return
+        }
         health.writeExerciseSession(
             clientRecordId = clientRecordId(entry.id),
             clientRecordVersion = clock.nowMs(),
@@ -73,8 +84,8 @@ class CardioRepository @Inject constructor(
             // Built-in activities carry their label; a custom activity's name lives in DataStore
             // (not resolvable here), so it mirrors under the honest generic.
             title = type?.displayName ?: "Cardio",
-            startMs = entry.date,
-            endMs = entry.date + entry.durationMin.coerceAtLeast(0) * 60_000L
+            startMs = startMs,
+            endMs = endMs
         )
     }
 

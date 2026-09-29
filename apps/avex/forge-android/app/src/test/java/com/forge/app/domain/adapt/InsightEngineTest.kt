@@ -112,6 +112,37 @@ class InsightEngineTest {
         assertNull(keyOf(InsightEngine.evaluate(snapshot(history = mapOf("ua1" to rising))), "improved"))
     }
 
+    @Test
+    fun mostImproved_doesNotReadAStrengthJumpAcrossASessionSwap() {
+        // The slot's DB row (60 lb) is swapped for a barbell row (135 lb). Filed by slot the series
+        // is 60, 60, 135, 135 (+125%), but neither lift improved.
+        val swapped = listOf(
+            bout(80, 60.0).copy(performedExerciseId = "ua1"),
+            bout(85, 60.0).copy(performedExerciseId = "ua1"),
+            bout(90, 135.0, swappedName = "Barbell Row").copy(performedExerciseId = "barbell-row"),
+            bout(95, 135.0, swappedName = "Barbell Row").copy(performedExerciseId = "barbell-row")
+        )
+        val fired = InsightEngine.evaluate(snapshot(history = mapOf("ua1" to swapped)))
+        assertNull(keyOf(fired, "improved"))
+    }
+
+    @Test
+    fun mostImproved_namesThePreSwapLiftByItsOwnName() {
+        // The slot is persistently swapped, so its snapshot already carries the swapped lift's name.
+        // The DB bench's own pre-swap progress must not be credited to the incline press.
+        val slots = listOf(slot("db-bench-press", "Incline DB Bench Press", MuscleGroup.CHEST))
+        val history = listOf(
+            bout(80, 40.0).copy(performedExerciseId = "db-bench-press"),
+            bout(82, 40.0).copy(performedExerciseId = "db-bench-press"),
+            bout(84, 50.0).copy(performedExerciseId = "db-bench-press"),
+            bout(86, 50.0).copy(performedExerciseId = "db-bench-press"),
+            bout(90, 30.0, swappedName = "Incline DB Bench Press").copy(performedExerciseId = "incline-db-bench-press")
+        )
+        val insight = keyOf(InsightEngine.evaluate(snapshot(slots = slots, history = mapOf("db-bench-press" to history))), "improved")
+        assertNotNull(insight)
+        assertTrue(insight!!.body, insight.body.startsWith("DB Bench Press is up"))
+    }
+
     // ── Weekly muscle dominance (ported) ──────────────────────────────────────
 
     @Test

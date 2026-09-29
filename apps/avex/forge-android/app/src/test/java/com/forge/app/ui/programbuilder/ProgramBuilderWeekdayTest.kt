@@ -3,8 +3,12 @@ package com.forge.app.ui.programbuilder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 /** The plan editor's "Day of the week" picks, as they become the weekly schedule. */
+// org.json is only a stub on the plain JVM test classpath ("Method put … not mocked").
+@RunWith(RobolectricTestRunner::class)
 class ProgramBuilderWeekdayTest {
 
     private fun day(key: String, weekdays: Set<Int> = emptySet()) = BuilderDay(

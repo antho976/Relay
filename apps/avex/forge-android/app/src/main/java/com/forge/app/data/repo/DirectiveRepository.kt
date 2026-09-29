@@ -84,10 +84,15 @@ class DirectiveRepository @Inject constructor(
         val mode = settingsRepository.scheduleMode.first()
         val schedule = settingsRepository.weeklySchedule.first()
         val dayKeys = Program.dayKeys
-        val lastFinished = snapshot.sessions.filter { it.finishedAt != null && !it.isUntracked }
-            .maxByOrNull { it.startedAt }?.dayKey
+        // A freestyle/imported session is not a program day: as the newest one it made the rotation
+        // lookup miss and next-up snap back to Day 1.
+        val lastFinished = snapshot.sessions
+            .filter { it.finishedAt != null && !it.isUntracked && it.dayKey != Program.FREESTYLE_DAY_KEY }
+            .maxByOrNull { it.finishedAt!! }?.dayKey
+        // Anchored on finish time like Stats and the day list, so a session that runs past midnight
+        // counts as today's.
         val trainedTodayKeys = snapshot.sessions
-            .filter { it.finishedAt != null && !it.isUntracked && it.startedAt >= todayStart(snapshot.nowMs, zone) }
+            .filter { it.finishedAt != null && !it.isUntracked && it.finishedAt!! >= todayStart(snapshot.nowMs, zone) }
             .map { it.dayKey }
             .toSet()
 

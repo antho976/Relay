@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Update
 import com.forge.app.data.db.entities.Session
+import com.forge.app.program.Program
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -149,10 +150,14 @@ interface SessionDao {
      *
      * The widget's separate "has this user ever trained" check stays inclusive: that one is asking
      * whether any data exists, not what to do next.
+     *
+     * Freestyle and imported sessions are skipped: their key is not a program day, so the rotation
+     * lookup missed and next-up snapped back to Day 1 after every ad-hoc workout.
      */
     @Query("""
         SELECT day_key FROM session
         WHERE finished_at IS NOT NULL AND is_untracked = 0
+          AND day_key != '${Program.FREESTYLE_DAY_KEY}'
         ORDER BY finished_at DESC LIMIT 1
     """)
     suspend fun lastFinishedDayKey(): String?
@@ -307,6 +312,9 @@ interface SessionDao {
 
     @Query("UPDATE session SET is_untracked = :v WHERE id = :id")
     suspend fun setUntracked(id: Long, v: Boolean)
+
+    @Query("UPDATE session SET tags = :tags WHERE id = :id")
+    suspend fun setTags(id: Long, tags: String)
 
     @Query("UPDATE session SET journal = :text WHERE id = :id")
     suspend fun setJournal(id: Long, text: String)

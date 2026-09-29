@@ -69,7 +69,20 @@ internal suspend fun DayViewModel.refreshExercises() {
             { allPlans.indexOfFirst { p -> p.id == it.plan.id } }
         )
     )
-    _state.update { it.copy(isLoading = false, exercises = exercises) }
+    // The three memory-only fields (expanded, bonus sets, finished early) were captured before the
+    // suspending reads above, so a "+ SET" or "Done with this exercise" tap made while the rebuild
+    // ran would be reverted by publishing them back. Re-read them from the list as it is AT WRITE
+    // TIME, inside the update (which retries on contention), as refreshExercise does.
+    _state.update { s ->
+        val live = s.exercises.associateBy { it.plan.id }
+        s.copy(
+            isLoading = false,
+            exercises = exercises.map { ex ->
+                val now = live[ex.plan.id] ?: return@map ex
+                ex.copy(isExpanded = now.isExpanded, bonusSets = now.bonusSets, finishedEarly = now.finishedEarly)
+            }
+        )
+    }
     // The warmup is derived from these exercises and their working loads, so it is rebuilt here
     // rather than guessed at construction. No-ops once the user has stepped into it.
     rebuildWarmupProtocol()
@@ -211,7 +224,9 @@ internal suspend fun DayViewModel.computeOrderingSuggestion() {
 }
 
 internal fun DayViewModel.startSessionService(dayName: String) {
-    bridge.startSession(SessionNotifState(dayName, clock.nowMs()))
+    // The notification counts up from the same active-time anchor the screen reads (prior sittings
+    // + this one), not from now: resuming a session 40 minutes in would otherwise read "Just started".
+    bridge.startSession(SessionNotifState(dayName, _state.value.elapsedAnchorMs ?: clock.nowMs()))
     appContext.startForegroundService(Intent(appContext, WorkoutSessionService::class.java))
 }
 

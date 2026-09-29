@@ -42,17 +42,28 @@ class CoachViewModel @Inject constructor(
     private val blockRepo: com.forge.app.data.repo.BlockRepository,
     private val projectRepo: com.forge.app.data.repo.ProjectRepository,
     private val inputSignals: com.forge.app.data.repo.EngineInputSignals,
-    private val programChangeGuard: ProgramChangeGuard
+    private val programChangeGuard: ProgramChangeGuard,
+    private val snackbar: com.forge.app.ui.common.SnackbarController
 ) : ViewModel() {
 
     /** Health Connect series for the signal deep dives; empty lists mean not connected. */
     data class HealthSeries(
-        /** Hours per night, oldest first (last [SLEEP_NIGHTS_SHOWN] synced nights). */
+        /**
+         * Hours per night, oldest first: the last [SLEEP_NIGHTS_SHOWN] nights inside the recent
+         * window, the same window the Sleep input's count reads, so the chart under it never shows
+         * weeks-old nights.
+         */
         val sleepHours: List<Float> = emptyList(),
         /** The nightly average at or below which sleep reads as a recovery drag. */
         val sleepFloorHours: Float = 6.5f,
-        /** Resting heart rate readings in bpm, oldest first. */
+        /** Resting heart rate readings in bpm inside the recent window, oldest first. */
         val restingHr: List<Int> = emptyList(),
+        /**
+         * Any night / resting-HR reading at all in the whole read, window or not: Health Connect
+         * is connected even when nothing recent has synced, so its input offers no Connect.
+         */
+        val sleepSynced: Boolean = false,
+        val restingHrSynced: Boolean = false,
         val hrWindowAvg: Int? = null,
         val hrBaseline: Int? = null,
         /** Overnight HRV (RMSSD ms): recent-window average vs the prior-window baseline (W6). */
@@ -77,6 +88,13 @@ class CoachViewModel @Inject constructor(
         val brief: CoachBrief? = null,
         val watch: CoachWatch? = null,
         val timeline: CoachTimeline? = null,
+        /**
+         * Decisions whose Undo the repository just declined (window over, or a newer call owns the
+         * slot). A declined undo writes nothing, so the brief and timeline re-read equal and the
+         * page's clock does not move: without this the dead pill stayed up. Held until the account
+         * itself changes, when the page re-reads its clock and every pill is re-judged.
+         */
+        val undoRefused: Set<Long> = emptySet(),
         /** Best estimated 1RM per non-skipped bout, per program slot, oldest first. */
         val e1rmBySlot: Map<String, List<Double>> = emptyMap(),
         val health: HealthSeries = HealthSeries(),
@@ -158,6 +176,7 @@ class CoachViewModel @Inject constructor(
             brief = brief,
             watch = watch,
             timeline = timeline,
+            undoRefused = keptUndoRefusals(current, brief, timeline),
             e1rmBySlot = snap?.let(::e1rmSeries).orEmpty(),
             health = snap?.let(::healthSeries) ?: HealthSeries(),
             readiness = readiness,
@@ -188,7 +207,12 @@ class CoachViewModel @Inject constructor(
      * [refreshWhileVisible] collects it, so the page redraws from the write, not from here.
      */
     fun setAdvanced(v: Boolean) = viewModelScope.launch {
-        runCatching { settingsRepo.setCoachAdvanced(v) }
+        runCatching {
+            settingsRepo.setCoachAdvanced(v)
+            // Turning it on retires the pop-up for good; otherwise switching it off again would
+            // bring the offer straight back (the pop-up shows whenever advanced is off).
+            if (v) settingsRepo.setCoachAdvancedPromptAfter(Long.MAX_VALUE)
+        }
     }
 
     /** The advanced-tracking pop-up's "Remind me later": offer it again in a week. */
@@ -214,7 +238,13 @@ class CoachViewModel @Inject constructor(
 
     fun skip(decisionId: Long) = act(guarded = false) { coachRepo.skipDecision(decisionId) }
 
-    fun undo(decisionId: Long) = act(guarded = false) { coachRepo.undoDecision(decisionId) }
+    /** An Undo the repository declines (window over, or a newer call owns the slot) says so. */
+    fun undo(decisionId: Long) = act(guarded = false) {
+        if (!coachRepo.undoDecision(decisionId)) {
+            _state.update { it.copy(undoRefused = it.undoRefused + decisionId) }
+            snackbar.show("Couldn't undo that change.")
+        }
+    }
 
     fun applyAll(weekId: String) {
         val hasDeload = _state.value.brief?.decisions
@@ -225,6 +255,14 @@ class CoachViewModel @Inject constructor(
     private fun act(guarded: Boolean, block: suspend () -> Unit) = viewModelScope.launch {
         if (guarded) programChangeGuard.run { runAndRefresh(block) } else runAndRefresh(block)
     }
+
+    /**
+     * [UiState.undoRefused] survives a re-read that leaves the account as it was (a declined undo
+     * writes nothing) and clears once it changes: the page's clock re-stamps then and re-judges
+     * every pill, and an undo that just succeeded may have freed an older call's slot.
+     */
+    private fun keptUndoRefusals(s: UiState, brief: CoachBrief?, timeline: CoachTimeline?): Set<Long> =
+        if (brief == s.brief && timeline == s.timeline) s.undoRefused else emptySet()
 
     private suspend fun runAndRefresh(block: suspend () -> Unit) {
         // A cancelled scope must unwind, not be laundered into a refresh: the repository's apply is
@@ -240,10 +278,13 @@ class CoachViewModel @Inject constructor(
         val watch = runCatching { coachRepo.coachLab() }.getOrNull()
         val timeline = runCatching { coachRepo.timeline() }.getOrNull()
         _state.update { s ->
+            val newBrief = brief ?: s.brief
+            val newTimeline = timeline ?: s.timeline
             s.copy(
-                brief = brief ?: s.brief,
+                brief = newBrief,
                 watch = watch ?: s.watch,
-                timeline = timeline ?: s.timeline
+                timeline = newTimeline,
+                undoRefused = keptUndoRefusals(s, newBrief, newTimeline)
             )
         }
     }
@@ -352,7 +393,10 @@ class CoachViewModel @Inject constructor(
         val dayMs = 24L * 60 * 60 * 1000
         val windowStart = s.nowMs - t.deloadWindowDays * dayMs
         val priorStart = windowStart - t.deloadPriorBaselineDays * dayMs
-        val sleep = s.health.sleepNights.sortedBy { it.endedAtMs }
+        // The charts cover the same window as the input counts above them (coachLab's
+        // windowStart): one night synced after a five-week gap must not chart the old nights.
+        val sleep = s.health.sleepNights.filter { it.endedAtMs >= windowStart }
+            .sortedBy { it.endedAtMs }
             .takeLast(SLEEP_NIGHTS_SHOWN).map { it.durationMin / 60f }
         val hr = s.health.restingHr.sortedBy { it.timeMs }
         val windowHr = hr.filter { it.timeMs >= windowStart }.map { it.bpm }
@@ -365,7 +409,9 @@ class CoachViewModel @Inject constructor(
         return HealthSeries(
             sleepHours = sleep,
             sleepFloorHours = t.deloadSleepDebtMinutes / 60f,
-            restingHr = hr.takeLast(HR_READINGS_SHOWN).map { it.bpm },
+            restingHr = hr.filter { it.timeMs >= windowStart }.takeLast(HR_READINGS_SHOWN).map { it.bpm },
+            sleepSynced = s.health.sleepNights.isNotEmpty(),
+            restingHrSynced = hr.isNotEmpty(),
             hrWindowAvg = windowHr.takeIf { it.size >= t.deloadMinRestingHrSamples }
                 ?.average()?.roundToInt(),
             hrBaseline = priorHr.takeIf { it.size >= t.deloadMinRestingHrSamples }

@@ -52,7 +52,9 @@ enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
         listOf(
             PreferenceKeys.HAPTIC_STRENGTH, PreferenceKeys.KEEP_SCREEN_ON,
             PreferenceKeys.REST_COMPOUND_SECONDS,
-            PreferenceKeys.REST_ISOLATION_SECONDS, PreferenceKeys.NOTE_TEMPLATES
+            // NOTE_TEMPLATES is content the user wrote, not a default: a full settings reset keeps
+            // it (KEPT_ON_SETTINGS_RESET), so this one-tap, no-undo section reset must too.
+            PreferenceKeys.REST_ISOLATION_SECONDS
         )
     ),
     NOTIFICATIONS(
@@ -568,6 +570,12 @@ class SettingsRepository @Inject constructor(
      *  reset set — the enabled activity-alias is the real state, so clearing this pref alone would
      *  desync the ringed choice from the icon actually on the home screen. */
     val appIcon: Flow<String> = pref { it[PreferenceKeys.APP_ICON] ?: "" }
+    /** [appIcon] with a failed read reported as null ("unknown") rather than "" — which, from a real
+     *  read, means Default (never picked, or cleared by a reset). The launcher-alias reconcile must not
+     *  act on a failure, but must act on a genuine "" so a reset switches the launcher back too. */
+    val appIconOrUnknown: Flow<String?> = allPreferences
+        .map { prefs -> if (prefs.readFailed) null else (prefs[PreferenceKeys.APP_ICON] ?: "") }
+        .distinctUntilChanged()
     suspend fun setAppIcon(key: String) =
         context.forgePreferences.edit { it[PreferenceKeys.APP_ICON] = key }
 
@@ -702,6 +710,25 @@ class SettingsRepository @Inject constructor(
     val availableEquipment: Flow<Set<String>> = pref { it[PreferenceKeys.AVAILABLE_EQUIPMENT] ?: emptySet() }
     suspend fun setAvailableEquipment(codes: Set<String>) =
         context.forgePreferences.edit { it[PreferenceKeys.AVAILABLE_EQUIPMENT] = codes }
+
+    /**
+     * Flip one piece of gear, deciding against the persisted set inside the edit so two quick taps
+     * on different tiles both land. An EMPTY set means "everything" to the generator, so removing
+     * the last piece is refused (onboarding likewise won't continue with none picked). Returns
+     * whether the set changed.
+     */
+    suspend fun toggleAvailableEquipment(code: String): Boolean {
+        var changed = false
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.AVAILABLE_EQUIPMENT] ?: emptySet()
+            val next = if (code in cur) cur - code else cur + code
+            if (next.isNotEmpty()) {
+                prefs[PreferenceKeys.AVAILABLE_EQUIPMENT] = next
+                changed = true
+            }
+        }
+        return changed
+    }
 
     /**
      * Curated/frozen exercise pool (a preset such as the Developer's preset). Null/absent = no
@@ -1149,6 +1176,15 @@ class SettingsRepository @Inject constructor(
     // ─── Onboarding (#1) ──────────────────────────────────────────────────────
 
     val onboardingDone: Flow<Boolean> = pref { it[PreferenceKeys.ONBOARDING_DONE] ?: false }
+    /**
+     * The same flag for the app's first-screen gate, with a failed read reported as null ("unknown")
+     * rather than false. [onboardingDone] cannot tell a storage failure from a user who has not
+     * onboarded, so an established user whose preferences file was briefly unreadable was shown
+     * onboarding over an intact database, where finishing it regenerates their program.
+     */
+    val onboardingDoneOrUnknown: Flow<Boolean?> = allPreferences
+        .map { prefs -> if (prefs.readFailed) null else (prefs[PreferenceKeys.ONBOARDING_DONE] ?: false) }
+        .distinctUntilChanged()
     /** When the user joined (onboarding finished), epoch ms — 0 if never stamped (pre-existing users
      *  who onboarded before this was tracked). Drives the profile's stable "member since" date. */
     val memberSinceMs: Flow<Long> = pref { it[PreferenceKeys.MEMBER_SINCE_MS] ?: 0L }
@@ -1255,6 +1291,12 @@ class SettingsRepository @Inject constructor(
     // ─── Personalization & safety (program-unlock Phase 3) ────────────────────
     /** Flagged problem-area codes — generation steers around movements that stress them. */
     val problemAreas: Flow<Set<String>> = pref { it[PreferenceKeys.PROBLEM_AREAS] ?: emptySet() }
+    /** Flip one code, deciding against the persisted set inside the edit (see [toggleAvailableEquipment]). */
+    suspend fun toggleProblemArea(code: String) =
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.PROBLEM_AREAS] ?: emptySet()
+            prefs[PreferenceKeys.PROBLEM_AREAS] = if (code in cur) cur - code else cur + code
+        }
     suspend fun toggleProblemArea(code: String, on: Boolean) =
         context.forgePreferences.edit { prefs ->
             val cur = prefs[PreferenceKeys.PROBLEM_AREAS] ?: emptySet()
@@ -1263,6 +1305,11 @@ class SettingsRepository @Inject constructor(
 
     /** Priority muscle codes — granular emphasis (extra volume). */
     val priorityMuscles: Flow<Set<String>> = pref { it[PreferenceKeys.PRIORITY_MUSCLES] ?: emptySet() }
+    suspend fun togglePriorityMuscle(code: String) =
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.PRIORITY_MUSCLES] ?: emptySet()
+            prefs[PreferenceKeys.PRIORITY_MUSCLES] = if (code in cur) cur - code else cur + code
+        }
     suspend fun togglePriorityMuscle(code: String, on: Boolean) =
         context.forgePreferences.edit { prefs ->
             val cur = prefs[PreferenceKeys.PRIORITY_MUSCLES] ?: emptySet()

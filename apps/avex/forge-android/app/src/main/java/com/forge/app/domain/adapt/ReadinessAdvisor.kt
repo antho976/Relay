@@ -101,7 +101,13 @@ object ReadinessAdvisor {
             when {
                 // DESIGN §11: join with a comma, never an em dash.
                 daysSince >= 5 -> { percent -= 3; parts += "first session back after $daysSince days, ease in" }
-                daysSince in 2..4 -> { percent += 1; parts += "fresh after $daysSince rest days" }
+                // daysSince counts today, so the rest days BETWEEN the sessions are one fewer
+                // (Mon then Wed: only Tuesday was a rest day). The +1 tuning is unchanged.
+                daysSince in 2..4 -> {
+                    val restDays = daysSince - 1
+                    percent += 1
+                    parts += "fresh after $restDays rest day${if (restDays == 1) "" else "s"}"
+                }
             }
         }
 
@@ -211,10 +217,10 @@ object ReadinessAdvisor {
         // ONE formula for what cardio costs lifting (Engine E-A): readiness consumes the Engine's
         // pure ConditioningLoad rather than re-deriving effort × zone × minutes here. Two formulas
         // would eventually disagree, and that would surface as a coach contradicting its own hub.
-        val interference = com.forge.app.domain.engine.ConditioningLoad.interferencePenalty(cardio, nowMs)
+        val interference = com.forge.app.domain.engine.ConditioningLoad.interferencePenalty(cardio, nowMs, zoneId)
         if (interference > 0) {
             percent -= interference
-            parts += "cardio load yesterday"
+            parts += "recent cardio load"
         }
 
         // ── Off-gym movement (Health Connect steps) ───────────────────────────────

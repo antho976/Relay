@@ -244,6 +244,13 @@ fun FreestyleLogScreen(
         updateExercise(ex.libId) { e -> e.copy(sets = e.sets.filterIndexed { i, _ -> i != index }) }
         entries = entries - ex.libId
         viewModel.offerUndo("Set ${index + 1} removed") {
+            // The slab may since have opened an edit by list position; re-inserting shifts every
+            // later index, so "Update set" would overwrite the wrong set. Drop that stale edit
+            // and, like onCancelEdit, close the tags panel the edit opened.
+            if (entries[ex.libId]?.editing != null) {
+                entries = entries - ex.libId
+                if (tagsOpenFor == ex.libId) tagsOpenFor = null
+            }
             updateExercise(ex.libId) { e ->
                 e.copy(sets = e.sets.toMutableList().apply { add(index.coerceAtMost(size), removed) })
             }

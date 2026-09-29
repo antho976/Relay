@@ -189,7 +189,8 @@
 7 raw-color wear/ui/WearTheme.kt Color(0x
 1 screen-name-title ui/coach/GoalPickerDialog.kt title={Text(
 1 screen-name-title ui/common/ProgramChangeGuardHost.kt title={Text(
-3 screen-name-title ui/gym/train/DayDialogs.kt title={Text(
+# AlertDialog titles, not a top bar: the fourth is the empty-workout FINISH confirm (2026-09-28 scan).
+4 screen-name-title ui/gym/train/DayDialogs.kt title={Text(
 3 screen-name-title ui/gym/train/DayListScreen.kt title={Text(
 2 screen-name-title ui/gym/train/DayScreen.kt title={Text(
 1 screen-name-title ui/gym/train/DaySessionContent.kt title={Text(

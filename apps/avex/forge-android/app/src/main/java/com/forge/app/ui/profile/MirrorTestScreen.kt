@@ -153,7 +153,7 @@ internal class GalleryActions(
     val setMuscles: (ProgressPhoto, List<String>) -> Unit,
     val setTags: (ProgressPhoto, List<String>) -> Unit,
     val setWeight: (ProgressPhoto, Double?) -> Unit,
-    val setTakenAt: (ProgressPhoto, Long) -> Unit
+    val setTakenAt: (ProgressPhoto, Long, (ProgressPhoto) -> Unit) -> Unit
 ) {
     companion object {
         fun of(vm: MirrorTestViewModel) = GalleryActions(
@@ -171,7 +171,7 @@ internal class GalleryActions(
             setMuscles = { p, m -> vm.setMuscles(p, m) },
             setTags = { p, t -> vm.setTags(p, t) },
             setWeight = { p, w -> vm.setWeight(p, w) },
-            setTakenAt = { p, ms -> vm.setTakenAt(p, ms) }
+            setTakenAt = { p, ms, onStored -> vm.setTakenAt(p, ms, onStored) }
         )
     }
 }

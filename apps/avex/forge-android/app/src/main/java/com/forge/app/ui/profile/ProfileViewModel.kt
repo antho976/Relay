@@ -235,6 +235,26 @@ class ProfileViewModel @Inject constructor(
         }
     }
 
+    /** The in-flight [refresh], so a burst of resumes runs one fan-out rather than stacking them. */
+    private var refreshJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Re-read the assembled profile data (activity days, totals, streak) — called when the screen
+     * resumes. This ViewModel lives as long as the Profile back-stack entry, and only the photo strip
+     * observes anything, so a session or cardio entry deleted from the day sheet's drill-down left its
+     * day lit and the totals stale on the way back. Skipped while the first load is still running.
+     */
+    fun refresh() {
+        if (_state.value.loading || refreshJob?.isActive == true) return
+        refreshJob = viewModelScope.launch {
+            val data = runCatching { profileRepo.load() }.getOrNull() ?: return@launch
+            // Merge into the CURRENT state so a rename or photo change made during the fan-out isn't reverted.
+            _state.update { st ->
+                buildState(data, st.name, st.photos, st.hasAvatar, st.avatarStamp, st.avatarDefaultKey, st.showAvatarHint)
+            }
+        }
+    }
+
     private fun buildState(
         data: ProfileData,
         name: String,

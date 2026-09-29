@@ -179,7 +179,11 @@ class StatsRepository @Inject constructor(
                     userWeekDayIndex(d, firstDayMonday)
                 }
                 .toSet()
-            val lastFinished = recentSessions.filter { it.finishedAt != null }.maxByOrNull { it.finishedAt!! }
+            // Open (freestyle) workouts belong to no plan day, so they must not be the "last day trained"
+            // that rotation resolves next-up from.
+            val lastFinished = recentSessions
+                .filter { it.finishedAt != null && it.dayKey != Program.FREESTYLE_DAY_KEY }
+                .maxByOrNull { it.finishedAt!! }
             // Calendar-aware in weekday mode, legacy day-after-last otherwise (shared resolver).
             val trainedTodayKeys = recentSessions
                 .filter { it.finishedAt != null && Instant.ofEpochMilli(it.finishedAt!!).atZone(zone).toLocalDate() == todayDate }
@@ -440,7 +444,9 @@ class StatsRepository @Inject constructor(
         val allRpe = exerciseDetails.flatMap { it.sets }.mapNotNull { it.rpe }
         val durationMin = session.durationMinutes()
         val title = Program.dayDisplayName(session.dayKey)
-        val prevSession = sessionDao.previousFinishedForDay(
+        // Open workouts share one day key but no training identity, so the previous "freestyle" session
+        // is unrelated work; an up/down arrow against it would be meaningless.
+        val prevSession = if (session.dayKey == Program.FREESTYLE_DAY_KEY) null else sessionDao.previousFinishedForDay(
             session.dayKey, session.id, session.finishedAt ?: Long.MAX_VALUE
         )
 
@@ -506,16 +512,24 @@ class StatsRepository @Inject constructor(
      */
     fun observeGymStats(): Flow<GymStats> {
         return combine(
-            loggedSetDao.observeAllFinishedSetsWithSession(),
+            // ONE whole-history query for both populations, split in memory below.
+            loggedSetDao.observeAllFinishedStatsSets(),
             loggedExerciseDao.observeRecentPrs(),
             timeSignals.dayStarts()
-        ) { allSets, prRows, _ ->
+        ) { statsRows, prRows, _ ->
           coroutineScope {
+            // Strength population (e1RM, PRs, curves, RPE…): unassisted, untimed sets only — the same
+            // rows observeAllFinishedSetsWithSession returns.
+            val allSets = statsRows.mapNotNull { if (it.isStrengthSet) it.set else null }
+            // Activity population keeps timed holds and assisted sets, with their weight nulled so they
+            // add sets but never tonnage (an assisted set's weight is the assistance, not load lifted).
+            val activitySets = statsRows.map { if (it.isStrengthSet) it.set else it.set.copy(weightLb = null) }
             // Rolling-7-day working sets for the volume-by-muscle read, recomputed per emission so the
-            // window slides while the screen stays open. Derived from allSets (already tracked /
-            // non-skipped / unassisted) and bucketed by session start.
+            // window slides while the screen stays open. Derived from activitySets (tracked / non-skipped,
+            // holds and assisted work included so a plank-only day still counts for core) and bucketed
+            // by session start.
             val volumeStartMs = clock.nowMs() - WEEK_MS
-            val volumeSets = allSets
+            val volumeSets = activitySets
                 .filter { it.sessionStartedAt >= volumeStartMs }
                 .map { SetWithExerciseId(it.weightLb, it.reps, it.exerciseId) }
             // The aggregate queries the trimmed screen still needs, fired concurrently.
@@ -530,8 +544,12 @@ class StatsRepository @Inject constructor(
                 strengthCurves = buildStrengthCurves(allSets),
                 weeklySetsByMuscle = buildWeeklySetsByMuscle(volumeSets),
                 plannedSetsByMuscle = emptyMap(),
-                weeklyTonnage = buildWeeklyTonnage(deloadTrend),
-                dailyActivity = buildDailyActivity(allSets),
+                // The in-progress week is left out: a Tuesday's partial total would plot as a collapse.
+                weeklyTonnage = buildWeeklyTonnage(
+                    deloadTrend,
+                    excludeWeekOf = todayLocal(ZoneId.systemDefault())
+                ),
+                dailyActivity = buildDailyActivity(activitySets),
                 rpeDistribution = buildRpeDistribution(allSets),
                 avgRpe = allSets.mapNotNull { it.rpe }.takeIf { it.isNotEmpty() }?.average(),
                 trainingTimes = buildTrainingTimes(allSets),

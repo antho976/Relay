@@ -118,4 +118,19 @@ class SnackbarControllerTest {
         assertNull("the tap landed on a snackbar a newer event replaced", controller.take(first.id))
         assertSame(second, controller.current.value)
     }
+
+    @Test
+    fun aLongerSystemTimeToTakeActionStretchesTheWindow() {
+        controller.windowAdjuster = { it * 3 }
+        controller.showUndo("Entry deleted") {}
+        val event = controller.current.value!!
+        assertEquals(now + SnackbarController.WINDOW_MS * 3, event.expiresAtMs)
+    }
+
+    @Test
+    fun aShorterAdjustedWindowNeverShrinksBelowTheDefault() {
+        controller.windowAdjuster = { it / 4 }
+        controller.showUndo("Entry deleted") {}
+        assertEquals(now + SnackbarController.WINDOW_MS, controller.current.value!!.expiresAtMs)
+    }
 }

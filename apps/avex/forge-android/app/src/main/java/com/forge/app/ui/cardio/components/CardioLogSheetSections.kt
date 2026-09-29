@@ -266,11 +266,15 @@ internal fun CardioTimePickerDialog(dateMs: Long, onPicked: (Long) -> Unit, onDi
         initialMinute = time.minute,
         is24Hour = com.forge.app.ui.theme.LocalForgeSettings.current.timeFormat24h
     )
+    // A session can't have started later than now. The date picker already stops future days; this
+    // stops a future time TODAY, which would end the entry (and its Health Connect mirror) ahead of the clock.
+    val nowMs = remember { System.currentTimeMillis() }
+    val pickedMs = combineTime(tpState.hour, tpState.minute, dateMs)
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            TextButton(onClick = {
-                onPicked(combineTime(tpState.hour, tpState.minute, dateMs))
+            TextButton(enabled = pickedMs <= nowMs, onClick = {
+                onPicked(pickedMs)
                 onDismiss()
             }) { Text("OK") }
         },

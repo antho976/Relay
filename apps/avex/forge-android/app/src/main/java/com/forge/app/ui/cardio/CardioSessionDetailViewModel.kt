@@ -8,6 +8,7 @@ import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CardioRepository
+import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.ui.common.SnackbarController
 import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioCondition
@@ -59,6 +60,7 @@ data class CardioSessionDetailState(
 @HiltViewModel
 class CardioSessionDetailViewModel @Inject constructor(
     private val cardioRepo: CardioRepository,
+    private val trophyRepo: TrophyRepository,
     private val settingsRepo: SettingsRepository,
     private val healthConnectManager: HealthConnectManager,
     private val snackbar: SnackbarController,
@@ -193,6 +195,10 @@ class CardioSessionDetailViewModel @Inject constructor(
                 )
             )
             editing.value = false
+            // An edit can cross a distance or session threshold (100 km, N sessions); cardio writes
+            // don't pass through the workout-finish path that normally unlocks trophies. Off the
+            // critical path, as in CardioViewModel.saveEntry.
+            viewModelScope.launch { runCatching { trophyRepo.evaluateAndUnlockNew() } }
         }
     }
 

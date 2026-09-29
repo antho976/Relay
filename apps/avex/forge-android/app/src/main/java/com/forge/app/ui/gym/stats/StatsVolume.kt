@@ -32,7 +32,7 @@ import com.forge.app.ui.gym.stats.state.MuscleSetCount
 import com.forge.app.ui.gym.stats.state.WeeklyTonnage
 import kotlin.math.roundToInt
 
-/** One muscle's "did I hit the target" row data — actual sets this week vs the planned target. */
+/** One muscle's "did I hit the target" row data — actual sets over the last 7 days vs the planned weekly target. */
 private data class MuscleSetRow(val muscle: MuscleGroup, val actual: Int, val target: Int)
 
 private fun muscleRows(
@@ -45,7 +45,7 @@ private fun muscleRows(
 }
 
 /**
- * Tier 2a — sets per muscle this week. Each muscle's TRACK LENGTH is its weekly target (relative to
+ * Tier 2a — sets per muscle over the last 7 days. Each muscle's TRACK LENGTH is its weekly target (relative to
  * the biggest target) and the fill is progress toward it — "fill the bar = hit the plan". Replaces
  * the old shared-scale bars with floating target ticks, which read as confusing stray lines.
  */
@@ -129,13 +129,16 @@ private fun BalanceRow(b: BalanceRatioUi, c: StatsColors) {
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(b.title, style = MaterialTheme.typography.labelMedium, color = c.onBg)
-            val verdict = when (b.balanced) {
-                true -> "balanced"
-                false -> "leans ${(if (b.setsA >= b.setsB) b.labelA else b.labelB).lowercase()}"
-                null -> "·"
+            // ratio (and so balanced) is null when a side has zero sets, but at this point the pair has
+            // enough sets to mean something: all on one side is the strongest skew, not "no verdict".
+            val skewed = b.balanced == false || b.setsA == 0 || b.setsB == 0
+            val verdict = when {
+                skewed -> "leans ${(if (b.setsA >= b.setsB) b.labelA else b.labelB).lowercase()}"
+                b.balanced == true -> "balanced"
+                else -> "·"
             }
             Text(verdict, style = MaterialTheme.typography.labelSmall,
-                color = if (b.balanced == false) c.muted else c.accent)
+                color = if (skewed) c.muted else c.accent)
         }
         Spacer(Modifier.height(8.dp))
         val fracA = b.setsA.toFloat() / total

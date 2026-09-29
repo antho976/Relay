@@ -96,10 +96,15 @@ class WatchSessionMirror @Inject constructor(
             ?.let { last -> counts.indexOfFirst { (_, row, _) -> row?.id == last.loggedExerciseId } }
             ?.takeIf { it >= 0 }
         val earlyDoneIdx = focusHolder.earlyDoneFor(session.id)
-            .let { ids -> counts.indices.filter { counts[it].first.id in ids }.toSet() }
+            .let { ids ->
+                // Phone-skipped rows count as done too, so the wrist never lands on them.
+                counts.indices.filter { counts[it].first.id in ids || counts[it].second?.skipped == true }.toSet()
+            }
         val currentIdx = CurrentSlotResolver.resolve(
             plannedSets = counts.map { it.first.sets },
-            doneSets = counts.map { it.third },
+            // A skipped row reads as filled, so a started-then-skipped latest slot doesn't pin the
+            // wrist (the resolver's "latest logged, short of plan" rule runs before earlyDoneIdx).
+            doneSets = counts.map { (ex, row, done) -> if (row?.skipped == true) maxOf(done, ex.sets) else done },
             lastLoggedIdx = lastLoggedIdx,
             earlyDoneIdx = earlyDoneIdx
         )

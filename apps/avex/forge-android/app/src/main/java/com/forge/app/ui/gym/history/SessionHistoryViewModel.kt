@@ -1,5 +1,8 @@
 package com.forge.app.ui.gym.history
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.db.dao.LoggedExerciseDao
@@ -53,6 +56,12 @@ class SessionHistoryViewModel @Inject constructor(
 
     private val filters = MutableStateFlow(HistoryFilters())
 
+    /** What the search field shows. Held synchronously: feeding the field from [state].query, which
+     *  only updates after the filter pass has run on another thread, hands it stale text mid-typing
+     *  and drops keystrokes. */
+    var queryText by mutableStateOf("")
+        private set
+
     /** Everything derived from the DB (the search index + tag list) — recomputed ONLY when the DB
      *  changes, not on every keystroke. Filtering reads this without re-resolving exercise names. */
     private data class HistoryData(
@@ -98,7 +107,10 @@ class SessionHistoryViewModel @Inject constructor(
     }.flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SessionHistoryUiState())
 
-    fun setQuery(q: String) = filters.update { it.copy(query = q) }
+    fun setQuery(q: String) {
+        queryText = q
+        filters.update { it.copy(query = q) }
+    }
     fun setTagFilter(tag: String?) = filters.update { it.copy(tag = tag) }
     fun setDurationFilter(f: SessionHistoryFilter?) = filters.update { it.copy(duration = f) }
     fun setVolumeFilter(f: SessionHistoryFilter?) = filters.update { it.copy(volume = f) }

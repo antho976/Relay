@@ -41,6 +41,8 @@ internal interface ProgramBuilderStore {
     suspend fun scheduledWeekdays(): Map<String, Set<Int>> = emptyMap()
     /** Make [schedule] the weekly schedule and switch to fixed weekdays; null = run in sequence. */
     suspend fun saveSchedule(schedule: List<String>?) {}
+    /** A deload week is running, so the loaded rows carry its reduced set counts. */
+    suspend fun deloadWeekRunning(): Boolean = false
 }
 
 internal class RepositoryProgramBuilderStore(
@@ -67,6 +69,7 @@ internal class RepositoryProgramBuilderStore(
             .groupBy({ it.value }, { it.index })
             .mapValues { it.value.toSet() }
     }
+    override suspend fun deloadWeekRunning(): Boolean = programRepository.deloadWeekRunning()
     override suspend fun saveSchedule(schedule: List<String>?) {
         if (schedule == null) {
             settingsRepo.setScheduleMode(WeeklySchedule.MODE_SEQUENCE)
@@ -131,6 +134,14 @@ class ProgramBuilderViewModel internal constructor(
     var loadComplete by mutableStateOf(false)
         private set
 
+    /**
+     * A deload week is running over the program being edited. Its reduced set counts are the rows
+     * loaded here, and a save ends the deload's automatic restore, so saving without raising them
+     * would make the recovery week the plan. The screen says so while editing.
+     */
+    var deloadWeekRunning by mutableStateOf(false)
+        private set
+
     /** Currently "go with the flow" — saving a plan switches to follow-a-plan, so the screen confirms
      *  first (see [save], which performs the flip). */
     val freestyleMode: StateFlow<Boolean> =
@@ -169,6 +180,9 @@ class ProgramBuilderViewModel internal constructor(
 
     /** Load once: blank for build-your-own, or the current program's rows for editing. */
     fun loadIfNeeded(blank: Boolean) {
+        // Read on every entry, draft-restored or not: a blank plan carries no deload rows, while a
+        // restored edit of the saved program still does.
+        if (!blank) viewModelScope.launch { deloadWeekRunning = store.deloadWeekRunning() }
         if (loaded) return
         loaded = true
         if (blank) { days = emptyList(); loadComplete = true; return }
@@ -270,7 +284,14 @@ class ProgramBuilderViewModel internal constructor(
         val removed = days[index]
         mutate { it.filterNot { d -> d.uid == dayUid } }
         // Undo re-inserts only this day at its old slot, so edits made while the snackbar showed survive.
-        stageUndo { mutate { list -> list.toMutableList().apply { add(index.coerceAtMost(size), removed) } } }
+        // Weekdays another day claimed in the meantime stay with that day: a weekday holds one workout.
+        stageUndo {
+            mutate { list ->
+                val taken = list.flatMapTo(HashSet()) { it.weekdays }
+                val restored = removed.copy(weekdays = removed.weekdays - taken)
+                list.toMutableList().apply { add(index.coerceAtMost(size), restored) }
+            }
+        }
     }
 
     /**
@@ -387,6 +408,9 @@ class ProgramBuilderViewModel internal constructor(
                     store.saveSchedule(days.toSchedule())
                     store.setFreestyleMode(false)
                     dirty = false
+                    // The removal it would undo is already baked into the saved rows; an Undo now
+                    // would re-insert it into the viewer only, unsaved and unprompted.
+                    undoRemoval = null
                     // The saved program IS the document now; a recreation reloads it from Room.
                     clearDraft()
                     onSaved()

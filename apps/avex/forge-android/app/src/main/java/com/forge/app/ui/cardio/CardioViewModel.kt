@@ -22,10 +22,13 @@ import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.CustomCardioType
 import com.forge.app.domain.cardio.RoutePoint
 import com.forge.app.data.health.HcExerciseTypes
+import com.forge.app.data.importer.ImportBounds
 import com.forge.app.domain.goal.GoalMetric
 import com.forge.app.domain.health.HrPoint
 import com.forge.app.domain.health.WatchWorkout
+import com.forge.app.domain.health.avgBpm
 import com.forge.app.domain.health.downsampleHr
+import com.forge.app.domain.health.maxBpm
 import com.forge.app.ui.cardio.state.CardioDayCell
 import com.forge.app.ui.cardio.state.CardioLens
 import com.forge.app.ui.cardio.state.CardioUiState
@@ -40,6 +43,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
@@ -76,6 +80,7 @@ class CardioViewModel @Inject constructor(
 
     /** The in-flight [saveEntry] write, if any — the double-tap guard. */
     private var saveJob: kotlinx.coroutines.Job? = null
+    private var sessionLoadJob: kotlinx.coroutines.Job? = null
     // Which Health Connect grants Avex actually holds — re-checked on init and on every resume (the
     // user may grant them in the HC app and return). Drives the banner's auto-hide and the "connected
     // but no data yet" steps placeholder. A one-shot read, not a flow: HC has no permission-change
@@ -180,16 +185,18 @@ class CardioViewModel @Inject constructor(
         .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
 
     // Candidates minus sessions that already have a matching cardio entry, minus dismissed ones —
-    // recomputed reactively when entries land or a suggestion is dismissed, capped for the section.
-    private val importSuggestionsFlow = combine(
+    // recomputed reactively when entries land or a suggestion is dismissed. The whole pool is kept
+    // here; the section shows only its first few, but "Hide" dismisses the pool.
+    private val importPoolFlow = combine(
         watchCandidates, entriesFlow, settingsRepo.hcDismissedWatchImports
     ) { candidates, entries, dismissed ->
         candidates
             .filterNot { it.recordId in dismissed }
             .filterNot { w -> entries.any { e -> overlapsEntry(w, e) } }
             .filter { it.durationMin >= 1 }
-            .take(3)
     }.flowOn(Dispatchers.Default)
+
+    private val importSuggestionsFlow = importPoolFlow.map { it.take(3) }
 
     // All DB-derived aggregates (streak, weekly/last-week totals, the Mon–Sun cells) are computed
     // here off the DB flow and on Dispatchers.Default — NOT in the combine with `transient` below,
@@ -278,6 +285,8 @@ class CardioViewModel @Inject constructor(
             sessionRoute = tr.sessionRoute,
             sessionRouteConsentId = tr.sessionRouteConsentId,
             sessionHr = tr.sessionHr,
+            sessionHrAvgBpm = tr.sessionHrAvgBpm,
+            sessionHrMaxBpm = tr.sessionHrMaxBpm,
             sessionWatch = tr.sessionWatch,
             historyExpanded = tr.historyExpanded
         )
@@ -316,10 +325,14 @@ class CardioViewModel @Inject constructor(
         transient.update {
             it.copy(
                 sessionDetailId = id, sessionWearable = null, sessionRoute = null,
-                sessionRouteConsentId = null, sessionHr = null, sessionWatch = null
+                sessionRouteConsentId = null, sessionHr = null, sessionHrAvgBpm = null,
+                sessionHrMaxBpm = null, sessionWatch = null
             )
         }
-        viewModelScope.launch {
+        // One load at a time: an edit re-opens the same session, and a slower load for the old
+        // date/duration must not land after the newer one.
+        sessionLoadJob?.cancel()
+        sessionLoadJob = viewModelScope.launch {
             val entry = cardioRepo.get(id) ?: return@launch
             val zone = ZoneId.systemDefault()
             val day = Instant.ofEpochMilli(entry.date).atZone(zone).toLocalDate()
@@ -331,15 +344,18 @@ class CardioViewModel @Inject constructor(
             // The same time-window match, for the watch's measured stats + HR series (W5) — each
             // independently fail-soft, so a missing grant just hides its section.
             val watch = healthConnectManager.matchWatchSession(entry.date, entry.durationMin, startMs, endMs)
-            val hr = watch?.let {
-                downsampleHr(healthConnectManager.readHrSeries(it.startMs, it.endMs)).takeIf { s -> s.size >= 2 }
-            }
+            // AVG / MAX come from the RAW series: a bucket-averaged one flattens the peak (a 186 bpm
+            // sprint reads as its bucket's mean), so only the chart is downsampled.
+            val rawHr = watch?.let { healthConnectManager.readHrSeries(it.startMs, it.endMs) }.orEmpty()
+            val hr = downsampleHr(rawHr).takeIf { s -> s.size >= 2 }
             transient.update {
                 if (it.sessionDetailId == id) it.copy(
                     sessionWearable = steps,
                     sessionRoute = match?.route,
                     sessionRouteConsentId = if (match?.route == null) match?.recordId else null,
                     sessionHr = hr,
+                    sessionHrAvgBpm = if (hr != null) rawHr.avgBpm() else null,
+                    sessionHrMaxBpm = if (hr != null) rawHr.maxBpm() else null,
                     sessionWatch = watch
                 ) else it
             }
@@ -348,7 +364,8 @@ class CardioViewModel @Inject constructor(
     fun closeSessionDetail() = transient.update {
         it.copy(
             sessionDetailId = null, sessionWearable = null, sessionRoute = null,
-            sessionRouteConsentId = null, sessionHr = null, sessionWatch = null
+            sessionRouteConsentId = null, sessionHr = null, sessionHrAvgBpm = null,
+            sessionHrMaxBpm = null, sessionWatch = null
         )
     }
 
@@ -367,6 +384,8 @@ class CardioViewModel @Inject constructor(
         )
         if (updated == original) return@launch
         cardioRepo.update(updated)
+        // A longer measured distance can cross a trophy threshold, same as an edit does.
+        viewModelScope.launch { runCatching { trophyRepo.evaluateAndUnlockNew() } }
         snackbar.showUndo("Watch stats applied") { cardioRepo.update(original) }
     }
 
@@ -386,7 +405,9 @@ class CardioViewModel @Inject constructor(
 
     /** Hide the current import suggestions (whole-section dismiss; they stay hidden for good). */
     fun dismissWatchImports() = viewModelScope.launch {
-        val ids = state.value.importSuggestions.map { it.recordId }.toSet()
+        // The whole pool, not just the 3 on screen — otherwise the rest slide into view at once and
+        // the "hide" looks half-done.
+        val ids = importPoolFlow.first().map { it.recordId }.toSet()
         if (ids.isNotEmpty()) settingsRepo.addDismissedWatchImports(ids)
     }
 
@@ -454,6 +475,10 @@ class CardioViewModel @Inject constructor(
                 inclinePct = inclinePct, laps = laps, elevationM = elevationM, conditions = conditions
             )
             if (editingId != null) cardioRepo.update(entry) else cardioRepo.add(entry)
+            // Editing the session whose detail is open: its steps, route, HR and watch match were
+            // matched to the OLD date/duration, and "Use watch stats" would adopt the old day's
+            // measurements. Reload them for the saved values.
+            if (editingId != null && editingId == transient.value.sessionDetailId) openSessionDetail(editingId)
             // Remember the activity as the next new-entry default (GYMAP-40) — only when logging a NEW
             // active session, so editing an old row or saving a rest day never changes the default.
             if (editingId == null && !activity.isRest) settingsRepo.setLastCardioType(activity.code)
@@ -498,6 +523,9 @@ class CardioViewModel @Inject constructor(
         val sessionRouteConsentId: String? = null,
         /** Downsampled HR series of the open session's matched watch workout (W5); null when none. */
         val sessionHr: List<HrPoint>? = null,
+        /** AVG / MAX bpm of the RAW (un-downsampled) series — the chart's buckets would understate the peak. */
+        val sessionHrAvgBpm: Int? = null,
+        val sessionHrMaxBpm: Int? = null,
         /** The open session's matched watch workout with its measured stats (W5); null when none. */
         val sessionWatch: WatchWorkout? = null,
         val historyExpanded: Boolean = false
@@ -600,8 +628,10 @@ internal fun cardioEntryFromForm(
     id = id,
     date = dateMs,
     type = activity.code,
-    durationMin = durationMin.coerceAtLeast(0),
-    distanceKm = if (activity.isRest) null else distanceKm,
+    // Held to plausible bounds here too (the sheet caps its own fields): one typo'd "9999" minutes or
+    // "99999" km would otherwise inflate the week, the streak, the records and the distance trophies.
+    durationMin = durationMin.coerceIn(0, ImportBounds.MAX_CARDIO_MINUTES),
+    distanceKm = if (activity.isRest) null else distanceKm?.coerceAtMost(ImportBounds.MAX_CARDIO_DISTANCE_KM),
     effort = if (activity.isRest) null else effort?.code,
     restReason = if (activity.isRest) restReason?.code else null,
     note = note?.takeIf { it.isNotBlank() },

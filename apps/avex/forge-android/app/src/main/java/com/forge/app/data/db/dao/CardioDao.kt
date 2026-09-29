@@ -23,8 +23,12 @@ interface CardioDao {
     @Query("SELECT * FROM cardio_entry WHERE id = :id")
     suspend fun get(id: Long): CardioEntry?
 
-    @Query("SELECT * FROM cardio_entry ORDER BY date DESC LIMIT :limit")
-    fun observeRecent(limit: Int = 20): Flow<List<CardioEntry>>
+    /**
+     * Newest cardio, logged rest days left out IN the query: filtered after the LIMIT, a run of
+     * rest-day rows could fill every slot and push real sessions out of the window.
+     */
+    @Query("SELECT * FROM cardio_entry WHERE type != :excludeType ORDER BY date DESC LIMIT :limit")
+    fun observeRecent(limit: Int = 20, excludeType: String = "rest"): Flow<List<CardioEntry>>
 
     /** Full history, newest-first — the cardio log list is no longer capped at 20. */
     @Query("SELECT * FROM cardio_entry ORDER BY date DESC")

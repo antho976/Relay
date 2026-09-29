@@ -235,7 +235,8 @@ interface LoggedSetDao {
      * exercises, and assisted reps) — they previously diverged on the same screen.
      */
     @Query("""
-        SELECT ls.weight_lb, ls.reps, ls.rpe, le.exercise_id, s.started_at, le.id AS logged_exercise_id
+        SELECT ls.weight_lb, ls.reps, ls.rpe, le.exercise_id, s.started_at, le.id AS logged_exercise_id,
+               le.swapped_name AS swapped_name
         FROM logged_set ls
         INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
         INNER JOIN session s ON le.session_id = s.id
@@ -245,6 +246,28 @@ interface LoggedSetDao {
         ORDER BY s.started_at ASC
     """)
     fun observeAllFinishedSetsWithSession(): Flow<List<SetWithExerciseAndSession>>
+
+    /**
+     * [observeAllFinishedSetsWithSession]'s tracked / non-skipped population but KEEPING timed holds and
+     * assisted sets, each flagged by [StatsSetRow.isStrengthSet] (false for a hold or an assisted set).
+     * One whole-history query feeds both Stats populations: the strength surfaces (e1RM, PRs) keep only
+     * the flagged-true rows, which is exactly [observeAllFinishedSetsWithSession]; the "did training
+     * happen" surfaces (consistency heatmap, Days lens, sets per muscle) keep every row, so a plank-only
+     * or assisted-pull-up-only session still counts. Subscribing to two whole-history queries loaded the
+     * history twice per logged set.
+     */
+    @Query("""
+        SELECT ls.weight_lb, ls.reps, ls.rpe, le.exercise_id, s.started_at, le.id AS logged_exercise_id,
+               le.swapped_name AS swapped_name,
+               (ls.is_assisted = 0 AND ls.duration_seconds IS NULL) AS is_strength_set
+        FROM logged_set ls
+        INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE s.finished_at IS NOT NULL
+          AND s.is_untracked = 0 AND le.skipped = 0
+        ORDER BY s.started_at ASC
+    """)
+    fun observeAllFinishedStatsSets(): Flow<List<com.forge.app.data.db.projections.StatsSetRow>>
 
     /**
      * Best estimated 1-rep-max (lb, Epley) across working sets (non-assisted, non-skipped, tracked)

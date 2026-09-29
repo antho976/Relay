@@ -5,9 +5,13 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 import java.time.LocalDate
 
 /** Planned rest vs missed training, judged by the schedule in force on the day. */
+// org.json is only a stub on the plain JVM test classpath ("Method put … not mocked").
+@RunWith(RobolectricTestRunner::class)
 class ScheduleHistoryTest {
 
     private val weekday = WeeklySchedule.MODE_WEEKDAY

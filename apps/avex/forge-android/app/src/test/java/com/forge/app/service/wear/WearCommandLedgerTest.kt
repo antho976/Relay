@@ -96,4 +96,39 @@ class WearCommandLedgerTest {
         assertTrue(published)
         ledger().run("a", publish = {}) { error("must not repeat after side effect failure") }
     }
+
+    @Test fun `retention delete drops only outcomes older than the cutoff`() = runBlocking {
+        val dao = db.wearCommandDao()
+        dao.insert(com.forge.app.data.db.entities.WearCommand("old", "{}", 100L))
+        dao.insert(com.forge.app.data.db.entities.WearCommand("new", "{}", 900L))
+        assertEquals(1, dao.deleteOlderThan(500L))
+        assertNull(dao.get("old"))
+        assertNotNull(dao.get("new"))
+    }
+
+    @Test fun `first executed command of a process prunes outcomes past retention`() = runBlocking {
+        val day = 24L * 60 * 60 * 1000
+        val now = 30 * day
+        val dao = db.wearCommandDao()
+        dao.insert(com.forge.app.data.db.entities.WearCommand("stale", "{}", now - 8 * day))
+        dao.insert(com.forge.app.data.db.entities.WearCommand("recent", "{}", now - day))
+        val ledger = WearCommandLedger(db, File(temp.root, "ledger.json"), Clock { now })
+        ledger.run("fresh", publish = {}) { ack("fresh") }
+        assertNull(dao.get("stale"))
+        assertNotNull(dao.get("recent"))
+        assertNotNull(dao.get("fresh"))
+    }
+
+    @Test fun `replayed command does not count toward pruning`() = runBlocking {
+        val day = 24L * 60 * 60 * 1000
+        val now = 30 * day
+        val dao = db.wearCommandDao()
+        dao.insert(com.forge.app.data.db.entities.WearCommand("a", com.forge.shared.protocol.WearCodec.encode(ack("a")).decodeToString(), now - day))
+        dao.insert(com.forge.app.data.db.entities.WearCommand("stale", "{}", now - 8 * day))
+        val ledger = WearCommandLedger(db, File(temp.root, "ledger.json"), Clock { now })
+        ledger.run("a", publish = {}) { error("must replay") }
+        assertNotNull(dao.get("stale"))
+        ledger.run("b", publish = {}) { ack("b") }
+        assertNull(dao.get("stale"))
+    }
 }

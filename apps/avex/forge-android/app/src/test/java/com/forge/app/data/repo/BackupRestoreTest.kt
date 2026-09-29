@@ -378,6 +378,32 @@ class BackupRestoreTest {
         assertEquals("the rest of the settings still come from the backup", "From the backup", staged[PreferenceKeys.USER_NAME])
     }
 
+    /**
+     * A folder grant belongs to the install that took it (2026-09-28 scan). The backup's folders
+     * would name trees this phone holds no grant for — every weekly mirror then failing silently —
+     * and orphan the grant it does hold, so the restore keeps this phone's folders, including none.
+     */
+    @Test
+    fun aRestoreKeepsThisPhonesFoldersRatherThanTheBackups() = runTest {
+        seedOneWorkout()
+        val plain = outFile()
+        repo.backupToUri(Uri.fromFile(plain))
+        val archive = withSettings(plain) {
+            it[PreferenceKeys.BACKUP_FOLDER_URI] = "content://old.provider/tree/backups"
+            it[PreferenceKeys.IMPORT_FOLDER_URI] = "content://old.provider/tree/imports"
+        }
+        settings.setBackupFolderUri("content://this.provider/tree/backups")
+        settings.setImportFolderUri(null)
+
+        assertEquals(BackupRepository.RestoreOutcome.SUCCESS, repo.restoreFromUri(Uri.fromFile(archive)))
+
+        val copy = File(temporaryFolder.newFolder(), "staged.preferences_pb")
+        File(context.filesDir, "pending_restore_prefs.pb").copyTo(copy)
+        val staged = withPreferencesFile(copy) { it.data.first() }
+        assertEquals("content://this.provider/tree/backups", staged[PreferenceKeys.BACKUP_FOLDER_URI])
+        assertEquals("no import folder here, so none restored", null, staged[PreferenceKeys.IMPORT_FOLDER_URI])
+    }
+
     @Test
     fun anUnreadableSettingsBlobIsDeclinedAndStagesNothing() = runTest {
         val blob = temporaryFolder.newFile("settings.bin").apply { writeBytes(ByteArray(64) { 0x7F }) }
@@ -385,7 +411,10 @@ class BackupRestoreTest {
 
         val staged = stageRestoredPreferences(
             blob, dest, temporaryFolder.newFolder(),
-            KeptProtections(privacyMode = true, appLockEnabled = true, galleryLockEnabled = true, appLockTimeoutSec = 0)
+            KeptProtections(
+                privacyMode = true, appLockEnabled = true, galleryLockEnabled = true, appLockTimeoutSec = 0,
+                backupFolderUri = null, importFolderUri = null
+            )
         )
 
         assertFalse(staged)

@@ -124,7 +124,22 @@ class ProgramRepository @Inject constructor(
             coachDao.foldAllAppliedDeltas()
             discardActiveSession()
         }
+        // The hand-built rows are not the deload plan the marker describes: left set, the window's
+        // end would run restoreAfterDeload and regenerate over them (silently, from the old seed).
+        // Written after the rows commit, like generate's own marker settle.
+        settings.setDeloadWeekStartMs(0L)
         loadIntoFacade(refreshWidget = true)
+    }
+
+    /**
+     * A deload week is still governing today. Its reduced set counts ARE the base rows the builder
+     * edits, and a builder save clears the marker (above), so the builder says so rather than let a
+     * recovery week quietly become the saved program.
+     */
+    suspend fun deloadWeekRunning(): Boolean {
+        val startedAt = settings.deloadWeekStartMs.first()
+        if (startedAt <= 0L) return false
+        return clock.nowMs() < com.forge.app.core.time.deloadWeekEndMs(startedAt)
     }
 
     /** Clear the program entirely (no plan) — used when the user opts to build their own from scratch. */
@@ -244,6 +259,9 @@ class ProgramRepository @Inject constructor(
             opId = java.util.UUID.randomUUID().toString()
         )
         settings.setProgramGenerationIntent(intent)
+        // The day keys being replaced, so the weekday carry-over only places days that are truly new
+        // (a same-keys regenerate must not fill a weekday the user deliberately left off).
+        val oldKeys = dao.days().map { it.id }
         // One transaction so a crash can't leave the fresh program bound to stale overlays (seam
         // finding 13): replace the program; drop the now-invalid customization overlay AND the
         // coach-applied swaps (their learning is already folded into the baseline above — see
@@ -276,7 +294,7 @@ class ProgramRepository @Inject constructor(
         settings.setDeloadWeekStartMs(if (params.deload) intent.atMs else 0L)
         settings.setProgramGenerationSeed(effectiveSeed)
         settings.clearProgramGenerationIntent()
-        keepWeekdaysFor(days.map { it.id })
+        keepWeekdaysFor(days.map { it.id }, oldKeys)
         loadIntoFacade(refreshWidget = true)
         true
     }
@@ -286,10 +304,10 @@ class ProgramRepository @Inject constructor(
      * and a schedule naming the old ones resolves to nothing — the app quietly stopped knowing which
      * day was today's. See [com.forge.app.domain.schedule.WeeklySchedule.remap].
      */
-    private suspend fun keepWeekdaysFor(newKeys: List<String>) {
+    private suspend fun keepWeekdaysFor(newKeys: List<String>, oldKeys: List<String>) {
         if (settings.scheduleMode.first() != com.forge.app.domain.schedule.WeeklySchedule.MODE_WEEKDAY) return
         val old = settings.weeklySchedule.first()
-        val next = com.forge.app.domain.schedule.WeeklySchedule.remap(old, newKeys)
+        val next = com.forge.app.domain.schedule.WeeklySchedule.remap(old, newKeys, oldKeys)
         if (next != old) settings.setWeeklySchedule(next)
     }
 
@@ -358,10 +376,16 @@ class ProgramRepository @Inject constructor(
      * re-roll (Phase 6), rotation, the coach/Overview deload and Settings' generate, re-roll and
      * deload. There used to be three copies that drifted: Settings' left out [personalCaps], so a
      * program it generated came back from deload→restore with different per-muscle sets (audit
-     * 2026-09-26, 08). [daysPerWeek] overrides the saved split size (Settings passes the staged one).
+     * 2026-09-26, 08). The split size defaults to the LIVE plan's day count: the days chip only
+     * stages a pref for the next Generate, so rotation, deload, restore and per-day re-roll must not
+     * silently rebuild the split from it. [daysPerWeek] overrides it (Settings' Generate passes the
+     * staged count). The pref is only the fallback while no real program has loaded, because until
+     * then [Program.days] is the non-empty seed split, not the user's plan.
      */
     suspend fun currentParams(daysPerWeek: Int? = null): GenerationParams = GenerationParams(
-        daysPerWeek = daysPerWeek ?: settings.daysPerWeek.first(),
+        daysPerWeek = daysPerWeek
+            ?: Program.days.size.takeIf { Program.isLoaded && it > 0 }
+            ?: settings.daysPerWeek.first(),
         emphasis = settings.programEmphasis.first(),
         goal = settings.userGoal.first().ifBlank { "build_muscle" },
         experience = settings.programExperience.first(),
@@ -414,6 +438,7 @@ class ProgramRepository @Inject constructor(
     suspend fun rerollAll(unlessWorkoutOpen: Boolean = false): Boolean {
         val recent = Program.days.flatMap { it.exercises }.map { it.id }.toSet()
         return generate(
+            // currentParams keeps the CURRENT plan's day count, not the staged days chip.
             currentParams(), currentEquipment(),
             settings.likedExercises.first(), settings.dislikedExercises.first(), recent,
             unlessWorkoutOpen = unlessWorkoutOpen

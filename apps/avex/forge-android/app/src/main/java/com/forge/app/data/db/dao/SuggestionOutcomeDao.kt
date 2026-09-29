@@ -9,7 +9,10 @@ import com.forge.app.data.db.entities.SuggestionOutcome
 interface SuggestionOutcomeDao {
 
     @Insert
-    suspend fun insert(outcome: SuggestionOutcome)
+    suspend fun insert(outcome: SuggestionOutcome): Long
+
+    @Query("DELETE FROM suggestion_outcome WHERE id = :id")
+    suspend fun deleteById(id: Long)
 
     @Query("SELECT * FROM suggestion_outcome ORDER BY logged_at DESC LIMIT :limit")
     suspend fun recent(limit: Int = 500): List<SuggestionOutcome>
