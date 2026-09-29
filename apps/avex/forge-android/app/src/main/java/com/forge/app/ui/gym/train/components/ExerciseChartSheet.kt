@@ -4,7 +4,6 @@ import com.forge.app.ui.common.ROW_H
 
 import com.forge.app.ui.common.GROUP_SEAM
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -36,7 +36,7 @@ import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.common.currentLocale
-import com.forge.app.ui.common.rememberDrawProgress
+import com.forge.app.ui.common.rememberDrawProgressState
 import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
@@ -62,8 +62,7 @@ fun ExerciseChartSheet(
     val bg = MaterialTheme.colorScheme.background
 
     // Chronological (oldest → newest) for the chart.
-    val chrono = history.asReversed()
-    val volumes = chrono.map { it.volumeLb }
+    val volumes = remember(history) { history.asReversed().map { it.volumeLb } }
     val zone = ZoneId.systemDefault()
     val dateFmt = DateTimeFormatter.ofPattern("MMM d", currentLocale())
 
@@ -203,48 +202,50 @@ private fun VolumeProjectionChart(
     val totalPoints = combined.size
 
     // Draw-in: sweep left-to-right on first open, keyed on the data identity.
-    val drawProgress = rememberDrawProgress(key = volumes)
+    // Read only in the draw lambda below, so the sweep redraws the chart without recomposing it.
+    val drawProgress = rememberDrawProgressState(key = volumes)
 
-    Canvas(modifier = modifier) {
+    // Paths and dot positions are built once per size; only the reveal clip moves per frame.
+    Spacer(modifier.drawWithCache {
         val stepX = size.width / (totalPoints - 1).coerceAtLeast(1)
         fun yFor(v: Double) = size.height - ((v - minV) / range * size.height).toFloat()
+        val gridEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))
 
-        // Clip the entire draw to the revealed fraction so grid, line, and dots all sweep in together.
-        clipRect(right = size.width * drawProgress) {
-            listOf(0.25f, 0.5f, 0.75f).forEach { frac ->
-                drawLine(
-                    color = gridColor,
-                    start = Offset(0f, size.height * frac),
-                    end = Offset(size.width, size.height * frac),
-                    strokeWidth = 1.dp.toPx(),
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))
-                )
-            }
-
-            // Solid actual line
-            val actualPath = Path()
-            volumes.forEachIndexed { i, v ->
-                val x = stepX * i
-                val y = yFor(v)
-                if (i == 0) actualPath.moveTo(x, y) else actualPath.lineTo(x, y)
-            }
-            drawPath(actualPath, color = lineColor, style = Stroke(width = 3.dp.toPx()))
-            volumes.forEachIndexed { i, v ->
-                drawCircle(lineColor, radius = 3.dp.toPx(), center = Offset(stepX * i, yFor(v)))
-            }
-
-            // Dashed projected continuation, starting from the last actual point
-            val projPath = Path()
-            val startIdx = volumes.size - 1
-            projPath.moveTo(stepX * startIdx, yFor(volumes.last()))
-            projected.forEachIndexed { i, v ->
-                projPath.lineTo(stepX * (startIdx + 1 + i), yFor(v))
-            }
-            drawPath(
-                projPath,
-                color = projectionColor,
-                style = Stroke(width = 2.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f)))
-            )
+        // Solid actual line
+        val actualPath = Path()
+        volumes.forEachIndexed { i, v ->
+            val x = stepX * i
+            val y = yFor(v)
+            if (i == 0) actualPath.moveTo(x, y) else actualPath.lineTo(x, y)
         }
-    }
+        val dots = volumes.mapIndexed { i, v -> Offset(stepX * i, yFor(v)) }
+
+        // Dashed projected continuation, starting from the last actual point
+        val projPath = Path()
+        val startIdx = volumes.size - 1
+        projPath.moveTo(stepX * startIdx, yFor(volumes.last()))
+        projected.forEachIndexed { i, v ->
+            projPath.lineTo(stepX * (startIdx + 1 + i), yFor(v))
+        }
+        val actualStroke = Stroke(width = 3.dp.toPx())
+        val projStroke = Stroke(width = 2.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f)))
+
+        onDrawBehind {
+            // Clip the entire draw to the revealed fraction so grid, line, and dots all sweep in together.
+            clipRect(right = size.width * drawProgress.value) {
+                listOf(0.25f, 0.5f, 0.75f).forEach { frac ->
+                    drawLine(
+                        color = gridColor,
+                        start = Offset(0f, size.height * frac),
+                        end = Offset(size.width, size.height * frac),
+                        strokeWidth = 1.dp.toPx(),
+                        pathEffect = gridEffect
+                    )
+                }
+                drawPath(actualPath, color = lineColor, style = actualStroke)
+                dots.forEach { drawCircle(lineColor, radius = 3.dp.toPx(), center = it) }
+                drawPath(projPath, color = projectionColor, style = projStroke)
+            }
+        }
+    })
 }

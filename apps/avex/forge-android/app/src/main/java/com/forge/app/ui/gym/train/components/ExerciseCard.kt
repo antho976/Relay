@@ -15,6 +15,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import com.forge.app.domain.volume.volumeLb
@@ -38,6 +39,7 @@ import com.forge.app.ui.gym.train.state.ExerciseUiState
 
 /** Reps to PRE-FILL the field with — numeric targets only ("8-12" → 12, "15" → 15); null otherwise. */
 private val TARGET_REPS_REGEX = Regex("""^(\d+)(?:-(\d+))?$""")
+private val DIGITS_REGEX = Regex("""\d+""")
 private fun targetRepsOf(reps: String): Int? {
     val m = TARGET_REPS_REGEX.matchEntire(reps.trim()) ?: return null
     return m.groupValues[2].ifEmpty { m.groupValues[1] }.toIntOrNull()
@@ -52,7 +54,7 @@ private fun recommendedRepsOf(reps: String): Int? {
     val t = reps.trim()
     if (t.equals("AMRAP", ignoreCase = true)) return 12
     if (t.contains('s')) return null
-    return Regex("""\d+""").findAll(t).map { it.value.toInt() }.lastOrNull()
+    return DIGITS_REGEX.findAll(t).map { it.value.toInt() }.lastOrNull()
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -65,7 +67,9 @@ fun ExerciseCard(
     /** One flag per exercise in the day, true once it's done or skipped — drives [SessionRail].
      *  Empty hides the rail. */
     sessionDone: List<Boolean> = emptyList(),
-    restTimerState: RestTimerState? = null,
+    /** The live rest timer. A [State], read only inside the timer slot, so each second's tick
+     *  recomposes that slot rather than the whole card. */
+    restTimerState: State<RestTimerState?>? = null,
     /** When every other exercise's sets this session were logged — see [restBetweenSeconds]. */
     otherSetTimes: List<Long> = emptyList(),
     sessionStartedAtMs: Long? = null,
@@ -336,11 +340,9 @@ fun ExerciseCard(
 
                 // Live rest timer — sits directly below the last logged set and above the next-set
                 // input row (so it always reads "rest, then enter the next set"), the instant a set is
-                // logged. Driven off restTimerState (top-level DayUiState.restTimer).
+                // logged. Driven off the view model's rest-timer flow, read inside the slot.
                 if (restTimerState != null) {
-                    Spacer(Modifier.height(10.dp))
-                    InlineRestTimer(timer = restTimerState, onTap = onOpenRestTimerSetter, onSkip = onSkipRest)
-                    Spacer(Modifier.height(4.dp))
+                    InlineRestTimerSlot(restTimerState, onTap = onOpenRestTimerSetter, onSkip = onSkipRest)
                 }
 
                 // Input row for the next set
@@ -392,3 +394,14 @@ fun ExerciseCard(
     }
 }
 
+/**
+ * The inline rest timer, reading the ticking value in its OWN restart scope: the timer changes every
+ * second for most of a workout, and read in [ExerciseCard] it recomposed the whole card each time.
+ */
+@Composable
+private fun InlineRestTimerSlot(timer: State<RestTimerState?>, onTap: () -> Unit, onSkip: () -> Unit) {
+    val t = timer.value ?: return
+    Spacer(Modifier.height(10.dp))
+    InlineRestTimer(timer = t, onTap = onTap, onSkip = onSkip)
+    Spacer(Modifier.height(4.dp))
+}

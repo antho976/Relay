@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -37,7 +38,9 @@ data class SessionHistoryUiState(
     val query: String = "",
     val tagFilter: String? = null,
     val durationFilter: SessionHistoryFilter? = null,
-    val volumeFilter: SessionHistoryFilter? = null
+    val volumeFilter: SessionHistoryFilter? = null,
+    /** False only for the placeholder before the first real emission — no empty-state flash. */
+    val loaded: Boolean = false
 ) {
     /** Whether any filter or the search box is narrowing the list (drives the empty-state copy). */
     val anyFilterActive: Boolean
@@ -74,8 +77,10 @@ class SessionHistoryViewModel @Inject constructor(
     )
 
     private val dataFlow = combine(
-        sessionDao.observeAllFinishedSessions(),
-        loggedExerciseDao.observeSessionExerciseIds(),
+        // Deduped: Room re-emits both on any write to their tables — every set of a workout in
+        // progress — and each emission re-filters and regroups the whole history.
+        sessionDao.observeAllFinishedSessions().distinctUntilChanged(),
+        loggedExerciseDao.observeSessionExerciseIds().distinctUntilChanged(),
         cardioRepo.observeAll(),
         settingsRepo.customCardioTypes
     ) { sessions, exerciseRows, cardioEntries, customTypes ->
@@ -102,7 +107,8 @@ class SessionHistoryViewModel @Inject constructor(
             query = f.query,
             tagFilter = f.tag,
             durationFilter = f.duration,
-            volumeFilter = f.volume
+            volumeFilter = f.volume,
+            loaded = true
         )
     }.flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SessionHistoryUiState())

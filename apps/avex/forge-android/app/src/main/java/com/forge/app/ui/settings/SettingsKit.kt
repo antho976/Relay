@@ -854,7 +854,9 @@ internal fun SettingsSegmented(
     contentDescription: String? = null
 ) {
     val n = options.size.coerceAtLeast(1)
-    val position by animateFloatAsState(
+    // Kept as a State and read only in the thumb's layout: reading it here recomposed the whole
+    // control on every frame of the slide.
+    val position = animateFloatAsState(
         selectedIndex.coerceIn(0, n - 1).toFloat(),
         ForgeMotion.snappy(),
         label = "segment"
@@ -867,11 +869,15 @@ internal fun SettingsSegmented(
         // Equal cells that cannot hold their widest label (a four-way choice at a large font
         // scale) would break words mid-label; the choice wraps into rows of cells instead.
         val measurer = rememberTextMeasurer()
-        val widest = with(LocalDensity.current) { (options.maxOfOrNull { measurer.measure(it, labelStyle).size.width } ?: 0).toDp() }
+        val density = LocalDensity.current
+        // Text measurement is not free, and the labels only change with these.
+        val widest = remember(options, labelStyle, measurer, density) {
+            with(density) { (options.maxOfOrNull { measurer.measure(it, labelStyle).size.width } ?: 0).toDp() }
+        }
         BoxWithConstraints(modifier.fillMaxWidth()) {
             val inner = maxWidth - 8.dp
             if (inner / n >= widest + 20.dp) {
-                SegmentedTrack(options, selectedIndex, onSelect, Modifier, null, position, labelStyle, thumb, contentDescription)
+                SegmentedTrack(options, selectedIndex, onSelect, Modifier, null, { position.value }, labelStyle, thumb, contentDescription)
             } else {
                 val perRow = (inner / (widest + 24.dp)).toInt().coerceIn(1, (n - 1).coerceAtLeast(1))
                 SegmentedGrid(options, selectedIndex, onSelect, perRow, labelStyle, thumb, contentDescription)
@@ -879,7 +885,7 @@ internal fun SettingsSegmented(
         }
         return
     }
-    SegmentedTrack(options, selectedIndex, onSelect, modifier, compactWidth, position, labelStyle, thumb, contentDescription)
+    SegmentedTrack(options, selectedIndex, onSelect, modifier, compactWidth, { position.value }, labelStyle, thumb, contentDescription)
 }
 
 /** The sliding-thumb track itself: one pill, equal cells, the thumb under the pick. */
@@ -890,7 +896,7 @@ private fun SegmentedTrack(
     onSelect: (Int) -> Unit,
     modifier: Modifier,
     compactWidth: Dp?,
-    position: Float,
+    position: () -> Float,
     labelStyle: androidx.compose.ui.text.TextStyle,
     thumb: Color,
     contentDescription: String?
@@ -912,7 +918,7 @@ private fun SegmentedTrack(
                     val cell = constraints.maxWidth / n
                     val placeable = measurable.measure(Constraints.fixed(cell, constraints.maxHeight))
                     layout(constraints.maxWidth, constraints.maxHeight) {
-                        placeable.placeRelative((position * cell).roundToInt(), 0)
+                        placeable.placeRelative((position() * cell).roundToInt(), 0)
                     }
                 }
                 .clip(PillShape)
@@ -998,8 +1004,11 @@ private fun SegmentedGrid(
 private fun segmentedCompactWidth(options: List<String>): Dp {
     val style = MaterialTheme.typography.labelLarge
     val measurer = rememberTextMeasurer()
-    val widest = options.maxOfOrNull { measurer.measure(it, style).size.width } ?: 0
-    return (with(LocalDensity.current) { widest.toDp() } + 28.dp) * options.size + 8.dp
+    val density = LocalDensity.current
+    return remember(options, style, measurer, density) {
+        val widest = options.maxOfOrNull { measurer.measure(it, style).size.width } ?: 0
+        (with(density) { widest.toDp() } + 28.dp) * options.size + 8.dp
+    }
 }
 
 /**

@@ -70,6 +70,8 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             // still inside NoteField's debounce does not count as unsaved work), when creating the
             // slot's row violates the session foreign key. The note has nowhere to go then; drop it
             // rather than crash the app on the way out.
+            val hadRow = _state.value.exercises
+                .firstOrNull { it.plan.id == event.exerciseId }?.loggedExerciseId != null
             try {
                 withContext(NonCancellable) {
                     val leId = ensureLoggedExercise(event.exerciseId) ?: return@withContext
@@ -78,7 +80,17 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             } catch (_: android.database.sqlite.SQLiteConstraintException) {
                 return@launch
             }
-            refreshExercise(event.exerciseId)
+            // The note commits every pause in typing. When its row already existed nothing else on
+            // the card can have changed, so patch the one field instead of re-reading the card (~7
+            // queries and three settings reads) and rebuilding the day's state each time.
+            if (hadRow) {
+                val note = event.note.ifBlank { null }
+                _state.update { s ->
+                    s.copy(exercises = s.exercises.map { if (it.plan.id == event.exerciseId) it.copy(note = note) else it })
+                }
+            } else {
+                refreshExercise(event.exerciseId)
+            }
         }
         is DayUiEvent.ToggleSkipped -> viewModelScope.launch {
             val currentUi = _state.value.exercises
@@ -339,10 +351,10 @@ internal fun DayViewModel.logSet(
             )
             val rest = computeRestPrescription(restPlan, currentUi.difficulty, currentUi.restTimerOverrideSeconds, performed)
             restTimer.start(rest.seconds)
-            // Push the started timer into UI state synchronously so it's visible before refreshExercise
-            // re-renders — don't wait for the collector coroutine to forward the first emission.
+            // The timer itself is visible at once through restTimerState (a StateFlow, already
+            // holding the started value); only the reason and owning slot live in UI state.
             _state.update {
-                it.copy(restTimer = restTimer.state.value, restTimerReason = rest.reason, restTimerExerciseId = exerciseId)
+                it.copy(restTimerReason = rest.reason, restTimerExerciseId = exerciseId)
             }
 
             closeOpenRestEvent(sessionId, restEndedAtMs)

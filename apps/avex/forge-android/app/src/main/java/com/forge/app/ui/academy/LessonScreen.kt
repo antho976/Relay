@@ -12,7 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.domain.academy.readMinutes
 import com.forge.app.ui.common.InlineEmptyHint
 
 /**
@@ -42,7 +41,7 @@ fun LessonScreen(
     ReaderScreen(
         onBack = onBack,
         lessonId = lesson.id,
-        meta = "${lesson.track.displayName} · ${lesson.blocks.readMinutes()} min",
+        meta = "${lesson.track.displayName} · ${lesson.readMinutes} min",
         title = lesson.title,
         deck = lesson.summary,
         blocks = lesson.blocks,

@@ -48,7 +48,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.sparklineSeries
 import com.forge.app.ui.common.bounceCombinedClick
-import com.forge.app.ui.common.rememberDrawProgress
+import com.forge.app.ui.common.rememberDrawProgressState
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 
@@ -85,6 +85,7 @@ import com.forge.app.ui.theme.LocalForgeSettings
  * The experiment's surface + data colours, resolved against the two theme switches the shipped app
  * already honours (AMOLED, monochrome). Read once per screen and thread it down.
  */
+@androidx.compose.runtime.Immutable
 data class SurfacePalette(
     /** The one elevation. Cards do not stack on cards, so there is no second fill. */
     val card: Color,
@@ -117,7 +118,10 @@ fun surfacePalette(): SurfacePalette {
     // that would break that promise. Direction still reads without it, because the ↑/↓ glyph
     // carries it and the three "hues" separate by tone. Meaning is never gated on colour (§14).
     val mono = !settings.accentEnabled
-    return SurfacePalette(
+    // Remembered: a new palette per call (its `hues` list compared by identity) made every Home and
+    // Profile child that takes it recompose whenever the screen body did. @Immutable lets equal
+    // palettes compare equal.
+    return androidx.compose.runtime.remember(settings.amoledMode, mono, muted, onBg) { SurfacePalette(
         // On AMOLED the ground is pure black, so the card steps DOWN rather than up — a lit slab on
         // black reads as a panel, the opposite of one quiet elevation.
         // The grouped-surface fill (`surfaceContainerHigh`), so a Home or Profile card and an
@@ -133,7 +137,7 @@ fun surfacePalette(): SurfacePalette {
         // for the four places that carry a decision — see `OverviewScreen`'s colour budget.
         hues = listOf(onBg, muted, muted.copy(alpha = 0.7f)),
         mutedOnCard = muted.copy(alpha = MUTED_ON_CARD_ALPHA),
-    )
+    ) }
 }
 
 /** The group radius, so a card and a grouped list share one corner. */
@@ -257,11 +261,12 @@ fun SurfaceSparkline(
     modifier: Modifier = Modifier
 ) {
     if (values.size < 2) return
-    val progress = rememberDrawProgress(key = values, spec = ForgeMotion.drawTween())
+    // Read only inside the Canvas below: the reveal invalidates the draw, not this composable.
+    val progress = rememberDrawProgressState(key = values, spec = ForgeMotion.drawTween())
     // Reduced to what the chart can actually show, once (P-13) — see [sparklineSeries].
     val plotted = remember(values) { sparklineSeries(values) }
     // The extrema are a property of the DATA, so they belong outside the draw scope: they were
-    // recomputed on every recomposition, and the reveal recomposes ~54 times per entry (P-13).
+    // recomputed on every recomposition, back when the reveal recomposed ~54 times per entry (P-13).
     val min = remember(plotted) { plotted.min() }
     val range = remember(plotted) { (plotted.max() - min).takeIf { it > 0.0 } ?: 1.0 }
     // And so are the paths, once the canvas size is known — which the reveal does not change. Both
@@ -274,12 +279,13 @@ fun SurfaceSparkline(
         // Half a stroke would clear the line; the dot is fatter, so it sets the inset.
         val inset = maxOf(stroke / 2f, dot)
         geometry.ensure(size, plotted, min, range, inset)
-        clipRect(right = (w * progress).coerceAtLeast(0.01f)) {
+        val p = progress.value
+        clipRect(right = (w * p).coerceAtLeast(0.01f)) {
             drawPath(geometry.area, Brush.verticalGradient(listOf(color.copy(alpha = 0.15f), Color.Transparent)))
             drawPath(geometry.line, color, style = Stroke(width = stroke, cap = StrokeCap.Round))
         }
         // The only per-frame work left: the end dot riding the reveal frontier.
-        val fx = (plotted.size - 1) * progress
+        val fx = (plotted.size - 1) * p
         val i = fx.toInt().coerceIn(0, plotted.size - 2)
         val t = fx - i
         val ys = geometry.ys

@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -30,11 +29,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.common.EditorialHeader
@@ -42,7 +46,7 @@ import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.session.state.ExerciseDetail
 import com.forge.app.ui.gym.session.state.SessionChartStyle
 import com.forge.app.ui.gym.session.state.SessionMetric
-import com.forge.app.ui.common.rememberDrawProgress
+import com.forge.app.ui.common.rememberDrawProgressState
 import com.forge.app.ui.common.staggeredProgress
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
@@ -126,11 +130,12 @@ internal fun MetricExerciseCard(
     accent: Color,
     outline: Color
 ) {
-    val values = exercises.map { it.metricValue(metric) }
+    val values = remember(exercises, metric) { exercises.map { it.metricValue(metric) } }
     val rawMax = values.maxOrNull() ?: 0.0
     // Hoisted above the card so the remember runs unconditionally regardless of the empty-state guard.
     // The slow draw curve fills the comparison bars in gently rather than snapping them to width.
-    val progress = rememberDrawProgress(metric, ForgeMotion.drawTween())
+    // Rows get a lambda over it and read it in draw, so the glide never recomposes the card.
+    val progress = rememberDrawProgressState(metric, ForgeMotion.drawTween())
     MetricCardShell("${metric.label.uppercase()} PER EXERCISE", style, onStyle, onBg, muted, accent, outline) {
         // The Weight metric is meaningless for a bodyweight-only session — say so instead of empty bars.
         if (rawMax <= 0.0) {
@@ -150,7 +155,7 @@ internal fun MetricExerciseCard(
                 metric = metric,
                 style = style,
                 defaultExpanded = i == 0,
-                barProgress = staggeredProgress(progress, i, exercises.size),
+                barProgress = { staggeredProgress(progress.value, i, exercises.size) },
                 onBg = onBg, muted = muted, accent = accent, outline = outline
             )
         }
@@ -166,7 +171,7 @@ private fun ExerciseDrillRow(
     metric: SessionMetric,
     style: SessionChartStyle,
     defaultExpanded: Boolean,
-    barProgress: Float,
+    barProgress: () -> Float,
     onBg: Color,
     muted: Color,
     accent: Color,
@@ -209,16 +214,25 @@ private fun ExerciseDrillRow(
                 )
                 Text(if (expanded) "▾" else "▸", style = MaterialTheme.typography.labelMedium, color = muted)
             }
-            val frac = if (rawMax > 0) (value / rawMax).toFloat() * barProgress else 0f
+            val share = if (rawMax > 0) (value / rawMax).toFloat() else 0f
+            // The fill is drawn rather than sized with fillMaxWidth(fraction), so the reveal is a
+            // redraw per frame, not a relayout: the same pill, anchored at the start edge.
             Box(
                 modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(50))
                     .background(outline.copy(alpha = 0.25f))
-            ) {
-                Box(
-                    modifier = Modifier.fillMaxWidth(frac.coerceIn(0f, 1f)).fillMaxHeight()
-                        .clip(RoundedCornerShape(50)).background(accent)
-                )
-            }
+                    .drawBehind {
+                        val w = size.width * (share * barProgress()).coerceIn(0f, 1f)
+                        if (w > 0f) {
+                            val left = if (layoutDirection == LayoutDirection.Rtl) size.width - w else 0f
+                            drawRoundRect(
+                                color = accent,
+                                topLeft = Offset(left, 0f),
+                                size = Size(w, size.height),
+                                cornerRadius = CornerRadius(minOf(w, size.height) / 2f)
+                            )
+                        }
+                    }
+            )
         }
         if (expanded) {
             Box(Modifier.padding(bottom = 12.dp)) {

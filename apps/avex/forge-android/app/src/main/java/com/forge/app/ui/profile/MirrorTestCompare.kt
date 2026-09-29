@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -204,18 +205,22 @@ private fun SliderCompare(
             .pointerInput(Unit) { detectDragGestures { change, _ -> fraction = (change.position.x / size.width).coerceIn(0f, 1f) } }
     ) {
         val w = maxWidth
-        GalleryFullImage(fileFor(after), Modifier.fillMaxSize())
+        // The drag position is read only in draw and in the offset lambdas below, never here: read in
+        // this scope it recomposed both images and the knob on every drag event.
+        val afterFile = remember(after) { fileFor(after) }
+        val beforeFile = remember(before) { fileFor(before) }
+        GalleryFullImage(afterFile, Modifier.fillMaxSize())
         // Draw `before` at full size but clip its paint to the left fraction, so both stay aligned.
         GalleryFullImage(
-            fileFor(before),
+            beforeFile,
             Modifier.fillMaxSize().drawWithContent {
                 clipRect(right = size.width * fraction) { this@drawWithContent.drawContent() }
             }
         )
         // Divider + knob.
-        Box(Modifier.align(Alignment.CenterStart).offset(x = w * fraction - 1.dp).fillMaxHeight().width(2.dp).background(Color.White.copy(alpha = 0.85f)))
+        Box(Modifier.align(Alignment.CenterStart).offset { IntOffset((w * fraction - 1.dp).roundToPx(), 0) }.fillMaxHeight().width(2.dp).background(Color.White.copy(alpha = 0.85f)))
         Box(
-            Modifier.align(Alignment.CenterStart).offset(x = w * fraction - 20.dp).size(40.dp)
+            Modifier.align(Alignment.CenterStart).offset { IntOffset((w * fraction - 20.dp).roundToPx(), 0) }.size(40.dp)
                 .clip(CircleShape).background(Color.White),
             contentAlignment = Alignment.Center
         ) {

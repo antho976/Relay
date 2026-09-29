@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.LocalDate
@@ -187,19 +188,30 @@ class ProfileViewModel @Inject constructor(
     }
 
     private fun load() = viewModelScope.launch {
-        val name = settingsRepo.userName.first()
-        val photos = photoRepo.photos()
+        // Everything below is independent, so it starts together: the whole-history fan-out first
+        // (the long pole), then the name, photos and avatar the cached first paint needs. These used
+        // to run one after another, with the avatar's file checks on Main, so even a cached re-entry
+        // showed the skeleton until all of them had finished.
+        val fresh = async { profileRepo.load() }
+        val nameD = async { settingsRepo.userName.first() }
+        val photosD = async { photoRepo.photos() }
 
         // ── Avatar (GYMAP-22) ──────────────────────────────────────────────────
         // AvatarRepository owns the file + its paired pref: ensureSeeded assigns a random default the
         // first time no avatar exists (one-shot, guarded), so the identity cover is never empty and the
         // ringed default stays in sync with the cover on disk.
-        val defaultKey = avatarRepo.ensureSeeded(DefaultAvatars.all.map { it.key to it.resId })
-        val hasAvatar = avatarRepo.exists()
-        val avatarStamp = if (hasAvatar) avatarRepo.file.lastModified() else 0L
+        val avatarD = async(kotlinx.coroutines.Dispatchers.IO) {
+            val key = avatarRepo.ensureSeeded(DefaultAvatars.all.map { it.key to it.resId })
+            val has = avatarRepo.exists()
+            Triple(key, has, if (has) avatarRepo.file.lastModified() else 0L)
+        }
+        val hintShownD = async { settingsRepo.avatarEditHintShown.first() }
+        val name = nameD.await()
+        val photos = photosD.await()
+        val (defaultKey, hasAvatar, avatarStamp) = avatarD.await()
         // The one-time "tap to change" hint teaches the tap (the old "tap to add a photo" placeholder is
         // gone now a default is always present); shows only over an un-personalised default, once.
-        val showHint = defaultKey != null && !settingsRepo.avatarEditHintShown.first()
+        val showHint = defaultKey != null && !hintShownD.await()
 
         // Instant first paint on re-entry: render the last-assembled data while the fresh fan-out runs (P3).
         val cached = profileRepo.cached()
@@ -208,7 +220,7 @@ class ProfileViewModel @Inject constructor(
                 name = name, photos = photos, hasAvatar = hasAvatar, avatarStamp = avatarStamp,
                 avatarDefaultKey = defaultKey, showAvatarHint = showHint
             )
-        val data = profileRepo.load()
+        val data = fresh.await()
         // Merge the fresh fan-out but keep the user-editable fields from current state, so a rename /
         // photo-note / avatar change made while the (slow) fan-out ran isn't reverted by the pre-load
         // snapshot — the edit fns persist then update _state, so reading them back here is correct.

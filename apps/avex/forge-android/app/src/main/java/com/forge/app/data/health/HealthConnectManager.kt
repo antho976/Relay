@@ -489,50 +489,67 @@ class HealthConnectManager @Inject constructor(
     suspend fun readRecovery(startMs: Long, nowMs: Long): HealthSnap = withContext(Dispatchers.IO) {
         val client = clientOrNull() ?: return@withContext HealthSnap()
         val granted = grantedPermissions()
+        // Reuse a read of the same window length made moments ago under the same grants — a strict
+        // snapshot rebuild, or the day screen reopened — since each read is several paged IPCs into
+        // the provider. A new grant (or a revoked one) changes the key.
+        val span = nowMs - startMs
+        recoveryCache?.let { c ->
+            if (c.span == span && c.granted == granted && nowMs - c.readAtMs in 0 until RECOVERY_CACHE_MS) {
+                return@withContext c.snap
+            }
+        }
         val range = TimeRangeFilter.between(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(nowMs))
 
         val recoveryGranted = granted.containsAll(permissions)
-        // Every page, not the first: `readRecords` returns the OLDEST 1000 rows of a 90-day window,
-        // and a watch that writes HRV or resting HR several times a night passes that, so the
-        // newest nights — the ones the recovery read is about — were the ones cut (see readAllPages).
-        val sleep = if (!recoveryGranted) emptyList() else hcCatching {
-            client.readAllPages(SleepSessionRecord::class, range)
-                .mapNotNull { rec ->
-                    // Drop corrupt records (a third-party app can write endTime <= startTime) and cap
-                    // absurd spans (a forgotten wearable can log a multi-day "night") so one bad row
-                    // can't skew DeloadAdvisor's sleep average up or down.
-                    val min = Duration.between(rec.startTime, rec.endTime).toMinutes()
-                    if (min <= 0) null else SleepNight(
-                        endedAtMs = rec.endTime.toEpochMilli(),
-                        durationMin = min.coerceAtMost(MAX_SLEEP_MIN).toInt(),
-                        deepMin = rec.stageMinutes(SleepSessionRecord.STAGE_TYPE_DEEP),
-                        remMin = rec.stageMinutes(SleepSessionRecord.STAGE_TYPE_REM)
-                    )
-                }
-        }.orEmpty()
-        val hr = if (!recoveryGranted) emptyList() else hcCatching {
-            client.readAllPages(RestingHeartRateRecord::class, range)
-                .mapNotNull {
-                    // Ignore physiologically impossible readings (0 bpm corrupt rows would distort the baseline).
-                    val bpm = it.beatsPerMinute.toInt()
-                    if (bpm in MIN_BPM..MAX_BPM) RestingHrSample(timeMs = it.time.toEpochMilli(), bpm = bpm) else null
-                }
-        }.orEmpty()
+        // The four reads are independent, so they run side by side rather than one IPC chain.
+        coroutineScope {
+            // Every page, not the first: `readRecords` returns the OLDEST 1000 rows of a 90-day window,
+            // and a watch that writes HRV or resting HR several times a night passes that, so the
+            // newest nights — the ones the recovery read is about — were the ones cut (see readAllPages).
+            val sleep = async { if (!recoveryGranted) emptyList() else hcCatching {
+                client.readAllPages(SleepSessionRecord::class, range)
+                    .mapNotNull { rec ->
+                        // Drop corrupt records (a third-party app can write endTime <= startTime) and cap
+                        // absurd spans (a forgotten wearable can log a multi-day "night") so one bad row
+                        // can't skew DeloadAdvisor's sleep average up or down.
+                        val min = Duration.between(rec.startTime, rec.endTime).toMinutes()
+                        if (min <= 0) null else SleepNight(
+                            endedAtMs = rec.endTime.toEpochMilli(),
+                            durationMin = min.coerceAtMost(MAX_SLEEP_MIN).toInt(),
+                            deepMin = rec.stageMinutes(SleepSessionRecord.STAGE_TYPE_DEEP),
+                            remMin = rec.stageMinutes(SleepSessionRecord.STAGE_TYPE_REM)
+                        )
+                    }
+            }.orEmpty() }
+            val hr = async { if (!recoveryGranted) emptyList() else hcCatching {
+                client.readAllPages(RestingHeartRateRecord::class, range)
+                    .mapNotNull {
+                        // Ignore physiologically impossible readings (0 bpm corrupt rows would distort the baseline).
+                        val bpm = it.beatsPerMinute.toInt()
+                        if (bpm in MIN_BPM..MAX_BPM) RestingHrSample(timeMs = it.time.toEpochMilli(), bpm = bpm) else null
+                    }
+            }.orEmpty() }
 
-        val hrvGranted = HealthPermission.getReadPermission(HeartRateVariabilityRmssdRecord::class) in granted
-        val hrv = if (!hrvGranted) emptyList() else hcCatching {
-            client.readAllPages(HeartRateVariabilityRmssdRecord::class, range)
-                .mapNotNull {
-                    val rmssd = it.heartRateVariabilityMillis
-                    if (rmssd > 0.0 && rmssd < MAX_RMSSD_MS) HrvSample(timeMs = it.time.toEpochMilli(), rmssdMs = rmssd) else null
-                }
-        }.orEmpty()
+            val hrvGranted = HealthPermission.getReadPermission(HeartRateVariabilityRmssdRecord::class) in granted
+            val hrv = async { if (!hrvGranted) emptyList() else hcCatching {
+                client.readAllPages(HeartRateVariabilityRmssdRecord::class, range)
+                    .mapNotNull {
+                        val rmssd = it.heartRateVariabilityMillis
+                        if (rmssd > 0.0 && rmssd < MAX_RMSSD_MS) HrvSample(timeMs = it.time.toEpochMilli(), rmssdMs = rmssd) else null
+                    }
+            }.orEmpty() }
+            val steps = async { readDailyStepTotals(startMs, nowMs, granted) }
 
-        HealthSnap(
-            sleepNights = sleep, restingHr = hr, hrv = hrv,
-            dailySteps = readDailyStepTotals(startMs, nowMs)
-        )
+            HealthSnap(
+                sleepNights = sleep.await(), restingHr = hr.await(), hrv = hrv.await(),
+                dailySteps = steps.await()
+            )
+        }.also { recoveryCache = RecoveryRead(span, granted, nowMs, it) }
     }
+
+    private class RecoveryRead(val span: Long, val granted: Set<String>, val readAtMs: Long, val snap: HealthSnap)
+
+    @Volatile private var recoveryCache: RecoveryRead? = null
 
     /**
      * Per-day step totals from the start of [startMs]'s local calendar day to [endMs] (W6),
@@ -546,9 +563,19 @@ class HealthConnectManager @Inject constructor(
      * snapped back to its local midnight so every bucket is a whole day; the last runs to
      * [endMs] (today so far). A period slice requires a local-time filter, hence LocalDateTime.
      */
-    suspend fun readDailyStepTotals(startMs: Long, endMs: Long): List<DailySteps> = withContext(Dispatchers.IO) {
+    suspend fun readDailyStepTotals(startMs: Long, endMs: Long): List<DailySteps> =
+        readDailyStepTotals(startMs, endMs, granted = null)
+
+    /** [granted], when the caller already holds it, spares a second permission IPC. */
+    private suspend fun readDailyStepTotals(
+        startMs: Long,
+        endMs: Long,
+        granted: Set<String>?
+    ): List<DailySteps> = withContext(Dispatchers.IO) {
         val client = clientOrNull() ?: return@withContext emptyList()
-        if (!canReadSteps()) return@withContext emptyList()
+        val stepsGranted = granted?.contains(HealthPermission.getReadPermission(StepsRecord::class))
+            ?: canReadSteps()
+        if (!stepsGranted) return@withContext emptyList()
         hcCatching {
             val zone = java.time.ZoneId.systemDefault()
             val startLocal = Instant.ofEpochMilli(startMs).atZone(zone).toLocalDate().atStartOfDay()
@@ -647,6 +674,12 @@ class HealthConnectManager @Inject constructor(
     /** True when Avex may READ exercise sessions from Health Connect. */
     suspend fun canReadExercise(): Boolean =
         grantedPermissions().contains(HealthPermission.getReadPermission(ExerciseSessionRecord::class))
+
+    /** [canReadSteps] || [canReadExercise] off ONE permission IPC instead of two. */
+    suspend fun canReadStepsOrExercise(): Boolean = grantedPermissions().let {
+        HealthPermission.getReadPermission(StepsRecord::class) in it ||
+            HealthPermission.getReadPermission(ExerciseSessionRecord::class) in it
+    }
 
     /** True when Avex may WRITE exercise sessions to Health Connect (W0). */
     suspend fun canWriteExerciseSessions(): Boolean =
@@ -1151,6 +1184,8 @@ class HealthConnectManager @Inject constructor(
     }
 
     private companion object {
+        /** How long [readRecovery] reuses a read of the same window under the same grants. */
+        const val RECOVERY_CACHE_MS = 3L * 60 * 1000
         /** Cap a single sleep record at 16h so a stuck/forgotten wearable session can't read as great rest. */
         const val MAX_SLEEP_MIN = 16L * 60
         const val MIN_BPM = 20

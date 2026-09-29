@@ -6,6 +6,7 @@ import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.ExerciseHighlight
 import com.forge.app.ui.gym.train.state.SessionSummary
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
@@ -181,12 +182,16 @@ private fun DayViewModel.finishWorkout() {
         openRestEvent = null
         restTimer.stop()
         stopSessionService()
-        // Trophies still unlock + persist; the summary no longer lists them (gamification paused).
-        trophyRepo.evaluateAndUnlockNew()
 
         val durationMin = (activeSeconds / 60).coerceAtLeast(0)
-        // Lifetime PR count AFTER this session (its PRs are already persisted) — drives the milestone push.
-        val lifetimePrCount = runCatching { workoutRepo.lifetimePrCount() }.getOrDefault(0)
+        // The three reads the summary needs are independent, so they run side by side.
+        val lifetimePrCountD = async {
+            // Lifetime PR count AFTER this session (its PRs are already persisted) — drives the milestone push.
+            runCatching { workoutRepo.lifetimePrCount() }.getOrDefault(0)
+        }
+        val prevSessionD = async { workoutRepo.previousSessionForDay(dayKey, sessionId) }
+        val bestPrevVolumeD = async { workoutRepo.bestPreviousVolumeForDay(dayKey, sessionId) }
+        val lifetimePrCount = lifetimePrCountD.await()
 
         // Recap: only exercises you actually logged this session — a skip isn't "what you worked on".
         val worked = exercises.filter { it.loggedSets.isNotEmpty() && !it.skipped }
@@ -196,9 +201,9 @@ private fun DayViewModel.finishWorkout() {
             .mapValues { (_, exs) -> exs.sumOf { it.loggedSets.size } }
 
         // Local-only inputs for the coach's one-line read — no longer rendered as their own sections.
-        val prevSession = workoutRepo.previousSessionForDay(dayKey, sessionId)
+        val prevSession = prevSessionD.await()
         val vsLastVolumeDelta = prevSession?.totalVolumeLb?.let { totalVolumeLb - it }
-        val bestPrevVolume = workoutRepo.bestPreviousVolumeForDay(dayKey, sessionId) ?: 0.0
+        val bestPrevVolume = bestPrevVolumeD.await() ?: 0.0
         val isBestSession = prevSession != null && totalVolumeLb > bestPrevVolume
         val plannedTotal = exercises.filter { !it.skipped }.sumOf { it.plan.sets }
         val loggedNonSkipped = exercises.filter { !it.skipped }.sumOf { it.loggedSets.size }
@@ -238,6 +243,11 @@ private fun DayViewModel.finishWorkout() {
             lifetimePrCount = lifetimePrCount
         )
         _state.update { it.copy(isFinished = true, summary = summary) }
+        // Trophies still unlock + persist; the summary no longer lists them (gamification paused).
+        // After the summary is up rather than before it: the evaluation is ~14 aggregate queries
+        // over the whole history, and nothing on this screen waits for it. NonCancellable so leaving
+        // the summary at once cannot drop an unlock half written.
+        withContext(NonCancellable + kotlinx.coroutines.Dispatchers.Default) { trophyRepo.evaluateAndUnlockNew() }
     }
 }
 
@@ -253,9 +263,11 @@ private fun DayViewModel.saveAndExit() {
         openRestEvent = null
         restTimer.stop()
         stopSessionService()
-        trophyRepo.evaluateAndUnlockNew()
         _state.update { it.copy(isFinished = true) }
         _navigation.send(DayNavigationEffect.PopBack)
+        // After the pop is sent, not before: nothing on the way out waits for the ~14 aggregate
+        // queries, and NonCancellable keeps the screen's teardown from dropping an unlock.
+        withContext(NonCancellable + kotlinx.coroutines.Dispatchers.Default) { trophyRepo.evaluateAndUnlockNew() }
     }
 }
 

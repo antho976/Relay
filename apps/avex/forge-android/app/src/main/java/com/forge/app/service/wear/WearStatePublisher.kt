@@ -21,6 +21,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -61,10 +63,18 @@ class WearStatePublisher @Inject constructor(
     var lastPublishedTimerEndAtMs: Long = 0L
         private set
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun start(scope: CoroutineScope) {
         scope.launch {
             var sawLiveSession = false
-            mirror.sessionLive.distinctUntilChanged().collect { dto ->
+            // Only while a watch app is paired. The mirror rebuilds its DTO — plan, swap and
+            // last-time reads — on every set logged, then writes a Data Layer item: work on the
+            // set-logging path that most phones, with no watch, did for nothing. A watch arriving
+            // mid-session starts the mirror, which publishes the live session straight away.
+            connection.pairedWearApp()
+                .distinctUntilChanged()
+                .flatMapLatest { paired -> if (paired) mirror.sessionLive else emptyFlow() }
+                .distinctUntilChanged().collect { dto ->
                 if (dto == null) {
                     deleteItem(WearProtocol.PATH_SESSION_LIVE)
                     // Only a session that WAS live and is now gone is a session END (P-02). The

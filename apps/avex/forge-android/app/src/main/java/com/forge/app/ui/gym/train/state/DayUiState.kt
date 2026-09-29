@@ -3,7 +3,6 @@ package com.forge.app.ui.gym.train.state
 import androidx.compose.runtime.Immutable
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.types.EffortRating
-import com.forge.app.domain.timer.RestTimerState
 import com.forge.app.program.DayPlan
 import com.forge.app.program.Equipment
 import com.forge.app.program.ExercisePlan
@@ -69,7 +68,6 @@ data class DayUiState(
     /** Warmup step ids the user has ticked off. Presentational only, never gates starting. */
     val warmupChecked: Set<String> = emptySet(),
     val isWarmupComplete: Boolean = false,
-    val restTimer: RestTimerState? = null,
     val showTimerControls: Boolean = false,
     /** How the running rest duration was derived (engine System 2) — shown in the timer dialog. */
     val restTimerReason: String? = null,

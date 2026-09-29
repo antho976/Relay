@@ -29,6 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -96,14 +97,13 @@ fun RestTimerBubble(
     // haptic for that moment, like the one for the finish, is DayScreen's alone: it is the owner
     // that reads the Feedback strength setting, so Off plays nothing and nothing plays twice.
     val warn = MaterialTheme.colorScheme.error
-    val urgency by animateFloatAsState(
+    // Kept as a State and read in drawBehind: read here, its ten-second warm-up recomposed the
+    // whole bubble every frame.
+    val urgency = animateFloatAsState(
         targetValue = if (!state.isFinished && state.secondsRemaining in 1..10) 1f else 0f,
         animationSpec = ForgeMotion.standardTween(ForgeMotion.DurationEmphasized),
         label = "ring-urgency"
     )
-    // The depleting arc is now the hero, so it carries the accent (not a muted on-background) and
-    // still warms toward the error colour over the final ten seconds.
-    val ringColor = lerp(accent, warn, urgency)
     val flash = remember { Animatable(0f) }
     val haptic = LocalHapticFeedback.current
     // Track the previous tick so the 10s flash fires ONLY on the descending transition into 0:10,
@@ -132,11 +132,19 @@ fun RestTimerBubble(
     // INSIDE the finished branch (P-12): the transition ran whatever the timer was doing, so a
     // running — or indefinitely paused — bubble advanced an animation every frame whose value was
     // multiplied by nothing. A paused bubble is now quiescent.
-    val scale = appear.value * if (state.isFinished) finishedPulseScale() else 1f
+    //
+    // Both scales are read inside graphicsLayer, never in composition: the pulse runs for as long as
+    // "ready" shows — often minutes, screen kept on — and read here it recomposed the bubble (brush,
+    // draw, semantics and click lambdas) every frame of that time.
+    val pulse = if (state.isFinished) finishedPulseScale() else null
+    val face = remember(surfaceVar, surface) { Brush.verticalGradient(listOf(surfaceVar, surface)) }
 
     Box(
         modifier = modifier
-            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .graphicsLayer {
+                val scale = appear.value * (pulse?.value ?: 1f)
+                scaleX = scale; scaleY = scale
+            }
             .size(64.dp)
             // Soft cast shadow so the bubble reads as a physical object floating over the content
             // rather than a flat sticker. clip = false keeps the shadow outside the disc bounds.
@@ -144,7 +152,7 @@ fun RestTimerBubble(
             .clip(CircleShape)
             // Dark "instrument" face: a subtle top-lit gradient gives the disc depth instead of a
             // single flat colour. The accent now lives in the ring, not the whole fill.
-            .background(Brush.verticalGradient(listOf(surfaceVar, surface)))
+            .background(face)
             // Hairline rim to separate the disc from the background gradient at any accent.
             .border(width = 1.dp, color = onBg.copy(alpha = 0.08f), shape = CircleShape)
             // Countdown ring: a depleting accent arc on a faint track — the hero of the design.
@@ -188,8 +196,10 @@ fun RestTimerBubble(
                             pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 8f), 0f)
                         )
                     )
+                    // The depleting arc is the hero, so it carries the accent (not a muted
+                    // on-background) and warms toward the error colour over the final ten seconds.
                     else -> drawArc(
-                        color = ringColor,
+                        color = lerp(accent, warn, urgency.value),
                         startAngle = -90f,
                         sweepAngle = 360f * animFraction,
                         useCenter = false,
@@ -411,13 +421,12 @@ private fun formatTime(totalSeconds: Int): String {
 /** The finished bubble's breathing scale. Its own composable so the transition exists only while
  *  the rest is actually up (P-12). */
 @Composable
-private fun finishedPulseScale(): Float {
+private fun finishedPulseScale(): State<Float> {
     val pulse = rememberInfiniteTransition(label = "rest-finished-pulse")
-    val pulseScale by pulse.animateFloat(
+    return pulse.animateFloat(
         initialValue = 1f,
         targetValue = 1.07f,
         animationSpec = infiniteRepeatable(tween(650), RepeatMode.Reverse),
         label = "pulse-scale"
     )
-    return pulseScale
 }

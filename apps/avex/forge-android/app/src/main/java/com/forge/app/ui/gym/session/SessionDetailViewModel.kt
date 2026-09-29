@@ -66,7 +66,10 @@ class SessionDetailViewModel @Inject constructor(
                             realizedSeconds = it.realizedSeconds
                         )
                     }
-                    val hrView = com.forge.app.domain.health.buildSessionHrView(samples, sets, rests)
+                    // Default: the analysis walks every sample against every set and rest span.
+                    val hrView = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        com.forge.app.domain.health.buildSessionHrView(samples, sets, rests)
+                    }
                     _state.update { it.copy(hrView = hrView) }
                 }
             }

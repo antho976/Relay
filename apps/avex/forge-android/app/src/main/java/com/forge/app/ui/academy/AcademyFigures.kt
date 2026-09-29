@@ -48,6 +48,7 @@ import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.fromDisplayWeight
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.LocalForgeSettings
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.exp
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -94,7 +95,7 @@ fun LessonFigure(key: String, caption: String, modifier: Modifier = Modifier) {
 
 /** Every key a lesson may name. `AcademySketchesTest` checks the content against this. */
 fun figureExists(key: String): Boolean =
-    key in setOf(FIG_RIR, FIG_VOLUME, FIG_WARMUP, FIG_PROTEIN) || FigureSketches.forKey(key) != null
+    key in setOf(FIG_RIR, FIG_VOLUME, FIG_WARMUP, FIG_PROTEIN) || FigureSketches.has(key)
 
 const val FIG_RIR = "ix.rir"
 const val FIG_VOLUME = "ix.volume"
@@ -413,31 +414,39 @@ private fun trim(v: Float): String = if (v % 1f == 0f) v.roundToInt().toString()
 
 internal object FigureSketches {
 
-    private val byKey: Map<String, Sketch> by lazy {
+    // Built per key on first use and kept, so opening one lesson draws only its own figures
+    // rather than all of them.
+    private val builders: Map<String, () -> Sketch> by lazy {
         mapOf(
-            "fig.repeat_vs_random" to repeatVsRandom(),
-            "fig.slowing_gains" to slowingGains(),
-            "fig.cost_vs_stimulus" to costVsStimulus(),
-            "fig.counting_sets" to countingSets(),
-            "fig.range" to range(),
-            "fig.rest_between_sets" to restBetweenSets(),
-            "fig.twice_a_week" to twiceAWeek(),
-            "fig.pain_check" to painCheck(),
-            "fig.repeated_bout" to repeatedBout(),
-            "fig.cut_hold" to cutHold(),
-            "fig.one_change" to oneChange(),
-            "fig.trust" to trust(),
-            "fig.readiness_sum" to readinessSum(),
-            "fig.hrv_noise" to hrvNoise(),
-            "fig.volume_vs_weight" to volumeVsWeight(),
-            "fig.goals_in_turn" to goalsInTurn(),
-            "fig.talk_test" to talkTest(),
-            "fig.base_building" to baseBuilding(),
-            "fig.interference" to interference()
+            "fig.repeat_vs_random" to { repeatVsRandom() },
+            "fig.slowing_gains" to { slowingGains() },
+            "fig.cost_vs_stimulus" to { costVsStimulus() },
+            "fig.counting_sets" to { countingSets() },
+            "fig.range" to { range() },
+            "fig.rest_between_sets" to { restBetweenSets() },
+            "fig.twice_a_week" to { twiceAWeek() },
+            "fig.pain_check" to { painCheck() },
+            "fig.repeated_bout" to { repeatedBout() },
+            "fig.cut_hold" to { cutHold() },
+            "fig.one_change" to { oneChange() },
+            "fig.trust" to { trust() },
+            "fig.readiness_sum" to { readinessSum() },
+            "fig.hrv_noise" to { hrvNoise() },
+            "fig.volume_vs_weight" to { volumeVsWeight() },
+            "fig.goals_in_turn" to { goalsInTurn() },
+            "fig.talk_test" to { talkTest() },
+            "fig.base_building" to { baseBuilding() },
+            "fig.interference" to { interference() }
         )
     }
+    private val cache = ConcurrentHashMap<String, Sketch>()
 
-    fun forKey(key: String): Sketch? = byKey[key]
+    private fun cached(key: String): Sketch? = builders[key]?.let { build -> cache.getOrPut(key, build) }
+
+    fun forKey(key: String): Sketch? = cached(key)
+
+    /** Whether [key] names a drawing, without building it. */
+    fun has(key: String): Boolean = key in builders
 
     private fun ink(path: Path, weight: Float = 1f) = SketchMark.Line(path, Ink.INK, weight = weight)
     private fun guide(path: Path) = SketchMark.Line(path, Ink.GUIDE)

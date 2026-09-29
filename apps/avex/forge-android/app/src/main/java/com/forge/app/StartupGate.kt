@@ -41,10 +41,21 @@ internal class StartupOpenHelperFactory(private val context: Context) : SupportS
     override fun create(configuration: SupportSQLiteOpenHelper.Configuration): SupportSQLiteOpenHelper {
         val helper = FrameworkSQLiteOpenHelperFactory().create(configuration)
         return object : SupportSQLiteOpenHelper by helper {
+            // The gate only ever opens once, so after the first successful wait every later access
+            // skips the runBlocking (an event loop per database access). A failed gate never sets
+            // this, so it keeps throwing.
+            @Volatile private var gateOpen = false
+
+            private fun awaitGate() {
+                if (gateOpen) return
+                runBlocking { context.awaitStorageReady() }
+                gateOpen = true
+            }
+
             override val writableDatabase: SupportSQLiteDatabase
-                get() { runBlocking { context.awaitStorageReady() }; return helper.writableDatabase }
+                get() { awaitGate(); return helper.writableDatabase }
             override val readableDatabase: SupportSQLiteDatabase
-                get() { runBlocking { context.awaitStorageReady() }; return helper.readableDatabase }
+                get() { awaitGate(); return helper.readableDatabase }
         }
     }
 }

@@ -37,6 +37,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
@@ -512,9 +513,11 @@ class StatsRepository @Inject constructor(
      */
     fun observeGymStats(): Flow<GymStats> {
         return combine(
-            // ONE whole-history query for both populations, split in memory below.
-            loggedSetDao.observeAllFinishedStatsSets(),
-            loggedExerciseDao.observeRecentPrs(),
+            // ONE whole-history query for both populations, split in memory below. Deduped: Room
+            // re-runs it on ANY write to its tables, including every set of the workout in progress,
+            // and only a real change to finished history should re-run the ~12 passes below.
+            loggedSetDao.observeAllFinishedStatsSets().distinctUntilChanged(),
+            loggedExerciseDao.observeRecentPrs().distinctUntilChanged(),
             timeSignals.dayStarts()
         ) { statsRows, prRows, _ ->
           coroutineScope {

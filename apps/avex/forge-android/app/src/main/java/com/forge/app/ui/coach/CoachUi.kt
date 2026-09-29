@@ -61,6 +61,8 @@ internal fun coachWeekLabel(weekId: String): String? = runCatching {
     "Week of " + monday.format(DateTimeFormatter.ofPattern("MMM d", Locale.getDefault()))
 }.getOrNull()
 
+private val HOLD_SESSIONS_REGEX = Regex("""(\d+)\s+(?:of\s+\d+\s+)?session""")
+
 /**
  * A stored hold reason rendered as a short human line. Pass rows are immutable, so their text is
  * machine prose — em dashes, "(s)" plurals, trailing instructions. A learning hold becomes the
@@ -69,7 +71,7 @@ internal fun coachWeekLabel(weekId: String): String? = runCatching {
  */
 internal fun recordHoldLine(reason: String): String {
     if (AutoCoachPlanner.isLearningHold(reason)) {
-        val n = Regex("""(\d+)\s+(?:of\s+\d+\s+)?session""").find(reason)?.groupValues?.get(1)
+        val n = HOLD_SESSIONS_REGEX.find(reason)?.groupValues?.get(1)
         return if (n != null) "Baseline still forming · $n of ${AutoCoachPlanner.MIN_SESSIONS} sessions"
         else "Baseline still forming"
     }

@@ -911,8 +911,10 @@ class CoachRepository @Inject constructor(
 
     private suspend fun briefFor(pass: CoachPass): CoachBrief {
         val decisions = coachDao.decisionsFor(pass.weekId)
-        // Snapshot once and reuse: feeds the review AND the activation-progress subtitle (CO1).
-        val snapshot = runCatching { adaptationRepository.snapshot() }.getOrNull()
+        // Snapshot once and reuse: feeds the review AND the activation-progress subtitle (CO1). The
+        // cached read: the Coach page asks for the same snapshot right after (lab, readiness,
+        // academy moments), and it is rebuilt whenever an input has changed.
+        val snapshot = runCatching { adaptationRepository.snapshotCached() }.getOrNull()
         val review = snapshot?.let { snap ->
             runCatching {
                 WeeklyReview.assemble(
@@ -956,7 +958,12 @@ class CoachRepository @Inject constructor(
      * words — tracked lifts, the recovery inputs it reads, and what it has learned so far. Pure
      * read off ONE snapshot + the decision history; never writes. Call on screen open only.
      */
-    suspend fun coachLab(): CoachWatch {
+    suspend fun coachLab(): CoachWatch =
+        // The advisors below are CPU passes over the whole history; callers reach this from
+        // viewModelScope (Main), so the work is moved off it here rather than at every call site.
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { assembleCoachLab() }
+
+    private suspend fun assembleCoachLab(): CoachWatch {
         // Read-only display: reuse a recent snapshot (e.g. the Week Brief's) rather than re-running the
         // whole-history fan-out again when Coach Lab is opened straight from it.
         val s = adaptationRepository.snapshotCached()

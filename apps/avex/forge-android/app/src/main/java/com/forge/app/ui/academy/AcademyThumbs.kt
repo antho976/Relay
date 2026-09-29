@@ -8,6 +8,7 @@ import com.forge.app.domain.academy.AcademyCardio
 import com.forge.app.domain.academy.AcademyCoachLessons
 import com.forge.app.domain.academy.AcademyRegistry
 import com.forge.app.domain.academy.AcademyTraining
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.exp
@@ -24,24 +25,28 @@ import kotlin.math.sin
  */
 object AcademyThumbs {
 
-    private val byId: Map<String, Sketch> by lazy {
+    // Built per lesson on first use and kept, so a list shows only the thumbnails it scrolls to.
+    private val builders: Map<String, () -> Sketch> by lazy {
         mapOf(
-            AcademyTraining.gettingStronger.id to stairs(),
-            AcademyTraining.effort.id to reserve(),
-            AcademyTraining.volume.id to doseCurve(),
-            AcademyTraining.form.id to ramp(),
-            AcademyTraining.recovery.id to waves(),
-            AcademyTraining.soreness.id to twoPains(),
-            AcademyTraining.protein.id to plateau(),
-            AcademyCoachLessons.howItDecides.id to loop(),
-            AcademyCoachLessons.readiness.id to band(),
-            AcademyCoachLessons.blocks.id to phases(),
-            AcademyCardio.zone2.id to zone(),
-            AcademyCardio.intervals.id to pulses()
+            AcademyTraining.gettingStronger.id to { stairs() },
+            AcademyTraining.effort.id to { reserve() },
+            AcademyTraining.volume.id to { doseCurve() },
+            AcademyTraining.form.id to { ramp() },
+            AcademyTraining.recovery.id to { waves() },
+            AcademyTraining.soreness.id to { twoPains() },
+            AcademyTraining.protein.id to { plateau() },
+            AcademyCoachLessons.howItDecides.id to { loop() },
+            AcademyCoachLessons.readiness.id to { band() },
+            AcademyCoachLessons.blocks.id to { phases() },
+            AcademyCardio.zone2.id to { zone() },
+            AcademyCardio.intervals.id to { pulses() }
         )
     }
+    private val cache = ConcurrentHashMap<String, Sketch>()
 
-    fun forLesson(lessonId: String): Sketch? = byId[AcademyRegistry.canonical(lessonId)]
+    private fun cached(key: String): Sketch? = builders[key]?.let { build -> cache.getOrPut(key, build) }
+
+    fun forLesson(lessonId: String): Sketch? = cached(AcademyRegistry.canonical(lessonId))
 
     private const val INK_W = 1.9f
     private const val ACCENT_W = 1.6f

@@ -150,7 +150,10 @@ fun SessionHistoryScreen(
                 }
             }
 
-            if (state.isEmpty) {
+            if (!state.loaded) {
+                // Nothing until the first read lands: "No sessions yet" flashed for a frame or two
+                // on every open, before the list it claimed was missing appeared.
+            } else if (state.isEmpty) {
                 // Quiet italic hint — no boxed empty-state card (§12).
                 val hint = if (state.anyFilterActive)
                     "No sessions match. Try a different search or clear a filter."

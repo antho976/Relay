@@ -69,6 +69,8 @@ private fun ExerciseUiState.toWarmupExercise(metric: Boolean, plateLb: Double): 
     )
 }
 
+private val DIGITS_REGEX = Regex("\\d+")
+
 /** Smallest rep count named in a range string ("8-10" to 8, "10/leg" to 10). Defaults to 10. */
 private fun minRepsOf(reps: String): Int =
-    Regex("\\d+").findAll(reps).mapNotNull { it.value.toIntOrNull() }.minOrNull() ?: 10
+    DIGITS_REGEX.findAll(reps).mapNotNull { it.value.toIntOrNull() }.minOrNull() ?: 10

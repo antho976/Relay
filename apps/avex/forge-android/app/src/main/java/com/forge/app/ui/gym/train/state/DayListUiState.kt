@@ -7,7 +7,9 @@ data class DayListUiState(
     val days: List<DayListItem> = emptyList(),
     val activeSession: Session? = null,
     /** "Go with the flow" — when on, the Train tab offers freestyle logging; plan modes hide it. */
-    val freestyleMode: Boolean = false
+    val freestyleMode: Boolean = false,
+    /** False only for the placeholder before the first real emission — no "No plan yet" flash. */
+    val loaded: Boolean = false
 )
 
 data class DayListItem(

@@ -35,8 +35,18 @@ class NotificationsViewModel @Inject constructor(
 
     init { refresh() }
 
-    /** Re-poll the coach pass + Health Connect grants (app open, and every resume). */
-    fun refresh() = viewModelScope.launch { runCatching { feed.refresh() } }
+    private var refreshJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Re-poll the coach pass + Health Connect grants (app open, and every resume). A call while one
+     * is still running joins it instead of starting a second: the nav host's resume observer is
+     * replayed ON_RESUME the moment it registers, right after [init]'s own refresh, so every cold
+     * start used to run two whole refreshes side by side against Home's first queries.
+     */
+    fun refresh(): kotlinx.coroutines.Job {
+        refreshJob?.takeIf { it.isActive }?.let { return it }
+        return viewModelScope.launch { runCatching { feed.refresh() } }.also { refreshJob = it }
+    }
 
     /** Opening the brief IS seeing it, so the row goes as the user navigates. */
     fun onCoachBriefOpened() = durable { feed.markCoachBriefSeen() }

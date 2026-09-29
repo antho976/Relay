@@ -49,7 +49,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.academy.AcademyRegistry
 import com.forge.app.domain.academy.LessonTrack
-import com.forge.app.domain.academy.readMinutes
 import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.LocalTouchExplorationEnabled
 import com.forge.app.ui.common.bounceClick
@@ -121,12 +120,12 @@ fun AcademyContent(
             modifier = Modifier.fillMaxSize().padding(inner),
             contentPadding = PaddingValues(horizontal = GUTTER, vertical = 12.dp)
         ) {
-            item("masthead") {
+            item("masthead", contentType = "masthead") {
                 Masthead(state, onBg, muted)
             }
 
             if (featured.isNotEmpty()) {
-                item("featured") {
+                item("featured", contentType = "featured") {
                     Spacer(Modifier.height(20.dp))
                     FeaturedRotator(
                         featured = featured,
@@ -142,19 +141,19 @@ fun AcademyContent(
             LessonTrack.entries.forEach { track ->
                 val lessons = state.lessonsIn(track)
                 if (lessons.isEmpty()) return@forEach
-                item("chapter-${track.code}") {
+                item("chapter-${track.code}", contentType = "chapter") {
                     Spacer(Modifier.height(44.dp))
                     ChapterHeading(track, onBg, muted)
                     Spacer(Modifier.height(8.dp))
                 }
                 lessons.forEach { lesson ->
-                    item(lesson.lesson.id) {
+                    item(lesson.lesson.id, contentType = "lesson") {
                         ContentsRow(lesson, onBg, muted, accent) { onOpenLesson(lesson.lesson.id) }
                     }
                 }
             }
 
-            item("tail") { Spacer(Modifier.height(72.dp)) }
+            item("tail", contentType = "tail") { Spacer(Modifier.height(72.dp)) }
         }
     }
 }
@@ -162,7 +161,7 @@ fun AcademyContent(
 /** The page's name, and one line of what is behind it. */
 @Composable
 private fun Masthead(state: AcademyViewModel.UiState, onBg: Color, muted: Color) {
-    val minutes = state.all.sumOf { it.lesson.blocks.readMinutes() }
+    val minutes = state.all.sumOf { it.lesson.readMinutes }
     val fresh = state.forYou.size
     Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Text(
@@ -265,7 +264,7 @@ private fun FeaturedRotator(
                 Text(
                     listOfNotNull(
                         if (featured.size > 1 && position >= 0) "${position + 1} of ${featured.size}" else null,
-                        "${lesson.lesson.blocks.readMinutes()} min"
+                        "${lesson.lesson.readMinutes} min"
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.labelMedium,
                     color = muted.copy(alpha = 0.65f)
@@ -341,7 +340,7 @@ private fun ContentsRow(
                     Spacer(Modifier.width(10.dp))
                 }
                 Text(
-                    "${lesson.blocks.readMinutes()} min",
+                    "${lesson.readMinutes} min",
                     style = MaterialTheme.typography.labelSmall,
                     color = muted.copy(alpha = 0.65f)
                 )

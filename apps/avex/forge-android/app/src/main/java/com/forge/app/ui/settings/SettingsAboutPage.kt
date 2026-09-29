@@ -1,6 +1,5 @@
 package com.forge.app.ui.settings
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -35,7 +34,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
@@ -79,10 +77,9 @@ internal fun AboutPage(
         SettingsGroup {
             SettingsGroupBlock(padding = PaddingValues(20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Image(
-                        painter = painterResource(AppIcon.fromKey(iconKey.orEmpty()).previewRes),
-                        contentDescription = null,
-                        modifier = Modifier.size(56.dp).clip(RoundedCornerShape(14.dp))
+                    AppIconPreviewImage(
+                        AppIcon.fromKey(iconKey.orEmpty()).previewRes,
+                        Modifier.size(56.dp).clip(RoundedCornerShape(14.dp))
                     )
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text("Avex", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface)

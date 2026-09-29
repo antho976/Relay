@@ -7,7 +7,6 @@ import com.forge.app.data.repo.AcademyRepository
 import com.forge.app.data.repo.AdaptationRepository
 import com.forge.app.domain.academy.AcademyRegistry
 import com.forge.app.domain.academy.Lesson
-import com.forge.app.domain.academy.readMinutes
 import com.forge.app.ui.nav.Routes
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -84,7 +83,7 @@ class LessonViewModel @Inject constructor(
         id = id,
         title = title,
         lead = lead,
-        minutes = blocks.readMinutes()
+        minutes = readMinutes
     )
 
     /** The reader's own numbers, for [com.forge.app.domain.academy.LessonBlock.Example] slots. */

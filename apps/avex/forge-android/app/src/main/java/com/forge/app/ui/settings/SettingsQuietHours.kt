@@ -61,14 +61,14 @@ internal fun QuietHoursDays(state: SettingsUiState, vm: SettingsViewModel, enabl
         // Back to one window: every day takes the first day's, so what shows is what applies.
         if (!on) {
             val w = schedule.windowFor(days.first())
-            DayOfWeek.entries.forEach { vm.setQuietWindow(it, w.start, w.end) }
+            vm.setQuietWindowAllDays(w.start, w.end)
             expanded = null
         }
     }
     if (!perDay) {
         val w = schedule.windowFor(days.first())
-        SettingsHourRow("From", w.start, use24h, enabled, indent = 16.dp) { h -> DayOfWeek.entries.forEach { vm.setQuietWindow(it, h, w.end) } }
-        SettingsHourRow("Until", w.end, use24h, enabled, indent = 16.dp) { h -> DayOfWeek.entries.forEach { vm.setQuietWindow(it, w.start, h) } }
+        SettingsHourRow("From", w.start, use24h, enabled, indent = 16.dp) { h -> vm.setQuietWindowAllDays(h, w.end) }
+        SettingsHourRow("Until", w.end, use24h, enabled, indent = 16.dp) { h -> vm.setQuietWindowAllDays(w.start, h) }
     } else {
         days.forEach { day ->
             val window = schedule.windowFor(day)

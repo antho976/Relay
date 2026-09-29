@@ -56,7 +56,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -65,9 +64,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
@@ -79,7 +76,6 @@ import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.window.DatePickerDialog
 import com.forge.app.ui.common.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.forge.app.core.io.OrientedBitmaps
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.domain.photo.PhotoPose
 import com.forge.app.domain.photo.PhotoTag
@@ -97,8 +93,6 @@ import com.forge.app.ui.common.currentLocale
 import com.forge.app.ui.onboarding.MAX_BODYWEIGHT_LB
 import com.forge.app.ui.onboarding.MIN_BODYWEIGHT_LB
 import com.forge.app.ui.onboarding.parseSaneBodyweightLb
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.time.Instant
@@ -232,7 +226,13 @@ internal fun GalleryViewerPager(
         GalleryTheme {
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 // The photo owns the whole screen; a tap hides the controls so nothing sits over it.
-                HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                // One neighbour composed each side, so the next photo is already decoding (and
+                // cached) before the swipe reaches it instead of arriving as a black page mid-gesture.
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize(),
+                    beyondViewportPageCount = 1
+                ) { page ->
                     GalleryFullImage(
                         fileFor(photos[page]),
                         Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { chromeVisible = !chromeVisible } }
@@ -626,15 +626,10 @@ internal fun GalleryFullImage(
     alpha: Float = 1f,
     contentScale: ContentScale = ContentScale.Fit
 ) {
-    val bitmap by produceState<ImageBitmap?>(initialValue = null, file.path, reqPx) {
-        // EXACT fit (P-09): `inSampleSize` only halves, so a source landing just under twice the
-        // request keeps close to four times the pixels — about 23 MB of ARGB at 1400 px rather than
-        // 5.9 MB, doubled again by the compare view holding two at once.
-        value = withContext(Dispatchers.IO) {
-            OrientedBitmaps.decode(file, reqPx, exactFit = true)?.asImageBitmap()
-        }
-    }
-    val bmp = bitmap
+    // EXACT fit (P-09) via the shared cache: `inSampleSize` only halves, so a source landing just
+    // under twice the request keeps close to four times the pixels. Cached, so swiping back to a
+    // page, or reopening the compare, shows at once.
+    val bmp = rememberPhotoBitmap(file, reqPx)
     if (bmp != null) {
         Image(
             bitmap = bmp,

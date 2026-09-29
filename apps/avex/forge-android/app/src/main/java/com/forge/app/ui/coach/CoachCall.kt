@@ -27,6 +27,11 @@ import com.forge.app.ui.common.ForgePrimaryCapsule
 /** The change a call makes, decomposed so the tile can rank it instead of printing a sentence. */
 internal data class CallCopy(val subject: String, val change: String, val reason: String)
 
+// Compiled once: callCopy runs per decision on every recomposition of the Coach page.
+private val SWING_REGEX = Regex("""\((\d+)\s*→\s*(\d+)\)""")
+private val DANGLING_PREPOSITION_REGEX = Regex("""\s+(to|from|for|on)\s+(?=\(|$)""")
+private val MULTI_SPACE_REGEX = Regex("""\s{2,}""")
+
 /**
  * One decision as subject + change + reason.
  *
@@ -38,7 +43,7 @@ internal data class CallCopy(val subject: String, val change: String, val reason
  */
 internal fun callCopy(d: CoachDecision): CallCopy {
     val subject = if (d.targetKey == "week") "This week" else d.targetName
-    val swing = Regex("""\((\d+)\s*→\s*(\d+)\)""").find(d.summary)
+    val swing = SWING_REGEX.find(d.summary)
     val change = when (d.type) {
         "deload" -> "Deload week"
         "swap" -> d.summary.substringAfter("→", "").trim()
@@ -69,8 +74,8 @@ internal fun callCopy(d: CoachDecision): CallCopy {
 private fun String.withoutSubject(name: String): String {
     if (name.isBlank() || !contains(name, ignoreCase = true)) return this
     val stripped = replace(name, "", ignoreCase = true)
-        .replace(Regex("""\s+(to|from|for|on)\s+(?=\(|$)"""), " ")
-        .replace(Regex("""\s{2,}"""), " ")
+        .replace(DANGLING_PREPOSITION_REGEX, " ")
+        .replace(MULTI_SPACE_REGEX, " ")
         .trim().trimEnd(':', ' ')
     return stripped.ifBlank { this }.replaceFirstChar { it.uppercaseChar() }
 }

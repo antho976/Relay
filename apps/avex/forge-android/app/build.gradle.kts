@@ -319,7 +319,12 @@ dependencies {
     // DocumentFile — enumerate a user-granted folder (Downloads) to auto-find gym-app exports (#GYMAP-17).
     implementation("androidx.documentfile:documentfile:1.1.0")
 
-    // Baseline Profile — installs the generated app/src/main/baseline-prof.txt at runtime (P2).
+    // Baseline Profile — installs app/src/main/baseline-prof.txt at runtime (P2). Until a profile is
+    // generated on a device (:baselineprofile:generateBaselineProfile), that file holds two wildcard
+    // rules covering the app's own classes, so they are compiled ahead of time at install instead of
+    // running interpreted/JIT through every first launch and first visit to each screen. Libraries
+    // (Compose, Room, Hilt) ship their own profiles. Replace it with the generated one when you can:
+    // a measured profile compiles only the hot paths, where the wildcard compiles everything.
     // profileinstaller is a no-op until the profile is generated on a device.
     implementation(libs.androidx.profileinstaller)
     baselineProfile(project(":baselineprofile"))

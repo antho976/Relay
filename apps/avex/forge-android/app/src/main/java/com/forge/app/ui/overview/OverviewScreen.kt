@@ -653,7 +653,11 @@ fun OverviewScreen(
                     onSecondaryAction = viewModel::hideHomeGoals
                 )
                 Spacer(Modifier.height(12.dp))
-                if (goals.isEmpty()) {
+                // Nothing before the first read (todayStartMs is 0 until then): the empty prompts
+                // below used to flash for a returning user while their goals and sessions loaded.
+                if (state.todayStartMs == 0L) {
+                    // Empty until the first read lands.
+                } else if (goals.isEmpty()) {
                     PromptLine("Pin a goal", "Pin a goal", onOpenGoals)
                 } else {
                     goals.forEachIndexed { index, goal ->
@@ -685,7 +689,9 @@ fun OverviewScreen(
                 onAction = onViewAllHistory
             )
             Spacer(Modifier.height(12.dp))
-            if (state.recentItems.isEmpty()) {
+            if (state.todayStartMs == 0L) {
+                // Empty until the first read lands, as with the goals above.
+            } else if (state.recentItems.isEmpty()) {
                 Text(
                     when {
                         freestyleMode -> "Your first logged workout lands here."

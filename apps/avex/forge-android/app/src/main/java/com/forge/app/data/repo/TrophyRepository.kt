@@ -17,10 +17,11 @@ import com.forge.app.domain.trophy.TrophyStatsSnapshot
 import com.forge.app.program.Program
 import com.forge.app.program.Trophies
 import com.forge.app.program.Trophy
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -60,7 +61,9 @@ class TrophyRepository @Inject constructor(
         }
     }
 
-    suspend fun snapshot(): TrophyStatsSnapshot = coroutineScope {
+    suspend fun snapshot(): TrophyStatsSnapshot = withContext(Dispatchers.Default) {
+        // Default, not the caller's context: the passes after the reads (streaks, early-bird, …) are
+        // CPU work over the whole history, and TrophiesViewModel calls this from Main.
         // Fire the ~14 independent DAO reads concurrently — run serially these were the long pole on
         // profile open (#8). Room serves concurrent reads and none of these depend on each other; the
         // CPU passes over `allSessions` (streak/early-bird/etc.) run after it resolves.

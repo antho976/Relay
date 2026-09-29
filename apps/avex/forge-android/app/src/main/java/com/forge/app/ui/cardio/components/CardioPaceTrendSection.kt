@@ -31,7 +31,7 @@ import com.forge.app.ui.cardio.CardioChartPanel
 import com.forge.app.ui.cardio.CardioFilledChip
 import com.forge.app.ui.gym.stats.components.LineChart
 import com.forge.app.ui.gym.stats.components.olsTrend
-import com.forge.app.ui.common.rememberDrawProgress
+import com.forge.app.ui.common.rememberDrawProgressState
 import com.forge.app.ui.theme.ForgeMotion
 import kotlin.math.roundToInt
 
@@ -61,7 +61,9 @@ internal fun CardioPaceTrendSection(
     val paces = remember(sel, useMiles) {
         sel.points.mapNotNull { paceSecPerUnit(it.durationMin, it.distanceKm, useMiles) }
     }
-    val progress = rememberDrawProgress(sel.typeCode, ForgeMotion.drawTween())
+    // Handed to the chart as a lambda so only its draw reads the reveal, not this section.
+    val progress = rememberDrawProgressState(sel.typeCode, ForgeMotion.drawTween())
+    val paceValues = remember(paces) { paces.map { it.toDouble() } }
 
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         EditorialHeader(label = "Pace trend", muted = muted, accent = accent)
@@ -92,11 +94,11 @@ internal fun CardioPaceTrendSection(
         if (paces.size >= 2) {
             CardioChartPanel {
                 LineChart(
-                    values = paces.map { it.toDouble() },
+                    values = paceValues,
                     lineColor = accent,
                     trendColor = secondary,
                     modifier = Modifier.fillMaxWidth().height(100.dp),
-                    progress = progress
+                    progress = { progress.value }
                 )
                 Spacer(Modifier.height(10.dp))
                 Text(

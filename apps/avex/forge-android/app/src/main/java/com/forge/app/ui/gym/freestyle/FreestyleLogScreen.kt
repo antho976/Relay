@@ -26,6 +26,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -110,9 +111,14 @@ fun FreestyleLogScreen(
     var pendingDraft by log.pendingDraft
     var draftChecked by log.draftChecked
     var leaving by log.leaving
-    val nowMs by produceState(System.currentTimeMillis()) {
+    // Held as a State and read only inside the lazy items that show a clock (the header, a running
+    // stopwatch, the start page): read here, it recomposed this whole screen — every card, the list
+    // DSL, the overlays — once a second for the length of the workout.
+    val clock = produceState(System.currentTimeMillis()) {
         while (true) { value = System.currentTimeMillis(); delay(1000) }
     }
+    // "Last done" labels only change at minute granularity, so they key on this, not the clock.
+    val clockMinute by remember { derivedStateOf { clock.value / 60_000 } }
 
     // Keep the screen awake while logging so it doesn't lock mid-set (GYMAP-74, mirrors the live
     // session). Gated on the Session setting (default on); released when the screen leaves.
@@ -323,16 +329,19 @@ fun FreestyleLogScreen(
     // Recent moves not already on the log, with last time's top set, shared by the empty page's list
     // and the in-session rail. Their last-time sets are prefetched below, so adding one lands with
     // the slab already filled.
-    val recentMoves = recentDefs.filter { d -> items.none { it.libId == d.id } }.mapNotNull { d ->
-        val ex = fsExerciseFor(d.id) ?: return@mapNotNull null
-        val last = lastTime[d.id].orEmpty()
-        FsRecentMove(
-            libId = d.id,
-            name = d.name,
-            muscle = d.muscle,
-            lastReading = last.topReading(ex.timed, weightUnit),
-            lastWhen = last.maxOfOrNull { it.completedAt }?.let { lastDoneLabel(it, nowMs) }
-        )
+    val recentMoves = remember(recentDefs, items, lastTime, weightUnit, clockMinute) {
+        val nowMs = System.currentTimeMillis()
+        recentDefs.filter { d -> items.none { it.libId == d.id } }.mapNotNull { d ->
+            val ex = fsExerciseFor(d.id) ?: return@mapNotNull null
+            val last = lastTime[d.id].orEmpty()
+            FsRecentMove(
+                libId = d.id,
+                name = d.name,
+                muscle = d.muscle,
+                lastReading = last.topReading(ex.timed, weightUnit),
+                lastWhen = last.maxOfOrNull { it.completedAt }?.let { lastDoneLabel(it, nowMs) }
+            )
+        }
     }
     val libraryCount = remember { com.forge.app.program.ExerciseLibrary.all.count { !it.curatedOnly } }
 
@@ -388,8 +397,8 @@ fun FreestyleLogScreen(
                         )
                     } else {
                         FsSessionHeader(
-                            elapsedMs = nowMs - openedAtMs,
-                            restMs = lastLoggedAtMs?.let { nowMs - it },
+                            elapsedMs = clock.value - openedAtMs,
+                            restMs = lastLoggedAtMs?.let { clock.value - it },
                             exerciseCount = items.size,
                             setCount = loggedSets,
                             volumeLb = totalVolumeLb,
@@ -411,7 +420,9 @@ fun FreestyleLogScreen(
                                 dragging = dragging,
                                 tagsOpen = tagsOpenFor == ex.libId,
                                 stopwatchStartMs = stopwatch?.takeIf { it.first == ex.libId }?.second,
-                                nowMs = nowMs,
+                                // Only a running stopwatch reads the clock, so an open card without
+                                // one no longer recomposes every second.
+                                nowMs = if (stopwatch?.first == ex.libId) clock.value else 0L,
                                 onFold = { open(null) },
                                 onRemove = { removeExercise(ex) },
                                 onEntryChange = { set -> entries = entries + (ex.libId to entry.copy(set = set)) },
@@ -465,7 +476,7 @@ fun FreestyleLogScreen(
                                 recent = recentMoves.take(START_RECENT_LIMIT),
                                 templates = templates,
                                 libraryCount = libraryCount,
-                                nowMs = nowMs,
+                                nowMs = clock.value,
                                 onSearch = { showBrowser = true },
                                 onAdd = { id -> fsExerciseFor(id)?.let { addExercises(listOf(it)) } },
                                 onRepeat = { id -> repeatWorkout(id) },
@@ -493,7 +504,7 @@ fun FreestyleLogScreen(
 
         if (showBrowser) {
             ExerciseBrowserScreen(
-                exclude = items.map { it.libId }.toSet(),
+                exclude = remember(items) { items.mapTo(HashSet()) { it.libId } },
                 onClose = { showBrowser = false },
                 onConfirm = { picked ->
                     addExercises(picked.mapNotNull { fsExerciseFor(it) })

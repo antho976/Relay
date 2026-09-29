@@ -25,11 +25,15 @@ import javax.inject.Inject
 class ForgeApp : Application(), Configuration.Provider {
 
     @Inject lateinit var workerFactory: HiltWorkerFactory
-    @Inject lateinit var programRepository: ProgramRepository
     @Inject lateinit var settingsRepository: SettingsRepository
-    @Inject lateinit var reminderScheduler: ReminderScheduler
-    @Inject lateinit var wearStatePublisher: com.forge.app.service.wear.WearStatePublisher
-    @Inject lateinit var resetRepository: com.forge.app.data.repo.ResetRepository
+    // Lazy: field injection runs on the main thread inside super.onCreate(), before the first
+    // Activity exists, and these pull in most of the graph (the wear publisher alone reaches the
+    // directive and adaptation repositories and every DAO they read; reset reaches eighteen). None is
+    // needed until the IO work below, where each is first resolved.
+    @Inject lateinit var programRepository: dagger.Lazy<ProgramRepository>
+    @Inject lateinit var reminderScheduler: dagger.Lazy<ReminderScheduler>
+    @Inject lateinit var wearStatePublisher: dagger.Lazy<com.forge.app.service.wear.WearStatePublisher>
+    @Inject lateinit var resetRepository: dagger.Lazy<com.forge.app.data.repo.ResetRepository>
     private val startupGate = StartupGate()
     internal suspend fun awaitStorageReady() = startupGate.await()
 
@@ -49,7 +53,7 @@ class ForgeApp : Application(), Configuration.Provider {
                 applyPendingRestore()
                 // Before the gate opens, so no screen reads a half-wiped database. Fail-soft: a
                 // reset that can't finish must not stop the app from starting.
-                runCatching { resetRepository.finishInterruptedFactoryReset() }
+                runCatching { resetRepository.get().finishInterruptedFactoryReset() }
                 startupGate.complete()
                 startAppServices()
             } catch (failure: Exception) {
@@ -68,14 +72,14 @@ class ForgeApp : Application(), Configuration.Provider {
             // ensureLoaded marks the program FAILED before rethrowing, and every later reader retries
             // the load, so a boot-time failure is logged here rather than crashing the process from
             // this root coroutine — and the reminder below is still re-armed.
-            runCatching { programRepository.ensureLoaded() }.onFailure { runCatching { writeCrashLog(it) } }
+            runCatching { programRepository.get().ensureLoaded() }.onFailure { runCatching { writeCrashLog(it) } }
             // Finish any regeneration that died between its program transaction and the deload
             // marker beside it (M-06). Two stores, no shared transaction: this is what stops them
             // disagreeing forever. Fail-soft — a reconciliation that throws must not stop startup.
-            runCatching { programRepository.reconcilePendingGeneration() }
+            runCatching { programRepository.get().reconcilePendingGeneration() }
             // A fixed-weekday schedule set before rest days were recorded starts its record today.
             runCatching { settingsRepository.ensureScheduleHistory() }
-            reminderScheduler.ensureScheduled(
+            reminderScheduler.get().ensureScheduled(
                 settingsRepository.trainingReminderEnabled.first(),
                 settingsRepository.trainingReminderHour.first()
             )
@@ -88,7 +92,7 @@ class ForgeApp : Application(), Configuration.Provider {
         }
         // Mirror phone state to the wrist (W1): /session/live + /timer/state + /config collectors,
         // and the app-open /glance/today refresh. All fail-soft — no watch means unread DataItems.
-        wearStatePublisher.start(appScope)
+        wearStatePublisher.get().start(appScope)
     }
 
     /**
