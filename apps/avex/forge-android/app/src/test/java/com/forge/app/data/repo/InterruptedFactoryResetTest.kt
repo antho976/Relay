@@ -8,7 +8,6 @@ import com.forge.app.data.db.inMemoryForgeDb
 import com.forge.app.data.db.session
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -69,20 +68,118 @@ class InterruptedFactoryResetTest {
     @After
     fun tearDown() {
         marker.delete()
+        // Persisted grants are device state that outlives the Application; never leak one.
+        context.contentResolver.persistedUriPermissions.forEach {
+            runCatching {
+                context.contentResolver.releasePersistableUriPermission(
+                    it.uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            }
+        }
         db.close()
     }
 
+    /**
+     * The boot path runs before the startup gate opens, and Room's open helper and the settings
+     * DataStore both wait on that gate: the live reset, called from here, waited for itself and
+     * left every later launch on "Preparing Avex…" (2026-09-28 scan). So it must finish the reset
+     * from the files alone. This database fails on open in place of the shut gate.
+     */
     @Test
-    fun aResetKilledAfterTheTableWipeIsFinishedAtBoot() = runBlocking {
-        // The state the process left: tables gone, preferences still saying "onboarded".
-        settings.completeOnboarding("Sam", com.forge.app.domain.units.WeightUnit.KG, "build_muscle", null)
+    fun aResetKilledAfterTheTableWipeIsFinishedAtBootWithoutOpeningTheStores() = runBlocking {
+        // The state the process left: the database file and preferences still saying "onboarded".
+        val dbFile = context.getDatabasePath("forge.db").apply { parentFile?.mkdirs(); writeText("tables") }
+        val wal = File(dbFile.path + "-wal").apply { writeText("frames") }
+        val prefsFile = File(context.filesDir, com.forge.app.RestoreApply.PREFS_PATH)
+            .apply { parentFile?.mkdirs(); writeText("onboarded") }
         marker.createNewFile()
+        grantFromPicker(backupFolder)
 
-        repo.finishInterruptedFactoryReset()
+        val shut = shutDatabase()
+        try {
+            resetRepository(shut).finishInterruptedFactoryReset()
+        } finally {
+            shut.close()
+        }
 
-        assertFalse("back through onboarding", settings.onboardingDone.first())
+        assertFalse("the database opens empty", dbFile.exists())
+        assertFalse(wal.exists())
+        assertFalse("back through onboarding", prefsFile.exists())
         assertFalse(marker.exists())
+        assertTrue("the folder grant goes with the setting that named it", heldTrees().isEmpty())
     }
+
+    /**
+     * The preference wipe forgets the backup and import folders, but a persisted grant outlives
+     * the setting that named it (M-18): the reset has to give the trees back too.
+     */
+    @Test
+    fun aFactoryResetReleasesTheFolderGrants() = runBlocking {
+        grantFromPicker(backupFolder)
+        grantFromPicker(importFolder)
+
+        repo.factoryReset()
+
+        assertTrue(heldTrees().isEmpty())
+    }
+
+    private val backupFolder: android.net.Uri =
+        android.net.Uri.parse("content://com.android.externalstorage.documents/tree/primary%3ABackups")
+    private val importFolder: android.net.Uri =
+        android.net.Uri.parse("content://com.android.externalstorage.documents/tree/primary%3AImports")
+
+    private fun heldTrees(): List<android.net.Uri> =
+        context.contentResolver.persistedUriPermissions.map { it.uri }
+
+    /** What the folder picker's result leaves behind. */
+    private fun grantFromPicker(uri: android.net.Uri) {
+        context.contentResolver.takePersistableUriPermission(
+            uri,
+            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        )
+    }
+
+    /** Stands in for the shut startup gate: opening this database fails the test. */
+    private fun shutDatabase(): ForgeDatabase =
+        androidx.room.Room.inMemoryDatabaseBuilder(context, ForgeDatabase::class.java)
+            .openHelperFactory(object : androidx.sqlite.db.SupportSQLiteOpenHelper.Factory {
+                override fun create(
+                    configuration: androidx.sqlite.db.SupportSQLiteOpenHelper.Configuration
+                ): androidx.sqlite.db.SupportSQLiteOpenHelper {
+                    val helper = androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory().create(configuration)
+                    return object : androidx.sqlite.db.SupportSQLiteOpenHelper by helper {
+                        override val writableDatabase: androidx.sqlite.db.SupportSQLiteDatabase
+                            get() = error("the boot path opened the database before the startup gate")
+                        override val readableDatabase: androidx.sqlite.db.SupportSQLiteDatabase
+                            get() = error("the boot path opened the database before the startup gate")
+                    }
+                }
+            })
+            .build()
+
+    private fun resetRepository(database: ForgeDatabase) = ResetRepository(
+        sessionDao = database.sessionDao(),
+        trophyDao = database.unlockedTrophyDao(),
+        cardioDao = database.cardioDao(),
+        moodDao = database.moodDao(),
+        suggestionOutcomeDao = database.suggestionOutcomeDao(),
+        adviceEventDao = database.adviceEventDao(),
+        restEventDao = database.restEventDao(),
+        restDayDao = database.restDayDao(),
+        coachDao = database.coachDao(),
+        nearMissDao = database.trophyNearMissDao(),
+        settingsRepo = settings,
+        photoRepo = ProgressPhotoRepository(context, database.bodyweightDao()),
+        avatarRepo = AvatarRepository(context, settings),
+        backupRepo = backupRepo,
+        health = HealthConnectManager(context),
+        clock = clock,
+        db = database,
+        context = context
+    )
 
     /**
      * "Deletes ALL data" has to mean the copies too (2026-09-26 audit, D2). The weekly ZIP holds the

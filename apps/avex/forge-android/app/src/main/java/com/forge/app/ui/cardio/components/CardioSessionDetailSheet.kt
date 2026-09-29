@@ -85,6 +85,10 @@ fun CardioSessionDetailSheet(
     wearableConnected: Boolean = false,
     /** Downsampled HR series of the matched watch workout (W5); non-null with ≥2 points draws the graph. */
     hr: List<com.forge.app.domain.health.HrPoint>? = null,
+    /** AVG / MAX bpm of the RAW series behind [hr] — the downsampled chart series understates the peak.
+     *  Null falls back to reading them off [hr]. */
+    hrAvgBpm: Int? = null,
+    hrMaxBpm: Int? = null,
     /** The matched watch workout's measured stats (W5); drives the "watch measured" reading. */
     watchStats: com.forge.app.domain.health.WatchWorkout? = null,
     /** Adopt the watch's measured duration/distance onto this entry — offered only when they differ. */
@@ -221,11 +225,23 @@ fun CardioSessionDetailSheet(
                     Spacer(Modifier.height(SECTION_GAP))
                     HeartRateSection(
                         hr = hr,
-                        watchStats = watchStats,
-                        entry = entry,
-                        useMiles = useMiles,
+                        avgBpm = hrAvgBpm ?: hr.avgBpm(),
+                        maxBpm = hrMaxBpm ?: hr.maxBpm(),
+                        muted = muted, accent = accent
+                    )
+                }
+            }
+
+            // The watch's own reading of the workout stands on its own item: a watch run with distance
+            // but no HR samples (or no HR grant) still matched, and should still offer its stats.
+            val watchParts = if (!activity.isRest) watchStatParts(watchStats, entry, useMiles) else emptyList()
+            if (watchParts.isNotEmpty()) {
+                item("watch-stats") {
+                    Spacer(Modifier.height(if (hr != null && hr.size >= 2) 10.dp else SECTION_GAP))
+                    WatchStatsLine(
+                        parts = watchParts,
                         onAdoptWatchStats = onAdoptWatchStats,
-                        onBg = onBg, muted = muted, accent = accent
+                        muted = muted
                     )
                 }
             }
@@ -386,23 +402,16 @@ private fun sessionTags(entry: CardioEntry, useMiles: Boolean): List<String> = b
 
 /**
  * The matched watch workout's heart rate over this session (W5): an open line chart (§10 — stroke
- * `primary`, no frame) with AVG · MAX as the header's reading, and — when the watch measured a
- * different duration/distance than the entry carries — one "watch measured" line with an explicit
- * adopt action (never a silent overwrite).
+ * `primary`, no frame) with AVG · MAX as the header's reading.
  */
 @Composable
 private fun HeartRateSection(
     hr: List<com.forge.app.domain.health.HrPoint>,
-    watchStats: com.forge.app.domain.health.WatchWorkout?,
-    entry: CardioEntry,
-    useMiles: Boolean,
-    onAdoptWatchStats: (() -> Unit)?,
-    onBg: Color,
+    avgBpm: Int?,
+    maxBpm: Int?,
     muted: Color,
     accent: Color
 ) {
-    val avg = hr.avgBpm()
-    val max = hr.maxBpm()
     Column(Modifier.padding(horizontal = 24.dp)) {
         Row(
             Modifier.fillMaxWidth(),
@@ -410,9 +419,9 @@ private fun HeartRateSection(
             verticalAlignment = Alignment.CenterVertically
         ) {
             EditorialHeader(label = "Heart rate", muted = muted, accent = accent)
-            if (avg != null && max != null) {
+            if (avgBpm != null && maxBpm != null) {
                 Text(
-                    "AVG $avg · MAX $max BPM",
+                    "AVG $avgBpm · MAX $maxBpm BPM",
                     style = MaterialTheme.typography.labelSmall,
                     color = muted, letterSpacing = 0.5.sp
                 )
@@ -426,35 +435,51 @@ private fun HeartRateSection(
                 modifier = Modifier.fillMaxWidth().height(96.dp)
             )
         }
-        // The watch's own reading of this workout, offered beside the logged values (§4.9). The
-        // adopt link renders only when it would actually change something.
-        val watchParts = watchStats?.let { w ->
-            buildList {
-                if (w.durationMin > 0 && w.durationMin != entry.durationMin) add("${w.durationMin} min")
-                w.distanceKm?.takeIf { d -> entry.distanceKm == null || kotlin.math.abs(d - entry.distanceKm!!) > 0.05 }
-                    ?.let { add(formatDistance(it, useMiles)) }
-                w.kcal?.let { add("${it.toInt()} kcal") }
-            }
-        }.orEmpty()
-        if (watchParts.isNotEmpty()) {
-            Spacer(Modifier.height(10.dp))
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "Watch measured ${watchParts.joinToString(" · ")}",
-                    style = MaterialTheme.typography.bodySmall, color = muted,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(12.dp))
-                if (onAdoptWatchStats != null &&
-                    watchParts.any { !it.endsWith("kcal") } // kcal alone isn't adoptable onto the entry
-                ) {
-                    CardioLinkCapsule("Use watch stats", "Use watch stats", onAdoptWatchStats)
-                }
-            }
+    }
+}
+
+/**
+ * What the watch measured that differs from the entry (W5): a different duration, a different
+ * distance, and its kcal. Empty when there is nothing to say.
+ */
+private fun watchStatParts(
+    watchStats: com.forge.app.domain.health.WatchWorkout?,
+    entry: CardioEntry,
+    useMiles: Boolean
+): List<String> = watchStats?.let { w ->
+    buildList {
+        if (w.durationMin > 0 && w.durationMin != entry.durationMin) add("${w.durationMin} min")
+        w.distanceKm?.takeIf { d -> entry.distanceKm == null || kotlin.math.abs(d - entry.distanceKm!!) > 0.05 }
+            ?.let { add(formatDistance(it, useMiles)) }
+        w.kcal?.let { add("${it.toInt()} kcal") }
+    }
+}.orEmpty()
+
+/**
+ * The watch's own reading of this workout, offered beside the logged values (§4.9) with an explicit
+ * adopt action (never a silent overwrite). The adopt link renders only when it would change something.
+ */
+@Composable
+private fun WatchStatsLine(
+    parts: List<String>,
+    onAdoptWatchStats: (() -> Unit)?,
+    muted: Color
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "Watch measured ${parts.joinToString(" · ")}",
+            style = MaterialTheme.typography.bodySmall, color = muted,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(Modifier.width(12.dp))
+        if (onAdoptWatchStats != null &&
+            parts.any { !it.endsWith("kcal") } // kcal alone isn't adoptable onto the entry
+        ) {
+            CardioLinkCapsule("Use watch stats", "Use watch stats", onAdoptWatchStats)
         }
     }
 }

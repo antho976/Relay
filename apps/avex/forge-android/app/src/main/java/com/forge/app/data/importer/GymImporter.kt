@@ -259,13 +259,37 @@ object ImportParsing {
         text.lineSequence().firstOrNull { it.isNotBlank() }?.lowercase().orEmpty()
 
     /**
-     * Resolve whether a row's weight is in kg, from the strongest signal available: a per-row unit
-     * cell wins, then a unit baked into the weight header ("Weight (kgs)"), else the caller's
-     * [assumeKg] fallback. Shared so FitNotes / the generic CSV resolve units identically.
+     * The unit a weight cell states for itself ("225 lb" false, "100 kg" true), or null when it
+     * carries none. [parseWeight] strips the suffix, so without this a cell's own unit was thrown
+     * away and the row converted with whatever the column or the app's unit said instead.
+     */
+    fun weightCellIsKg(raw: String): Boolean? {
+        val s = raw.trim().lowercase()
+        return when {
+            s.endsWith("kg") || s.endsWith("kgs") -> true
+            s.endsWith("lb") || s.endsWith("lbs") -> false
+            else -> null
+        }
+    }
+
+    /**
+     * True for Avex's own PR-list export ("exercise,muscle,bestWeightLb,reps,date"). It has the
+     * date/exercise/weight/reps shape of a workout CSV but holds one best set per exercise, not
+     * sessions, so importing it fabricates finished workouts. [header] is [firstLine]'s output.
+     */
+    fun isAvexPrListHeader(header: String): Boolean =
+        header.contains("bestweightlb") && header.contains("muscle")
+
+    /**
+     * Resolve whether a row's weight is in kg, from the strongest signal available: a unit written
+     * in the weight cell itself ([weightCell], "225 lb") wins, then a per-row unit cell, then a unit
+     * baked into the weight header ("Weight (kgs)"), else the caller's [assumeKg] fallback. Shared
+     * so FitNotes / the generic CSV resolve units identically.
      */
     fun rowIsKg(
-        row: List<String>, unitCol: Int?, weightHeaderKg: Boolean, weightHeaderLb: Boolean, assumeKg: Boolean
-    ): Boolean = when {
+        row: List<String>, unitCol: Int?, weightHeaderKg: Boolean, weightHeaderLb: Boolean, assumeKg: Boolean,
+        weightCell: String = ""
+    ): Boolean = weightCellIsKg(weightCell) ?: when {
         unitCol != null -> at(row, unitCol).lowercase().startsWith("kg")
         weightHeaderKg -> true
         weightHeaderLb -> false

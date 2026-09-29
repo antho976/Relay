@@ -220,6 +220,10 @@ class WorkoutRepository @Inject constructor(
      * the lift feeds the lifetime PR count / PRs list like any other workout.
      */
     suspend fun flagPrForLoggedExercise(loggedExerciseId: Long, exerciseId: String): Boolean {
+        // First-ever time on this exercise: no record to beat, so nothing flags. This is the day
+        // screen's rule (computePrFlags), not PrDetector's empty-history "any weight is a PR" — a
+        // first freestyle/wrist session must not paint gold and inflate the lifetime PR count.
+        if (!hasHistoryForExercise(exerciseId, loggedExerciseId)) return false
         // The frontier (per-rep max weight, excluding this entry) substitutes exactly for full history
         // in PrDetector, which reads only weightLb/reps/isAssisted — same wrapping the day screen uses.
         val running = repMaxFrontierForExercise(exerciseId, loggedExerciseId).map { row ->
@@ -561,8 +565,9 @@ class WorkoutRepository @Inject constructor(
 
     /** Persists the comma-separated tag list for a finished session (#107). */
     suspend fun setSessionTags(sessionId: Long, tags: List<String>) {
-        val session = sessionDao.get(sessionId) ?: return
-        sessionDao.update(session.copy(tags = tags.joinToString(",")))
+        // One column: the finish sheet's untracked / intensity / type writes are fire-and-forget, and
+        // a whole-row rewrite from an earlier read could revert one that committed in between.
+        sessionDao.setTags(sessionId, tags.joinToString(","))
     }
 
     suspend fun setDifficultyTag(setId: Long, tag: String?) = loggedSetDao.setDifficultyTag(setId, tag)
@@ -615,30 +620,37 @@ class WorkoutRepository @Inject constructor(
             discardSession(active.id)
             return OrphanResolution(finishedToHistory = false)
         }
-        val now = clock.nowMs()
-        // This session was abandoned earlier (force-stop / regenerate), not finished just now: close any
-        // open sitting at the LAST logged-set activity rather than `now` (which could be days later), then
-        // stamp the real active time exactly as [finishSession] does — otherwise activeSeconds stays 0 and
-        // [Session.durationMinutes] falls back to wall-clock, showing a multi-day "workout" in history.
-        closeDanglingSegments(active.id)
-        val activeSeconds = (closedSegmentMs(active.id) / 1000L).toInt().coerceAtLeast(0)
-        // Mirror finishSession's denormalised stamps so history/recap/trophies read this session correctly:
-        // volume through the shared calculator (no divergence if its formula changes), and prCount from the
-        // per-exercise PR flags (the sets also count toward all-time PRs via the frontier queries).
-        val prCount = loggedExerciseDao.forSession(active.id).count { it.wasPr }
-        sessionDao.update(
-            active.copy(
-                finishedAt = now,
+        // Resolution can run days after the session was abandoned, so its finish time is the LAST
+        // logged-set activity, not `now`: `finished_at` drives the streak's trained days and the
+        // weekly stats/export bucketing, and stamping resolution time credited the wrong day/week.
+        val lastActivityMs = sets.maxOf { it.completedAt }.coerceAtLeast(active.startedAt)
+        // Same conditional-stamp + targeted-totals shape as finishSession, in one transaction: a
+        // concurrent finish, tag or journal write is neither overwritten by a stale whole-row copy
+        // nor finished twice.
+        val activeSeconds = database.withTransaction {
+            if (sessionDao.finishIfUnfinished(active.id, lastActivityMs) == 0) return@withTransaction null
+            // This session was abandoned earlier (force-stop / regenerate), not finished just now: close any
+            // open sitting at the LAST logged-set activity rather than `now` (which could be days later), then
+            // stamp the real active time exactly as [finishSession] does — otherwise activeSeconds stays 0 and
+            // [Session.durationMinutes] falls back to wall-clock, showing a multi-day "workout" in history.
+            closeDanglingSegments(active.id)
+            val seconds = (closedSegmentMs(active.id) / 1000L).toInt().coerceAtLeast(0)
+            // Mirror finishSession's denormalised stamps so history/recap/trophies read this session correctly:
+            // volume through the shared calculator (no divergence if its formula changes), and prCount from the
+            // per-exercise PR flags (the sets also count toward all-time PRs via the frontier queries).
+            sessionDao.setFinishTotals(
+                id = active.id,
                 totalVolumeLb = VolumeCalculator.sessionVolumeLb(sets),
+                prCount = loggedExerciseDao.forSession(active.id).count { it.wasPr },
                 setCount = sets.size,
-                prCount = prCount,
-                activeSeconds = activeSeconds
+                activeSeconds = seconds
             )
-        )
+            seconds
+        } ?: return null // someone else finished it first — nothing left to resolve
         // Mirror to Health Connect like a normal finish (a recovered session is a real session) — but
         // end the HC record at the LAST logged activity, not `now`: resolution can run days after the
         // session was abandoned, and `now` would write a multi-day workout into Samsung Health.
-        val hcEndMs = sets.maxOfOrNull { it.completedAt } ?: (active.startedAt + activeSeconds * 1000L)
+        val hcEndMs = lastActivityMs
         writeFinishMirrors(active, endMs = hcEndMs, activeSeconds = activeSeconds)
         refreshWidget()
         return OrphanResolution(finishedToHistory = true)
@@ -923,7 +935,8 @@ class WorkoutRepository @Inject constructor(
 
     // ─── Suggestion outcomes (auto-coach Phase 2 calibration) ─────────────────
 
-    /** First set logged while a weight suggestion was showing: record suggestion vs reality. */
+    /** First set logged while a weight suggestion was showing: record suggestion vs reality.
+     *  Returns the outcome's row id, so an undo of that set can take the sample back out. */
     suspend fun recordSuggestionOutcome(
         exerciseId: String,
         unitCode: String,
@@ -931,12 +944,15 @@ class WorkoutRepository @Inject constructor(
         takenLb: Double,
         reps: Int,
         rangeText: String
-    ) = suggestionOutcomeDao.insert(
+    ): Long = suggestionOutcomeDao.insert(
         SuggestionOutcome(
             exerciseId = exerciseId, unit = unitCode, suggestedLb = suggestedLb,
             takenLb = takenLb, reps = reps, rangeText = rangeText, loggedAt = clock.nowMs()
         )
     )
+
+    /** Drop one suggestion outcome: the set it described was undone or deleted. */
+    suspend fun deleteSuggestionOutcome(id: Long) = suggestionOutcomeDao.deleteById(id)
 
     /** Recent suggestion outcomes — SuggestionCalibrator's input. */
     suspend fun recentSuggestionOutcomes(limit: Int = 500): List<SuggestionOutcome> =

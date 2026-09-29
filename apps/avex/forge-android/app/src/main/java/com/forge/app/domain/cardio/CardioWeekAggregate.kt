@@ -17,6 +17,9 @@ data class CardioWeekAggregate(
     val sessions: Int,
     val minutes: Int,
     val distanceKm: Double,
+    /** Minutes of only the sessions that logged a distance — the denominator an average pace needs,
+     *  since a distance-less HIIT session adds minutes but no kilometres. */
+    val pacedMinutes: Int,
     /** Index 0 = Monday … 6 = Sunday; active minutes that day. Always length 7. */
     val perDayMinutes: List<Int>,
     /** Active minutes by type, busiest first. */
@@ -36,6 +39,7 @@ fun cardioWeekAggregate(entries: List<CardioEntry>, weekStartMs: Long, zone: Zon
     var sessions = 0
     var minutes = 0
     var distance = 0.0
+    var pacedMinutes = 0
     for (e in entries) {
         if (e.type == CardioType.REST.code) continue
         val date = Instant.ofEpochMilli(e.date).atZone(zone).toLocalDate()
@@ -44,6 +48,7 @@ fun cardioWeekAggregate(entries: List<CardioEntry>, weekStartMs: Long, zone: Zon
         perDay[idx.toInt()] += e.durationMin
         minutes += e.durationMin
         distance += e.distanceKm ?: 0.0
+        if ((e.distanceKm ?: 0.0) > 0.0) pacedMinutes += e.durationMin
         sessions++
         activeDays += date
         val t = CardioType.fromCode(e.type)
@@ -54,6 +59,7 @@ fun cardioWeekAggregate(entries: List<CardioEntry>, weekStartMs: Long, zone: Zon
         sessions = sessions,
         minutes = minutes,
         distanceKm = distance,
+        pacedMinutes = pacedMinutes,
         perDayMinutes = perDay.toList(),
         minutesByType = byType.entries.sortedByDescending { it.value }.map { it.key to it.value }
     )

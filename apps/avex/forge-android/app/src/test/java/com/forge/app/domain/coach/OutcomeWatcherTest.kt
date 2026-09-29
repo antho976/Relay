@@ -40,7 +40,9 @@ class OutcomeWatcherTest {
     private fun bout(startDay: Int, skipped: Boolean = false, effort: EffortRating? = EffortRating.JUST_RIGHT) =
         ExerciseBout(
             sessionStartedAt = startDay * day, effort = effort, hitFullTarget = false,
-            skipped = skipped, swappedName = null, sets = listOf(set(45.0))
+            skipped = skipped, swappedName = null, sets = listOf(set(45.0)),
+            // The swapped-in lift [decision] rotates to: the movement a swap verdict is judged on.
+            performedExerciseId = "alt-1"
         )
 
     /** A non-skipped bout at a chosen working weight — for the rep_shift e1RM-trend checks. */
@@ -309,6 +311,34 @@ class OutcomeWatcherTest {
         val verdict = OutcomeWatcher.evaluate(listOf(decision(appliedAtDay = 44)), snapshot()).single()
         assertEquals(CoachDecision.OUTCOME_NOT_FOLLOWED, verdict.outcome)
         assertTrue(verdict.failReason!!.contains("wasn't trained"))
+    }
+
+    @Test
+    fun swap_windowClosed_onlyADifferentLiftTrained_isNotFollowed() {
+        // History is filed by slot: the athlete kept training the ORIGINAL lift (or a third one) in
+        // the slot. Those bouts have sets and aren't skipped, but the rotation was never performed.
+        val original = bout(48).copy(performedExerciseId = "ua1")
+        val third = bout(52).copy(performedExerciseId = "other")
+        val verdict = OutcomeWatcher.evaluate(
+            listOf(decision(appliedAtDay = 44)),
+            snapshot(mapOf("ua1" to listOf(original, third)))
+        ).single()
+        assertEquals(CoachDecision.OUTCOME_NOT_FOLLOWED, verdict.outcome)
+    }
+
+    @Test
+    fun repShift_windowClosed_judgedOnTheLiftPerformedNotAnEarlierSwappedOutOne() {
+        // Barbell row (e1RM ~160) was swapped to a dumbbell row (~62) before the rep shift. The lighter
+        // lift holding steady is not a slip against the barbell's best.
+        fun lift(day: Int, weight: Double, id: String) = wbout(day, weight).copy(performedExerciseId = id)
+        val verdict = OutcomeWatcher.evaluate(
+            listOf(decision(type = "rep_shift", appliedAtDay = 44, undoData = "6-8")),
+            snapshot(mapOf("ua1" to listOf(
+                lift(30, 135.0, "barbell-row"), lift(40, 50.0, "db-row"),
+                lift(48, 50.0, "db-row"), lift(52, 52.0, "db-row")
+            )))
+        ).single()
+        assertEquals("ok", verdict.outcome)
     }
 
     @Test

@@ -20,7 +20,20 @@ data class SetWithExerciseAndSession(
     @ColumnInfo(name = "started_at") val sessionStartedAt: Long,
     /** Stable id of the owning LoggedExercise — lets PR display match the exact set (not just session+exercise). */
     @ColumnInfo(name = "logged_exercise_id") val loggedExerciseId: Long,
-    @ColumnInfo(name = "rpe") val rpe: Double? = null
+    @ColumnInfo(name = "rpe") val rpe: Double? = null,
+    /** The logged exercise's stored name; for an imported lift the catalogue can't match (`ext-*`) it is the only readable label. */
+    @ColumnInfo(name = "swapped_name") val swappedName: String? = null
+)
+
+/**
+ * One tracked, non-skipped set for the Stats page, with [isStrengthSet] false for a timed hold or an
+ * assisted set. A single whole-history query feeds both populations: the strength one (e1RM, PRs)
+ * keeps only strength sets, and the activity one (consistency, sets per muscle) keeps every row with
+ * the weight nulled on the others.
+ */
+data class StatsSetRow(
+    @androidx.room.Embedded val set: SetWithExerciseAndSession,
+    @ColumnInfo(name = "is_strength_set") val isStrengthSet: Boolean
 )
 
 data class RecentPrRow(

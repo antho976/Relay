@@ -140,6 +140,16 @@ fun ProfileScreen(
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Sessions or cardio deleted from the day sheet's drill-down change the totals, streak and lit
+    // days; the ViewModel outlives that trip, so re-read them when the screen comes back.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) viewModel.refresh()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val dayLog by viewModel.dayLog.collectAsStateWithLifecycle()
     val galleryLocked by LocalAppLock.current.galleryLocked.collectAsStateWithLifecycle()
     val showRankUpCelebration by viewModel.showRankUpCelebration.collectAsStateWithLifecycle()

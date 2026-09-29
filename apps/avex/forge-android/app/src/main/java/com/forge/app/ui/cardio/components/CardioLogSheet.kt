@@ -132,7 +132,14 @@ fun CardioLogSheet(
     // row stores, so the bundle carries a String and the Set is decoded from it.
     var conditionsCode by rememberSaveable(editKey) { mutableStateOf(editing?.conditions) }
     val conditions = CardioCondition.decode(conditionsCode)
-    var dateMs by rememberSaveable(editKey) { mutableStateOf(editing?.date ?: System.currentTimeMillis()) }
+    // When the sheet opened (or the edited entry's own date) — a NEW entry's start defaults to this
+    // moment MINUS its duration, so a session logged right after finishing does not end in the future.
+    val openedAtMs = rememberSaveable(editKey) { editing?.date ?: System.currentTimeMillis() }
+    var dateMs by rememberSaveable(editKey) { mutableStateOf(openedAtMs) }
+    // Set once the start time is picked by hand; from then on the picked time is used as-is.
+    var timePicked by rememberSaveable(editKey) { mutableStateOf(false) }
+    // Set once the day is picked by hand; from then on the start never leaves that calendar day.
+    var datePicked by rememberSaveable(editKey) { mutableStateOf(false) }
     var showDatePicker by rememberSaveable { mutableStateOf(false) }
     // The entry's start time (GYMAP-33) is the time-of-day of the same [dateMs] — no separate column.
     var showTimePicker by rememberSaveable { mutableStateOf(false) }
@@ -149,12 +156,13 @@ fun CardioLogSheet(
     }
 
     // Accepts plain minutes ("90") or an H:MM clock value ("1:30" -> 90) — GYMAP-41.
-    val durationInt = parseDurationMin(durationText)
+    val durationInt = parseDurationMin(durationText).coerceAtMost(com.forge.app.data.importer.ImportBounds.MAX_CARDIO_MINUTES)
     // The field holds a number in the display unit; convert to the canonical km we store + pass to onSave.
     // An untouched field keeps the stored km: re-parsing its one-decimal seed turned an adopted
     // 10.047 km into 10.0 on a note-only edit, and 5 km edited in miles mode into 4.989 (audit
     // 2026-09-26, 05). Elevation, seeded as a whole number, gets the same rule.
     val distanceKm = storedUnlessEdited(distanceText, distanceSeed, editing?.distanceKm) { parseToKm(it, useMiles) }
+        ?.coerceAtMost(com.forge.app.data.importer.ImportBounds.MAX_CARDIO_DISTANCE_KM)
     val intervalInt = intervalText.toIntOrNull()
     // Per-type fields — raw parsed values; the VM keeps only the ones the chosen activity surfaces.
     val inclineValue = inclineText.toDoubleOrNull()
@@ -163,10 +171,25 @@ fun CardioLogSheet(
     val canSubmit = if (type.isRest) restReason != null else durationInt > 0
     val distanceFocus = remember { FocusRequester() }
 
+    // The start time actually saved and shown. A never-picked time on a new entry counts back from
+    // when the sheet opened; a backdated day or a picked time is already earlier/explicit and stands.
+    // Counting back can cross midnight (00:20 minus a 45-min run is yesterday 23:35); that is right
+    // for the default, but a day the user PICKED stands, so the start is then held to that day.
+    val startMs = if (editing == null && !timePicked) {
+        val counted = minOf(dateMs, openedAtMs - (if (type.isRest) 0 else durationInt) * 60_000L)
+        if (datePicked) {
+            val zone = java.time.ZoneId.systemDefault()
+            counted.coerceAtLeast(
+                java.time.Instant.ofEpochMilli(dateMs).atZone(zone).toLocalDate()
+                    .atStartOfDay(zone).toInstant().toEpochMilli()
+            )
+        } else counted
+    } else dateMs
+
     // "MON · JUL 6" — the year only appears once it differs from today's (backdating that far is rare).
     // Keyed on dateMs so the formatters aren't rebuilt on every recomposition (e.g. each keystroke).
-    val dateHeader = remember(dateMs) {
-        val d = Date(dateMs)
+    val dateHeader = remember(startMs) {
+        val d = Date(startMs)
         val sameYear = SimpleDateFormat("yyyy", Locale.getDefault()).format(d) ==
             SimpleDateFormat("yyyy", Locale.getDefault()).format(Date())
         val day = SimpleDateFormat("EEE", Locale.getDefault()).format(d).uppercase().take(3)
@@ -176,9 +199,9 @@ fun CardioLogSheet(
     // "7:24 AM" (GYMAP-33): the app's own 12/24-hour setting, matching the time picker below. It
     // followed the phone's setting, so with "Clock" set in Settings the header and picker disagreed.
     val use24h = com.forge.app.ui.theme.LocalForgeSettings.current.timeFormat24h
-    val timeHeader = remember(dateMs, use24h) {
+    val timeHeader = remember(startMs, use24h) {
         SimpleDateFormat(com.forge.app.domain.units.clockPattern(use24h), Locale.getDefault())
-            .format(Date(dateMs)).uppercase()
+            .format(Date(startMs)).uppercase()
     }
 
     val focus = LocalFocusManager.current
@@ -228,7 +251,7 @@ fun CardioLogSheet(
                                 ForgeFieldRow(
                                     label = "Duration",
                                     value = durationText,
-                                    onValueChange = { durationText = sanitizeDuration(it) },
+                                    onValueChange = { durationText = capDurationText(sanitizeDuration(it)) },
                                     placeholder = "30",
                                     // Reflects how the typed value reads: plain minutes, or an H:MM clock (GYMAP-41).
                                     suffix = if (durationText.contains(':')) "h:mm" else "min",
@@ -251,7 +274,7 @@ fun CardioLogSheet(
                                 ForgeFieldRow(
                                     label = "Distance",
                                     value = distanceText,
-                                    onValueChange = { distanceText = sanitizeDecimal(it) },
+                                    onValueChange = { distanceText = capDistanceText(sanitizeDecimal(it), useMiles) },
                                     placeholder = "0",
                                     suffix = distanceUnitLabel(useMiles),
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
@@ -307,7 +330,8 @@ fun CardioLogSheet(
             }
 
             cardioSaveActionsItem(
-                editing = editing != null,
+                // A watch-import prefill (id 0) is a NEW entry shown through `editing`, not a saved one.
+                editing = editing != null && editing.id != 0L,
                 activity = type,
                 canSubmit = canSubmit,
                 onSubmit = {
@@ -318,7 +342,7 @@ fun CardioLogSheet(
                         if (type.isRest) null else effort,
                         if (type.isRest) restReason else null,
                         note.ifBlank { null },
-                        dateMs,
+                        startMs,
                         if (type.isHiit) intervalInt else null,
                         if (type.isRest) null else hrZone,
                         inclineValue,
@@ -334,16 +358,17 @@ fun CardioLogSheet(
 
     if (showDatePicker) {
         CardioDatePickerDialog(
-            dateMs = dateMs,
-            onPicked = { dateMs = it },
+            // Seeded with the start actually shown, so the picker preselects the header's day.
+            dateMs = startMs,
+            onPicked = { dateMs = it; datePicked = true },
             onDismiss = { showDatePicker = false }
         )
     }
 
     if (showTimePicker) {
         CardioTimePickerDialog(
-            dateMs = dateMs,
-            onPicked = { dateMs = it },
+            dateMs = startMs,
+            onPicked = { dateMs = it; timePicked = true },
             onDismiss = { showTimePicker = false }
         )
     }

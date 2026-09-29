@@ -47,4 +47,7 @@ class BodyMeasurementRepository @Inject constructor(
     suspend fun latest(type: BodyMeasurementType): BodyMeasurementEntry? = dao.latest(type.key)
 
     suspend fun delete(id: Long) = dao.delete(id)
+
+    /** Put a deleted reading back exactly as it was (its id and day), for the Undo snackbar. */
+    suspend fun restore(entry: BodyMeasurementEntry) { dao.upsert(entry) }
 }

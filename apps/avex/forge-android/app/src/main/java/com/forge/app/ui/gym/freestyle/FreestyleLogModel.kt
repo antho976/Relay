@@ -201,7 +201,7 @@ internal fun formatElapsed(ms: Long): String {
 
 /** A library move as a fresh log row. */
 internal fun fsExerciseFor(libId: String): FsExercise? {
-    val def = ExerciseLibrary.byId(libId) ?: return null
+    val def = ExerciseLibrary.byId(libId) ?: return customFsExerciseFor(libId)
     return FsExercise(
         libId = def.id,
         name = def.name,
@@ -209,6 +209,13 @@ internal fun fsExerciseFor(libId: String): FsExercise? {
         bodyweight = def.unit == ExerciseUnit.BODYWEIGHT,
         timed = def.timed
     )
+}
+
+/** A user-created move (picked again from the browser) as a fresh log row, named and classified by the registry. */
+private fun customFsExerciseFor(libId: String): FsExercise? {
+    if (!isCustomExerciseId(libId)) return null
+    val def = CustomExerciseRegistry.get(libId) ?: return null
+    return FsExercise(libId = def.id, name = def.name, muscle = def.muscle, bodyweight = false, custom = true)
 }
 
 /**
@@ -336,7 +343,8 @@ internal fun List<FreestyleTemplateExercise>.toItems(weightUnit: WeightUnit): Li
             FsSet(
                 weight = if (ex.bodyweight) "" else s.weightLb?.let { weightInputValue(it, weightUnit) } ?: "",
                 reps = if (ex.timed) "" else s.reps.toString(),
-                hold = s.durationSeconds?.let { holdText(it) } ?: ""
+                // Legacy timed rows kept their seconds in `reps` with a null duration (as toEntrySet reads them).
+                hold = if (ex.timed) holdText(s.durationSeconds ?: s.reps) else s.durationSeconds?.let { holdText(it) } ?: ""
             )
         }
         ex.copy(sets = sets.filter { ex.isLogged(it) })

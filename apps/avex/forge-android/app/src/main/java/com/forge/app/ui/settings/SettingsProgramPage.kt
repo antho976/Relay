@@ -194,7 +194,7 @@ private fun PlanSection(state: SettingsUiState, vm: SettingsViewModel) {
         }
     }
 
-    SettingsGroup("Days per week", footer = "Your split follows the count, and it sets your weekly target on Home.") {
+    SettingsGroup("Days per week", footer = "Sets your weekly target on Home. Your split changes the next time you generate.") {
         SettingsGroupBlock(padding = PaddingValues(12.dp)) {
             SettingsSegmented(
                 options = DAY_COUNT_OPTIONS,
@@ -342,10 +342,10 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
                     selected = selected,
                     role = Role.Checkbox,
                     onClick = {
-                        val current = state.availableEquipment.toMutableSet()
-                        if (selected) current.remove(equip.name) else current.add(equip.name)
-                        vm.setAvailableEquipment(current)
-                        equipmentEdited = true
+                        vm.toggleEquipment(equip.name)
+                        // The last selected piece can't be removed (the tap is refused), so nothing
+                        // changed and there is nothing to regenerate for.
+                        if (!(selected && state.availableEquipment.size == 1)) equipmentEdited = true
                     },
                     modifier = mod
                 )

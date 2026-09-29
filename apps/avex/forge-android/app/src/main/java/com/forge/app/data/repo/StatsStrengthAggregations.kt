@@ -48,6 +48,25 @@ internal fun buildPrEntries(
     }
 }
 
+/**
+ * Display name for a lift grouped by id, or null to leave it out. A catalogue/active/custom id keeps its
+ * plan name. An id [Program.exercise] cannot resolve is listed only when its stored row name IS its
+ * identity: an imported `ext-*` lift or a user-created `custom-*` move whose registry entry is gone. Those
+ * are named from that stored name (then [Program.exerciseDisplayName]).
+ *
+ * Any other unresolved id (a seed-split id rotated out by a regenerate, a removed library movement) stays
+ * dropped, as before: its `swapped_name` is a mid-session substitute, not the lift's name, and a rotated-out
+ * seed lift would otherwise sit beside its library successor as a second row with the same name.
+ */
+internal fun liftDisplayName(
+    id: String,
+    sets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
+): String? {
+    Program.exercise(id)?.name?.let { return it }
+    if (!id.startsWith("ext-") && !id.startsWith("custom-")) return null
+    return Program.exerciseDisplayName(id, sets.lastOrNull { !it.swappedName.isNullOrBlank() }?.swappedName)
+}
+
 internal fun buildHallOfFame(
     allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>,
     bodyweightLb: Double? = null
@@ -56,7 +75,7 @@ internal fun buildHallOfFame(
         .filter { it.weightLb != null }
         .groupBy { it.exerciseId }
         .mapNotNull { (exerciseId, sets) ->
-            val plan = Program.exercise(exerciseId) ?: return@mapNotNull null
+            val plan = Program.exercise(exerciseId)
             val bestSet = sets.maxByOrNull { it.weightLb!! } ?: return@mapNotNull null
             // Rounded to one decimal, not truncated: 1.99x bodyweight used to render "1.9x".
             val rel = if (bodyweightLb != null && bodyweightLb > 0)
@@ -64,15 +83,16 @@ internal fun buildHallOfFame(
             else null
             PrRecord(
                 exerciseId = exerciseId,
-                exerciseName = plan.name,
+                exerciseName = liftDisplayName(exerciseId, sets) ?: return@mapNotNull null,
                 maxWeightLb = bestSet.weightLb!!,
                 bestReps = bestSet.reps,
                 sessionDate = bestSet.sessionStartedAt,
-                muscle = plan.muscle,
+                // Only the ordering below needs it; an unmatched lift has no muscle to report.
+                muscle = plan?.muscle,
                 relativeStrength = rel
             )
         }
-        .sortedWith(compareBy({ it.muscle.displayName }, { it.exerciseName }))
+        .sortedWith(compareBy({ it.muscle?.displayName ?: "\uFFFF" }, { it.exerciseName }))
 }
 
 /**
@@ -91,7 +111,7 @@ internal fun buildE1rmLifts(
         .filter { it.weightLb != null && it.weightLb > 0 }
         .groupBy { it.exerciseId }
         .mapNotNull { (id, sets) ->
-            val name = Program.exercise(id)?.name ?: return@mapNotNull null
+            val name = liftDisplayName(id, sets) ?: return@mapNotNull null
             val perSession = sets.groupBy { it.sessionStartedAt }.toSortedMap()
             val points = perSession.map { (_, ss) -> ss.maxOf { e1rm(it.weightLb!!, it.reps) } }
             if (points.isEmpty()) return@mapNotNull null

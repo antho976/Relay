@@ -1,6 +1,9 @@
 package com.forge.app.domain.engine
 
 import com.forge.app.data.db.entities.CardioEntry
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 import kotlin.math.roundToInt
 
 /**
@@ -75,11 +78,20 @@ object ConditioningLoad {
      * The interference term readiness subtracts (Engine E-A → Coach B1). Bounded on purpose: cardio
      * competes with lifting recovery, but it is not a reason for the coach to shut a session down.
      */
-    fun interferencePenalty(entries: List<CardioEntry>, nowMs: Long): Int {
-        val yesterday = entries.filter { it.date >= nowMs - DAY_MS }.sumOf { of(it) }
+    fun interferencePenalty(entries: List<CardioEntry>, nowMs: Long, zoneId: ZoneId = ZoneOffset.UTC): Int {
+        // Read by local calendar day, not a rolling 24 h window on the START time (entry dates carry
+        // the clock time): that missed a 07:00 run yesterday when read at 18:00 today. Both
+        // yesterday's load and today's load so far count (cardio earlier today, before lifting, is
+        // the strongest interference case), each judged as a day against the day thresholds.
+        val today = Instant.ofEpochMilli(nowMs).atZone(zoneId).toLocalDate()
+        val yesterdayDate = today.minusDays(1)
+        fun dayLoad(date: java.time.LocalDate) = entries.filter {
+            it.date <= nowMs && Instant.ofEpochMilli(it.date).atZone(zoneId).toLocalDate() == date
+        }.sumOf { of(it) }
+        val load = maxOf(dayLoad(yesterdayDate), dayLoad(today))
         return when {
-            yesterday >= HARD_DAY_LOAD -> 2
-            yesterday >= MODERATE_DAY_LOAD -> 1
+            load >= HARD_DAY_LOAD -> 2
+            load >= MODERATE_DAY_LOAD -> 1
             else -> 0
         }
     }

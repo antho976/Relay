@@ -58,6 +58,34 @@ class ImageIntegrityTest {
         assertFalse(ImageIntegrity.looksComplete(file("d.jpg", jpegHead, eoi, padding(4096))))
     }
 
+    // ── JPEG, walked by segments ────────────────────────────────────────────────────────────────
+
+    private fun segment(marker: Int, payload: ByteArray): ByteArray {
+        val len = payload.size + 2
+        return bytes(0xFF, marker, len shr 8, len and 0xFF) + payload
+    }
+
+    /** SOI, an APP1 whose payload holds a thumbnail's own EOI, then a scan with stuffing and a restart marker. */
+    private fun structuredJpeg(entropyBytes: Int, withEoi: Boolean): ByteArray =
+        bytes(0xFF, 0xD8) +
+            segment(0xE1, padding(20) + eoi + padding(20)) +
+            segment(0xDA, padding(6)) +
+            padding(entropyBytes) + bytes(0xFF, 0x00) + padding(10) + bytes(0xFF, 0xD0) + padding(10) +
+            (if (withEoi) eoi else ByteArray(0))
+
+    @Test
+    fun `a jpeg with megabytes of trailing data after its end marker is complete`() {
+        // A Motion Photo: the primary image ends well before EOF, then an MP4 follows.
+        val f = file("motion.jpg", structuredJpeg(600, withEoi = true), padding(200_000))
+        assertTrue(ImageIntegrity.looksComplete(f))
+    }
+
+    @Test
+    fun `a structured jpeg cut off inside its scan is refused even though a thumbnail carried an end marker`() {
+        // The APP1 thumbnail's FF D9 must not be mistaken for the image's own ending.
+        assertFalse(ImageIntegrity.looksComplete(file("cut.jpg", structuredJpeg(600, withEoi = false))))
+    }
+
     // ── PNG ─────────────────────────────────────────────────────────────────────────────────────
 
     private val pngHead = bytes(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)

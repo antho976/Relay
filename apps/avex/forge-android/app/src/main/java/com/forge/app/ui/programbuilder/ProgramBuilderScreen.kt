@@ -113,7 +113,11 @@ fun ProgramBuilderScreen(
 
     // Saving a plan flips a "go with the flow" user to follow-a-plan — confirm that switch first so it's
     // never silent. Plan users save straight through. A pen-edit returns to the viewer it came from.
-    fun onSaved() { if (viewOrigin) viewing = true else onClose() }
+    fun onSaved() {
+        // The save consumed any staged removal; don't leave its Undo up over the viewer.
+        snackbarHostState.currentSnackbarData?.dismiss()
+        if (viewOrigin) viewing = true else onClose()
+    }
     fun attemptSave() { if (freestyleMode) showFreestyleSwitch = true else viewModel.save { onSaved() } }
 
     // Back out of a pen-edit lands on the viewer (dirty edits confirm + reload first); the viewer
@@ -251,6 +255,15 @@ fun ProgramBuilderScreen(
             }
             if (caption != null) {
                 Text(caption, style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.7f))
+            }
+            // The rows being edited are the deload week's reduced sets, and a save ends its automatic
+            // return to full volume, so saving them unchanged makes the recovery week the plan.
+            if (editing && viewModel.deloadWeekRunning && days.isNotEmpty()) {
+                Text(
+                    "You're in a deload week, so these set counts are reduced. Saving keeps them as your plan.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = muted
+                )
             }
             if (days.isEmpty()) {
                 // Honest zero (§12): the plan has no days yet, so there is no week to draw. Not

@@ -175,7 +175,8 @@ class ProfileRepository @Inject constructor(
         // ── Standing (90-day window) ──────────────────────────────────────────────
         val since90 = nowMs - 90L * 24 * 3600 * 1000
         val recent = sessions.filter { it.startedAt >= since90 }
-        val weeks90 = 90.0 / 7.0
+        // Rates are per week actually covered: someone 3 weeks in isn't averaged over 12.86 weeks.
+        val weeks90 = standingWindowWeeks(nowMs, sinceMs(memberSinceMs, sessions))
         val standings = StandingEngine.standings(
             StandingSnapshot(
                 sessionsPerWeek = recent.size / weeks90,
@@ -300,6 +301,17 @@ class ProfileRepository @Inject constructor(
         const val TROPHY_HIGHLIGHTS = 9   // total cells (done + almost-complete + 0% fillers)
         val SINCE_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM yyyy", Locale.getDefault())
     }
+}
+
+/**
+ * Weeks the 90-day standing window actually covers: from the later of the window start and the
+ * user's first tracked moment ([originMs], see [sinceMs]) up to [nowMs], floored at one week so a
+ * brand-new user's rate isn't inflated by a tiny divisor.
+ */
+internal fun standingWindowWeeks(nowMs: Long, originMs: Long?): Double {
+    val windowMs = 90L * 24 * 3600 * 1000
+    val startMs = maxOf(nowMs - windowMs, originMs ?: nowMs)
+    return ((nowMs - startMs) / (7.0 * 24 * 3600 * 1000)).coerceIn(1.0, 90.0 / 7.0)
 }
 
 /**

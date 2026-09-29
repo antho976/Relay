@@ -42,6 +42,17 @@ class CardioWeekAggregateTest {
         assertEquals(80, agg.minutes)
     }
 
+    @Test fun `paced minutes count only sessions that logged a distance`() {
+        val entries = listOf(
+            entry(weekStart, type = CardioType.HIIT.code, dur = 45),
+            entry(weekStart.plusDays(1), dur = 30, dist = 5.0)
+        )
+        val agg = cardioWeekAggregate(entries, weekStartMs, zone)
+        assertEquals(75, agg.minutes)
+        assertEquals(30, agg.pacedMinutes)
+        assertEquals("6:00", pacePerUnit(agg.pacedMinutes, agg.distanceKm, useMiles = false))
+    }
+
     @Test fun `two sessions same day count one day but two sessions`() {
         val entries = listOf(entry(weekStart, dur = 30), entry(weekStart, dur = 20))
         val agg = cardioWeekAggregate(entries, weekStartMs, zone)

@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import com.forge.app.ui.common.SnackbarController
 import com.forge.app.ui.common.launchDurable
 import javax.inject.Inject
 
@@ -36,7 +37,8 @@ data class BodyMeasurementsUiState(
 @HiltViewModel
 class BodyMeasurementsViewModel @Inject constructor(
     private val repo: BodyMeasurementRepository,
-    settings: SettingsRepository
+    settings: SettingsRepository,
+    private val snackbar: SnackbarController
 ) : ViewModel() {
 
     val state: StateFlow<BodyMeasurementsUiState> =
@@ -59,5 +61,10 @@ class BodyMeasurementsViewModel @Inject constructor(
         values.forEach { (type, cm) -> repo.log(type, cm) }
     }
 
-    fun delete(id: Long) = viewModelScope.launchDurable { repo.delete(id) }
+    /** Delete one past reading now and offer an Undo (§13) — the sheet only ever logs today, so this
+     *  is the one way to remove a mistyped reading once its day has passed. */
+    fun delete(entry: BodyMeasurementEntry) = viewModelScope.launchDurable {
+        repo.delete(entry.id)
+        snackbar.showUndo("Reading deleted") { repo.restore(entry) }
+    }
 }

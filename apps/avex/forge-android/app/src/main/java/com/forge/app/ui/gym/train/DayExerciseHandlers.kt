@@ -32,7 +32,9 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
         is DayUiEvent.DeleteSet -> viewModelScope.launch {
             val set = findSet(event.setId) ?: return@launch
             val exId = findExerciseIdForSet(event.setId)
+            cancelRestForRemovedSet(event.setId)
             workoutRepo.deleteSet(set)
+            dropSuggestionOutcomeForRemovedSet(event.setId)
             if (exId != null) refreshExercise(exId) else refreshExercises()
         }
         is DayUiEvent.EditSet -> viewModelScope.launch {
@@ -63,11 +65,20 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             // NonCancellable the write is dropped mid-flight, losing exactly the last-moment edit
             // the dispose commit exists to save. The refresh afterwards stays cancellable: it only
             // updates UI state that is going away anyway.
+            //
+            // The same dispose commit can land after Back has discarded an untouched session (a note
+            // still inside NoteField's debounce does not count as unsaved work), when creating the
+            // slot's row violates the session foreign key. The note has nowhere to go then; drop it
+            // rather than crash the app on the way out.
             val hadRow = _state.value.exercises
                 .firstOrNull { it.plan.id == event.exerciseId }?.loggedExerciseId != null
-            withContext(NonCancellable) {
-                val leId = ensureLoggedExercise(event.exerciseId) ?: return@withContext
-                workoutRepo.setNote(leId, event.note.ifBlank { null })
+            try {
+                withContext(NonCancellable) {
+                    val leId = ensureLoggedExercise(event.exerciseId) ?: return@withContext
+                    workoutRepo.setNote(leId, event.note.ifBlank { null })
+                }
+            } catch (_: android.database.sqlite.SQLiteConstraintException) {
+                return@launch
             }
             // The note commits every pause in typing. When its row already existed nothing else on
             // the card can have changed, so patch the one field instead of re-reading the card (~7
@@ -312,7 +323,7 @@ internal fun DayViewModel.logSet(
             // taps both read a stale null from UI state and both inserted a row for the same slot.
             val leId = ensureLoggedExercise(exerciseId) ?: return@launch
 
-            workoutRepo.logSet(
+            val loggedSetId = workoutRepo.logSet(
                 loggedExerciseId = leId,
                 weightText = weightText,
                 weightLb = newWeightLb,
@@ -359,9 +370,11 @@ internal fun DayViewModel.logSet(
 
             // First set of this exercise while a suggestion chip was showing → record suggestion vs
             // reality for the coach's step calibration (auto-coach Phase 2). Write-only, no reads.
+            // Remembered by set id: undoing this set takes the sample back out (see
+            // dropSuggestionOutcomeForRemovedSet), so the corrected re-log is the only one counted.
             val suggestedLb = currentUi.suggestedTargetLb
             if (currentUi.loggedSets.isEmpty() && newWeightLb != null && suggestedLb != null) {
-                workoutRepo.recordSuggestionOutcome(
+                suggestionOutcomeBySetId[loggedSetId] = workoutRepo.recordSuggestionOutcome(
                     exerciseId = effectiveExerciseId,
                     unitCode = unit.code,
                     suggestedLb = suggestedLb,

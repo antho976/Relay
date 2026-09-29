@@ -42,4 +42,30 @@ class CardioDurationInputTest {
         // Capped at HH:MM width.
         assertEquals("12:34", sanitizeDuration("12:3456"))
     }
+
+    @Test
+    fun capDurationTextHoldsTheFieldToOneDay() {
+        assertEquals("1440", capDurationText("99999"))
+        assertEquals("1440", capDurationText("99:99"))
+        assertEquals("1440", capDurationText("1500"))
+        // Plausible values pass through untouched, including a whole day.
+        assertEquals("90", capDurationText("90"))
+        assertEquals("1:30", capDurationText("1:30"))
+        assertEquals("1440", capDurationText("1440"))
+        assertEquals("", capDurationText(""))
+    }
+
+    @Test
+    fun capDistanceTextHoldsTheFieldToTheSingleEntryBound() {
+        // Over the 1000 km bound, the field shows the bound itself — in the display unit.
+        assertEquals("1000", capDistanceText("1500", useMiles = false))
+        assertEquals("1000", capDistanceText("999999", useMiles = false))
+        assertEquals("621.3", capDistanceText("999", useMiles = true))
+        // The capped miles text never parses past the bound itself.
+        assertEquals("621.3", capDistanceText("621.3", useMiles = true))
+        // Plausible values and partial input pass through untouched.
+        assertEquals("1000", capDistanceText("1000", useMiles = false))
+        assertEquals("5.", capDistanceText("5.", useMiles = false))
+        assertEquals("", capDistanceText("", useMiles = true))
+    }
 }

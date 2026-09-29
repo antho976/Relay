@@ -31,7 +31,9 @@ internal fun DayViewModel.handleSessionEvent(event: DayUiEvent) {
             viewModelScope.launch {
                 val set = findSet(setId) ?: return@launch
                 val exId = findExerciseIdForSet(setId)
+                cancelRestForRemovedSet(setId)
                 workoutRepo.deleteSet(set)
+                dropSuggestionOutcomeForRemovedSet(setId)
                 if (exId != null) refreshExercise(exId) else refreshExercises()
             }
         }
@@ -151,6 +153,19 @@ private fun DayViewModel.finishWorkout() {
     if (finishJob?.isActive == true || leaving) return
     finishJob = viewModelScope.launch {
         val sessionId = _state.value.sessionId ?: return@launch
+        // FINISH on a session with nothing in it would commit an empty workout (it still counts
+        // toward the rotation, first-workout-done, trophies and Health Connect). Ask instead, with
+        // the leave dialog's nothing-logged variant (Discard / Keep going; no "Resume later", which
+        // would park an empty session). Checked against the DATABASE too: a wrist-logged set may
+        // not have reached UI state yet, in which case the screen is brought up to date and the
+        // finish carries on.
+        if (!_state.value.hasUnsavedWork) {
+            if (workoutRepo.allSetsForSession(sessionId).isEmpty()) {
+                _state.update { it.copy(showDiscardConfirm = true) }
+                return@launch
+            }
+            refreshExercises()
+        }
         val exercises = _state.value.exercises
         val allSets = exercises.flatMap { it.loggedSets }
         val totalVolumeLb = VolumeCalculator.sessionVolumeLb(allSets)
@@ -304,6 +319,15 @@ private fun DayViewModel.requestBack() {
         leaving = true
         viewModelScope.launch {
             val sessionId = _state.value.sessionId
+            // UI state can lag the database: a set logged from the wrist only reaches it after the
+            // observer's debounce and a rebuild. Discarding on that stale view would cascade-delete
+            // the set unasked, so confirm against Room first (OpenSwapPicker does the same).
+            if (sessionId != null && workoutRepo.allSetsForSession(sessionId).isNotEmpty()) {
+                leaving = false
+                refreshExercises()
+                _state.update { it.copy(showDiscardConfirm = true) }
+                return@launch
+            }
             if (sessionId != null) workoutRepo.discardSession(sessionId)
             restTimer.stop()
             stopSessionService()

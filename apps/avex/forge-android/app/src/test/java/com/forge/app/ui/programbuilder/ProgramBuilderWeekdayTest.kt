@@ -7,8 +7,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /** The plan editor's "Day of the week" picks, as they become the weekly schedule. */
-// Robolectric: the round-trips go through org.json, which the plain JVM only has as android.jar
-// stubs that throw, so these tests could never pass outside it.
+// org.json is only a stub on the plain JVM test classpath ("Method put … not mocked").
 @RunWith(RobolectricTestRunner::class)
 class ProgramBuilderWeekdayTest {
 

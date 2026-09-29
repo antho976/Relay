@@ -59,6 +59,7 @@ internal fun MainList(
             SearchAction.DATA -> onOpenDataDialog()
             SearchAction.IMPORT -> onImportData()
             SearchAction.RESET -> onOpenResetMenu()
+            SearchAction.FACTORY -> onResetTarget(ResetTarget.FACTORY)
             SearchAction.COACH -> onOpenCoachBrief()
         }
     }
@@ -234,6 +235,7 @@ private fun actionGlyph(action: SearchAction): ImageVector = when (action) {
     SearchAction.IMPORT -> SettingsIcons.Import
     SearchAction.COACH -> NavIcons.Coach
     SearchAction.RESET -> Icons.Rounded.RestartAlt
+    SearchAction.FACTORY -> Icons.Rounded.DeleteForever
 }
 
 /** Bold the matched span within a result name so it's clear WHY the row surfaced. */

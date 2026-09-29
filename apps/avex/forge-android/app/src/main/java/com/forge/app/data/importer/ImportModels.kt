@@ -242,6 +242,9 @@ sealed interface ImportResult {
     /** The parser failed on the file itself (a damaged or truncated export), not on single rows. */
     data class ParseFailed(val source: ImportSource) : ImportResult
 
+    /** The file is Avex's own PR list: one best set per exercise, not workouts, so it is not imported. */
+    data object AvexPrList : ImportResult
+
     /** File format wasn't recognised as any supported gym app export. */
     data object UnrecognisedFormat : ImportResult
 
@@ -315,6 +318,8 @@ fun ImportResult.userMessage(): String = when (this) {
     is ImportResult.UnsupportedExportVersion ->
         "That Avex export was written by a newer version of the app (format $version). Update Avex, then import it again."
     ImportResult.NothingToImport -> "No new workouts found in that file."
+    ImportResult.AvexPrList ->
+        "That's Avex's PR list: one best set per exercise, not workouts, so there is nothing to import. Use an Avex JSON export to move your log."
     ImportResult.UnrecognisedFormat ->
         "That file isn't a recognised gym-app export. Export a CSV from Strong, Hevy, FitNotes, or a similar app, or an Avex JSON export."
     ImportResult.TooLarge -> "That file is too large to import."

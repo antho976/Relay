@@ -109,7 +109,7 @@ class AcademyRepository @Inject constructor(
         val activeCardio = snapshot.cardio.filter { it.restReason == null }
         if (activeCardio.isNotEmpty()) unlock(LESSON_ZONE2)
         if (activeCardio.any { it.intervalCount != null && it.intervalCount > 0 } ||
-            com.forge.app.domain.engine.ConditioningLoad.interferencePenalty(snapshot.cardio, snapshot.nowMs) > 0
+            com.forge.app.domain.engine.ConditioningLoad.interferencePenalty(snapshot.cardio, snapshot.nowMs, snapshot.zoneId) > 0
         ) {
             unlock(LESSON_INTERVALS)
         }

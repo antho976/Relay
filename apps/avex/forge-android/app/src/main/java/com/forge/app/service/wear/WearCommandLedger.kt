@@ -38,12 +38,28 @@ class WearCommandLedger(
                 WearCodec.encode(outcome).decodeToString(), clock.nowMs()))
             outcome to (legacy == null)
         }
+        if (executed) pruneOccasionally()
         // Timer/transport failures cannot roll back the committed mutation or make it retryable.
         try {
             if (executed) afterCommit(ack)
         } finally {
             publish(ack)
         }
+    }
+
+    // Starts one short of the threshold so the FIRST executed command of each process prunes: the
+    // phone process that serves the wrist is usually short-lived (a session is ~20-50 commands),
+    // and a counter that had to reach 50 in one process life meant the delete often never ran.
+    private var commandsSincePrune = PRUNE_EVERY - 1
+
+    /**
+     * On the first executed command of the process and every [PRUNE_EVERY] after, drops outcomes
+     * past [RETENTION_MS]; best effort.
+     */
+    private suspend fun pruneOccasionally() {
+        if (++commandsSincePrune < PRUNE_EVERY) return
+        commandsSincePrune = 0
+        runCatching { db.wearCommandDao().deleteOlderThan(clock.nowMs() - RETENTION_MS) }
     }
 
     private fun decodeAck(json: String): CmdAckDto =
@@ -73,5 +89,9 @@ class WearCommandLedger(
         }.getOrDefault(emptyMap())
     }
 
-    companion object { const val FILE_NAME = "wear_command_ledger.json" }
+    companion object {
+        const val FILE_NAME = "wear_command_ledger.json"
+        private const val PRUNE_EVERY = 50
+        private const val RETENTION_MS = 7L * 24 * 60 * 60 * 1000
+    }
 }

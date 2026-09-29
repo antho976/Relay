@@ -31,6 +31,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,8 +49,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.program.CustomExerciseRegistry
 import com.forge.app.program.ExerciseDef
 import com.forge.app.program.ExerciseLibrary
+import com.forge.app.program.ExerciseUnit
 import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.Corners
@@ -77,16 +81,31 @@ fun browseLibrary(
     muscle: MuscleGroup?,
     favoritesOnly: Boolean,
     favorites: Set<String>,
-    exclude: Set<String>
+    exclude: Set<String>,
+    /** The user's own moves ([customBrowserDefs]); searched with the library so a re-typed name
+     *  finds the existing custom id instead of offering to create a second one. */
+    custom: List<ExerciseDef> = emptyList()
 ): List<ExerciseDef> {
     val q = query.trim().lowercase()
-    return ExerciseLibrary.all.filter { def ->
+    return (ExerciseLibrary.all + custom).filter { def ->
         !def.curatedOnly && def.id !in exclude &&
             (muscle == null || def.muscle == muscle) &&
             (!favoritesOnly || def.id in favorites) &&
             (q.isEmpty() || def.name.lowercase().contains(q) || def.muscle.displayName.lowercase().contains(q))
     }
 }
+
+/** A user-created move as a browser tile: only its identity and muscle exist, the rest is nominal. */
+fun customBrowserDef(id: String): ExerciseDef? {
+    if (!isCustomExerciseId(id)) return null
+    val def = CustomExerciseRegistry.get(id) ?: return null
+    val muscle = def.muscle ?: return null
+    return ExerciseDef(def.id, def.name, muscle, emptyList(), ExerciseUnit.WEIGHT)
+}
+
+/** Every registered user-created move as browser tiles, by name. */
+fun customBrowserDefs(): List<ExerciseDef> =
+    CustomExerciseRegistry.all.mapNotNull { customBrowserDef(it.id) }.sortedBy { it.name.lowercase() }
 
 /** The Recently-performed rail minus the moves already on the log, so Recent can never offer a
  *  duplicate of something the grid is already hiding. */
@@ -148,6 +167,8 @@ private fun customNameDigest(canonical: String): String {
     return String.format(java.util.Locale.US, "%08x", h)
 }
 
+private val PickedSaver = listSaver<Set<String>, String>(save = { it.toList() }, restore = { it.toSet() })
+
 /**
  * The freestyle exercise browser (GYMAP-27): a full-screen List/browser that replaces the old search
  * dialog. Anatomy muscle-filter row → search → most-performed → a grid of anatomy-thumbnail tiles you
@@ -165,13 +186,16 @@ fun ExerciseBrowserScreen(
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
     val recent by viewModel.recent.collectAsStateWithLifecycle()
 
-    var query by remember { mutableStateOf("") }
-    var muscle by remember { mutableStateOf<MuscleGroup?>(null) }
-    var favoritesOnly by remember { mutableStateOf(false) }
-    var picked by remember { mutableStateOf(emptySet<String>()) }
+    // Saveable: the overlay's open flag lives in the log's ViewModel, so it outlives a rotation and
+    // these must too, or the ticked moves silently vanish under it.
+    var query by rememberSaveable { mutableStateOf("") }
+    var muscle by rememberSaveable { mutableStateOf<MuscleGroup?>(null) }
+    var favoritesOnly by rememberSaveable { mutableStateOf(false) }
+    var picked by rememberSaveable(stateSaver = PickedSaver) { mutableStateOf(emptySet<String>()) }
 
-    val results = remember(query, muscle, favoritesOnly, favorites, exclude) {
-        browseLibrary(query, muscle, favoritesOnly, favorites, exclude)
+    val customDefs = remember { customBrowserDefs() }
+    val results = remember(query, muscle, favoritesOnly, favorites, exclude, customDefs) {
+        browseLibrary(query, muscle, favoritesOnly, favorites, exclude, customDefs)
     }
     val unfiltered = query.isBlank() && muscle == null && !favoritesOnly
     // The grid already hides what's on the log; Recent has to as well, or picking a move from

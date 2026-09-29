@@ -52,4 +52,23 @@ class FreestyleShapeTest {
   assertNull(com.forge.app.program.Program.exercise("ext-lat-pulldown-cable"))
   assertEquals(MuscleGroup.QUADS, com.forge.app.program.Program.exercise("custom-sled")?.muscle)
  }
+
+ // A legacy plank kept its seconds in `reps` with a null duration; repeating it must not drop the set.
+ @Test fun `repeating a workout keeps legacy timed sets stored in reps`() {
+  val template = listOf(FreestyleTemplateExercise("plank", listOf(FreestyleTemplateSet(null, 60))))
+  val plank = template.toItems(WeightUnit.LB).single()
+  assertTrue(plank.timed)
+  assertEquals(listOf("1:00"), plank.sets.map { it.hold })
+ }
+
+ // The exercise browser must find the user's own moves so a re-typed name reuses the custom id.
+ @Test fun `browser search finds a registered custom move`() {
+  CustomExerciseRegistry.put(CustomExerciseDef("custom-sled-push", "Sled Push", MuscleGroup.QUADS.code))
+  val custom = customBrowserDefs()
+  assertEquals(listOf("custom-sled-push"), custom.map { it.id })
+  val hits = browseLibrary("sled", null, false, emptySet(), emptySet(), custom)
+  assertEquals(listOf("custom-sled-push"), hits.map { it.id })
+  assertTrue(browseLibrary("sled", null, false, emptySet(), setOf("custom-sled-push"), custom).isEmpty())
+  assertEquals("Sled Push", fsExerciseFor("custom-sled-push")?.name)
+ }
 }

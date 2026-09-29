@@ -11,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.gym.stats.components.CalendarHeatmap
+import com.forge.app.ui.gym.stats.components.rememberToday
 import com.forge.app.ui.gym.stats.state.DayLoad
 import java.time.LocalDate
 
@@ -31,8 +32,9 @@ internal fun ColumnScope.AdherenceContent(
     val byDay = remember(dailyActivity) { dailyActivity.associate { it.epochDay to it.sets } }
     // Count only the days the heatmap actually shows (last HEATMAP_WEEKS weeks), so the label can't
     // claim "312 training days · last 26 weeks" when most of those days are off-screen history.
-    val windowDays = remember(dailyActivity) {
-        val cutoff = LocalDate.now().toEpochDay() - HEATMAP_WEEKS * 7L
+    val today = rememberToday()
+    val windowDays = remember(dailyActivity, today) {
+        val cutoff = today.toEpochDay() - HEATMAP_WEEKS * 7L
         dailyActivity.count { it.epochDay >= cutoff }
     }
     CalendarHeatmap(

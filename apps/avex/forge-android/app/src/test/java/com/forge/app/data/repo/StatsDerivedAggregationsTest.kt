@@ -178,6 +178,36 @@ class StatsDerivedAggregationsTest {
         assertTrue(weeks[1].isDeload)
     }
 
+    @Test
+    fun weeklyTonnage_dropsTheInProgressWeekWhenAsked() {
+        val points = listOf(
+            VolumeDeloadPoint(dayMs(monday), "d", 1000.0, isDeload = false),
+            VolumeDeloadPoint(dayMs(monday.plusWeeks(1)), "d", 900.0, isDeload = false),
+            // Tuesday of the third (current) week: only one session in so far.
+            VolumeDeloadPoint(dayMs(monday.plusWeeks(2).plusDays(1)), "d", 300.0, isDeload = false)
+        )
+        val weeks = buildWeeklyTonnage(points, zone, excludeWeekOf = monday.plusWeeks(2).plusDays(1))
+        assertEquals(2, weeks.size)
+        assertEquals(900.0, weeks.last().volumeLb, 0.001)
+        // Without it the partial week is charted as the last point.
+        assertEquals(3, buildWeeklyTonnage(points, zone).size)
+    }
+
+    // ── standingWindowWeeks ────────────────────────────────────────────────────
+
+    @Test
+    fun standingWindowWeeks_coversOnlyTheWeeksSinceTheFirstSession() {
+        val day = 24L * 3600 * 1000
+        val now = 1_000L * day
+        // Three weeks of history -> 3 weeks, not the full 12.86.
+        assertEquals(3.0, standingWindowWeeks(now, now - 21 * day), 0.001)
+        // Older than the window -> the whole window.
+        assertEquals(90.0 / 7.0, standingWindowWeeks(now, now - 400 * day), 0.001)
+        // Brand new / nothing tracked -> floored at one week.
+        assertEquals(1.0, standingWindowWeeks(now, now - 2 * day), 0.001)
+        assertEquals(1.0, standingWindowWeeks(now, null), 0.001)
+    }
+
     // ── buildTrainingTimes ─────────────────────────────────────────────────────
 
     @Test

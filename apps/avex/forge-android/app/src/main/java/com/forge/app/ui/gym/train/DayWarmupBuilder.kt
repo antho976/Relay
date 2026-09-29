@@ -64,7 +64,8 @@ private fun ExerciseUiState.toWarmupExercise(metric: Boolean, plateLb: Double): 
         // The LOW end of the planned range is the heaviest set in it, so it sets the intensity the
         // ramp has to reach. Reading the high end would under-build the ladder for "6 to 10".
         targetReps = minRepsOf(plan.reps),
-        loadStep = WarmupEngine.loadIncrement(unit, metric)
+        loadStep = WarmupEngine.loadIncrement(unit, metric),
+        barLoad = WarmupEngine.barLoadFor(effectiveExerciseId, unit, metric)
     )
 }
 

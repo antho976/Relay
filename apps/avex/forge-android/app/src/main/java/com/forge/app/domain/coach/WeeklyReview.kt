@@ -79,18 +79,24 @@ object WeeklyReview {
 
         // PRs are computed, not stored: a last-week bout whose top working weight beats every
         // earlier bout of that exercise (PrDetector's rule; a first-ever bout doesn't count).
-        val prs = s.exerciseHistory.values.sumOf { bouts ->
-            var best: Double? = null
-            var count = 0
-            bouts.sortedBy { it.sessionStartedAt }.forEach { b ->
-                if (b.skipped) return@forEach
-                val top = b.sets.workingStrengthSets().mapNotNull { it.weightLb }.maxOrNull()
-                    ?: return@forEach
-                val prior = best
-                if (prior != null && top > prior && b.sessionStartedAt in lastWeekStart until weekStartMs) count++
-                if (prior == null || top > prior) best = top
+        //
+        // Compared within the lift actually PERFORMED (H-06): history is filed by slot, so a slot
+        // rotated from a 60 lb row to a 120 lb pulldown would otherwise read the pulldown's first
+        // bout as beating the row's best.
+        val prs = s.exerciseHistory.entries.sumOf { (slotId, slotBouts) ->
+            slotBouts.groupBy { it.performedExerciseId ?: slotId }.values.sumOf { bouts ->
+                var best: Double? = null
+                var count = 0
+                bouts.sortedBy { it.sessionStartedAt }.forEach { b ->
+                    if (b.skipped) return@forEach
+                    val top = b.sets.workingStrengthSets().mapNotNull { it.weightLb }.maxOrNull()
+                        ?: return@forEach
+                    val prior = best
+                    if (prior != null && top > prior && b.sessionStartedAt in lastWeekStart until weekStartMs) count++
+                    if (prior == null || top > prior) best = top
+                }
+                count
             }
-            count
         }
 
         // The block's phase, as the weekly pass reads it: a deload week escalates nothing, so this

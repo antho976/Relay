@@ -255,7 +255,15 @@ object AutoCoachPlanner {
 
         // E: the cap scales with earned initiative. A beginner's coach still moves slowly; a coach
         // with a long good record may make more calls in one week, because it has shown it can.
-        val cap = inputs.changesPerWeek ?: if (inputs.experience == "beginner") 1 else 2
+        //
+        // The ladder always reports a number (2 for the three lowest tiers), so the experience cap
+        // has to bound it, not merely stand in for a missing one — otherwise a beginner's coach
+        // would never be held to its one change a week. Only a tier above the base two-change
+        // band (earned initiative) lifts it.
+        val experienceCap = if (inputs.experience == "beginner") 1 else 2
+        val cap = inputs.changesPerWeek
+            ?.let { if (it <= 2) minOf(it, experienceCap) else it }
+            ?: experienceCap
         return CoachPassResult(CoachPassStatus.SHADOW, null, candidates.take(cap))
     }
 
@@ -286,9 +294,7 @@ object AutoCoachPlanner {
             if (slot.exerciseId in inputs.lockedExerciseIds || slot.targetSets <= 2) return@mapNotNull null
             if ((inputs.volumeNetByMuscle[slot.muscle] ?: 0) <= -VOLUME_DRIFT_CAP) return@mapNotNull null
             if (slot.muscle in inputs.volumeLockedMuscles) return@mapNotNull null
-            val last4 = s.exerciseHistory[slot.exerciseId]?.takeLast(4) ?: return@mapNotNull null
-            if (last4.size < 4) return@mapNotNull null
-            val skips = last4.count { it.skipped }
+            val skips = recentSkips(s, slot.exerciseId) ?: return@mapNotNull null
             if (skips >= SKIP_DOWNSIZE_COUNT) Triple(dayKey, slot, skips) else null
         }.maxByOrNull { it.third }
         skipped?.let { (dayKey, slot, skips) ->
@@ -348,7 +354,12 @@ object AutoCoachPlanner {
                 val tracked = muscleSlots.map { it.second.exerciseId }.filter { it in trackedIds }
                 if (tracked.isEmpty() || tracked.any { it in stalledIds }) return@mapNotNull null
                 val (dayKey, slot) = muscleSlots
-                    .filter { it.second.exerciseId !in inputs.lockedExerciseIds && it.second.targetSets < MAX_SLOT_SETS }
+                    .filter {
+                        it.second.exerciseId !in inputs.lockedExerciseIds && it.second.targetSets < MAX_SLOT_SETS &&
+                            // Never add to a slot the skip rule is trimming: "drop a set" and "add a set" on
+                            // the same lift in one pass would apply as a net-zero pair of "accepted" decisions.
+                            !chronicallySkipped(s, it.second.exerciseId)
+                    }
                     .minByOrNull { it.second.targetSets } ?: return@mapNotNull null
                 VolPick(muscle, dayKey, slot, tracked.size, muscleGrowth(s, tracked))
             }
@@ -368,6 +379,16 @@ object AutoCoachPlanner {
         }
         return out
     }
+
+    /** Skips among the slot's last four bouts, or null when it has fewer than four. */
+    private fun recentSkips(s: AdaptationSnapshot, exerciseId: String): Int? {
+        val last4 = s.exerciseHistory[exerciseId]?.takeLast(4) ?: return null
+        if (last4.size < 4) return null
+        return last4.count { it.skipped }
+    }
+
+    private fun chronicallySkipped(s: AdaptationSnapshot, exerciseId: String): Boolean =
+        (recentSkips(s, exerciseId) ?: 0) >= SKIP_DOWNSIZE_COUNT
 
     /** Lifts with enough non-skipped, weighted history to be judged — the ladder's own gate. */
     private fun trackedLiftIds(s: AdaptationSnapshot, t: AdaptThresholds): Set<String> =

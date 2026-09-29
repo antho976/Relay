@@ -214,12 +214,14 @@ object ProgramGenerator {
             val avail = pool
                 .filter { it.muscle == muscle && it.id !in disliked }
                 .filter { ExerciseLibrary.contraindicationsOf(it).none { area -> area in params.problemAreas } }
+            // Respect the experience ceiling even when it leaves a slot unavailable. Applied BEFORE
+            // the fallback decision below, so a beginner whose only owned options are advanced (a
+            // pull-up bar and nothing else) falls back to the bodyweight fills rather than to nothing.
+            val allowed = avail.filter { it.difficulty.ordinal <= maxDifficulty.ordinal }
             // Last-resort bodyweight fills only enter the pool when nothing the user actually owns
-            // can train this muscle — so an equipped user never gets a bodyweight squat, but a
-            // bodyweight-only / minimal setup is never starved into an empty day.
-            val forMuscle = avail.filterNot { it.fallbackOnly }.ifEmpty { avail }
-            // Respect the experience ceiling even when it leaves a slot unavailable.
-            forMuscle.filter { it.difficulty.ordinal <= maxDifficulty.ordinal }
+            // (and can do at their level) can train this muscle — so an equipped user never gets a
+            // bodyweight squat, but a bodyweight-only / minimal setup is never starved into an empty day.
+            allowed.filterNot { it.fallbackOnly }.ifEmpty { allowed }
         }
         // Tracks picks across the WHOLE week so a muscle trained on two days gets different movements.
         val usedInWeek = HashSet<String>(if (onlyDay != null) usedElsewhere else emptySet())
@@ -396,6 +398,9 @@ object ProgramGenerator {
      */
     private fun repsFor(def: ExerciseDef, scheme: RepScheme, goal: String): String =
         if (!isNumericReps(def.defaultReps) || def.fixedReps) def.defaultReps
+        // A last-resort bodyweight compound (bw-squat, bw-good-morning) is unloaded: a 4-10 rep
+        // prescription is no stimulus, so it keeps its own 15-20.
+        else if (def.fallbackOnly && def.unit == ExerciseUnit.BODYWEIGHT && ExerciseTag.COMPOUND in def.tags) def.defaultReps
         else if (ExerciseTag.COMPOUND !in def.tags && goal == "get_stronger") {
             if (scheme == RepScheme.PUMP) "12-15" else "8-12"
         } else if (ExerciseTag.COMPOUND !in def.tags && scheme == RepScheme.STRENGTH) {

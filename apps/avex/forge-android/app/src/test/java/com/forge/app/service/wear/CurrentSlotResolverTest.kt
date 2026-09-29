@@ -126,4 +126,35 @@ class CurrentSlotResolverTest {
             )
         )
     }
+
+    @Test
+    fun phoneSkippedSlotsNeverBecomeCurrent() {
+        // Callers pass phone-skipped rows ("I have N minutes", manual skip) in earlyDoneIdx, so once
+        // the last kept slot fills the wrist stays on it instead of walking onto a skipped exercise.
+        assertEquals(
+            1,
+            CurrentSlotResolver.resolve(
+                plannedSets = listOf(3, 3, 3),
+                doneSets = listOf(3, 3, 0),
+                lastLoggedIdx = 1,
+                earlyDoneIdx = setOf(2)
+            )
+        )
+    }
+
+    @Test
+    fun startedThenSkippedLatestSlotDoesNotPinTheWrist() {
+        // Slot 0 has 1 of 3 sets, then was skipped on the phone. Callers report a skipped row as
+        // filled (maxOf(done, planned)) and mark it done, so the wrist moves on to slot 1 instead
+        // of staying on a slot whose every wrist log is refused.
+        assertEquals(
+            1,
+            CurrentSlotResolver.resolve(
+                plannedSets = listOf(3, 3, 3),
+                doneSets = listOf(3, 0, 0),
+                lastLoggedIdx = 0,
+                earlyDoneIdx = setOf(0)
+            )
+        )
+    }
 }

@@ -359,6 +359,7 @@ fun ExerciseCard(
                         // The PR hint needs the all-time record, not last session — feed the frontier.
                         priorSets = state.priorFrontier,
                         nextSetNumber = state.loggedSets.size + 1,
+                        exerciseKey = state.effectiveExerciseId,
                         priorSetForActiveRow = state.priorSets.getOrNull(state.loggedSets.size),
                         targetsMet = targetsMet,
                         advanceLabel = advanceLabel,

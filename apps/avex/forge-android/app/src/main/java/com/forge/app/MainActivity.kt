@@ -8,6 +8,8 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.app.KeyguardManager
 import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.compose.setContent
@@ -23,6 +25,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -32,6 +36,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.core.content.IntentCompat
@@ -129,8 +134,9 @@ class MainActivity : FragmentActivity() {
     private var privacyPolicyRequest by mutableStateOf(0)
 
     /** The chosen app-icon key, seeded in onCreate and kept live by a collector so [onStop] never has to
-     *  block on a DataStore read. @Volatile because onStop (main thread) reads what the collector writes. */
-    @Volatile private var appIconKey: String = ""
+     *  block on a DataStore read. @Volatile because onStop (main thread) reads what the collector writes.
+     *  Null = not known (no read has landed, or it failed); "" from a real read = Default. */
+    @Volatile private var appIconKey: String? = null
 
     /** True only when the user themselves sent the app to the background (Home/Recents) — set by
      *  [onUserLeaveHint], which the framework does NOT call when WE launch a sub-activity (the system
@@ -138,6 +144,12 @@ class MainActivity : FragmentActivity() {
      *  the icon-alias swap on this flag keeps the swap out of the mid-session overlay case that can tear
      *  the task down on some OEMs (see [AppIconManager]). */
     private var userLeaving = false
+
+    /** True from the moment WE start another activity (picker, share sheet, file dialog) until we are
+     *  resumed again. [onUserLeaveHint] is not called for Back either, and on Android 12+ Back moves the
+     *  task to the background, so the picked icon was never applied on that exit. Knowing explicitly that
+     *  a sub-activity of ours is what covers us lets [onStop] tell that case from a genuine exit. */
+    private var launchedSubActivity = false
 
     /**
      * Stage a CSV/JSON export shared into or opened with Avex. The import starts only after the app is
@@ -217,6 +229,30 @@ class MainActivity : FragmentActivity() {
     override fun onResume() {
         super.onResume()
         userLeaving = false
+        launchedSubActivity = false
+    }
+
+    // Every startActivity funnels through here, as does ActivityResultRegistry's launch.
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        launchedSubActivity = true
+        try {
+            super.startActivityForResult(intent, requestCode, options)
+        } catch (t: Throwable) {
+            // Nothing launched (e.g. ActivityNotFoundException, which callers catch), so no pause/resume
+            // will clear the flag; left set, the next Back exit would skip the icon swap.
+            launchedSubActivity = false
+            throw t
+        }
+    }
+
+    /** False while the screen is off or the keyguard is up. onStop fires for the power button, a display
+     *  timeout and a full-screen call or alarm over the lock screen, and in each the task is still the
+     *  user's foreground task, so flipping the launcher alias then risks the OEM teardown. */
+    private fun deviceInUse(): Boolean {
+        val interactive = getSystemService(PowerManager::class.java)?.isInteractive ?: true
+        val locked = getSystemService(KeyguardManager::class.java)?.isKeyguardLocked ?: false
+        return interactive && !locked
     }
 
     /**
@@ -243,10 +279,18 @@ class MainActivity : FragmentActivity() {
         // re-locking under a zero-second timeout is what "lock immediately" asks for.
         appLock.onGenuineBackground()
         // The icon-alias swap keeps the gate: flipping the alias while a sub-activity WE launched
-        // covers us can tear the task down on some OEMs.
-        if (!userLeaving) return
+        // covers us can tear the task down on some OEMs. Home/Recents is one genuine exit; Back (which
+        // never calls onUserLeaveHint) is the other. Back is inferred: a stop not caused by our own
+        // sub-activity, with the device awake and unlocked (screen-off, a timeout, or a call or alarm
+        // over the lock screen stop us too, while the task stays the foreground one).
+        val leaving = userLeaving || (!launchedSubActivity && deviceInUse())
         userLeaving = false
-        runCatching { appIconManager.reconcileTo(AppIcon.fromKey(appIconKey)) }
+        if (!leaving) return
+        // Null is "not known": the startup read has not landed, or it failed. Reconciling to Default
+        // from it would switch the launcher off the user's real pick, so the aliases wait for a real
+        // read. A real "" IS Default (never picked, or cleared by a reset) and is reconciled.
+        val key = appIconKey ?: return
+        runCatching { appIconManager.reconcileTo(AppIcon.fromKey(key)) }
     }
 
     /** The system animation-scale (0 when "Remove animations" is on) — single read used at startup
@@ -400,6 +444,7 @@ class MainActivity : FragmentActivity() {
 
         // Read off Main with a bounded wait. A failed/stalled read uses the remembered privacy
         // protections; no real app content is composed before these flags and gates are primed.
+        var startupReadFailed = false
         val startup = withContext(Dispatchers.IO) {
             runCatching { withTimeout(2000) { settingsRepo.startupPreferences() } }
                 .onSuccess { ok ->
@@ -414,6 +459,7 @@ class MainActivity : FragmentActivity() {
                 }
                 .getOrElse {
                     if (it is CancellationException && it !is TimeoutCancellationException) throw it
+                    startupReadFailed = true
                     val known = ProtectionSentinel.fallback(this@MainActivity)
                     SettingsRepository.StartupPreferences(
                         privacyMode = known.privacyMode,
@@ -441,7 +487,8 @@ class MainActivity : FragmentActivity() {
         applyAdaptiveWindowBackground(startup.amoledMode)
         val introIconKey = startup.appIcon
         val themedIntro = startup.themedLaunchIntro
-        appIconKey = introIconKey
+        // The fallback's "" is not a real read, so the key stays unknown until the collector sees one.
+        if (!startupReadFailed) appIconKey = introIconKey
         lifecycleScope.launch {
             // FLAG_SECURE follows privacy mode OR the app lock — turning on a lock implies keeping the
             // app out of the recents preview / screenshots, as every app-lock feature does.
@@ -465,7 +512,7 @@ class MainActivity : FragmentActivity() {
         }
         // Keep the icon pick live so onStop can read it without blocking on DataStore (and never stale).
         lifecycleScope.launch {
-            settingsRepo.appIcon.collect { appIconKey = it }
+            settingsRepo.appIconOrUnknown.collect { if (it != null) appIconKey = it }
         }
 
         setContent {
@@ -507,7 +554,16 @@ class MainActivity : FragmentActivity() {
                 }
             }
             val uiSettings by uiSettingsFlow.collectAsState(initial = ForgeUiSettings())
-            val onboardingDone by settingsRepo.onboardingDone.collectAsState(initial = null)
+            // A failed read emits null and the flow ENDS (allPreferences catches, emits once, completes),
+            // so the gate would sit on the empty null branch for the whole process. Collected here so its
+            // end is visible: ending on null means the read failed, and Retry re-collects.
+            var prefsAttempt by remember { mutableIntStateOf(0) }
+            var prefsReadFailed by remember { mutableStateOf(false) }
+            val onboardingDone by produceState<Boolean?>(initialValue = null, prefsAttempt) {
+                prefsReadFailed = false
+                settingsRepo.onboardingDoneOrUnknown.collect { value = it }
+                if (value == null) prefsReadFailed = true
+            }
             LaunchedEffect(onboardingDone) { if (onboardingDone != null) contentReady = true }
 
             CompositionLocalProvider(LocalForgeSettings provides uiSettings) {
@@ -571,7 +627,8 @@ class MainActivity : FragmentActivity() {
                                         )
                                     }
                                 }
-                                null -> {} // DataStore still loading; the theme's gradient shows briefly
+                                // DataStore still loading (the theme's gradient shows briefly), or failed.
+                                null -> if (prefsReadFailed) PreferencesUnavailableMessage(onRetry = { prefsAttempt++ })
                             }
                             // App-lock gate — an opaque overlay above the nav host (whose state is
                             // preserved underneath), below the launch intro. The prompt waits for the
@@ -642,6 +699,24 @@ private fun ImportConfirmationDialog(
 internal fun opensHealthConnectPrivacyPolicy(action: String?): Boolean =
     action == "androidx.health.connect.action.SHOW_PERMISSIONS_RATIONALE" ||
         action == "android.intent.action.VIEW_PERMISSION_USAGE"
+
+/** The first-screen gate could not read the settings file. Nothing private is composed behind it. */
+@Composable
+private fun PreferencesUnavailableMessage(onRetry: () -> Unit) {
+    Box(
+        Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                "Avex couldn't read its settings. Your training data is safe.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            TextButton(onClick = onRetry) { Text("Retry") }
+        }
+    }
+}
 
 /** Only visible during real startup latency or failed recovery, before private content exists. */
 @Composable

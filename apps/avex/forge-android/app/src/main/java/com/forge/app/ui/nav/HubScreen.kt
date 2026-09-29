@@ -151,8 +151,8 @@ fun HubScreen(
                     onOpenWeek = { weekStartMs -> nav.navigate(Routes.cardioWeeks(weekStartMs)) }
                 )
                 BottomTab.STATS -> DayListScreen(
-                    onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
-                    onOpenDayQuick = { dayKey -> nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
+                    onOpenDay = { dayKey -> nav.navigateToGymDay(dayKey) },
+                    onOpenDayQuick = { dayKey -> nav.navigateToGymDay(dayKey, skipWarmup = true) },
                     onOpenHistory = { pushOnce(Routes.SESSION_HISTORY) },
                     onOpenNotes = { pushOnce(Routes.NOTES_SEARCH) },
                     onOpenRecap = { pushOnce(Routes.RECAP) },
@@ -171,8 +171,8 @@ fun HubScreen(
                 BottomTab.HOME -> OverviewScreen(
                     onOpenAcademy = { goToTab(BottomTab.ACADEMY) },
                     // A cardio "day" is logged on the Cardio page, so its start CTA swipes there.
-                    onStartSession = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigate(Routes.gymDay(dayKey)) },
-                    onStartSessionSkipWarmup = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
+                    onStartSession = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigateToGymDay(dayKey) },
+                    onStartSessionSkipWarmup = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigateToGymDay(dayKey, skipWarmup = true) },
                     // "View program" opens the program screen read-only — the top-bar pencil
                     // unlocks the same editor Settings → Program opens (GYMAP-28).
                     onViewProgram = { pushOnce(Routes.programBuilder(view = true)) },

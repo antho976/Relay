@@ -42,7 +42,8 @@ class GenericCsvImporter : GymImporter {
             if (exerciseName.isBlank()) { skipped++; continue }
 
             val reps = ImportParsing.parseReps(ImportParsing.at(row, cols.reps))
-            val weightRaw = ImportParsing.parseWeight(ImportParsing.at(row, cols.weight))
+            val weightCell = ImportParsing.at(row, cols.weight)
+            val weightRaw = ImportParsing.parseWeight(weightCell)
             val seconds = ImportParsing.parseClockOrSeconds(ImportParsing.at(row, cols.seconds))
             val distanceKm = cols.distance?.let { (col, headerUnit) ->
                 val unit = ImportParsing.at(row, cols.distanceUnit).ifBlank { headerUnit }
@@ -57,7 +58,7 @@ class GenericCsvImporter : GymImporter {
             }
             if (reps == null && (weightRaw == null || weightRaw == 0.0) && seconds == null) { skipped++; continue }
 
-            val kg = ImportParsing.rowIsKg(row, cols.unit, cols.weightHeaderKg, cols.weightHeaderLb, assumeKg)
+            val kg = ImportParsing.rowIsKg(row, cols.unit, cols.weightHeaderKg, cols.weightHeaderLb, assumeKg, weightCell)
             val weightLb = weightRaw?.takeIf { it > 0.0 }
                 ?.let { ImportParsing.roundWeight(if (kg) ImportParsing.kgToLb(it) else it) }
 
@@ -91,6 +92,8 @@ class GenericCsvImporter : GymImporter {
     /** The column map derived from the header row alone — all detection ever needed. */
     private fun columnsFrom(header: List<String>): Columns? {
         val idx = ImportParsing.headerIndex(header)
+        // Avex's own PR list looks like a workout CSV but is not one; it is refused, never imported.
+        if (ImportParsing.isAvexPrListHeader(header.joinToString(",") { it.trim().lowercase() })) return null
         val date = ImportParsing.findCol(idx, "date") ?: ImportParsing.findCol(idx, "start") ?: return null
         val exercise = ImportParsing.findCol(idx, "exercise", "movement", "lift") ?: return null
         // Exclude a per-row "Bodyweight" column: it holds the user's bodyweight, not the lift load,

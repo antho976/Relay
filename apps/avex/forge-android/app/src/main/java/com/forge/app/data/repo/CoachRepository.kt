@@ -854,7 +854,10 @@ class CoachRepository @Inject constructor(
                         if (name.isBlank() && unit.isBlank()) customizationRepo.clearSwap(d.targetKey)
                         else customizationRepo.restoreSwap(
                             d.targetKey, name, unit,
-                            source = OverlaySource.USER,
+                            // A restored NAMED swap can only be an earlier coach swap: applying over a
+                            // user's named swap is refused by userOwnsSlot. Tagging it USER would lock
+                            // the slot and detach it from clearCoachSwaps and its own decision's undo.
+                            source = if (name.isNotBlank()) OverlaySource.COACH else OverlaySource.USER,
                             swappedExerciseId = swapId
                         )
                     }

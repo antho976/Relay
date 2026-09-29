@@ -294,7 +294,7 @@ internal fun SketchCanvas(
             progress.snapTo(0f)
             // Linear on the master clock: each mark eases inside its own window, so an eased master
             // would bunch the whole choreography into its first second.
-            progress.animateTo(1f, tween(ForgeMotion.scaledDuration(DRAW_MS), easing = LinearEasing))
+            progress.animateTo(1f, tween(ForgeMotion.nominalDuration(DRAW_MS), easing = LinearEasing))
         } else {
             progress.snapTo(1f)
         }

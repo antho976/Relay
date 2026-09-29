@@ -15,8 +15,11 @@ import com.forge.app.ui.common.window.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalFocusManager
@@ -75,8 +78,13 @@ internal fun BodyMeasurementLogSheet(
         return raw.isNotBlank() && parsedCm(type) == null
     }
 
-    // Only fields the user actually changed from their seed — an untouched field is left as-is.
-    fun isChanged(type: BodyMeasurementType): Boolean = inputs[type].orEmpty() != seeded[type].orEmpty()
+    // Fields the user typed into, even if the text ended up equal to the seed: re-measuring 85 when
+    // 85 was last logged is still today's reading, and retyping it must be able to record it.
+    var touched by remember(series, useCm) { mutableStateOf(emptySet<BodyMeasurementType>()) }
+
+    // Only fields the user actually changed or retyped — an untouched field is left as-is.
+    fun isChanged(type: BodyMeasurementType): Boolean =
+        type in touched || inputs[type].orEmpty() != seeded[type].orEmpty()
 
     val toSave = BodyMeasurementType.entries
         .filter { isChanged(it) }
@@ -106,7 +114,7 @@ internal fun BodyMeasurementLogSheet(
             // group top to bottom; the last row closes the keyboard.
             ForgeGroupSection(
                 label = null,
-                footer = { ForgeGroupCaption("One entry per measurement per day, saving replaces today's.") }
+                footer = { ForgeGroupCaption("One entry per measurement per day, saving replaces today's. Hold a site's row to remove a past reading.") }
             ) {
                 ForgeRowGroup(*types.mapIndexed { i, type ->
                     @Composable {
@@ -114,7 +122,7 @@ internal fun BodyMeasurementLogSheet(
                         ForgeFieldRow(
                             label = type.label,
                             value = inputs[type].orEmpty(),
-                            onValueChange = { v -> inputs[type] = filterDecimalInput(v) },
+                            onValueChange = { v -> inputs[type] = filterDecimalInput(v); touched = touched + type },
                             placeholder = "0",
                             suffix = unit,
                             isError = isInvalid(type),

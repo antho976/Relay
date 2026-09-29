@@ -27,7 +27,13 @@ data class WarmupExercise(
      * the imperial grid. The caller passes it explicitly so a kg user gets prescriptions that round
      * to whole kilos, rather than to pounds that render as 22.7 kg.
      */
-    val loadStep: Double? = null
+    val loadStep: Double? = null,
+    /**
+     * Weight of the empty implement in the same scale as [workingLoad] (a barbell: 45 lb, or 20 kg
+     * carried in pounds), or null when there is no fixed floor (cables, dumbbells, machines).
+     * A barbell rung lighter than this cannot be set up, so the ramp is floored at it.
+     */
+    val barLoad: Double? = null
 )
 
 /**
@@ -170,6 +176,18 @@ object WarmupEngine {
         ExerciseUnit.BODYWEIGHT -> 0.0
     }
 
+    /**
+     * The empty-bar weight for [libId] when it is a standard-barbell movement on the pounds-scaled
+     * [ExerciseUnit.WEIGHT] input, in stored pounds; null otherwise (unknown/custom lifts, cables,
+     * dumbbells, plate machines). 45 lb, or 20 kg for a metric gym.
+     */
+    fun barLoadFor(libId: String, unit: ExerciseUnit, metric: Boolean): Double? {
+        if (unit != ExerciseUnit.WEIGHT) return null
+        val def = com.forge.app.program.ExerciseLibrary.byId(libId) ?: return null
+        if (com.forge.app.program.Equipment.BARBELL !in def.equipment) return null
+        return if (metric) fromDisplayWeight(20.0, WeightUnit.KG) else 45.0
+    }
+
     /** 2.5 kg, the metric grid's smallest step, in the pounds loads are carried in. */
     private val METRIC_STEP_LB = fromDisplayWeight(2.5, WeightUnit.KG)
 
@@ -210,7 +228,10 @@ object WarmupEngine {
         val out = mutableListOf<WarmupRampSet>()
         var lastLoad = 0.0
         fractions.forEachIndexed { index, fraction ->
+            // A barbell cannot be loaded below the empty bar: rungs under it clamp onto it, and the
+            // duplicate check below then keeps a single "empty bar" rung.
             val rounded = (roundTo(working * fraction, increment)).coerceAtLeast(increment)
+                .coerceAtLeast(exercise.barLoad ?: 0.0)
             // Drop a rung that rounds onto the working load, or onto the rung below it. On light
             // exercises with a coarse increment several fractions collapse to the same loadable
             // weight, and repeating it adds fatigue without adding preparation.

@@ -179,7 +179,9 @@ fun DayScreen(
         LeaveSessionDialog(
             onResumeLater = { viewModel.onEvent(DayUiEvent.LeaveAndResume) },
             onDiscard = { viewModel.onEvent(DayUiEvent.ConfirmDiscard) },
-            onKeepGoing = { viewModel.onEvent(DayUiEvent.DismissDiscardConfirm) }
+            onKeepGoing = { viewModel.onEvent(DayUiEvent.DismissDiscardConfirm) },
+            // Back only asks when there is work to keep; an empty FINISH asks too, with nothing to resume.
+            nothingLogged = !state.hasUnsavedWork
         )
     }
 
@@ -323,7 +325,12 @@ fun DayScreen(
             muscleAlreadyWarm = alreadyWarm,
             workingWeightLb = workingWeight,
             weightUnit = LocalForgeSettings.current.weightUnit,
-            onDismiss = { viewModel.onEvent(DayUiEvent.DismissTrainingHelper) }
+            onDismiss = { viewModel.onEvent(DayUiEvent.DismissTrainingHelper) },
+            barLoadLb = ex?.let {
+                com.forge.app.domain.warmup.WarmupEngine.barLoadFor(
+                    it.effectiveExerciseId, it.effectiveUnit, LocalForgeSettings.current.weightUnit.isMetric
+                )
+            }
         )
     }
     state.plateCalculatorForExerciseId?.let { exerciseId ->

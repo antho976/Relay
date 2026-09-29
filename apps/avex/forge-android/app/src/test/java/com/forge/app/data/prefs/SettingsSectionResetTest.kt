@@ -93,4 +93,42 @@ class SettingsSectionResetTest {
         assertTrue("lb derives miles once the explicit km pick is gone", repo.useMiles.first())
         assertFalse("lb derives inches once the explicit cm pick is gone", repo.useCm.first())
     }
+
+    /** Note templates are content the user wrote: the full settings reset keeps them, so must this. */
+    @Test
+    fun sessionResetKeepsUserWrittenNoteTemplates() = runTest {
+        repo.addNoteTemplate("Felt strong today")
+        repo.setHapticStrength("light")
+
+        repo.resetSection(SettingsSection.SESSION)
+
+        assertEquals("strong", repo.hapticStrength.first())
+        assertTrue("custom note starter survives", "Felt strong today" in repo.noteTemplates.first())
+    }
+
+    /** An empty equipment set means "all equipment", so the last tile can't be switched off. */
+    @Test
+    fun lastEquipmentPieceCannotBeRemoved() = runTest {
+        repo.setAvailableEquipment(setOf("DUMBBELLS"))
+
+        assertFalse("removing the last piece is refused", repo.toggleAvailableEquipment("DUMBBELLS"))
+        assertEquals(setOf("DUMBBELLS"), repo.availableEquipment.first())
+
+        assertTrue(repo.toggleAvailableEquipment("BENCH"))
+        assertTrue(repo.toggleAvailableEquipment("DUMBBELLS"))
+        assertEquals(setOf("BENCH"), repo.availableEquipment.first())
+    }
+
+    /** The on/off decision is made against the persisted set, so back-to-back taps alternate. */
+    @Test
+    fun problemAreaAndPriorityTogglesFlipAgainstPersistedState() = runTest {
+        repo.toggleProblemArea("knees")
+        repo.toggleProblemArea("knees")
+        assertTrue(repo.problemAreas.first().isEmpty())
+
+        repo.togglePriorityMuscle("chest")
+        assertEquals(setOf("chest"), repo.priorityMuscles.first())
+        repo.togglePriorityMuscle("chest")
+        assertTrue(repo.priorityMuscles.first().isEmpty())
+    }
 }

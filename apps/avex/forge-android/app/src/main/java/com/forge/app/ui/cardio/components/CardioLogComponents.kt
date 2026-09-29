@@ -307,6 +307,29 @@ internal fun plainDecimalInput(v: Double): String =
 
 internal fun sanitizeDecimal(input: String): String = filterDecimalInput(input).take(6)
 
+/**
+ * The duration field's text, held to one day. The field allows five characters, so a typo like
+ * "99999" (or "99:99") would otherwise be stored as-is and inflate the week's totals, the streak,
+ * the records and the cardio goals. The bound is the importers' (a longer single entry is a slip).
+ */
+internal fun capDurationText(input: String): String =
+    if (parseDurationMin(input) > com.forge.app.data.importer.ImportBounds.MAX_CARDIO_MINUTES) {
+        com.forge.app.data.importer.ImportBounds.MAX_CARDIO_MINUTES.toString()
+    } else input
+
+/**
+ * The distance field's text (in the display unit), held to the importers' single-entry bound so the
+ * field shows what will be saved rather than a "1500" that is silently stored as 1000 km. The miles
+ * bound is rounded DOWN to one decimal so the capped text itself never parses past the bound.
+ */
+internal fun capDistanceText(input: String, useMiles: Boolean): String {
+    val maxKm = com.forge.app.data.importer.ImportBounds.MAX_CARDIO_DISTANCE_KM
+    val km = com.forge.app.domain.units.parseToKm(input, useMiles) ?: return input
+    if (km <= maxKm) return input
+    val maxDisplay = kotlin.math.floor(com.forge.app.domain.units.toDisplayDistance(maxKm, useMiles) * 10.0) / 10.0
+    return plainDecimalInput(maxDisplay)
+}
+
 /** Keep digits and a single colon, capped at "HH:MM" width, for the duration field (GYMAP-41). */
 internal fun sanitizeDuration(input: String): String {
     val filtered = input.filter { it.isDigit() || it == ':' }

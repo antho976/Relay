@@ -130,12 +130,14 @@ internal fun BodyweightLogSheet(
     val lbSeed = if (stones) seedLb?.let { (it.roundToInt() % 14).toString() } ?: "" else ""
     var stInput by remember(seedLb, weightUnit, date) { mutableStateOf(stSeed) }
     var lbInput by remember(seedLb, weightUnit, date) { mutableStateOf(lbSeed) }
-    // Keyed on the day's entry (not just the date) so a late flow emission — or a change while the
-    // sheet is open — re-seeds the note like the weight field above, rather than leaving it blank and
-    // then blanking the stored note on Save.
-    var note by remember(entryForDate, date) { mutableStateOf(entryForDate?.note ?: "") }
+    // Keyed on the day, and re-seeded from the day's entry below while UNTOUCHED, so a late flow
+    // emission — or a change while the sheet is open — lands the stored note like the weight field
+    // above, rather than leaving it blank and then blanking the stored note on Save. Once the user
+    // has typed, a re-emission (an import replacing today's row) must not throw their text away.
+    var note by remember(date) { mutableStateOf(entryForDate?.note ?: "") }
     // Untouched, Save leaves the day's note alone rather than trusting the seed to have landed.
-    var noteTouched by remember(entryForDate, date) { mutableStateOf(false) }
+    var noteTouched by remember(date) { mutableStateOf(false) }
+    LaunchedEffect(entryForDate?.note, date) { if (!noteTouched) note = entryForDate?.note ?: "" }
 
     // Parsed lb — stones sums the two fields, kg/lb parse the single field; both clamp to the sane range.
     val parsed: Double? = if (stones) {

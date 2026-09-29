@@ -86,8 +86,9 @@ class ForgeWidget : GlanceAppWidget() {
         val settings = entryPoint.settingsRepository()
         val zone = java.time.ZoneId.systemDefault()
         val today = java.time.LocalDate.now(zone)
-        val monday = today.with(java.time.DayOfWeek.MONDAY)
-        val mondayMs = monday.atStartOfDay(zone).toInstant().toEpochMilli()
+        // The dot row follows Settings > Format > Week starts, like Home and the wrist's week tile.
+        val weekStart = com.forge.app.core.time.userWeekStart(today, settings.firstDayMonday.first())
+        val weekStartMs = weekStart.atStartOfDay(zone).toInstant().toEpochMilli()
         val todayStartMs = today.atStartOfDay(zone).toInstant().toEpochMilli()
         // "Go with the flow" deliberately keeps the seed program around, so resolving next-up here
         // would name — and the tap would open — a planned day the user explicitly opted out of.
@@ -142,7 +143,7 @@ class ForgeWidget : GlanceAppWidget() {
         // This-week dot row from `finished`; streak reuses the app's vacation-aware computation
         // (bridges holidays + the one rest-day grace) so the widget can't contradict the in-app number
         // a hand-rolled walk over finished dates would have ignored vacation bridging.
-        val finishedDates = entryPoint.sessionDao().finishedAtsSince(mondayMs)
+        val finishedDates = entryPoint.sessionDao().finishedAtsSince(weekStartMs)
             .mapTo(HashSet()) { java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
         val streak = entryPoint.statsRepository().currentStreakDays()
         // "Has this user ever trained" — a zero-state question, so it counts untracked work too.
@@ -152,7 +153,7 @@ class ForgeWidget : GlanceAppWidget() {
         val hasAnyFinished = streak >= 1 || finishedDates.isNotEmpty() ||
             entryPoint.sessionDao().hasAnyFinishedSession()
         val weekDots = (0..6).joinToString(" ") { off ->
-            if (monday.plusDays(off.toLong()) in finishedDates) "●" else "○"
+            if (weekStart.plusDays(off.toLong()) in finishedDates) "●" else "○"
         }
 
         provideContent {

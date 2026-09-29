@@ -5,6 +5,7 @@ import com.forge.app.data.db.inMemoryForgeDb
 import com.forge.app.data.db.loggedExercise
 import com.forge.app.data.db.loggedSet
 import com.forge.app.data.db.session
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -323,5 +324,20 @@ class LoggedSetDaoTest {
 
         assertNull("the set is gone with its session", sets.get(setId))
         assertNull("and no longer counts toward any maximum", sets.maxWeightForExercise("bench"))
+    }
+
+    @Test
+    fun statsSetsFlagExactlyTheStrengthPopulation() = runTest {
+        // observeGymStats derives BOTH populations from this one query, so its flagged-true rows must be
+        // exactly observeAllFinishedSetsWithSession, while holds and assisted sets stay as activity.
+        seedOneCleanBestAmongDisqualifiedHeavierSets()
+        log(weightLb = 135.0, reps = 5, skipped = true)                  // skipped exercise: in neither
+
+        val rows = sets.observeAllFinishedStatsSets().first()
+        val strength = sets.observeAllFinishedSetsWithSession().first()
+
+        assertEquals(strength, rows.filter { it.isStrengthSet }.map { it.set })
+        assertEquals("clean set + assisted set + hold", 3, rows.size)
+        assertEquals(2, rows.count { !it.isStrengthSet })
     }
 }

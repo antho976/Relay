@@ -91,11 +91,18 @@ class SetLogUseCase @Inject constructor(
         val lastLoggedIdx = allSets.maxByOrNull { it.completedAt }
             ?.let { last -> rows.indexOfFirst { (_, row) -> row?.id == last.loggedExerciseId } }
             ?.takeIf { it >= 0 }
+        // Rows skipped on the phone (manual skip, "I have N minutes") count as done, like an early
+        // finish — otherwise the resolver walks onto them once the kept slots fill.
         val earlyDoneIdx = focusHolder.earlyDoneFor(session.id)
-            .let { ids -> rows.indices.filter { rows[it].first.id in ids }.toSet() }
+            .let { ids -> rows.indices.filter { rows[it].first.id in ids || rows[it].second?.skipped == true }.toSet() }
+        // A skipped row reads as filled: skipping a started exercise must not leave it pinned as
+        // the "latest logged, short of plan" slot (the resolver checks that before earlyDoneIdx).
         val currentIdx = com.forge.app.service.wear.CurrentSlotResolver.resolve(
             plannedSets = rows.map { it.first.sets },
-            doneSets = rows.map { (_, row) -> row?.let { setsByLogged[it.id]?.size } ?: 0 },
+            doneSets = rows.map { (ex, row) ->
+                val done = row?.let { setsByLogged[it.id]?.size } ?: 0
+                if (row?.skipped == true) maxOf(done, ex.sets) else done
+            },
             lastLoggedIdx = lastLoggedIdx,
             earlyDoneIdx = earlyDoneIdx
         )
@@ -106,6 +113,9 @@ class SetLogUseCase @Inject constructor(
             return Result(false, "exercise moved on")
         }
         val row = loggedFor(slotPlan.id)
+        // Every slot is skipped/done and the resolver fell back onto a skipped one: logSet never
+        // clears `skipped`, so the set would vanish from history and progression reads.
+        if (row?.skipped == true) return Result(false, "exercise skipped on the phone")
 
         // Persistent swap (#11): the slot logs under the swapped exercise even before its first set.
         val swap = customizationRepo.getSwap(slotPlan.id)

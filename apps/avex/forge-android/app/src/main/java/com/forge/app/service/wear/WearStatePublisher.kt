@@ -91,14 +91,24 @@ class WearStatePublisher @Inject constructor(
             }
         }
         scope.launch {
+            // Before the persisted rest is restored the controller reads null even when a live rest
+            // is about to come back; clearing on that would make the wrist drop and re-add it.
+            timerHolder.awaitRestore()
             var last: TimerStateDto? = null
+            var firstEmission = true
             timerHolder.controller.state.collect { state ->
                 val dto = state?.toDto()
                 val prev = last
+                // A RUNNING /timer/state left by a phone process that died mid-rest outlives it, and
+                // a rest that expired during the downtime restores as null: without this the first
+                // null looked like "still nothing" and the wrist stayed wedged on a dead 0:00 rest.
+                val startupClear = firstEmission && dto == null
+                firstEmission = false
                 // The controller re-emits every tick; the wrist derives its own countdown from
                 // endAtMs, so only STRUCTURAL changes republish (start/pause/resume/±30/stop —
                 // detected as a shifted end instant or a mode flip), never the 1 Hz decrement.
                 val structural = when {
+                    startupClear -> true
                     (dto == null) != (prev == null) -> true
                     dto == null || prev == null -> false
                     dto.paused != prev.paused || dto.totalSeconds != prev.totalSeconds -> true

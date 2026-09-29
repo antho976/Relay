@@ -80,6 +80,7 @@ import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.domain.photo.PhotoPose
 import com.forge.app.domain.photo.PhotoTag
 import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.filterDecimalInput
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
@@ -122,7 +123,8 @@ internal fun GalleryViewerPager(
     onSetMuscles: (ProgressPhoto, List<String>) -> Unit,
     onSetTags: (ProgressPhoto, List<String>) -> Unit,
     onSetWeight: (ProgressPhoto, Double?) -> Unit,
-    onSetDate: (ProgressPhoto, Long) -> Unit,
+    /** Re-date a photo; the callback receives the entry as stored, whose weight was re-snapshotted. */
+    onSetDate: (ProgressPhoto, Long, (ProgressPhoto) -> Unit) -> Unit,
     onDelete: (ProgressPhoto) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -427,7 +429,7 @@ internal fun GalleryViewerPager(
                             ForgeFieldRow(
                                 label = "Bodyweight",
                                 value = weightInput,
-                                onValueChange = { weightInput = it.filter { c -> c.isDigit() || c == '.' }.take(6) },
+                                onValueChange = { weightInput = filterDecimalInput(it).take(6) },
                                 placeholder = "0",
                                 suffix = unitLabel(weightUnit),
                                 isError = weightInvalid,
@@ -480,8 +482,21 @@ internal fun GalleryViewerPager(
                         // DatePicker returns UTC midnight — map that calendar day to local start-of-day.
                         val localDate = Instant.ofEpochMilli(picked).atZone(ZoneId.of("UTC")).toLocalDate()
                         val ms = localDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                        record(baseline(current).copy(takenAtMs = ms))
-                        onSetDate(current, ms)
+                        val before = baseline(current)
+                        record(before.copy(takenAtMs = ms))
+                        // The repository re-snapshots the bodyweight for the new date. Adopt what it
+                        // stored as the committed weight, so the weight line, the field and the next
+                        // commit's dirty check all agree with the file, unless a weight was committed
+                        // since; reseed the field only if the user has not typed over it.
+                        onSetDate(current, ms) { stored ->
+                            val now = baseline(stored)
+                            if (now.weightLb == before.weightLb) {
+                                record(now.copy(weightLb = stored.weightLb))
+                                if (editingFile == stored.fileName && weightInput == weightText(before)) {
+                                    weightInput = weightText(stored)
+                                }
+                            }
+                        }
                     }
                     showDatePicker = false
                 },

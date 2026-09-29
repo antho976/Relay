@@ -68,6 +68,7 @@ import com.forge.app.domain.units.formatHold
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.parser.WeightParser
 import com.forge.app.program.ExerciseUnit
+import com.forge.app.domain.units.normalizeDecimalInput
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
@@ -75,8 +76,8 @@ import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.LocalForgeSettings
 
 // Hoisted so it isn't recompiled on every weight keystroke. Matches a full "WxR"
-// entry (e.g. a pasted "45x10") so it splits into both fields at once.
-private val WEIGHT_REPS_REGEX = Regex("""^([0-9]*\.?[0-9]+)\s*[xX]\s*([0-9]+)$""")
+// entry (e.g. a pasted "45x10" or "22,5x10") so it splits into both fields at once.
+private val WEIGHT_REPS_REGEX = Regex("""^([0-9]*[.,]?[0-9]+)\s*[xX]\s*([0-9]+)$""")
 
 /**
  * Input row for the next set. When [nextSetNumber] is provided the layout
@@ -90,6 +91,10 @@ fun SetInputRow(
     suggestionReason: String? = null,
     priorSets: List<LoggedSet> = emptyList(),
     nextSetNumber: Int? = null,
+    /** The exercise actually being performed (the swapped one after a swap). Keys the seeded
+     *  weight/reps so a swap re-seeds them: a swap only happens at zero sets, so [nextSetNumber]
+     *  never changes across one. */
+    exerciseKey: String = "",
     priorSetForActiveRow: LoggedSet? = null,
     targetsMet: Boolean = false,
     advanceLabel: String = "",
@@ -130,8 +135,8 @@ fun SetInputRow(
     val seedReps = priorSetForActiveRow?.reps?.toString() ?: targetReps?.toString().orEmpty()
     // Re-seed only when the SET NUMBER changes (a new set), not when the derived seed value shifts —
     // keying on the volatile seed would wipe a half-typed entry if the prior baseline changed (#11).
-    var weight by rememberSaveable(nextSetNumber) { mutableStateOf(seedWeight) }
-    var reps by rememberSaveable(nextSetNumber) { mutableStateOf(seedReps) }
+    var weight by rememberSaveable(nextSetNumber, exerciseKey) { mutableStateOf(seedWeight) }
+    var reps by rememberSaveable(nextSetNumber, exerciseKey) { mutableStateOf(seedReps) }
     val repsFocus = remember { FocusRequester() }
     val haptic = LocalHapticFeedback.current
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
@@ -195,7 +200,7 @@ fun SetInputRow(
         // reps field, so the rest of "45x10" is typed as reps — never truncated mid-entry.
         if (new.endsWith("x") || new.endsWith("X")) {
             val numPart = new.dropLast(1)
-            if (numPart.isNotEmpty() && numPart.toDoubleOrNull() != null) {
+            if (numPart.isNotEmpty() && normalizeDecimalInput(numPart).toDoubleOrNull() != null) {
                 weight = numPart
                 repsFocus.requestFocus()
                 return
@@ -253,7 +258,7 @@ fun SetInputRow(
     // Weight steps in the DISPLAY unit (kg/lb) or by half-plates on PLATES exercises; the field
     // already holds a display-unit value, so we step the parsed number and re-format it.
     fun stepWeight(delta: Double) {
-        val base = weight.toDoubleOrNull() ?: 0.0
+        val base = normalizeDecimalInput(weight).toDoubleOrNull() ?: 0.0
         val next = (base + delta).coerceAtLeast(0.0)
         // Format/parse pinned to Locale.US so the field always uses a '.' decimal — a comma-decimal
         // locale would otherwise write "2,5" and the next toDoubleOrNull() would fail (matches WeightFormatter).

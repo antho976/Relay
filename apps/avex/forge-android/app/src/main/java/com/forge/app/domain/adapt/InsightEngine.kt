@@ -4,6 +4,7 @@ import com.forge.app.core.time.mondayStartMs
 import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.program.DayPlan
 import com.forge.app.program.Difficulty
+import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.ExercisePlan
 import com.forge.app.program.MuscleGroup
 import com.forge.app.program.SessionEstimate
@@ -49,6 +50,29 @@ object InsightEngine {
     /** One bout reduced to what the Tier-5 strength rules need: when, and its best working e1RM. */
     private data class BoutE1rm(val startedAt: Long, val best: Double)
 
+    /**
+     * The bouts of ONE lift within a slot. History is filed by program slot, but a session swap puts
+     * a different lift under the same key (a 60 lb DB row, then a 135 lb barbell row), and a series
+     * read across it reports a strength jump that never happened. So strength trends are read per
+     * PERFORMED lift, the way [DeloadAdvisor] and [VolumeResponse] already do. [name] is the lift's
+     * display name, null when it cannot be resolved (a slot no longer in the program).
+     */
+    private data class LiftE1rms(val slotId: String, val name: String?, val series: List<BoutE1rm>)
+
+    private data class LiftBouts(val slotId: String, val name: String?, val bouts: List<ExerciseBout>)
+
+    private fun liftGroups(s: AdaptationSnapshot, slots: Map<String, ProgramSlotSnap>): List<LiftBouts> =
+        s.exerciseHistory.flatMap { (slotId, bouts) ->
+            bouts.groupBy { it.performedExerciseId ?: slotId }.map { (lift, lb) ->
+                // The slot's own lift is named from the library, not the slot: a persistent swap has
+                // already renamed the slot snapshot to the swapped lift, which would credit the
+                // pre-swap lift's progress to the new one (and give both groups one name).
+                val name = if (lift == slotId) ExerciseLibrary.byId(slotId)?.name ?: slots[slotId]?.name
+                else lb.lastOrNull { it.swappedName != null }?.swappedName ?: slots[slotId]?.name
+                LiftBouts(slotId, name, lb)
+            }
+        }
+
     fun evaluate(s: AdaptationSnapshot, t: AdaptThresholds = AdaptThresholds()): List<Recommendation.Insight> {
         val slots = s.program.flatMap { it.slots }.associateBy { it.exerciseId }
         val ratios = balanceRatios(s, t)
@@ -60,10 +84,10 @@ object InsightEngine {
         // like every other strength read in the engine: a hand-rolled "weighted and unassisted"
         // filter admitted timed holds (a 45 lb, 90 s plank read as a 180 lb single), and a test-day
         // single is a measurement, not the trend.
-        val boutE1rms: Map<String, List<BoutE1rm>> = s.exerciseHistory.mapValues { (_, bouts) ->
-            bouts.filter { !it.skipped && it.countsForProgression }.mapNotNull { b ->
+        val boutE1rms: List<LiftE1rms> = liftGroups(s, slots).map { g ->
+            LiftE1rms(g.slotId, g.name, g.bouts.filter { !it.skipped && it.countsForProgression }.mapNotNull { b ->
                 b.bestE1rm()?.let { BoutE1rm(b.sessionStartedAt, it) }
-            }
+            })
         }
         return listOfNotNull(
             bestTimeOfDay(s, t),
@@ -123,9 +147,11 @@ object InsightEngine {
         t: AdaptThresholds
     ): Recommendation.Insight? {
         val since = s.nowMs - 90 * DAY_MS
-        val best = s.exerciseHistory.mapNotNull { (exerciseId, bouts) ->
-            val name = slots[exerciseId]?.name ?: return@mapNotNull null
-            val perSession = bouts
+        val best = liftGroups(s, slots).mapNotNull { g ->
+            if (slots[g.slotId] == null) return@mapNotNull null
+            val name = g.name ?: return@mapNotNull null
+            val exerciseId = g.slotId
+            val perSession = g.bouts
                 // Ordinary training only: a test-day single is the heaviest thing ever lifted on the
                 // lift by design, and read as a session's top weight it manufactured the gain.
                 .filter { it.sessionStartedAt >= since && !it.skipped && it.countsForProgression }
@@ -319,8 +345,10 @@ object InsightEngine {
         t: AdaptThresholds
     ): Recommendation.Insight? {
         data class Cand(val name: String, val label: String, val total: Int)
-        val best = s.exerciseHistory.mapNotNull { (id, bouts) ->
-            val name = slots[id]?.name ?: return@mapNotNull null
+        val best = liftGroups(s, slots).mapNotNull { g ->
+            if (slots[g.slotId] == null) return@mapNotNull null
+            val name = g.name ?: return@mapNotNull null
+            val bouts = g.bouts
             // Working sets of ordinary training only. A timed hold's `reps` is seconds (a 60 s plank
             // landed in the 16+ bucket as a 60-rep set), and warm-ups filled the lighter buckets
             // with numbers that say nothing about strength at that rep count.
@@ -366,13 +394,14 @@ object InsightEngine {
     private fun laggingLift(
         s: AdaptationSnapshot,
         slots: Map<String, ProgramSlotSnap>,
-        boutE1rms: Map<String, List<BoutE1rm>>,
+        boutE1rms: List<LiftE1rms>,
         t: AdaptThresholds
     ): Recommendation.Insight? {
         val since = s.nowMs - 90 * DAY_MS
-        val growth = boutE1rms.mapNotNull { (id, series) ->
-            val slot = slots[id] ?: return@mapNotNull null
-            liftGrowthPct(series, since, t.insightImprovedMinSessions)?.let { Triple(slot.muscle, slot.name, it) }
+        val growth = boutE1rms.mapNotNull { lift ->
+            val slot = slots[lift.slotId] ?: return@mapNotNull null
+            val name = lift.name ?: return@mapNotNull null
+            liftGrowthPct(lift.series, since, t.insightImprovedMinSessions)?.let { Triple(slot.muscle, name, it) }
         }
         val candidate = growth.groupBy { it.first }
             .filterValues { it.size >= 2 }
@@ -404,13 +433,14 @@ object InsightEngine {
      */
     private fun timeOfDayPerformance(
         s: AdaptationSnapshot,
-        boutE1rms: Map<String, List<BoutE1rm>>,
+        boutE1rms: List<LiftE1rms>,
         t: AdaptThresholds
     ): Recommendation.Insight? {
         val split = t.insightTimePerfSplitHour
         val amRatios = mutableListOf<Double>()
         val pmRatios = mutableListOf<Double>()
-        boutE1rms.values.forEach { series ->
+        boutE1rms.forEach { lift ->
+            val series = lift.series
             val perBout = series.map { b ->
                 (Instant.ofEpochMilli(b.startedAt).atZone(s.zoneId).hour < split) to b.best
             }

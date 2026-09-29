@@ -55,7 +55,7 @@ enum class SettingsPage(val title: String) {
 internal data class SettingsItem(val name: String, val tags: String, val page: SettingsPage)
 
 /** What a non-page search hit does when tapped — fire an action (dialog/menu), not open a sub-page. */
-enum class SearchAction { DATA, IMPORT, RESET, COACH }
+enum class SearchAction { DATA, IMPORT, RESET, FACTORY, COACH }
 
 /** A search hit that triggers an [action] instead of navigating to a page. [where] is its breadcrumb. */
 internal data class SettingsActionEntry(val name: String, val where: String, val tags: String, val action: SearchAction)
@@ -66,7 +66,7 @@ internal val ACTION_ENTRIES = listOf(
     SettingsActionEntry("Import data", "Data", "import data strong hevy fitnotes jefit csv json migrate from another app move history", SearchAction.IMPORT),
     SettingsActionEntry("Backup & restore", "Data", "backup restore database file save load import survive uninstall", SearchAction.DATA),
     SettingsActionEntry("Reset…", "Reset", "reset delete clear wipe erase sessions trophies cardio settings data", SearchAction.RESET),
-    SettingsActionEntry("Factory reset", "Reset", "factory reset erase everything wipe delete all clean slate", SearchAction.RESET),
+    SettingsActionEntry("Factory reset", "Reset", "factory reset erase everything wipe delete all clean slate", SearchAction.FACTORY),
     SettingsActionEntry("Your coach", "Coach", "coach brief tracking plan learning weekly review autopilot deload trust history record proposals undo", SearchAction.COACH),
 )
 
@@ -189,19 +189,20 @@ fun SettingsScreen(
     // Root-list scroll, hoisted here (outside the AnimatedContent that swaps pages) so it survives
     // opening a sub-page and backing out — the list lands where you left it, not scrolled to the top.
     val mainListState = rememberLazyListState()
-    var searchQuery by remember { mutableStateOf("") }
-    var confirmReset by remember { mutableStateOf<ResetTarget?>(null) }
-    var showResetMenu by remember { mutableStateOf(false) }
-    var showDataDialog by remember { mutableStateOf(false) }
-    var showImportDialog by remember { mutableStateOf(false) }
+    // Saveable so a rotation mid-confirm (restore / factory reset) keeps the dialog and the picked backup.
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var confirmReset by rememberSaveable { mutableStateOf<ResetTarget?>(null) }
+    var showResetMenu by rememberSaveable { mutableStateOf(false) }
+    var showDataDialog by rememberSaveable { mutableStateOf(false) }
+    var showImportDialog by rememberSaveable { mutableStateOf(false) }
 
     // Complete DB backup & restore via the system file picker (survives uninstall).
     val context = LocalContext.current
     val restoreImpact by viewModel.restoreImpact.collectAsStateWithLifecycle()
-    var pendingRestoreUri by remember { mutableStateOf<Uri?>(null) }
-    val dateStamp = remember {
-        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
-    }
+    var pendingRestoreUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    // ISO date = ASCII digits whatever the locale (ar/fa would otherwise localise them), read at
+    // launch time so a Settings screen left open past midnight doesn't suggest yesterday's name.
+    fun dateStamp(): String = java.time.LocalDate.now().toString()
     val backupLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri ->
@@ -355,9 +356,9 @@ fun SettingsScreen(
         onPickReset = { showResetMenu = false; confirmReset = it },
         showDataDialog = showDataDialog,
         onCloseData = { showDataDialog = false },
-        onBackup = { backupLauncher.launch("avex_backup_$dateStamp.zip") },
+        onBackup = { backupLauncher.launch("avex_backup_${dateStamp()}.zip") },
         onRestore = { restoreLauncher.launch(arrayOf("*/*")) },
-        onExportCrashLogs = { crashLauncher.launch("avex_crash_logs_$dateStamp.zip") },
+        onExportCrashLogs = { crashLauncher.launch("avex_crash_logs_${dateStamp()}.zip") },
         showImportDialog = showImportDialog,
         onCloseImport = { showImportDialog = false },
         onGrantFolder = { viewModel.openImportFolderPicker { start -> folderGrantLauncher.launch(start) } },

@@ -28,9 +28,13 @@ class FitNotesImporter : GymImporter {
         if (rows.size < 2) return ParsedImport(emptyList())
         val idx = ImportParsing.headerIndex(rows.first())
 
-        val weightCol = ImportParsing.findCol(idx, "weight")
-        val weightHeaderKg = idx.keys.firstOrNull { it.contains("weight") && it.contains("kg") } != null
-        val weightHeaderLb = idx.keys.firstOrNull { it.contains("weight") && it.contains("lb") } != null
+        // Not a "Bodyweight" or "Weight Unit" column: both contain "weight", and one ahead of the real
+        // Weight column was read as the load (the same exclusion GenericCsvImporter makes).
+        fun isLoadHeader(h: String) =
+            h.contains("weight") && !h.contains("bodyweight") && !h.contains("body weight") && !h.contains("unit")
+        val weightCol = idx.entries.firstOrNull { isLoadHeader(it.key) }?.value
+        val weightHeaderKg = idx.keys.any { isLoadHeader(it) && it.contains("kg") }
+        val weightHeaderLb = idx.keys.any { isLoadHeader(it) && it.contains("lb") }
         val unitCol = idx["weight unit"]
         val dateOf = ImportParsing.dateReader(rows.asSequence().drop(1).map { ImportParsing.cell(it, idx, "date") })
 
@@ -45,7 +49,8 @@ class FitNotesImporter : GymImporter {
             if (exerciseName.isBlank()) { skipped++; continue }
 
             val reps = ImportParsing.parseReps(ImportParsing.cell(row, idx, "reps"))
-            val weightRaw = ImportParsing.parseWeight(ImportParsing.at(row, weightCol))
+            val weightCell = ImportParsing.at(row, weightCol)
+            val weightRaw = ImportParsing.parseWeight(weightCell)
             // `Time` was never read, so a plank (Weight 0, Reps 0, Time) was dropped uncounted.
             val seconds = ImportParsing.parseClockOrSeconds(ImportParsing.cell(row, idx, "time"))
             val distanceKm = ImportParsing.distanceKm(
@@ -65,7 +70,7 @@ class FitNotesImporter : GymImporter {
             }
             if (unloaded && seconds == null) { skipped++; continue }
 
-            val kg = ImportParsing.rowIsKg(row, unitCol, weightHeaderKg, weightHeaderLb, assumeKg)
+            val kg = ImportParsing.rowIsKg(row, unitCol, weightHeaderKg, weightHeaderLb, assumeKg, weightCell)
             val weightLb = weightRaw?.takeIf { it > 0.0 }
                 ?.let { ImportParsing.roundWeight(if (kg) ImportParsing.kgToLb(it) else it) }
 

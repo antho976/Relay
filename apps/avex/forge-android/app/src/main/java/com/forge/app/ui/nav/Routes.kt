@@ -1,5 +1,7 @@
 package com.forge.app.ui.nav
 
+import androidx.navigation.NavController
+
 object Routes {
     const val OVERVIEW = "overview"
     const val GYM_DAY = "gym/day/{dayKey}?skipWarmup={skipWarmup}"
@@ -88,4 +90,19 @@ object Routes {
     const val ARG_WEEK_START = "week"
 
     fun cardioWeeks(weekStartMs: Long = -1L) = "cardio/weeks?week=$weekStartMs"
+}
+
+/**
+ * Opens a gym day, unless that same day is already the current destination. A widget tap routed
+ * through onNewIntent, or a double tap on a Start button during the push animation, otherwise
+ * stacked a second DayScreen (with its own ViewModel) for the session already open, and finishing
+ * the top one revealed the stale twin underneath. Not single-top: that would re-point the open
+ * screen at a different day's arguments, whereas a different day is a genuine new push.
+ */
+fun NavController.navigateToGymDay(dayKey: String, skipWarmup: Boolean = false) {
+    val current = currentBackStackEntry
+    if (current?.destination?.route == Routes.GYM_DAY &&
+        current.arguments?.getString(Routes.ARG_DAY_KEY) == dayKey
+    ) return
+    navigate(Routes.gymDay(dayKey, skipWarmup))
 }

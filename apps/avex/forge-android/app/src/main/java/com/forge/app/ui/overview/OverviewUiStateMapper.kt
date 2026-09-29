@@ -6,6 +6,7 @@ import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.data.repo.StatsRepository
 import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.CustomCardioType
 import com.forge.app.domain.session.SessionType
 import com.forge.app.domain.units.WeightUnit
@@ -73,7 +74,8 @@ internal fun buildOverviewUiState(
             statusPill = sessionStatusPill(session)
         ))
     }
-    val cardioItems = recentCardio.map { entry ->
+    // A logged rest day is not a session: it would take a Recent slot from a real one.
+    val cardioItems = recentCardio.filter { it.type != CardioType.REST.code }.map { entry ->
         // Distance renders in the row's right column (where gym volume sits), not the subtitle.
         val sub = "${entry.durationMin} min"
         Pair(entry.date, OverviewRecentItem(

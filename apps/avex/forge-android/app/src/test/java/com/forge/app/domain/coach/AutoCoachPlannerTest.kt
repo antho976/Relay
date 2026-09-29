@@ -168,6 +168,17 @@ class AutoCoachPlannerTest {
         assertEquals(2, AutoCoachPlanner.evaluate(snapshot(history), CoachPassInputs("intermediate")).decisions.size)
     }
 
+    @Test
+    fun beginnerCapHolds_evenWhenTheTrustLadderReportsItsBaseTwo() {
+        // The repository always passes TrustLadder's changesPerWeek (2 for OBSERVE/PROPOSE/AUTO_APPLY);
+        // that must not lift a beginner past one change a week.
+        val history = mapOf("ua1" to stalledBouts(8), "ua2" to stalledBouts(8))
+        val beginnerTwo = CoachPassInputs("beginner", changesPerWeek = 2)
+        assertEquals(1, AutoCoachPlanner.evaluate(snapshot(history), beginnerTwo).decisions.size)
+        val intermediateTwo = CoachPassInputs("intermediate", changesPerWeek = 2)
+        assertEquals(2, AutoCoachPlanner.evaluate(snapshot(history), intermediateTwo).decisions.size)
+    }
+
     // ── Phase 3: locks, volume, reverts ────────────────────────────────────────
 
     @Test
@@ -263,6 +274,26 @@ class AutoCoachPlannerTest {
         val d = r.decisions.single()
         assertEquals("volume_down", d.type)
         assertEquals("2", d.payload)
+    }
+
+    @Test
+    fun volumeUp_neverTargetsTheSlotTheSkipRuleIsTrimming() {
+        val skippedHistory = listOf(bout(38, 45.0), bout(40, 45.0)) +
+            listOf(bout(48, 45.0, skipped = true), bout(50, 45.0, skipped = true),
+                bout(52, 45.0), bout(54, 45.0, skipped = true))
+        // The skipped slot is the muscle's unique smallest slot, so without the exclusion volume_up's
+        // min-sets pick would land on it and ua2 would carry both a volume_down and a volume_up.
+        val slots = listOf(slot("ua1", sets = 4), slot("ua2", sets = 3))
+        val r = AutoCoachPlanner.evaluate(
+            snapshot(
+                mapOf("ua1" to progressingBouts(8), "ua2" to skippedHistory),
+                sessions = sessionsMeetingThisWeeksTarget(),
+                slots = slots
+            ),
+            CoachPassInputs("intermediate", sessionsTarget = 1)
+        )
+        assertEquals("volume_down", r.decisions.single { it.targetKey == "ua2" }.type)
+        r.decisions.filter { it.type == "volume_up" }.forEach { assertEquals("ua1", it.targetKey) }
     }
 
     @Test

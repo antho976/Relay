@@ -70,12 +70,15 @@ internal fun CoachSparkline(
     accent: Color,
     pageBg: Color,
     modifier: Modifier = Modifier,
-    height: androidx.compose.ui.unit.Dp = 56.dp
+    height: androidx.compose.ui.unit.Dp = 56.dp,
+    // Optional y-range for a caller that overlays its own reference line and must share the scale.
+    domainMin: Double? = null,
+    domainMax: Double? = null
 ) {
     if (values.size < 2) return
     val progress = rememberCoachDrawState(values.size)
-    val lo = values.min()
-    val hi = values.max()
+    val lo = minOf(values.min(), domainMin ?: values.min())
+    val hi = maxOf(values.max(), domainMax ?: values.max())
     val pad = if (hi - lo < 1e-6) 1.0 else 0.0
     val minV = lo - pad
     val range = ((hi + pad) - minV).coerceAtLeast(1.0)
@@ -287,10 +290,14 @@ internal fun CoachHrLine(values: List<Int>, baseline: Int?, c: CoachColors) {
     val series = remember(values) { values.map { it.toDouble() } }
     Column {
         Box {
-            CoachSparkline(series, c.accent, c.bg, height = 56.dp)
+            // One range for the line and the baseline, or the same y would mean different readings.
+            val lo = minOf(values.min(), baseline ?: values.min()).toFloat()
+            val hi = maxOf(values.max(), baseline ?: values.max()).toFloat()
+            CoachSparkline(
+                series, c.accent, c.bg, height = 56.dp,
+                domainMin = lo.toDouble(), domainMax = hi.toDouble()
+            )
             if (baseline != null) {
-                val lo = minOf(values.min(), baseline).toFloat()
-                val hi = maxOf(values.max(), baseline).toFloat()
                 Canvas(Modifier.fillMaxWidth().height(56.dp)) {
                     val vInset = 6.dp.toPx()
                     val plotH = size.height - vInset * 2

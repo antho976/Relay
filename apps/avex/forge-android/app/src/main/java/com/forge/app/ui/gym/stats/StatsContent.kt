@@ -9,12 +9,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -29,6 +31,7 @@ import com.forge.app.ui.gym.session.SegmentRow
 import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.gym.stats.state.StatsUiState
 import com.forge.app.ui.theme.LocalForgeSettings
+import kotlinx.coroutines.launch
 
 /**
  * The lenses the Stats page reads through — the session-detail metric-picker pattern applied to the
@@ -65,6 +68,10 @@ fun StatsContent(
     // re-expands its row after a manual collapse.
     var focusLift by rememberSaveable { mutableStateOf<String?>(null) }
     var focusNonce by rememberSaveable { mutableStateOf(0) }
+    // The expanding row is the "str-lifts" card, ABOVE the Records card being tapped, so the page is
+    // scrolled up to it or the tap would appear to do nothing.
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
 
     // Reopen on the last lens the user viewed (reuses the old tab pref; unknown stored names — the
     // retired tab names — fall back to the default). Restore once, THEN start persisting changes.
@@ -100,6 +107,7 @@ fun StatsContent(
 
         // Everything scrolls together — the hero is part of the page, like the session screen.
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(top = 4.dp, bottom = 56.dp)
         ) {
@@ -138,7 +146,11 @@ fun StatsContent(
                 when (lens) {
                     StatsLens.STRENGTH -> strengthLens(
                         state, weightUnit, c, focusLift, focusNonce,
-                        onOpenLift = { id -> focusLift = id; focusNonce++; lens = StatsLens.STRENGTH }
+                        onOpenLift = { id ->
+                            focusLift = id; focusNonce++; lens = StatsLens.STRENGTH
+                            // Items above the lens content: "hero" (0), "lens" (1) -> "str-lifts" is 2.
+                            scope.launch { listState.animateScrollToItem(2) }
+                        }
                     )
                     StatsLens.VOLUME -> volumeLens(state, weightUnit, c)
                     StatsLens.EFFORT -> effortLens(state, c)
@@ -215,7 +227,11 @@ private fun LazyListScope.strengthLens(
     if (state.hallOfFame.isNotEmpty()) {
         item("str-records") {
             StatsCard(c, title = "Records", caption = "Your heaviest set on each lift. Tap one for its trend.", index = 4) {
-                RecordsContent(state.hallOfFame, weightUnit, c, onOpenLift)
+                // Only lifts with a drill row (top e1RM lifts with 2+ sessions) can open one.
+                RecordsContent(
+                    state.hallOfFame, weightUnit, c, onOpenLift,
+                    drillableIds = state.e1rmLifts.filter { it.history.size >= 2 }.mapTo(HashSet()) { it.exerciseId }
+                )
             }
         }
     }
@@ -253,7 +269,7 @@ private fun LazyListScope.volumeLens(state: StatsUiState, weightUnit: WeightUnit
     }
     if (state.weeklySetsByMuscle.isNotEmpty()) {
         item("vol-muscles") {
-            StatsCard(c, title = "Sets per muscle this week", caption = "Each track is that muscle's weekly target. Fill it and you're on plan.", index = 2) {
+            StatsCard(c, title = "Sets per muscle, last 7 days", caption = "Each track is that muscle's weekly target. Fill it and you're on plan.", index = 2) {
                 SetsPerMuscleContent(state.weeklySetsByMuscle, state.plannedSetsByMuscle, c)
             }
         }
