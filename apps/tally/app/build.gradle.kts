@@ -23,12 +23,12 @@ val hasReleaseKeystore = keystorePropertiesFile.exists() &&
         .all { !keystoreProperties.getProperty(it).isNullOrBlank() }
 
 android {
-    namespace = "com.margin.app"
+    namespace = "com.tally.app"
     // compileSdk ahead of targetSdk: the AndroidX generation this app uses is built against 37.
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.quietsoftware.margin"
+        applicationId = "com.quietsoftware.tally"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
@@ -53,12 +53,12 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // CI signs the minified APK with the debug key (-PmarginCiSmokeSigning) only so it can
+            // CI signs the minified APK with the debug key (-PtallyCiSmokeSigning) only so it can
             // be installed and launched: "R8 finished" and "R8 produced something that runs" are
             // different claims. A real release is signed only by a real keystore.
             if (hasReleaseKeystore) {
                 signingConfig = signingConfigs.getByName("release")
-            } else if (providers.gradleProperty("marginCiSmokeSigning").isPresent) {
+            } else if (providers.gradleProperty("tallyCiSmokeSigning").isPresent) {
                 signingConfig = signingConfigs.getByName("debug")
             }
         }

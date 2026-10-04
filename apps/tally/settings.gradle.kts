@@ -23,7 +23,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Margin"
+rootProject.name = "Tally"
 include(":app")
 // Pure Kotlin/JVM: money, periods, pace, recurrence, CSV and backup codecs. No Android types, so it
 // tests in milliseconds and the app layer cannot leak into the arithmetic.

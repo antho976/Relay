@@ -6,7 +6,7 @@
     <!-- WorkManager's default initializer is replaced by the Hilt worker factory. -->
 
     <application
-        android:name=".MarginApp"
+        android:name=".TallyApp"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -15,14 +15,14 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:enableOnBackInvokedCallback="true"
-        android:theme="@style/Theme.Margin.Starting"
+        android:theme="@style/Theme.Tally.Starting"
         tools:targetApi="36">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:windowSoftInputMode="adjustResize"
-            android:theme="@style/Theme.Margin.Starting">
+            android:theme="@style/Theme.Tally.Starting">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

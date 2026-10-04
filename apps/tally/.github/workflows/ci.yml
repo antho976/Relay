@@ -1,6 +1,6 @@
 name: CI
 
-# Everything that must be true before Margin is installable. Cheapest first, each gating the next:
+# Everything that must be true before Tally is installable. Cheapest first, each gating the next:
 #
 #   guard         ~30s  Wrapper checksum, no signing material, no build output in the tree.
 #   core          ~1m   The money arithmetic on the plain JVM: formatting, periods, pace,
@@ -71,7 +71,7 @@ jobs:
         # catches the hand-written one.
         run: |
           if grep -R "android.permission.INTERNET" app/src/main/AndroidManifest.xml; then
-            echo "::error::Margin must not request INTERNET."; exit 1
+            echo "::error::Tally must not request INTERNET."; exit 1
           fi
 
       - name: CI helper self checks
@@ -196,13 +196,13 @@ jobs:
           retention-days: 14
 
       - name: Assemble debug and minified release
-        # The release is signed with the DEBUG key (-PmarginCiSmokeSigning) so it can be
+        # The release is signed with the DEBUG key (-PtallyCiSmokeSigning) so it can be
         # installed for testing; a real release is signed only by release.yml with a real key.
         if: ${{ !cancelled() }}
         shell: bash
         run: |
           set -o pipefail
-          ./gradlew :app:assembleDebug :app:assembleRelease -PmarginCiSmokeSigning 2>&1 | tee -a "$RUNNER_TEMP/verify.log"
+          ./gradlew :app:assembleDebug :app:assembleRelease -PtallyCiSmokeSigning 2>&1 | tee -a "$RUNNER_TEMP/verify.log"
 
       - name: No INTERNET in the merged release manifest
         if: ${{ !cancelled() }}
@@ -227,7 +227,7 @@ jobs:
       - name: Upload installable APKs
         uses: actions/upload-artifact@v7
         with:
-          name: margin-apks
+          name: tally-apks
           path: |
             app/build/outputs/apk/debug/*.apk
             app/build/outputs/apk/release/*.apk
@@ -286,7 +286,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Build everything the emulator needs (before it boots)
-        run: ./gradlew :app:assembleDebugAndroidTest :app:assembleDebug :app:assembleRelease -PmarginCiSmokeSigning
+        run: ./gradlew :app:assembleDebugAndroidTest :app:assembleDebug :app:assembleRelease -PtallyCiSmokeSigning
       - name: Cache the AVD snapshot
         uses: actions/cache@v6
         id: avd-cache

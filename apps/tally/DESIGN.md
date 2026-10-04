@@ -1,5 +1,5 @@
 ---
-name: Margin
+name: Tally
 description: A month read as a pace, on raised warm panels under one lit hero.
 colors:
   ember: "#D4761F"
@@ -264,13 +264,13 @@ components:
     textColor: "{colors.on-ground}"
 ---
 
-# Design System: Margin
+# Design System: Tally
 
 ## Overview
 
 **Creative North Star: "The Lit Ledger"**
 
-Margin is a month kept as a ledger on a warm near-black desk, with one lamp over the figure that matters. The world is inherited from the sibling app Avex (warm Pearl ground, serif figures, sans rows, mono uppercase labels, one owner-chosen accent) and deliberately made richer at the owner's binding call: every section sits on its own raised panel, every section header and every stat is led by a drawn glyph on a tinted tile, the reading a screen exists for sits in the one accent-lit hero panel, and screens carry more readings and charts than Avex's open page. The result is dense but ordered: blocks of readings, each one quietly edged, none shouting.
+Tally is a month kept as a ledger on a warm near-black desk, with one lamp over the figure that matters. The world is inherited from the sibling app Avex (warm Pearl ground, serif figures, sans rows, mono uppercase labels, one owner-chosen accent) and deliberately made richer at the owner's binding call: every section sits on its own raised panel, every section header and every stat is led by a drawn glyph on a tinted tile, the reading a screen exists for sits in the one accent-lit hero panel, and screens carry more readings and charts than Avex's open page. The result is dense but ordered: blocks of readings, each one quietly edged, none shouting.
 
 Depth is tonal, not cast. Panels are a warm rung above the ground with a 1dp edge; tappable things are a further rung up and edgeless; the hero is lit from its top edge by a wash of the accent. Colour is spent with intent: the accent marks what the owner acts on and where the month stands, the twelve category hues are a data series, and red and green appear only when something is really over or under. Readings travel with their numbers: a meter always carries its pace tick, a figure always carries the line that explains it.
 

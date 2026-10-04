@@ -30,7 +30,7 @@ from the brief "tracking my spending, budget etc":
 
 ## Product Purpose
 
-Margin *(inferred working name)* records spending and income into local SQLite and answers one
+Tally *(the owner's name for it, 2026-10-04; the working name was Margin)* records spending and income into local SQLite and answers one
 question at all times: how much room is left in this month's budget, and is the month on pace.
 Success is the owner logging every purchase because it costs nothing, and never being surprised at
 the end of the month.
@@ -68,7 +68,7 @@ servers, no internet permission *(inferred from Avex's offline promise)*.
   user-chosen accent.
 - **Adapted, not copied (binding, owner 2026-10-04):** "I want it to feel professional with icons,
   backgrounds, more details since it's not for the gym; gym apps are more discreet compared to what
-  I want." So Margin is richer than Avex: sections sit on raised panels, every section and stat is
+  I want." So Tally is richer than Avex: sections sit on raised panels, every section and stat is
   led by a glyph, the hero reading sits in a lit panel, and screens carry more readings and charts
   than Avex's open page would.
 - Voice inherited from Avex *(inferred)*: dry, specific, grounded in the owner's own numbers.

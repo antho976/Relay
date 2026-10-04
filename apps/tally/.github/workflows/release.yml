@@ -3,7 +3,7 @@ name: Release
 # A tag v* (or a manual run) becomes a GitHub Release with an installable APK, gated on the full CI
 # pipeline running against that exact commit.
 #
-# Signing: with the four MARGIN_* secrets set, the APK is signed with the real upload key. Without
+# Signing: with the four TALLY_* secrets set, the APK is signed with the real upload key. Without
 # them it is signed with a throwaway debug key and the release is marked a pre-release, so a test
 # build can never be mistaken for one that can update a store install.
 
@@ -44,10 +44,10 @@ jobs:
       - name: Write the keystore, when one is configured
         id: keys
         env:
-          KEYSTORE_B64: ${{ secrets.MARGIN_KEYSTORE_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.MARGIN_STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.MARGIN_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.MARGIN_KEY_PASSWORD }}
+          KEYSTORE_B64: ${{ secrets.TALLY_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.TALLY_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.TALLY_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.TALLY_KEY_PASSWORD }}
         run: |
           if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
             echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
@@ -67,10 +67,10 @@ jobs:
           if [ "${{ steps.keys.outputs.signed }}" = "true" ]; then
             ./gradlew :app:assembleRelease
           else
-            ./gradlew :app:assembleRelease -PmarginCiSmokeSigning
+            ./gradlew :app:assembleRelease -PtallyCiSmokeSigning
           fi
           apk=$(find app/build/outputs/apk/release -name '*.apk' -not -name '*unsigned*' | head -1)
-          cp "$apk" "margin-${{ github.ref_name }}.apk"
+          cp "$apk" "tally-${{ github.ref_name }}.apk"
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -79,8 +79,8 @@ jobs:
           if [ "${{ github.ref_type }}" != "tag" ]; then tag="build-${{ github.run_number }}"; fi
           flags=""
           if [ "${{ steps.keys.outputs.signed }}" != "true" ]; then flags="--prerelease"; fi
-          gh release create "$tag" "margin-${{ github.ref_name }}.apk" --target "${{ github.sha }}" \
-            --title "Margin $tag" --notes "Built from ${{ github.sha }}." $flags
+          gh release create "$tag" "tally-${{ github.ref_name }}.apk" --target "${{ github.sha }}" \
+            --title "Tally $tag" --notes "Built from ${{ github.sha }}." $flags
       - name: Remove the keystore
         if: always()
         run: rm -f keystore.properties "$RUNNER_TEMP/upload.jks"

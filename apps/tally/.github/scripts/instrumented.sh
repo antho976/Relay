@@ -5,7 +5,7 @@
 #  2. The MINIFIED release APK launches and stays up. "R8 finished" is not "R8 produced an app".
 set -euo pipefail
 
-APP_ID=com.quietsoftware.margin
+APP_ID=com.quietsoftware.tally
 LOGCAT=smoke-logcat.txt
 
 wait_for_framework() {

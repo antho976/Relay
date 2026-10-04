@@ -1,4 +1,4 @@
-# Margin
+# Tally
 
 An offline spending and budget tracker for Android. You log what you spend in two seconds, and the
 app answers one question at all times: how much room is left this month, and is the month on pace.
@@ -8,12 +8,12 @@ internet permission. Visual language inherited from Avex.
 
 ## Install a test build
 
-Every CI run on this branch uploads an artifact called **margin-apks** (Actions tab, open the run,
+Every CI run on this branch uploads an artifact called **tally-apks** (Actions tab, open the run,
 scroll to Artifacts). It holds:
 
 - `app-release.apk`: the minified build, signed with a throwaway debug key. Use this one to judge
   speed and feel.
-- `app-debug.apk`: installs beside it as "Margin" with the `.debug` id, with LeakCanary watching
+- `app-debug.apk`: installs beside it as "Tally" with the `.debug` id, with LeakCanary watching
   for leaks.
 
 Unzip, copy to the phone, open it (allow installing from your file manager once). A tagged release
@@ -61,5 +61,5 @@ Needs JDK 21 and the Android SDK with `platforms;android-37.0`.
 | Instrumented | the real UI flow on an emulator with LeakCanary failing any test that leaks, device SQLite, and a cold launch of the minified APK |
 
 `record-screenshots.yml` re-records the goldens and the Room schema on demand; `release.yml`
-turns a `v*` tag into a GitHub Release (signed with the real key when the `MARGIN_*` secrets are
+turns a `v*` tag into a GitHub Release (signed with the real key when the `TALLY_*` secrets are
 set, otherwise a debug-signed pre-release).

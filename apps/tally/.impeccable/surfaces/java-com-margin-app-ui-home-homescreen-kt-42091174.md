@@ -1,11 +1,11 @@
 ---
 version: 1
 slug: "java-com-margin-app-ui-home-homescreen-kt-42091174"
-primary_target: "app/src/main/java/com/margin/app/ui/home/HomeScreen.kt"
+primary_target: "app/src/main/java/com/tally/app/ui/home/HomeScreen.kt"
 related_targets: []
 ---
 
-# Surface: Home (Margin)
+# Surface: Home (Tally)
 
 Scope: the Home tab of the hub, plus the shell it sits in (bottom navigation on compact width,
 rail on wide, one add FAB). Visitor mode: **Operate**. Audience: one person checking their own
