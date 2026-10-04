@@ -59,7 +59,15 @@ class PlanRepository @Inject constructor(
         return if (clean.id == 0L) recurring.insert(clean) else { recurring.update(clean); clean.id }
     }
 
-    suspend fun deleteRecurring(id: Long) = recurring.delete(id)
+    /** Deletes a bill and hands it back for Undo. Entries it posted stay, unlinked. */
+    suspend fun deleteRecurring(id: Long): RecurringEntity? {
+        val row = recurring.get(id) ?: return null
+        recurring.delete(id)
+        return row
+    }
+
+    /** Puts a deleted bill back exactly, same id. */
+    suspend fun restoreRecurring(item: RecurringEntity) { recurring.insert(item) }
 
     suspend fun setRecurringActive(id: Long, active: Boolean) {
         val item = recurring.get(id) ?: return
@@ -81,10 +89,30 @@ class PlanRepository @Inject constructor(
         if (goal.id == 0L) goals.insert(goal.copy(name = goal.name.trim()))
         else { goals.update(goal.copy(name = goal.name.trim())); goal.id }
 
-    suspend fun deleteGoal(id: Long) = goals.delete(id)
+    /** A deleted goal and its contributions, for Undo. */
+    data class DeletedGoal(val goal: GoalEntity, val contributions: List<ContributionEntity>)
+
+    suspend fun deleteGoal(id: Long): DeletedGoal? {
+        val goal = goals.get(id) ?: return null
+        val contributions = goals.contributionsFor(id)
+        goals.delete(id)
+        return DeletedGoal(goal, contributions)
+    }
+
+    suspend fun restoreGoal(deleted: DeletedGoal) {
+        goals.insert(deleted.goal)
+        goals.insertContributions(deleted.contributions)
+    }
 
     suspend fun contribute(goalId: Long, amount: Long, note: String = ""): Long =
         goals.insertContribution(ContributionEntity(goalId = goalId, amount = amount, date = clock.today(), note = note.trim()))
 
-    suspend fun deleteContribution(id: Long) = goals.deleteContribution(id)
+    /** Deletes one contribution and hands it back for Undo. */
+    suspend fun deleteContribution(id: Long): ContributionEntity? {
+        val row = goals.contribution(id) ?: return null
+        goals.deleteContribution(id)
+        return row
+    }
+
+    suspend fun restoreContribution(c: ContributionEntity) { goals.insertContributions(listOf(c)) }
 }

@@ -154,6 +154,9 @@ tasks.register<JacocoReport>("coverageReport") {
 }
 
 dependencies {
+    // The money arithmetic, codecs and enums live in the pure-JVM :core module.
+    implementation(project(":core"))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.lifecycle.runtime.ktx)

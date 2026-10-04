@@ -74,6 +74,7 @@ class LedgerRepository @Inject constructor(
     fun balances(): Flow<List<AccountBalance>> = accounts.observeBalances()
     fun accounts(): Flow<List<AccountEntity>> = accounts.observeAll()
     fun categories(): Flow<List<CategoryEntity>> = categories.observeAll()
+    fun categoriesWithCounts(): Flow<List<com.margin.app.data.db.CategoryWithCount>> = categories.observeWithCounts()
     fun activeCategories(kind: CategoryKind): Flow<List<CategoryEntity>> = categories.observeActive(kind)
     fun count(): Flow<Int> = transactions.observeCount()
 

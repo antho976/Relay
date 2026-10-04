@@ -155,6 +155,12 @@ interface CategoryDao {
     @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM categories WHERE kind = :kind") suspend fun nextSortOrder(kind: CategoryKind): Int
     @Query("SELECT * FROM categories WHERE name = :name COLLATE NOCASE AND kind = :kind LIMIT 1")
     suspend fun findByName(name: String, kind: CategoryKind): CategoryEntity?
+    @Query(
+        """SELECT c.*, (SELECT COUNT(*) FROM transactions t WHERE t.categoryId = c.id) AS entryCount
+           FROM categories c ORDER BY c.kind, c.archived, c.sortOrder, c.id"""
+    )
+    fun observeWithCounts(): Flow<List<CategoryWithCount>>
+
     @Query("DELETE FROM categories") suspend fun deleteAll()
 }
 
@@ -220,6 +226,8 @@ interface GoalDao {
     @Query("SELECT * FROM goal_contributions WHERE goalId = :goalId ORDER BY date DESC, id DESC")
     fun observeContributions(goalId: Long): Flow<List<ContributionEntity>>
     @Query("SELECT * FROM goal_contributions") suspend fun allContributions(): List<ContributionEntity>
+    @Query("SELECT * FROM goal_contributions WHERE goalId = :goalId") suspend fun contributionsFor(goalId: Long): List<ContributionEntity>
+    @Query("SELECT * FROM goal_contributions WHERE id = :id") suspend fun contribution(id: Long): ContributionEntity?
 
     @Query("DELETE FROM goal_contributions") suspend fun deleteAllContributions()
     @Query("DELETE FROM goals") suspend fun deleteAll()

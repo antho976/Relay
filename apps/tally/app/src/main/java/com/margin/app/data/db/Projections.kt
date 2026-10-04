@@ -67,6 +67,12 @@ data class RecurringRow(
 )
 
 @Immutable
+data class CategoryWithCount(
+    @Embedded val category: CategoryEntity,
+    val entryCount: Int,
+)
+
+@Immutable
 data class GoalWithSaved(
     @Embedded val goal: GoalEntity,
     val saved: Long,

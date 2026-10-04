@@ -179,7 +179,10 @@ jobs:
 
       - name: Android Lint (release)
         if: ${{ !cancelled() }}
-        run: ./gradlew --continue :app:lintRelease 2>&1 | tee -a "$RUNNER_TEMP/verify.log"
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew --continue :app:lintRelease 2>&1 | tee -a "$RUNNER_TEMP/verify.log"
 
       - name: Upload lint report
         if: always()
@@ -194,7 +197,10 @@ jobs:
         # The release is signed with the DEBUG key (-PmarginCiSmokeSigning) so it can be
         # installed for testing; a real release is signed only by release.yml with a real key.
         if: ${{ !cancelled() }}
-        run: ./gradlew :app:assembleDebug :app:assembleRelease -PmarginCiSmokeSigning 2>&1 | tee -a "$RUNNER_TEMP/verify.log"
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew :app:assembleDebug :app:assembleRelease -PmarginCiSmokeSigning 2>&1 | tee -a "$RUNNER_TEMP/verify.log"
 
       - name: No INTERNET in the merged release manifest
         if: ${{ !cancelled() }}
