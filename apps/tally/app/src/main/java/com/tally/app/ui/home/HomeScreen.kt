@@ -46,9 +46,9 @@ import com.tally.app.ui.common.CategoryBadge
 import com.tally.app.ui.common.ChromeButton
 import com.tally.app.ui.common.Dates
 import com.tally.app.ui.common.DayBars
+import com.tally.app.ui.common.EndsRow
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.HeroPanel
-import com.tally.app.ui.common.IconBadge
 import com.tally.app.ui.common.LedgerRow
 import com.tally.app.ui.common.LocalMoney
 import com.tally.app.ui.common.PANEL_GAP
@@ -56,6 +56,7 @@ import com.tally.app.ui.common.PaceMeter
 import com.tally.app.ui.common.PageTitle
 import com.tally.app.ui.common.Panel
 import com.tally.app.ui.common.PanelHeader
+import com.tally.app.ui.common.ROW_FOCUS_OUTSET
 import com.tally.app.ui.common.StatChip
 import com.tally.app.ui.common.StatTile
 import com.tally.app.ui.common.TextAction
@@ -68,6 +69,7 @@ import com.tally.app.ui.nav.HubTab
 import com.tally.core.Copy
 import com.tally.core.PaceStatus
 import com.tally.core.TxType
+import java.time.LocalDate
 
 @Composable
 fun HomeTab(nav: AppNav, openTab: (HubTab) -> Unit, viewModel: HomeViewModel = hiltViewModel()) {
@@ -136,13 +138,17 @@ fun HomeScreen(state: HomeState, actions: HomeActions) {
                 )
             }
         }
-        item(key = "margin") { MarginHero(state, actions, Modifier.padding(horizontal = GUTTER)) }
-        item(key = "inout") { InOutTiles(state, Modifier.padding(horizontal = GUTTER)) }
-        item(key = "week") { WeekPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
-        item(key = "budgets") { BudgetsPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
-        item(key = "recent") { RecentPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
-        item(key = "upcoming") { UpcomingPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
-        item(key = "accounts") { AccountsPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+        // Until the first read lands every figure is a placeholder zero: drawing "$0" and "No
+        // accounts yet" over a full ledger would say something untrue, so only the frame shows.
+        if (state.loaded) {
+            item(key = "margin") { MarginHero(state, actions, Modifier.padding(horizontal = GUTTER)) }
+            item(key = "inout") { InOutTiles(state, Modifier.padding(horizontal = GUTTER)) }
+            item(key = "week") { WeekPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+            item(key = "budgets") { BudgetsPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+            item(key = "recent") { RecentPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+            item(key = "upcoming") { UpcomingPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+            item(key = "accounts") { AccountsPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+        }
     }
 }
 
@@ -157,22 +163,15 @@ private fun MarginHero(state: HomeState, actions: HomeActions, modifier: Modifie
     val money = LocalMoney.current
     val r = state.reading
     val over = r?.status == PaceStatus.OVER_BUDGET
-    HeroPanel(modifier, tint = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            IconBadge(
-                Icons.Rounded.AccountBalanceWallet,
-                tint = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                if (over) "OVER BUDGET" else if (r != null) "MARGIN" else "LEFT FROM INCOME",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.weight(1f),
-            )
-            if (r != null && !over) {
-                Text(Copy.paceLine(r, money), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
+    val tint = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    HeroPanel(modifier, tint = tint) {
+        // The kit's header: the pace reading drops under the label before "MARGIN" would break.
+        PanelHeader(
+            Icons.Rounded.AccountBalanceWallet,
+            if (over) "Over budget" else if (r != null) "Margin" else "Left from income",
+            meta = if (r != null && !over) Copy.paceLine(r, money) else null,
+            tint = tint,
+        )
         Spacer(Modifier.height(14.dp))
         if (r != null) {
             Text(
@@ -220,12 +219,22 @@ private fun MarginHero(state: HomeState, actions: HomeActions, modifier: Modifie
                 height = 14.dp,
             )
             Spacer(Modifier.height(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Aside("A monthly budget adds the pace tick", Modifier.weight(1f, fill = false))
-                TextAction("set budget", actions.setBudget, color = MaterialTheme.colorScheme.primary)
-            }
+            AsideAction("A monthly budget adds the pace tick", "set budget", actions.setBudget)
         }
     }
+}
+
+/**
+ * A zero state's quiet line with the act that fills it at the end. Where the two cannot share a
+ * line without breaking a word of the line (200% font), the act drops under it.
+ */
+@Composable
+private fun AsideAction(text: String, action: String, onAction: () -> Unit) {
+    EndsRow(
+        start = { Aside(text) },
+        end = { TextAction(action, onAction, color = MaterialTheme.colorScheme.primary) },
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 /** Money in and out, each beside where last month stood by the same day. */
@@ -261,9 +270,7 @@ private fun InOutTiles(state: HomeState, modifier: Modifier = Modifier) {
 private fun WeekPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
     val money = LocalMoney.current
     val labels = List(7) { Dates.weekdayInitial(state.weekStart.plusDays(it.toLong()).dayOfWeek) }
-    val desc = "This week: " + state.week.take(state.todayInWeek + 1).mapIndexed { i, v ->
-        Dates.weekdayInitial(state.weekStart.plusDays(i.toLong()).dayOfWeek) + " " + money.formatWhole(v)
-    }.joinToString(", ")
+    val desc = weekDescription(state.weekStart, state.week, state.todayInWeek) { money.formatWhole(it) }
     Panel(modifier) {
         PanelHeader(
             Icons.Rounded.BarChart,
@@ -294,10 +301,7 @@ private fun BudgetsPanel(state: HomeState, actions: HomeActions, modifier: Modif
         )
         if (state.envelopes.isEmpty()) {
             Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Aside("No category budgets yet", Modifier.weight(1f, fill = false))
-                TextAction("add one", actions.openPlan, color = MaterialTheme.colorScheme.primary)
-            }
+            AsideAction("No category budgets yet", "add one", actions.openPlan)
         } else {
             state.envelopes.take(4).forEach { e -> EnvelopeRow(e) { actions.openCategory(e.categoryId) } }
         }
@@ -312,17 +316,22 @@ private fun EnvelopeRow(e: Envelope, onClick: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
-            .bounceClick(label = "${e.name} entries", onClick = onClick)
+            .bounceClick(label = "${e.name} entries", focusOutset = ROW_FOCUS_OUTSET, onClick = onClick)
             .heightIn(min = 56.dp)
             .padding(top = 12.dp, bottom = 4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             CategoryBadge(e.icon, e.color, size = 36.dp)
-            Column(Modifier.weight(1f)) {
-                Text(e.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-                Text(Copy.paceLine(r, money), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Text(reading, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground)
+            EndsRow(
+                start = {
+                    Column {
+                        Text(e.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                        Text(Copy.paceLine(r, money), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                },
+                end = { Text(reading, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground) },
+                modifier = Modifier.weight(1f),
+            )
         }
         Spacer(Modifier.height(10.dp))
         PaceMeter(r.spentFraction, r.paceFraction, "${e.name}: $reading. ${Copy.paceLine(r, money)}", height = 6.dp)
@@ -356,10 +365,7 @@ private fun UpcomingPanel(state: HomeState, actions: HomeActions, modifier: Modi
         PanelHeader(Icons.Rounded.Event, "Upcoming", meta = if (state.upcoming.isEmpty()) null else "NEXT 14 DAYS")
         if (state.upcoming.isEmpty()) {
             Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Aside("Nothing due in the next two weeks", Modifier.weight(1f, fill = false))
-                TextAction("add a bill", actions.addBill, color = MaterialTheme.colorScheme.primary)
-            }
+            AsideAction("Nothing due in the next two weeks", "add a bill", actions.addBill)
         } else {
             Spacer(Modifier.height(4.dp))
             state.upcoming.forEach { b -> BillRow(b) { actions.openBill(b.id) } }
@@ -375,7 +381,7 @@ private fun BillRow(b: UpcomingBill, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .bounceClick(label = "Edit ${b.name}", onClick = onClick)
+            .bounceClick(label = "Edit ${b.name}", focusOutset = ROW_FOCUS_OUTSET, onClick = onClick)
             .semantics(mergeDescendants = true) { contentDescription = "${b.name}, $amount, $meta" }
             .heightIn(min = 64.dp)
             .padding(vertical = 8.dp),
@@ -383,11 +389,17 @@ private fun BillRow(b: UpcomingBill, onClick: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (b.type == TxType.TRANSFER) TransferBadge() else CategoryBadge(b.icon, b.color)
-        Column(Modifier.weight(1f).clearAndSetSemantics { }, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(b.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-            Text(meta, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Text(amount, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.clearAndSetSemantics { })
+        EndsRow(
+            start = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(b.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                    Text(meta, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            end = { Text(amount, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground) },
+            modifier = Modifier.weight(1f).clearAndSetSemantics { },
+            gap = 14.dp,
+        )
     }
 }
 
@@ -403,30 +415,50 @@ private fun AccountsPanel(state: HomeState, actions: HomeActions, modifier: Modi
         } else {
             Spacer(Modifier.height(10.dp))
             Text(money.format(state.net), style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
-            Text("NET ACROSS ${active.size} ACCOUNTS", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(netAcrossLabel(active.size), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(6.dp))
             active.take(5).forEach { a ->
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .bounceClick(label = "${a.name} entries") { actions.openAccount(a.id) }
+                        .bounceClick(label = "${a.name} entries", focusOutset = ROW_FOCUS_OUTSET) { actions.openAccount(a.id) }
                         .heightIn(min = 60.dp)
                         .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     AccountBadge(a.type)
-                    Column(Modifier.weight(1f)) {
-                        Text(a.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-                        Text(
-                            Copy.plural(a.entryCount, "entry", "entries"),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Text(money.format(a.balance), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
+                    EndsRow(
+                        start = {
+                            Column {
+                                Text(a.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                                Text(
+                                    Copy.plural(a.entryCount, "entry", "entries"),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        end = {
+                            Text(money.format(a.balance), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
+                        },
+                        modifier = Modifier.weight(1f),
+                        gap = 14.dp,
+                    )
                 }
             }
         }
     }
 }
+
+/**
+ * The week chart's spoken reading, each day so far by its full name: initials would read
+ * Tuesday and Thursday, Saturday and Sunday, as the same letter.
+ */
+internal fun weekDescription(weekStart: LocalDate, week: List<Long>, todayInWeek: Int, format: (Long) -> String): String =
+    "This week: " + week.take(todayInWeek + 1).mapIndexed { i, v ->
+        Dates.weekday(weekStart.plusDays(i.toLong()).dayOfWeek) + " " + format(v)
+    }.joinToString(", ")
+
+/** "NET ACROSS 1 ACCOUNT", "NET ACROSS 4 ACCOUNTS": onboarding makes exactly one. */
+internal fun netAcrossLabel(accounts: Int): String = "NET ACROSS " + Copy.plural(accounts, "account").uppercase()

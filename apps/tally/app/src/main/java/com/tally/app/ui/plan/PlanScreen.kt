@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.CalendarMonth
@@ -53,6 +54,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tally.app.ui.common.CategoryBadge
 import com.tally.app.ui.common.Dates
+import com.tally.app.ui.common.EndsRow
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.HeroAction
@@ -63,6 +65,7 @@ import com.tally.app.ui.common.PaceMeter
 import com.tally.app.ui.common.PageTitle
 import com.tally.app.ui.common.Panel
 import com.tally.app.ui.common.PanelHeader
+import com.tally.app.ui.common.ROW_FOCUS_OUTSET
 import com.tally.app.ui.common.RowPill
 import com.tally.app.ui.common.SecondaryAction
 import com.tally.app.ui.common.SlidingSegments
@@ -208,7 +211,10 @@ private fun BudgetHero(state: PlanState, actions: PlanActions, modifier: Modifie
     val over = r.status == PaceStatus.OVER_BUDGET
     val tint = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     val pace = Copy.paceLine(r, money)
-    HeroPanel(modifier.bounceClick(label = "Change monthly budget") { actions.openBudget(0L) }, tint = tint) {
+    HeroPanel(
+        modifier.bounceClick(label = "Change monthly budget", focusShape = RoundedCornerShape(24.dp)) { actions.openBudget(0L) },
+        tint = tint,
+    ) {
         HeroLabel(
             Icons.Rounded.AccountBalanceWallet,
             if (over) "Over budget" else "Monthly budget",
@@ -327,21 +333,30 @@ private fun EnvelopeRow(e: BudgetLine, onClick: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
-            .bounceClick(label = "Change ${e.name} budget", onClick = onClick)
+            .bounceClick(label = "Change ${e.name} budget", focusOutset = ROW_FOCUS_OUTSET, onClick = onClick)
             .heightIn(min = 56.dp)
             .padding(top = 12.dp, bottom = 4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             CategoryBadge(e.icon, e.color, size = 36.dp)
-            Column(Modifier.weight(1f)) {
-                Text(e.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-                Text(
-                    pace,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (r.status == PaceStatus.OVER_BUDGET) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Text(reading, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
+            // The reading shares the name's line until a word of the name would break; then it
+            // drops under the name (200% font, a long reading).
+            EndsRow(
+                start = {
+                    Column {
+                        Text(e.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                        Text(
+                            pace,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (r.status == PaceStatus.OVER_BUDGET) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                end = {
+                    Text(reading, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
+                },
+                modifier = Modifier.weight(1f),
+            )
         }
         Spacer(Modifier.height(10.dp))
         PaceMeter(r.spentFraction, r.paceFraction, "${e.name}: $reading. $pace", height = 6.dp)
@@ -380,7 +395,7 @@ private fun UnbudgetedRow(u: UnbudgetedLine, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .bounceClick(label = "Set a ${u.name} budget", onClick = onClick)
+            .bounceClick(label = "Set a ${u.name} budget", focusOutset = ROW_FOCUS_OUTSET, onClick = onClick)
             .semantics(mergeDescendants = true) { contentDescription = "${u.name}, $spent spent, $meta, no budget" }
             .heightIn(min = 64.dp)
             .padding(vertical = 8.dp),
@@ -388,12 +403,22 @@ private fun UnbudgetedRow(u: UnbudgetedLine, onClick: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         CategoryBadge(u.icon, u.color, size = 36.dp)
-        Column(Modifier.weight(1f).clearAndSetSemantics { }, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(u.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-            Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Text(spent, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.clearAndSetSemantics { })
-        RowPill("Set", Modifier.clearAndSetSemantics { })
+        // The amount and the pill travel together, so a stacked row gives the name the full width.
+        EndsRow(
+            start = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(u.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                    Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            end = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(spent, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground)
+                    RowPill("Set")
+                }
+            },
+            modifier = Modifier.weight(1f).clearAndSetSemantics { },
+        )
     }
 }
 
@@ -539,7 +564,7 @@ private fun BillRow(b: BillLine, paused: Boolean, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .bounceClick(label = "Edit ${b.name}", onClick = onClick)
+            .bounceClick(label = "Edit ${b.name}", focusOutset = ROW_FOCUS_OUTSET, onClick = onClick)
             .semantics(mergeDescendants = true) {
                 contentDescription = listOfNotNull(b.name, amount, meta, if (reminder) "reminder, you log it yourself" else null).joinToString(", ")
             }
@@ -550,25 +575,29 @@ private fun BillRow(b: BillLine, paused: Boolean, onClick: () -> Unit) {
     ) {
         val badgeModifier = if (paused) Modifier.alpha(0.5f) else Modifier
         if (b.type == TxType.TRANSFER) TransferBadge(badgeModifier) else CategoryBadge(b.icon, b.color, badgeModifier)
-        Column(Modifier.weight(1f).clearAndSetSemantics { }, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(b.name, style = MaterialTheme.typography.bodyLarge, color = titleColor)
-            Text(meta, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Column(
-            Modifier.clearAndSetSemantics { },
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                amount,
-                style = MaterialTheme.typography.titleMedium,
-                color = if (paused || b.type == TxType.TRANSFER) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onBackground,
-                textAlign = TextAlign.End,
-            )
-            if (reminder) {
-                Text("REMINDER", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
+        EndsRow(
+            start = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(b.name, style = MaterialTheme.typography.bodyLarge, color = titleColor)
+                    Text(meta, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            end = {
+                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        amount,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (paused || b.type == TxType.TRANSFER) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onBackground,
+                        textAlign = TextAlign.End,
+                    )
+                    if (reminder) {
+                        Text("REMINDER", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            },
+            modifier = Modifier.weight(1f).clearAndSetSemantics { },
+            gap = 14.dp,
+        )
     }
 }
 
@@ -647,7 +676,7 @@ private fun GoalRow(g: GoalLine, state: PlanState, onClick: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
-            .bounceClick(label = "Open ${g.name}", onClick = onClick)
+            .bounceClick(label = "Open ${g.name}", focusOutset = ROW_FOCUS_OUTSET, onClick = onClick)
             .heightIn(min = 56.dp)
             .padding(top = 12.dp, bottom = 4.dp),
     ) {
@@ -658,11 +687,18 @@ private fun GoalRow(g: GoalLine, state: PlanState, onClick: () -> Unit) {
                 fill = hue.copy(alpha = 0.15f),
                 size = 36.dp,
             )
-            Column(Modifier.weight(1f)) {
-                Text(g.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-                Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Text(reading, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
+            EndsRow(
+                start = {
+                    Column {
+                        Text(g.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                        Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                },
+                end = {
+                    Text(reading, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
+                },
+                modifier = Modifier.weight(1f),
+            )
         }
         Spacer(Modifier.height(10.dp))
         PaceMeter(g.fraction, null, "${g.name}: $reading. $line", height = 6.dp, fill = hue)

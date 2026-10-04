@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalance
@@ -274,7 +275,7 @@ private fun DetailsBlock(state: BillEditState, actions: BillEditActions) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AccountChips(accounts: List<AccountEntity>, selected: Long?, onPick: (Long) -> Unit) {
-    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         accounts.forEach { a -> ChoiceChip(a.name, a.id == selected) { onPick(a.id) } }
     }
 }
@@ -347,7 +348,7 @@ private fun CategoryPanel(state: BillEditState, actions: BillEditActions) {
                 onAction = { actions.addCategory(kind) },
             )
         } else {
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 state.categories.forEach { c -> ChoiceChip(c.name, c.id == d.categoryId) { actions.pickCategory(c.id) } }
             }
         }

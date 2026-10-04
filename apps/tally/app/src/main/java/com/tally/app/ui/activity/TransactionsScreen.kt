@@ -38,7 +38,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -50,6 +49,7 @@ import com.tally.app.ui.common.Caption
 import com.tally.app.ui.common.CategoryIcons
 import com.tally.app.ui.common.ChromeButton
 import com.tally.app.ui.common.Dates
+import com.tally.app.ui.common.EndsRow
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.HeroPanel
 import com.tally.app.ui.common.LocalMoney
@@ -311,10 +311,12 @@ private fun NoBudgetHero(state: TransactionsState, periodName: String, onSetBudg
             StatChip(Icons.Rounded.CalendarToday, Copy.plural(state.period.daysLeft(state.today), "day") + " left")
         }
         Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Aside("A budget adds a meter and a pace tick", Modifier.weight(1f, fill = false))
-            TextAction("set budget", onSetBudget, color = MaterialTheme.colorScheme.primary)
-        }
+        // The act drops under the line before a word of the line would break (200% font).
+        EndsRow(
+            start = { Aside("A budget adds a meter and a pace tick") },
+            end = { TextAction("set budget", onSetBudget, color = MaterialTheme.colorScheme.primary) },
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 

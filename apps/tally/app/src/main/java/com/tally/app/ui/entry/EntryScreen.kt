@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalance
@@ -49,6 +50,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -374,7 +376,7 @@ private fun CategoryPanel(state: EntryState, actions: EntryActions) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AccountChips(accounts: List<AccountBalance>, selected: Long?, onPick: (Long) -> Unit) {
-    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         accounts.forEach { a -> ChoiceChip(a.name, a.id == selected) { onPick(a.id) } }
     }
 }
@@ -552,7 +554,7 @@ private fun DetailsSection(state: EntryState, actions: EntryActions, onPickDate:
     }
     Column(Modifier.fillMaxWidth()) {
         GroupHeader("Details")
-        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ChoiceChip("Today", d.date == state.today) { actions.setDate(state.today) }
             ChoiceChip("Yesterday", d.date == yesterday) { actions.setDate(yesterday) }
         }
@@ -563,7 +565,8 @@ private fun DetailsSection(state: EntryState, actions: EntryActions, onPickDate:
         if (state.suggestions.isNotEmpty()) {
             Spacer(Modifier.height(6.dp))
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                state.suggestions.forEach { note -> ChoiceChip(note, false) { actions.pickSuggestion(note) } }
+                // A suggestion fills the note; it is an act, not one of a set of picks.
+                state.suggestions.forEach { note -> ChoiceChip(note, false, role = Role.Button) { actions.pickSuggestion(note) } }
             }
         }
     }

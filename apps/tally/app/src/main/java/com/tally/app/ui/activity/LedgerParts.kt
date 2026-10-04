@@ -49,6 +49,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.tally.app.ui.common.Aside
 import com.tally.app.ui.common.Dates
+import com.tally.app.ui.common.EndsRow
 import com.tally.app.ui.common.HeroPanel
 import com.tally.app.ui.common.IconBadge
 import com.tally.app.ui.common.LedgerRow
@@ -120,7 +121,7 @@ internal fun SearchField(
                         Modifier
                             .minimumInteractiveComponentSize()
                             .clip(RoundedCornerShape(50))
-                            .bounceClick(label = "Clear search", role = Role.Button) { onQuery("") },
+                            .bounceClick(label = "Clear search", role = Role.Button, focusShape = RoundedCornerShape(50)) { onQuery("") },
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(Icons.Rounded.Close, contentDescription = "Clear search", tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -134,8 +135,9 @@ internal fun SearchField(
 }
 
 /**
- * One day of the ledger on its own panel: the mono day name with that day's total at the end,
- * then the day's rows. The header carries the day, so rows carry no date.
+ * One day of the ledger on its own panel: the mono day name with that day's total at the end
+ * (under it, once the two cannot share a line without breaking the name), then the day's rows.
+ * The header carries the day, so rows carry no date.
  */
 @Composable
 internal fun DayPanel(group: DayGroup, today: LocalDate, onOpen: (Long) -> Unit, modifier: Modifier = Modifier) {
@@ -174,13 +176,13 @@ private fun DayHeader(group: DayGroup, today: LocalDate) {
             tint = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             size = 28.dp,
         )
-        Text(
-            label.uppercase(),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onBackground,
+        EndsRow(
+            start = {
+                Text(label.uppercase(), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onBackground)
+            },
+            end = { Text(total, style = MaterialTheme.typography.labelLarge, color = totalColor) },
             modifier = Modifier.weight(1f),
         )
-        Text(total, style = MaterialTheme.typography.labelLarge, color = totalColor)
     }
 }
 

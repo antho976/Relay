@@ -56,6 +56,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.tally.app.ui.common.Aside
+import com.tally.app.ui.common.EndsRow
 import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.IconBadge
 import com.tally.app.ui.common.PanelHeader
@@ -136,7 +137,8 @@ internal data class FigureCell(
 
 /**
  * Two to four small figures side by side, serif values over mono labels. Past 1.3x font they
- * stack into label-and-value lines so no amount wraps.
+ * stack into label-and-value lines so no amount wraps; a value too wide to share its line with
+ * the label's longest word drops under the label.
  */
 @Composable
 internal fun FigureRow(cells: List<FigureCell>, modifier: Modifier = Modifier) {
@@ -145,23 +147,25 @@ internal fun FigureRow(cells: List<FigureCell>, modifier: Modifier = Modifier) {
     if (stacked) {
         Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             cells.forEach { cell ->
-                Row(
-                    Modifier.fillMaxWidth().semantics(mergeDescendants = true) { },
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Text(
-                        cell.label.uppercase(),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        cell.value,
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = if (cell.color == Color.Unspecified) base else cell.color,
-                    )
-                }
+                // A long amount on a narrow phone takes the line; its label then sits over it
+                // instead of breaking ("MONTH / LY").
+                EndsRow(
+                    start = {
+                        Text(
+                            cell.label.uppercase(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    end = {
+                        Text(
+                            cell.value,
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = if (cell.color == Color.Unspecified) base else cell.color,
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) { },
+                )
             }
         }
     } else {
@@ -205,10 +209,16 @@ internal fun EmptyLine(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         IconBadge(icon, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Aside(text, Modifier.weight(1f))
-        if (action != null && onAction != null) {
-            TextAction(action, onAction, color = MaterialTheme.colorScheme.primary)
-        }
+        // The act drops under the line before a word of the line would break (200% font).
+        EndsRow(
+            start = { Aside(text) },
+            end = if (action != null && onAction != null) {
+                { TextAction(action, onAction, color = MaterialTheme.colorScheme.primary) }
+            } else {
+                null
+            },
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
@@ -298,7 +308,7 @@ internal fun StepButton(icon: ImageVector, label: String, enabled: Boolean, onCl
             .size(44.dp)
             .clip(RoundedCornerShape(50))
             .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-            .bounceClick(enabled = enabled, label = label, role = Role.Button, onClick = onClick),
+            .bounceClick(enabled = enabled, label = label, role = Role.Button, focusShape = RoundedCornerShape(50), onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(22.dp))
