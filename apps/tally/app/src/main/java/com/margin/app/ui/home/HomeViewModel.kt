@@ -23,7 +23,9 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.temporal.TemporalAdjusters
 import java.time.temporal.ChronoUnit
 import javax.inject.Inject
 
@@ -66,7 +68,17 @@ data class HomeState(
     val hasEntries: Boolean = false,
     val sampleLoaded: Boolean = false,
     val loaded: Boolean = false,
+    /** Spent per day of the current week, in display order (week start first). */
+    val week: List<Long> = List(7) { 0L },
+    val weekStart: LocalDate = today,
+    /** What the previous period had spent by the same day, for "vs last month". */
+    val lastPeriodSameDay: Long = 0,
+    val lastPeriodIncomeSameDay: Long = 0,
 ) {
+    val todayInWeek: Int get() = ChronoUnit.DAYS.between(weekStart, today).toInt().coerceIn(0, 6)
+    val weekSpent: Long get() = week.take(todayInWeek + 1).sum()
+    /** An even day's share of the overall budget, the dashed line on the week bars. */
+    val dailyBudget: Long? get() = reading?.let { it.budget / period.days }
     val daysLeft: Int get() = period.daysLeft(today)
     val net: Long get() = accounts.filter { !it.archived }.sumOf { it.balance }
 }
@@ -85,10 +97,14 @@ class HomeViewModel @Inject constructor(
 
     fun onResume() { today.value = clock.today() }
 
-    private val context = combine(settings.settings, today) { s, d -> Triple(s.periodFor(d), d, s.sampleLoaded) }
-        .distinctUntilChanged()
+    private data class Context(val period: BudgetPeriod, val day: LocalDate, val sample: Boolean, val weekStart: LocalDate)
 
-    val state: StateFlow<HomeState> = context.flatMapLatest { (period, day, sample) ->
+    private val context = combine(settings.settings, today) { s, d ->
+        val first = if (s.weekStartsMonday) DayOfWeek.MONDAY else DayOfWeek.SUNDAY
+        Context(s.periodFor(d), d, s.sampleLoaded, d.with(TemporalAdjusters.previousOrSame(first)))
+    }.distinctUntilChanged()
+
+    val state: StateFlow<HomeState> = context.flatMapLatest { (period, day, sample, weekStart) ->
         val totals = ledger.typeTotals(period.start, period.endExclusive)
         val byCategory = ledger.byCategory(TxType.EXPENSE, period.start, period.endExclusive)
         val money = combine(totals, byCategory, plan.budgets()) { t, cats, budgets ->
@@ -131,7 +147,20 @@ class HomeViewModel @Inject constructor(
                 .take(3)
                 .toList()
         }
-        combine(money, upcoming, ledger.recent(RECENT), ledger.balances(), ledger.count()) { m, bills, recent, accounts, count ->
+        val previous = period.shift(-1)
+        val previousSameDay = previous.start.plusDays(period.elapsedDays(day).toLong())
+        val extras = combine(
+            ledger.dailyExpense(weekStart, weekStart.plusDays(7)),
+            ledger.typeTotals(previous.start, minOf(previousSameDay, previous.endExclusive)),
+        ) { days, last ->
+            val byDay = days.associate { it.date to it.total }
+            Triple(
+                List(7) { byDay[weekStart.plusDays(it.toLong())] ?: 0L },
+                last.firstOrNull { it.type == TxType.EXPENSE }?.total ?: 0L,
+                last.firstOrNull { it.type == TxType.INCOME }?.total ?: 0L,
+            )
+        }
+        val base = combine(money, upcoming, ledger.recent(RECENT), ledger.balances(), ledger.count()) { m, bills, recent, accounts, count ->
             HomeState(
                 today = day,
                 period = period,
@@ -145,8 +174,10 @@ class HomeViewModel @Inject constructor(
                 hasEntries = count > 0,
                 sampleLoaded = sample,
                 loaded = true,
+                weekStart = weekStart,
             )
         }
+        combine(base, extras) { b, x -> b.copy(week = x.first, lastPeriodSameDay = x.second, lastPeriodIncomeSameDay = x.third) }
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),

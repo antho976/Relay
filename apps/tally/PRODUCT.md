@@ -63,9 +63,14 @@ servers, no internet permission *(inferred from Avex's offline promise)*.
 
 ## Brand Commitments
 
-- Visual reference: Avex, "something like that but adapted to spending" *(brief)*. Its world is
-  inherited: warm near-black ground, three type voices, one user-chosen accent, grouped surfaces
-  for interactive things, no decoration.
+- Visual reference: Avex, "something like that but adapted to spending" *(brief)*. Inherited:
+  warm near-black ground, three type voices (serif figures, sans rows, mono labels), one
+  user-chosen accent.
+- **Adapted, not copied (binding, owner 2026-10-04):** "I want it to feel professional with icons,
+  backgrounds, more details since it's not for the gym; gym apps are more discreet compared to what
+  I want." So Margin is richer than Avex: sections sit on raised panels, every section and stat is
+  led by a glyph, the hero reading sits in a lit panel, and screens carry more readings and charts
+  than Avex's open page would.
 - Voice inherited from Avex *(inferred)*: dry, specific, grounded in the owner's own numbers.
   No exclamation marks, no em dashes, no hype, no praise the data does not support. Speaks in
   "you", never "I".

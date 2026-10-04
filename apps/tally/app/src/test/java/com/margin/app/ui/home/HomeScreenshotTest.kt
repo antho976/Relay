@@ -42,6 +42,10 @@ class HomeScreenshotTest {
         accounts = Fixtures.accounts,
         hasEntries = true,
         loaded = true,
+        week = listOf(4_210L, 9_830L, 2_150L, 0L, 3_410L, 0L, 0L),
+        weekStart = Fixtures.TODAY.minusDays(4),
+        lastPeriodSameDay = 141_200,
+        lastPeriodIncomeSameDay = 215_000,
     )
 
     private val zero = HomeState(today = Fixtures.TODAY, period = period, loaded = true)

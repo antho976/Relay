@@ -24,19 +24,21 @@ Insights lens.
 THESIS: The month is a two-sided ledger, money in against money out, and the margin between them
 is drawn, not stated. Refuses the category default of one big balance over a card grid.
 
-OWN-WORLD: Avex's warm near-black ground (#110F0C), serif figures, quiet sans rows, mono uppercase
-labels for data; one user accent (Ember default) for selection and the primary act; twelve
-muted category hues as data series; interactive things sit in grouped 12dp slabs with 2dp seams,
-passive things sit bare on the page.
+OWN-WORLD: Avex's warm near-black ground (#110F0C), serif figures, sans rows, mono uppercase
+labels; one user accent (Ember default); twelve category hues as a data series. Owner-pinned
+(2026-10-04) richness on top: every section is a raised 20dp panel led by a glyph tile, the
+margin sits in one accent-lit hero panel, readings come as stat tiles and chips, the nav bar is a
+raised Material bar with an indicator pill.
 
 STORY: The owner opens, reads In and Out side by side, sees the margin bar and its pace tick,
 understands "33 a day for 27 days", glances at the envelope that is furthest ahead of pace,
 then logs with the FAB or leaves.
 
-FIRST VIEWPORT: top bar with only a settings capsule at the end. Serif month title, mono period
-line under it. Two equal columns, IN at start and OUT at end, each a serif figure over a mono
-label. Under them the full-width margin bar (budget scale, spent fill, pace tick) with its reading
-line. Then BUDGETS, the four envelopes furthest ahead of pace. FAB bottom end; nav bar under.
+FIRST VIEWPORT: top bar with only a settings capsule at the end. Serif month title, sans period
+line under it. The lit hero panel: wallet glyph + MARGIN label + pace verdict, the margin as the
+display serif figure, "of budget, spent" line, the meter with its pace tick, chips (days left,
+per day, pace). Under it IN and OUT stat tiles side by side, each against last month. Then the
+week's day bars against the daily budget. FAB bottom end; raised nav bar under.
 
 FORM: in / out ledger, candidate 7 of 7, seed key 3a18b5e6. Signature move: the pace tick, a
 thin onBackground tick on every meter in the app at where an even spend would be today; fill past

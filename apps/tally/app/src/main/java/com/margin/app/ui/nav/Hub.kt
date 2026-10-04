@@ -1,6 +1,10 @@
 package com.margin.app.ui.nav
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -77,7 +81,7 @@ fun Hub(nav: AppNav) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 600.dp
         DisposableEffect(wide) {
-            lift.value = if (wide) 88.dp else 152.dp
+            lift.value = if (wide) 88.dp else 160.dp
             onDispose { lift.value = 0.dp }
         }
         val content: @Composable (Modifier) -> Unit = { modifier ->
@@ -132,18 +136,25 @@ private fun AddFab(onClick: () -> Unit, modifier: Modifier = Modifier) {
 }
 
 /**
- * Avex's bar: a mono label under each glyph, the picked one in the accent, no pill behind it, on
- * the page's own ground. Each item is a full-height Tab-role target.
+ * The Material 3 bar on a raised warm surface: a glyph over a label for each tab, the picked one
+ * in the accent on its indicator pill. Each item is a full-height Tab-role target.
  */
 @Composable
 private fun HubBottomBar(selected: HubTab, onSelect: (HubTab) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().navigationBarsPadding().height(64.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically,
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
     ) {
-        HubTab.entries.forEach { t ->
-            NavItem(t, t == selected, Modifier.weight(1f).fillMaxHeight()) { onSelect(t) }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
+        Row(
+            Modifier.fillMaxWidth().navigationBarsPadding().height(72.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            HubTab.entries.forEach { t ->
+                NavItem(t, t == selected, Modifier.weight(1f).fillMaxHeight()) { onSelect(t) }
+            }
         }
     }
 }
@@ -166,17 +177,27 @@ private fun HubRail(selected: HubTab, onSelect: (HubTab) -> Unit, onAdd: () -> U
 @Composable
 private fun NavItem(tab: HubTab, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+    val pill by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else Color.Transparent,
+        MarginMotion.standard(MarginMotion.Fast),
+        label = "nav_pill",
+    )
     Column(
         modifier.selectable(selected = selected, role = Role.Tab, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Icon(tab.icon, contentDescription = null, tint = color, modifier = Modifier.size(24.dp))
+        Box(
+            Modifier.width(60.dp).height(32.dp).clip(RoundedCornerShape(16.dp)).background(pill),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(tab.icon, contentDescription = null, tint = color, modifier = Modifier.size(24.dp))
+        }
         Spacer(Modifier.height(4.dp))
         Text(
             tab.label,
-            style = MaterialTheme.typography.labelMedium,
-            color = color,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (selected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
         )
     }

@@ -2,19 +2,31 @@ package com.margin.app.ui.home
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
+import androidx.compose.material.icons.automirrored.rounded.TrendingUp
+import androidx.compose.material.icons.rounded.AccountBalance
+import androidx.compose.material.icons.rounded.AccountBalanceWallet
+import androidx.compose.material.icons.rounded.ArrowDownward
+import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.BarChart
+import androidx.compose.material.icons.rounded.CalendarToday
+import androidx.compose.material.icons.rounded.DonutLarge
+import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,23 +36,28 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.margin.app.data.db.TransactionRow
 import com.margin.app.ui.common.AccountBadge
 import com.margin.app.ui.common.Aside
 import com.margin.app.ui.common.CategoryBadge
 import com.margin.app.ui.common.ChromeButton
 import com.margin.app.ui.common.Dates
+import com.margin.app.ui.common.DayBars
 import com.margin.app.ui.common.GUTTER
+import com.margin.app.ui.common.HeroPanel
+import com.margin.app.ui.common.IconBadge
 import com.margin.app.ui.common.LedgerRow
 import com.margin.app.ui.common.LocalMoney
+import com.margin.app.ui.common.PANEL_GAP
 import com.margin.app.ui.common.PaceMeter
 import com.margin.app.ui.common.PageTitle
-import com.margin.app.ui.common.SectionHeader
+import com.margin.app.ui.common.Panel
+import com.margin.app.ui.common.PanelHeader
+import com.margin.app.ui.common.StatChip
+import com.margin.app.ui.common.StatTile
 import com.margin.app.ui.common.TextAction
 import com.margin.app.ui.common.TopBar
 import com.margin.app.ui.common.TransferBadge
@@ -66,6 +83,7 @@ fun HomeTab(nav: AppNav, openTab: (HubTab) -> Unit, viewModel: HomeViewModel = h
             setBudget = { nav.budgetEdit(0) },
             openPlan = { openTab(HubTab.PLAN) },
             openActivity = { openTab(HubTab.ACTIVITY) },
+            openInsights = { openTab(HubTab.INSIGHTS) },
             openCategory = { nav.transactions(categoryId = it) },
             openEntry = { nav.entry(id = it) },
             openBill = { nav.billEdit(it) },
@@ -82,6 +100,7 @@ data class HomeActions(
     val setBudget: () -> Unit = {},
     val openPlan: () -> Unit = {},
     val openActivity: () -> Unit = {},
+    val openInsights: () -> Unit = {},
     val openCategory: (Long) -> Unit = {},
     val openEntry: (Long) -> Unit = {},
     val openBill: (Long) -> Unit = {},
@@ -91,107 +110,116 @@ data class HomeActions(
 )
 
 /**
- * Home, the in / out ledger (surface brief, direction contract): the month's two sides, the
- * margin between them drawn as the budget meter with its pace tick, then the envelopes furthest
- * ahead of pace, the newest entries, what is due, and where the money sits.
+ * Home: the month's margin in the one lit panel, money in and out beside last month, the week's
+ * days against the daily budget, then the envelopes furthest over pace, the newest entries, what is
+ * due, and where the money sits. Each section is one panel led by its glyph.
  */
 @Composable
 fun HomeScreen(state: HomeState, actions: HomeActions) {
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = FAB_CLEARANCE),
+        verticalArrangement = Arrangement.spacedBy(PANEL_GAP),
     ) {
-        item(key = "bar") {
-            TopBar(onBack = null) { ChromeButton(Icons.Rounded.Settings, "Settings", actions.settings) }
+        item(key = "head") {
+            Column {
+                TopBar(onBack = null) { ChromeButton(Icons.Rounded.Settings, "Settings", actions.settings) }
+                val context = buildList {
+                    add(Copy.plural(state.daysLeft, "day") + " left")
+                    add("resets " + Dates.short(state.period.endExclusive, state.today))
+                    if (state.sampleLoaded) add("sample data")
+                }.joinToString(" · ")
+                PageTitle(
+                    Dates.period(state.period, state.today),
+                    Modifier.padding(horizontal = GUTTER).padding(top = 4.dp, bottom = 6.dp),
+                    context = context,
+                )
+            }
         }
-        item(key = "title") {
-            val context = buildList {
-                add(Copy.plural(state.daysLeft, "day") + " left")
-                add("resets " + Dates.short(state.period.endExclusive, state.today))
-                if (state.sampleLoaded) add("sample data")
-            }.joinToString(" · ")
-            PageTitle(
-                Dates.period(state.period, state.today),
-                Modifier.padding(horizontal = GUTTER).padding(top = 8.dp),
-                context = context,
-            )
-        }
-        item(key = "ledger") { LedgerPair(state, Modifier.padding(horizontal = GUTTER).padding(top = 28.dp)) }
-        item(key = "margin") { MarginBlock(state, actions, Modifier.padding(horizontal = GUTTER).padding(top = 20.dp)) }
-
-        envelopes(state, actions)
-        recent(state, actions)
-        upcoming(state, actions)
-        accounts(state, actions)
-    }
-}
-
-/** IN at the start, OUT at the end: the two sides of the month. */
-@Composable
-private fun LedgerPair(state: HomeState, modifier: Modifier = Modifier) {
-    val money = LocalMoney.current
-    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(money.formatWhole(state.income), style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
-            Text("IN", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Column(Modifier.weight(1f), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                money.formatWhole(state.spent),
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-                textAlign = TextAlign.End,
-            )
-            Text("OUT", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        item(key = "margin") { MarginHero(state, actions, Modifier.padding(horizontal = GUTTER)) }
+        item(key = "inout") { InOutTiles(state, Modifier.padding(horizontal = GUTTER)) }
+        item(key = "week") { WeekPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+        item(key = "budgets") { BudgetsPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+        item(key = "recent") { RecentPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+        item(key = "upcoming") { UpcomingPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+        item(key = "accounts") { AccountsPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
     }
 }
 
 /**
- * The margin, drawn: the meter on the budget's scale with today's pace tick, the margin itself as
- * the screen's one serif hero, and the reading that says what each day can take. Without a
- * budget it falls back to income, honestly labelled, and offers the budget.
+ * The margin, drawn: the screen's one serif hero under the accent's light, the budget meter with
+ * today's pace tick, and chips for the readings that say what to do. Without a budget it measures
+ * against income, honestly labelled, and offers the budget.
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun MarginBlock(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
+private fun MarginHero(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
     val money = LocalMoney.current
     val r = state.reading
-    Column(modifier.fillMaxWidth()) {
+    val over = r?.status == PaceStatus.OVER_BUDGET
+    HeroPanel(modifier, tint = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            IconBadge(
+                Icons.Rounded.AccountBalanceWallet,
+                tint = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                if (over) "OVER BUDGET" else if (r != null) "MARGIN" else "LEFT FROM INCOME",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            if (r != null && !over) {
+                Text(Copy.paceLine(r, money), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Spacer(Modifier.height(14.dp))
         if (r != null) {
-            val desc = "Spent ${money.formatWhole(r.spent)} of ${money.formatWhole(r.budget)}. " +
-                "An even pace would be ${money.formatWhole(r.expected)} by today."
-            PaceMeter(r.spentFraction, r.paceFraction, desc, height = 14.dp)
-            Spacer(Modifier.height(18.dp))
-            val over = r.status == PaceStatus.OVER_BUDGET
             Text(
                 money.formatWhole(if (over) -r.remaining else r.remaining),
-                style = MaterialTheme.typography.displayMedium,
-                color = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground,
-            )
-            Text(
-                (if (over) "OVER BUDGET" else "MARGIN") + " · " + money.formatWhole(r.budget).uppercase() + " BUDGET",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(12.dp))
-            Text(Copy.marginLine(r, money), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-            if (r.status != PaceStatus.OVER_BUDGET) {
-                Text(Copy.paceLine(r, money), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        } else {
-            // No budget: the bar measures spending against income, with no pace to claim.
-            val fraction = if (state.income > 0) state.spent.toFloat() / state.income else 0f
-            val desc = if (state.income > 0) "Spent ${money.formatWhole(state.spent)} of ${money.formatWhole(state.income)} income"
-            else "No budget and no income this month"
-            PaceMeter(fraction, null, desc, height = 14.dp)
-            Spacer(Modifier.height(18.dp))
-            Text(
-                money.formatWhole(state.income - state.spent),
-                style = MaterialTheme.typography.displayMedium,
+                style = MaterialTheme.typography.displayLarge,
                 color = MaterialTheme.colorScheme.onBackground,
             )
-            Text("LEFT FROM INCOME", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(4.dp))
+            Text(
+                "of " + money.formatWhole(r.budget) + " budget, " + money.formatWhole(r.spent) + " spent",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(16.dp))
+            PaceMeter(
+                r.spentFraction,
+                r.paceFraction,
+                "Spent ${money.formatWhole(r.spent)} of ${money.formatWhole(r.budget)}. " +
+                    "An even pace would be ${money.formatWhole(r.expected)} by today.",
+                height = 14.dp,
+            )
+            Spacer(Modifier.height(16.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatChip(Icons.Rounded.CalendarToday, Copy.plural(r.daysLeft, "day") + " left")
+                if (!over) StatChip(Icons.Rounded.Speed, money.formatWhole(r.dailyAllowance) + " a day")
+                StatChip(Icons.AutoMirrored.Rounded.TrendingUp, "Pace " + money.formatWhole(r.expected))
+            }
+        } else {
+            val fraction = if (state.income > 0) state.spent.toFloat() / state.income else 0f
+            Text(
+                money.formatWhole(state.income - state.spent),
+                style = MaterialTheme.typography.displayLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                money.formatWhole(state.spent) + " spent of " + money.formatWhole(state.income) + " in",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(16.dp))
+            PaceMeter(
+                fraction,
+                null,
+                if (state.income > 0) "Spent ${money.formatWhole(state.spent)} of ${money.formatWhole(state.income)} income"
+                else "No budget and no income this month",
+                height = 14.dp,
+            )
+            Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Aside("A monthly budget adds the pace tick", Modifier.weight(1f, fill = false))
                 TextAction("set budget", actions.setBudget, color = MaterialTheme.colorScheme.primary)
@@ -200,15 +228,66 @@ private fun MarginBlock(state: HomeState, actions: HomeActions, modifier: Modifi
     }
 }
 
-private fun LazyListScope.section(key: String, content: @Composable () -> Unit) {
-    item(key = key) {
-        Column(Modifier.padding(horizontal = GUTTER).padding(top = 32.dp)) { content() }
+/** Money in and out, each beside where last month stood by the same day. */
+@Composable
+private fun InOutTiles(state: HomeState, modifier: Modifier = Modifier) {
+    val money = LocalMoney.current
+    fun versus(now: Long, then: Long): String = when {
+        then <= 0L -> "Nothing by this day last month"
+        now == then -> "Level with last month"
+        now > then -> money.formatWhole(now - then) + " more than last month"
+        else -> money.formatWhole(then - now) + " less than last month"
+    }
+    Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+        StatTile(
+            Icons.Rounded.ArrowDownward,
+            "In",
+            money.formatWhole(state.income),
+            Modifier.weight(1f).fillMaxHeight(),
+            detail = versus(state.income, state.lastPeriodIncomeSameDay),
+            tint = MaterialTheme.colorScheme.tertiary,
+        )
+        StatTile(
+            Icons.Rounded.ArrowUpward,
+            "Out",
+            money.formatWhole(state.spent),
+            Modifier.weight(1f).fillMaxHeight(),
+            detail = versus(state.spent, state.lastPeriodSameDay),
+        )
     }
 }
 
-private fun LazyListScope.envelopes(state: HomeState, actions: HomeActions) {
-    section("budgets_header") {
-        SectionHeader(
+@Composable
+private fun WeekPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
+    val money = LocalMoney.current
+    val labels = List(7) { Dates.weekdayInitial(state.weekStart.plusDays(it.toLong()).dayOfWeek) }
+    val desc = "This week: " + state.week.take(state.todayInWeek + 1).mapIndexed { i, v ->
+        Dates.weekdayInitial(state.weekStart.plusDays(i.toLong()).dayOfWeek) + " " + money.formatWhole(v)
+    }.joinToString(", ")
+    Panel(modifier) {
+        PanelHeader(
+            Icons.Rounded.BarChart,
+            "This week",
+            action = "insights",
+            onAction = actions.openInsights,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            money.formatWhole(state.weekSpent) + " spent" +
+                (state.dailyBudget?.let { " · " + money.formatWhole(it) + " a day budgeted" } ?: ""),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(14.dp))
+        DayBars(state.week, labels, state.todayInWeek, desc, allowance = state.dailyBudget)
+    }
+}
+
+@Composable
+private fun BudgetsPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
+    Panel(modifier) {
+        PanelHeader(
+            Icons.Rounded.DonutLarge,
             "Budgets",
             action = if (state.envelopes.isEmpty()) null else "all",
             onAction = actions.openPlan,
@@ -219,78 +298,82 @@ private fun LazyListScope.envelopes(state: HomeState, actions: HomeActions) {
                 Aside("No category budgets yet", Modifier.weight(1f, fill = false))
                 TextAction("add one", actions.openPlan, color = MaterialTheme.colorScheme.primary)
             }
+        } else {
+            state.envelopes.take(4).forEach { e -> EnvelopeRow(e) { actions.openCategory(e.categoryId) } }
         }
-    }
-    items(state.envelopes.take(4), key = { "env_${it.categoryId}" }) { e ->
-        EnvelopeRow(e, Modifier.padding(horizontal = GUTTER)) { actions.openCategory(e.categoryId) }
     }
 }
 
 @Composable
-private fun EnvelopeRow(e: Envelope, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun EnvelopeRow(e: Envelope, onClick: () -> Unit) {
     val money = LocalMoney.current
     val r = e.reading
     val reading = Copy.ofBudget(r.spent, r.budget, money)
     Column(
-        modifier
+        Modifier
             .fillMaxWidth()
             .bounceClick(label = "${e.name} entries", onClick = onClick)
             .heightIn(min = 56.dp)
-            .padding(top = 12.dp, bottom = 6.dp),
+            .padding(top = 12.dp, bottom = 4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            CategoryBadge(e.icon, e.color, size = 32.dp)
-            Text(e.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.weight(1f))
+            CategoryBadge(e.icon, e.color, size = 36.dp)
+            Column(Modifier.weight(1f)) {
+                Text(e.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                Text(Copy.paceLine(r, money), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Text(reading, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground)
         }
-        Spacer(Modifier.height(8.dp))
-        PaceMeter(
-            r.spentFraction,
-            r.paceFraction,
-            "${e.name}: $reading. ${Copy.paceLine(r, money)}",
-            height = 6.dp,
-        )
+        Spacer(Modifier.height(10.dp))
+        PaceMeter(r.spentFraction, r.paceFraction, "${e.name}: $reading. ${Copy.paceLine(r, money)}", height = 6.dp)
     }
 }
 
-private fun LazyListScope.recent(state: HomeState, actions: HomeActions) {
-    section("recent_header") {
-        SectionHeader("Recent", action = if (state.recent.isEmpty()) null else "view all", onAction = actions.openActivity)
+@Composable
+private fun RecentPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
+    Panel(modifier) {
+        PanelHeader(
+            Icons.AutoMirrored.Rounded.ReceiptLong,
+            "Recent",
+            action = if (state.recent.isEmpty()) null else "view all",
+            onAction = actions.openActivity,
+        )
         if (state.recent.isEmpty()) {
             Spacer(Modifier.height(8.dp))
-            Aside("Your first entry lands here")
+            Aside("Your first entry lands here. Tap + to log one")
         } else {
             Spacer(Modifier.height(4.dp))
+            state.recent.forEach { row ->
+                LedgerRow(row, Dates.day(row.date, state.today), onClick = { actions.openEntry(row.id) })
+            }
         }
-    }
-    items(state.recent, key = { "tx_${it.id}" }) { row: TransactionRow ->
-        LedgerRow(row, Dates.day(row.date, state.today), onClick = { actions.openEntry(row.id) }, modifier = Modifier.padding(horizontal = GUTTER))
     }
 }
 
-private fun LazyListScope.upcoming(state: HomeState, actions: HomeActions) {
-    section("upcoming_header") {
-        SectionHeader("Upcoming", meta = if (state.upcoming.isEmpty()) null else "NEXT 14 DAYS")
+@Composable
+private fun UpcomingPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
+    Panel(modifier) {
+        PanelHeader(Icons.Rounded.Event, "Upcoming", meta = if (state.upcoming.isEmpty()) null else "NEXT 14 DAYS")
         if (state.upcoming.isEmpty()) {
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Aside("Nothing due in the next two weeks", Modifier.weight(1f, fill = false))
                 TextAction("add a bill", actions.addBill, color = MaterialTheme.colorScheme.primary)
             }
-        } else Spacer(Modifier.height(4.dp))
-    }
-    items(state.upcoming, key = { "bill_${it.id}" }) { b ->
-        BillRow(b, Modifier.padding(horizontal = GUTTER)) { actions.openBill(b.id) }
+        } else {
+            Spacer(Modifier.height(4.dp))
+            state.upcoming.forEach { b -> BillRow(b) { actions.openBill(b.id) } }
+        }
     }
 }
 
 @Composable
-private fun BillRow(b: UpcomingBill, modifier: Modifier = Modifier, onClick: () -> Unit) {
+private fun BillRow(b: UpcomingBill, onClick: () -> Unit) {
     val money = LocalMoney.current
     val amount = if (b.type == TxType.INCOME) money.formatSigned(b.amount) else money.format(b.amount)
     val meta = listOf(Copy.dueLine(b.daysUntil), b.accountName).joinToString(" · ")
     Row(
-        modifier
+        Modifier
             .fillMaxWidth()
             .bounceClick(label = "Edit ${b.name}", onClick = onClick)
             .semantics(mergeDescendants = true) { contentDescription = "${b.name}, $amount, $meta" }
@@ -308,37 +391,42 @@ private fun BillRow(b: UpcomingBill, modifier: Modifier = Modifier, onClick: () 
     }
 }
 
-private fun LazyListScope.accounts(state: HomeState, actions: HomeActions) {
-    section("accounts_header") {
-        val fmt = LocalMoney.current
-        SectionHeader("Accounts", action = "manage", onAction = actions.accounts)
-        if (state.accounts.none { !it.archived }) {
+@Composable
+private fun AccountsPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
+    val money = LocalMoney.current
+    val active = state.accounts.filter { !it.archived }
+    Panel(modifier) {
+        PanelHeader(Icons.Rounded.AccountBalance, "Accounts", action = "manage", onAction = actions.accounts)
+        if (active.isEmpty()) {
             Spacer(Modifier.height(8.dp))
             Aside("No accounts yet")
         } else {
-            Text(
-                "Net " + fmt.formatWhole(state.net),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(4.dp))
-        }
-    }
-    items(state.accounts.filter { !it.archived }.take(5), key = { "acc_${it.id}" }) { a ->
-        val fmt = LocalMoney.current
-        Row(
-            Modifier
-                .padding(horizontal = GUTTER)
-                .fillMaxWidth()
-                .bounceClick(label = "${a.name} entries") { actions.openAccount(a.id) }
-                .heightIn(min = 60.dp)
-                .padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            AccountBadge(a.type)
-            Text(a.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground, modifier = Modifier.weight(1f))
-            Text(fmt.format(a.balance), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
+            Spacer(Modifier.height(10.dp))
+            Text(money.format(state.net), style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
+            Text("NET ACROSS ${active.size} ACCOUNTS", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(6.dp))
+            active.take(5).forEach { a ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .bounceClick(label = "${a.name} entries") { actions.openAccount(a.id) }
+                        .heightIn(min = 60.dp)
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    AccountBadge(a.type)
+                    Column(Modifier.weight(1f)) {
+                        Text(a.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                        Text(
+                            Copy.plural(a.entryCount, "entry", "entries"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Text(money.format(a.balance), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
+                }
+            }
         }
     }
 }
