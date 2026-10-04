@@ -32,7 +32,9 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # A newer push supersedes an older run on the same ref: its result would describe a tree that
+  # no longer exists. Tags (release.yml) are their own refs and are never cancelled by a branch push.
+  cancel-in-progress: true
 
 jobs:
   guard:
