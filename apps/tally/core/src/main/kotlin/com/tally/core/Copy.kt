@@ -33,9 +33,12 @@ object Copy {
     fun ofBudget(spent: Long, budget: Long, fmt: MoneyFormatter): String =
         "${fmt.formatWhole(spent)} of ${fmt.formatWhole(budget)}"
 
-    /** The month against the one before, by the same day. */
+    /**
+     * The month against the one before, by the same day. Nothing by this day last month says just
+     * that: it is not proof of a first month, since earlier months can hold entries on later days.
+     */
     fun versusLastLine(thisPeriod: Long, lastPeriodSameDay: Long, fmt: MoneyFormatter): String {
-        if (lastPeriodSameDay <= 0L) return if (thisPeriod == 0L) "Nothing spent yet" else "First month on record"
+        if (lastPeriodSameDay <= 0L) return if (thisPeriod == 0L) "Nothing spent yet" else "Nothing by this day last month"
         val diff = thisPeriod - lastPeriodSameDay
         return when {
             diff == 0L -> "Level with last month by this day"

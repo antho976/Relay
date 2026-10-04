@@ -32,6 +32,8 @@ import com.tally.core.TransactionDto
 import com.tally.core.TxType
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.util.Locale
@@ -43,6 +45,12 @@ sealed interface DataResult {
     data class Done(val message: String) : DataResult
     data class Failed(val message: String) : DataResult
 }
+
+/**
+ * A currency switch, worked out before it runs: from and to how many decimals, and how many
+ * stored amounts would be rounded to fit (0 when the switch keeps every amount exactly).
+ */
+data class CurrencyPlan(val code: String, val fromDigits: Int, val toDigits: Int, val rounded: Int)
 
 /**
  * Everything that moves the whole ledger at once: JSON backup and restore, CSV export and import,
@@ -58,26 +66,35 @@ class DataRepository @Inject constructor(
     private val clock: Clock,
 ) {
 
+    /**
+     * The whole ledger as one file. The reads are one transaction, so a bill the daily poster
+     * advances meanwhile is never captured past entries the file does not hold. The currency is
+     * read inside it too, since a currency switch rescales the amounts in the same transaction.
+     */
     suspend fun snapshot(): BackupFile = withContext(Dispatchers.IO) {
-        val s = settings.current()
-        BackupFile(
-            exportedAt = clock.today().toString(),
-            currency = s.currency,
-            accounts = db.accounts().all().map { AccountDto(it.id, it.name, it.type, it.openingBalance, it.archived, it.sortOrder) },
-            categories = db.categories().all().map { CategoryDto(it.id, it.name, it.kind, it.color, it.icon, it.archived, it.sortOrder) },
-            transactions = db.transactions().all().map {
-                TransactionDto(it.id, it.type, it.amount, it.date.toString(), it.accountId, it.toAccountId, it.categoryId, it.note, it.recurringId)
-            },
-            budgets = db.budgets().all().map { BudgetDto(it.id, it.categoryId.takeIf { c -> c != BudgetEntity.OVERALL }, it.amount) },
-            recurring = db.recurring().all().map {
-                RecurringDto(
-                    it.id, it.name, it.type, it.amount, it.accountId, it.toAccountId, it.categoryId, it.frequency,
-                    it.interval, it.anchorDate.toString(), it.nextDate.toString(), it.endDate?.toString(), it.autoPost, it.active,
-                )
-            },
-            goals = db.goals().all().map { GoalDto(it.id, it.name, it.target, it.targetDate?.toString(), it.color, it.archived) },
-            contributions = db.goals().allContributions().map { ContributionDto(it.id, it.goalId, it.amount, it.date.toString(), it.note) },
-        )
+        db.withTransaction {
+            val s = settings.current()
+            BackupFile(
+                exportedAt = clock.today().toString(),
+                currency = s.currency,
+                monthStartDay = s.monthStartDay,
+                weekStartsMonday = s.weekStartsMonday,
+                accounts = db.accounts().all().map { AccountDto(it.id, it.name, it.type, it.openingBalance, it.archived, it.sortOrder) },
+                categories = db.categories().all().map { CategoryDto(it.id, it.name, it.kind, it.color, it.icon, it.archived, it.sortOrder) },
+                transactions = db.transactions().all().map {
+                    TransactionDto(it.id, it.type, it.amount, it.date.toString(), it.accountId, it.toAccountId, it.categoryId, it.note, it.recurringId)
+                },
+                budgets = db.budgets().all().map { BudgetDto(it.id, it.categoryId.takeIf { c -> c != BudgetEntity.OVERALL }, it.amount) },
+                recurring = db.recurring().all().map {
+                    RecurringDto(
+                        it.id, it.name, it.type, it.amount, it.accountId, it.toAccountId, it.categoryId, it.frequency,
+                        it.interval, it.anchorDate.toString(), it.nextDate.toString(), it.endDate?.toString(), it.autoPost, it.active,
+                    )
+                },
+                goals = db.goals().all().map { GoalDto(it.id, it.name, it.target, it.targetDate?.toString(), it.color, it.archived) },
+                contributions = db.goals().allContributions().map { ContributionDto(it.id, it.goalId, it.amount, it.date.toString(), it.note) },
+            )
+        }
     }
 
     suspend fun writeBackup(uri: Uri): DataResult = withContext(Dispatchers.IO) {
@@ -106,6 +123,9 @@ class DataRepository @Inject constructor(
                 insertFile(file)
             }
             settings.setCurrency(file.currency)
+            // A file that does not say (the sample, or one saved before these were kept) leaves them.
+            file.monthStartDay?.let { settings.setMonthStartDay(it) }
+            file.weekStartsMonday?.let { settings.setWeekStartsMonday(it) }
             settings.setOnboarded(true)
             settings.setSampleLoaded(false)
             // Always reset: an id from the old data must not survive into the restored set.
@@ -183,12 +203,15 @@ class DataRepository @Inject constructor(
                     id
                 }
                 val catCache = HashMap<String, Long>()
+                // Matched in Kotlin with the category editor's own rule (Unicode, any case), not
+                // SQLite's NOCASE, which folds ASCII only and would make "épicerie" a second "Épicerie".
+                val existing = db.categories().all()
                 suspend fun categoryId(name: String?, type: TxType): Long? {
                     if (name.isNullOrBlank() || type == TxType.TRANSFER) return null
                     val kind = if (type == TxType.INCOME) CategoryKind.INCOME else CategoryKind.EXPENSE
                     val key = "${kind.name}:${name.lowercase()}"
                     return catCache.getOrPut(key) {
-                        db.categories().findByName(name, kind)?.id
+                        existing.firstOrNull { it.kind == kind && it.name.trim().equals(name.trim(), ignoreCase = true) }?.id
                             ?: ledger.saveCategory(CategoryEntity(name = name, kind = kind, color = (catCache.size + 3) % 12, icon = "dots"))
                     }
                 }
@@ -216,6 +239,73 @@ class DataRepository @Inject constructor(
             },
             onFailure = { DataResult.Failed("The import did not finish. Nothing was added.") },
         )
+    }
+
+    // ── Currency ─────────────────────────────────────────────────────────────
+
+    /**
+     * What switching to [code] does to the stored amounts, read before anything changes. Null
+     * when [code] is already the currency. [rounded] counts the amounts that would lose digits
+     * (entries, opening balances, budgets, bills, goals and contributions); zero means the switch
+     * is exact and needs no confirm.
+     */
+    suspend fun planCurrencyChange(code: String): CurrencyPlan? = withContext(Dispatchers.IO) {
+        val current = settings.current().currency
+        if (code == current) return@withContext null
+        val from = MoneyFormatter(current, Locale.getDefault()).fractionDigits
+        val to = MoneyFormatter(code, Locale.getDefault()).fractionDigits
+        val rounded = if (to < from) {
+            db.withTransaction { storedAmounts().count { MoneyFormatter.rescaleRounds(it, from, to) } }
+        } else 0
+        CurrencyPlan(code = code, fromDigits = from, toDigits = to, rounded = rounded)
+    }
+
+    /**
+     * Switches the currency. Amounts are minor units of the CURRENT currency, so when [code] has a
+     * different number of decimals every stored amount is rewritten to keep its figure ($12.50
+     * reads 12.50 in any 2-decimal currency and ¥12 in yen, never ¥1,250), in the same transaction as
+     * the setting: a failure leaves both the amounts and the currency as they were. The current
+     * currency is read inside the transaction too, so two quick switches cannot rescale twice from
+     * the same starting point.
+     */
+    suspend fun changeCurrency(code: String): DataResult = withContext(Dispatchers.IO) {
+        runCatching {
+            currencyLock.withLock {
+                db.withTransaction {
+                    val current = settings.current().currency
+                    if (code != current) {
+                        val from = MoneyFormatter(current, Locale.getDefault()).fractionDigits
+                        val to = MoneyFormatter(code, Locale.getDefault()).fractionDigits
+                        if (from != to) rescaleAmounts { MoneyFormatter.rescale(it, from, to) }
+                        settings.setCurrency(code)
+                    }
+                }
+            }
+        }.fold(
+            onSuccess = { DataResult.Done("Currency changed") },
+            onFailure = { DataResult.Failed("The currency did not change. Your amounts are as they were.") },
+        )
+    }
+
+    private val currencyLock = Mutex()
+
+    /** Every stored amount, in no particular order. Call inside a transaction for one consistent read. */
+    private suspend fun storedAmounts(): List<Long> =
+        db.transactions().all().map { it.amount } +
+            db.accounts().all().map { it.openingBalance } +
+            db.budgets().all().map { it.amount } +
+            db.recurring().all().map { it.amount } +
+            db.goals().all().map { it.target } +
+            db.goals().allContributions().map { it.amount }
+
+    /** Rewrites every stored amount through [rescale]. Runs inside the caller's transaction. */
+    private suspend fun rescaleAmounts(rescale: (Long) -> Long) {
+        db.transactions().updateAll(db.transactions().all().map { it.copy(amount = rescale(it.amount)) })
+        db.accounts().updateAll(db.accounts().all().map { it.copy(openingBalance = rescale(it.openingBalance)) })
+        db.budgets().updateAll(db.budgets().all().map { it.copy(amount = rescale(it.amount)) })
+        db.recurring().updateAll(db.recurring().all().map { it.copy(amount = rescale(it.amount)) })
+        db.goals().updateAll(db.goals().all().map { it.copy(target = rescale(it.target)) })
+        db.goals().updateContributions(db.goals().allContributions().map { it.copy(amount = rescale(it.amount)) })
     }
 
     /**

@@ -3,10 +3,14 @@ package com.tally.app.data
 import android.content.Context
 import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
+import com.tally.app.data.db.ContributionEntity
+import com.tally.app.data.db.GoalEntity
+import com.tally.app.data.db.RecurringEntity
 import com.tally.app.data.db.TallyDatabase
 import com.tally.app.data.db.TransactionRow
 import com.tally.app.data.prefs.Accent
 import com.tally.app.data.prefs.SettingsRepository
+import com.tally.app.data.repo.CurrencyPlan
 import com.tally.app.data.repo.DataRepository
 import com.tally.app.data.repo.DataResult
 import com.tally.core.AccountDto
@@ -16,6 +20,7 @@ import com.tally.core.BackupFile
 import com.tally.core.BackupReadResult
 import com.tally.core.CategoryKind
 import com.tally.core.Defaults
+import com.tally.core.Frequency
 import com.tally.core.SampleData
 import com.tally.core.TransactionDto
 import com.tally.core.TxType
@@ -62,6 +67,8 @@ class DataRepositoryTest {
             settings.resetData()
             settings.setCurrency("CAD")
             settings.setAccent(Accent.DEFAULT)
+            settings.setMonthStartDay(1)
+            settings.setWeekStartsMonday(true)
         }
     }
 
@@ -84,6 +91,12 @@ class DataRepositoryTest {
         contributions = contributions.sortedBy { it.id },
     )
 
+    /**
+     * [byId] without the month and week start: a snapshot always writes the phone's own, while
+     * the sample file leaves them out, so a ledger comparison must not count them.
+     */
+    private fun BackupFile.ledgerOnly(): BackupFile = byId().copy(monthStartDay = null, weekStartsMonday = null)
+
     /** A small ledger the owner made by hand, to prove a failed move leaves it alone. */
     private suspend fun ownLedger() {
         val chequing = db.addAccount("Chequing", opening = 1_000_00)
@@ -104,7 +117,8 @@ class DataRepositoryTest {
         val restored = data.restore(sample)
         assertEquals(DataResult.Done("Restored ${sample.transactions.size} entries"), restored)
         val first = data.snapshot()
-        assertEquals("The restore wrote exactly what the file says", sample.byId(), first.byId())
+        assertEquals("The restore wrote exactly what the file says", sample.ledgerOnly(), first.ledgerOnly())
+        assertEquals("A file that does not say leaves the month start alone", 1, first.monthStartDay)
 
         assertTrue(data.restore(first) is DataResult.Done)
         val second = data.snapshot()
@@ -201,7 +215,7 @@ class DataRepositoryTest {
 
         assertEquals(DataResult.Done("Sample data loaded"), data.loadSample())
 
-        assertEquals(SampleData.build(today, 2, "CAD").byId(), data.snapshot().byId())
+        assertEquals(SampleData.build(today, 2, "CAD").ledgerOnly(), data.snapshot().ledgerOnly())
         assertTrue(db.accounts().all().all { it.name.startsWith(SampleData.ACCOUNT_PREFIX) })
         val s = settings.current()
         assertTrue(s.sampleLoaded)
@@ -299,5 +313,138 @@ class DataRepositoryTest {
         assertEquals(exported, db.transactions().allRows().map { it.line() }.sorted())
         assertNull("Imported accounts are plain chequing until the owner says otherwise",
             db.accounts().all().firstOrNull { it.type != AccountType.CHEQUING })
+    }
+
+    @Test fun csvExportStartsWithAByteOrderMarkSoExcelReadsTheAccents() = runTest {
+        val chequing = db.addAccount("Compte chèque")
+        db.addExpense(12_50, today, chequing, db.addCategory("Épicerie"), note = "Café dépanneur")
+        val uri = uriFor("accents.csv")
+
+        assertTrue(data.writeCsv(uri) is DataResult.Done)
+
+        val bytes = File(folder.root, "accents.csv").readBytes()
+        assertEquals(listOf(0xEF, 0xBB, 0xBF), bytes.take(3).map { it.toInt() and 0xFF })
+        assertTrue(bytes.toString(Charsets.UTF_8).contains("Café dépanneur"))
+    }
+
+    @Test fun csvImportMatchesAnAccentedCategoryInAnyCaseInsteadOfMakingASecondOne() = runTest {
+        db.addAccount("Chequing")
+        val groceries = db.addCategory("Épicerie")
+        val csv = "date,type,amount,category,account,note\r\n2026-10-01,expense,12.50,épicerie,Chequing,Metro\r\n"
+
+        assertTrue(data.importCsv(uriFor("fr.csv", csv)) is DataResult.Done)
+
+        assertEquals(listOf("Épicerie"), db.categories().all().map { it.name })
+        assertEquals(groceries, db.transactions().all().single().categoryId)
+    }
+
+    @Test fun csvRoundTripKeepsNamesThatLookLikeFormulas() = runTest {
+        val plus = db.addAccount("+Savings")
+        db.addExpense(5_00, today, plus, note = "@Costco")
+        val uri = uriFor("formulas.csv")
+        assertTrue(data.writeCsv(uri) is DataResult.Done)
+        db.transactions().deleteAll()
+
+        assertTrue(data.importCsv(uri) is DataResult.Done)
+
+        assertEquals("No second account named '+Savings", listOf("+Savings"), db.accounts().all().map { it.name })
+        assertEquals("@Costco", db.transactions().all().single().note)
+    }
+
+    // ── Settings that ride in the backup ─────────────────────────────────────
+
+    @Test fun aPaydayMonthSurvivesEraseAndRestore() = runTest {
+        ownLedger()
+        settings.setMonthStartDay(15)
+        settings.setWeekStartsMonday(false)
+        val backup = data.snapshot()
+        assertEquals(15, backup.monthStartDay)
+        assertEquals(false, backup.weekStartsMonday)
+
+        assertTrue(data.eraseAll() is DataResult.Done)
+        settings.setWeekStartsMonday(true)
+        assertEquals("Erase forgets the month start", 1, settings.current().monthStartDay)
+        assertTrue(data.restore(backup) is DataResult.Done)
+
+        val s = settings.current()
+        assertEquals(15, s.monthStartDay)
+        assertFalse(s.weekStartsMonday)
+    }
+
+    // ── Currency ─────────────────────────────────────────────────────────────
+
+    /** One of every stored amount: an opening balance, entries, a budget, a bill, a goal and a withdrawal. */
+    private suspend fun everyKindOfAmount(): Long {
+        ownLedger()
+        val chequing = db.accounts().all().first().id
+        db.recurring().insert(
+            RecurringEntity(
+                name = "Phone", type = TxType.EXPENSE, amount = 15_99, accountId = chequing, frequency = Frequency.MONTHLY,
+                anchorDate = today, nextDate = today.plusMonths(1),
+            )
+        )
+        val goal = db.goals().insert(GoalEntity(name = "Trip", target = 10_000_00))
+        db.goals().insertContribution(ContributionEntity(goalId = goal, amount = -25_50, date = today))
+        return goal
+    }
+
+    private suspend fun amounts(): List<Long> =
+        db.accounts().all().map { it.openingBalance } +
+            db.transactions().all().sortedBy { it.id }.map { it.amount } +
+            db.budgets().all().map { it.amount } +
+            db.recurring().all().map { it.amount } +
+            db.goals().all().map { it.target } +
+            db.goals().allContributions().map { it.amount }
+
+    @Test fun aSwitchToFewerDecimalsKeepsEachFigureAndSaysHowManyItRounds() = runTest {
+        everyKindOfAmount()
+        assertEquals(listOf(1_000_00L, 68_42L, 2_150_00L, 500_00L, 15_99L, 10_000_00L, -25_50L), amounts())
+
+        val plan = data.planCurrencyChange("JPY")
+        assertEquals(CurrencyPlan(code = "JPY", fromDigits = 2, toDigits = 0, rounded = 3), plan)
+
+        assertEquals(DataResult.Done("Currency changed"), data.changeCurrency("JPY"))
+
+        assertEquals("JPY", settings.current().currency)
+        // $1,000.00 reads ¥1,000, not ¥100,000; cents round half-even, a withdrawal keeps its sign.
+        assertEquals(listOf(1_000L, 68L, 2_150L, 500L, 16L, 10_000L, -26L), amounts())
+    }
+
+    @Test fun aSwitchToMoreDecimalsIsExactAndNeedsNoConfirm() = runTest {
+        settings.setCurrency("JPY")
+        val chequing = db.addAccount("Chequing", opening = 1_000)
+        db.addExpense(1_250, today, chequing)
+
+        assertEquals(0, data.planCurrencyChange("CAD")?.rounded)
+        assertTrue(data.changeCurrency("CAD") is DataResult.Done)
+
+        assertEquals("¥1,250 reads $1,250.00, not $12.50", listOf(1_000_00L, 1_250_00L), amounts())
+        assertEquals("CAD", settings.current().currency)
+    }
+
+    @Test fun aSwitchBetweenCurrenciesWithTheSameDecimalsOnlyRelabels() = runTest {
+        everyKindOfAmount()
+        val before = amounts()
+
+        assertEquals(CurrencyPlan(code = "USD", fromDigits = 2, toDigits = 2, rounded = 0), data.planCurrencyChange("USD"))
+        assertNull("No plan for the currency already in use", data.planCurrencyChange("CAD"))
+        assertTrue(data.changeCurrency("USD") is DataResult.Done)
+
+        assertEquals(before, amounts())
+        assertEquals("USD", settings.current().currency)
+    }
+
+    @Test fun aSwitchThatFailsHalfwayLeavesEveryAmountAndTheCurrency() = runTest {
+        settings.setCurrency("JPY")
+        val chequing = db.addAccount("Chequing", opening = 1_000)
+        db.addExpense(1_250, today, chequing)
+        // Goals are rewritten after entries and accounts; this target cannot gain two digits in a Long.
+        db.goals().insert(GoalEntity(name = "Too big", target = Long.MAX_VALUE / 10))
+        val before = amounts()
+
+        assertEquals(DataResult.Failed("The currency did not change. Your amounts are as they were."), data.changeCurrency("CAD"))
+
+        assertEquals(before, amounts())
+        assertEquals("JPY", settings.current().currency)
     }
 }

@@ -6,6 +6,7 @@ import com.tally.app.data.db.TallyDatabase
 import com.tally.app.data.db.TransactionEntity
 import com.tally.app.data.repo.LedgerFilter
 import com.tally.app.data.repo.LedgerRepository
+import com.tally.app.ui.activity.summary
 import com.tally.core.AccountType
 import com.tally.core.CategoryKind
 import com.tally.core.Defaults
@@ -253,6 +254,27 @@ class LedgerRepositoryTest {
         )
         assertEquals(1, ledger.search(LedgerFilter(), limit = 1).first().size)
         assertEquals(3, ledger.search(LedgerFilter()).first().size)
+    }
+
+    @Test fun theSummaryCountsEveryMatchWhileTheListStopsAtTheCap() = runTest {
+        val visa = db.addAccount("Visa", AccountType.CREDIT)
+        val n = LedgerRepository.SEARCH_LIMIT + 100
+        db.transactions().insertAll(
+            (0 until n).map { i ->
+                TransactionEntity(type = TxType.EXPENSE, amount = 10_00, date = today.minusDays(i.toLong()), accountId = visa, note = "Coffee")
+            }
+        )
+        db.addExpense(2_400_00, today.minusDays(n.toLong()), visa, note = "Old laptop")
+        val filter = LedgerFilter(query = "VISA")
+
+        assertEquals("the list is capped", LedgerRepository.SEARCH_LIMIT, ledger.search(filter).first().size)
+        val s = ledger.summary(filter).first()
+        assertEquals(n + 1, s.count)
+        assertEquals(n * 10_00L + 2_400_00L, s.spent)
+        assertEquals(n + 1, s.basisCount)
+        assertEquals((n * 10_00L + 2_400_00L) / (n + 1), s.average)
+        assertEquals("the oldest entry, far past the cap, is still the largest", "Old laptop", s.largest?.note)
+        assertEquals(n + 1, s.activeDays)
     }
 
     @Test fun noteSuggestionsNeedAPrefix() = runTest {

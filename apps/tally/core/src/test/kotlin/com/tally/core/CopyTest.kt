@@ -34,6 +34,13 @@ class CopyTest {
         assertEquals("Reached", Copy.goalLine(1_000_00, 1_000_00, 3, fmt))
     }
 
+    @Test fun `nothing by this day last month never claims a first month`() {
+        assertEquals("Nothing by this day last month", Copy.versusLastLine(4_00, 0, fmt))
+        assertEquals("Nothing spent yet", Copy.versusLastLine(0, 0, fmt))
+        assertEquals("$6 more than last month by this day", Copy.versusLastLine(10_00, 4_00, fmt))
+        assertEquals("Level with last month by this day", Copy.versusLastLine(4_00, 4_00, fmt))
+    }
+
     @Test fun `no generated line breaks the voice rules`() {
         val readings = listOf(
             PaceReading(310_00, 100_00, 31, 10), PaceReading(310_00, 200_00, 31, 10),

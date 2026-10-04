@@ -99,10 +99,23 @@ class SettingsLogicTest {
         assertEquals("0", countText(0, Locale.CANADA))
     }
 
+    @Test fun roundingPromptSaysWhatIsLostAndThatItStaysLost() {
+        assertEquals(
+            "Japanese yen has no decimals, so 37 amounts will be rounded to fit. Switching back later does not restore them.",
+            roundingPrompt("Japanese yen", 0, 37),
+        )
+        assertEquals(
+            "Canadian dollar has 2 decimal places, so 1 amount will be rounded to fit. Switching back later does not restore it.",
+            roundingPrompt("Canadian dollar", 2, 1),
+        )
+        assertTrue(roundingPrompt("Malagasy ariary", 1, 2).startsWith("Malagasy ariary has 1 decimal place, so 2 amounts"))
+    }
+
     @Test fun copyKeepsTheVoice() {
         val lines = listOf(
             appearanceSummary(false, false, Accent.RED), formatSummary("USD", 2, true), accountsSummary(2, "$1"),
             categoriesSummary(1, 1), restorePrompt(3, "1 Oct"), restorePrompt(0, null),
+            roundingPrompt("Japanese yen", 0, 37), roundingPrompt("Kuwaiti dinar", 3, 1),
         ) + DataOp.entries.map { it.working }
         lines.forEach { line -> Copy.banned.forEach { bad -> assertFalse("\"$line\" contains \"$bad\"", line.contains(bad, ignoreCase = true)) } }
     }

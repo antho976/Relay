@@ -9,6 +9,7 @@ import com.tally.app.data.db.TransactionEntity
 import com.tally.core.AccountType
 import com.tally.core.CategoryKind
 import com.tally.core.Frequency
+import com.tally.core.TextMatch
 import com.tally.core.TxType
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -178,7 +179,13 @@ class DaoTest {
         start: LocalDate? = null,
         end: LocalDate? = null,
         limit: Int = 400,
-    ): List<Long> = db.transactions().search(query, type, categoryId, accountId, start, end, limit).first().map { it.id }
+    ): List<Long> = db.transactions().search(TextMatch.containsPattern(query), type, categoryId, accountId, start, end, limit).first().map { it.id }
+
+    private suspend fun totals(query: String = "", type: TxType? = null, accountId: Long? = null) =
+        db.transactions().searchTotals(TextMatch.containsPattern(query), type, null, accountId, null, null).first()
+
+    private suspend fun largest(query: String = "", type: TxType? = null, accountId: Long? = null) =
+        db.transactions().searchLargest(TextMatch.containsPattern(query), type, null, accountId, null, null).first()
 
     @Test fun searchWithNoFiltersListsEverythingNewestFirst() = runTest {
         val w = searchWorld()
@@ -218,6 +225,58 @@ class DaoTest {
     @Test fun searchHonoursItsLimit() = runTest {
         val w = searchWorld()
         assertEquals(listOf(w.metro, w.pho), search(limit = 2))
+    }
+
+    @Test fun searchFoldsCaseForAccentedLettersToo() = runTest {
+        val chequing = db.addAccount("Compte chèque")
+        val school = db.addCategory("École")
+        val grocery = db.addExpense(42_10, day, chequing, note = "Épicerie Metro")
+        val fees = db.addExpense(300_00, day.minusDays(1), chequing, school, note = "Frais")
+        assertEquals("note, lower case finds the capital É", listOf(grocery), search(query = "épicerie"))
+        assertEquals(listOf(grocery), search(query = "ÉPICERIE"))
+        assertEquals("category name", listOf(fees), search(query = "école"))
+        assertEquals("account name", listOf(grocery, fees), search(query = "CHÈQUE"))
+    }
+
+    @Test fun searchMatchesWildcardCharactersAsTyped() = runTest {
+        val cash = db.addAccount("Cash")
+        val sale = db.addExpense(10_00, day, cash, note = "50% off")
+        db.addExpense(10_00, day, cash, note = "500 off")
+        val star = db.addExpense(10_00, day, cash, note = "a*b")
+        db.addExpense(10_00, day, cash, note = "ab")
+        assertEquals(listOf(sale), search(query = "50%"))
+        assertEquals(listOf(star), search(query = "a*b"))
+        assertEquals(emptyList<Long>(), search(query = "a?"))
+    }
+
+    @Test fun searchTotalsCountEveryMatchNotTheCappedList() = runTest {
+        val visa = db.addAccount("Visa", AccountType.CREDIT)
+        val other = db.addAccount("Chequing")
+        val big = db.addExpense(2_400_00, day.minusDays(500), visa, note = "Old laptop")
+        repeat(30) { db.addExpense(10_00, day.minusDays(it.toLong()), visa, note = "Coffee") }
+        db.addIncome(50_00, day, visa, note = "Refund")
+        db.addExpense(99_00, day, other, note = "Elsewhere")
+
+        assertEquals("the list is capped", 5, search(query = "visa", limit = 5).size)
+        val t = totals(query = "visa")
+        assertEquals(32, t.count)
+        assertEquals(2_400_00L + 30 * 10_00L, t.spent)
+        assertEquals(50_00L, t.income)
+        assertEquals(31, t.expenses)
+        assertEquals(1, t.incomes)
+        assertEquals(0, t.transfers)
+        assertEquals("30 days of coffee, the refund on one of them, and the laptop", 31, t.activeDays)
+        assertEquals("the old purchase past the cap is still the largest", big, largest(query = "visa")?.id)
+    }
+
+    @Test fun searchLargestIsOfTheBasisTypeAndNullWhenNothingMatches() = runTest {
+        val w = searchWorld()
+        assertEquals("spending first, so the salary never reads as the largest spend", w.metro, largest()?.id)
+        assertEquals(w.salary, largest(type = TxType.INCOME)?.id)
+        assertEquals("only transfers touch Savings", w.toSavings, largest(accountId = w.savings)?.id)
+        assertNull(largest(query = "nothing like this"))
+        assertEquals(0, totals(query = "nothing like this").count)
+        assertEquals(0L, totals(query = "nothing like this").spent)
     }
 
     // ── Budgets ──────────────────────────────────────────────────────────────
@@ -388,7 +447,10 @@ class DaoTest {
         db.addExpense(12_00, day, visa, dining, note = "Mezze bar")
         db.addExpense(3_00, day, visa, dining, note = "Bagels")
 
-        assertEquals(listOf("Metro", "Mezze bar"), db.transactions().noteSuggestions("Me"))
+        assertEquals(listOf("Metro", "Mezze bar"), db.transactions().noteSuggestions(TextMatch.prefixPattern("Me")))
+        assertEquals("any case", listOf("Metro", "Mezze bar"), db.transactions().noteSuggestions(TextMatch.prefixPattern("me")))
+        db.addExpense(9_00, day, visa, food, note = "Épicerie du coin")
+        assertEquals("accented capitals too", listOf("Épicerie du coin"), db.transactions().noteSuggestions(TextMatch.prefixPattern("épi")))
         assertEquals("The most recent use wins", food, db.transactions().lastCategoryForNote("Metro"))
         assertNull(db.transactions().lastCategoryForNote("Never typed"))
     }

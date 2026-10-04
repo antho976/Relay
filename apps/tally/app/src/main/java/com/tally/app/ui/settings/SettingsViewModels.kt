@@ -8,11 +8,16 @@ import com.tally.app.data.Clock
 import com.tally.app.data.prefs.Accent
 import com.tally.app.data.prefs.Settings
 import com.tally.app.data.prefs.SettingsRepository
+import com.tally.app.data.repo.CurrencyPlan
+import com.tally.app.data.repo.DataRepository
+import com.tally.app.data.repo.DataResult
 import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.data.repo.PlanRepository
+import com.tally.app.ui.common.Notices
 import com.tally.core.BudgetPeriod
 import com.tally.core.CategoryKind
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -137,32 +142,79 @@ data class FormatState(
     val monthStartDay: Int = 1,
     val weekStartsMonday: Boolean = true,
     val period: BudgetPeriod = BudgetPeriod.containing(today),
+    /** A switch to fewer decimals that would round stored amounts, waiting for the owner's yes. */
+    val pendingCurrency: CurrencyPlan? = null,
     val loaded: Boolean = false,
 )
 
 @HiltViewModel
 class FormatViewModel @Inject constructor(
     private val settings: SettingsRepository,
+    private val data: DataRepository,
+    private val notices: Notices,
     clock: Clock,
 ) : ViewModel() {
 
     private val today: LocalDate = clock.today()
 
-    val state: StateFlow<FormatState> = settings.settings
-        .map { s ->
-            FormatState(
-                today = today,
-                currency = s.currency,
-                monthStartDay = s.monthStartDay,
-                weekStartsMonday = s.weekStartsMonday,
-                period = s.periodFor(today),
-                loaded = true,
-            )
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FormatState(today = today))
+    private val pending = MutableStateFlow<CurrencyPlan?>(null)
 
+    /** A switch is being worked out or written; further taps wait for it instead of racing it. */
+    private var switching = false
+
+    val state: StateFlow<FormatState> = combine(settings.settings, pending) { s, p ->
+        FormatState(
+            today = today,
+            currency = s.currency,
+            monthStartDay = s.monthStartDay,
+            weekStartsMonday = s.weekStartsMonday,
+            period = s.periodFor(today),
+            pendingCurrency = p,
+            loaded = true,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), FormatState(today = today))
+
+    /**
+     * Amounts are stored in the current currency's minor units, so a switch to a currency with
+     * other decimals rewrites them to keep each figure. When that would round any amount, the
+     * screen asks first; an exact switch (same decimals, more of them, or only whole amounts)
+     * runs at once.
+     */
     fun setCurrency(code: String) {
-        viewModelScope.launch { settings.setCurrency(code) }
+        if (switching || pending.value != null) return
+        switching = true
+        viewModelScope.launch {
+            try {
+                val plan = runCatching { data.planCurrencyChange(code) }.getOrNull() ?: return@launch
+                if (plan.rounded > 0) pending.value = plan else switchTo(plan.code)
+            } finally {
+                switching = false
+            }
+        }
+    }
+
+    /** The owner said yes to the rounding. */
+    fun confirmCurrency() {
+        val plan = pending.value ?: return
+        pending.value = null
+        if (switching) return
+        switching = true
+        viewModelScope.launch {
+            try {
+                switchTo(plan.code)
+            } finally {
+                switching = false
+            }
+        }
+    }
+
+    fun cancelCurrency() {
+        pending.value = null
+    }
+
+    private suspend fun switchTo(code: String) {
+        val result = data.changeCurrency(code)
+        if (result is DataResult.Failed) notices.show(result.message)
     }
 
     fun setMonthStartDay(day: Int) {

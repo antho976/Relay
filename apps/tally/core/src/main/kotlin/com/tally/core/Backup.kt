@@ -13,6 +13,14 @@ data class BackupFile(
     val version: Int = VERSION,
     val exportedAt: String,
     val currency: String,
+    /**
+     * The day the budget month starts on, so a payday month survives a restore. Null when the
+     * file does not say (the sample, or a file from before it was kept): a restore leaves the
+     * phone's own setting alone then.
+     */
+    val monthStartDay: Int? = null,
+    /** Whether weeks start on Monday; null when the file does not say, as for [monthStartDay]. */
+    val weekStartsMonday: Boolean? = null,
     val accounts: List<AccountDto> = emptyList(),
     val categories: List<CategoryDto> = emptyList(),
     val transactions: List<TransactionDto> = emptyList(),
@@ -120,6 +128,9 @@ object BackupCodec {
         ignoreUnknownKeys = true
     }
 
+    /** The intervals [Recurrence] accepts; a bill outside them would throw where it is read. */
+    private val BILL_INTERVALS = 1..52
+
     fun encode(file: BackupFile): String = json.encodeToString(BackupFile.serializer(), file)
 
     fun decode(text: String): BackupReadResult {
@@ -135,22 +146,50 @@ object BackupCodec {
         return validate(file)
     }
 
-    /** References must resolve and amounts must be sane, or the restore would write orphans. */
+    /**
+     * References must resolve and values must be ones the app itself could have written, or the
+     * restore would write orphans, or rows that crash the screen or the poster that reads them.
+     * The file is human-readable and may have been edited by hand, so nothing is taken on trust.
+     */
     fun validate(file: BackupFile): BackupReadResult {
         val accounts = file.accounts.map { it.id }.toSet()
         val categories = file.categories.map { it.id }.toSet()
         val goals = file.goals.map { it.id }.toSet()
+        val bills = file.recurring.map { it.id }.toSet()
+        fun readable(date: String?) = date == null || runCatching { java.time.LocalDate.parse(date) }.isSuccess
         file.transactions.forEach { t ->
             if (t.amount < 0) return BackupReadResult.Invalid("A transaction has a negative amount.")
             if (t.accountId !in accounts) return BackupReadResult.Invalid("A transaction points at an account that is not in the file.")
             if (t.toAccountId != null && t.toAccountId !in accounts) return BackupReadResult.Invalid("A transfer points at an account that is not in the file.")
             if (t.categoryId != null && t.categoryId !in categories) return BackupReadResult.Invalid("A transaction points at a category that is not in the file.")
-            if (runCatching { java.time.LocalDate.parse(t.date) }.isFailure) return BackupReadResult.Invalid("A transaction has an unreadable date.")
+            if (t.recurringId != null && t.recurringId !in bills) return BackupReadResult.Invalid("A transaction points at a bill that is not in the file.")
+            if (!readable(t.date)) return BackupReadResult.Invalid("A transaction has an unreadable date.")
+        }
+        file.recurring.forEach { r ->
+            if (r.amount <= 0) return BackupReadResult.Invalid("A bill has an amount of zero or less.")
+            if (r.interval !in BILL_INTERVALS) {
+                return BackupReadResult.Invalid("A bill repeats at an interval outside ${BILL_INTERVALS.first} to ${BILL_INTERVALS.last}.")
+            }
+            if (r.accountId !in accounts) return BackupReadResult.Invalid("A bill points at an account that is not in the file.")
+            if (r.toAccountId != null && r.toAccountId !in accounts) return BackupReadResult.Invalid("A bill points at an account that is not in the file.")
+            if (r.type == TxType.TRANSFER && (r.toAccountId == null || r.toAccountId == r.accountId)) {
+                return BackupReadResult.Invalid("A transfer bill needs two different accounts.")
+            }
+            if (r.categoryId != null && r.categoryId !in categories) return BackupReadResult.Invalid("A bill points at a category that is not in the file.")
+            if (!readable(r.anchorDate) || !readable(r.nextDate) || !readable(r.endDate)) {
+                return BackupReadResult.Invalid("A bill has an unreadable date.")
+            }
+        }
+        file.goals.forEach { g ->
+            if (g.target < 0) return BackupReadResult.Invalid("A goal has a negative target.")
+            if (!readable(g.targetDate)) return BackupReadResult.Invalid("A goal has an unreadable date.")
         }
         file.contributions.forEach { c ->
             if (c.goalId !in goals) return BackupReadResult.Invalid("A contribution points at a goal that is not in the file.")
+            if (!readable(c.date)) return BackupReadResult.Invalid("A contribution has an unreadable date.")
         }
         file.budgets.forEach { b ->
+            if (b.amount < 0) return BackupReadResult.Invalid("A budget has a negative amount.")
             if (b.categoryId != null && b.categoryId !in categories) return BackupReadResult.Invalid("A budget points at a category that is not in the file.")
         }
         return BackupReadResult.Ok(file)

@@ -1,5 +1,6 @@
 package com.tally.app.ui.activity
 
+import com.tally.app.data.db.LedgerTotals
 import com.tally.app.data.db.TransactionRow
 import com.tally.core.TxType
 import org.junit.Assert.assertEquals
@@ -89,6 +90,36 @@ class ActivityLogicTest {
         assertEquals(4L, s.largest?.id)
         assertEquals(2_000L, s.average)
         assertEquals(209_000L, s.net)
+    }
+
+    @Test fun theSummaryReadsTheUncappedTotalsNotTheShownRows() {
+        // 1,100 matches, of which the screen lists 400: every reading comes from the SQL totals.
+        val totals = LedgerTotals(
+            count = 1_100, spent = 2_700_000, income = 0, moved = 0,
+            expenses = 1_100, incomes = 0, transfers = 0, activeDays = 700,
+        )
+        val s = summaryOf(totals, largest = row(9, 240_000, 600))
+        assertEquals(1_100, s.count)
+        assertEquals(2_700_000L, s.spent)
+        assertEquals(1_100, s.basisCount)
+        assertEquals(2_454L, s.average)
+        assertEquals(700, s.activeDays)
+        assertEquals("An old purchase past the cap still reads as the largest", 9L, s.largest?.id)
+    }
+
+    @Test fun theSummaryPicksItsBasisFromTheTotalsAndDropsALargestOfAnotherType() {
+        val incomeOnly = LedgerTotals(count = 2, spent = 0, income = 150_000, moved = 0, expenses = 0, incomes = 2, transfers = 0, activeDays = 2)
+        val s = summaryOf(incomeOnly, largest = row(1, 100_000, 0, TxType.INCOME))
+        assertEquals(TxType.INCOME, s.basis)
+        assertEquals(75_000L, s.average)
+        assertEquals(1L, s.largest?.id)
+        assertNull("A largest of the wrong type, from a flow a moment behind, never shows", summaryOf(incomeOnly, row(2, 5_000, 0)).largest)
+        assertEquals(LedgerSummary(), summaryOf(LedgerTotals(0, 0, 0, 0, 0, 0, 0, 0), null))
+    }
+
+    @Test fun inMemoryTotalsMatchWhatTheSqlCounts() {
+        val rows = listOf(row(1, 1_000, 0), row(2, 215_000, 1, TxType.INCOME), row(3, 90_000, 1, TxType.TRANSFER, account = 1, to = 2))
+        assertEquals(LedgerTotals(3, 1_000, 215_000, 90_000, 1, 1, 1, 2), totalsOf(rows))
     }
 
     @Test fun withoutSpendingTheReadingsFallBackToIncomeThenTransfers() {

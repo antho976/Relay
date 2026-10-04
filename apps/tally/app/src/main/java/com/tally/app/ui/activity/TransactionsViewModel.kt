@@ -215,26 +215,29 @@ class TransactionsViewModel @Inject constructor(
         }
     }
 
-    private val results: Flow<Pair<String, List<TransactionRow>>> = query
+    /** The settled query, the capped rows it lists, and the summary of EVERY entry it matches. */
+    private data class Results(val query: String, val rows: List<TransactionRow>, val summary: LedgerSummary)
+
+    private val results: Flow<Results> = query
         .debounce { if (it.isBlank()) 0L else SEARCH_DEBOUNCE_MS }
         .map { it.trim() }
         .distinctUntilChanged()
         .flatMapLatest { q ->
             if (categoryId == 0L && accountId == 0L) {
-                flowOf(q to emptyList<TransactionRow>())
+                flowOf(Results(q, emptyList(), LedgerSummary()))
             } else {
-                ledger.search(
-                    LedgerFilter(
-                        query = q,
-                        categoryId = categoryId.takeIf { it != 0L },
-                        accountId = accountId.takeIf { it != 0L },
-                    )
-                ).map { q to it }
+                val filter = LedgerFilter(
+                    query = q,
+                    categoryId = categoryId.takeIf { it != 0L },
+                    accountId = accountId.takeIf { it != 0L },
+                )
+                combine(ledger.search(filter), ledger.summary(filter)) { rows, summary -> Results(q, rows, summary) }
             }
         }
 
     val state: StateFlow<TransactionsState> = combine(subject, figures, results, period) { s, f, r, pd ->
-        val (q, rows) = r
+        val q = r.query
+        val rows = r.rows
         val (p, day) = pd
         TransactionsState(
             today = day,
@@ -258,7 +261,7 @@ class TransactionsViewModel @Inject constructor(
             flows = f.flows,
             query = q,
             days = groupByDay(rows),
-            summary = summarize(rows),
+            summary = r.summary,
             truncated = rows.size >= LedgerRepository.SEARCH_LIMIT,
             loaded = true,
         )

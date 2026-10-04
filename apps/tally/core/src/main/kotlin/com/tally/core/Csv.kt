@@ -25,8 +25,17 @@ object CsvCodec {
 
     val HEADER = listOf("date", "type", "amount", "currency", "category", "account", "to_account", "note")
 
+    /**
+     * The UTF-8 byte order mark. Excel opens a CSV without one in the legacy code page, so
+     * "Épicerie" would read "Ã‰picerie"; the reader drops it again.
+     */
+    const val BOM = "\uFEFF"
+
+    /** The characters that start a formula in a spreadsheet cell. */
+    private const val FORMULA_START = "=+-@"
+
     fun encode(rows: List<CsvRow>, currency: String, fractionDigits: Int): String {
-        val sb = StringBuilder()
+        val sb = StringBuilder(BOM)
         sb.append(HEADER.joinToString(",")).append("\r\n")
         rows.forEach { r ->
             val fields = listOf(
@@ -53,21 +62,40 @@ object CsvCodec {
     }
 
     private fun quote(field: String): String {
-        // A leading =, +, - or @ turns into a formula in a spreadsheet; a quote prefix defuses it.
-        val safe = if (field.isNotEmpty() && field[0] in "=+-@" && field.toDoubleOrNull() == null) "'$field" else field
+        // A leading =, +, - or @ turns into a formula in a spreadsheet; an apostrophe defuses it.
+        // A field that already starts with apostrophes before one gets one more, so [unguard]
+        // always takes off exactly the one that was added.
+        val safe = if (needsGuard(field.trimStart('\''))) "'$field" else field
         return if (safe.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
             "\"" + safe.replace("\"", "\"\"") + "\""
         } else safe
     }
 
-    /** Splits CSV text into records of fields, honouring quotes, doubled quotes and CRLF. */
+    private val PLAIN_NUMBER = Regex("""[+-]?\d+(\.\d+)?""")
+
+    /** True when [text] would start a formula: it opens with =, +, - or @ and is not a plain number. */
+    private fun needsGuard(text: String): Boolean =
+        text.isNotEmpty() && text[0] in FORMULA_START && !PLAIN_NUMBER.matches(text)
+
+    /** Takes off the apostrophe [quote] put in front of a formula-like field, and nothing else. */
+    fun unguard(field: String): String =
+        if (field.startsWith("'") && needsGuard(field.trimStart('\''))) field.substring(1) else field
+
+    /**
+     * Splits CSV text into records of fields, honouring quotes, doubled quotes and CRLF. A quote
+     * opens a quoted section only at the start of a field (spaces before it are dropped); anywhere
+     * else it is a plain character, as spreadsheets read it, so the inch mark in `TV 55" stand`
+     * cannot swallow the rows that follow it.
+     */
     fun parseRecords(text: String): List<List<String>> {
         val records = ArrayList<List<String>>()
         val field = StringBuilder()
         var record = ArrayList<String>()
         var inQuotes = false
+        // Whether the current field already had its quoted section; a second quote is plain text.
+        var quoted = false
         var i = 0
-        val src = text.removePrefix("﻿")
+        val src = text.removePrefix(BOM)
         while (i < src.length) {
             val c = src[i]
             if (inQuotes) {
@@ -75,10 +103,16 @@ object CsvCodec {
                     if (i + 1 < src.length && src[i + 1] == '"') { field.append('"'); i++ } else inQuotes = false
                 } else field.append(c)
             } else when (c) {
-                '"' -> inQuotes = true
-                ',' -> { record.add(field.toString()); field.clear() }
+                '"' -> if (!quoted && field.isBlank()) {
+                    field.clear()
+                    inQuotes = true
+                    quoted = true
+                } else {
+                    field.append(c)
+                }
+                ',' -> { record.add(field.toString()); field.clear(); quoted = false }
                 '\r' -> {}
-                '\n' -> { record.add(field.toString()); field.clear(); records.add(record); record = ArrayList() }
+                '\n' -> { record.add(field.toString()); field.clear(); quoted = false; records.add(record); record = ArrayList() }
                 else -> field.append(c)
             }
             i++
@@ -118,8 +152,11 @@ object CsvCodec {
                 errors += "Line $line: the date \"${at(dateCol)}\" is not in YYYY-MM-DD form."
                 return@forEachIndexed
             }
+            // The names and the note come back without the apostrophe the export put before a formula.
+            fun textAt(i: Int) = unguard(at(i))
             val rawAmount = at(amountCol)
-            val negative = rawAmount.trimStart().startsWith("-") || rawAmount.startsWith("(")
+            // "-4.25", "−4.25", "-$4.25", "$-4.25", "4.25-" and "(4.25)" are all money going out.
+            val negative = MoneyFormatter.hasSign(rawAmount)
             val amount = MoneyFormatter.parseAmount(rawAmount, fractionDigits)
             if (amount == null || amount == 0L) {
                 errors += "Line $line: \"$rawAmount\" is not an amount."
@@ -135,7 +172,7 @@ object CsvCodec {
                     return@forEachIndexed
                 }
             }
-            val toAccount = at(toCol).ifEmpty { null }
+            val toAccount = textAt(toCol).ifEmpty { null }
             if (type == TxType.TRANSFER && toAccount == null) {
                 errors += "Line $line: a transfer needs a to_account."
                 return@forEachIndexed
@@ -144,10 +181,10 @@ object CsvCodec {
                 date = date,
                 type = type,
                 amount = amount,
-                category = at(catCol).ifEmpty { null },
-                account = at(accCol).ifEmpty { defaultAccount },
+                category = textAt(catCol).ifEmpty { null },
+                account = textAt(accCol).ifEmpty { defaultAccount },
                 toAccount = toAccount,
-                note = at(noteCol),
+                note = textAt(noteCol),
             )
         }
         return CsvImport(rows, errors)

@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.tally.app.data.repo.CurrencyPlan
 import com.tally.app.ui.common.ChoiceChip
 import com.tally.app.ui.common.ChoiceRow
 import com.tally.app.ui.common.Dates
@@ -57,17 +58,24 @@ fun FormatRoute(nav: AppNav) {
             setCurrency = viewModel::setCurrency,
             setMonthStartDay = viewModel::setMonthStartDay,
             setWeekStartsMonday = viewModel::setWeekStartsMonday,
+            confirmCurrency = viewModel::confirmCurrency,
+            cancelCurrency = viewModel::cancelCurrency,
         )
     }
     FormatScreen(state, actions)
 }
 
-/** Everything Currency & dates can change, as plain lambdas. Each write lands at once. */
+/**
+ * Everything Currency & dates can change, as plain lambdas. Each write lands at once, except a
+ * currency switch that would round stored amounts: that one waits for [confirmCurrency].
+ */
 data class FormatActions(
     val back: () -> Unit = {},
     val setCurrency: (String) -> Unit = {},
     val setMonthStartDay: (Int) -> Unit = {},
     val setWeekStartsMonday: (Boolean) -> Unit = {},
+    val confirmCurrency: () -> Unit = {},
+    val cancelCurrency: () -> Unit = {},
 )
 
 /**
@@ -106,6 +114,37 @@ fun FormatScreen(state: FormatState, actions: FormatActions) {
             onDismiss = { pickingDay = false },
         )
     }
+    state.pendingCurrency?.let { plan ->
+        RoundingDialog(plan, onConfirm = actions.confirmCurrency, onDismiss = actions.cancelCurrency)
+    }
+}
+
+/**
+ * The one currency switch that asks first: fewer decimals round amounts the ledger holds, and
+ * switching back cannot bring the dropped digits back, so there is no undo to offer instead.
+ */
+@Composable
+private fun RoundingDialog(plan: CurrencyPlan, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val locale = LocalMoney.current.locale
+    val option = remember(plan.code, locale) { currencyOption(plan.code, locale) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("Switch and round", color = MaterialTheme.colorScheme.primary)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = MaterialTheme.colorScheme.onBackground)
+            }
+        },
+        title = { Text("Switch to ${option.name}?", style = MaterialTheme.typography.headlineSmall) },
+        text = { Text(roundingPrompt(option.name, plan.toDigits, plan.rounded), style = MaterialTheme.typography.bodyLarge) },
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        titleContentColor = MaterialTheme.colorScheme.onBackground,
+        textContentColor = MaterialTheme.colorScheme.onBackground,
+    )
 }
 
 /** A sample amount in the picked currency as the figure, and the calendar it is counted on as chips. */
@@ -147,7 +186,7 @@ private fun CurrencyGroup(state: FormatState, actions: FormatActions, modifier: 
         modifier = modifier,
         title = "Currency",
         trailing = state.currency,
-        footer = "Changing the currency relabels amounts; it does not convert them",
+        footer = "Changing the currency relabels amounts; it does not convert them, and it asks before rounding to fewer decimals",
     )
 }
 

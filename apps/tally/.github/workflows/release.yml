@@ -62,25 +62,45 @@ jobs:
             echo "signed=false" >> "$GITHUB_OUTPUT"
             echo "::warning::No signing secrets: publishing a debug-signed pre-release."
           fi
-      - name: Build the release APK
+      # One name for the tag and the APK, worked out once. A manual run from a branch such as
+      # claude/xyz gets build-N, and any slash left in a name is replaced, since the APK is a file
+      # name and "tally-claude/xyz.apk" would point into a directory that does not exist. The ref
+      # comes in through env, never pasted into the script, so a branch name cannot run as shell.
+      - name: Name the release
+        id: name
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          if [ "${{ steps.keys.outputs.signed }}" = "true" ]; then
+          if [ "$REF_TYPE" = "tag" ]; then tag="$REF_NAME"; else tag="build-$RUN_NUMBER"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "apk=tally-${tag//\//-}.apk" >> "$GITHUB_OUTPUT"
+      - name: Build the release APK
+        env:
+          SIGNED: ${{ steps.keys.outputs.signed }}
+          APK_NAME: ${{ steps.name.outputs.apk }}
+        run: |
+          if [ "$SIGNED" = "true" ]; then
             ./gradlew :app:assembleRelease
           else
             ./gradlew :app:assembleRelease -PtallyCiSmokeSigning
           fi
           apk=$(find app/build/outputs/apk/release -name '*.apk' -not -name '*unsigned*' | head -1)
-          cp "$apk" "tally-${{ github.ref_name }}.apk"
+          if [ -z "$apk" ]; then echo "::error::No signed release APK was built."; exit 1; fi
+          cp "$apk" "$APK_NAME"
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          SIGNED: ${{ steps.keys.outputs.signed }}
+          TAG: ${{ steps.name.outputs.tag }}
+          APK_NAME: ${{ steps.name.outputs.apk }}
+          SHA: ${{ github.sha }}
         run: |
-          tag="${{ github.ref_name }}"
-          if [ "${{ github.ref_type }}" != "tag" ]; then tag="build-${{ github.run_number }}"; fi
           flags=""
-          if [ "${{ steps.keys.outputs.signed }}" != "true" ]; then flags="--prerelease"; fi
-          gh release create "$tag" "tally-${{ github.ref_name }}.apk" --target "${{ github.sha }}" \
-            --title "Tally $tag" --notes "Built from ${{ github.sha }}." $flags
+          if [ "$SIGNED" != "true" ]; then flags="--prerelease"; fi
+          gh release create "$TAG" "$APK_NAME" --target "$SHA" \
+            --title "Tally $TAG" --notes "Built from $SHA." $flags
       - name: Remove the keystore
         if: always()
         run: rm -f keystore.properties "$RUNNER_TEMP/upload.jks"
