@@ -44,6 +44,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -57,6 +58,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tally.app.data.db.ContributionEntity
 import com.tally.app.ui.common.ChromeButton
 import com.tally.app.ui.common.Dates
+import com.tally.app.ui.common.EndsRow
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.GroupFooter
@@ -68,6 +70,7 @@ import com.tally.app.ui.common.PaceMeter
 import com.tally.app.ui.common.PageTitle
 import com.tally.app.ui.common.Panel
 import com.tally.app.ui.common.PanelHeader
+import com.tally.app.ui.common.ROW_FOCUS_OUTSET
 import com.tally.app.ui.common.SecondaryAction
 import com.tally.app.ui.common.StatChip
 import com.tally.app.ui.common.StatTile
@@ -150,18 +153,12 @@ fun GoalScreen(state: GoalState, actions: GoalActions) {
         if (goal != null) {
             item(key = "hero") { GoalHero(state, goal, Modifier.padding(horizontal = GUTTER)) }
             item(key = "acts") {
-                Row(
-                    Modifier.padding(horizontal = GUTTER).fillMaxWidth().height(IntrinsicSize.Min),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    HeroAction("Add money", { sheet = SHEET_ADD }, Modifier.weight(1f).fillMaxHeight())
-                    SecondaryAction(
-                        "Withdraw",
-                        { sheet = SHEET_WITHDRAW },
-                        Modifier.weight(1f).fillMaxHeight(),
-                        enabled = goal.saved > 0L,
-                    )
-                }
+                GoalActs(
+                    canWithdraw = goal.saved > 0L,
+                    onAdd = { sheet = SHEET_ADD },
+                    onWithdraw = { sheet = SHEET_WITHDRAW },
+                    modifier = Modifier.padding(horizontal = GUTTER),
+                )
             }
             item(key = "pace") { PaceTiles(state, goal, Modifier.padding(horizontal = GUTTER)) }
             item(key = "flow") { FlowTiles(state, Modifier.padding(horizontal = GUTTER)) }
@@ -175,6 +172,28 @@ fun GoalScreen(state: GoalState, actions: GoalActions) {
             onConfirm = { amount, note -> actions.contribute(amount, note) },
             onDismiss = { sheet = SHEET_NONE },
         )
+    }
+}
+
+/**
+ * Add and withdraw, side by side at matching heights. Past 1.3x font a half-width button cannot
+ * hold "Withdraw" whole, so the two stack at full width instead.
+ */
+@Composable
+private fun GoalActs(canWithdraw: Boolean, onAdd: () -> Unit, onWithdraw: () -> Unit, modifier: Modifier = Modifier) {
+    if (LocalDensity.current.fontScale > 1.3f) {
+        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            HeroAction("Add money", onAdd, Modifier.fillMaxWidth())
+            SecondaryAction("Withdraw", onWithdraw, Modifier.fillMaxWidth(), enabled = canWithdraw)
+        }
+    } else {
+        Row(
+            modifier.fillMaxWidth().height(IntrinsicSize.Min),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            HeroAction("Add money", onAdd, Modifier.weight(1f).fillMaxHeight())
+            SecondaryAction("Withdraw", onWithdraw, Modifier.weight(1f).fillMaxHeight(), enabled = canWithdraw)
+        }
     }
 }
 
@@ -330,7 +349,11 @@ private fun ContributionRow(c: ContributionEntity, state: GoalState, onClick: ()
     Row(
         Modifier
             .fillMaxWidth()
-            .bounceClick(label = "Remove this ${if (added) "contribution" else "withdrawal"}", onClick = onClick)
+            .bounceClick(
+                label = "Remove this ${if (added) "contribution" else "withdrawal"}",
+                focusOutset = ROW_FOCUS_OUTSET,
+                onClick = onClick,
+            )
             .semantics(mergeDescendants = true) { contentDescription = "$title, $amount, $day" }
             .heightIn(min = 60.dp)
             .padding(vertical = 8.dp),
@@ -342,16 +365,23 @@ private fun ContributionRow(c: ContributionEntity, state: GoalState, onClick: ()
             tint = if (added) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
             size = 40.dp,
         )
-        Column(Modifier.weight(1f).clearAndSetSemantics { }, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-            Text(day, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Text(
-            amount,
-            modifier = Modifier.clearAndSetSemantics { },
-            style = MaterialTheme.typography.titleMedium,
-            color = if (added) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onBackground,
-            textAlign = TextAlign.End,
+        EndsRow(
+            start = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                    Text(day, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            end = {
+                Text(
+                    amount,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (added) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onBackground,
+                    textAlign = TextAlign.End,
+                )
+            },
+            modifier = Modifier.weight(1f).clearAndSetSemantics { },
+            gap = 14.dp,
         )
     }
 }

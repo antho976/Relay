@@ -384,40 +384,59 @@ private fun HeatCell(
         else -> MaterialTheme.colorScheme.onBackground
     }
     // The whole slot is the touch target; the drawn square sits 2dp inside it, so neighbours read
-    // 4dp apart while each tap area spans its full column.
+    // 4dp apart while each tap area spans its full column. Where a column is under 48dp wide (a
+    // 360dp phone), the slot still stands 48dp tall with the square centred in it.
     Box(
         modifier
-            .aspectRatio(1f)
-            .then(if (isAhead) Modifier else Modifier.bounceClick(label = "Show entries", role = Role.Button, onClick = onClick))
-            .semantics { contentDescription = description }
-            .padding(2.dp)
-            .clip(shape)
-            .background(fill)
-            .then(ring),
+            .heightIn(min = 48.dp)
+            .then(
+                if (isAhead) {
+                    Modifier
+                } else {
+                    // The focus ring runs in the 2dp gap around the square, concentric with it.
+                    Modifier.bounceClick(label = "Show entries", role = Role.Button, focusShape = RoundedCornerShape(8.dp), onClick = onClick)
+                },
+            )
+            .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            date.dayOfMonth.toString(),
-            modifier = Modifier.clearAndSetSemantics { },
-            style = MaterialTheme.typography.labelSmall,
-            color = numberColor,
-        )
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .padding(2.dp)
+                .clip(shape)
+                .background(fill)
+                .then(ring),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                date.dayOfMonth.toString(),
+                modifier = Modifier.clearAndSetSemantics { },
+                style = MaterialTheme.typography.labelSmall,
+                color = numberColor,
+            )
+        }
     }
 }
 
 /**
- * Lets a mark run [horizontal] past its parent's padding on both sides, so a grid inside a padded
- * panel keeps 48dp columns on a narrow phone. The panel's own clip still bounds it.
+ * Lets a grid of [columns] run past its parent's padding on both sides: by [min] at least, and
+ * further, up to [max], until each column is [column] wide. A 411dp phone needs only [min]; on a
+ * 360dp phone even [max] leaves the columns short of [column], so the cells keep their height
+ * and take the width there is. The panel's own clip still bounds it.
  */
-internal fun Modifier.bleed(horizontal: Dp): Modifier = layout { measurable, constraints ->
+internal fun Modifier.bleed(min: Dp, max: Dp, columns: Int, column: Dp): Modifier = layout { measurable, constraints ->
     if (!constraints.hasBoundedWidth) {
         val placeable = measurable.measure(constraints)
         return@layout layout(placeable.width, placeable.height) { placeable.place(0, 0) }
     }
-    val extra = (horizontal * 2).roundToPx()
+    val wanted = column.roundToPx() * columns - constraints.maxWidth
+    val side = ((wanted + 1) / 2).coerceIn(min.roundToPx(), max.roundToPx())
+    val extra = side * 2
     val placeable = measurable.measure(
         constraints.copy(minWidth = constraints.minWidth + extra, maxWidth = constraints.maxWidth + extra)
     )
     val width = (placeable.width - extra).coerceIn(constraints.minWidth, constraints.maxWidth)
-    layout(width, placeable.height) { placeable.place(-extra / 2, 0) }
+    layout(width, placeable.height) { placeable.place(-side, 0) }
 }

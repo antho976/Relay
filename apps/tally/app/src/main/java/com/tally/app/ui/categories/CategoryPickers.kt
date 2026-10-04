@@ -103,7 +103,7 @@ private fun IconTile(key: String, selected: Boolean, hue: Color, modifier: Modif
             .clip(shape)
             .background(wash)
             .border(2.dp, if (selected) ring else Color.Transparent, shape)
-            .bounceClick(label = name, role = Role.RadioButton, onClick = onClick)
+            .bounceClick(label = name, role = Role.RadioButton, focusShape = shape, onClick = onClick)
             .semantics {
                 contentDescription = name
                 this.selected = selected
@@ -151,7 +151,7 @@ private fun Swatch(index: Int, selected: Boolean, onClick: () -> Unit) {
         Modifier
             .size(48.dp)
             .clip(CircleShape)
-            .bounceClick(label = label, role = Role.RadioButton, onClick = onClick)
+            .bounceClick(label = label, role = Role.RadioButton, focusShape = CircleShape, onClick = onClick)
             .semantics {
                 contentDescription = label
                 this.selected = selected

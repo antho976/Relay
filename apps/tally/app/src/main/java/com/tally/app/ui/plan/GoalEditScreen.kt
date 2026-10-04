@@ -1,13 +1,9 @@
 package com.tally.app.ui.plan
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,16 +11,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CalendarToday
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.EditNote
@@ -32,7 +23,6 @@ import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.Speed
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,19 +32,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.tally.app.ui.categories.HueSwatches
 import com.tally.app.ui.common.ChromeButton
 import com.tally.app.ui.common.Dates
 import com.tally.app.ui.common.GUTTER
@@ -74,13 +59,7 @@ import com.tally.app.ui.common.TopBar
 import com.tally.app.ui.nav.AppNav
 import com.tally.app.ui.theme.categoryColor
 import com.tally.core.Copy
-import com.tally.core.Defaults
 import java.time.LocalDate
-
-/** The twelve category hues by name, for the swatches' spoken labels. Same order as the palette. */
-private val HUE_NAMES = listOf(
-    "Sage", "Teal", "Sky", "Iris", "Orchid", "Rose", "Coral", "Amber", "Olive", "Sand", "Slate", "Brick",
-)
 
 @Composable
 fun GoalEditRoute(nav: AppNav) {
@@ -140,6 +119,8 @@ fun GoalEditScreen(state: GoalEditState, actions: GoalEditActions) {
             if (state.loaded) {
                 GoalFields(state, actions)
                 DateGroup(state, actions, onPick = { picking = true })
+                // The category editor's swatches, which drop to four a row before a 48dp target
+                // would shrink on a narrow phone.
                 val colourRow: @Composable (Shape) -> Unit = { shape ->
                     GroupBlock(shape) { HueSwatches(d.color, actions.setColor) }
                 }
@@ -265,45 +246,4 @@ private fun DateGroup(state: GoalEditState, actions: GoalEditActions, onPick: ()
         title = "Date",
         footer = if (date == null) "Without a date it shows what is left, not a monthly pace" else null,
     )
-}
-
-/** Twelve hue circles in two rows of six; the picked one wears a ring and a check. One radio group. */
-@Composable
-private fun HueSwatches(selected: Int, onPick: (Int) -> Unit) {
-    val rows = remember { (0 until Defaults.PALETTE_SIZE).toList().chunked(6) }
-    Column(Modifier.fillMaxWidth().selectableGroup(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        rows.forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                row.forEach { i ->
-                    HueSwatch(categoryColor(i), HUE_NAMES.getOrElse(i) { "Colour ${i + 1}" }, i == selected) { onPick(i) }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun HueSwatch(color: Color, label: String, selected: Boolean, onClick: () -> Unit) {
-    val ring = MaterialTheme.colorScheme.onBackground
-    Box(
-        Modifier
-            .size(48.dp)
-            .clip(CircleShape)
-            .semantics(mergeDescendants = true) { contentDescription = label }
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
-            .then(if (selected) Modifier.border(2.dp, ring, CircleShape) else Modifier)
-            .padding(5.dp)
-            .clip(CircleShape)
-            .background(color),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (selected) {
-            Icon(
-                Icons.Rounded.Check,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.background,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-    }
 }

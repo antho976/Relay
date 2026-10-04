@@ -4,6 +4,7 @@ import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.db.CategoryTotal
 import com.tally.app.data.db.DayTotal
 import com.tally.app.data.db.TransactionRow
+import com.tally.app.ui.common.Dates
 import com.tally.core.BudgetPeriod
 import com.tally.core.CategoryKind
 import com.tally.core.PaceReading
@@ -366,5 +367,18 @@ class InsightsLogicTest {
         assertEquals(4, s.heat.last())
         assertNull(s.projected)
         assertEquals(0, s.daysLeft)
+    }
+
+    // ── Day sheet copy ──────────────────────────────────────────────────────
+
+    @Test fun anEmptyDaySheetReadsRelativeDaysAsWords() {
+        assertEquals("Nothing logged today", nothingLoggedLine(day(14), day(14)))
+        // Never "Nothing logged on Yesterday".
+        assertEquals("Nothing logged yesterday", nothingLoggedLine(day(13), day(14)))
+    }
+
+    @Test fun anEmptyDaySheetNamesAnyOtherDayByItsDate() {
+        assertEquals("Nothing logged on " + Dates.day(day(6), day(14)), nothingLoggedLine(day(6), day(14)))
+        assertFalse(nothingLoggedLine(day(6), day(14)).contains("2026-"))
     }
 }

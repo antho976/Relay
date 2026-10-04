@@ -76,6 +76,7 @@ import com.tally.app.ui.common.Caption
 import com.tally.app.ui.common.CategoryBadge
 import com.tally.app.ui.common.ChromeButton
 import com.tally.app.ui.common.Dates
+import com.tally.app.ui.common.EndsRow
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.HeroPanel
@@ -87,6 +88,7 @@ import com.tally.app.ui.common.PANEL_GAP
 import com.tally.app.ui.common.PageTitle
 import com.tally.app.ui.common.Panel
 import com.tally.app.ui.common.PanelHeader
+import com.tally.app.ui.common.ROW_FOCUS_OUTSET
 import com.tally.app.ui.common.SlidingSegments
 import com.tally.app.ui.common.StackedBar
 import com.tally.app.ui.common.StatChip
@@ -193,14 +195,18 @@ fun InsightsScreen(state: InsightsState, lens: InsightsLens, actions: InsightsAc
                 modifier = Modifier.padding(horizontal = GUTTER).fillMaxWidth(),
             )
         }
-        when (lens) {
-            InsightsLens.MONTH -> monthItems(state, periodName, actions)
-            InsightsLens.TREND -> trendItems(state, actions)
-            InsightsLens.CALENDAR -> calendarItems(state, periodName) { openDay = it.toEpochDay() }
+        // Before the first read every reading is a placeholder zero; "Nothing spent in October"
+        // over a month of entries would be untrue, so only the frame shows until it lands.
+        if (state.loaded) {
+            when (lens) {
+                InsightsLens.MONTH -> monthItems(state, periodName, actions)
+                InsightsLens.TREND -> trendItems(state, actions)
+                InsightsLens.CALENDAR -> calendarItems(state, periodName) { openDay = it.toEpochDay() }
+            }
         }
     }
     val day = openDay
-    if (lens == InsightsLens.CALENDAR && day != null) {
+    if (state.loaded && lens == InsightsLens.CALENDAR && day != null) {
         DaySheet(
             date = LocalDate.ofEpochDay(day),
             state = state,
@@ -311,6 +317,13 @@ private fun dayWord(date: LocalDate, today: LocalDate): String = when (date) {
     today -> "today"
     today.minusDays(1) -> "yesterday"
     else -> Dates.day(date, today)
+}
+
+/** An empty day sheet's line: "today" and "yesterday" read as words, any other day by its date. */
+internal fun nothingLoggedLine(date: LocalDate, today: LocalDate): String = when (date) {
+    today -> "Nothing logged today"
+    today.minusDays(1) -> "Nothing logged yesterday"
+    else -> "Nothing logged on " + Dates.day(date, today)
 }
 
 private fun nothingSpentLine(state: InsightsState, periodName: String): String =
@@ -555,7 +568,13 @@ private fun SliceRow(
     Column(
         Modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.bounceClick(label = "${slice.name} entries", onClick = onClick) else Modifier)
+            .then(
+                if (onClick != null) {
+                    Modifier.bounceClick(label = "${slice.name} entries", focusOutset = ROW_FOCUS_OUTSET, onClick = onClick)
+                } else {
+                    Modifier
+                },
+            )
             .semantics(mergeDescendants = true) { contentDescription = "${slice.name}, $amount, $meta" }
             .heightIn(min = 56.dp)
             .padding(top = 12.dp, bottom = 6.dp),
@@ -567,11 +586,16 @@ private fun SliceRow(
                     slice.isUncategorized -> GlyphBadge(Icons.Rounded.Category, tint = hue, fill = hue.copy(alpha = 0.15f), size = 36.dp)
                     else -> CategoryBadge(slice.icon, slice.color, size = 36.dp)
                 }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(slice.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-                    Text(meta.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Text(amount, style = MaterialTheme.typography.titleSmall, color = amountColor)
+                EndsRow(
+                    start = {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(slice.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                            Text(meta.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    },
+                    end = { Text(amount, style = MaterialTheme.typography.titleSmall, color = amountColor) },
+                    modifier = Modifier.weight(1f),
+                )
             }
             if (fraction != null) {
                 Spacer(Modifier.height(10.dp))
@@ -815,7 +839,7 @@ private fun TrendListPanel(state: InsightsState, onOpen: (Int) -> Unit, modifier
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .bounceClick(label = "Open $name") { onOpen(p.offset) }
+                            .bounceClick(label = "Open $name", focusOutset = ROW_FOCUS_OUTSET) { onOpen(p.offset) }
                             .semantics(mergeDescendants = true) { contentDescription = "$name, spent $spent, $meta" }
                             .heightIn(min = 60.dp)
                             .padding(vertical = 8.dp),
@@ -826,15 +850,16 @@ private fun TrendListPanel(state: InsightsState, onOpen: (Int) -> Unit, modifier
                             Icons.Rounded.CalendarMonth,
                             tint = if (p.offset == state.offset) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Column(Modifier.weight(1f).clearAndSetSemantics { }, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-                            Text(meta.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Text(
-                            spent,
-                            modifier = Modifier.clearAndSetSemantics { },
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onBackground,
+                        EndsRow(
+                            start = {
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                                    Text(meta.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            },
+                            end = { Text(spent, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground) },
+                            modifier = Modifier.weight(1f).clearAndSetSemantics { },
+                            gap = 14.dp,
                         )
                         Icon(
                             Icons.AutoMirrored.Rounded.KeyboardArrowRight,
@@ -904,7 +929,7 @@ private fun CalendarHero(state: InsightsState, periodName: String, onDay: (Local
                 }
             },
             onDay = onDay,
-            modifier = Modifier.bleed(8.dp),
+            modifier = Modifier.bleed(min = 8.dp, max = 16.dp, columns = 7, column = 48.dp),
         )
         Spacer(Modifier.height(10.dp))
         Caption(caption)
@@ -994,13 +1019,16 @@ private fun WeekdayPanel(state: InsightsState, periodName: String, modifier: Mod
                             .padding(top = 10.dp, bottom = 4.dp),
                     ) {
                         Column(Modifier.clearAndSetSemantics { }) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-                                    Text(meta.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                                Text(average, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground)
-                            }
+                            EndsRow(
+                                start = {
+                                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Text(name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                                        Text(meta.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                },
+                                end = { Text(average, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground) },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
                             Spacer(Modifier.height(8.dp))
                             ThinBar(
                                 if (top > 0L) (w.average.toFloat() / top).coerceIn(0f, 1f) else 0f,
@@ -1036,23 +1064,26 @@ private fun DaySheet(date: LocalDate, state: InsightsState, onEntry: (Long) -> U
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 IconBadge(Icons.Rounded.CalendarToday)
-                Text(
-                    dayName.uppercase(),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onBackground,
+                // The reading drops under the day before the day's name would break mid-word.
+                EndsRow(
+                    start = {
+                        Text(dayName.uppercase(), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onBackground)
+                    },
+                    end = {
+                        Text(
+                            (Copy.plural(rows.size, "entry", "entries") + " · " + money.formatWhole(spent) + " out").uppercase(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
                     modifier = Modifier.weight(1f),
-                )
-                Text(
-                    (Copy.plural(rows.size, "entry", "entries") + " · " + money.formatWhole(spent) + " out").uppercase(),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             Spacer(Modifier.height(8.dp))
             if (rows.isEmpty()) {
                 EmptyLine(
                     Icons.Rounded.Bedtime,
-                    if (date == state.today) "Nothing logged today" else "Nothing logged on $dayName",
+                    nothingLoggedLine(date, state.today),
                     Modifier.padding(vertical = 8.dp),
                 )
             } else {

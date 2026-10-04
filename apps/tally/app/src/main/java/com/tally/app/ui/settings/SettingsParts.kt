@@ -27,7 +27,6 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -36,9 +35,9 @@ import androidx.compose.ui.unit.dp
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.GroupRow
-import com.tally.app.ui.common.IconBadge
 import com.tally.app.ui.common.PANEL_GAP
 import com.tally.app.ui.common.PageTitle
+import com.tally.app.ui.common.PanelHeader
 import com.tally.app.ui.common.TopBar
 
 /*
@@ -98,7 +97,10 @@ internal fun TilePair(
     }
 }
 
-/** The lit panel's opening row: glyph tile, the mono label, an optional reading at the end. */
+/**
+ * The lit panel's opening row: glyph tile, the mono label, an optional reading at the end. It is
+ * the kit's [PanelHeader], so a long reading drops under the label instead of breaking it.
+ */
 @Composable
 internal fun HeroHead(
     icon: ImageVector,
@@ -107,22 +109,7 @@ internal fun HeroHead(
     end: String? = null,
     tint: Color = MaterialTheme.colorScheme.primary,
 ) {
-    Row(
-        modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        IconBadge(icon, tint = tint)
-        Text(
-            label.uppercase(),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.weight(1f).semantics { heading() },
-        )
-        if (end != null) {
-            Text(end, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
+    PanelHeader(icon, label, modifier, meta = end, tint = tint)
 }
 
 /**

@@ -44,6 +44,11 @@ object Dates {
         return if (p.start.year == today.year || !calendar) base else "$base ${p.start.year}"
     }
 
+    /** One letter, for a drawn axis only: "S" is Saturday and Sunday, so it is never spoken. */
     fun weekdayInitial(dayOfWeek: java.time.DayOfWeek): String =
         dayOfWeek.getDisplayName(TextStyle.NARROW_STANDALONE, locale)
+
+    /** The weekday's full name ("Tuesday"), for a spoken description where initials collide. */
+    fun weekday(dayOfWeek: java.time.DayOfWeek): String =
+        dayOfWeek.getDisplayName(TextStyle.FULL, locale).replaceFirstChar { it.titlecase(locale) }
 }

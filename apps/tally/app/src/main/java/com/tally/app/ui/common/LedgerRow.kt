@@ -22,6 +22,8 @@ import com.tally.core.TxType
 /**
  * One ledger entry, bare on the page as in Avex's Recent: badge, what it was, where and when,
  * and the amount. The whole row is the tap. Income carries a "+", an expense is just the amount.
+ * The amount shares the title's line until a word of the title would break (200% font, a long
+ * amount); then it drops under the title and its line.
  */
 @Composable
 fun LedgerRow(
@@ -47,7 +49,7 @@ fun LedgerRow(
     Row(
         modifier
             .fillMaxWidth()
-            .bounceClick(label = "Edit $title", onClick = onClick)
+            .bounceClick(label = "Edit $title", focusOutset = ROW_FOCUS_OUTSET, onClick = onClick)
             .semantics(mergeDescendants = true) { contentDescription = "$title, $amount, $where, $meta" }
             .heightIn(min = 64.dp)
             .padding(vertical = 8.dp),
@@ -55,20 +57,27 @@ fun LedgerRow(
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (row.type == TxType.TRANSFER) TransferBadge() else CategoryBadge(row.categoryIcon, row.categoryColor)
-        Column(Modifier.weight(1f).clearAndSetSemantics { }, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-            Text(
-                listOf(meta, where).filter { it.isNotBlank() }.joinToString(" · "),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Text(
-            amount,
-            modifier = Modifier.clearAndSetSemantics { },
-            style = MaterialTheme.typography.titleMedium,
-            color = if (row.type == TxType.TRANSFER) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onBackground,
-            textAlign = TextAlign.End,
+        EndsRow(
+            start = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                    Text(
+                        listOf(meta, where).filter { it.isNotBlank() }.joinToString(" · "),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            end = {
+                Text(
+                    amount,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (row.type == TxType.TRANSFER) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onBackground,
+                    textAlign = TextAlign.End,
+                )
+            },
+            modifier = Modifier.weight(1f).clearAndSetSemantics { },
+            gap = 14.dp,
         )
     }
 }

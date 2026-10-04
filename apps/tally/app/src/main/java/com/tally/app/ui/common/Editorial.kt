@@ -149,7 +149,14 @@ fun HeroAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier,
             .heightIn(min = 56.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.primary.copy(alpha = if (enabled) 1f else 0.35f))
-            .bounceClick(enabled = enabled, label = text, role = Role.Button, onClick = onClick)
+            // On the accent fill an accent ring would vanish; it takes the label's colour instead.
+            .bounceClick(
+                enabled = enabled,
+                label = text,
+                role = Role.Button,
+                focusColor = MaterialTheme.colorScheme.onPrimary,
+                onClick = onClick,
+            )
             .padding(horizontal = 20.dp, vertical = 16.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -194,7 +201,7 @@ fun ChromeButton(icon: ImageVector, label: String, onClick: () -> Unit, modifier
             .size(44.dp)
             .clip(RoundedCornerShape(50))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .bounceClick(label = label, role = Role.Button, onClick = onClick),
+            .bounceClick(label = label, role = Role.Button, focusShape = RoundedCornerShape(50), onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(22.dp))

@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -171,7 +172,7 @@ fun GroupRow(
     Row(
         modifier
             .slab(shape)
-            .then(if (onClick != null) Modifier.bounceClick(label = title, onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.bounceClick(label = title, focusShape = shape, onClick = onClick) else Modifier)
             .heightIn(min = 56.dp)
             .padding(horizontal = ROW_PAD, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -224,7 +225,7 @@ fun SwitchRow(
     Row(
         Modifier
             .slab(shape)
-            .then(if (enabled) Modifier.bounceClick(label = title, role = Role.Switch) { onToggle(!checked) } else Modifier)
+            .then(if (enabled) Modifier.bounceClick(label = title, role = Role.Switch, focusShape = shape) { onToggle(!checked) } else Modifier)
             .semantics { stateDescription = if (checked) "On" else "Off" }
             .heightIn(min = 56.dp)
             .padding(horizontal = ROW_PAD, vertical = 14.dp),
@@ -274,7 +275,8 @@ fun selectableColors(selected: Boolean): Pair<Color, Color> {
 
 /**
  * A sliding segmented control: recessed track, equal cells, one thumb that glides to the pick.
- * Past 1.3x font scale worded options wrap into separate capsules so no word breaks.
+ * Past 1.3x font scale worded options wrap into separate capsules so no word breaks; they still
+ * announce as tabs, so the control reads the same at every size.
  */
 @Composable
 fun SlidingSegments(
@@ -285,17 +287,17 @@ fun SlidingSegments(
 ) {
     if (LocalDensity.current.fontScale > 1.3f && options.size > 2) {
         androidx.compose.foundation.layout.FlowRow(
-            modifier,
+            modifier.selectableGroup(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            options.forEachIndexed { i, label -> ChoiceChip(label, i == selectedIndex) { onSelect(i) } }
+            options.forEachIndexed { i, label -> ChoiceChip(label, i == selectedIndex, role = Role.Tab) { onSelect(i) } }
         }
         return
     }
     val track = RoundedCornerShape(12.dp)
     val thumb = RoundedCornerShape(10.dp)
-    BoxWithConstraints(modifier.clip(track).background(MaterialTheme.colorScheme.surfaceContainerLowest)) {
+    BoxWithConstraints(modifier.clip(track).background(MaterialTheme.colorScheme.surfaceContainerLowest).selectableGroup()) {
         val cell = maxWidth / options.size
         val (border, fill) = selectableColors(selected = selectedIndex >= 0)
         val x by animateDpAsState(cell * selectedIndex.coerceAtLeast(0), TallyMotion.snappy(), label = "thumb")
@@ -337,9 +339,20 @@ fun SlidingSegments(
     }
 }
 
-/** A capsule choice chip: outline when idle, ring and wash when picked. ≥48dp touch. */
+/**
+ * A capsule choice chip: outline when idle, ring and wash when picked. ≥48dp touch. A chip is one
+ * of several and only one is picked, so it announces as a radio button; put its row in a
+ * `Modifier.selectableGroup()` so TalkBack reads its place in the set. A chip that acts rather
+ * than picks (a note suggestion) passes [Role.Button].
+ */
 @Composable
-fun ChoiceChip(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+fun ChoiceChip(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    role: Role = Role.RadioButton,
+    onClick: () -> Unit,
+) {
     val (border, fill) = selectableColors(selected)
     val shape = RoundedCornerShape(50)
     Box(
@@ -349,8 +362,8 @@ fun ChoiceChip(label: String, selected: Boolean, modifier: Modifier = Modifier, 
             .clip(shape)
             .background(fill)
             .border(1.dp, border, shape)
-            .bounceClick(label = label, role = Role.Checkbox, onClick = onClick)
-            .semantics { this.selected = selected }
+            .bounceClick(label = label, role = role, focusShape = shape, onClick = onClick)
+            .semantics { if (role != Role.Button) this.selected = selected }
             .padding(horizontal = 16.dp, vertical = 9.dp),
         contentAlignment = Alignment.Center,
     ) {

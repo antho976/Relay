@@ -28,7 +28,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -41,6 +40,7 @@ import com.tally.app.ui.common.Aside
 import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.IconBadge
 import com.tally.app.ui.common.PANEL_GAP
+import com.tally.app.ui.common.PanelHeader
 import com.tally.app.ui.common.ROW_PAD
 import com.tally.app.ui.common.slab
 
@@ -53,7 +53,10 @@ import com.tally.app.ui.common.slab
 /** The hero figure stops growing here, so a 200% font keeps it on one line. */
 private const val HERO_MAX_SCALE = 1.3f
 
-/** The lit panel's opening row: glyph tile, the mono label, an optional reading at the end. */
+/**
+ * The lit panel's opening row: glyph tile, the mono label, an optional reading at the end. It is
+ * the kit's [PanelHeader], so a long reading drops under the label instead of breaking it.
+ */
 @Composable
 internal fun HeroHead(
     icon: ImageVector,
@@ -62,22 +65,7 @@ internal fun HeroHead(
     end: String? = null,
     tint: Color = MaterialTheme.colorScheme.primary,
 ) {
-    Row(
-        modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        IconBadge(icon, tint = tint)
-        Text(
-            label.uppercase(),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.weight(1f).semantics { heading() },
-        )
-        if (end != null) {
-            Text(end, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
+    PanelHeader(icon, label, modifier, meta = end, tint = tint)
 }
 
 /**

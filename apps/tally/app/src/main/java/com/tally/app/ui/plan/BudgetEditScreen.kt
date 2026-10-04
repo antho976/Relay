@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
@@ -236,7 +237,7 @@ private fun QuickFill(state: BudgetEditState, actions: BudgetEditActions) {
             Spacer(Modifier.height(6.dp))
             EmptyLine(Icons.Rounded.History, "Nothing on record to suggest from yet")
         } else {
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (last != null) {
                     ChoiceChip("Last month, rounded · " + money.formatWhole(last), minor == last) { actions.fill(last) }
                 }
