@@ -39,7 +39,7 @@ fun TallyDatabase.ledgerRepository(clock: Clock): LedgerRepository =
     LedgerRepository(this, transactions(), accounts(), categories(), budgets(), clock)
 
 fun TallyDatabase.planRepository(clock: Clock): PlanRepository =
-    PlanRepository(budgets(), recurring(), goals(), clock)
+    PlanRepository(this, budgets(), recurring(), goals(), clock)
 
 fun TallyDatabase.recurringPoster(clock: Clock): RecurringPoster =
     RecurringPoster(this, recurring(), transactions(), clock)

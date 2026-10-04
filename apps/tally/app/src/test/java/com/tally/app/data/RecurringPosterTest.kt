@@ -155,10 +155,45 @@ class RecurringPosterTest {
         assertEquals(0, poster.postDue())
 
         assertEquals(0, db.transactions().count())
-        assertEquals(jan31, db.recurring().get(paused)?.nextDate)
-        assertEquals(jan31, db.recurring().get(reminder)?.nextDate)
+        assertEquals("A paused bill keeps its date", jan31, db.recurring().get(paused)?.nextDate)
+        assertEquals("A reminder moves on to its next date", LocalDate.of(2026, 5, 31), db.recurring().get(reminder)?.nextDate)
         assertEquals(false, db.recurring().get(paused)?.active)
         assertEquals(true, db.recurring().get(reminder)?.active)
+    }
+
+    @Test fun aReminderStaysOnItsDayAndMovesOnOnceTheDayIsOver() = runTest {
+        world()
+        val phone = bill(name = "Phone", amount = 45_00, anchor = LocalDate.of(2026, 1, 15), next = clock.today(), autoPost = false)
+
+        assertEquals(0, poster.postDue())
+        assertEquals("Due today stays due today", clock.today(), db.recurring().get(phone)?.nextDate)
+
+        clock.date = LocalDate.of(2026, 5, 16)
+        assertEquals(0, poster.postDue())
+        assertEquals(LocalDate.of(2026, 6, 15), db.recurring().get(phone)?.nextDate)
+        assertEquals(0, db.transactions().count())
+    }
+
+    @Test fun aReminderLeftForMonthsIsNotOverdueOnceThePosterRuns() = runTest {
+        world()
+        // Due Jul 1 and paid by hand each month since; nothing ever marked it paid.
+        clock.date = LocalDate.of(2026, 10, 4)
+        val rent = bill(anchor = LocalDate.of(2026, 7, 1), autoPost = false)
+
+        assertEquals(0, poster.postDue())
+
+        assertEquals(LocalDate.of(2026, 11, 1), db.recurring().get(rent)?.nextDate)
+        assertEquals(0, db.transactions().count())
+    }
+
+    @Test fun aReminderPastItsEndDateEnds() = runTest {
+        world()
+        val lease = bill(name = "Lease", endDate = LocalDate.of(2026, 4, 30), autoPost = false)
+
+        poster.postDue()
+
+        assertFalse(db.recurring().get(lease)!!.active)
+        assertEquals(0, db.transactions().count())
     }
 
     @Test fun billEndsOnceItsEndDateHasPassed() = runTest {

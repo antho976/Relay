@@ -11,12 +11,14 @@ import com.tally.app.data.db.GoalWithSaved
 import com.tally.app.data.db.RecurringEntity
 import com.tally.app.data.db.RecurringRow
 import com.tally.app.data.db.TypeTotal
+import com.tally.core.BillSchedule
 import com.tally.core.BudgetPeriod
 import com.tally.core.CategoryKind
 import com.tally.core.Frequency
 import com.tally.core.PaceReading
 import com.tally.core.Recurrence
 import com.tally.core.TxType
+import com.tally.core.nextDueOnSave
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
 import kotlin.math.roundToLong
@@ -266,8 +268,9 @@ internal fun billLine(row: RecurringRow, today: LocalDate): BillLine {
 }
 
 /**
- * Every payment of [bills] from each one's next date through [through], overdue ones included:
- * a reminder left unpaid is still owed.
+ * Every payment of [bills] from each one's next date through [through]. A next date already
+ * behind counts too, as it has not posted yet: the poster catches up a bill that posts itself and
+ * moves a reminder on once its day is over, so a date stays behind only until its next run.
  */
 internal fun dueThrough(bills: List<BillLine>, through: LocalDate): DueSum {
     var total = 0L
@@ -383,19 +386,34 @@ internal fun billCategories(categories: List<CategoryEntity>, type: TxType, pick
 }
 
 /**
- * The next [count] dates the bill will post on, as saving it would set them: an unchanged rule
- * keeps its stored next date; a new or changed one starts at its first date from today.
+ * The next [count] dates the bill will post on, as saving it would set them: the same
+ * [nextDueOnSave] the repository applies, over the [stored] row and [lastPosted], the latest date
+ * already entered against it. So an unchanged rule keeps its stored next date, a new or changed
+ * one starts at its first date from today (and after any date it already posted), and a bill
+ * turned back on starts from today instead of showing the dates it was paused through. Empty
+ * while the draft is paused: a paused bill posts nothing.
  */
-internal fun nextDates(d: BillDraft, stored: RecurringEntity?, today: LocalDate, count: Int = 3): List<LocalDate> {
+internal fun nextDates(
+    d: BillDraft,
+    stored: RecurringEntity?,
+    today: LocalDate,
+    count: Int = 3,
+    lastPosted: LocalDate? = null,
+): List<LocalDate> {
+    if (!d.active) return emptyList()
     val rule = Recurrence(d.anchorDate, d.frequency, d.interval.coerceIn(1, 52))
-    val first = if (
-        stored != null && stored.anchorDate == d.anchorDate &&
-        stored.frequency == d.frequency && stored.interval == d.interval
-    ) {
-        stored.nextDate
-    } else {
-        rule.onOrAfter(if (d.anchorDate.isAfter(today)) d.anchorDate else today)
+    val schedule = stored?.let {
+        BillSchedule(Recurrence(it.anchorDate, it.frequency, it.interval.coerceIn(1, 52)), it.nextDate, it.autoPost, it.active)
     }
+    val first = nextDueOnSave(
+        rule = rule,
+        autoPost = d.autoPost,
+        active = d.active,
+        stored = schedule,
+        today = today,
+        lastPosted = lastPosted,
+        notBefore = if (stored == null) d.anchorDate else null,
+    )
     val out = ArrayList<LocalDate>(count)
     var next = first
     repeat(count) {

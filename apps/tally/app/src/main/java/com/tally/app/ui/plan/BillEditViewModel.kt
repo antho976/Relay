@@ -48,7 +48,7 @@ data class BillEditState(
     val toAccountName: String? = null,
     /** The picked category, when it is one of [categories]. */
     val category: CategoryEntity? = null,
-    /** The next three dates it would post on. */
+    /** The next three dates it would post on; empty while it is paused, since then it posts nothing. */
     val preview: List<LocalDate> = emptyList(),
     /** The amount in an average month. */
     val perMonth: Long = 0,
@@ -76,8 +76,11 @@ class BillEditViewModel @Inject constructor(
     private val argId: Long = savedStateHandle.get<Long>(Args.ID) ?: 0L
     private val today: LocalDate = clock.today()
 
+    /** The bill as stored when the editor opened, and the latest date already entered against it. */
+    private data class Stored(val item: RecurringEntity, val lastPosted: LocalDate?)
+
     private val draft = MutableStateFlow(BillDraft(id = argId, anchorDate = today))
-    private val stored = MutableStateFlow<RecurringEntity?>(null)
+    private val stored = MutableStateFlow<Stored?>(null)
     private val ready = MutableStateFlow(false)
     private val showErrors = MutableStateFlow(false)
     private val finished = Channel<Unit>(Channel.CONFLATED)
@@ -107,7 +110,7 @@ class BillEditViewModel @Inject constructor(
             accountName = l.accounts.firstOrNull { it.id == resolved.accountId }?.name,
             toAccountName = if (resolved.type == TxType.TRANSFER) l.accounts.firstOrNull { it.id == resolved.toAccountId }?.name else null,
             category = categories.firstOrNull { it.id == resolved.categoryId },
-            preview = nextDates(resolved, st, today),
+            preview = nextDates(resolved, st?.item, today, lastPosted = st?.lastPosted),
             perMonth = perMonth(resolved.amount ?: 0L, resolved.frequency, resolved.interval),
             problems = billProblems(resolved),
             showErrors = errors,
@@ -124,7 +127,7 @@ class BillEditViewModel @Inject constructor(
             val money = MoneyFormatter(s.currency, Locale.getDefault())
             val item = if (argId != 0L) plan.recurringItem(argId) else null
             if (item != null) {
-                stored.value = item
+                stored.value = Stored(item, plan.lastPosted(item.id))
                 draft.value = BillDraft(
                     id = item.id,
                     name = item.name,
@@ -190,7 +193,7 @@ class BillEditViewModel @Inject constructor(
         val d = s.draft
         val amount = d.amount ?: return
         val accountId = d.accountId ?: return
-        val original = stored.value
+        val original = stored.value?.item
         busy = true
         viewModelScope.launch {
             val item = RecurringEntity(
@@ -204,15 +207,17 @@ class BillEditViewModel @Inject constructor(
                 frequency = d.frequency,
                 interval = d.interval,
                 anchorDate = d.anchorDate,
-                nextDate = original?.nextDate ?: d.anchorDate,
+                // Only a new bill's earliest start. For a stored one the repository reads the row
+                // fresh and keeps its schedule, so this editor's copy, which the poster may have
+                // moved past while it was open, is never written back.
+                nextDate = d.anchorDate,
                 endDate = original?.endDate,
                 autoPost = d.autoPost,
-                active = original?.active ?: true,
+                // Pausing and resuming ride along: the repository starts a resumed bill from today
+                // instead of owing the dates it was paused for.
+                active = d.active,
             )
-            val id = plan.saveRecurring(item)
-            // Pausing and resuming go through the repository so a resumed bill starts from today
-            // instead of owing the dates it was paused for.
-            if (original != null && original.active != d.active) plan.setRecurringActive(id, d.active)
+            plan.saveRecurring(item)
             finished.send(Unit)
         }
     }

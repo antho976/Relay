@@ -287,6 +287,39 @@ class PlanLogicTest {
         assertEquals(LocalDate.of(2026, 11, 30), nextDates(draft.copy(id = 1, interval = 2), stored, today).first())
     }
 
+    @Test fun nextDatesForAPausedBillShowNothingAndResumingStartsFromToday() {
+        // Gym paused on Aug 14 and opened again in October.
+        val gym = RecurringEntity(
+            id = 7, name = "Gym", type = TxType.EXPENSE, amount = 3_900, accountId = 1,
+            frequency = Frequency.MONTHLY, anchorDate = LocalDate.of(2026, 3, 14),
+            nextDate = LocalDate.of(2026, 8, 14), active = false,
+        )
+        val draft = BillDraft(id = 7, name = "Gym", amount = 3_900, accountId = 1, anchorDate = gym.anchorDate, active = false)
+        assertTrue("Paused: no dates to promise", nextDates(draft, gym, today).isEmpty())
+        assertEquals(
+            listOf(LocalDate.of(2026, 10, 14), LocalDate.of(2026, 11, 14), LocalDate.of(2026, 12, 14)),
+            nextDates(draft.copy(active = true), gym, today),
+        )
+    }
+
+    @Test fun nextDatesSkipADateTheBillAlreadyPostedAndAReminderPastItsDay() {
+        val anchor = LocalDate.of(2026, 1, 14)
+        val phone = RecurringEntity(
+            id = 3, name = "Phone", type = TxType.EXPENSE, amount = 4_500, accountId = 1,
+            frequency = Frequency.MONTHLY, anchorDate = anchor, nextDate = LocalDate.of(2026, 11, 14),
+        )
+        val draft = BillDraft(id = 3, name = "Phone", amount = 4_500, accountId = 1, anchorDate = anchor)
+        // Every three months from Jan 14 lands on today, which already posted.
+        assertEquals(
+            LocalDate.of(2027, 1, 14),
+            nextDates(draft.copy(interval = 3), phone, today, lastPosted = today).first(),
+        )
+        // A reminder that is still on July moves to its first date from today once it posts itself.
+        val reminder = phone.copy(autoPost = false, nextDate = LocalDate.of(2026, 7, 14))
+        assertEquals(today, nextDates(draft.copy(autoPost = true), reminder, today).first())
+        assertEquals(today, nextDates(draft.copy(autoPost = false), reminder, today).first())
+    }
+
     // ── Goals ────────────────────────────────────────────────────────────────
 
     @Test fun monthsUntilRoundsUpAndStopsAtZeroOncePassed() {

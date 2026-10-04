@@ -17,6 +17,12 @@ import javax.inject.Singleton
  * Writes every auto-posting bill that has come due into the ledger, catching up on any days the
  * app was not opened. Runs at launch and from the daily worker; the mutex and the per-bill
  * transaction mean two overlapping runs can never post the same date twice.
+ *
+ * It also moves reminders on. A reminder never writes an entry, and Tally cannot see whether you
+ * paid it, so its date is a heads-up rather than a debt: it shows ahead of time on Home and in
+ * Plan, and on the day itself, and once that day is over it moves to its next date, as a bill
+ * that posts itself does, only without the entry. Left in place, a paid reminder would read as
+ * overdue for months and count every month since in what is due.
  */
 @Singleton
 class RecurringPoster @Inject constructor(
@@ -27,10 +33,19 @@ class RecurringPoster @Inject constructor(
 ) {
     private val mutex = Mutex()
 
-    /** Returns how many entries were posted. */
+    /** Returns how many entries were posted. Reminders moved on are not counted: they post nothing. */
     suspend fun postDue(): Int = mutex.withLock {
         val today = clock.today()
         var posted = 0
+        recurring.remindersBehind(today).forEach { item ->
+            db.withTransaction {
+                val fresh = recurring.get(item.id) ?: return@withTransaction
+                if (!fresh.active || fresh.autoPost || !fresh.nextDate.isBefore(today)) return@withTransaction
+                val next = Recurrence(fresh.anchorDate, fresh.frequency, fresh.interval).onOrAfter(today)
+                val ended = fresh.endDate != null && next.isAfter(fresh.endDate)
+                recurring.update(fresh.copy(nextDate = next, active = !ended))
+            }
+        }
         recurring.due(today).forEach { item ->
             db.withTransaction {
                 // Re-read inside the transaction: the row may have moved since the query above.

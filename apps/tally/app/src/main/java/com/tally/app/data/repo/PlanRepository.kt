@@ -1,5 +1,6 @@
 package com.tally.app.data.repo
 
+import androidx.room.withTransaction
 import com.tally.app.data.Clock
 import com.tally.app.data.db.BudgetDao
 import com.tally.app.data.db.BudgetEntity
@@ -11,13 +12,18 @@ import com.tally.app.data.db.GoalWithSaved
 import com.tally.app.data.db.RecurringDao
 import com.tally.app.data.db.RecurringEntity
 import com.tally.app.data.db.RecurringRow
+import com.tally.app.data.db.TallyDatabase
+import com.tally.core.BillSchedule
 import com.tally.core.Recurrence
+import com.tally.core.nextDueOnSave
 import kotlinx.coroutines.flow.Flow
+import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class PlanRepository @Inject constructor(
+    private val db: TallyDatabase,
     private val budgets: BudgetDao,
     private val recurring: RecurringDao,
     private val goals: GoalDao,
@@ -43,20 +49,19 @@ class PlanRepository @Inject constructor(
     fun recurring(): Flow<List<RecurringRow>> = recurring.observeAll()
     suspend fun recurringItem(id: Long): RecurringEntity? = recurring.get(id)
 
+    /** The latest date entered against bill [id], or null when nothing has been. */
+    suspend fun lastPosted(id: Long): LocalDate? = recurring.lastPosted(id)
+
     /**
-     * Saves a bill. A new or re-anchored one starts at its first occurrence from today, so making
-     * a bill never back-fills months of entries the owner did not ask for.
+     * Saves a bill, pausing or resuming it by [item]'s active flag. The stored row is the authority
+     * on where the schedule stands: it is read in the same transaction as the write, so an editor
+     * that sat open while the poster ran cannot rewind a date that already posted. [item]'s
+     * nextDate is only the earliest start of a new bill; [nextDueOnSave] decides the rest, so a
+     * new bill never back-fills, a resumed one does not owe its pause, one switched to posting
+     * itself starts from today, and a changed rule never lands on a date the bill already posted.
+     * A bill deleted while its editor was open comes back as a new one instead of vanishing.
      */
-    suspend fun saveRecurring(item: RecurringEntity): Long {
-        val rule = Recurrence(item.anchorDate, item.frequency, item.interval)
-        val today = clock.today()
-        val existing = if (item.id != 0L) recurring.get(item.id) else null
-        val ruleChanged = existing == null || existing.anchorDate != item.anchorDate ||
-            existing.frequency != item.frequency || existing.interval != item.interval
-        val next = if (ruleChanged) rule.onOrAfter(if (item.anchorDate.isAfter(today)) item.anchorDate else today) else item.nextDate
-        val clean = item.copy(name = item.name.trim(), nextDate = next)
-        return if (clean.id == 0L) recurring.insert(clean) else { recurring.update(clean); clean.id }
-    }
+    suspend fun saveRecurring(item: RecurringEntity): Long = db.withTransaction { write(item) }
 
     /** Deletes a bill and hands it back for Undo. Entries it posted stay, unlinked. */
     suspend fun deleteRecurring(id: Long): RecurringEntity? {
@@ -68,14 +73,29 @@ class PlanRepository @Inject constructor(
     /** Puts a deleted bill back exactly, same id. */
     suspend fun restoreRecurring(item: RecurringEntity) { recurring.insert(item) }
 
+    /** Pauses or resumes a bill. Resuming starts from today: a paused bill does not owe its pause. */
     suspend fun setRecurringActive(id: Long, active: Boolean) {
-        val item = recurring.get(id) ?: return
-        val today = clock.today()
-        // Resuming starts from today: a paused bill does not owe the months it was paused for.
-        val next = if (active && item.nextDate.isBefore(today)) {
-            Recurrence(item.anchorDate, item.frequency, item.interval).onOrAfter(today)
-        } else item.nextDate
-        recurring.update(item.copy(active = active, nextDate = next))
+        db.withTransaction {
+            recurring.get(id)?.let { write(it.copy(active = active)) }
+        }
+    }
+
+    /** [saveRecurring]'s write, inside the caller's transaction. */
+    private suspend fun write(item: RecurringEntity): Long {
+        val existing = if (item.id != 0L) recurring.get(item.id) else null
+        val next = nextDueOnSave(
+            rule = Recurrence(item.anchorDate, item.frequency, item.interval),
+            autoPost = item.autoPost,
+            active = item.active,
+            stored = existing?.let { BillSchedule(Recurrence(it.anchorDate, it.frequency, it.interval), it.nextDate, it.autoPost, it.active) },
+            today = clock.today(),
+            lastPosted = existing?.let { recurring.lastPosted(it.id) },
+            notBefore = if (existing == null) item.nextDate else null,
+        )
+        val clean = item.copy(name = item.name.trim(), nextDate = next)
+        if (existing == null) return recurring.insert(clean.copy(id = 0L))
+        recurring.update(clean)
+        return clean.id
     }
 
     // ── Goals ────────────────────────────────────────────────────────────────

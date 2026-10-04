@@ -60,3 +60,50 @@ data class Recurrence(val anchor: LocalDate, val frequency: Frequency, val inter
         Frequency.YEARLY -> 1.0 / (12.0 * interval)
     }
 }
+
+/**
+ * A bill's schedule as the database holds it: the rule it follows, the next date it is due,
+ * whether it posts itself (off makes it a reminder) and whether it runs at all.
+ */
+data class BillSchedule(
+    val rule: Recurrence,
+    val next: LocalDate,
+    val autoPost: Boolean = true,
+    val active: Boolean = true,
+)
+
+/**
+ * The date a bill is next due once it is saved with [rule], [autoPost] and [active] over
+ * [stored], the schedule the database holds for it (null for a new bill). The stored schedule is
+ * the authority, never an editor's copy of it, so saving cannot post a date twice and never
+ * back-fills dates nobody asked for:
+ *
+ * - A new bill starts at its first date from today, or from [notBefore] when that is later.
+ * - A changed rule starts again at its first date from today.
+ * - A paused bill keeps its stored date; turning it back on is what moves it.
+ * - A bill that was posting itself and still does keeps its stored date even when it is behind:
+ *   those dates are owed, and the poster catches them up.
+ * - Any other bill (one turned back on, one switched to posting itself, a reminder) keeps its
+ *   stored date unless that date is behind, and then starts at its first date from today. A
+ *   paused bill does not owe the dates it was paused for, and a reminder's past dates were never
+ *   going to post.
+ *
+ * Every fresh start also falls strictly after [lastPosted], the latest date already entered
+ * against the bill, so changing the rule on a day the bill posted does not post that day again.
+ */
+fun nextDueOnSave(
+    rule: Recurrence,
+    autoPost: Boolean,
+    active: Boolean,
+    stored: BillSchedule?,
+    today: LocalDate,
+    lastPosted: LocalDate? = null,
+    notBefore: LocalDate? = null,
+): LocalDate {
+    val start = if (lastPosted != null && !lastPosted.isBefore(today)) lastPosted.plusDays(1) else today
+    if (stored == null) return rule.onOrAfter(if (notBefore != null && notBefore.isAfter(start)) notBefore else start)
+    if (stored.rule != rule) return rule.onOrAfter(start)
+    if (!active) return stored.next
+    if (stored.active && stored.autoPost && autoPost) return stored.next
+    return if (stored.next.isBefore(start)) rule.onOrAfter(start) else stored.next
+}

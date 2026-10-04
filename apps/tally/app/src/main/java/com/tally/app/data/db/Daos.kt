@@ -214,6 +214,14 @@ interface RecurringDao {
     @Query("SELECT * FROM recurring WHERE active = 1 AND autoPost = 1 AND nextDate <= :today")
     suspend fun due(today: LocalDate): List<RecurringEntity>
 
+    /** Running reminders whose date is over. They never post; the poster only moves them on. */
+    @Query("SELECT * FROM recurring WHERE active = 1 AND autoPost = 0 AND nextDate < :today")
+    suspend fun remindersBehind(today: LocalDate): List<RecurringEntity>
+
+    /** The latest date entered against bill [id]: the entries it posted, and the one a repeat was made from. */
+    @Query("SELECT MAX(date) FROM transactions WHERE recurringId = :id")
+    suspend fun lastPosted(id: Long): LocalDate?
+
     /** Re-files bills when their category is deleted into another one. */
     @Query("UPDATE recurring SET categoryId = :to WHERE categoryId = :from")
     suspend fun moveCategory(from: Long, to: Long)

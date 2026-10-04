@@ -84,9 +84,9 @@ class PlanRepositoryTest {
         val id = plan.saveRecurring(draft(anchor = LocalDate.of(2026, 1, 31)))
         val saved = plan.recurringItem(id)!!
 
-        // An amount change keeps the next date as it stands.
+        // An amount change keeps the stored next date, whatever next date the editor handed over.
         plan.saveRecurring(saved.copy(amount = 1_400_00, nextDate = LocalDate.of(2026, 6, 30)))
-        assertEquals(LocalDate.of(2026, 6, 30), plan.recurringItem(id)?.nextDate)
+        assertEquals(LocalDate.of(2026, 5, 31), plan.recurringItem(id)?.nextDate)
         assertEquals(1_400_00L, plan.recurringItem(id)?.amount)
 
         // A new anchor re-anchors from today.
@@ -96,6 +96,112 @@ class PlanRepositoryTest {
         // So does a new frequency.
         plan.saveRecurring(plan.recurringItem(id)!!.copy(frequency = Frequency.WEEKLY))
         assertEquals(LocalDate.of(2026, 5, 17), plan.recurringItem(id)?.nextDate)
+        assertEquals(1, db.recurring().all().size)
+    }
+
+    @Test fun anEditorOpenedBeforeThePosterRanCannotRewindThePosting() = runTest {
+        chequing = db.addAccount("Chequing")
+        val id = db.recurring().insert(draft(anchor = LocalDate.of(2026, 1, 15)).copy(nextDate = today))
+        // The editor reads the bill while it is due today; the worker posts it before Save.
+        val opened = plan.recurringItem(id)!!
+        assertEquals(1, db.recurringPoster(clock).postDue())
+
+        plan.saveRecurring(opened.copy(name = "Rent, flat 4"))
+
+        val saved = plan.recurringItem(id)!!
+        assertEquals("Rent, flat 4", saved.name)
+        assertEquals("The stored date stands", LocalDate.of(2026, 6, 15), saved.nextDate)
+        assertEquals("Today posts once", 0, db.recurringPoster(clock).postDue())
+        assertEquals(1, db.transactions().count())
+    }
+
+    @Test fun switchingAReminderToPostItselfStartsFromTodayAndNeverBackFills() = runTest {
+        chequing = db.addAccount("Chequing")
+        clock.date = LocalDate.of(2026, 10, 4)
+        // A reminder still on its first date: July to October were logged by hand.
+        val id = db.recurring().insert(draft(anchor = LocalDate.of(2026, 7, 1)).copy(autoPost = false))
+        val opened = plan.recurringItem(id)!!
+
+        plan.saveRecurring(opened.copy(autoPost = true))
+
+        val saved = plan.recurringItem(id)!!
+        assertTrue(saved.autoPost)
+        assertEquals(LocalDate.of(2026, 11, 1), saved.nextDate)
+        assertEquals(0, db.recurringPoster(clock).postDue())
+        assertEquals(0, db.transactions().count())
+    }
+
+    @Test fun switchingToPostItselfOnADayItAlreadyPostedWaitsForTheNextDate() = runTest {
+        chequing = db.addAccount("Chequing")
+        val id = db.recurring().insert(draft(anchor = LocalDate.of(2026, 1, 15)).copy(nextDate = today))
+        assertEquals(1, db.recurringPoster(clock).postDue())
+        // Off and back on the same day: today already has its entry.
+        plan.saveRecurring(plan.recurringItem(id)!!.copy(autoPost = false))
+        plan.saveRecurring(plan.recurringItem(id)!!.copy(autoPost = true))
+
+        assertEquals(LocalDate.of(2026, 6, 15), plan.recurringItem(id)?.nextDate)
+        assertEquals(0, db.recurringPoster(clock).postDue())
+        assertEquals(1, db.transactions().count())
+    }
+
+    @Test fun aRuleChangedOnTheDayTheBillPostedStartsAfterThatDay() = runTest {
+        chequing = db.addAccount("Chequing")
+        clock.date = LocalDate.of(2026, 10, 15)
+        val id = db.recurring().insert(
+            draft(anchor = LocalDate.of(2026, 1, 15), name = "Phone").copy(amount = 45_00, nextDate = clock.date)
+        )
+        assertEquals(1, db.recurringPoster(clock).postDue())
+
+        // Every three months from Jan 15 lands on Oct 15, the day it just posted.
+        plan.saveRecurring(plan.recurringItem(id)!!.copy(interval = 3))
+        assertEquals(LocalDate.of(2027, 1, 15), plan.recurringItem(id)?.nextDate)
+        assertEquals(0, db.recurringPoster(clock).postDue())
+
+        // Weekly from Jan 15 lands on Oct 15 too: 39 weeks.
+        plan.saveRecurring(plan.recurringItem(id)!!.copy(frequency = Frequency.WEEKLY, interval = 1))
+        assertEquals(LocalDate.of(2026, 10, 22), plan.recurringItem(id)?.nextDate)
+        assertEquals(0, db.recurringPoster(clock).postDue())
+        assertEquals("Oct 15 posted once", 1, db.transactions().count())
+    }
+
+    @Test fun resumingFromTheEditorStartsFromTodayAndOwesNothingForThePause() = runTest {
+        chequing = db.addAccount("Chequing")
+        val id = db.recurring().insert(
+            draft(anchor = LocalDate.of(2026, 1, 31)).copy(nextDate = LocalDate.of(2026, 2, 28), active = false)
+        )
+
+        plan.saveRecurring(plan.recurringItem(id)!!.copy(active = true))
+
+        val resumed = plan.recurringItem(id)!!
+        assertTrue(resumed.active)
+        assertEquals(LocalDate.of(2026, 5, 31), resumed.nextDate)
+        assertEquals(0, db.recurringPoster(clock).postDue())
+
+        // Pausing from the editor keeps the date.
+        plan.saveRecurring(resumed.copy(active = false))
+        assertEquals(false, plan.recurringItem(id)?.active)
+        assertEquals(LocalDate.of(2026, 5, 31), plan.recurringItem(id)?.nextDate)
+    }
+
+    @Test fun aRepeatsBillStartsAfterTheEntryItWasMadeFrom() = runTest {
+        chequing = db.addAccount("Chequing")
+        // The entry is dated today, so its bill is handed over starting a month on.
+        val id = plan.saveRecurring(draft(anchor = today).copy(nextDate = LocalDate.of(2026, 6, 15)))
+
+        assertEquals(LocalDate.of(2026, 6, 15), plan.recurringItem(id)?.nextDate)
+        assertEquals(0, db.recurringPoster(clock).postDue())
+    }
+
+    @Test fun aBillDeletedWhileItsEditorWasOpenIsSavedAsANewOne() = runTest {
+        chequing = db.addAccount("Chequing")
+        val id = plan.saveRecurring(draft(anchor = LocalDate.of(2026, 1, 31)))
+        val opened = plan.recurringItem(id)!!
+        plan.deleteRecurring(id)
+
+        val again = plan.saveRecurring(opened.copy(amount = 1_400_00))
+
+        assertEquals(1_400_00L, plan.recurringItem(again)?.amount)
+        assertEquals(LocalDate.of(2026, 5, 31), plan.recurringItem(again)?.nextDate)
         assertEquals(1, db.recurring().all().size)
     }
 
