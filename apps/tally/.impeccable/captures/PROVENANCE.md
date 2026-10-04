@@ -3,8 +3,8 @@
 Emulator screenshots of Home with its real system bars, for the design finish review.
 Written by `.github/workflows/device-captures.yml`; run it again rather than editing these.
 
-- Run: [37243670550](https://github.com/antho976/Tally/actions/runs/37243670550)
-- Commit: `830e8433dc123d8838f777d659e2fdbc02092618` on `ccr-f4d00244-l3la8z`
+- Run: [37244781274](https://github.com/antho976/Tally/actions/runs/37244781274)
+- Commit: `04eb1bed91ded3d00f5d1e4f34c1094f91f89216` on `ccr-f4d00244-l3la8z`
 - Build: debug APK, sample data loaded through first run, system animations off
 - Status bar: SystemUI demo mode (fixed clock, full battery and signal, no notification icons)
 
