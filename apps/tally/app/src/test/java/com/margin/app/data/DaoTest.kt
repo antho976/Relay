@@ -1,0 +1,395 @@
+package com.margin.app.data
+
+import com.margin.app.data.db.BudgetEntity
+import com.margin.app.data.db.ContributionEntity
+import com.margin.app.data.db.GoalEntity
+import com.margin.app.data.db.MarginDatabase
+import com.margin.app.data.db.RecurringEntity
+import com.margin.app.data.db.TransactionEntity
+import com.margin.core.AccountType
+import com.margin.core.CategoryKind
+import com.margin.core.Frequency
+import com.margin.core.TxType
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import java.time.LocalDate
+
+/** The SQL itself: balances, breakdowns, the search, uniqueness and what a delete takes with it. */
+@RunWith(RobolectricTestRunner::class)
+class DaoTest {
+
+    private lateinit var db: MarginDatabase
+    private val day = LocalDate.of(2026, 10, 4)
+
+    @Before fun open() { db = RoomTestDb.create() }
+
+    @After fun close() { db.close() }
+
+    // ── Account balances ─────────────────────────────────────────────────────
+
+    @Test fun balanceIsOpeningPlusIncomeMinusExpensesAndTransfersOutPlusTransfersIn() = runTest {
+        val chequing = db.addAccount("Chequing", opening = 100_00, sortOrder = 0)
+        val visa = db.addAccount("Visa", AccountType.CREDIT, sortOrder = 1)
+        val savings = db.addAccount("Savings", AccountType.SAVINGS, opening = 50_00, sortOrder = 2)
+        val untouched = db.addAccount("Cash", AccountType.CASH, opening = 12_00, sortOrder = 3)
+
+        db.addIncome(500_00, day, chequing)
+        db.addExpense(30_00, day, chequing)
+        db.addExpense(45_00, day, visa)
+        db.addTransfer(200_00, day, fromAccountId = chequing, toAccountId = visa)
+        db.addTransfer(20_00, day, fromAccountId = savings, toAccountId = chequing)
+
+        val balances = db.accounts().observeBalances().first().associateBy { it.id }
+        assertEquals(100_00L + 500_00 - 30_00 - 200_00 + 20_00, balances.getValue(chequing).balance)
+        assertEquals(-45_00L + 200_00, balances.getValue(visa).balance)
+        assertEquals(50_00L - 20_00, balances.getValue(savings).balance)
+        assertEquals("An account with no entries holds its opening balance", 12_00L, balances.getValue(untouched).balance)
+
+        // Entry counts include both sides of a transfer.
+        assertEquals(4, balances.getValue(chequing).entryCount)
+        assertEquals(2, balances.getValue(visa).entryCount)
+        assertEquals(1, balances.getValue(savings).entryCount)
+        assertEquals(0, balances.getValue(untouched).entryCount)
+    }
+
+    @Test fun balancesListActiveAccountsBySortOrderAndArchivedLast() = runTest {
+        val archived = db.addAccount("Old card", AccountType.CREDIT, archived = true, sortOrder = 0)
+        val second = db.addAccount("Savings", AccountType.SAVINGS, sortOrder = 2)
+        val first = db.addAccount("Chequing", sortOrder = 1)
+
+        assertEquals(listOf(first, second, archived), db.accounts().observeBalances().first().map { it.id })
+        assertEquals(listOf(first, second, archived), db.accounts().all().map { it.id })
+    }
+
+    // ── Breakdowns ───────────────────────────────────────────────────────────
+
+    @Test fun byCategoryGroupsOneTypeAndLeavesTransfersOut() = runTest {
+        val chequing = db.addAccount("Chequing")
+        val visa = db.addAccount("Visa", AccountType.CREDIT)
+        val food = db.addCategory("Groceries")
+        val transport = db.addCategory("Transport")
+        val salary = db.addCategory("Salary", CategoryKind.INCOME)
+
+        db.addExpense(10_00, day, visa, food)
+        db.addExpense(15_00, day.minusDays(3), visa, food)
+        db.addExpense(5_00, day, chequing, transport)
+        db.addExpense(7_00, day, chequing, categoryId = null)
+        db.addIncome(1_000_00, day, chequing, salary)
+        db.addTransfer(99_00, day, fromAccountId = chequing, toAccountId = visa)
+        // Outside the window: the end is exclusive.
+        db.addExpense(40_00, day.plusDays(1), visa, food)
+
+        val expenses = db.transactions().observeByCategory(TxType.EXPENSE, day.minusDays(7), day.plusDays(1)).first()
+            .associateBy { it.categoryId }
+        assertEquals(setOf(food, transport, null), expenses.keys)
+        assertEquals(25_00L, expenses.getValue(food).total)
+        assertEquals(2, expenses.getValue(food).count)
+        assertEquals(5_00L, expenses.getValue(transport).total)
+        assertEquals("The transfer's null category must not join the uncategorized group", 7_00L, expenses.getValue(null).total)
+        assertEquals(1, expenses.getValue(null).count)
+
+        val income = db.transactions().observeByCategory(TxType.INCOME, day.minusDays(7), day.plusDays(1)).first()
+        assertEquals(1, income.size)
+        assertEquals(salary, income.single().categoryId)
+        assertEquals(1_000_00L, income.single().total)
+    }
+
+    @Test fun typeTotalsSumIncomeAndExpenseAndNeverTransfers() = runTest {
+        val chequing = db.addAccount("Chequing")
+        val savings = db.addAccount("Savings", AccountType.SAVINGS)
+        db.addExpense(12_00, day, chequing)
+        db.addExpense(8_00, day.minusDays(1), chequing)
+        db.addIncome(300_00, day, chequing)
+        db.addTransfer(250_00, day, fromAccountId = chequing, toAccountId = savings)
+        db.addExpense(1_00, day.minusDays(30), chequing)
+
+        val totals = db.transactions().observeTypeTotals(day.minusDays(7), day.plusDays(1)).first().associate { it.type to it.total }
+        assertEquals(mapOf(TxType.EXPENSE to 20_00L, TxType.INCOME to 300_00L), totals)
+        assertFalse(TxType.TRANSFER in totals)
+    }
+
+    @Test fun dailyExpenseSumsEachDayInOrderAndSkipsOtherTypes() = runTest {
+        val chequing = db.addAccount("Chequing")
+        val savings = db.addAccount("Savings", AccountType.SAVINGS)
+        db.addExpense(4_00, day, chequing)
+        db.addExpense(6_00, day, chequing)
+        db.addExpense(3_00, day.minusDays(2), chequing)
+        db.addIncome(500_00, day.minusDays(1), chequing)
+        db.addTransfer(50_00, day.minusDays(1), fromAccountId = chequing, toAccountId = savings)
+        db.addExpense(9_00, day.plusDays(1), chequing)
+
+        val days = db.transactions().observeDailyExpense(day.minusDays(6), day.plusDays(1)).first()
+        assertEquals(listOf(day.minusDays(2), day), days.map { it.date })
+        assertEquals(listOf(3_00L, 10_00L), days.map { it.total })
+    }
+
+    // ── Search ───────────────────────────────────────────────────────────────
+
+    private data class SearchWorld(
+        val chequing: Long,
+        val visa: Long,
+        val savings: Long,
+        val groceries: Long,
+        val dining: Long,
+        val metro: Long,
+        val pho: Long,
+        val salary: Long,
+        val cardPayment: Long,
+        val toSavings: Long,
+        val old: Long,
+    )
+
+    private suspend fun searchWorld(): SearchWorld {
+        val chequing = db.addAccount("Chequing")
+        val visa = db.addAccount("Visa", AccountType.CREDIT)
+        val savings = db.addAccount("Savings", AccountType.SAVINGS)
+        val groceries = db.addCategory("Groceries")
+        val dining = db.addCategory("Dining")
+        val salaryCat = db.addCategory("Salary", CategoryKind.INCOME)
+        return SearchWorld(
+            chequing = chequing,
+            visa = visa,
+            savings = savings,
+            groceries = groceries,
+            dining = dining,
+            metro = db.addExpense(68_42, day, visa, groceries, note = "Metro"),
+            pho = db.addExpense(23_10, day.minusDays(1), visa, dining, note = "Pho Lien"),
+            salary = db.addIncome(2_150_00, day.minusDays(2), chequing, salaryCat, note = "Pay"),
+            cardPayment = db.addTransfer(900_00, day.minusDays(3), fromAccountId = chequing, toAccountId = visa, note = "Card payment"),
+            toSavings = db.addTransfer(250_00, day.minusDays(4), fromAccountId = chequing, toAccountId = savings, note = "Rainy day"),
+            old = db.addExpense(5_00, day.minusDays(40), chequing, groceries, note = "Corner store"),
+        )
+    }
+
+    private suspend fun search(
+        query: String = "",
+        type: TxType? = null,
+        categoryId: Long? = null,
+        accountId: Long? = null,
+        start: LocalDate? = null,
+        end: LocalDate? = null,
+        limit: Int = 400,
+    ): List<Long> = db.transactions().search(query, type, categoryId, accountId, start, end, limit).first().map { it.id }
+
+    @Test fun searchWithNoFiltersListsEverythingNewestFirst() = runTest {
+        val w = searchWorld()
+        assertEquals(listOf(w.metro, w.pho, w.salary, w.cardPayment, w.toSavings, w.old), search())
+    }
+
+    @Test fun searchQueryMatchesNoteCategoryAndAccountNames() = runTest {
+        val w = searchWorld()
+        assertEquals("note, any case", listOf(w.metro), search(query = "metro"))
+        assertEquals("category name", listOf(w.metro, w.old), search(query = "groc"))
+        assertEquals("account name", listOf(w.metro, w.pho), search(query = "visa"))
+        assertEquals(emptyList<Long>(), search(query = "nothing like this"))
+    }
+
+    @Test fun searchFiltersByTypeAndCategory() = runTest {
+        val w = searchWorld()
+        assertEquals(listOf(w.cardPayment, w.toSavings), search(type = TxType.TRANSFER))
+        assertEquals(listOf(w.salary), search(type = TxType.INCOME))
+        assertEquals(listOf(w.pho), search(categoryId = w.dining))
+        assertEquals(listOf(w.old), search(type = TxType.EXPENSE, categoryId = w.groceries, accountId = w.chequing))
+    }
+
+    @Test fun searchByAccountMatchesBothSidesOfATransfer() = runTest {
+        val w = searchWorld()
+        assertEquals("Visa receives the card payment", listOf(w.metro, w.pho, w.cardPayment), search(accountId = w.visa))
+        assertEquals(listOf(w.toSavings), search(accountId = w.savings))
+        assertEquals(listOf(w.salary, w.cardPayment, w.toSavings, w.old), search(accountId = w.chequing))
+    }
+
+    @Test fun searchDateRangeIsStartInclusiveEndExclusive() = runTest {
+        val w = searchWorld()
+        assertEquals(listOf(w.pho, w.salary), search(start = day.minusDays(2), end = day))
+        assertEquals(listOf(w.metro, w.pho), search(start = day.minusDays(1)))
+        assertEquals(listOf(w.old), search(end = day.minusDays(4)))
+    }
+
+    @Test fun searchHonoursItsLimit() = runTest {
+        val w = searchWorld()
+        assertEquals(listOf(w.metro, w.pho), search(limit = 2))
+    }
+
+    // ── Budgets ──────────────────────────────────────────────────────────────
+
+    @Test fun budgetsAreOnePerCategoryWithTheOverallAtZero() = runTest {
+        val food = db.addCategory("Groceries", sortOrder = 1)
+        db.budgets().upsert(BudgetEntity(categoryId = BudgetEntity.OVERALL, amount = 2_000_00))
+        db.budgets().upsert(BudgetEntity(categoryId = food, amount = 500_00))
+        val overall = db.budgets().getFor(BudgetEntity.OVERALL)!!
+
+        // Upserting the existing row by its id changes it in place.
+        db.budgets().upsert(overall.copy(amount = 2_500_00))
+        assertEquals(2_500_00L, db.budgets().getFor(BudgetEntity.OVERALL)?.amount)
+        assertEquals(overall.id, db.budgets().getFor(BudgetEntity.OVERALL)?.id)
+
+        // A second row for the same category can never exist: the index is unique. An upsert
+        // without the existing id cannot add one (whether Room swallows or throws the conflict),
+        // which is why PlanRepository.setBudget looks the id up first.
+        runCatching { db.budgets().upsert(BudgetEntity(categoryId = food, amount = 999_00)) }
+        db.budgets().insertAll(listOf(BudgetEntity(categoryId = BudgetEntity.OVERALL, amount = 3_000_00)))
+        val all = db.budgets().all()
+        assertEquals(2, all.size)
+        assertEquals(1, all.count { it.categoryId == BudgetEntity.OVERALL })
+        assertEquals(1, all.count { it.categoryId == food })
+
+        // The overall budget sorts first and has no category to join.
+        val rows = db.budgets().observeAll().first()
+        assertEquals(listOf(BudgetEntity.OVERALL, food), rows.map { it.categoryId })
+        assertNull(rows.first().categoryName)
+        assertEquals("Groceries", rows.last().categoryName)
+    }
+
+    // ── Goals ────────────────────────────────────────────────────────────────
+
+    @Test fun goalSavedIsTheSumOfContributionsWithdrawalsIncluded() = runTest {
+        val trip = db.goals().insert(GoalEntity(name = "Lisbon trip", target = 2_400_00, targetDate = day.plusMonths(6)))
+        val fund = db.goals().insert(GoalEntity(name = "Emergency fund", target = 10_000_00))
+        db.goals().insertContribution(ContributionEntity(goalId = trip, amount = 300_00, date = day.minusDays(30)))
+        db.goals().insertContribution(ContributionEntity(goalId = trip, amount = 200_00, date = day.minusDays(10)))
+        db.goals().insertContribution(ContributionEntity(goalId = trip, amount = -50_00, date = day, note = "Took some back"))
+
+        val goals = db.goals().observeAll().first()
+        assertEquals("Dated goals sort before undated ones", listOf(trip, fund), goals.map { it.goal.id })
+        assertEquals(450_00L, goals.first { it.goal.id == trip }.saved)
+        assertEquals("No contributions reads as zero, not null", 0L, goals.first { it.goal.id == fund }.saved)
+
+        val history = db.goals().observeContributions(trip).first()
+        assertEquals("Newest first", listOf(day, day.minusDays(10), day.minusDays(30)), history.map { it.date })
+    }
+
+    // ── What deletes take with them ──────────────────────────────────────────
+
+    @Test fun deletingAnAccountCascadesEveryEntryThatTouchesIt() = runTest {
+        val chequing = db.addAccount("Chequing")
+        val visa = db.addAccount("Visa", AccountType.CREDIT)
+        val cash = db.addAccount("Cash", AccountType.CASH)
+        db.addExpense(30_00, day, visa)
+        db.addTransfer(200_00, day, fromAccountId = chequing, toAccountId = visa)
+        db.addTransfer(40_00, day, fromAccountId = visa, toAccountId = cash)
+        val kept = db.addExpense(5_00, day, chequing)
+        db.recurring().insert(
+            RecurringEntity(
+                name = "Card payment", type = TxType.TRANSFER, amount = 900_00, accountId = chequing, toAccountId = visa,
+                frequency = Frequency.MONTHLY, anchorDate = day, nextDate = day.plusMonths(1),
+            )
+        )
+
+        db.accounts().delete(db.accounts().get(visa)!!)
+
+        assertEquals(listOf(kept), db.transactions().all().map { it.id })
+        assertTrue("A bill into the deleted account goes too", db.recurring().all().isEmpty())
+        assertEquals(listOf(chequing, cash), db.accounts().all().map { it.id })
+    }
+
+    @Test fun deletingACategoryKeepsItsEntriesUncategorized() = runTest {
+        val visa = db.addAccount("Visa", AccountType.CREDIT)
+        val dining = db.addCategory("Dining")
+        val food = db.addCategory("Groceries")
+        val a = db.addExpense(12_00, day, visa, dining)
+        val b = db.addExpense(8_00, day, visa, dining)
+        val c = db.addExpense(50_00, day, visa, food)
+        val bill = db.recurring().insert(
+            RecurringEntity(
+                name = "Lunch club", type = TxType.EXPENSE, amount = 20_00, accountId = visa, categoryId = dining,
+                frequency = Frequency.WEEKLY, anchorDate = day, nextDate = day.plusWeeks(1),
+            )
+        )
+
+        db.categories().delete(dining)
+
+        assertEquals(3, db.transactions().count())
+        assertNull(db.transactions().get(a)?.categoryId)
+        assertNull(db.transactions().get(b)?.categoryId)
+        assertEquals(food, db.transactions().get(c)?.categoryId)
+        assertNull(db.recurring().get(bill)?.categoryId)
+    }
+
+    @Test fun deletingABillUnlinksTheEntriesItPosted() = runTest {
+        val chequing = db.addAccount("Chequing")
+        val bill = db.recurring().insert(
+            RecurringEntity(
+                name = "Rent", type = TxType.EXPENSE, amount = 1_350_00, accountId = chequing,
+                frequency = Frequency.MONTHLY, anchorDate = day, nextDate = day.plusMonths(1),
+            )
+        )
+        val posted = db.transactions().insert(
+            TransactionEntity(type = TxType.EXPENSE, amount = 1_350_00, date = day, accountId = chequing, note = "Rent", recurringId = bill)
+        )
+
+        db.recurring().delete(bill)
+
+        assertNull(db.transactions().get(posted)?.recurringId)
+        assertEquals(1, db.transactions().count())
+    }
+
+    // ── Categories ───────────────────────────────────────────────────────────
+
+    @Test fun categoriesWithCountsCountEachCategorysEntries() = runTest {
+        val visa = db.addAccount("Visa", AccountType.CREDIT)
+        val food = db.addCategory("Groceries", sortOrder = 0)
+        val dining = db.addCategory("Dining", sortOrder = 1)
+        val unused = db.addCategory("Gifts", sortOrder = 2)
+        val salary = db.addCategory("Salary", CategoryKind.INCOME, sortOrder = 0)
+        repeat(3) { db.addExpense(10_00L + it, day.minusDays(it.toLong()), visa, food) }
+        db.addExpense(25_00, day, visa, dining)
+        db.addIncome(2_000_00, day, visa, salary)
+        db.addExpense(1_00, day, visa, categoryId = null)
+
+        val counts = db.categories().observeWithCounts().first()
+        assertEquals("Expense kinds first, then by sort order", listOf(food, dining, unused, salary), counts.map { it.category.id })
+        assertEquals(listOf(3, 1, 0, 1), counts.map { it.entryCount })
+    }
+
+    @Test fun findByNameIgnoresCaseAndRespectsKind() = runTest {
+        val food = db.addCategory("Groceries")
+        db.addCategory("Refunds", CategoryKind.INCOME)
+        assertEquals(food, db.categories().findByName("groceries", CategoryKind.EXPENSE)?.id)
+        assertNull(db.categories().findByName("Groceries", CategoryKind.INCOME))
+        assertNull(db.categories().findByName("Refunds", CategoryKind.EXPENSE))
+    }
+
+    // ── Bills due ────────────────────────────────────────────────────────────
+
+    @Test fun dueListsOnlyActiveAutoPostingBillsOnOrBeforeToday() = runTest {
+        val chequing = db.addAccount("Chequing")
+        fun bill(name: String, next: LocalDate, active: Boolean = true, autoPost: Boolean = true) = RecurringEntity(
+            name = name, type = TxType.EXPENSE, amount = 10_00, accountId = chequing, frequency = Frequency.MONTHLY,
+            anchorDate = next, nextDate = next, active = active, autoPost = autoPost,
+        )
+        val today = db.recurring().insert(bill("Today", day))
+        val late = db.recurring().insert(bill("Late", day.minusDays(9)))
+        db.recurring().insert(bill("Tomorrow", day.plusDays(1)))
+        db.recurring().insert(bill("Paused", day.minusDays(1), active = false))
+        db.recurring().insert(bill("Reminder", day.minusDays(1), autoPost = false))
+
+        assertEquals(setOf(today, late), db.recurring().due(day).map { it.id }.toSet())
+    }
+
+    // ── Editor helpers ───────────────────────────────────────────────────────
+
+    @Test fun noteSuggestionsAreMostUsedFirstAndRememberTheirCategory() = runTest {
+        val visa = db.addAccount("Visa", AccountType.CREDIT)
+        val food = db.addCategory("Groceries")
+        val dining = db.addCategory("Dining")
+        db.addExpense(60_00, day.minusDays(9), visa, dining, note = "Metro")
+        db.addExpense(60_00, day.minusDays(2), visa, food, note = "Metro")
+        db.addExpense(55_00, day.minusDays(1), visa, food, note = "Metro")
+        db.addExpense(12_00, day, visa, dining, note = "Mezze bar")
+        db.addExpense(3_00, day, visa, dining, note = "Bagels")
+
+        assertEquals(listOf("Metro", "Mezze bar"), db.transactions().noteSuggestions("Me"))
+        assertEquals("The most recent use wins", food, db.transactions().lastCategoryForNote("Metro"))
+        assertNull(db.transactions().lastCategoryForNote("Never typed"))
+    }
+}
