@@ -62,7 +62,8 @@ jobs:
           arch: x86_64
           profile: pixel_7
           avd-name: phone
-          cores: 3
+          cores: 4
+          ram-size: 4096M
           disk-size: 3G
           force-avd-creation: true
           disable-animations: true
@@ -76,7 +77,8 @@ jobs:
           arch: x86_64
           profile: pixel_tablet
           avd-name: tablet
-          cores: 3
+          cores: 4
+          ram-size: 4096M
           disk-size: 3G
           force-avd-creation: true
           disable-animations: true

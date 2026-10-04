@@ -1,6 +1,7 @@
 package com.tally.app
 
 import android.graphics.Bitmap
+import android.os.ParcelFileDescriptor
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -103,14 +104,32 @@ class CaptureTest {
         waitOrExplain("Home (its Settings button)", 20_000) { onHome() }
     }
 
+    /**
+     * Home draws only its title row until its first load, and the Settings button lives in that
+     * row, so reaching Home is not the same as Home being drawn. The hero panel is the first thing
+     * the load brings; its label reads one of these three.
+     */
+    private fun homeDrawn(): Boolean =
+        exists("Margin") || exists("Over budget") || exists("Left from income")
+
+    /** Runs [command] as the shell user and waits for it to finish. */
+    private fun shell(command: String) {
+        val pfd = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
+        ParcelFileDescriptor.AutoCloseInputStream(pfd).use { it.readBytes() }
+    }
+
     @Test
     fun captureHome() {
         val name = checkNotNull(captureName)
         ensureHome()
+        waitOrExplain("Home's hero panel", 30_000) { homeDrawn() }
         compose.waitForIdle()
+        // A software-rendered emulator on a CI runner can leave a "System UI isn't responding"
+        // dialog over the app. Error dialogs close on this broadcast; the shell user may send it.
+        shell("am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS")
         // Idle covers Compose only. The status and navigation bars settle their tint and scrim
         // after the window does, and the capture is about exactly those bars.
-        Thread.sleep(1_500)
+        Thread.sleep(2_500)
 
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val shot = checkNotNull(instrumentation.uiAutomation.takeScreenshot()) { "The device returned no screenshot." }

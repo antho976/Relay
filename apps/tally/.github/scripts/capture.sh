@@ -40,8 +40,22 @@ wait_for_framework() {
 
 taken=()
 
+# Demo mode pins the clock, battery and signal and hides the emulator's own notification icons,
+# so two runs differ only where the app does. The bar's height and icon tint stay the system's.
+demo() { adb shell am broadcast -a com.android.systemui.demo -e command "$@" > /dev/null 2>&1 || true; }
+steady_bar() {
+  adb shell settings put global sysui_demo_allowed 1 > /dev/null 2>&1 || true
+  demo enter
+  demo clock -e hhmm 0941
+  demo battery -e level 100 -e plugged false
+  demo network -e wifi show -e level 4 -e mobile show -e datatype none -e level 4
+  demo notifications -e visible false
+}
+
 capture() {
   local name="$1" out
+  # A font-scale change or a SystemUI restart drops demo mode, so pin the bar before every shot.
+  steady_bar
   echo "::group::Capture $name"
   # am instrument exits 0 whether or not the test passed, so the verdict is read from its output.
   out=$(adb shell am instrument -w -e class com.tally.app.CaptureTest -e captureName "$name" "$RUNNER" 2>&1) || true
@@ -82,16 +96,13 @@ fi
 adb shell rm -rf "$REMOTE" > /dev/null 2>&1 || true
 echo "::endgroup::"
 
-echo "::group::Steady status bar"
-# Demo mode pins the clock, battery and signal and hides the emulator's own notification icons,
-# so two runs differ only where the app does. The bar's height and icon tint stay the system's.
-adb shell settings put global sysui_demo_allowed 1 || true
-demo() { adb shell am broadcast -a com.android.systemui.demo -e command "$@" > /dev/null 2>&1 || true; }
-demo enter
-demo clock -e hhmm 0941
-demo battery -e level 100 -e plugged false
-demo network -e wifi show -e level 4 -e mobile show -e datatype none -e level 4
-demo notifications -e visible false
+echo "::group::Quiet system"
+# A software-rendered emulator is still busy for a while after boot; SystemUI that is starved then
+# raises "System UI isn't responding" over whatever is on screen. Let it settle, and keep error
+# dialogs off the screen (CaptureTest also closes any that appear before it shoots).
+sleep 45
+adb shell settings put global hide_error_dialogs 1 || true
+adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS > /dev/null 2>&1 || true
 # Nothing here counts as user activity, and a screen that sleeps mid-run stops the Activity.
 adb shell svc power stayon true > /dev/null 2>&1 || true
 adb shell input keyevent KEYCODE_WAKEUP > /dev/null 2>&1 || true
