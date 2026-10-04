@@ -226,7 +226,7 @@ class BillEditViewModel @Inject constructor(
         viewModelScope.launch {
             val row = repo.deleteRecurring(id)
             // The undo holds the repository and the row, never this ViewModel.
-            if (row != null) notices.showUndo("Bill deleted") { repo.restoreRecurring(row) }
+            if (row != null) notices.showUndo("${row.name} deleted") { repo.restoreRecurring(row) }
             finished.send(Unit)
         }
     }

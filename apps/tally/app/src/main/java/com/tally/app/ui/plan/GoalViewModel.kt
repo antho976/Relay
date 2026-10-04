@@ -61,10 +61,20 @@ class GoalViewModel @Inject constructor(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GoalState(today = today))
 
+    /** True while a contribution is being written: a second tap in that time is the same one. */
+    private var posting = false
+
     /** Money in (positive) or out (negative). */
     fun contribute(amount: Long, note: String) {
-        if (amount == 0L || goalId == 0L) return
-        viewModelScope.launch { plan.contribute(goalId, amount, note) }
+        if (amount == 0L || goalId == 0L || posting) return
+        posting = true
+        viewModelScope.launch {
+            try {
+                plan.contribute(goalId, amount, note)
+            } finally {
+                posting = false
+            }
+        }
     }
 
     /** Removes one contribution at once and offers Undo. */

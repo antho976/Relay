@@ -153,7 +153,7 @@ class GoalEditViewModel @Inject constructor(
         viewModelScope.launch {
             val deleted = repo.deleteGoal(id)
             // The undo holds the repository and the rows, never this ViewModel.
-            if (deleted != null) notices.showUndo("Goal deleted") { repo.restoreGoal(deleted) }
+            if (deleted != null) notices.showUndo("${deleted.goal.name} deleted") { repo.restoreGoal(deleted) }
             finished.send(Unit)
         }
     }

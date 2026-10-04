@@ -57,6 +57,21 @@ class AppNav(private val controller: NavHostController) {
         go("entry?id=$id&type=${type.name}&account=$accountId&category=$categoryId")
 
     fun transactions(categoryId: Long = 0, accountId: Long = 0) = go("transactions?category=$categoryId&account=$accountId")
+
+    /**
+     * An account's entries, asked for from its editor. An existing account's editor opens from
+     * those entries, so this goes back to them: pushing them again would stack a second editor on
+     * a first one that still holds the account as it was loaded.
+     */
+    fun accountEntries(accountId: Long) {
+        if (!resumed) return
+        val previous = controller.previousBackStackEntry
+        val cameFromThem = previous != null &&
+            previous.destination.route == Routes.TRANSACTIONS &&
+            previous.arguments?.getLong(Args.ACCOUNT) == accountId
+        if (cameFromThem) controller.popBackStack() else transactions(accountId = accountId)
+    }
+
     fun accounts() = go(Routes.ACCOUNTS)
     fun accountEdit(id: Long = 0) = go("account/edit?id=$id")
     fun categories() = go(Routes.CATEGORIES)
