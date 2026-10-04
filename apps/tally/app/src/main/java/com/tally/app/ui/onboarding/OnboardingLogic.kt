@@ -3,6 +3,7 @@ package com.tally.app.ui.onboarding
 import androidx.compose.runtime.Immutable
 import com.tally.core.AccountType
 import com.tally.core.BudgetPeriod
+import kotlinx.serialization.Serializable
 import java.time.LocalDate
 
 /*
@@ -73,6 +74,38 @@ internal fun accountNameToSave(typed: String, type: AccountType): String = typed
 /** An amount field's one problem: text that is there but is not an amount. Empty is fine (zero). */
 internal fun amountProblem(text: String, parsed: Long?): String? =
     if (text.isNotBlank() && parsed == null) "That is not an amount. Type digits, like 1250.50" else null
+
+/**
+ * What the owner has filled in so far, as the flow keeps it in its SavedStateHandle so a process
+ * death does not send them back to the first question. The currency is not here: it is written
+ * to settings as it is picked. Amounts are kept as typed and read again at that currency.
+ */
+@Serializable
+internal data class SavedOnboarding(
+    val step: OnboardingStep = OnboardingStep.CURRENCY,
+    val moreCurrencies: Boolean = false,
+    val accountName: String = defaultAccountName(AccountType.CHEQUING),
+    val accountType: AccountType = AccountType.CHEQUING,
+    val balanceText: String = "",
+    val budgetText: String = "",
+) {
+    /** [into] with these answers; [parse] reads a typed amount in the current currency. */
+    fun applyTo(into: OnboardingState, parse: (String) -> Long?): OnboardingState = into.copy(
+        step = step,
+        moreCurrencies = moreCurrencies,
+        accountName = accountName,
+        accountType = accountType,
+        balanceText = balanceText,
+        balance = parse(balanceText),
+        budgetText = budgetText,
+        budget = parse(budgetText),
+    )
+
+    companion object {
+        fun of(s: OnboardingState): SavedOnboarding =
+            SavedOnboarding(s.step, s.moreCurrencies, s.accountName, s.accountType, s.balanceText, s.budgetText)
+    }
+}
 
 internal fun nextStep(step: OnboardingStep): OnboardingStep? = OnboardingStep.entries.getOrNull(step.ordinal + 1)
 

@@ -1,5 +1,6 @@
 package com.tally.app.ui.onboarding
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tally.app.data.Clock
@@ -11,6 +12,8 @@ import com.tally.app.data.repo.DataRepository
 import com.tally.app.data.repo.DataResult
 import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.data.repo.PlanRepository
+import com.tally.app.ui.common.keepDraft
+import com.tally.app.ui.common.savedDraft
 import com.tally.core.AccountType
 import com.tally.core.BudgetPeriod
 import com.tally.core.MoneyFormatter
@@ -28,11 +31,13 @@ import java.util.Locale
 import javax.inject.Inject
 
 /**
- * First run. The draft lives here until the last step; only the currency is written as it is
- * picked, so every amount on the next two steps already reads in it.
+ * First run. The draft lives here until the last step, kept in the SavedStateHandle as it changes
+ * so a process death resumes on the same question; only the currency is written as it is picked,
+ * so every amount on the next two steps already reads in it.
  */
 @HiltViewModel
 class OnboardingViewModel @Inject constructor(
+    savedStateHandle: SavedStateHandle,
     private val settings: SettingsRepository,
     private val ledger: LedgerRepository,
     private val plan: PlanRepository,
@@ -53,15 +58,19 @@ class OnboardingViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            val kept = savedStateHandle.savedDraft(SavedOnboarding.serializer())
             val s = settings.current()
+            val fmt = MoneyFormatter(s.currency, Locale.getDefault())
             draft.update {
-                it.copy(
+                val base = it.copy(
                     currency = s.currency,
                     deviceCurrency = Settings.defaultCurrency(),
                     period = s.periodFor(today),
                     loaded = true,
                 )
+                kept?.applyTo(base) { text -> fmt.parse(text) } ?: base
             }
+            draft.collect { savedStateHandle.keepDraft(SavedOnboarding.serializer(), SavedOnboarding.of(it)) }
         }
     }
 

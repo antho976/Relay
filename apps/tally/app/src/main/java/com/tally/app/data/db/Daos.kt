@@ -165,6 +165,21 @@ interface TransactionDao {
     @Query("SELECT COUNT(*) FROM transactions WHERE categoryId = :categoryId")
     suspend fun countForCategory(categoryId: Long): Int
 
+    /**
+     * The transfers between [accountId] and each other account: how many, and what they added to
+     * that other account's balance (below zero when it sent more than it got).
+     */
+    @Query(
+        """SELECT CASE WHEN accountId = :accountId THEN toAccountId ELSE accountId END AS otherId,
+                  COUNT(*) AS count,
+                  SUM(CASE WHEN accountId = :accountId THEN amount ELSE -amount END) AS net
+           FROM transactions
+           WHERE type = 'TRANSFER' AND toAccountId IS NOT NULL AND accountId != toAccountId
+             AND (accountId = :accountId OR toAccountId = :accountId)
+           GROUP BY otherId"""
+    )
+    suspend fun transfersWith(accountId: Long): List<TransferLink>
+
     @Query("UPDATE transactions SET categoryId = :to WHERE categoryId = :from")
     suspend fun moveCategory(from: Long, to: Long)
 
@@ -288,6 +303,14 @@ interface RecurringDao {
     /** Re-files bills when their category is deleted into another one. */
     @Query("UPDATE recurring SET categoryId = :to WHERE categoryId = :from")
     suspend fun moveCategory(from: Long, to: Long)
+
+    /** Bills that pay from or into the account; the foreign key deletes them with it. */
+    @Query("SELECT COUNT(*) FROM recurring WHERE accountId = :accountId OR toAccountId = :accountId")
+    suspend fun countForAccount(accountId: Long): Int
+
+    /** Bills filed under the category; they post uncategorized once it is deleted, unless moved. */
+    @Query("SELECT COUNT(*) FROM recurring WHERE categoryId = :categoryId")
+    suspend fun countForCategory(categoryId: Long): Int
 
     @Query("SELECT COUNT(*) FROM recurring") suspend fun count(): Int
 

@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.db.CategoryTotal
 import com.tally.app.data.db.CategoryWithCount
+import com.tally.app.data.repo.CategoryUse
 import com.tally.core.BudgetPeriod
 import com.tally.core.CategoryKind
 import com.tally.core.Copy
@@ -152,11 +153,41 @@ internal fun moveTargets(all: List<CategoryWithCount>, kind: CategoryKind, selfI
     all.filter { it.category.kind == kind && it.category.id != selfId && !it.category.archived }
         .map { MoveTarget(it.category.id, it.category.name, it.category.icon, it.category.color, it.entryCount) }
 
-/** The one line the snackbar says after a delete. */
-internal fun deletedLine(name: String, entries: Int, movedTo: String?): String = when {
-    entries == 0 -> "Category deleted"
-    movedTo != null -> "$name deleted · ${Copy.plural(entries, "entry", "entries")} moved to $movedTo"
-    else -> "$name deleted · ${Copy.plural(entries, "entry", "entries")} left uncategorized"
+/** What a deleted category's move covers, as one phrase ("3 entries and 1 bill"); null when nothing moves. */
+internal fun movingPhrase(use: CategoryUse): String? {
+    val parts = listOfNotNull(
+        if (use.entries > 0) Copy.plural(use.entries, "entry", "entries") else null,
+        if (use.bills > 0) Copy.plural(use.bills, "bill") else null,
+    )
+    return if (parts.isEmpty()) null else parts.joinToString(" and ")
+}
+
+/** The move sheet's heading: "Move its 3 entries and 1 bill to". */
+internal fun moveHeading(use: CategoryUse): String = "Move its ${movingPhrase(use).orEmpty()} to"
+
+/** The move sheet's line under the heading: what goes for good, the budget included by its amount. */
+internal fun moveNote(name: String, budget: String?): String =
+    if (budget != null) "$name is deleted, with its $budget budget. This cannot be undone."
+    else "$name is deleted. This cannot be undone."
+
+/** The sheet's last row, the choice to move nothing: what then happens to the entries and the bills. */
+internal fun leaveTitle(use: CategoryUse): String =
+    if (use.entries + use.bills == 1) "Leave it uncategorized" else "Leave them uncategorized"
+
+internal fun leaveSubtitle(use: CategoryUse): String = when {
+    use.entries > 0 && use.bills > 0 -> "Entries stay in the ledger and bills keep posting, with no category"
+    use.bills > 0 -> if (use.bills == 1) "It keeps posting, with no category" else "They keep posting, with no category"
+    else -> "They stay in the ledger with no category"
+}
+
+/**
+ * The one line the snackbar says after a delete: the budget that went with it by its amount, and
+ * where the entries and bills went.
+ */
+internal fun deletedLine(name: String, use: CategoryUse, budget: String?, movedTo: String?): String {
+    val head = if (budget != null) "$name deleted with its $budget budget" else "$name deleted"
+    val moved = movingPhrase(use) ?: return head
+    return if (movedTo != null) "$head · $moved moved to $movedTo" else "$head · $moved left uncategorized"
 }
 
 /** The spoken name of each icon key, for the picker's tiles. */

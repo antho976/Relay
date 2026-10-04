@@ -167,7 +167,11 @@ fun EntryScreen(state: EntryState, actions: EntryActions) {
     val fontScale = LocalDensity.current.fontScale
     var picking by rememberSaveable { mutableStateOf(false) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val pinHead = maxHeight >= PIN_MIN_HEIGHT && fontScale <= HERO_MAX_SCALE
+        // maxHeight is the whole window, measured outside imePadding, so the keyboard does not
+        // shrink it. Pinned under a keyboard the head would leave the note field no height at
+        // all, so while it is up the head scrolls with the form. The scroll area grows by what
+        // the head gave up, so the field being typed in stays about where it was on screen.
+        val pinHead = !imeVisible && maxHeight >= PIN_MIN_HEIGHT && fontScale <= HERO_MAX_SCALE
         Column(Modifier.fillMaxSize().imePadding().navigationBarsPadding()) {
             TopBar(onBack = actions.back) {
                 if (!state.isNew) {

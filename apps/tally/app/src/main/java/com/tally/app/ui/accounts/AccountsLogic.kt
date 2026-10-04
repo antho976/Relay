@@ -2,8 +2,12 @@ package com.tally.app.ui.accounts
 
 import androidx.compose.runtime.Immutable
 import com.tally.app.data.db.AccountBalance
+import com.tally.app.data.repo.AccountUse
+import com.tally.app.data.repo.OtherAccountChange
 import com.tally.core.AccountType
 import com.tally.core.Copy
+import com.tally.core.MoneyFormatter
+import kotlinx.serialization.Serializable
 
 /*
  * The pure half of Accounts: the list's readings, the editor's draft and its checks. No Android,
@@ -104,8 +108,12 @@ internal fun shareLine(line: AccountLine): String {
 
 // ── The editor ───────────────────────────────────────────────────────────────
 
-/** The editor's fields as typed. [opening] is [openingText] read as an amount; null when it is not one. */
+/**
+ * The editor's fields as typed. [opening] is [openingText] read as an amount; null when it is not
+ * one. Serializable so the editor can keep it in its SavedStateHandle across process death.
+ */
 @Immutable
+@Serializable
 data class AccountDraft(
     val name: String = "",
     val type: AccountType = AccountType.CHEQUING,
@@ -155,7 +163,43 @@ internal fun previewShare(id: Long, balance: Long, archived: Boolean, all: List<
     }
 }
 
-/** The delete dialog's sentence, with the real count, so the consequence is the number. */
-internal fun deleteAccountLine(name: String, entries: Int): String =
-    if (entries == 0) "Delete $name? It has no entries. This cannot be undone."
-    else "Delete $name and its ${Copy.plural(entries, "entry", "entries")}? This cannot be undone."
+/** What goes with a deleted account, as one phrase ("24 entries and 5 bills"); null when nothing does. */
+internal fun goesWith(use: AccountUse): String? {
+    val parts = listOfNotNull(
+        if (use.entries > 0) Copy.plural(use.entries, "entry", "entries") else null,
+        if (use.bills > 0) Copy.plural(use.bills, "bill") else null,
+    )
+    return if (parts.isEmpty()) null else parts.joinToString(" and ")
+}
+
+/** An account that stays, and how far its balance moves once the transfers with the deleted one are gone. */
+internal fun otherAccountLine(other: OtherAccountChange, money: MoneyFormatter): String {
+    val transfers = Copy.plural(other.transfers, "transfer")
+    val go = if (other.transfers == 1) "goes" else "go"
+    return when {
+        other.change > 0 -> "${other.name} goes up by ${money.format(other.change)}, since $transfers between them $go too."
+        other.change < 0 -> "${other.name} goes down by ${money.format(-other.change)}, since $transfers between them $go too."
+        else -> "$transfers with ${other.name} $go too, which leaves its balance where it is."
+    }
+}
+
+/**
+ * The delete dialog's text, with the real counts, so the consequence is the number: the entries
+ * and bills that go, every account that stays but reads differently without its transfers with
+ * this one, and, when there is anything to keep, that archiving keeps it.
+ */
+internal fun deleteAccountLine(name: String, use: AccountUse, money: MoneyFormatter, canArchive: Boolean): String {
+    val what = goesWith(use)
+    val go = if (use.entries + use.bills == 1) "goes" else "go"
+    val sentences = buildList {
+        add(if (what == null) "Delete $name? It has no entries and no bills." else "Delete $name? Its $what $go with it.")
+        use.others.forEach { add(otherAccountLine(it, money)) }
+        add("This cannot be undone.")
+        if (canArchive) add("Archiving keeps all of it and takes the account out of the pickers.")
+    }
+    return sentences.joinToString(" ")
+}
+
+/** The snackbar after the delete. */
+internal fun accountDeletedLine(name: String, use: AccountUse): String =
+    goesWith(use)?.let { "$name deleted with its $it" } ?: "$name deleted"

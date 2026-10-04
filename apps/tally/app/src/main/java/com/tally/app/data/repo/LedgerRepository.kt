@@ -38,6 +38,27 @@ data class LedgerFilter(
     val isNarrowed: Boolean get() = query.isNotBlank() || type != null || categoryId != null || accountId != null
 }
 
+/** What deleting an account takes with it, counted when the delete is asked for. */
+data class AccountUse(
+    /** Every entry that touches the account, transfers either way included. */
+    val entries: Int = 0,
+    /** Bills paying from or into it. */
+    val bills: Int = 0,
+    /** The accounts that stay but read differently once the transfers with this one are gone. */
+    val others: List<OtherAccountChange> = emptyList(),
+) {
+    val isEmpty: Boolean get() = entries == 0 && bills == 0
+}
+
+/** One account that stays: [transfers] with the deleted one go, which moves its balance by [change]. */
+data class OtherAccountChange(val name: String, val transfers: Int, val change: Long)
+
+/** What deleting a category touches: entries and bills it files (they can move), and its budget (it goes). */
+data class CategoryUse(val entries: Int = 0, val bills: Int = 0, val budget: Long? = null) {
+    /** Entries and bills can move to another category; a budget cannot, so it alone needs no choice. */
+    val hasMovable: Boolean get() = entries > 0 || bills > 0
+}
+
 @Singleton
 class LedgerRepository @Inject constructor(
     private val db: TallyDatabase,
@@ -110,6 +131,28 @@ class LedgerRepository @Inject constructor(
     suspend fun entriesForAccount(id: Long): Int = transactions.countForAccount(id)
     suspend fun entriesForCategory(id: Long): Int = transactions.countForCategory(id)
 
+    /** Everything [deleteAccount] would take or change, read in one transaction so the counts agree. */
+    suspend fun accountUse(id: Long): AccountUse = db.withTransaction {
+        val links = transactions.transfersWith(id).associateBy { it.otherId }
+        AccountUse(
+            entries = transactions.countForAccount(id),
+            bills = db.recurring().countForAccount(id),
+            // In the accounts' own order; deleting the transfers undoes what they added.
+            others = accounts.all().mapNotNull { a ->
+                links[a.id]?.let { OtherAccountChange(a.name, it.count, -it.net) }
+            },
+        )
+    }
+
+    /** Everything [deleteCategory] would move or remove. */
+    suspend fun categoryUse(id: Long): CategoryUse = db.withTransaction {
+        CategoryUse(
+            entries = transactions.countForCategory(id),
+            bills = db.recurring().countForCategory(id),
+            budget = budgets.getFor(id)?.amount,
+        )
+    }
+
     // ── Writes ───────────────────────────────────────────────────────────────
 
     /** Inserts when [tx] has no id, updates otherwise. Returns the row's id. */
@@ -145,7 +188,11 @@ class LedgerRepository @Inject constructor(
         if (account.id == 0L) accounts.insert(account.copy(name = account.name.trim(), sortOrder = accounts.nextSortOrder()))
         else { accounts.update(account.copy(name = account.name.trim())); account.id }
 
-    /** Removes the account and, through the foreign key, every entry that touches it. */
+    /**
+     * Removes the account and, through the foreign keys, every entry that touches it (transfers
+     * with other accounts included, so their balances move) and every bill paying from or into it.
+     * [accountUse] counts all of that first, for the dialog that asks.
+     */
     suspend fun deleteAccount(id: Long) {
         accounts.get(id)?.let { accounts.delete(it) }
     }
@@ -166,6 +213,17 @@ class LedgerRepository @Inject constructor(
         }
         budgets.deleteFor(id)
         categories.delete(id)
+    }
+
+    /**
+     * Undo for a category deleted with nothing filed under it: the row comes back with its id, and
+     * its budget with it. (With entries or bills moved there is no exact way back, so no Undo.)
+     */
+    suspend fun restoreCategory(category: CategoryEntity, budget: Long?) {
+        db.withTransaction {
+            categories.insert(category)
+            if (budget != null && budget > 0L) budgets.setAmount(category.id, budget)
+        }
     }
 
     /** First run: the default categories, once. */

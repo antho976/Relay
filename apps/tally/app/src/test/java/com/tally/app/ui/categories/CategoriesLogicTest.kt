@@ -3,6 +3,7 @@ package com.tally.app.ui.categories
 import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.db.CategoryTotal
 import com.tally.app.data.db.CategoryWithCount
+import com.tally.app.data.repo.CategoryUse
 import com.tally.app.ui.common.CategoryIcons
 import com.tally.core.BudgetPeriod
 import com.tally.core.CategoryKind
@@ -105,10 +106,42 @@ class CategoriesLogicTest {
         assertEquals(48, targets.first().entries)
     }
 
-    @Test fun theDeleteNoticeSaysWhereTheEntriesWent() {
-        assertEquals("Category deleted", deletedLine("Dining", 0, null))
-        assertEquals("Dining deleted · 61 entries moved to Groceries", deletedLine("Dining", 61, "Groceries"))
-        assertEquals("Dining deleted · 1 entry left uncategorized", deletedLine("Dining", 1, null))
+    @Test fun theDeleteNoticeSaysWhereTheEntriesAndBillsWentAndWhatBudgetWent() {
+        assertEquals("Dining deleted", deletedLine("Dining", CategoryUse(), null, null))
+        assertEquals("Dining deleted · 61 entries moved to Groceries", deletedLine("Dining", CategoryUse(entries = 61), null, "Groceries"))
+        assertEquals("Dining deleted · 1 entry left uncategorized", deletedLine("Dining", CategoryUse(entries = 1), null, null))
+        assertEquals(
+            "Streaming deleted with its $20.00 budget · 1 bill moved to Subscriptions",
+            deletedLine("Streaming", CategoryUse(bills = 1, budget = 2_000), "$20.00", "Subscriptions"),
+        )
+        assertEquals(
+            "Dining deleted · 3 entries and 2 bills left uncategorized",
+            deletedLine("Dining", CategoryUse(entries = 3, bills = 2), null, null),
+        )
+        assertEquals("Streaming deleted with its $20.00 budget", deletedLine("Streaming", CategoryUse(budget = 2_000), "$20.00", null))
+    }
+
+    /** A category with a bill and no entries yet still asks where the bill goes, instead of un-filing it. */
+    @Test fun billsAloneAreSomethingToMoveAndABudgetAloneIsNot() {
+        assertTrue(CategoryUse(bills = 1).hasMovable)
+        assertTrue(CategoryUse(entries = 1).hasMovable)
+        assertFalse(CategoryUse(budget = 2_000).hasMovable)
+        assertFalse(CategoryUse().hasMovable)
+    }
+
+    @Test fun theMoveSheetNamesEntriesBillsAndTheBudget() {
+        assertEquals("Move its 1 bill to", moveHeading(CategoryUse(bills = 1)))
+        assertEquals("Move its 3 entries and 1 bill to", moveHeading(CategoryUse(entries = 3, bills = 1)))
+        assertEquals("Streaming is deleted, with its $20.00 budget. This cannot be undone.", moveNote("Streaming", "$20.00"))
+        assertEquals("Dining is deleted. This cannot be undone.", moveNote("Dining", null))
+        assertEquals("Leave it uncategorized", leaveTitle(CategoryUse(bills = 1)))
+        assertEquals("Leave them uncategorized", leaveTitle(CategoryUse(entries = 2)))
+        assertEquals("It keeps posting, with no category", leaveSubtitle(CategoryUse(bills = 1)))
+        assertEquals("They stay in the ledger with no category", leaveSubtitle(CategoryUse(entries = 2)))
+        assertEquals(
+            "Entries stay in the ledger and bills keep posting, with no category",
+            leaveSubtitle(CategoryUse(entries = 2, bills = 1)),
+        )
     }
 
     @Test fun everyIconAndHueHasASpokenName() {
@@ -118,9 +151,14 @@ class CategoriesLogicTest {
     }
 
     @Test fun everyLineKeepsTheVoice() {
+        val use = CategoryUse(entries = 3, bills = 1, budget = 32_000)
         val lines = listOf(
-            deletedLine("Dining", 3, "Groceries"),
-            deletedLine("Dining", 3, null),
+            deletedLine("Dining", use, "$320.00", "Groceries"),
+            deletedLine("Dining", use, "$320.00", null),
+            moveHeading(use),
+            moveNote("Dining", "$320.00"),
+            leaveTitle(use),
+            leaveSubtitle(use),
             MISSING_NAME,
             categoryNameProblem("Dining", CategoryKind.EXPENSE, 0, all.map { it.category }).orEmpty(),
         ) + CategoryIcons.all.keys.map { iconName(it) }

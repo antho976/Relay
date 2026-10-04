@@ -42,12 +42,14 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.tally.app.data.repo.CategoryUse
 import com.tally.app.ui.common.CategoryBadge
 import com.tally.app.ui.common.CategoryIcons
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.Group
 import com.tally.app.ui.common.GroupRow
+import com.tally.app.ui.common.LocalMoney
 import com.tally.app.ui.common.bounceClick
 import com.tally.app.ui.common.selectableColors
 import com.tally.app.ui.theme.categoryColor
@@ -174,18 +176,21 @@ private fun Swatch(index: Int, selected: Boolean, onClick: () -> Unit) {
 }
 
 /**
- * Deleting a category that holds entries: they move to another category of its kind, or stay as
- * uncategorized. Picking a row is the commit; dismissing keeps the category.
+ * Deleting a category that files entries or bills: they move to another category of its kind, or
+ * stay uncategorized. The sheet names both counts and the budget that goes by its amount. Picking
+ * a row is the commit; dismissing keeps the category.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun MoveSheet(
     name: String,
-    entries: Int,
+    use: CategoryUse,
     targets: List<MoveTarget>,
     onMove: (Long?) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val money = LocalMoney.current
+    val budget = use.budget?.let { money.format(it) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -201,17 +206,17 @@ internal fun MoveSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                "Move its ${Copy.plural(entries, "entry", "entries")} to",
+                moveHeading(use),
                 style = MaterialTheme.typography.headlineMedium,
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.semantics { heading() },
             )
             Text(
-                "$name is deleted, with its budget if it has one. This cannot be undone.",
+                moveNote(name, budget),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            val rows: List<@Composable (Shape) -> Unit> = targets.map { t -> moveRow(t, onMove) } + leaveRow(onMove)
+            val rows: List<@Composable (Shape) -> Unit> = targets.map { t -> moveRow(t, onMove) } + leaveRow(use, onMove)
             Group(rows = rows)
         }
     }
@@ -228,11 +233,11 @@ private fun moveRow(t: MoveTarget, onMove: (Long?) -> Unit): @Composable (Shape)
     )
 }
 
-private fun leaveRow(onMove: (Long?) -> Unit): @Composable (Shape) -> Unit = { shape ->
+private fun leaveRow(use: CategoryUse, onMove: (Long?) -> Unit): @Composable (Shape) -> Unit = { shape ->
     GroupRow(
-        "Leave them uncategorized",
+        leaveTitle(use),
         shape,
-        subtitle = "They stay in the ledger with no category",
+        subtitle = leaveSubtitle(use),
         leading = { GlyphBadge(Icons.AutoMirrored.Rounded.LabelOff, size = 40.dp) },
         chevron = false,
         onClick = { onMove(null) },

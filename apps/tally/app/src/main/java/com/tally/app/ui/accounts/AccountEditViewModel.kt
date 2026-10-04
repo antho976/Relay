@@ -6,11 +6,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tally.app.data.db.AccountEntity
 import com.tally.app.data.prefs.SettingsRepository
+import com.tally.app.data.repo.AccountUse
 import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.ui.common.Notices
+import com.tally.app.ui.common.keepDraft
+import com.tally.app.ui.common.savedDraft
 import com.tally.app.ui.nav.Args
 import com.tally.core.AccountType
-import com.tally.core.Copy
 import com.tally.core.MoneyFormatter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
@@ -36,6 +38,8 @@ data class AccountEditState(
     /** True when the account exists in the database (editing, not new). */
     val stored: Boolean = false,
     val storedName: String = "",
+    /** The account is archived as saved, so the delete dialog has no archive to offer. */
+    val storedArchived: Boolean = false,
     /** The balance as it will read with the draft's opening balance. */
     val balance: Long = 0,
     val entryCount: Int = 0,
@@ -43,10 +47,13 @@ data class AccountEditState(
     val problems: AccountProblems = AccountProblems(),
     /** True once a save was tried with problems: the form then says what is missing. */
     val showErrors: Boolean = false,
-    /** The real entry count while the delete dialog is open; null when it is closed. */
-    val confirmDelete: Int? = null,
+    /** What goes with the account, counted afresh, while the delete dialog is open; null when it is closed. */
+    val confirmDelete: AccountUse? = null,
 ) {
     val isNew: Boolean get() = !stored
+
+    /** Archiving is the way to keep the entries and bills, offered when there are some and it is not archived yet. */
+    val canArchive: Boolean get() = stored && !storedArchived && confirmDelete?.isEmpty == false
 }
 
 @HiltViewModel
@@ -59,7 +66,7 @@ class AccountEditViewModel @Inject constructor(
 
     private val argId: Long = savedStateHandle.get<Long>(Args.ID) ?: 0L
 
-    private data class Flags(val loaded: Boolean = false, val showErrors: Boolean = false, val confirmDelete: Int? = null)
+    private data class Flags(val loaded: Boolean = false, val showErrors: Boolean = false, val confirmDelete: AccountUse? = null)
 
     private val draft = MutableStateFlow(AccountDraft())
     private val stored = MutableStateFlow<AccountEntity?>(null)
@@ -83,6 +90,7 @@ class AccountEditViewModel @Inject constructor(
             loaded = f.loaded,
             stored = st != null,
             storedName = st?.name.orEmpty(),
+            storedArchived = st?.archived ?: false,
             balance = balance,
             entryCount = row?.entryCount ?: 0,
             share = previewShare(st?.id ?: 0L, balance, d.archived, balances),
@@ -94,11 +102,13 @@ class AccountEditViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            // A draft kept before the process died wins over the stored row: it is what was typed.
+            val kept = savedStateHandle.savedDraft(AccountDraft.serializer())
             val s = settings.current()
             val account = if (argId != 0L) ledger.account(argId) else null
             if (account != null) {
                 val money = MoneyFormatter(s.currency, Locale.getDefault())
-                draft.value = AccountDraft(
+                draft.value = kept ?: AccountDraft(
                     name = account.name,
                     type = account.type,
                     openingText = if (account.openingBalance == 0L) "" else money.formatInput(account.openingBalance),
@@ -110,9 +120,10 @@ class AccountEditViewModel @Inject constructor(
                 stored.value = account
             } else {
                 // The first account becomes the default, so the entry screen has somewhere to start.
-                draft.value = AccountDraft(isDefault = s.defaultAccountId == 0L)
+                draft.value = kept ?: AccountDraft(isDefault = s.defaultAccountId == 0L)
             }
             flags.update { it.copy(loaded = true) }
+            draft.collect { savedStateHandle.keepDraft(AccountDraft.serializer(), it) }
         }
     }
 
@@ -162,32 +173,56 @@ class AccountEditViewModel @Inject constructor(
         }
     }
 
-    /** Counts the entries afresh and opens the dialog that names them. */
+    /** Counts afresh what goes with the account (entries, bills, other accounts' transfers) and opens the dialog that names it. */
     fun requestDelete() {
         val original = stored.value ?: return
         if (busy) return
         viewModelScope.launch {
-            val count = ledger.entriesForAccount(original.id)
-            flags.update { it.copy(confirmDelete = count) }
+            val use = ledger.accountUse(original.id)
+            flags.update { it.copy(confirmDelete = use) }
         }
     }
 
     fun dismissDelete() = flags.update { it.copy(confirmDelete = null) }
 
-    /** Irreversible: the account goes, and through the foreign key every entry that touches it. */
+    /**
+     * Irreversible: the account goes, and through the foreign keys every entry that touches it and
+     * every bill that pays from or into it.
+     */
     fun delete() {
         val original = stored.value ?: return
         if (busy) return
         busy = true
-        val count = flags.value.confirmDelete ?: 0
+        val use = flags.value.confirmDelete ?: AccountUse()
         flags.update { it.copy(confirmDelete = null) }
         viewModelScope.launch {
             ledger.deleteAccount(original.id)
             if (settings.current().defaultAccountId == original.id) settings.setDefaultAccount(0L)
-            notices.show(
-                if (count == 0) "${original.name} deleted"
-                else "${original.name} deleted with its ${Copy.plural(count, "entry", "entries")}"
-            )
+            notices.show(accountDeletedLine(original.name, use))
+            finished.send(Unit)
+        }
+    }
+
+    /**
+     * The dialog's way to keep everything: the account as saved, archived, so its entries and
+     * bills stay and it leaves the pickers. Undo puts it back as it was, default included.
+     */
+    fun archiveInstead() {
+        val original = stored.value ?: return
+        if (busy || original.archived) return
+        busy = true
+        flags.update { it.copy(confirmDelete = null) }
+        val repo = ledger
+        val prefs = settings
+        viewModelScope.launch {
+            repo.saveAccount(original.copy(archived = true))
+            val wasDefault = prefs.current().defaultAccountId == original.id
+            if (wasDefault) prefs.setDefaultAccount(0L)
+            // The undo holds the repositories and the row, never this ViewModel.
+            notices.showUndo("${original.name} archived · its entries and bills stay") {
+                repo.saveAccount(original)
+                if (wasDefault) prefs.setDefaultAccount(original.id)
+            }
             finished.send(Unit)
         }
     }

@@ -38,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -69,8 +70,10 @@ import com.tally.app.ui.common.LocalMoney
 import com.tally.app.ui.common.PANEL_GAP
 import com.tally.app.ui.common.PaceMeter
 import com.tally.app.ui.common.PageTitle
+import com.tally.app.ui.common.SaveRefusal
 import com.tally.app.ui.common.StatChip
 import com.tally.app.ui.common.TopBar
+import com.tally.app.ui.common.refusalLine
 import com.tally.app.ui.nav.AppNav
 import com.tally.app.ui.theme.categoryColor
 import com.tally.core.Copy
@@ -119,6 +122,7 @@ data class GoalEditActions(
 @Composable
 fun GoalEditScreen(state: GoalEditState, actions: GoalEditActions) {
     var picking by rememberSaveable { mutableStateOf(false) }
+    var saveAttempts by rememberSaveable { mutableIntStateOf(0) }
     val d = state.draft
     Column(Modifier.fillMaxSize().imePadding().navigationBarsPadding()) {
         TopBar(onBack = actions.back) {
@@ -144,9 +148,10 @@ fun GoalEditScreen(state: GoalEditState, actions: GoalEditActions) {
                     GroupBlock(shape) { HueSwatches(d.color, actions.setColor) }
                 }
                 Group(rows = listOf(colourRow), title = "Colour")
-                HeroAction("Save goal", actions.save, Modifier.fillMaxWidth())
-                if (state.showErrors && state.problems.any) {
-                    GroupFooter("Fill in what is marked above to save", isError = true)
+                Column(Modifier.fillMaxWidth()) {
+                    val p = state.problems
+                    SaveRefusal(if (state.showErrors) refusalLine(listOf(p.name, p.target)) else null, saveAttempts)
+                    HeroAction("Save goal", { saveAttempts++; actions.save() }, Modifier.fillMaxWidth())
                 }
             }
         }
@@ -172,11 +177,11 @@ private fun TargetHero(state: GoalEditState, modifier: Modifier = Modifier) {
     HeroPanel(modifier) {
         HeroLabel(Icons.Rounded.Flag, "Target", end = money.currency.currencyCode, tint = hue)
         Spacer(Modifier.height(10.dp))
+        // Not a live region: the figure follows a text field, and TalkBack already echoes each key.
         HeroFigure(
             money.formatWhole(target),
             color = if (target > 0L) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
             description = "Target, " + money.formatWhole(target),
-            live = true,
         )
         Text(
             d.name.trim().ifEmpty { "Name it below" },
