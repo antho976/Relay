@@ -71,20 +71,22 @@ fun rowShape(index: Int, count: Int): Shape {
 /** The sans group header over a slab group (the Settings voice), with an optional reading. */
 @Composable
 fun GroupHeader(title: String, modifier: Modifier = Modifier, trailing: String? = null) {
-    Row(
-        modifier.fillMaxWidth().padding(start = ROW_PAD, end = ROW_PAD, bottom = 10.dp),
-        verticalAlignment = Alignment.Bottom,
-    ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f).semantics { heading() },
-        )
-        if (trailing != null) {
-            Text(trailing, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
+    EndsRow(
+        start = {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.semantics { heading() },
+            )
+        },
+        end = if (trailing != null) {
+            { Text(trailing, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        } else {
+            null
+        },
+        modifier = modifier.fillMaxWidth().padding(start = ROW_PAD, end = ROW_PAD, bottom = 10.dp),
+    )
 }
 
 /** The one note under a group. [isError] for the quiet inline error line. */
@@ -176,13 +178,25 @@ fun GroupRow(
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         leading?.invoke()
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = titleColor)
-            if (subtitle != null) {
-                Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        trailing?.invoke(this)
+        // The title and the trailing reading share the line until a word of the title would break;
+        // then the reading moves under it (200% font, long amounts).
+        EndsRow(
+            start = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title, style = MaterialTheme.typography.bodyLarge, color = titleColor)
+                    if (subtitle != null) {
+                        Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            },
+            end = if (trailing != null) {
+                { Row(verticalAlignment = Alignment.CenterVertically) { trailing(this) } }
+            } else {
+                null
+            },
+            modifier = Modifier.weight(1f),
+            gap = 16.dp,
+        )
         if (chevron && onClick != null) {
             Icon(
                 Icons.AutoMirrored.Rounded.KeyboardArrowRight,

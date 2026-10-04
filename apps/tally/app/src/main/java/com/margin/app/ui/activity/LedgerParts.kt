@@ -56,6 +56,7 @@ import com.margin.app.ui.common.LocalMoney
 import com.margin.app.ui.common.PANEL_GAP
 import com.margin.app.ui.common.PANEL_PAD
 import com.margin.app.ui.common.Panel
+import com.margin.app.ui.common.PanelHeader
 import com.margin.app.ui.common.StackedBar
 import com.margin.app.ui.common.StatChip
 import com.margin.app.ui.common.TextAction
@@ -194,18 +195,7 @@ internal fun HeroLabel(
     meta: String? = null,
     iconTint: Color = MaterialTheme.colorScheme.primary,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        IconBadge(icon, tint = iconTint)
-        Text(
-            label.uppercase(),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.weight(1f),
-        )
-        if (meta != null) {
-            Text(meta, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
+    PanelHeader(icon, label, meta = meta, tint = iconTint)
 }
 
 /** A serif figure over its mono label, keyed to its colour in the bar by a dot. */

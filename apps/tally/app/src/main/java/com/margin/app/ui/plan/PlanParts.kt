@@ -47,7 +47,6 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -59,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import com.margin.app.ui.common.Aside
 import com.margin.app.ui.common.GlyphBadge
 import com.margin.app.ui.common.IconBadge
+import com.margin.app.ui.common.PanelHeader
 import com.margin.app.ui.common.ROW_PAD
 import com.margin.app.ui.common.TextAction
 import com.margin.app.ui.common.bounceClick
@@ -84,22 +84,7 @@ internal fun HeroLabel(
     end: String? = null,
     tint: Color = MaterialTheme.colorScheme.primary,
 ) {
-    Row(
-        modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        IconBadge(icon, tint = tint)
-        Text(
-            label.uppercase(),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.weight(1f).semantics { heading() },
-        )
-        if (end != null) {
-            Text(end, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
+    PanelHeader(icon, label, modifier, meta = end, tint = tint)
 }
 
 /**

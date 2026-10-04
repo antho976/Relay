@@ -238,29 +238,7 @@ private fun PeriodStepper(label: String, canGoNext: Boolean, onPrevious: () -> U
 /** The lit panel's label row: a glyph tile, the mono name of the reading, a mono reading at the end. */
 @Composable
 private fun LensHeroLabel(icon: ImageVector, label: String, meta: String?, tint: Color = MaterialTheme.colorScheme.primary) {
-    // Past 1.5x font scale the reading moves under the label, so neither breaks inside a word.
-    val stacked = LocalDensity.current.fontScale > 1.5f
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        IconBadge(icon, tint = tint)
-        if (stacked) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(label.uppercase(), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onBackground)
-                if (!meta.isNullOrBlank()) {
-                    Text(meta, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        } else {
-            Text(
-                label.uppercase(),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.weight(1f),
-            )
-            if (!meta.isNullOrBlank()) {
-                Text(meta, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    }
+    PanelHeader(icon, label, meta = meta, tint = tint)
 }
 
 /**

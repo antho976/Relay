@@ -42,8 +42,9 @@ class HomeScreenshotTest {
         accounts = Fixtures.accounts,
         hasEntries = true,
         loaded = true,
-        week = listOf(4_210L, 9_830L, 2_150L, 0L, 3_410L, 0L, 0L),
-        weekStart = Fixtures.TODAY.minusDays(4),
+        // Sunday 11 Oct to Saturday 17 Oct; today is the Wednesday.
+        week = listOf(4_210L, 9_830L, 2_150L, 3_410L, 0L, 0L, 0L),
+        weekStart = Fixtures.TODAY.minusDays(3),
         lastPeriodSameDay = 141_200,
         lastPeriodIncomeSameDay = 215_000,
     )

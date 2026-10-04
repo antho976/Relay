@@ -70,7 +70,8 @@ data class HomeState(
     val loaded: Boolean = false,
     /** Spent per day of the current week, in display order (week start first). */
     val week: List<Long> = List(7) { 0L },
-    val weekStart: LocalDate = today,
+    /** Defaults to the Sunday on or before [today]; the view model passes the owner's week start. */
+    val weekStart: LocalDate = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.SUNDAY)),
     /** What the previous period had spent by the same day, for "vs last month". */
     val lastPeriodSameDay: Long = 0,
     val lastPeriodIncomeSameDay: Long = 0,

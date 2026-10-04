@@ -32,12 +32,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -116,6 +118,53 @@ fun IconBadge(
 }
 
 /**
+ * Two ends of one line: [start] takes the room, [end] sits at the far edge. When the longest word
+ * of [start] and the whole of [end] cannot share the width (a 200% font, a long reading), [end]
+ * drops under [start] instead of squeezing it until a word breaks in the middle.
+ */
+@Composable
+fun EndsRow(
+    start: @Composable () -> Unit,
+    end: (@Composable () -> Unit)?,
+    modifier: Modifier = Modifier,
+    gap: Dp = 12.dp,
+    stackedGap: Dp = 2.dp,
+) {
+    if (end == null) {
+        Box(modifier) { start() }
+        return
+    }
+    Layout(contents = listOf(start, end), modifier = modifier) { (starts, ends), constraints ->
+        val first = starts.first()
+        val last = ends.first()
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val gapPx = gap.roundToPx()
+        val endPlaceable = last.measure(loose)
+        val bounded = constraints.hasBoundedWidth
+        val room = constraints.maxWidth
+        val sideBySide = !bounded || first.minIntrinsicWidth(Constraints.Infinity) + gapPx + endPlaceable.width <= room
+        if (sideBySide) {
+            val startMax = if (bounded) room - gapPx - endPlaceable.width else Constraints.Infinity
+            val startPlaceable = first.measure(loose.copy(maxWidth = startMax.coerceAtLeast(0)))
+            val width = if (bounded) room else startPlaceable.width + gapPx + endPlaceable.width
+            val height = maxOf(startPlaceable.height, endPlaceable.height).coerceAtLeast(constraints.minHeight)
+            layout(width, height) {
+                startPlaceable.placeRelative(0, (height - startPlaceable.height) / 2)
+                endPlaceable.placeRelative(width - endPlaceable.width, (height - endPlaceable.height) / 2)
+            }
+        } else {
+            val startPlaceable = first.measure(loose)
+            val below = stackedGap.roundToPx()
+            val height = (startPlaceable.height + below + endPlaceable.height).coerceAtLeast(constraints.minHeight)
+            layout(room, height) {
+                startPlaceable.placeRelative(0, 0)
+                endPlaceable.placeRelative(0, startPlaceable.height + below)
+            }
+        }
+    }
+}
+
+/**
  * A panel's header: icon tile, the mono label, and either a reading or a `view all →` at the end.
  * The label names the panel; it is not a kicker above a heading.
  */
@@ -129,22 +178,36 @@ fun PanelHeader(
     onAction: (() -> Unit)? = null,
     tint: Color = MaterialTheme.colorScheme.primary,
 ) {
+    val actionLabel = action?.takeIf { onAction != null }
+    val reading = meta?.takeIf { it.isNotBlank() }
     Row(
         modifier.fillMaxWidth().heightIn(min = 40.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         IconBadge(icon, tint = tint)
-        Text(
-            title.uppercase(),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.weight(1f).semantics { heading() },
+        EndsRow(
+            start = {
+                Text(
+                    title.uppercase(),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.semantics { heading() },
+                )
+            },
+            end = if (actionLabel != null || reading != null) {
+                {
+                    if (actionLabel != null && onAction != null) {
+                        TextAction(actionLabel, onAction, color = MaterialTheme.colorScheme.primary)
+                    } else if (reading != null) {
+                        Text(reading, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            } else {
+                null
+            },
+            modifier = Modifier.weight(1f),
         )
-        when {
-            action != null && onAction != null -> TextAction(action, onAction, color = MaterialTheme.colorScheme.primary)
-            meta != null -> Text(meta, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
     }
 }
 
