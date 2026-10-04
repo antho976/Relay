@@ -90,7 +90,7 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v6
         with:
-          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+          cache-read-only: ${{ github.ref_name != github.event.repository.default_branch }}
       - name: Install the Android platform (configuration needs it)
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
@@ -119,7 +119,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6
         with:
-          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+          cache-read-only: ${{ github.ref_name != github.event.repository.default_branch }}
           add-job-summary: on-failure
 
       - name: Install the Android platform this build compiles against
