@@ -33,8 +33,7 @@ class PlanRepository @Inject constructor(
             budgets.deleteFor(categoryId)
             return
         }
-        val existing = budgets.getFor(categoryId)
-        budgets.upsert(BudgetEntity(id = existing?.id ?: 0, categoryId = categoryId, amount = amount))
+        budgets.setAmount(categoryId, amount)
     }
 
     suspend fun budgetFor(categoryId: Long): BudgetEntity? = budgets.getFor(categoryId)

@@ -132,11 +132,15 @@ class LedgerRepository @Inject constructor(
         else { categories.update(category.copy(name = category.name.trim())); category.id }
 
     /**
-     * Deletes a category. Its entries move to [moveTo] when given, or become uncategorized; its
-     * budget goes with it.
+     * Deletes a category. Its entries and bills move to [moveTo] when given, or become
+     * uncategorized; its budget goes with it.
      */
     suspend fun deleteCategory(id: Long, moveTo: Long?) = db.withTransaction {
-        if (moveTo != null && moveTo != id) transactions.moveCategory(id, moveTo)
+        if (moveTo != null && moveTo != id) {
+            transactions.moveCategory(id, moveTo)
+            // Bills filed under it move too, or they would post uncategorized from now on.
+            db.recurring().moveCategory(id, moveTo)
+        }
         budgets.deleteFor(id)
         categories.delete(id)
     }

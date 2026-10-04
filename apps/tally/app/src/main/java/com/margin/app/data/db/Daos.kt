@@ -170,6 +170,17 @@ interface BudgetDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertAll(budgets: List<BudgetEntity>)
     @Query("DELETE FROM budgets WHERE categoryId = :categoryId") suspend fun deleteFor(categoryId: Long)
     @Query("SELECT * FROM budgets WHERE categoryId = :categoryId") suspend fun getFor(categoryId: Long): BudgetEntity?
+
+    /**
+     * Sets [categoryId]'s limit. The read and the write are one transaction: apart, two quick
+     * saves for a new budget both read "none", and the second upsert lands on id 0 and vanishes.
+     * (SQLite's own UPSERT clause is 3.24+, newer than the platform SQLite on API 26 to 29.)
+     */
+    @Transaction
+    suspend fun setAmount(categoryId: Long, amount: Long) {
+        val existing = getFor(categoryId)
+        upsert(BudgetEntity(id = existing?.id ?: 0, categoryId = categoryId, amount = amount))
+    }
     @Query(
         """SELECT b.id, b.categoryId, b.amount, c.name AS categoryName, c.color AS categoryColor, c.icon AS categoryIcon
            FROM budgets b LEFT JOIN categories c ON c.id = b.categoryId
@@ -177,6 +188,7 @@ interface BudgetDao {
     )
     fun observeAll(): Flow<List<BudgetRow>>
     @Query("SELECT * FROM budgets") suspend fun all(): List<BudgetEntity>
+    @Query("SELECT COUNT(*) FROM budgets") suspend fun count(): Int
     @Query("DELETE FROM budgets") suspend fun deleteAll()
 }
 
@@ -202,6 +214,12 @@ interface RecurringDao {
     @Query("SELECT * FROM recurring WHERE active = 1 AND autoPost = 1 AND nextDate <= :today")
     suspend fun due(today: LocalDate): List<RecurringEntity>
 
+    /** Re-files bills when their category is deleted into another one. */
+    @Query("UPDATE recurring SET categoryId = :to WHERE categoryId = :from")
+    suspend fun moveCategory(from: Long, to: Long)
+
+    @Query("SELECT COUNT(*) FROM recurring") suspend fun count(): Int
+
     @Query("DELETE FROM recurring") suspend fun deleteAll()
 }
 
@@ -213,6 +231,7 @@ interface GoalDao {
     @Query("DELETE FROM goals WHERE id = :id") suspend fun delete(id: Long)
     @Query("SELECT * FROM goals WHERE id = :id") suspend fun get(id: Long): GoalEntity?
     @Query("SELECT * FROM goals") suspend fun all(): List<GoalEntity>
+    @Query("SELECT COUNT(*) FROM goals") suspend fun count(): Int
 
     @Query(
         """SELECT g.*, COALESCE((SELECT SUM(amount) FROM goal_contributions WHERE goalId = g.id), 0) AS saved

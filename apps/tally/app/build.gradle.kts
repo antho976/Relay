@@ -87,7 +87,7 @@ android {
     }
 
     sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
-    // Room's exported schema is also a unit-test input: SchemaContractTest reads it.
+    // Room's exported schema rides along as a unit-test resource for schema checks.
     sourceSets["test"].resources.srcDir("$projectDir/schemas")
 
     lint {

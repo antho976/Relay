@@ -108,7 +108,8 @@ class DataRepository @Inject constructor(
             settings.setCurrency(file.currency)
             settings.setOnboarded(true)
             settings.setSampleLoaded(false)
-            file.accounts.firstOrNull { !it.archived }?.let { settings.setDefaultAccount(it.id) }
+            // Always reset: an id from the old data must not survive into the restored set.
+            settings.setDefaultAccount(file.accounts.firstOrNull { !it.archived }?.id ?: 0)
         }.fold(
             onSuccess = { DataResult.Done("Restored ${file.transactions.size} entries") },
             onFailure = { DataResult.Failed("The restore did not finish. Your data is unchanged.") },
@@ -203,23 +204,33 @@ class DataRepository @Inject constructor(
                         note = r.note,
                         createdAt = now,
                     )
-                }.filter { it.type != TxType.TRANSFER || it.toAccountId != it.accountId }
-                db.transactions().insertAll(entities)
-                entities.size
+                }
+                val valid = entities.filter { it.type != TxType.TRANSFER || it.toAccountId != it.accountId }
+                db.transactions().insertAll(valid)
+                valid.size to (entities.size - valid.size)
             }
         }.fold(
-            onSuccess = { n ->
-                val skipped = parsed.errors.size
+            onSuccess = { (n, sameAccountTransfers) ->
+                val skipped = parsed.errors.size + sameAccountTransfers
                 DataResult.Done(if (skipped == 0) "Imported $n entries" else "Imported $n entries, skipped $skipped")
             },
             onFailure = { DataResult.Failed("The import did not finish. Nothing was added.") },
         )
     }
 
-    /** Fills an EMPTY ledger with the labeled sample set. Refuses to mix it into real entries. */
+    /**
+     * True when nothing the owner made exists yet. The seeded default categories do not count;
+     * an account, a budget, a bill or a goal does, because loading the sample replaces them all.
+     */
+    suspend fun isEmptyForSample(): Boolean = withContext(Dispatchers.IO) {
+        db.transactions().count() == 0 && db.accounts().count() == 0 && db.budgets().count() == 0 &&
+            db.recurring().count() == 0 && db.goals().count() == 0
+    }
+
+    /** Fills an EMPTY app with the labeled sample set. Refuses to replace anything the owner made. */
     suspend fun loadSample(): DataResult = withContext(Dispatchers.IO) {
-        if (db.transactions().count() > 0) {
-            return@withContext DataResult.Failed("Sample data loads only into an empty ledger. Erase first to try it.")
+        if (!isEmptyForSample()) {
+            return@withContext DataResult.Failed("Sample data loads only into an empty app. Erase everything first to try it.")
         }
         val s = settings.current()
         val fmt = MoneyFormatter(s.currency, Locale.getDefault())
