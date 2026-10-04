@@ -16,6 +16,6 @@ val LocalMoney = staticCompositionLocalOf { MoneyFormatter("CAD", Locale.getDefa
  */
 @Composable
 fun rememberMoney(currency: String): MoneyFormatter {
-    val locale = LocalConfiguration.current.locales[0] ?: Locale.getDefault()
+    val locale: Locale = LocalConfiguration.current.locales[0]
     return remember(currency, locale) { MoneyFormatter(currency, locale) }
 }
