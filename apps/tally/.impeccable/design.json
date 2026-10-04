@@ -1,0 +1,968 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-04T19:57:10+00:00",
+  "title": "Design System: Margin",
+  "extensions": {
+    "platform": "android (Jetpack Compose, Material 3); dp and sp units; tokens live in ui/theme/*.kt",
+    "colorMeta": {
+      "ember": {
+        "role": "primary",
+        "displayName": "Ember",
+        "canonical": "#D4761F",
+        "oklch": "oklch(65.8% 0.149 56.8)",
+        "tonalRamp": [
+          "#160700",
+          "#3B1C01",
+          "#643304",
+          "#914D0A",
+          "#C06812",
+          "#EA8A39",
+          "#FDB885",
+          "#FEEADC"
+        ]
+      },
+      "accent-red": {
+        "role": "primary",
+        "displayName": "Clear Red (owner accent)",
+        "canonical": "#E23D3D",
+        "oklch": "oklch(60.8% 0.202 25.6)",
+        "tonalRamp": [
+          "#1F0001",
+          "#4C0206",
+          "#7F0711",
+          "#B5111E",
+          "#E23D3D",
+          "#FB766E",
+          "#FEB3AB",
+          "#FFE9E6"
+        ]
+      },
+      "pearl-ground": {
+        "role": "neutral",
+        "displayName": "Pearl Ground",
+        "canonical": "#110F0C",
+        "oklch": "oklch(17.0% 0.007 78.1)",
+        "tonalRamp": [
+          "#0D0B08",
+          "#272521",
+          "#44423E",
+          "#63615D",
+          "#85827E",
+          "#A7A5A0",
+          "#CCC9C4",
+          "#F1EEE9"
+        ]
+      },
+      "pearl-ground-top": {
+        "role": "neutral",
+        "displayName": "Pearl Gradient Top",
+        "canonical": "#17120E",
+        "oklch": "oklch(18.7% 0.011 60.7)",
+        "tonalRamp": [
+          "#0F0A07",
+          "#292420",
+          "#47413C",
+          "#66605B",
+          "#88817C",
+          "#ABA49E",
+          "#CFC8C2",
+          "#F4EDE7"
+        ]
+      },
+      "pearl-ground-bottom": {
+        "role": "neutral",
+        "displayName": "Pearl Gradient Bottom",
+        "canonical": "#0A0806",
+        "oklch": "oklch(13.6% 0.006 71.3)",
+        "tonalRamp": [
+          "#0D0B08",
+          "#272522",
+          "#44413E",
+          "#64615D",
+          "#85827E",
+          "#A8A4A1",
+          "#CCC8C5",
+          "#F1EEEA"
+        ]
+      },
+      "container-lowest": {
+        "role": "neutral",
+        "displayName": "Recessed Well",
+        "canonical": "#0C0A08",
+        "oklch": "oklch(14.6% 0.006 69.2)",
+        "tonalRamp": [
+          "#0D0B09",
+          "#272522",
+          "#44413F",
+          "#63615E",
+          "#85827F",
+          "#A7A4A1",
+          "#CCC8C5",
+          "#F1EEEA"
+        ]
+      },
+      "container-low": {
+        "role": "neutral",
+        "displayName": "Bar Brown",
+        "canonical": "#16120F",
+        "oklch": "oklch(18.6% 0.009 59.1)",
+        "tonalRamp": [
+          "#0E0A08",
+          "#282421",
+          "#46413D",
+          "#65605C",
+          "#87817D",
+          "#A9A4A0",
+          "#CEC8C3",
+          "#F3EDE9"
+        ]
+      },
+      "container": {
+        "role": "neutral",
+        "displayName": "Panel Brown",
+        "canonical": "#1A1613",
+        "oklch": "oklch(20.4% 0.009 59.1)",
+        "tonalRamp": [
+          "#0E0A08",
+          "#282421",
+          "#46413D",
+          "#65605C",
+          "#86817D",
+          "#A9A4A0",
+          "#CEC8C4",
+          "#F3EDE9"
+        ]
+      },
+      "container-high": {
+        "role": "neutral",
+        "displayName": "Slab Brown",
+        "canonical": "#221C16",
+        "oklch": "oklch(23.1% 0.015 67.0)",
+        "tonalRamp": [
+          "#0F0A05",
+          "#2A241E",
+          "#47413A",
+          "#676059",
+          "#888179",
+          "#ABA39C",
+          "#D0C8BF",
+          "#F5EDE4"
+        ]
+      },
+      "container-highest": {
+        "role": "neutral",
+        "displayName": "Track Brown",
+        "canonical": "#2A231C",
+        "oklch": "oklch(26.2% 0.016 67.0)",
+        "tonalRamp": [
+          "#100A05",
+          "#2B241D",
+          "#484039",
+          "#686058",
+          "#898178",
+          "#ACA39A",
+          "#D1C7BE",
+          "#F6EDE3"
+        ]
+      },
+      "outline": {
+        "role": "neutral",
+        "displayName": "Warm Outline",
+        "canonical": "#38302A",
+        "oklch": "oklch(31.6% 0.016 59.0)",
+        "tonalRamp": [
+          "#100A05",
+          "#2B231E",
+          "#49403A",
+          "#685F59",
+          "#8A8079",
+          "#ADA39C",
+          "#D1C7BF",
+          "#F7ECE4"
+        ]
+      },
+      "outline-variant": {
+        "role": "neutral",
+        "displayName": "Quiet Edge",
+        "canonical": "#2A241F",
+        "oklch": "oklch(26.5% 0.013 62.0)",
+        "tonalRamp": [
+          "#0F0A06",
+          "#2A241F",
+          "#47413B",
+          "#67605A",
+          "#88817B",
+          "#ABA39D",
+          "#D0C7C1",
+          "#F5EDE6"
+        ]
+      },
+      "on-ground": {
+        "role": "neutral",
+        "displayName": "Paper White",
+        "canonical": "#F2EFEA",
+        "oklch": "oklch(95.3% 0.007 80.7)",
+        "tonalRamp": [
+          "#0D0B08",
+          "#272521",
+          "#44423E",
+          "#63615D",
+          "#85827D",
+          "#A7A5A0",
+          "#CCC9C4",
+          "#F1EEE9"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Warm Muted",
+        "canonical": "#BFB6AA",
+        "oklch": "oklch(78.0% 0.020 75.3)",
+        "tonalRamp": [
+          "#100A03",
+          "#2B241A",
+          "#484137",
+          "#686055",
+          "#898176",
+          "#ACA498",
+          "#D1C8BB",
+          "#F6EDE0"
+        ]
+      },
+      "amoled-ground": {
+        "role": "neutral",
+        "displayName": "Pure Black",
+        "canonical": "#000000",
+        "oklch": "oklch(0.0% 0.000 0.0)",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#A5A5A5",
+          "#C9C9C9",
+          "#EEEEEE"
+        ]
+      },
+      "amoled-ground-bottom": {
+        "role": "neutral",
+        "displayName": "Pure Black Gradient Bottom",
+        "canonical": "#050507",
+        "oklch": "oklch(11.6% 0.006 285.4)",
+        "tonalRamp": [
+          "#0B0B0E",
+          "#252528",
+          "#414245",
+          "#616165",
+          "#828286",
+          "#A4A4A9",
+          "#C8C9CD",
+          "#EEEEF2"
+        ]
+      },
+      "amoled-container-low": {
+        "role": "neutral",
+        "displayName": "OLED Bar",
+        "canonical": "#060606",
+        "oklch": "oklch(12.2% 0.000 89.9)",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#A5A5A5",
+          "#C9C9C9",
+          "#EEEEEE"
+        ]
+      },
+      "amoled-surface": {
+        "role": "neutral",
+        "displayName": "OLED Surface",
+        "canonical": "#080808",
+        "oklch": "oklch(13.4% 0.000 89.9)",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#A5A5A5",
+          "#C9C9C9",
+          "#EEEEEE"
+        ]
+      },
+      "amoled-container": {
+        "role": "neutral",
+        "displayName": "OLED Panel",
+        "canonical": "#0A0A0A",
+        "oklch": "oklch(14.5% 0.000 89.9)",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#A5A5A5",
+          "#C9C9C9",
+          "#EEEEEE"
+        ]
+      },
+      "amoled-container-high": {
+        "role": "neutral",
+        "displayName": "OLED Slab",
+        "canonical": "#111111",
+        "oklch": "oklch(17.8% 0.000 89.9)",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#A5A5A5",
+          "#C9C9C9",
+          "#EEEEEE"
+        ]
+      },
+      "amoled-container-highest": {
+        "role": "neutral",
+        "displayName": "OLED Track",
+        "canonical": "#1A1A1A",
+        "oklch": "oklch(21.8% 0.000 89.9)",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#A5A5A5",
+          "#C9C9C9",
+          "#EEEEEE"
+        ]
+      },
+      "amoled-outline-variant": {
+        "role": "neutral",
+        "displayName": "OLED Edge",
+        "canonical": "#1E1E1E",
+        "oklch": "oklch(23.5% 0.000 89.9)",
+        "tonalRamp": [
+          "#0B0B0B",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#A5A5A5",
+          "#C9C9C9",
+          "#EEEEEE"
+        ]
+      },
+      "state-over": {
+        "role": "error",
+        "displayName": "Over-Budget Red",
+        "canonical": "#D9534A",
+        "oklch": "oklch(61.8% 0.170 27.0)",
+        "tonalRamp": [
+          "#1F0001",
+          "#4D0003",
+          "#800109",
+          "#AD2825",
+          "#D54F47",
+          "#FE7469",
+          "#FDB4AB",
+          "#FFE9E6"
+        ]
+      },
+      "state-under": {
+        "role": "tertiary",
+        "displayName": "Under-Budget Green",
+        "canonical": "#6FB98A",
+        "oklch": "oklch(72.4% 0.102 155.1)",
+        "tonalRamp": [
+          "#000F05",
+          "#012E17",
+          "#03502B",
+          "#257247",
+          "#4A9467",
+          "#6EB889",
+          "#92DDAC",
+          "#C5FFD8"
+        ]
+      },
+      "hue-sage": {
+        "role": "data",
+        "displayName": "Category Sage",
+        "canonical": "#7FB27A",
+        "oklch": "oklch(71.3% 0.096 142.3)",
+        "tonalRamp": [
+          "#001000",
+          "#022F01",
+          "#1E4E1B",
+          "#3F6F3A",
+          "#5F915B",
+          "#82B57D",
+          "#A5DAA0",
+          "#CCFFC6"
+        ]
+      },
+      "hue-teal": {
+        "role": "data",
+        "displayName": "Category Teal",
+        "canonical": "#4FA9A0",
+        "oklch": "oklch(67.7% 0.087 186.6)",
+        "tonalRamp": [
+          "#000F0D",
+          "#022C28",
+          "#054D47",
+          "#0E7069",
+          "#37938B",
+          "#5EB7AE",
+          "#83DCD2",
+          "#B8FFF6"
+        ]
+      },
+      "hue-sky": {
+        "role": "data",
+        "displayName": "Category Sky",
+        "canonical": "#6A9FD8",
+        "oklch": "oklch(68.9% 0.102 251.2)",
+        "tonalRamp": [
+          "#000B1D",
+          "#022648",
+          "#0B4376",
+          "#306499",
+          "#5286BD",
+          "#74A9E3",
+          "#A1CEFE",
+          "#E3F0FF"
+        ]
+      },
+      "hue-iris": {
+        "role": "data",
+        "displayName": "Category Iris",
+        "canonical": "#8C87D9",
+        "oklch": "oklch(66.2% 0.120 285.4)",
+        "tonalRamp": [
+          "#0C002E",
+          "#24135B",
+          "#3E347E",
+          "#5C55A2",
+          "#7C76C7",
+          "#9E99ED",
+          "#C3C2FE",
+          "#ECEDFF"
+        ]
+      },
+      "hue-orchid": {
+        "role": "data",
+        "displayName": "Category Orchid",
+        "canonical": "#C27BC0",
+        "oklch": "oklch(68.1% 0.126 327.8)",
+        "tonalRamp": [
+          "#190019",
+          "#410141",
+          "#632263",
+          "#864385",
+          "#AA65A9",
+          "#CF87CD",
+          "#F6ABF3",
+          "#FEE5FD"
+        ]
+      },
+      "hue-rose": {
+        "role": "data",
+        "displayName": "Category Rose",
+        "canonical": "#D9768E",
+        "oklch": "oklch(68.3% 0.125 5.5)",
+        "tonalRamp": [
+          "#1E0008",
+          "#49021E",
+          "#741A38",
+          "#993D57",
+          "#BF5F77",
+          "#E6829A",
+          "#FEB0C0",
+          "#FFE8EC"
+        ]
+      },
+      "hue-coral": {
+        "role": "data",
+        "displayName": "Category Coral",
+        "canonical": "#E08A5F",
+        "oklch": "oklch(71.4% 0.120 46.8)",
+        "tonalRamp": [
+          "#190500",
+          "#401701",
+          "#6C2C02",
+          "#96471A",
+          "#BC693F",
+          "#E28C61",
+          "#FFB692",
+          "#FFE9DF"
+        ]
+      },
+      "hue-amber": {
+        "role": "data",
+        "displayName": "Category Amber",
+        "canonical": "#D9A441",
+        "oklch": "oklch(75.1% 0.130 79.8)",
+        "tonalRamp": [
+          "#120900",
+          "#332100",
+          "#573C01",
+          "#7F5A05",
+          "#A9780B",
+          "#CF9B36",
+          "#F5BF5F",
+          "#FEECCE"
+        ]
+      },
+      "hue-olive": {
+        "role": "data",
+        "displayName": "Category Olive",
+        "canonical": "#A3A84E",
+        "oklch": "oklch(70.9% 0.114 111.9)",
+        "tonalRamp": [
+          "#0C0C00",
+          "#262700",
+          "#444600",
+          "#636701",
+          "#84892C",
+          "#A7AC52",
+          "#CBD176",
+          "#F0F79B"
+        ]
+      },
+      "hue-sand": {
+        "role": "data",
+        "displayName": "Category Sand",
+        "canonical": "#C2A585",
+        "oklch": "oklch(73.9% 0.056 69.6)",
+        "tonalRamp": [
+          "#140800",
+          "#361F01",
+          "#553C1F",
+          "#765C3E",
+          "#987D5E",
+          "#BC9F80",
+          "#E1C3A3",
+          "#FEEBD6"
+        ]
+      },
+      "hue-slate": {
+        "role": "data",
+        "displayName": "Category Slate",
+        "canonical": "#8D99A6",
+        "oklch": "oklch(67.8% 0.024 250.3)",
+        "tonalRamp": [
+          "#040C15",
+          "#1C2630",
+          "#39434E",
+          "#57636F",
+          "#788490",
+          "#9AA7B4",
+          "#BECBD8",
+          "#E3F0FE"
+        ]
+      },
+      "hue-brick": {
+        "role": "data",
+        "displayName": "Category Brick",
+        "canonical": "#B8664F",
+        "oklch": "oklch(59.9% 0.111 36.5)",
+        "tonalRamp": [
+          "#1C0200",
+          "#461002",
+          "#712610",
+          "#954731",
+          "#BB6851",
+          "#E18B73",
+          "#FEB5A0",
+          "#FFE9E3"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display-large": {
+        "displayName": "Hero Figure",
+        "purpose": "The display serif figure inside the lit hero panel; steps down a rung as the text grows, font scale capped at 1.3x."
+      },
+      "display-medium": {
+        "displayName": "Hero Figure, long",
+        "purpose": "The hero figure when its text runs long."
+      },
+      "headline-large": {
+        "displayName": "Page Title",
+        "purpose": "Every screen's serif title, with its sans context line under it."
+      },
+      "headline-medium": {
+        "displayName": "Panel Figure",
+        "purpose": "A secondary figure inside a panel, such as the net across accounts."
+      },
+      "headline-small": {
+        "displayName": "Stat Value",
+        "purpose": "The serif value in a stat tile."
+      },
+      "title-large": {
+        "displayName": "Title Large",
+        "purpose": "Sans titles, tabular."
+      },
+      "title-medium": {
+        "displayName": "Row Amount",
+        "purpose": "Amounts at a row's end."
+      },
+      "title-small": {
+        "displayName": "Group Header",
+        "purpose": "The sans header over a slab group, and compact readings."
+      },
+      "body-large": {
+        "displayName": "Row Title",
+        "purpose": "Row titles, field text, segment labels, the context line under a page title."
+      },
+      "body-medium": {
+        "displayName": "Row Subtitle",
+        "purpose": "Row subtitles and the line under a hero figure; the italic aside."
+      },
+      "body-small": {
+        "displayName": "Caption",
+        "purpose": "Chip text, captions, tile details, legend and nav labels."
+      },
+      "label-large": {
+        "displayName": "Panel Name",
+        "purpose": "Mono uppercase panel names and lowercase text actions."
+      },
+      "label-medium": {
+        "displayName": "Stat Label",
+        "purpose": "Mono uppercase stat-tile labels, panel readings, day initials."
+      },
+      "label-small": {
+        "displayName": "Label Small",
+        "purpose": "The smallest mono label."
+      },
+      "mono-action": {
+        "displayName": "Action Label",
+        "purpose": "The bold mono label on hero and secondary actions, sentence case."
+      }
+    },
+    "shadows": [
+      {
+        "name": "fab-lift",
+        "value": "Material elevation 2dp, 4dp pressed",
+        "purpose": "The add FAB only; every other surface is flat and rises by the tonal ladder."
+      }
+    ],
+    "surfaces": [
+      {
+        "name": "panel-edge",
+        "value": "1dp solid outline-variant (#2A241F)",
+        "purpose": "The quiet edge of panels, stat tiles and the nav bar's top."
+      },
+      {
+        "name": "hero-light",
+        "value": "linear-gradient(180deg, accent 22%, accent 6%, container) over container; 1dp accent edge at 28%",
+        "purpose": "The one lit hero panel per view."
+      },
+      {
+        "name": "glyph-wash",
+        "value": "accent or hue at 16% (tiles) / 15% (category badges)",
+        "purpose": "The tinted tile behind every leading glyph."
+      },
+      {
+        "name": "selection",
+        "value": "1dp accent ring (1.5dp on segment thumbs) over a 15% accent wash; idle ring outline at 35%",
+        "purpose": "Every selectable control."
+      },
+      {
+        "name": "muted-floor",
+        "value": "alpha 0.65",
+        "purpose": "The lowest alpha muted text may take and still clear 4.5:1."
+      },
+      {
+        "name": "disabled",
+        "value": "alpha 0.35",
+        "purpose": "Disabled actions and rows."
+      }
+    ],
+    "motion": [
+      {
+        "name": "fast",
+        "value": "150ms",
+        "purpose": "Selection ring and wash, nav pill, tab cross-fade."
+      },
+      {
+        "name": "standard",
+        "value": "240ms",
+        "purpose": "Default enter, exit and state transitions."
+      },
+      {
+        "name": "emphasized",
+        "value": "320ms",
+        "purpose": "Pushed screens sliding in by an eighth of the width."
+      },
+      {
+        "name": "draw",
+        "value": "900ms",
+        "purpose": "Meter, bar and chart fills drawing in once."
+      },
+      {
+        "name": "ease-decelerate",
+        "value": "cubic-bezier(0.05, 0.7, 0.1, 1)",
+        "purpose": "Enter."
+      },
+      {
+        "name": "ease-accelerate",
+        "value": "cubic-bezier(0.3, 0, 0.8, 0.15)",
+        "purpose": "Exit."
+      },
+      {
+        "name": "ease-standard",
+        "value": "cubic-bezier(0.2, 0, 0, 1)",
+        "purpose": "State changes."
+      },
+      {
+        "name": "ease-draw",
+        "value": "cubic-bezier(0.39, 0.575, 0.565, 1)",
+        "purpose": "Fills drawing in: moves at once, settles softly."
+      },
+      {
+        "name": "press-bounce",
+        "value": "scale 0.97, spring damping medium-bouncy, stiffness medium-low",
+        "purpose": "The one press language; no ripple except under TalkBack."
+      },
+      {
+        "name": "snappy",
+        "value": "spring, no bounce, stiffness medium",
+        "purpose": "The segmented thumb gliding to its pick."
+      },
+      {
+        "name": "remove-animations",
+        "value": "animator scale 0 collapses every spec to a cut",
+        "purpose": "Accessibility: honoured everywhere."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "compact",
+        "value": "0dp",
+        "purpose": "Bottom bar (72dp) and a floating add FAB at bottom end."
+      },
+      {
+        "name": "medium",
+        "value": "600dp",
+        "purpose": "An 88dp nav rail at the start with the FAB at its top."
+      },
+      {
+        "name": "font-1.3x",
+        "value": "fontScale > 1.3",
+        "purpose": "Segments wrap into chips, choice rows and figure rows stack; hero figure stops growing."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Hero Action",
+      "kind": "button",
+      "refersTo": "button-hero",
+      "description": "A view's one do-it-now act: accent fill, measured on-accent label, mono bold, at least 56dp.",
+      "html": "<button class=\"ds-hero-action\">Save expense</button>",
+      "css": ".ds-hero-action { min-height: 56px; min-width: 280px; padding: 16px 20px; border: none; border-radius: 12px; background: #D4761F; color: #110F0C; font-family: 'Droid Sans Mono', ui-monospace, monospace; font-weight: 700; font-size: 16px; line-height: 20px; letter-spacing: 1px; cursor: pointer; transition: transform 180ms cubic-bezier(0.2,0,0,1); } .ds-hero-action:hover { background: #DE8530; } .ds-hero-action:active { transform: scale(0.97); } .ds-hero-action:focus-visible { outline: 2px solid #F2EFEA; outline-offset: 3px; } .ds-hero-action:disabled { background: rgba(212,118,31,0.35); cursor: default; }"
+    },
+    {
+      "name": "Secondary Action",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "The hero's sidekick: same shape on the raised slab, mono label; destructive turns the label red.",
+      "html": "<div class=\"ds-sec-row\"><button class=\"ds-sec-action\">Load sample data</button><button class=\"ds-sec-action ds-sec-danger\">Erase everything</button></div>",
+      "css": ".ds-sec-row { display: flex; gap: 12px; flex-wrap: wrap; } .ds-sec-action { min-height: 56px; padding: 16px 20px; border: none; border-radius: 12px; background: #221C16; color: #F2EFEA; font-family: 'Droid Sans Mono', ui-monospace, monospace; font-weight: 700; font-size: 16px; line-height: 20px; letter-spacing: 1px; cursor: pointer; transition: transform 180ms cubic-bezier(0.2,0,0,1); } .ds-sec-action:hover { background: #2A231C; } .ds-sec-action:active { transform: scale(0.97); } .ds-sec-action:focus-visible { outline: 2px solid #D4761F; outline-offset: 3px; } .ds-sec-danger { color: #D9534A; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "text-field",
+      "description": "A filled slab led by a glyph badge; the accent cursor marks focus, a 1dp red edge marks an error.",
+      "html": "<label class=\"ds-field\"><span class=\"ds-field-badge\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"4\" y=\"5\" width=\"16\" height=\"15\" rx=\"2\"/><path d=\"M4 10h16M9 3v4M15 3v4\"/></svg></span><input class=\"ds-field-input\" placeholder=\"Name this bill\"><span class=\"ds-field-suffix\">CAD</span></label>",
+      "css": ".ds-field { display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 14px 18px; border-radius: 16px; background: #221C16; border: 1px solid transparent; max-width: 380px; } .ds-field:hover { background: #2A231C; } .ds-field:focus-within { border-color: rgba(212,118,31,0.6); } .ds-field-badge { width: 44px; height: 44px; flex: none; border-radius: 12px; background: #2A231C; color: #F2EFEA; display: grid; place-items: center; } .ds-field-input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: #F2EFEA; caret-color: #D4761F; font-family: Roboto, system-ui, sans-serif; font-size: 16px; line-height: 24px; } .ds-field-input::placeholder { color: #BFB6AA; } .ds-field-suffix { font-family: 'Droid Sans Mono', ui-monospace, monospace; font-size: 13px; letter-spacing: 0.8px; color: #BFB6AA; }"
+    },
+    {
+      "name": "Bottom Navigation",
+      "kind": "nav",
+      "refersTo": "nav-bar",
+      "description": "Four tabs on the raised low rung; the picked tab's glyph sits in the accent on a 16% pill.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item ds-nav-on\" href=\"#\"><span class=\"ds-nav-pill\"><svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 11l8-6 8 6v8a1 1 0 0 1-1 1h-4v-5h-6v5H5a1 1 0 0 1-1-1z\"/></svg></span><span>Home</span></a><a class=\"ds-nav-item\" href=\"#\"><span class=\"ds-nav-pill\"><svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M6 4h12v16l-3-2-3 2-3-2-3 2z\"/><path d=\"M9 9h6M9 13h6\"/></svg></span><span>Activity</span></a><a class=\"ds-nav-item\" href=\"#\"><span class=\"ds-nav-pill\"><svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"11\" cy=\"12\" r=\"6.5\"/><path d=\"M17 11h2v3h-2\"/></svg></span><span>Plan</span></a><a class=\"ds-nav-item\" href=\"#\"><span class=\"ds-nav-pill\"><svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M6 19v-7M12 19V5M18 19v-10\"/></svg></span><span>Insights</span></a></nav>",
+      "css": ".ds-nav { display: flex; height: 72px; background: #16120F; border-top: 1px solid #2A241F; max-width: 420px; } .ds-nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #BFB6AA; text-decoration: none; font-family: Roboto, system-ui, sans-serif; font-size: 12px; line-height: 16px; } .ds-nav-pill { width: 60px; height: 32px; border-radius: 16px; display: grid; place-items: center; transition: background 150ms cubic-bezier(0.2,0,0,1); } .ds-nav-item:hover .ds-nav-pill { background: rgba(242,239,234,0.06); } .ds-nav-item:focus-visible { outline: 2px solid #D4761F; outline-offset: 3px; } .ds-nav-on { color: #F2EFEA; font-weight: 600; } .ds-nav-on .ds-nav-pill, .ds-nav-on:hover .ds-nav-pill { background: rgba(212,118,31,0.16); color: #D4761F; }"
+    },
+    {
+      "name": "Choice Chip",
+      "kind": "chip",
+      "refersTo": "choice-chip",
+      "description": "A capsule choice: a faint outline ring idle, the accent ring over a 15% wash when picked.",
+      "html": "<div class=\"ds-chips\"><button class=\"ds-chip ds-chip-on\" aria-pressed=\"true\">Monthly</button><button class=\"ds-chip\">Weekly</button><button class=\"ds-chip\">Yearly</button></div>",
+      "css": ".ds-chips { display: flex; flex-wrap: wrap; gap: 8px; } .ds-chip { min-height: 40px; padding: 9px 16px; border-radius: 999px; background: transparent; border: 1px solid rgba(56,48,42,0.35); color: #BFB6AA; font-family: Roboto, system-ui, sans-serif; font-size: 14px; line-height: 20px; cursor: pointer; transition: border-color 150ms cubic-bezier(0.2,0,0,1), background 150ms cubic-bezier(0.2,0,0,1), transform 180ms; } .ds-chip:hover { border-color: #38302A; color: #F2EFEA; } .ds-chip:active { transform: scale(0.97); } .ds-chip:focus-visible { outline: 2px solid #D4761F; outline-offset: 3px; } .ds-chip-on { border-color: #D4761F; background: rgba(212,118,31,0.15); color: #F2EFEA; }"
+    },
+    {
+      "name": "Sliding Segments",
+      "kind": "custom",
+      "refersTo": "segmented-track",
+      "description": "A recessed track of equal cells with one ringed thumb that glides to the pick.",
+      "html": "<div class=\"ds-seg\" role=\"tablist\"><button class=\"ds-seg-cell ds-seg-on\" role=\"tab\" aria-selected=\"true\">Budgets</button><button class=\"ds-seg-cell\" role=\"tab\">Bills</button><button class=\"ds-seg-cell\" role=\"tab\">Goals</button></div>",
+      "css": ".ds-seg { display: flex; border-radius: 12px; background: #0C0A08; max-width: 400px; padding: 3px; } .ds-seg-cell { flex: 1; min-height: 42px; border: 1.5px solid transparent; border-radius: 10px; background: transparent; color: #BFB6AA; font-family: Roboto, system-ui, sans-serif; font-size: 16px; line-height: 24px; cursor: pointer; transition: border-color 150ms, background 150ms, transform 180ms; } .ds-seg-cell:hover { color: #F2EFEA; } .ds-seg-cell:active { transform: scale(0.97); } .ds-seg-cell:focus-visible { outline: 2px solid #D4761F; outline-offset: 3px; } .ds-seg-on { border-color: #D4761F; background: rgba(212,118,31,0.15); color: #F2EFEA; }"
+    },
+    {
+      "name": "Hero Panel with Pace Meter",
+      "kind": "card",
+      "refersTo": "hero-panel",
+      "description": "The one lit panel per view: glyph-led header, the serif figure, its explaining line, the pace meter with its tick, and stat chips.",
+      "html": "<section class=\"ds-hero\"><div class=\"ds-ph\"><span class=\"ds-badge\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"3\" y=\"6\" width=\"18\" height=\"13\" rx=\"2.5\"/><path d=\"M16 12.5h2\"/><path d=\"M5 6l10-3v3\"/></svg></span><span class=\"ds-ph-name\">MARGIN</span><span class=\"ds-ph-meta\">On pace</span></div><div class=\"ds-hero-fig\">$1,616</div><p class=\"ds-hero-line\">of $2,900 budget, $1,284 spent</p><div class=\"ds-meter\" role=\"img\" aria-label=\"Spent 44 percent, even pace 45 percent\"><span class=\"ds-meter-fill\" style=\"width:44%\"></span><span class=\"ds-meter-tick\" style=\"left:45%\"></span></div><div class=\"ds-chiprow\"><span class=\"ds-stat-chip\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"4\" y=\"5\" width=\"16\" height=\"15\" rx=\"2\"/><path d=\"M4 10h16M9 3v4M15 3v4\"/></svg>18 days left</span><span class=\"ds-stat-chip\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M7 19v-6M12 19V7M17 19v-9\"/></svg>$90 a day</span></div></section>",
+      "css": ".ds-hero { max-width: 400px; padding: 20px; border-radius: 24px; background: linear-gradient(180deg, rgba(212,118,31,0.22), rgba(212,118,31,0.06) 50%, #1A1613), #1A1613; border: 1px solid rgba(212,118,31,0.28); color: #F2EFEA; } .ds-ph { display: flex; align-items: center; gap: 12px; min-height: 40px; } .ds-badge { width: 32px; height: 32px; flex: none; border-radius: 10px; background: rgba(212,118,31,0.16); color: #D4761F; display: grid; place-items: center; } .ds-ph-name { flex: 1; font-family: 'Droid Sans Mono', ui-monospace, monospace; font-weight: 500; font-size: 13px; letter-spacing: 0.8px; } .ds-ph-meta { font-family: 'Droid Sans Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.6px; color: #BFB6AA; } .ds-hero-fig { margin-top: 16px; font-family: 'Noto Serif', Georgia, serif; font-size: 52px; line-height: 58px; font-variant-numeric: tabular-nums; } .ds-hero-line { margin: 0 0 16px; font-family: Roboto, system-ui, sans-serif; font-size: 14px; line-height: 20px; color: #BFB6AA; } .ds-meter { position: relative; height: 18px; } .ds-meter::before { content: ''; position: absolute; inset: 4px 0; border-radius: 5px; background: #2A231C; } .ds-meter-fill { position: absolute; top: 4px; bottom: 4px; left: 0; border-radius: 5px; background: #D4761F; animation: ds-draw 900ms cubic-bezier(0.39,0.575,0.565,1); } .ds-meter-tick { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; border-radius: 1px; background: #F2EFEA; } @keyframes ds-draw { from { width: 0; } } @media (prefers-reduced-motion: reduce) { .ds-meter-fill { animation: none; } } .ds-chiprow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; } .ds-stat-chip { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px; background: rgba(42,35,28,0.7); color: #F2EFEA; font-family: Roboto, system-ui, sans-serif; font-size: 12px; line-height: 16px; } .ds-stat-chip svg { color: #BFB6AA; width: 16px; height: 16px; }"
+    },
+    {
+      "name": "Stat Tile Pair",
+      "kind": "card",
+      "refersTo": "stat-tile",
+      "description": "Two different readings side by side, each led by its glyph tile: mono label, serif value, one detail line.",
+      "html": "<div class=\"ds-tiles\"><div class=\"ds-tile\"><span class=\"ds-tile-badge ds-in\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 5v14\"/><path d=\"M6 13l6 6 6-6\"/></svg></span><span class=\"ds-tile-label\">IN</span><span class=\"ds-tile-value\">$4,300</span><span class=\"ds-tile-detail\">$2,150 more than last month</span></div><div class=\"ds-tile\"><span class=\"ds-tile-badge\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M7 19v-6M12 19V7M17 19v-9\"/></svg></span><span class=\"ds-tile-label\">PER DAY</span><span class=\"ds-tile-value\">$92</span><span class=\"ds-tile-detail\">Budget allows $94 a day</span></div></div>",
+      "css": ".ds-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; max-width: 400px; } .ds-tile { display: flex; flex-direction: column; padding: 16px; border-radius: 18px; background: #1A1613; border: 1px solid #2A241F; color: #F2EFEA; } .ds-tile-badge { width: 30px; height: 30px; margin-bottom: 10px; border-radius: 10px; background: rgba(212,118,31,0.16); color: #D4761F; display: grid; place-items: center; } .ds-tile-badge.ds-in { background: rgba(111,185,138,0.16); color: #6FB98A; } .ds-tile-label { font-family: 'Droid Sans Mono', ui-monospace, monospace; font-size: 11px; line-height: 14px; letter-spacing: 0.6px; color: #BFB6AA; } .ds-tile-value { margin-top: 2px; font-family: 'Noto Serif', Georgia, serif; font-size: 22px; line-height: 28px; font-variant-numeric: tabular-nums; } .ds-tile-detail { margin-top: 2px; font-family: Roboto, system-ui, sans-serif; font-size: 12px; line-height: 16px; color: #BFB6AA; }"
+    },
+    {
+      "name": "Slab Group",
+      "kind": "custom",
+      "refersTo": "group-row",
+      "description": "Tappable rows as one rounded group of slabs on 2dp seams: glyph badge, title over subtitle, chevron.",
+      "html": "<div class=\"ds-group\"><p class=\"ds-group-head\">Money</p><a class=\"ds-row ds-row-first\" href=\"#\"><span class=\"ds-glyph\" style=\"background:rgba(127,178,122,0.15)\"><svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#7FB27A\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 5h2l2 10h9l2-7H7\"/><circle cx=\"9\" cy=\"19\" r=\"1\"/><circle cx=\"16\" cy=\"19\" r=\"1\"/></svg></span><span class=\"ds-row-text\"><span class=\"ds-row-title\">Categories</span><span class=\"ds-row-sub\">12 expense · 3 income</span></span><span class=\"ds-chev\"><svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10 7l5 5-5 5\"/></svg></span></a><a class=\"ds-row ds-row-last\" href=\"#\"><span class=\"ds-glyph\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"3\" y=\"6\" width=\"18\" height=\"13\" rx=\"2.5\"/><path d=\"M16 12.5h2\"/><path d=\"M5 6l10-3v3\"/></svg></span><span class=\"ds-row-text\"><span class=\"ds-row-title\">Accounts</span><span class=\"ds-row-sub\">4 accounts · net $10,096</span></span><span class=\"ds-chev\"><svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10 7l5 5-5 5\"/></svg></span></a></div>",
+      "css": ".ds-group { display: flex; flex-direction: column; gap: 2px; max-width: 400px; } .ds-group-head { margin: 0 18px 8px; font-family: Roboto, system-ui, sans-serif; font-weight: 500; font-size: 14px; line-height: 20px; letter-spacing: 0.1px; color: #BFB6AA; } .ds-row { display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 14px 18px; background: #221C16; border-radius: 4px; color: #F2EFEA; text-decoration: none; transition: transform 180ms cubic-bezier(0.2,0,0,1); } .ds-row-first { border-radius: 16px 16px 4px 4px; } .ds-row-last { border-radius: 4px 4px 16px 16px; } .ds-row:hover { background: #2A231C; } .ds-row:active { transform: scale(0.97); } .ds-row:focus-visible { outline: 2px solid #D4761F; outline-offset: 3px; } .ds-glyph { width: 44px; height: 44px; flex: none; border-radius: 12px; background: #2A231C; color: #F2EFEA; display: grid; place-items: center; } .ds-row-text { flex: 1; display: flex; flex-direction: column; gap: 2px; } .ds-row-title { font-family: Roboto, system-ui, sans-serif; font-size: 16px; line-height: 24px; } .ds-row-sub { font-family: Roboto, system-ui, sans-serif; font-size: 14px; line-height: 20px; color: #BFB6AA; } .ds-chev { color: #BFB6AA; display: grid; }"
+    },
+    {
+      "name": "Chrome Button",
+      "kind": "button",
+      "refersTo": "chrome-button",
+      "description": "The round raised capsule for back, settings and stepping, 44dp drawn inside a 48dp target.",
+      "html": "<button class=\"ds-chrome\" aria-label=\"Back\"><svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M19 12H5\"/><path d=\"M11 6l-6 6 6 6\"/></svg></button>",
+      "css": ".ds-chrome { width: 44px; height: 44px; margin: 2px; border: none; border-radius: 999px; background: #221C16; color: #F2EFEA; display: grid; place-items: center; cursor: pointer; transition: transform 180ms cubic-bezier(0.2,0,0,1); } .ds-chrome:hover { background: #2A231C; } .ds-chrome:active { transform: scale(0.97); } .ds-chrome:focus-visible { outline: 2px solid #D4761F; outline-offset: 3px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Lit Ledger",
+    "overview": "**Creative North Star: \"The Lit Ledger\"**\n\nMargin is a month kept as a ledger on a warm near-black desk, with one lamp over the figure that matters. The world is inherited from the sibling app Avex (warm Pearl ground, serif figures, sans rows, mono uppercase labels, one owner-chosen accent) and deliberately made richer at the owner's binding call: every section sits on its own raised panel, every section header and every stat is led by a drawn glyph on a tinted tile, the reading a screen exists for sits in the one accent-lit hero panel, and screens carry more readings and charts than Avex's open page. The result is dense but ordered: blocks of readings, each one quietly edged, none shouting.\n\nDepth is tonal, not cast. Panels are a warm rung above the ground with a 1dp edge; tappable things are a further rung up and edgeless; the hero is lit from its top edge by a wash of the accent. Colour is spent with intent: the accent marks what the owner acts on and where the month stands, the twelve category hues are a data series, and red and green appear only when something is really over or under. Readings travel with their numbers: a meter always carries its pace tick, a figure always carries the line that explains it.\n\nMotion is short and physical. Fills draw in once over 900ms and never replay when a row scrolls back, a press is a 0.97 bounce rather than a ripple, and every animation collapses to a cut when the system's Remove animations is on.",
+    "keyCharacteristics": [
+      "Warm near-black Pearl ground with a top-to-bottom gradient; a pure-black variant for OLED.",
+      "Three type voices: serif figures and titles, sans rows and prose, mono uppercase labels.",
+      "One owner-chosen accent (Ember by default), with a near-white fallback when colour is off.",
+      "Raised 20dp panels with a 1dp quiet edge, one 24dp lit hero panel per view.",
+      "A glyph tile leads every panel header, stat tile and list row.",
+      "The pace tick: every meter shows where an even spend would be today.",
+      "No dividers anywhere; air and panel edges separate sections."
+    ],
+    "rules": [
+      {
+        "name": "The One Light Rule",
+        "body": "The accent is the owner's single colour and the only light in the room. It marks what can be acted on and where the month stands; the hero panel's wash is the only gradient on any surface.",
+        "section": "colors"
+      },
+      {
+        "name": "The Data Series Rule",
+        "body": "Category hues are data, not decoration: they appear on a category's badge and in charts, never on text, never on chrome. Their order is stored, so a new hue is appended, never inserted or reordered.",
+        "section": "colors"
+      },
+      {
+        "name": "The True State Rule",
+        "body": "Red means over, green means in or under, and nothing else wears them. A state colour is a mark, never a paragraph.",
+        "section": "colors"
+      },
+      {
+        "name": "The Measured Contrast Rule",
+        "body": "Text clears 4.5:1 and marks clear 3:1 on the surface they sit on, and content on an accent fill is chosen by measuring both ends of the palette against it, never by guess. The build's contrast test holds every accent, both grounds and the accent-off fallback to this.",
+        "section": "colors"
+      },
+      {
+        "name": "The Three Voices Rule",
+        "body": "Serif for THE figure or title of a block, sans for rows and prose, mono for labels and text actions. Sizes come only from the type scale; a call site never sets its own size, and the build fails if one does.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Figures Rule",
+        "body": "Every serif and title style carries tabular digits, so a changing amount never shifts its neighbours.",
+        "section": "typography"
+      },
+      {
+        "name": "The Context Below Rule",
+        "body": "A page title stands alone at the top of its column with its context line under it in sans, joined with \" · \" (for example \"18 days left · resets 1 Nov\"). Nothing sits above a title.",
+        "section": "typography"
+      },
+      {
+        "name": "The Serif Is A Role Rule",
+        "body": "The serif voice is fixed by role and size, not by face. It resolves to the platform serif because the pinned reference, Avex, resolves to exactly that face and the two apps are meant to sit side by side on one phone. If the owner ever unpins Avex, a bundled serif replaces it without changing any size, weight or role here.",
+        "section": "typography"
+      },
+      {
+        "name": "The Air Not Rules Rule",
+        "body": "Sections are separated by space and by panel edges, never by a divider or a hairline rule. The build fails on any divider.",
+        "section": "layout"
+      },
+      {
+        "name": "The Start And End Rule",
+        "body": "Padding, alignment and chart direction are written in start and end so the whole app mirrors for right-to-left; left and right never appear.",
+        "section": "layout"
+      },
+      {
+        "name": "The Tonal Ladder Rule",
+        "body": "A surface rises by stepping up the warm container ladder and taking a 1dp edge, never by casting a shadow. Only the FAB floats.",
+        "section": "elevation"
+      },
+      {
+        "name": "The One Lit Panel Rule",
+        "body": "A view has exactly one hero panel, for the figure it exists to show. Its tint follows the reading: the accent normally, the over-budget red when the month or budget is over.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Seam Rule",
+        "body": "Members of a group, keypad keys included, are separated by a 2dp gap of ground, never a line; the group's outer corners are 16dp and its inner corners 4dp.",
+        "section": "shapes"
+      },
+      {
+        "name": "The Glyph Leads Rule",
+        "body": "Every panel header, stat tile and list row begins with a drawn glyph on its own tinted tile, all from one rounded icon library at one stroke, and no two icon keys share a glyph.",
+        "section": "components"
+      },
+      {
+        "name": "The Slab Is A Tap Rule",
+        "body": "An edgeless container-high slab is always something you press. A panel or stat tile is a section of readings and is not itself a target, the monthly budget's hero being the single exception, because it opens its own editor.",
+        "section": "components"
+      },
+      {
+        "name": "The Pace Tick Rule",
+        "body": "A meter without its pace tick is only half a reading. Wherever an even spend has a meaning, the tick is drawn.",
+        "section": "components"
+      },
+      {
+        "name": "The Bounce Rule",
+        "body": "A press is a 0.97 bounce and a fill is drawn once; when the system's animation scale is zero, every spec collapses to a cut.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do put every section on one panel (20dp corners, container fill, 1dp outline-variant edge, 18dp padding) with 14dp between panels and a 24dp gutter.",
+      "Do lead every panel header and stat tile with a glyph tile (32dp or 30dp, 10dp corners, the accent on a 16% wash) and every row with a 44dp glyph badge.",
+      "Do give each view exactly one hero panel for its main figure, tinted red when that figure is over.",
+      "Do draw the pace tick on every meter where an even spend means something, and let an overrun show as a red length past a budget notch.",
+      "Do take every colour from the scheme or the category palette and every size from the type scale.",
+      "Do set titles and figures in serif, rows in sans, labels in spaced mono capitals, and join readings with \" · \".",
+      "Do hold text to 4.5:1 and marks to 3:1 on the surface they sit on, and keep muted text at 0.65 alpha or more.",
+      "Do let every row and control grow with its text at 200% and let readings drop under their labels rather than break.",
+      "Do write layout in start and end, and draw charts from the reading edge in right-to-left.",
+      "Do make a press a 0.97 bounce and make every animation collapse to a cut when animations are removed."
+    ],
+    "donts": [
+      "Don't draw a divider or hairline rule between sections; space and panel edges do that work.",
+      "Don't use a Material top app bar or name the screen in the top bar; the serif page title names it.",
+      "Don't put a label above a page title or a heading; context goes under it.",
+      "Don't set a font size or a raw colour at a call site.",
+      "Don't nest a panel inside a panel, or box the interactive rows inside a panel.",
+      "Don't put a category hue on text or chrome, or reorder the hues.",
+      "Don't use red or green for anything but a true over, under or money-in state, and never for body text.",
+      "Don't cast shadows from panels, tiles or slabs; only the FAB lifts.",
+      "Don't wash the accent over sheets and menus; tonal depth is the warm ladder.",
+      "Don't cut user content to one line.",
+      "Don't use left or right in layout."
+    ]
+  }
+}
