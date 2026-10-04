@@ -9,6 +9,7 @@ import com.tally.app.data.db.BudgetEntity
 import com.tally.app.data.prefs.SettingsRepository
 import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.data.repo.PlanRepository
+import com.tally.app.ui.common.DRAFT_KEY
 import com.tally.app.ui.common.Notices
 import com.tally.app.ui.nav.Args
 import com.tally.core.AmountInput
@@ -166,12 +167,19 @@ class BudgetEditViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            // What was typed before the process died wins over the stored limit.
+            val kept = savedStateHandle.get<String>(DRAFT_KEY)
             val s = settings.current()
             // The keypad works in the owner's currency's minor units (0 digits for JPY).
             val digits = MoneyFormatter(s.currency, Locale.getDefault()).fractionDigits
             val stored = plan.budgetFor(categoryId)
-            input.value = if (stored != null) AmountInput.of(stored.amount, digits) else AmountInput(fractionDigits = digits)
+            input.value = when {
+                kept != null -> AmountInput(kept, digits)
+                stored != null -> AmountInput.of(stored.amount, digits)
+                else -> AmountInput(fractionDigits = digits)
+            }
             ready.value = true
+            input.collect { savedStateHandle[DRAFT_KEY] = it.text }
         }
     }
 

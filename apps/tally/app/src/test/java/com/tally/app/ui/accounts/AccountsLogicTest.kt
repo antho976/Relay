@@ -1,13 +1,17 @@
 package com.tally.app.ui.accounts
 
 import com.tally.app.data.db.AccountBalance
+import com.tally.app.data.repo.AccountUse
+import com.tally.app.data.repo.OtherAccountChange
 import com.tally.core.AccountType
 import com.tally.core.Copy
+import com.tally.core.MoneyFormatter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Locale
 
 class AccountsLogicTest {
 
@@ -116,15 +120,64 @@ class AccountsLogicTest {
         assertEquals(SharePreview(), previewShare(id = 0, balance = 0, archived = false, all = all))
     }
 
-    @Test fun theDeleteLineCarriesTheRealCount() {
-        assertEquals("Delete Visa and its 61 entries? This cannot be undone.", deleteAccountLine("Visa", 61))
-        assertEquals("Delete Visa and its 1 entry? This cannot be undone.", deleteAccountLine("Visa", 1))
-        assertEquals("Delete Visa? It has no entries. This cannot be undone.", deleteAccountLine("Visa", 0))
+    private val money = MoneyFormatter("CAD", Locale.CANADA)
+
+    @Test fun theDeleteLineCarriesTheRealCounts() {
+        assertEquals(
+            "Delete Visa? Its 61 entries go with it. This cannot be undone.",
+            deleteAccountLine("Visa", AccountUse(entries = 61), money, canArchive = false),
+        )
+        assertEquals(
+            "Delete Visa? Its 1 entry goes with it. This cannot be undone.",
+            deleteAccountLine("Visa", AccountUse(entries = 1), money, canArchive = false),
+        )
+        assertEquals(
+            "Delete Visa? It has no entries and no bills. This cannot be undone.",
+            deleteAccountLine("Visa", AccountUse(), money, canArchive = false),
+        )
+    }
+
+    /** The sample's Visa: its bills and the card payments from Chequing go too, and Chequing reads higher after. */
+    @Test fun theDeleteLineNamesTheBillsAndEveryAccountWhoseBalanceMoves() {
+        val use = AccountUse(
+            entries = 24,
+            bills = 5,
+            others = listOf(
+                OtherAccountChange("Chequing", transfers = 2, change = 180_000),
+                OtherAccountChange("Savings", transfers = 1, change = -1_000),
+            ),
+        )
+        assertEquals(
+            "Delete Visa? Its 24 entries and 5 bills go with it. " +
+                "Chequing goes up by $1,800.00, since 2 transfers between them go too. " +
+                "Savings goes down by $10.00, since 1 transfer between them goes too. " +
+                "This cannot be undone. Archiving keeps all of it and takes the account out of the pickers.",
+            deleteAccountLine("Visa", use, money, canArchive = true),
+        )
+        assertEquals(
+            "Delete Visa? Its 1 bill goes with it. This cannot be undone.",
+            deleteAccountLine("Visa", AccountUse(bills = 1), money, canArchive = false),
+        )
+        assertEquals(
+            "2 transfers with Savings go too, which leaves its balance where it is.",
+            otherAccountLine(OtherAccountChange("Savings", transfers = 2, change = 0), money),
+        )
+    }
+
+    @Test fun theDeleteNoticeSaysWhatWentWithIt() {
+        assertEquals("Visa deleted with its 24 entries and 5 bills", accountDeletedLine("Visa", AccountUse(entries = 24, bills = 5)))
+        assertEquals("Visa deleted with its 1 bill", accountDeletedLine("Visa", AccountUse(bills = 1)))
+        assertEquals("Visa deleted", accountDeletedLine("Visa", AccountUse()))
     }
 
     @Test fun everyLineKeepsTheVoice() {
+        val use = AccountUse(3, 2, listOf(OtherAccountChange("Chequing", 1, 5_000), OtherAccountChange("Cash", 1, -5_000)))
         val lines = AccountType.entries.flatMap { listOf(typeLabel(it), typeHint(it)) } +
-            listOf(deleteAccountLine("Visa", 3), accountProblems(AccountDraft(opening = null)).opening.orEmpty())
+            listOf(
+                deleteAccountLine("Visa", use, money, canArchive = true),
+                accountDeletedLine("Visa", use),
+                accountProblems(AccountDraft(opening = null)).opening.orEmpty(),
+            )
         lines.forEach { line -> Copy.banned.forEach { bad -> assertFalse("\"$line\" has \"$bad\"", line.lowercase().contains(bad)) } }
     }
 }

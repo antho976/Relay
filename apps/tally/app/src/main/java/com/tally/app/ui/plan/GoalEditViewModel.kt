@@ -9,6 +9,8 @@ import com.tally.app.data.db.GoalEntity
 import com.tally.app.data.prefs.SettingsRepository
 import com.tally.app.data.repo.PlanRepository
 import com.tally.app.ui.common.Notices
+import com.tally.app.ui.common.keepDraft
+import com.tally.app.ui.common.savedDraft
 import com.tally.app.ui.nav.Args
 import com.tally.core.MoneyFormatter
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -87,12 +89,14 @@ class GoalEditViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            // A draft kept before the process died wins over the stored row: it is what was typed.
+            val kept = savedStateHandle.savedDraft(SavedGoal.serializer())?.toDraft()
             val s = settings.current()
             val money = MoneyFormatter(s.currency, Locale.getDefault())
             val goal = if (argId != 0L) plan.goal(argId) else null
             if (goal != null) {
                 stored.value = goal
-                draft.value = GoalDraft(
+                draft.value = kept ?: GoalDraft(
                     id = goal.id,
                     name = goal.name,
                     targetText = money.formatInput(goal.target),
@@ -102,9 +106,10 @@ class GoalEditViewModel @Inject constructor(
                     archived = goal.archived,
                 )
             } else {
-                draft.update { it.copy(id = 0L) }
+                draft.value = (kept ?: draft.value).copy(id = 0L)
             }
             ready.value = true
+            draft.collect { savedStateHandle.keepDraft(SavedGoal.serializer(), SavedGoal.of(it)) }
         }
     }
 

@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -70,10 +71,12 @@ import com.tally.app.ui.common.PageTitle
 import com.tally.app.ui.common.Panel
 import com.tally.app.ui.common.PanelHeader
 import com.tally.app.ui.common.ROW_PAD
+import com.tally.app.ui.common.SaveRefusal
 import com.tally.app.ui.common.SlidingSegments
 import com.tally.app.ui.common.StatChip
 import com.tally.app.ui.common.SwitchRow
 import com.tally.app.ui.common.TopBar
+import com.tally.app.ui.common.refusalLine
 import com.tally.app.ui.common.slab
 import com.tally.app.ui.nav.AppNav
 import com.tally.core.CategoryKind
@@ -142,6 +145,7 @@ data class BillEditActions(
 @Composable
 fun BillEditScreen(state: BillEditState, actions: BillEditActions) {
     var picking by rememberSaveable { mutableStateOf(false) }
+    var saveAttempts by rememberSaveable { mutableIntStateOf(0) }
     val d = state.draft
     Column(Modifier.fillMaxSize().imePadding().navigationBarsPadding()) {
         TopBar(onBack = actions.back) {
@@ -172,9 +176,10 @@ fun BillEditScreen(state: BillEditState, actions: BillEditActions) {
                 if (d.type != TxType.TRANSFER) CategoryPanel(state, actions)
                 ScheduleGroup(state, actions, onPickDate = { picking = true })
                 PostingGroup(state, actions)
-                HeroAction("Save bill", actions.save, Modifier.fillMaxWidth())
-                if (state.showErrors && state.problems.any) {
-                    GroupFooter("Fill in what is marked above to save", isError = true)
+                Column(Modifier.fillMaxWidth()) {
+                    val p = state.problems
+                    SaveRefusal(if (state.showErrors) refusalLine(listOf(p.name, p.amount, p.account)) else null, saveAttempts)
+                    HeroAction("Save bill", { saveAttempts++; actions.save() }, Modifier.fillMaxWidth())
                 }
             }
         }
@@ -214,11 +219,11 @@ private fun BillHero(state: BillEditState, modifier: Modifier = Modifier) {
             tint = tint,
         )
         Spacer(Modifier.height(10.dp))
+        // Not a live region: the figure follows a text field, and TalkBack already echoes each key.
         HeroFigure(
             formatted,
             color = if (amount > 0L) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
             description = "Amount, $formatted",
-            live = true,
         )
         Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(12.dp))

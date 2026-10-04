@@ -15,6 +15,8 @@ import com.tally.app.data.prefs.SettingsRepository
 import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.data.repo.PlanRepository
 import com.tally.app.ui.common.Notices
+import com.tally.app.ui.common.keepDraft
+import com.tally.app.ui.common.savedDraft
 import com.tally.app.ui.nav.Args
 import com.tally.core.AmountInput
 import com.tally.core.BudgetPeriod
@@ -209,13 +211,15 @@ class EntryViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            // A draft kept before the process died wins over the stored entry: it is what was typed.
+            val kept = savedStateHandle.savedDraft(SavedEntry.serializer())?.toDraft()
             val s = settings.current()
             // The keypad works in the owner's currency's minor units (0 digits for JPY).
             val digits = MoneyFormatter(s.currency, Locale.getDefault()).fractionDigits
             val stored = if (argId != 0L) ledger.transaction(argId) else null
             if (stored != null) {
                 original.value = stored
-                draft.value = EntryDraft(
+                draft.value = kept ?: EntryDraft(
                     id = stored.id,
                     type = stored.type,
                     amount = AmountInput.of(stored.amount, digits),
@@ -229,9 +233,11 @@ class EntryViewModel @Inject constructor(
                 )
             } else {
                 // A new entry, or one deleted while its link was open: either way this writes a new row.
+                if (kept != null) draft.value = kept
                 draft.update { it.copy(id = 0L, amount = it.amount.copy(fractionDigits = digits)) }
             }
             ready.value = true
+            draft.collect { savedStateHandle.keepDraft(SavedEntry.serializer(), SavedEntry.of(it)) }
         }
     }
 

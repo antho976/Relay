@@ -34,6 +34,10 @@ data class DayTotal(val date: LocalDate, val total: Long)
 @Immutable
 data class TypeTotal(val type: TxType, val total: Long)
 
+/** The transfers between one account and [otherId]: how many, and what they added to [otherId]'s balance. */
+@Immutable
+data class TransferLink(val otherId: Long, val count: Int, val net: Long)
+
 @Immutable
 data class AccountBalance(
     val id: Long,

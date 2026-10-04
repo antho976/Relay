@@ -35,7 +35,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
@@ -47,13 +50,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.tally.app.data.repo.AccountUse
 import com.tally.app.ui.common.AccountBadge
 import com.tally.app.ui.common.Caption
 import com.tally.app.ui.common.CategoryIcons
 import com.tally.app.ui.common.ChromeButton
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.Group
-import com.tally.app.ui.common.GroupFooter
 import com.tally.app.ui.common.HeroAction
 import com.tally.app.ui.common.HeroPanel
 import com.tally.app.ui.common.LocalMoney
@@ -61,11 +64,13 @@ import com.tally.app.ui.common.PANEL_GAP
 import com.tally.app.ui.common.PaceMeter
 import com.tally.app.ui.common.PageTitle
 import com.tally.app.ui.common.ROW_PAD
+import com.tally.app.ui.common.SaveRefusal
 import com.tally.app.ui.common.StatChip
 import com.tally.app.ui.common.SwitchRow
 import com.tally.app.ui.common.TextAction
 import com.tally.app.ui.common.TopBar
 import com.tally.app.ui.common.bounceClick
+import com.tally.app.ui.common.refusalLine
 import com.tally.app.ui.common.selectableColors
 import com.tally.app.ui.common.slab
 import com.tally.app.ui.nav.AppNav
@@ -90,6 +95,7 @@ fun AccountEditRoute(nav: AppNav) {
             requestDelete = viewModel::requestDelete,
             dismissDelete = viewModel::dismissDelete,
             delete = viewModel::delete,
+            archiveInstead = viewModel::archiveInstead,
             viewEntries = { nav.transactions(accountId = it) },
         )
     }
@@ -110,16 +116,21 @@ data class AccountEditActions(
     val requestDelete: () -> Unit = {},
     val dismissDelete: () -> Unit = {},
     val delete: () -> Unit = {},
+    /** The delete dialog's way out that keeps everything: archive the account instead. */
+    val archiveInstead: () -> Unit = {},
     val viewEntries: (Long) -> Unit = {},
 )
 
 /**
  * The account editor: the balance it will read under the light, then the name, the type, what it
- * opened with and how it is used. Deleting names the entries that go with it before it acts.
+ * opened with and how it is used. Deleting names what goes with it (entries, bills, and how far
+ * each other account moves once its transfers with this one are gone) before it acts, and offers
+ * archiving instead.
  */
 @Composable
 fun AccountEditScreen(state: AccountEditState, actions: AccountEditActions) {
     val d = state.draft
+    var saveAttempts by rememberSaveable { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize().imePadding().navigationBarsPadding()) {
         TopBar(onBack = actions.back) {
             if (!state.isNew) ChromeButton(Icons.Rounded.DeleteOutline, "Delete account", actions.requestDelete)
@@ -143,16 +154,26 @@ fun AccountEditScreen(state: AccountEditState, actions: AccountEditActions) {
                 TypeGroup(d.type, actions.setType)
                 OpeningGroup(state, actions)
                 UseGroup(d, actions)
-                HeroAction("Save account", actions.save, Modifier.fillMaxWidth())
-                if (state.showErrors && state.problems.any) {
-                    GroupFooter("Fix what is marked above to save", isError = true)
+                Column(Modifier.fillMaxWidth()) {
+                    SaveRefusal(
+                        if (state.showErrors) refusalLine(listOf(state.problems.name, state.problems.opening)) else null,
+                        saveAttempts,
+                    )
+                    HeroAction("Save account", { saveAttempts++; actions.save() }, Modifier.fillMaxWidth())
                 }
             }
         }
     }
-    val count = state.confirmDelete
-    if (count != null) {
-        DeleteDialog(state.storedName, count, onConfirm = actions.delete, onDismiss = actions.dismissDelete)
+    val use = state.confirmDelete
+    if (use != null) {
+        DeleteDialog(
+            state.storedName,
+            use,
+            canArchive = state.canArchive,
+            onConfirm = actions.delete,
+            onArchive = actions.archiveInstead,
+            onDismiss = actions.dismissDelete,
+        )
     }
 }
 
@@ -180,10 +201,10 @@ private fun BalanceHero(state: AccountEditState, onEntries: () -> Unit, modifier
             end = money.currency.currencyCode,
         )
         Spacer(Modifier.height(14.dp))
+        // Not a live region: the figure follows a text field, and TalkBack already echoes each key.
         HeroNumber(
             money.format(state.balance),
             description = (if (state.isNew) "Opens with " else "Balance, ") + money.format(state.balance),
-            live = true,
         )
         Text(
             d.name.trim().ifEmpty { "Name it below" } + " · " + typeLabel(d.type),
@@ -290,7 +311,7 @@ private fun OpeningGroup(state: AccountEditState, actions: AccountEditActions) {
     }
     val oweRow: @Composable (Shape) -> Unit = { shape ->
         SwitchRow(
-            "I owe this",
+            "You owe this",
             d.owe,
             actions.setOwe,
             shape,
@@ -329,9 +350,21 @@ private fun UseGroup(d: AccountDraft, actions: AccountEditActions) {
     Group(rows = listOf(defaultRow, archivedRow), title = "Use")
 }
 
-/** The one confirm in this package: deleting an account takes its entries, and cannot be undone. */
+/**
+ * The one confirm in this package: deleting an account takes its entries and bills and moves the
+ * balance of every account it has transfers with, and cannot be undone. With anything to keep,
+ * archiving is offered beside it.
+ */
 @Composable
-private fun DeleteDialog(name: String, entries: Int, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+private fun DeleteDialog(
+    name: String,
+    use: AccountUse,
+    canArchive: Boolean,
+    onConfirm: () -> Unit,
+    onArchive: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val money = LocalMoney.current
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
@@ -340,11 +373,18 @@ private fun DeleteDialog(name: String, entries: Int, onConfirm: () -> Unit, onDi
             }
         },
         dismissButton = {
+            if (canArchive) TextButton(onClick = onArchive) { Text("Archive instead") }
             TextButton(onClick = onDismiss) { Text("Keep it") }
         },
         icon = { Icon(Icons.Rounded.DeleteOutline, contentDescription = null) },
         title = { Text("Delete account") },
-        text = { Text(deleteAccountLine(name, entries)) },
+        text = {
+            // A long list of other accounts can outgrow a short screen; the dialog's text scrolls.
+            Text(
+                deleteAccountLine(name, use, money, canArchive),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            )
+        },
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
     )
 }

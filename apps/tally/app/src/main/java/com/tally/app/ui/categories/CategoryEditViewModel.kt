@@ -8,11 +8,15 @@ import com.tally.app.data.Clock
 import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.db.CategoryTotal
 import com.tally.app.data.prefs.SettingsRepository
+import com.tally.app.data.repo.CategoryUse
 import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.ui.common.Notices
+import com.tally.app.ui.common.keepDraft
+import com.tally.app.ui.common.savedDraft
 import com.tally.app.ui.nav.Args
 import com.tally.core.BudgetPeriod
 import com.tally.core.CategoryKind
+import com.tally.core.MoneyFormatter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
@@ -29,11 +33,14 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
 import java.time.LocalDate
+import java.util.Locale
 import javax.inject.Inject
 
-/** The editor's fields as picked. */
+/** The editor's fields as picked. Serializable so the editor keeps it in its SavedStateHandle. */
 @Immutable
+@Serializable
 data class CategoryDraft(
     val name: String = "",
     val icon: String = "dots",
@@ -62,10 +69,10 @@ data class CategoryEditState(
     val nameProblem: String? = null,
     /** True once a save was tried with a problem: a missing name is then said too. */
     val showErrors: Boolean = false,
-    /** Where the entries can go when the category is deleted. */
+    /** Where the entries and bills can go when the category is deleted. */
     val targets: List<MoveTarget> = emptyList(),
-    /** The real entry count while the move sheet is open; null when it is closed. */
-    val moving: Int? = null,
+    /** What the delete touches, counted afresh, while the move sheet is open; null when it is closed. */
+    val moving: CategoryUse? = null,
 ) {
     val isNew: Boolean get() = !stored
 
@@ -80,7 +87,7 @@ data class CategoryEditState(
 class CategoryEditViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val ledger: LedgerRepository,
-    settings: SettingsRepository,
+    private val settings: SettingsRepository,
     private val notices: Notices,
     clock: Clock,
 ) : ViewModel() {
@@ -91,7 +98,7 @@ class CategoryEditViewModel @Inject constructor(
         ?: CategoryKind.EXPENSE
     private val today: LocalDate = clock.today()
 
-    private data class Flags(val loaded: Boolean = false, val showErrors: Boolean = false, val moving: Int? = null)
+    private data class Flags(val loaded: Boolean = false, val showErrors: Boolean = false, val moving: CategoryUse? = null)
 
     private data class PeriodTotals(val period: BudgetPeriod, val totals: List<CategoryTotal>)
 
@@ -139,16 +146,21 @@ class CategoryEditViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            // A draft kept before the process died wins over the stored row: it is what was picked.
+            val kept = savedStateHandle.savedDraft(CategoryDraft.serializer())
             val existing = if (argId != 0L) ledger.category(argId) else null
             if (existing != null) {
-                draft.value = CategoryDraft(existing.name, existing.icon, existing.color, existing.archived)
+                draft.value = kept ?: CategoryDraft(existing.name, existing.icon, existing.color, existing.archived)
                 kind.value = existing.kind
                 stored.value = existing
             } else {
-                val siblings = ledger.categories().first().filter { it.kind == argKind }
-                draft.value = CategoryDraft(color = suggestColor(siblings.map { it.color }))
+                draft.value = kept ?: run {
+                    val siblings = ledger.categories().first().filter { it.kind == argKind }
+                    CategoryDraft(color = suggestColor(siblings.map { it.color }))
+                }
             }
             flags.update { it.copy(loaded = true) }
+            draft.collect { savedStateHandle.keepDraft(CategoryDraft.serializer(), it) }
         }
     }
 
@@ -188,34 +200,44 @@ class CategoryEditViewModel @Inject constructor(
     }
 
     /**
-     * Counts the entries afresh. With none, the category goes at once; with some, the sheet asks
-     * where they move first, since moving them cannot be undone.
+     * Counts afresh what the delete touches: entries, bills and the budget. With entries or bills
+     * filed under it, the sheet asks where they move first, since moving them cannot be undone.
+     * With neither (a budget alone cannot move) it goes at once, with Undo.
      */
     fun requestDelete() {
         val original = stored.value ?: return
         if (busy) return
         viewModelScope.launch {
-            val count = ledger.entriesForCategory(original.id)
-            if (count == 0) remove(original, null, 0) else flags.update { it.copy(moving = count) }
+            val use = ledger.categoryUse(original.id)
+            if (use.hasMovable) flags.update { it.copy(moving = use) } else remove(original, null, use)
         }
     }
 
     fun dismissMove() = flags.update { it.copy(moving = null) }
 
-    /** [moveTo] null leaves the entries uncategorized. */
+    /** [moveTo] null leaves the entries and bills uncategorized. */
     fun delete(moveTo: Long?) {
         val original = stored.value ?: return
-        val count = flags.value.moving ?: return
+        val use = flags.value.moving ?: return
         flags.update { it.copy(moving = null) }
-        viewModelScope.launch { remove(original, moveTo, count) }
+        viewModelScope.launch { remove(original, moveTo, use) }
     }
 
-    private suspend fun remove(original: CategoryEntity, moveTo: Long?, entries: Int) {
+    private suspend fun remove(original: CategoryEntity, moveTo: Long?, use: CategoryUse) {
         if (busy) return
         busy = true
         val targetName = moveTo?.let { id -> state.value.targets.firstOrNull { it.id == id }?.name }
-        ledger.deleteCategory(original.id, moveTo)
-        notices.show(deletedLine(original.name, entries, targetName))
+        val money = MoneyFormatter(settings.current().currency, Locale.getDefault())
+        val line = deletedLine(original.name, use, use.budget?.let { money.format(it) }, targetName)
+        val repo = ledger
+        repo.deleteCategory(original.id, moveTo)
+        if (use.hasMovable) {
+            notices.show(line)
+        } else {
+            // Nothing moved or lost its category, so the delete undoes exactly. The undo holds
+            // the repository and the row, never this ViewModel.
+            notices.showUndo(line) { repo.restoreCategory(original, use.budget) }
+        }
         finished.send(Unit)
     }
 }

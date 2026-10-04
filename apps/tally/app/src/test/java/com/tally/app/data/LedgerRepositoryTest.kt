@@ -2,13 +2,17 @@ package com.tally.app.data
 
 import com.tally.app.data.db.AccountEntity
 import com.tally.app.data.db.CategoryEntity
+import com.tally.app.data.db.RecurringEntity
 import com.tally.app.data.db.TallyDatabase
 import com.tally.app.data.db.TransactionEntity
+import com.tally.app.data.repo.CategoryUse
 import com.tally.app.data.repo.LedgerFilter
 import com.tally.app.data.repo.LedgerRepository
+import com.tally.app.data.repo.OtherAccountChange
 import com.tally.core.AccountType
 import com.tally.core.CategoryKind
 import com.tally.core.Defaults
+import com.tally.core.Frequency
 import com.tally.core.TxType
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -164,6 +168,106 @@ class LedgerRepositoryTest {
 
         assertNull(ledger.account(visa))
         assertEquals(listOf(kept), db.transactions().all().map { it.id })
+    }
+
+    private suspend fun addBill(name: String, accountId: Long, toAccountId: Long? = null, categoryId: Long? = null): Long =
+        db.recurring().insert(
+            RecurringEntity(
+                name = name,
+                type = if (toAccountId != null) TxType.TRANSFER else TxType.EXPENSE,
+                amount = 20_00,
+                accountId = accountId,
+                toAccountId = toAccountId,
+                categoryId = categoryId,
+                frequency = Frequency.MONTHLY,
+                anchorDate = today,
+                nextDate = today.plusDays(10),
+            )
+        )
+
+    /**
+     * The sample's case: deleting the card takes its bills (paid from it, and the payment into it)
+     * and the card payments from Chequing, which then reads higher. All of it is counted first.
+     */
+    @Test fun accountUseCountsEntriesBillsAndWhatEachOtherAccountLosesOrGains() = runTest {
+        val chequing = db.addAccount("Chequing", sortOrder = 0)
+        val visa = db.addAccount("Visa", AccountType.CREDIT, sortOrder = 1)
+        val savings = db.addAccount("Savings", AccountType.SAVINGS, sortOrder = 2)
+        db.addExpense(30_00, today, visa)
+        db.addTransfer(900_00, today.minusDays(40), fromAccountId = chequing, toAccountId = visa)
+        db.addTransfer(900_00, today.minusDays(9), fromAccountId = chequing, toAccountId = visa)
+        db.addTransfer(50_00, today, fromAccountId = visa, toAccountId = chequing)
+        db.addTransfer(10_00, today, fromAccountId = visa, toAccountId = savings)
+        db.addTransfer(70_00, today, fromAccountId = chequing, toAccountId = savings)
+        addBill("Phone plan", visa)
+        addBill("Card payment", chequing, toAccountId = visa)
+        addBill("Rent", chequing)
+
+        val use = ledger.accountUse(visa)
+
+        assertEquals(5, use.entries)
+        assertEquals(2, use.bills)
+        assertEquals(
+            listOf(OtherAccountChange("Chequing", 3, 1_750_00), OtherAccountChange("Savings", 1, -10_00)),
+            use.others,
+        )
+        // And it is exactly what the delete does to the accounts that stay.
+        val before = ledger.balances().first().associate { it.id to it.balance }
+        ledger.deleteAccount(visa)
+        val after = ledger.balances().first().associate { it.id to it.balance }
+        assertEquals(before.getValue(chequing) + 1_750_00, after.getValue(chequing))
+        assertEquals(before.getValue(savings) - 10_00, after.getValue(savings))
+        assertEquals(listOf("Rent"), db.recurring().all().map { it.name })
+    }
+
+    @Test fun anAccountWithNothingOnItHasAnEmptyUse() = runTest {
+        val cash = db.addAccount("Cash", AccountType.CASH)
+        db.addAccount("Chequing")
+
+        val use = ledger.accountUse(cash)
+
+        assertTrue(use.isEmpty)
+        assertTrue(use.others.isEmpty())
+    }
+
+    /** A category with no entries yet but a bill and a budget: both are counted, so the bill is not un-filed silently. */
+    @Test fun categoryUseCountsBillsAndTheBudgetNotOnlyEntries() = runTest {
+        val visa = db.addAccount("Visa", AccountType.CREDIT)
+        val streaming = db.addCategory("Streaming")
+        addBill("Netflix", visa, categoryId = streaming)
+        db.planRepository(clock).setBudget(streaming, 20_00)
+
+        val use = ledger.categoryUse(streaming)
+
+        assertEquals(CategoryUse(entries = 0, bills = 1, budget = 20_00), use)
+        assertTrue(use.hasMovable)
+    }
+
+    @Test fun deleteCategoryWithMoveToMovesItsBillsToo() = runTest {
+        val visa = db.addAccount("Visa", AccountType.CREDIT)
+        val streaming = db.addCategory("Streaming")
+        val subscriptions = db.addCategory("Subscriptions")
+        val netflix = addBill("Netflix", visa, categoryId = streaming)
+
+        ledger.deleteCategory(streaming, moveTo = subscriptions)
+
+        assertEquals(subscriptions, db.recurring().get(netflix)?.categoryId)
+    }
+
+    @Test fun restoreCategoryPutsTheRowAndItsBudgetBack() = runTest {
+        val food = db.addCategory("Groceries", icon = "cart", color = 3)
+        val original = ledger.category(food)!!
+        db.planRepository(clock).setBudget(food, 500_00)
+
+        ledger.deleteCategory(food, moveTo = null)
+        assertNull(ledger.category(food))
+        ledger.restoreCategory(original, 500_00)
+
+        assertEquals(original, ledger.category(food))
+        assertEquals(500_00L, db.planRepository(clock).budgetFor(food)?.amount)
+        ledger.deleteCategory(food, moveTo = null)
+        ledger.restoreCategory(original, null)
+        assertNull("No budget comes back when it had none", db.planRepository(clock).budgetFor(food))
     }
 
     @Test fun deleteCategoryWithMoveToMovesEntriesAndRemovesItsBudget() = runTest {

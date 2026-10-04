@@ -25,13 +25,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
@@ -51,9 +52,11 @@ import com.tally.app.ui.common.LocalMoney
 import com.tally.app.ui.common.PANEL_GAP
 import com.tally.app.ui.common.PaceMeter
 import com.tally.app.ui.common.PageTitle
+import com.tally.app.ui.common.SaveRefusal
 import com.tally.app.ui.common.StatChip
 import com.tally.app.ui.common.SwitchRow
 import com.tally.app.ui.common.TopBar
+import com.tally.app.ui.common.refusalLine
 import com.tally.app.ui.nav.AppNav
 import com.tally.app.ui.theme.categoryColor
 import com.tally.core.Copy
@@ -100,6 +103,7 @@ data class CategoryEditActions(
 @Composable
 fun CategoryEditScreen(state: CategoryEditState, actions: CategoryEditActions) {
     val d = state.draft
+    var saveAttempts by rememberSaveable { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize().imePadding().navigationBarsPadding()) {
         TopBar(onBack = actions.back) {
             if (!state.isNew) ChromeButton(Icons.Rounded.DeleteOutline, "Delete category", actions.requestDelete)
@@ -153,7 +157,10 @@ fun CategoryEditScreen(state: CategoryEditState, actions: CategoryEditActions) {
                     )
                 }
                 Group(rows = listOf(archivedRow), title = "Visibility")
-                HeroAction("Save category", actions.save, Modifier.fillMaxWidth())
+                Column(Modifier.fillMaxWidth()) {
+                    SaveRefusal(if (state.showErrors) refusalLine(listOf(problem)) else null, saveAttempts)
+                    HeroAction("Save category", { saveAttempts++; actions.save() }, Modifier.fillMaxWidth())
+                }
             }
         }
     }
@@ -161,7 +168,7 @@ fun CategoryEditScreen(state: CategoryEditState, actions: CategoryEditActions) {
     if (moving != null) {
         MoveSheet(
             name = state.storedName.ifEmpty { "This category" },
-            entries = moving,
+            use = moving,
             targets = state.targets,
             onMove = actions.delete,
             onDismiss = actions.dismissMove,
@@ -189,10 +196,10 @@ private fun CategoryPreview(state: CategoryEditState, modifier: Modifier = Modif
     }
     val name = d.name.trim()
     HeroPanel(modifier, tint = hue) {
+        // Not a live region: the name comes from a text field, and TalkBack already echoes each key.
         Row(
             Modifier.fillMaxWidth().semantics(mergeDescendants = true) {
                 contentDescription = "Preview: " + name.ifEmpty { "unnamed" } + ", " + iconName(d.icon) + ", " + hueName(d.color)
-                liveRegion = LiveRegionMode.Polite
             },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp),

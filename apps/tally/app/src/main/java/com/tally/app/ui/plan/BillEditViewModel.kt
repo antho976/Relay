@@ -12,6 +12,8 @@ import com.tally.app.data.prefs.SettingsRepository
 import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.data.repo.PlanRepository
 import com.tally.app.ui.common.Notices
+import com.tally.app.ui.common.keepDraft
+import com.tally.app.ui.common.savedDraft
 import com.tally.app.ui.nav.Args
 import com.tally.core.Frequency
 import com.tally.core.MoneyFormatter
@@ -120,12 +122,14 @@ class BillEditViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            // A draft kept before the process died wins over the stored row: it is what was typed.
+            val kept = savedStateHandle.savedDraft(SavedBill.serializer())?.toDraft()
             val s = settings.current()
             val money = MoneyFormatter(s.currency, Locale.getDefault())
             val item = if (argId != 0L) plan.recurringItem(argId) else null
             if (item != null) {
                 stored.value = item
-                draft.value = BillDraft(
+                draft.value = kept ?: BillDraft(
                     id = item.id,
                     name = item.name,
                     type = item.type,
@@ -142,9 +146,11 @@ class BillEditViewModel @Inject constructor(
                 )
             } else {
                 // A new bill, or one deleted while its link was open: either way this writes a new row.
+                if (kept != null) draft.value = kept
                 draft.update { it.copy(id = 0L) }
             }
             ready.value = true
+            draft.collect { savedStateHandle.keepDraft(SavedBill.serializer(), SavedBill.of(it)) }
         }
     }
 
