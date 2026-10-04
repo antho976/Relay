@@ -10,6 +10,7 @@ import com.tally.app.data.db.CategoryDao
 import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.db.CategoryTotal
 import com.tally.app.data.db.DayTotal
+import com.tally.app.data.db.LedgerTotals
 import com.tally.app.data.db.TallyDatabase
 import com.tally.app.data.db.TransactionDao
 import com.tally.app.data.db.TransactionEntity
@@ -18,6 +19,7 @@ import com.tally.app.data.db.TypeTotal
 import com.tally.core.BudgetPeriod
 import com.tally.core.CategoryKind
 import com.tally.core.Defaults
+import com.tally.core.TextMatch
 import com.tally.core.TxType
 import kotlinx.coroutines.flow.Flow
 import java.time.LocalDate
@@ -52,14 +54,35 @@ class LedgerRepository @Inject constructor(
     fun between(period: BudgetPeriod): Flow<List<TransactionRow>> =
         transactions.observeBetween(period.start, period.endExclusive)
 
+    /** The newest [limit] entries matching [filter]; the query matches in any case, any alphabet. */
     fun search(filter: LedgerFilter, limit: Int = SEARCH_LIMIT): Flow<List<TransactionRow>> = transactions.search(
-        query = filter.query.trim(),
+        pattern = TextMatch.containsPattern(filter.query),
         type = filter.type,
         categoryId = filter.categoryId,
         accountId = filter.accountId,
         start = filter.start,
         end = filter.end,
         limit = limit,
+    )
+
+    /** What every entry matching [filter] adds up to, never capped like [search]'s list. */
+    fun searchTotals(filter: LedgerFilter): Flow<LedgerTotals> = transactions.searchTotals(
+        pattern = TextMatch.containsPattern(filter.query),
+        type = filter.type,
+        categoryId = filter.categoryId,
+        accountId = filter.accountId,
+        start = filter.start,
+        end = filter.end,
+    )
+
+    /** The largest entry matching [filter], of the type the readings are about; null when none match. */
+    fun searchLargest(filter: LedgerFilter): Flow<TransactionRow?> = transactions.searchLargest(
+        pattern = TextMatch.containsPattern(filter.query),
+        type = filter.type,
+        categoryId = filter.categoryId,
+        accountId = filter.accountId,
+        start = filter.start,
+        end = filter.end,
     )
 
     fun byCategory(type: TxType, start: LocalDate, endExclusive: LocalDate): Flow<List<CategoryTotal>> =
@@ -82,7 +105,7 @@ class LedgerRepository @Inject constructor(
     suspend fun account(id: Long): AccountEntity? = accounts.get(id)
     suspend fun category(id: Long): CategoryEntity? = categories.get(id)
     suspend fun noteSuggestions(prefix: String): List<String> =
-        if (prefix.isBlank()) emptyList() else transactions.noteSuggestions(prefix.trim())
+        if (prefix.isBlank()) emptyList() else transactions.noteSuggestions(TextMatch.prefixPattern(prefix))
     suspend fun lastCategoryForNote(note: String): Long? = transactions.lastCategoryForNote(note.trim())
     suspend fun entriesForAccount(id: Long): Int = transactions.countForAccount(id)
     suspend fun entriesForCategory(id: Long): Int = transactions.countForCategory(id)

@@ -58,6 +58,20 @@ internal data class CurrencyOption(
         }
 }
 
+/**
+ * The confirm before a switch that rounds: "Japanese yen has no decimals, so 37 amounts will be
+ * rounded to fit. Switching back later does not restore them."
+ */
+internal fun roundingPrompt(name: String, fractionDigits: Int, rounded: Int): String {
+    val decimals = when (fractionDigits) {
+        0 -> "no decimals"
+        1 -> "1 decimal place"
+        else -> "$fractionDigits decimal places"
+    }
+    return "$name has $decimals, so " + Copy.plural(rounded, "amount") + " will be rounded to fit. " +
+        "Switching back later does not restore " + (if (rounded == 1) "it." else "them.")
+}
+
 /** 1234.56 in minor units for a currency with [fractionDigits] decimals (1234 for yen). */
 internal fun sampleMinor(fractionDigits: Int): Long = 123_456L * MoneyFormatter.pow10(fractionDigits) / 100
 

@@ -28,6 +28,19 @@ data class TransactionRow(
 @Immutable
 data class CategoryTotal(val categoryId: Long?, val total: Long, val count: Int)
 
+/** What a searched set of entries adds up to, counted in SQL over every match, not the shown rows. */
+@Immutable
+data class LedgerTotals(
+    val count: Int,
+    val spent: Long,
+    val income: Long,
+    val moved: Long,
+    val expenses: Int,
+    val incomes: Int,
+    val transfers: Int,
+    val activeDays: Int,
+)
+
 @Immutable
 data class DayTotal(val date: LocalDate, val total: Long)
 

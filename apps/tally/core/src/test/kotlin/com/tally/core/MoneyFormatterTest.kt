@@ -59,6 +59,55 @@ class MoneyFormatterTest {
         assertNull(enCa.parse("abc"))
     }
 
+    @Test fun `a typed sign is refused, never dropped`() {
+        assertNull("an overdrawn balance must not save as a positive one", enCa.parse("-120.50"))
+        assertNull(enCa.parse("−120.50"))
+        assertNull(enCa.parse("(120.50)"))
+        assertNull(enCa.parse("$-5"))
+        assertNull(frCa.parse("-1 234,56 $"))
+        assertEquals("a plus sign is still a non-negative amount", 1_200L, enCa.parse("+12"))
+    }
+
+    @Test fun `the magnitude reader ignores the sign for callers that read it themselves`() {
+        assertEquals(12_050L, MoneyFormatter.parseAmount("-120.50", 2))
+        assertEquals(true, MoneyFormatter.hasSign("4.25-"))
+        assertEquals(false, MoneyFormatter.hasSign("$4.25"))
+    }
+
+    @Test fun `rescaling to more decimals is exact`() {
+        assertEquals(125_000L, MoneyFormatter.rescale(1_250, fromDigits = 0, toDigits = 2))
+        assertEquals(12_500L, MoneyFormatter.rescale(1_250, fromDigits = 2, toDigits = 3))
+        assertEquals(-50_000L, MoneyFormatter.rescale(-500, fromDigits = 0, toDigits = 2))
+        assertEquals(false, MoneyFormatter.rescaleRounds(1_250, 0, 2))
+    }
+
+    @Test fun `rescaling to fewer decimals keeps the figure, rounding half even`() {
+        assertEquals("$12.50 reads 12 yen, not 1,250", 12L, MoneyFormatter.rescale(1_250, fromDigits = 2, toDigits = 0))
+        assertEquals(14L, MoneyFormatter.rescale(1_350, 2, 0))
+        assertEquals(13L, MoneyFormatter.rescale(1_251, 2, 0))
+        assertEquals(-12L, MoneyFormatter.rescale(-1_250, 2, 0))
+        assertEquals(-13L, MoneyFormatter.rescale(-1_260, 2, 0))
+        assertEquals(1_234L, MoneyFormatter.rescale(12_345, 3, 2))
+        assertEquals(1_236L, MoneyFormatter.rescale(12_355, 3, 2))
+        assertEquals(0L, MoneyFormatter.rescale(0, 2, 0))
+    }
+
+    @Test fun `a non-zero amount never rescales to zero`() {
+        assertEquals(1L, MoneyFormatter.rescale(40, 2, 0))
+        assertEquals(-1L, MoneyFormatter.rescale(-40, 2, 0))
+    }
+
+    @Test fun `rescale says when it rounds`() {
+        assertEquals(true, MoneyFormatter.rescaleRounds(1_250, 2, 0))
+        assertEquals(false, MoneyFormatter.rescaleRounds(1_200, 2, 0))
+        assertEquals(true, MoneyFormatter.rescaleRounds(-1_201, 2, 0))
+        assertEquals(false, MoneyFormatter.rescaleRounds(0, 2, 0))
+    }
+
+    @Test(expected = ArithmeticException::class) fun `rescaling past a Long throws instead of wrapping`() {
+        MoneyFormatter.rescale(Long.MAX_VALUE / 10, 0, 2)
+    }
+
     @Test fun `input formatting round trips through parse`() {
         listOf(0L, 5L, 1_250L, 99_999_99L).forEach { minor ->
             assertEquals(minor, enCa.parse(enCa.formatInput(minor)))

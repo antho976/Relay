@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tally.app.data.Clock
+import com.tally.app.data.db.LedgerTotals
 import com.tally.app.data.db.TransactionRow
 import com.tally.app.data.prefs.SettingsRepository
 import com.tally.app.data.repo.LedgerFilter
@@ -13,6 +14,7 @@ import com.tally.core.TxType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -39,9 +41,10 @@ data class DayGroup(
 )
 
 /**
- * The readings over whatever set of entries is on screen. [basis] is the type the largest and
- * average readings are about: spending when there is any, else income, else transfers, so a
- * salary never stands in as the "largest spend" and a card payment never dwarfs a month of coffee.
+ * The readings over every entry a filter matches, those past the list's cap included. [basis] is
+ * the type the largest and average readings are about: spending when there is any, else income,
+ * else transfers, so a salary never stands in as the "largest spend" and a card payment never
+ * dwarfs a month of coffee.
  */
 @Immutable
 data class LedgerSummary(
@@ -102,41 +105,61 @@ internal fun groupByDay(rows: List<TransactionRow>): List<DayGroup> =
         }
         .sortedByDescending { it.date }
 
-/** Totals, counts, and the largest and average entry of [rows]. */
-internal fun summarize(rows: List<TransactionRow>): LedgerSummary {
-    if (rows.isEmpty()) return LedgerSummary()
-    var spent = 0L
-    var income = 0L
-    var moved = 0L
-    var expenses = 0
-    var incomes = 0
-    var transfers = 0
-    rows.forEach {
-        when (it.type) {
-            TxType.EXPENSE -> { spent += it.amount; expenses++ }
-            TxType.INCOME -> { income += it.amount; incomes++ }
-            TxType.TRANSFER -> { moved += it.amount; transfers++ }
-        }
-    }
+/**
+ * The readings from [totals], counted over EVERY matching entry, and the [largest] entry of the
+ * basis type. The screens read their summary from here, never from the capped list of rows, so a
+ * search with more matches than the list shows still reads its true total, count and average.
+ */
+internal fun summaryOf(totals: LedgerTotals, largest: TransactionRow?): LedgerSummary {
+    if (totals.count == 0) return LedgerSummary()
     val basis = when {
-        expenses > 0 -> TxType.EXPENSE
-        incomes > 0 -> TxType.INCOME
+        totals.expenses > 0 -> TxType.EXPENSE
+        totals.incomes > 0 -> TxType.INCOME
         else -> TxType.TRANSFER
     }
-    val pool = rows.filter { it.type == basis }
+    val (basisCount, basisSum) = when (basis) {
+        TxType.EXPENSE -> totals.expenses to totals.spent
+        TxType.INCOME -> totals.incomes to totals.income
+        TxType.TRANSFER -> totals.transfers to totals.moved
+    }
     return LedgerSummary(
-        count = rows.size,
-        spent = spent,
-        income = income,
-        moved = moved,
-        transfers = transfers,
-        activeDays = rows.asSequence().map { it.date }.distinct().count(),
+        count = totals.count,
+        spent = totals.spent,
+        income = totals.income,
+        moved = totals.moved,
+        transfers = totals.transfers,
+        activeDays = totals.activeDays,
         basis = basis,
-        basisCount = pool.size,
-        largest = pool.maxByOrNull { it.amount },
-        average = if (pool.isEmpty()) 0L else pool.sumOf { it.amount } / pool.size,
+        basisCount = basisCount,
+        // The two flows behind a summary can land a moment apart; a stale largest never shows.
+        largest = largest?.takeIf { it.type == basis },
+        average = if (basisCount == 0) 0L else basisSum / basisCount,
     )
 }
+
+/** [rows] counted in memory the way [com.tally.app.data.db.TransactionDao.searchTotals] counts in SQL. */
+internal fun totalsOf(rows: List<TransactionRow>): LedgerTotals = LedgerTotals(
+    count = rows.size,
+    spent = rows.sumOf { if (it.type == TxType.EXPENSE) it.amount else 0L },
+    income = rows.sumOf { if (it.type == TxType.INCOME) it.amount else 0L },
+    moved = rows.sumOf { if (it.type == TxType.TRANSFER) it.amount else 0L },
+    expenses = rows.count { it.type == TxType.EXPENSE },
+    incomes = rows.count { it.type == TxType.INCOME },
+    transfers = rows.count { it.type == TxType.TRANSFER },
+    activeDays = rows.asSequence().map { it.date }.distinct().count(),
+)
+
+/** Totals, counts, and the largest and average entry of [rows], for a set already whole in memory. */
+internal fun summarize(rows: List<TransactionRow>): LedgerSummary {
+    val totals = totalsOf(rows)
+    val basis = summaryOf(totals, null).basis
+    // Rows come newest first and maxByOrNull keeps the first of equals, so the newest wins a tie.
+    return summaryOf(totals, rows.filter { it.type == basis }.maxByOrNull { it.amount })
+}
+
+/** The uncapped readings for [filter]: SQL totals over every match, with the largest of them. */
+internal fun LedgerRepository.summary(filter: LedgerFilter): Flow<LedgerSummary> =
+    combine(searchTotals(filter), searchLargest(filter)) { totals, largest -> summaryOf(totals, largest) }
 
 /**
  * The ledger browser: one period at a time, or every month while a query is typed, narrowed by
@@ -189,8 +212,8 @@ class ActivityViewModel @Inject constructor(
             start = if (searching) null else i.period.start,
             end = if (searching) null else i.period.endExclusive,
         )
-        ledger.search(ledgerFilter).map { rows ->
-            val summary = summarize(rows)
+        // The list is capped for the screen; the summary is counted over every match.
+        combine(ledger.search(ledgerFilter), ledger.summary(ledgerFilter)) { rows, summary ->
             val days = when {
                 searching -> 0
                 i.current -> i.period.elapsedDays(i.day)

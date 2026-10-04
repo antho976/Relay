@@ -92,9 +92,10 @@ class MoneyFormatter(currencyCode: String, val locale: Locale) {
 
     /**
      * Parses what a person types into an amount field: "12", "12.5", "12,50", "$1,234.56",
-     * "1 234,56 $". Returns null for anything that is not a non-negative amount.
+     * "1 234,56 $". Returns null for anything that is not a non-negative amount, a minus sign or
+     * accounting brackets included: "-120.50" is refused, never read as 120.50.
      */
-    fun parse(text: String): Long? = parseAmount(text, fractionDigits)
+    fun parse(text: String): Long? = if (hasSign(text)) null else parseAmount(text, fractionDigits)
 
     private fun signed(minor: Long, body: String) = if (minor < 0) "−$body" else body
 
@@ -105,7 +106,32 @@ class MoneyFormatter(currencyCode: String, val locale: Locale) {
             return r
         }
 
-        /** Locale-tolerant amount parsing; see [MoneyFormatter.parse]. */
+        /** A minus (hyphen or true minus) or an opening bracket: the text says the amount is negative. */
+        fun hasSign(text: String): Boolean = text.any { it == '-' || it == '−' || it == '(' }
+
+        /**
+         * [minor] written with [fromDigits] decimals, rewritten with [toDigits]: the same figure in a
+         * currency with a different number of decimals. Gaining digits is exact (12 yen becomes
+         * 1200 cents); losing them rounds half-even (1250 cents becomes 12 yen, 1251 becomes 13),
+         * and a non-zero amount never rounds to zero, so no entry is left without an amount.
+         * Throws [ArithmeticException] when the result does not fit in a [Long].
+         */
+        fun rescale(minor: Long, fromDigits: Int, toDigits: Int): Long {
+            val gained = toDigits - fromDigits
+            if (gained >= 0) return Math.multiplyExact(minor, pow10(gained))
+            val rounded = BigDecimal.valueOf(minor).movePointLeft(-gained).setScale(0, RoundingMode.HALF_EVEN).longValueExact()
+            return if (rounded == 0L && minor != 0L) java.lang.Long.signum(minor).toLong() else rounded
+        }
+
+        /** True when [rescale] cannot keep [minor] exactly, because it drops digits [minor] uses. */
+        fun rescaleRounds(minor: Long, fromDigits: Int, toDigits: Int): Boolean =
+            toDigits < fromDigits && minor % pow10(fromDigits - toDigits) != 0L
+
+        /**
+         * Locale-tolerant reading of an amount's MAGNITUDE: every character but digits and the two
+         * separators is ignored, a sign included. Callers that care about the sign read it
+         * themselves: [MoneyFormatter.parse] refuses one, and the CSV reader turns it into a type.
+         */
         fun parseAmount(text: String, fractionDigits: Int): Long? {
             val cleaned = text.filter { it.isDigit() || it == '.' || it == ',' }
             if (cleaned.isEmpty() || cleaned.none { it.isDigit() }) return null

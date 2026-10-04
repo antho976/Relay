@@ -1,11 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 12 and up. Nothing leaves the phone unasked, so the ledger is never uploaded to a
+    cloud backup: every domain is excluded there (an empty section would back up everything).
+    A device-to-device transfer, which the owner starts when setting up a new phone, still
+    carries the database (with its -wal file, which holds the latest writes) and the settings.
+-->
 <data-extraction-rules>
     <cloud-backup>
-        <include domain="database" path="tally.db" />
-        <include domain="file" path="datastore/" />
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
     </cloud-backup>
     <device-transfer>
-        <include domain="database" path="tally.db" />
+        <include domain="database" path="." />
         <include domain="file" path="datastore/" />
     </device-transfer>
 </data-extraction-rules>

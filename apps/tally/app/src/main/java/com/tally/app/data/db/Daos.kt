@@ -23,12 +23,27 @@ private const val ROW_SELECT = """
     LEFT JOIN categories c ON c.id = t.categoryId
 """
 
+/**
+ * The Activity search's filters, shared by its rows, its totals and its largest entry so the three
+ * always describe the same set. Every filter is optional (NULL, or an empty pattern, skips it).
+ * [pattern] is a GLOB pattern from TextMatch: GLOB with a set per letter folds case for every
+ * alphabet, where LIKE folds ASCII only and would miss "Épicerie" for "épicerie".
+ */
+private const val LEDGER_WHERE = """
+    WHERE (:start IS NULL OR t.date >= :start) AND (:end IS NULL OR t.date < :end)
+      AND (:type IS NULL OR t.type = :type)
+      AND (:categoryId IS NULL OR t.categoryId = :categoryId)
+      AND (:accountId IS NULL OR t.accountId = :accountId OR t.toAccountId = :accountId)
+      AND (:pattern = '' OR t.note GLOB :pattern OR c.name GLOB :pattern OR a.name GLOB :pattern)
+"""
+
 @Dao
 interface TransactionDao {
 
     @Insert suspend fun insert(tx: TransactionEntity): Long
     @Insert suspend fun insertAll(tx: List<TransactionEntity>)
     @Update suspend fun update(tx: TransactionEntity)
+    @Update suspend fun updateAll(tx: List<TransactionEntity>)
     @Query("DELETE FROM transactions WHERE id = :id") suspend fun delete(id: Long)
     @Query("SELECT * FROM transactions WHERE id = :id") suspend fun get(id: Long): TransactionEntity?
 
@@ -39,22 +54,18 @@ interface TransactionDao {
     fun observeBetween(start: LocalDate, end: LocalDate): Flow<List<TransactionRow>>
 
     /**
-     * The Activity search. Every filter is optional (NULL skips it). Capped, because a search over
-     * years of entries renders the newest few hundred and says how many it is showing.
+     * The Activity search's rows. Capped, because a search over years of entries renders the
+     * newest few hundred and says how many it is showing; the readings come from [searchTotals]
+     * and [searchLargest], which are not capped.
      */
     @Query(
         """$ROW_SELECT
-        WHERE (:start IS NULL OR t.date >= :start) AND (:end IS NULL OR t.date < :end)
-          AND (:type IS NULL OR t.type = :type)
-          AND (:categoryId IS NULL OR t.categoryId = :categoryId)
-          AND (:accountId IS NULL OR t.accountId = :accountId OR t.toAccountId = :accountId)
-          AND (:query = '' OR t.note LIKE '%' || :query || '%' OR c.name LIKE '%' || :query || '%'
-               OR a.name LIKE '%' || :query || '%')
+        $LEDGER_WHERE
         ORDER BY t.date DESC, t.id DESC
         LIMIT :limit"""
     )
     fun search(
-        query: String,
+        pattern: String,
         type: TxType?,
         categoryId: Long?,
         accountId: Long?,
@@ -62,6 +73,51 @@ interface TransactionDao {
         end: LocalDate?,
         limit: Int,
     ): Flow<List<TransactionRow>>
+
+    /** What EVERY entry the search matches adds up to, however many the capped list shows. */
+    @Query(
+        """SELECT COUNT(*) AS count,
+                  COALESCE(SUM(CASE WHEN t.type = 'EXPENSE' THEN t.amount END), 0) AS spent,
+                  COALESCE(SUM(CASE WHEN t.type = 'INCOME' THEN t.amount END), 0) AS income,
+                  COALESCE(SUM(CASE WHEN t.type = 'TRANSFER' THEN t.amount END), 0) AS moved,
+                  COUNT(CASE WHEN t.type = 'EXPENSE' THEN 1 END) AS expenses,
+                  COUNT(CASE WHEN t.type = 'INCOME' THEN 1 END) AS incomes,
+                  COUNT(CASE WHEN t.type = 'TRANSFER' THEN 1 END) AS transfers,
+                  COUNT(DISTINCT t.date) AS activeDays
+           FROM transactions t
+           JOIN accounts a ON a.id = t.accountId
+           LEFT JOIN categories c ON c.id = t.categoryId
+           $LEDGER_WHERE"""
+    )
+    fun searchTotals(
+        pattern: String,
+        type: TxType?,
+        categoryId: Long?,
+        accountId: Long?,
+        start: LocalDate?,
+        end: LocalDate?,
+    ): Flow<LedgerTotals>
+
+    /**
+     * The largest entry the search matches, of the type the readings are about: spending when
+     * there is any, else income, else transfers. Ordering by that rank first means the top row is
+     * the largest of the first type present. Ties go to the newest, as the list shows them.
+     */
+    @Query(
+        """$ROW_SELECT
+        $LEDGER_WHERE
+        ORDER BY CASE t.type WHEN 'EXPENSE' THEN 0 WHEN 'INCOME' THEN 1 ELSE 2 END,
+                 t.amount DESC, t.date DESC, t.id DESC
+        LIMIT 1"""
+    )
+    fun searchLargest(
+        pattern: String,
+        type: TxType?,
+        categoryId: Long?,
+        accountId: Long?,
+        start: LocalDate?,
+        end: LocalDate?,
+    ): Flow<TransactionRow?>
 
     @Query(
         """SELECT categoryId, SUM(amount) AS total, COUNT(*) AS count FROM transactions
@@ -89,12 +145,15 @@ interface TransactionDao {
 
     @Query("$ROW_SELECT ORDER BY t.date, t.id") suspend fun allRows(): List<TransactionRow>
 
-    /** Notes used before, most frequent first, for the editor's suggestions. */
+    /**
+     * Notes used before, most frequent first, for the editor's suggestions. [pattern] is a GLOB
+     * prefix pattern from TextMatch, so "é" suggests "Épicerie" as "m" suggests "Metro".
+     */
     @Query(
-        """SELECT note FROM transactions WHERE note != '' AND note LIKE :prefix || '%'
+        """SELECT note FROM transactions WHERE note != '' AND note GLOB :pattern
            GROUP BY note ORDER BY COUNT(*) DESC, MAX(date) DESC LIMIT 5"""
     )
-    suspend fun noteSuggestions(prefix: String): List<String>
+    suspend fun noteSuggestions(pattern: String): List<String>
 
     /** The category last used with a note, so typing "Metro" picks Groceries. */
     @Query("SELECT categoryId FROM transactions WHERE note = :note AND categoryId IS NOT NULL ORDER BY date DESC, id DESC LIMIT 1")
@@ -117,6 +176,7 @@ interface AccountDao {
     @Insert suspend fun insert(account: AccountEntity): Long
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertAll(accounts: List<AccountEntity>)
     @Update suspend fun update(account: AccountEntity)
+    @Update suspend fun updateAll(accounts: List<AccountEntity>)
     @Delete suspend fun delete(account: AccountEntity)
     @Query("SELECT * FROM accounts WHERE id = :id") suspend fun get(id: Long): AccountEntity?
     @Query("SELECT * FROM accounts ORDER BY archived, sortOrder, id") fun observeAll(): Flow<List<AccountEntity>>
@@ -153,6 +213,7 @@ interface CategoryDao {
     fun observeActive(kind: CategoryKind): Flow<List<CategoryEntity>>
     @Query("SELECT COUNT(*) FROM categories") suspend fun count(): Int
     @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM categories WHERE kind = :kind") suspend fun nextSortOrder(kind: CategoryKind): Int
+    /** NOCASE folds ASCII only ("groceries" finds "Groceries", "épicerie" misses "Épicerie"). */
     @Query("SELECT * FROM categories WHERE name = :name COLLATE NOCASE AND kind = :kind LIMIT 1")
     suspend fun findByName(name: String, kind: CategoryKind): CategoryEntity?
     @Query(
@@ -167,6 +228,7 @@ interface CategoryDao {
 @Dao
 interface BudgetDao {
     @Upsert suspend fun upsert(budget: BudgetEntity)
+    @Update suspend fun updateAll(budgets: List<BudgetEntity>)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertAll(budgets: List<BudgetEntity>)
     @Query("DELETE FROM budgets WHERE categoryId = :categoryId") suspend fun deleteFor(categoryId: Long)
     @Query("SELECT * FROM budgets WHERE categoryId = :categoryId") suspend fun getFor(categoryId: Long): BudgetEntity?
@@ -197,6 +259,7 @@ interface RecurringDao {
     @Insert suspend fun insert(r: RecurringEntity): Long
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertAll(r: List<RecurringEntity>)
     @Update suspend fun update(r: RecurringEntity)
+    @Update suspend fun updateAll(r: List<RecurringEntity>)
     @Query("DELETE FROM recurring WHERE id = :id") suspend fun delete(id: Long)
     @Query("SELECT * FROM recurring WHERE id = :id") suspend fun get(id: Long): RecurringEntity?
     @Query("SELECT * FROM recurring") suspend fun all(): List<RecurringEntity>
@@ -236,6 +299,8 @@ interface GoalDao {
     @Insert suspend fun insert(goal: GoalEntity): Long
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertAll(goals: List<GoalEntity>)
     @Update suspend fun update(goal: GoalEntity)
+    @Update suspend fun updateAll(goals: List<GoalEntity>)
+    @Update suspend fun updateContributions(c: List<ContributionEntity>)
     @Query("DELETE FROM goals WHERE id = :id") suspend fun delete(id: Long)
     @Query("SELECT * FROM goals WHERE id = :id") suspend fun get(id: Long): GoalEntity?
     @Query("SELECT * FROM goals") suspend fun all(): List<GoalEntity>
