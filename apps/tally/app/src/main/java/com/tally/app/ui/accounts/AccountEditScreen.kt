@@ -90,7 +90,7 @@ fun AccountEditRoute(nav: AppNav) {
             requestDelete = viewModel::requestDelete,
             dismissDelete = viewModel::dismissDelete,
             delete = viewModel::delete,
-            viewEntries = { nav.transactions(accountId = it) },
+            viewEntries = nav::accountEntries,
         )
     }
     AccountEditScreen(state, actions)

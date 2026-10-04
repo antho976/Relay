@@ -35,6 +35,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -369,6 +370,11 @@ private fun MoneySheet(withdraw: Boolean, saved: Long, onConfirm: (Long, String)
     var text by rememberSaveable { mutableStateOf("") }
     var note by rememberSaveable { mutableStateOf("") }
     var tried by rememberSaveable { mutableStateOf(false) }
+    // One commit per visit: the sheet stays on screen, and tappable, while it slides away.
+    var committed by rememberSaveable { mutableStateOf(false) }
+    // A rotation mid-slide brings the sheet back after its commit went through: close it again,
+    // rather than leave a sheet whose action does nothing.
+    LaunchedEffect(Unit) { if (committed) onDismiss() }
     val value = money.parse(text) ?: 0L
     val problem = when {
         value <= 0L -> "Enter an amount above zero"
@@ -425,11 +431,14 @@ private fun MoneySheet(withdraw: Boolean, saved: Long, onConfirm: (Long, String)
             HeroAction(
                 if (withdraw) "Withdraw" else "Add money",
                 {
-                    if (problem != null) {
-                        tried = true
-                    } else {
-                        onConfirm(if (withdraw) -value else value, note)
-                        close()
+                    if (!committed) {
+                        if (problem != null) {
+                            tried = true
+                        } else {
+                            committed = true
+                            onConfirm(if (withdraw) -value else value, note)
+                            close()
+                        }
                     }
                 },
                 Modifier.fillMaxWidth(),

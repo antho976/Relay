@@ -95,6 +95,9 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         // Unregistered here: a registered observer holds this Activity past its death.
         contentResolver.unregisterContentObserver(animatorObserver)
+        // A rotation hands the notice on screen to the next Activity, which shows it again. Leaving
+        // the app lets it stand, so an old Undo never waits for the next launch.
+        if (!isChangingConfigurations) notices.clear()
         super.onDestroy()
     }
 

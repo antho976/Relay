@@ -326,9 +326,16 @@ class EntryViewModel @Inject constructor(
         viewModelScope.launch {
             val row = repo.delete(id)
             // The undo holds the repository and the row, never this ViewModel.
-            if (row != null) notices.showUndo("Entry deleted") { repo.restore(row) }
+            if (row != null) notices.showUndo(undoLine(row)) { repo.restore(row) }
             finished.send(Unit)
         }
+    }
+
+    /** Names the entry by its category, so the snackbar says which one its Undo brings back. */
+    private suspend fun undoLine(row: TransactionEntity): String {
+        if (row.type == TxType.TRANSFER) return "Transfer deleted"
+        val category = row.categoryId?.let { ledger.category(it) }?.name
+        return if (category != null) "$category entry deleted" else "Entry deleted"
     }
 
     /** The stored entry again, dated today, unlinked from any bill. */

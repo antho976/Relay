@@ -197,6 +197,11 @@ class BudgetEditViewModel @Inject constructor(
         busy = true
         val repo = plan
         val id = categoryId
+        // Named, so the snackbar says which limit its Undo brings back.
+        val line = when {
+            id == BudgetEntity.OVERALL -> "Monthly budget removed"
+            else -> state.value.name?.let { "$it budget removed" } ?: "Budget removed"
+        }
         viewModelScope.launch {
             val old = repo.budgetFor(id)?.amount
             if (old == null) {
@@ -205,7 +210,7 @@ class BudgetEditViewModel @Inject constructor(
             }
             repo.setBudget(id, 0L)
             // The undo holds the repository and the amount, never this ViewModel.
-            notices.showUndo("Budget removed") { repo.setBudget(id, old) }
+            notices.showUndo(line) { repo.setBudget(id, old) }
             finished.send(Unit)
         }
     }

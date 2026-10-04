@@ -1,5 +1,6 @@
 package com.tally.app.ui.nav
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
@@ -71,12 +72,14 @@ val LocalSnackbarLift = staticCompositionLocalOf { mutableStateOf(0.dp) }
  * The hub: four tabs with one add FAB that stays put across them, because logging is the most
  * frequent act and must cost one tap from anywhere. Compact width gets a bottom bar; 600dp and up
  * a rail, so a tablet never wears a stretched phone bar. Each tab keeps its scroll position.
+ * Home is the start: Back from any other tab returns there, and only Back on Home leaves the app.
  */
 @Composable
 fun Hub(nav: AppNav) {
     var tab by rememberSaveable { mutableStateOf(HubTab.HOME) }
     val holder = rememberSaveableStateHolder()
     val lift = LocalSnackbarLift.current
+    BackHandler(enabled = tab != HubTab.HOME) { tab = HubTab.HOME }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 600.dp
