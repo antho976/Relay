@@ -1,0 +1,317 @@
+name: CI
+
+# Everything that must be true before Margin is installable. Cheapest first, each gating the next:
+#
+#   guard         ~30s  Wrapper checksum, no signing material, no build output in the tree.
+#   core          ~1m   The money arithmetic on the plain JVM: formatting, periods, pace,
+#                       recurrence, CSV and backup codecs, the sample set, the voice rules.
+#   verify        ~12m  The app on the JVM: Room DAO and repository tests against a real SQLite,
+#                       ViewModel tests, the design-doctrine scan, screenshot goldens, Android
+#                       Lint, and both APKs including a real R8 release.
+#   instrumented  ~15m  What only a device answers: the UI smoke flow with LeakCanary watching
+#                       for leaks after every test, and whether the MINIFIED APK launches.
+#
+# One JVM job rather than a fan-out: every gate shares the same expensive :app compile.
+
+on:
+  push:
+    paths-ignore:
+      - "**.md"
+      - ".impeccable/**"
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to check out. Defaults to the caller's ref."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  guard:
+    name: Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Validate Gradle wrapper checksum
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: No signing material in the tree
+        run: |
+          found=$(git ls-files -- '*.jks' '*.keystore' '*.p12' 'keystore.properties' '**/keystore.properties' | grep -v '\.example$' || true)
+          if [ -n "$found" ]; then
+            echo "::error::Signing material is committed:"; echo "$found"; exit 1
+          fi
+          echo "No keystores."
+
+      - name: No build output in the tree
+        run: |
+          found=$(git ls-files | grep -E '(^|/)(build|\.gradle|\.kotlin)/' || true)
+          if [ -n "$found" ]; then
+            echo "::error::Build output is committed:"; echo "$found"; exit 1
+          fi
+          echo "Clean."
+
+      - name: No INTERNET permission
+        # The product promise: nothing leaves the phone unless the owner exports it. A merged
+        # manifest that gains INTERNET (a library adding it) fails the release check below; this
+        # catches the hand-written one.
+        run: |
+          if grep -R "android.permission.INTERNET" app/src/main/AndroidManifest.xml; then
+            echo "::error::Margin must not request INTERNET."; exit 1
+          fi
+
+      - name: CI helper self checks
+        run: python3 .github/scripts/test_summary_test.py
+
+  core:
+    name: Core (money math)
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      - name: Install the Android platform (configuration needs it)
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$sdkmanager" "platforms;android-37.0" > /dev/null
+      - name: Core unit tests
+        run: ./gradlew --continue :core:test
+      - name: Test summary
+        if: always()
+        run: python3 .github/scripts/test_summary.py core >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    name: Verify (JVM)
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+          add-job-summary: on-failure
+
+      - name: Install the Android platform this build compiles against
+        # `android-37.0`: platforms are minor-versioned and there is no bare android-37.
+        run: |
+          set -o pipefail
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+          if ! "$sdkmanager" "platforms;android-37.0" > /dev/null; then
+            "$sdkmanager" --list 2>/dev/null | grep -E "^\s*platforms;android-[0-9]+" | sort -u || true
+            echo "::error::platforms;android-37.0 could not be installed."; exit 1
+          fi
+
+      - name: Cache Robolectric runtime jars
+        # Fetched at TEST time into ~/.m2, outside Gradle's cache.
+        uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: robolectric-${{ runner.os }}-
+
+      - name: Unit tests, DAO tests, doctrine, screenshot goldens
+        # verifyRoborazziDebug IS testDebugUnitTest with every golden compared, so one invocation
+        # runs the whole JVM suite. Until goldens exist (the first run on a new screen set), the
+        # tests still run, without comparison, and the Record workflow commits them.
+        shell: bash
+        run: |
+          set -o pipefail
+          if ls app/src/test/screenshots/*.png > /dev/null 2>&1; then task=:app:verifyRoborazziDebug; else task=:app:testDebugUnitTest; fi
+          echo "Running $task"
+          ./gradlew --continue $task :app:coverageReport 2>&1 | tee "$RUNNER_TEMP/verify.log"
+
+      - name: Test summary
+        if: always()
+        run: python3 .github/scripts/test_summary.py app >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: |
+            app/build/reports/tests/**
+            app/build/test-results/**
+            app/build/reports/jacoco/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload screenshot diffs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: roborazzi-diffs
+          path: app/build/outputs/roborazzi/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Android Lint (release)
+        if: ${{ !cancelled() }}
+        run: ./gradlew --continue :app:lintRelease 2>&1 | tee -a "$RUNNER_TEMP/verify.log"
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-*.*
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Assemble debug and minified release
+        # The release is signed with the DEBUG key (-PmarginCiSmokeSigning) so it can be
+        # installed for testing; a real release is signed only by release.yml with a real key.
+        if: ${{ !cancelled() }}
+        run: ./gradlew :app:assembleDebug :app:assembleRelease -PmarginCiSmokeSigning 2>&1 | tee -a "$RUNNER_TEMP/verify.log"
+
+      - name: No INTERNET in the merged release manifest
+        if: ${{ !cancelled() }}
+        run: |
+          manifest=$(find app/build/intermediates/merged_manifests/release -name AndroidManifest.xml | head -1)
+          if [ -z "$manifest" ]; then manifest=$(find app/build/intermediates -path '*release*' -name AndroidManifest.xml | grep merged | head -1); fi
+          echo "Checking $manifest"
+          if grep -q "android.permission.INTERNET" "$manifest"; then
+            echo "::error::A dependency added INTERNET to the release manifest."; exit 1
+          fi
+
+      - name: APK size budget
+        # A spending tracker has no reason to weigh more than this; a jump means a dependency
+        # dragged something in (an icon set unshrunk, a second copy of a library).
+        if: ${{ !cancelled() }}
+        run: |
+          apk=$(find app/build/outputs/apk/release -name '*.apk' -not -name '*unsigned*' | head -1)
+          size=$(stat -c %s "$apk")
+          echo "Release APK: $apk, $((size / 1024)) KiB" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$size" -gt 12000000 ]; then echo "::error::Release APK is over the 12 MB budget."; exit 1; fi
+
+      - name: Upload installable APKs
+        uses: actions/upload-artifact@v7
+        with:
+          name: margin-apks
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: What failed
+        if: failure()
+        shell: bash
+        run: |
+          echo "::group::Compile errors"
+          grep -A 4 -E "^e: |: error: |Unresolved reference|FAILURE: Build failed" "$RUNNER_TEMP/verify.log" | head -120 || echo "(none)"
+          echo "::endgroup::"
+          echo "::group::Failing tests"
+          grep -E "FAILED$|AssertionError|tests completed," "$RUNNER_TEMP/verify.log" | head -60 || echo "(none)"
+          echo "::endgroup::"
+          echo "::group::Lint errors"
+          find app/build/reports -name 'lint-results-*.txt' -print0 2>/dev/null | xargs -0 -r grep -h ": Error: " | sort -u | head -60 || echo "(none)"
+          echo "::endgroup::"
+
+  instrumented:
+    name: Instrumented (emulator)
+    needs: [core, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: true
+      - name: Install the Android platform
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$sdkmanager" "platforms;android-37.0" > /dev/null
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Build everything the emulator needs (before it boots)
+        run: ./gradlew :app:assembleDebugAndroidTest :app:assembleDebug :app:assembleRelease -PmarginCiSmokeSigning
+      - name: Cache the AVD snapshot
+        uses: actions/cache@v6
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-34-google_apis-x86_64
+      - name: Create the AVD snapshot
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "AVD snapshot created."
+      - name: UI flow with leak detection, then the release smoke launch
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: bash .github/scripts/instrumented.sh
+      - name: Upload instrumented report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: connected-test-report
+          path: |
+            app/build/reports/androidTests/**
+            app/build/outputs/androidTest-results/**
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload smoke logcat
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-logcat
+          path: smoke-logcat.txt
+          if-no-files-found: ignore
+          retention-days: 14
