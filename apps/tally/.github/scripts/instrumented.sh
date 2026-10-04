@@ -50,11 +50,22 @@ adb install -r -d "$apk"
 echo "::endgroup::"
 
 echo "::group::Cold-launch the release build"
+# A busy software-rendered emulator can raise "System UI isn't responding" over the app. That
+# dialog takes window focus from a healthy app, so keep error dialogs off the screen and ask the
+# activity manager which activity is resumed instead of which window has focus.
+adb shell settings put global hide_error_dialogs 1 > /dev/null 2>&1 || true
+adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS > /dev/null 2>&1 || true
 adb logcat -c
 adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 || true
+resumed() {
+  # Read first, then match: under pipefail an early-exiting grep -q can fail the pipe by SIGPIPE.
+  local acts
+  acts=$(adb shell dumpsys activity activities 2>/dev/null | tr -d '\r' || true)
+  grep -qE "(topResumedActivity|ResumedActivity).*$APP_ID/" <<< "$acts"
+}
 up=0
-for _ in $(seq 1 25); do
-  if adb shell pidof "$APP_ID" > /dev/null 2>&1 && adb shell dumpsys window 2>/dev/null | grep "mCurrentFocus.*$APP_ID" > /dev/null; then
+for _ in $(seq 1 45); do
+  if adb shell pidof "$APP_ID" > /dev/null 2>&1 && resumed; then
     up=1; break
   fi
   sleep 1
@@ -62,7 +73,14 @@ done
 sleep 3
 adb logcat -d > "$LOGCAT" 2>/dev/null || true
 if [ "$up" -ne 1 ]; then
-  echo "::error::$APP_ID never reached the foreground."; tail -200 "$LOGCAT"; exit 1
+  echo "::error::$APP_ID never reached the foreground."
+  # The cause, wherever it sits in the log: a crash, an ANR, or the app's own lines. A tail would
+  # show only the system noise logged after it.
+  echo "-- process: $(adb shell pidof "$APP_ID" 2>/dev/null | tr -d '\r' || true)"
+  adb shell dumpsys activity activities 2>/dev/null | tr -d '\r' | grep -E "ResumedActivity|mFocusedApp" | head -5 || true
+  adb shell dumpsys window 2>/dev/null | tr -d '\r' | grep -E "mCurrentFocus|mFocusedApp" | head -5 || true
+  grep -nE "FATAL EXCEPTION|AndroidRuntime|ANR in|$APP_ID|Process: " "$LOGCAT" | head -150 || true
+  exit 1
 fi
 if grep -q "FATAL EXCEPTION" "$LOGCAT"; then
   echo "::error::A fatal exception was logged during the release launch."
