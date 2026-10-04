@@ -7,6 +7,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import leakcanary.DetectLeaksAfterTestSuccess
 import org.junit.Rule
@@ -41,7 +42,10 @@ class AppFlowTest {
 
     private fun tap(text: String, substring: Boolean = true) {
         waitForText(text, substring)
-        compose.onAllNodesWithText(text, substring = substring, ignoreCase = true).onFirst().performClick()
+        val node = compose.onAllNodesWithText(text, substring = substring, ignoreCase = true).onFirst()
+        // Inside a scrolling form the target may sit below the fold; bring it on screen first.
+        runCatching { node.performScrollTo() }
+        node.performClick()
         compose.waitForIdle()
     }
 
