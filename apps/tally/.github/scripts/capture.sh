@@ -71,9 +71,11 @@ for apk in "$APP_APK" "$TEST_APK"; do
   if [ ! -f "$apk" ]; then echo "::error::$apk is missing; assemble it before the emulator boots."; exit 1; fi
   adb install -r -t -g "$apk"
 done
-if ! adb shell pm list instrumentation | tr -d '\r' | grep -qF "$RUNNER"; then
+# Read into a variable first: under pipefail, grep -q leaving a pipe early can fail it by SIGPIPE.
+instrumentations=$(adb shell pm list instrumentation | tr -d '\r')
+if ! grep -qF "$RUNNER" <<< "$instrumentations"; then
   echo "::error::$RUNNER is not installed. The device lists:"
-  adb shell pm list instrumentation
+  echo "$instrumentations"
   exit 1
 fi
 # No stale capture from an earlier run on this AVD can stand in for a fresh one.
@@ -90,6 +92,9 @@ demo clock -e hhmm 0941
 demo battery -e level 100 -e plugged false
 demo network -e wifi show -e level 4 -e mobile show -e datatype none -e level 4
 demo notifications -e visible false
+# Nothing here counts as user activity, and a screen that sleeps mid-run stops the Activity.
+adb shell svc power stayon true > /dev/null 2>&1 || true
+adb shell input keyevent KEYCODE_WAKEUP > /dev/null 2>&1 || true
 echo "::endgroup::"
 
 if [ "$device" = phone ]; then
