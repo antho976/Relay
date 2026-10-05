@@ -22,10 +22,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
-import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.DarkMode
-import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -132,7 +129,7 @@ private fun SampleHero(modifier: Modifier = Modifier) {
         PaceReading(SAMPLE_BUDGET_UNITS * unit, SAMPLE_SPENT_UNITS * unit, SAMPLE_DAYS, SAMPLE_ELAPSED)
     }
     HeroPanel(modifier) {
-        HeroHead(Icons.Rounded.AccountBalanceWallet, "Left to spend", end = "SAMPLE")
+        HeroHead("Left to spend", end = "SAMPLE")
         Spacer(Modifier.height(14.dp))
         HeroNumber(money.formatWhole(reading.remaining), description = "Sample, " + money.formatWhole(reading.remaining) + " left to spend")
         Text(
@@ -163,7 +160,6 @@ private fun LookTiles(state: AppearanceState, modifier: Modifier = Modifier) {
         modifier,
         first = { m ->
             StatTile(
-                Icons.Rounded.Palette,
                 "Accent",
                 if (state.accentEnabled) state.accent.label else "Off",
                 m,
@@ -172,7 +168,6 @@ private fun LookTiles(state: AppearanceState, modifier: Modifier = Modifier) {
         },
         second = { m ->
             StatTile(
-                Icons.Rounded.DarkMode,
                 "Ground",
                 groundLabel(state.amoled),
                 m,

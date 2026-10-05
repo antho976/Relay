@@ -1,6 +1,6 @@
 ---
 name: Tally
-description: A month read as a pace, on raised warm panels under one lit hero.
+description: A month read as a pace, open on a warm page like Avex, with one serif hero per view.
 colors:
   ember: "#D4761F"
   accent-red: "#E23D3D"
@@ -268,9 +268,9 @@ components:
 
 **Creative North Star: "The Lit Ledger"**
 
-Tally is a month kept as a ledger on a warm near-black desk, with one lamp over the figure that matters. The world is inherited from the sibling app Avex (warm Pearl ground, serif figures, sans rows, mono uppercase labels, one owner-chosen accent) and deliberately made richer at the owner's binding call: every section sits on its own raised panel, every section header and every stat is led by a drawn glyph on a tinted tile, the reading a screen exists for sits in the one accent-lit hero panel, and screens carry more readings and charts than Avex's open page. The result is dense but ordered: blocks of readings, each one quietly edged, none shouting.
+Tally is a month kept as a ledger on a warm near-black desk, with one lamp over the figure that matters. The world is the sibling app Avex's, and so is its page: warm Pearl ground, serif figures, sans rows, mono uppercase labels, one owner-chosen accent, and open editorial composition (the owner's call, 2026-10-05: "I don't like these big boxes, look at what I did for Avex"). Nothing that cannot be tapped sits in a box; a section is its mono header and the air around it, a reading is a serif figure over a mono label, and the figure a screen exists for is its one serif hero. Tally keeps its richer money readings and charts, drawn open on the page.
 
-Depth is tonal, not cast. Panels are a warm rung above the ground with a 1dp edge; tappable things are a further rung up and edgeless; the hero is lit by one flat tint of the accent. Nothing in the app is a gradient. Colour is spent with intent: the accent marks what the owner acts on and where the month stands, the twelve category hues are a data series, and red and green appear only when something is really over or under. Readings travel with their numbers: a meter always carries its pace tick, a figure always carries the line that explains it.
+Depth is tonal, not cast, and spent only on what can be tapped. Passive content sits straight on the ground, as in Avex: no panels, no boxes, sections separated by air and a mono header; tappable things (slab rows, chips, fields, buttons) take a warm rung up. Nothing in the app is a gradient. Colour is spent with intent: the accent marks what the owner acts on and where the month stands, the twelve category hues are a data series, and red and green appear only when something is really over or under. Readings travel with their numbers: a meter always carries its pace tick, a figure always carries the line that explains it.
 
 Motion is short and physical. Fills draw in once over 900ms and never replay when a row scrolls back, a press is a 0.97 bounce rather than a ripple, and every animation collapses to a cut when the system's Remove animations is on.
 
@@ -278,10 +278,10 @@ Motion is short and physical. Fills draw in once over 900ms and never replay whe
 - Warm near-black Pearl ground, one flat colour; a pure-black variant for OLED.
 - Three type voices: serif figures and titles, sans rows and prose, mono uppercase labels.
 - One owner-chosen accent (Ember by default), with a near-white fallback when colour is off.
-- Raised 20dp panels with a 1dp quiet edge, one 24dp lit hero panel per view.
-- A glyph tile leads every panel header, stat tile and list row.
+- Open editorial, Avex's: no box around anything that cannot be tapped; one serif hero figure per view.
+- Mono uppercase section anchors; a glyph badge leads tappable list rows only.
 - The pace tick: every meter shows where an even spend would be today.
-- No dividers anywhere; air and panel edges separate sections.
+- No dividers anywhere; air and the section's header separate sections.
 
 ## Colors
 
@@ -330,7 +330,7 @@ A warm, low-chroma ladder of browns under a single saturated accent, with a twel
 **Character:** A ledger's three hands: an old-style serif for the number or title a block exists to show, a plain sans for everything you read in a row, and a spaced mono in capitals for the labels that name a reading. Choosing the voice is choosing the meaning.
 
 ### Hierarchy
-- **Display** (400, 52sp / 44sp, 58 / 50 line): the hero figure inside the lit panel. It steps down through display-medium, headline-large and headline-medium as the text grows, and its font scale is capped at 1.3x so a long amount at 200% stays on one line.
+- **Display** (400, 52sp / 44sp, 58 / 50 line): the hero figure, open on the page. It steps down through display-medium, headline-large and headline-medium as the text grows, and its font scale is capped at 1.3x so a long amount at 200% stays on one line.
 - **Headline** (400, 36sp / 28sp / 22sp): headline-large is every page title; headline-medium is a secondary panel figure such as the net across accounts; headline-small is the value in a stat tile.
 - **Title** (500, 18sp / 16sp / 14sp, tabular): keypad digits (title-large), amounts at a row's end (title-medium), compact readings (title-small), and the sans group header over a slab group (title-small in muted).
 - **Body** (400, 16sp / 14sp / 12sp): body-large for row titles, field text, segment labels and the context line under a page title; body-medium for row subtitles and the line under a hero figure; body-small for chip text, captions, tile details, legend labels and nav labels.
@@ -402,10 +402,10 @@ Tactile and few. A view has one hero action at most.
 - **Choice chip:** a capsule choice drawn at least 40dp tall in a 48dp slot, 16dp by 9dp padding. Idle: no fill, a 1dp ring of outline at 35%, muted body-medium text. Selected: the accent ring over a 15% accent wash, text in on-ground. Ring and wash cross-fade over 150ms. Only one of a set is picked, so a chip announces as a radio button and its row is a selectable group, letting TalkBack read its place in the set. A chip that acts rather than picks (a note suggestion) is a plain button and never shows as picked; worded segments that wrap into chips still announce as tabs.
 
 ### Cards / Containers
-- **Panel:** every section. 20dp corners, container fill, 1dp outline-variant edge, 18dp padding. One panel per section, never a panel inside a panel.
-- **Panel header:** a 32dp glyph tile (the glyph at 56% of the tile, in the accent on a 16% wash, 10dp corners), then the panel's name in label-large uppercase on-ground, then at the end either a reading in label-medium muted or a text action. At least 40dp tall. The name keeps one line: when the name and the end cannot share the width whole, the end drops under the name. The name labels the panel beside its glyph; it is not a line above a heading.
-- **Hero panel:** the lit panel. 24dp corners, container fill under one flat accent tint at 10%, a 1dp accent edge at 28%, 20dp padding. Holds a panel header, the display figure, one explaining line in body-medium muted, a pace meter, and stat chips. On the monthly budget it is also the tap into its own editor. Home's hero names its figure for what it is, the room left of the budget: LEFT TO SPEND (OVER BUDGET when over, LEFT FROM INCOME with no budget), with the pace verdict at the header's end, the line "left of your $2,900 budget · $1,284 spent" ("over your" when over), and two chips, the allowance in the story's words ("$90 a day for 18 days") and the even pace (over budget, only the pace). Plan's hero keeps MONTHLY BUDGET as its name but words its line ("left of your $2,900 budget") and its allowance chip the same way; the Appearance and onboarding samples carry Home's LEFT TO SPEND. "Margin" is kept for In minus Out, as Activity's hero uses it.
-- **Stat tile:** one reading per tile, always in pairs of different readings. 18dp corners, container fill, 1dp edge, 16dp padding: a 30dp glyph tile, the value in headline-small serif, the label in label-medium uppercase muted 2dp under it, an optional body-small detail 6dp below. The label sits under its figure as every figure in the kit reads (the figure row, Avex's stats), never above it as an eyebrow. Announced to TalkBack as one sentence: label, value, detail.
+- **Panel:** an open section, Avex's: its content straight on the page, no fill and no edge, because a box is a promise of a tap. The air around it (28dp between sections) and its header are the only separator. Rows inside it are bare taps.
+- **Panel header:** the section's mono anchor (15sp, uppercase, muted), with either a reading in label-medium muted or a text action at its end. No glyph tile, no rule. At least 32dp tall. The name keeps one line: when it and the end cannot share the width whole, the end drops under it. A true state (over budget, money in) colours the name.
+- **Hero panel:** the screen's lead section, open like every other: its anchor, the display figure, one explaining line in body-medium muted, a pace meter and quiet context lines. It is told apart by its serif figure, never by a box or a wash. On the monthly budget it is also the tap into its own editor. Home's hero names its figure for what it is, the room left of the budget: LEFT TO SPEND (OVER BUDGET when over, LEFT FROM INCOME with no budget).
+- **Stat tile:** one open reading, Avex's figure: the value in headline-small serif straight on the page, the label in label-medium uppercase muted 2dp under it, an optional body-small detail 6dp below. Always in pairs of different readings, 20dp apart.
 
 ### Inputs / Fields
 - **Style:** a filled container-high slab, 16dp corners, at least 56dp, 18dp by 14dp padding, led by a 44dp glyph badge; text and placeholder in body-large (placeholder muted); an optional mono suffix (currency) at the end.

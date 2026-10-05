@@ -27,7 +27,6 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.EditNote
-import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Savings
@@ -206,7 +205,7 @@ private fun TargetHero(state: GoalEditState, modifier: Modifier = Modifier) {
         when (d.kind) {
             GoalKind.SAVINGS -> {
                 val fraction = if (target > 0L) (state.saved.toDouble() / target).toFloat() else 0f
-                HeroLabel(Icons.Rounded.Flag, "Target", end = money.currency.currencyCode, tint = hue)
+                HeroLabel("Target", end = money.currency.currencyCode, tint = hue)
                 Spacer(Modifier.height(10.dp))
                 // Not a live region: the figure follows a text field, and TalkBack already echoes each key.
                 HeroFigure(
@@ -241,7 +240,7 @@ private fun TargetHero(state: GoalEditState, modifier: Modifier = Modifier) {
             GoalKind.BALANCE -> {
                 val now = state.balanceNow
                 val what = d.accountId?.let { id -> state.accounts.firstOrNull { it.id == id }?.name } ?: "Everything you own"
-                HeroLabel(Icons.Rounded.AccountBalance, "Reach", end = money.currency.currencyCode, tint = hue)
+                HeroLabel("Reach", end = money.currency.currencyCode, tint = hue)
                 Spacer(Modifier.height(10.dp))
                 HeroFigure(
                     money.formatWhole(target),
@@ -273,7 +272,7 @@ private fun TargetHero(state: GoalEditState, modifier: Modifier = Modifier) {
             }
             GoalKind.INVEST, GoalKind.SAVE -> {
                 val invest = d.kind == GoalKind.INVEST
-                HeroLabel(goalKindIcon(d.kind), "Every month", end = if (d.byShare) "OF INCOME" else money.currency.currencyCode, tint = hue)
+                HeroLabel("Every month", end = if (d.byShare) "OF INCOME" else money.currency.currencyCode, tint = hue)
                 Spacer(Modifier.height(10.dp))
                 HeroFigure(
                     if (d.byShare) "${d.percent}%" else money.formatWhole(target),

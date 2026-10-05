@@ -18,8 +18,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
-import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
@@ -232,7 +230,6 @@ private fun GoalHero(state: GoalState, goal: GoalLine, modifier: Modifier = Modi
     val line = Copy.goalLine(goal.saved, goal.target, goal.monthsLeft, money)
     HeroPanel(modifier) {
         HeroLabel(
-            if (goal.reached) Icons.Rounded.EmojiEvents else Icons.Rounded.Savings,
             if (goal.reached) "Reached" else "Saved",
             end = "$percent%",
             tint = hue,
@@ -281,7 +278,6 @@ private fun PaceTiles(state: GoalState, goal: GoalLine, modifier: Modifier = Mod
         modifier,
         first = { m ->
             StatTile(
-                Icons.AutoMirrored.Rounded.TrendingUp,
                 "Your pace",
                 money.formatWhole(pace?.perMonth ?: 0L),
                 m,
@@ -295,7 +291,6 @@ private fun PaceTiles(state: GoalState, goal: GoalLine, modifier: Modifier = Mod
         },
         second = { m ->
             StatTile(
-                Icons.Rounded.Flag,
                 "At this pace",
                 when {
                     goal.reached -> "Reached"
@@ -326,22 +321,18 @@ private fun FlowTiles(state: GoalState, modifier: Modifier = Modifier) {
         modifier,
         first = { m ->
             StatTile(
-                Icons.Rounded.ArrowDownward,
                 "Added",
                 money.formatWhole(state.added),
                 m,
                 detail = if (ins == 0) "Nothing added yet" else Copy.plural(ins, "time"),
-                tint = MaterialTheme.colorScheme.tertiary,
             )
         },
         second = { m ->
             StatTile(
-                Icons.Rounded.ArrowUpward,
                 "Withdrawn",
                 money.formatWhole(state.withdrawn),
                 m,
                 detail = if (outs == 0) "Nothing taken out" else Copy.plural(outs, "time"),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
     )
@@ -359,7 +350,6 @@ private fun BalanceHero(state: GoalState, goal: GoalLine, modifier: Modifier = M
     val percent = (goal.fraction * 100f).roundToInt()
     HeroPanel(modifier) {
         HeroLabel(
-            if (goal.reached) Icons.Rounded.EmojiEvents else Icons.Rounded.AccountBalance,
             if (goal.reached) "Reached" else (goal.accountName ?: "Everything you own"),
             end = "$percent%",
             tint = hue,
@@ -425,7 +415,6 @@ private fun MonthlyHero(state: GoalState, goal: GoalLine, modifier: Modifier = M
     val invest = goal.kind == GoalKind.INVEST
     HeroPanel(modifier) {
         HeroLabel(
-            if (goal.reached) Icons.Rounded.EmojiEvents else goalKindIcon(goal.kind),
             if (invest) "Invested this month" else "Kept this month",
             end = goal.achievedPercent?.let { "$it% OF INCOME" },
             tint = hue,
@@ -467,7 +456,6 @@ private fun MonthsPanel(state: GoalState, goal: GoalLine, modifier: Modifier = M
     val months = goal.history.asReversed()
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.CalendarMonth,
             "Earlier months",
             meta = if (months.isEmpty()) null else "${months.count { it.met }} OF ${months.size} MET",
         )
@@ -511,7 +499,6 @@ private fun MonthsPanel(state: GoalState, goal: GoalLine, modifier: Modifier = M
 private fun ContributionsPanel(state: GoalState, actions: GoalActions, modifier: Modifier = Modifier) {
     Panel(modifier) {
         PanelHeader(
-            Icons.AutoMirrored.Rounded.ReceiptLong,
             "Contributions",
             meta = if (state.contributions.isEmpty()) null else state.contributions.size.toString(),
         )

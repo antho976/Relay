@@ -17,13 +17,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
-import androidx.compose.material.icons.rounded.AccountBalance
-import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AddCard
-import androidx.compose.material.icons.rounded.Inventory2
-import androidx.compose.material.icons.rounded.Leaderboard
-import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -151,7 +146,6 @@ private fun NetHero(state: AccountsState, modifier: Modifier = Modifier) {
     val count = state.active.size
     HeroPanel(modifier) {
         HeroHead(
-            Icons.Rounded.AccountBalanceWallet,
             "Net balance",
             end = Copy.plural(count, "account").uppercase(),
         )
@@ -204,7 +198,6 @@ private fun AccountTiles(state: AccountsState, modifier: Modifier = Modifier) {
         modifier,
         first = { m ->
             StatTile(
-                Icons.Rounded.Savings,
                 "Largest",
                 money.formatWhole(largest?.account?.balance ?: 0L),
                 m,
@@ -213,7 +206,6 @@ private fun AccountTiles(state: AccountsState, modifier: Modifier = Modifier) {
         },
         second = { m ->
             StatTile(
-                Icons.Rounded.Leaderboard,
                 "Most used",
                 (busiest?.account?.entryCount ?: 0).toString(),
                 m,
@@ -228,7 +220,6 @@ private fun ActivePanel(state: AccountsState, actions: AccountsActions, modifier
     val money = LocalMoney.current
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.AccountBalance,
             "Active",
             meta = if (state.active.isEmpty()) null else "NET " + money.formatWhole(state.net),
         )
@@ -246,7 +237,6 @@ private fun ActivePanel(state: AccountsState, actions: AccountsActions, modifier
 private fun ArchivedPanel(state: AccountsState, actions: AccountsActions, modifier: Modifier = Modifier) {
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.Inventory2,
             "Archived",
             meta = Copy.plural(state.archived.size, "account").uppercase(),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,

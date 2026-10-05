@@ -37,9 +37,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.tally.app.ui.common.Aside
+import com.tally.app.ui.common.FIGURE_GAP
 import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.IconBadge
-import com.tally.app.ui.common.PANEL_GAP
 import com.tally.app.ui.common.PanelHeader
 import com.tally.app.ui.common.ROW_PAD
 import com.tally.app.ui.common.slab
@@ -59,13 +59,12 @@ private const val HERO_MAX_SCALE = 1.3f
  */
 @Composable
 internal fun HeroHead(
-    icon: ImageVector,
     label: String,
     modifier: Modifier = Modifier,
     end: String? = null,
     tint: Color = MaterialTheme.colorScheme.primary,
 ) {
-    PanelHeader(icon, label, modifier, meta = end, tint = tint)
+    PanelHeader(label, modifier, meta = end, tint = tint)
 }
 
 /**
@@ -189,12 +188,12 @@ internal fun TilePair(
     second: @Composable (Modifier) -> Unit,
 ) {
     if (LocalDensity.current.fontScale > 1.5f) {
-        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
             first(Modifier.fillMaxWidth())
             second(Modifier.fillMaxWidth())
         }
     } else {
-        Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+        Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
             first(Modifier.weight(1f).fillMaxHeight())
             second(Modifier.weight(1f).fillMaxHeight())
         }

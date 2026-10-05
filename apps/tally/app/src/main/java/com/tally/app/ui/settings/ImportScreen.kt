@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Receipt
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
 import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.AddCard
@@ -27,7 +26,6 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CopyAll
 import androidx.compose.material.icons.rounded.EditNote
-import androidx.compose.material.icons.rounded.MoveToInbox
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.TableChart
@@ -265,7 +263,7 @@ private fun PlanHero(state: ImportState, modifier: Modifier = Modifier) {
     val money = LocalMoney.current
     val plan = state.plan
     HeroPanel(modifier) {
-        HeroHead(Icons.Rounded.MoveToInbox, "Ready to import", end = state.statement?.format?.label?.uppercase())
+        HeroHead("Ready to import", end = state.statement?.format?.label?.uppercase())
         Spacer(Modifier.height(12.dp))
         HeroNumber(plan.count.toString(), description = Copy.plural(plan.count, "entry", "entries") + " to import")
         Text(
@@ -394,7 +392,7 @@ private fun MovesGroup(state: ImportState, actions: ImportActions) {
 private fun LinesPanel(state: ImportState, modifier: Modifier = Modifier) {
     val plan = state.plan
     Panel(modifier.padding(top = 14.dp)) {
-        PanelHeader(Icons.Rounded.Receipt, "First lines", meta = Copy.plural(plan.lines.size, "line").uppercase())
+        PanelHeader("First lines", meta = Copy.plural(plan.lines.size, "line").uppercase())
         Spacer(Modifier.height(4.dp))
         plan.lines.take(PREVIEW_LINES).forEach { line -> PlannedRow(line, state) }
         val more = plan.lines.size - PREVIEW_LINES

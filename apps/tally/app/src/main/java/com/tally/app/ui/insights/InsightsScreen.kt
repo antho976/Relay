@@ -30,21 +30,14 @@ import androidx.compose.material.icons.automirrored.rounded.ShowChart
 import androidx.compose.material.icons.automirrored.rounded.TrendingDown
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.AccountBalance
-import androidx.compose.material.icons.rounded.AccountBalanceWallet
-import androidx.compose.material.icons.rounded.ArrowDownward
-import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.BarChart
-import androidx.compose.material.icons.rounded.BeachAccess
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Category
-import androidx.compose.material.icons.rounded.CreditCard
 import androidx.compose.material.icons.rounded.DonutLarge
-import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.Flag
-import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.LocalOffer
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Payments
@@ -88,6 +81,7 @@ import com.tally.app.ui.common.CategoryIcons
 import com.tally.app.ui.common.ChromeButton
 import com.tally.app.ui.common.Dates
 import com.tally.app.ui.common.EndsRow
+import com.tally.app.ui.common.FIGURE_GAP
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.HeroPanel
@@ -256,8 +250,8 @@ private fun PeriodStepper(label: String, canGoNext: Boolean, onPrevious: () -> U
 
 /** The lit panel's label row: a glyph tile, the mono name of the reading, a mono reading at the end. */
 @Composable
-private fun LensHeroLabel(icon: ImageVector, label: String, meta: String?, tint: Color = MaterialTheme.colorScheme.primary) {
-    PanelHeader(icon, label, meta = meta, tint = tint)
+private fun LensHeroLabel(label: String, meta: String?, tint: Color = MaterialTheme.colorScheme.primary) {
+    PanelHeader(label, meta = meta, tint = tint)
 }
 
 /**
@@ -282,12 +276,12 @@ private fun TileRow(
     second: @Composable (Modifier) -> Unit,
 ) {
     if (LocalDensity.current.fontScale > 1.5f) {
-        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
             first(Modifier.fillMaxWidth())
             second(Modifier.fillMaxWidth())
         }
     } else {
-        Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+        Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
             first(Modifier.weight(1f).fillMaxHeight())
             second(Modifier.weight(1f).fillMaxHeight())
         }
@@ -423,8 +417,8 @@ private fun MonthHero(state: InsightsState, modifier: Modifier = Modifier) {
         }
     }
 
-    HeroPanel(modifier, tint = tint) {
-        LensHeroLabel(Icons.AutoMirrored.Rounded.TrendingUp, if (state.isCurrentPeriod) "Spent so far" else "Spent", meta, tint)
+    HeroPanel(modifier) {
+        LensHeroLabel(if (state.isCurrentPeriod) "Spent so far" else "Spent", meta, tint)
         Spacer(Modifier.height(14.dp))
         HeroFigure(money.formatWhole(state.spent))
         Text(supporting, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -475,14 +469,13 @@ private fun MonthTiles(state: InsightsState, modifier: Modifier = Modifier) {
         }
     }
     val net = state.net
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
         TileRow(
             first = { m ->
-                StatTile(Icons.Rounded.Speed, "Per day", money.formatWhole(state.perDay), m, detail = perDayDetail)
+                StatTile("Per day", money.formatWhole(state.perDay), m, detail = perDayDetail)
             },
             second = { m ->
                 StatTile(
-                    Icons.Rounded.History,
                     if (state.isCurrentPeriod) "Last month" else "Month before",
                     money.formatWhole(state.lastPeriodSameDay),
                     m,
@@ -493,17 +486,14 @@ private fun MonthTiles(state: InsightsState, modifier: Modifier = Modifier) {
         TileRow(
             first = { m ->
                 StatTile(
-                    Icons.Rounded.Savings,
                     "Net",
                     signedWhole(money, net),
                     m,
                     detail = money.formatWhole(state.income) + " in · " + money.formatWhole(state.spent) + " out",
-                    tint = if (net > 0L) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
                 )
             },
             second = { m ->
                 StatTile(
-                    Icons.Rounded.EditNote,
                     "Expenses",
                     state.expenseCount.toString(),
                     m,
@@ -532,7 +522,6 @@ private fun WherePanel(state: InsightsState, periodName: String, onCategory: (Lo
     val top = slices.firstOrNull()?.total ?: 0L
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.DonutLarge,
             "Where it went",
             meta = if (slices.isEmpty()) null else Copy.plural(state.categoryCount, "category", "categories").uppercase(),
         )
@@ -630,7 +619,6 @@ private fun LargestPanel(state: InsightsState, periodName: String, onEntry: (Lon
     val rows = state.largest
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.LocalOffer,
             "Largest",
             meta = if (rows.isEmpty()) null else shareText(state.largestTotal, state.spent) + " OF SPENDING",
         )
@@ -654,7 +642,7 @@ private fun LargestPanel(state: InsightsState, periodName: String, onEntry: (Lon
 private fun PayeesPanel(state: InsightsState, modifier: Modifier = Modifier) {
     val money = LocalMoney.current
     Panel(modifier) {
-        PanelHeader(Icons.Rounded.Storefront, "Payees", meta = "TOP " + state.payees.size)
+        PanelHeader("Payees", meta = "TOP " + state.payees.size)
         Spacer(Modifier.height(4.dp))
         state.payees.forEach { p ->
             key(p.note) {
@@ -695,7 +683,6 @@ private fun IncomePanel(state: InsightsState, periodName: String, onCategory: (L
     val inColor = MaterialTheme.colorScheme.tertiary
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.ArrowDownward,
             "Income",
             meta = if (sources.isEmpty()) null else signedWhole(money, state.income),
             tint = inColor,
@@ -780,7 +767,7 @@ private fun TrendHero(state: InsightsState, modifier: Modifier = Modifier) {
         }
     }
     HeroPanel(modifier) {
-        LensHeroLabel(Icons.Rounded.BarChart, "Average month", "LAST $n MONTHS")
+        LensHeroLabel("Average month", "LAST $n MONTHS")
         Spacer(Modifier.height(14.dp))
         HeroFigure(money.formatWhole(t.averageSpent))
         Text(supporting, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -827,11 +814,10 @@ private fun TrendTiles(state: InsightsState, modifier: Modifier = Modifier) {
     val points = state.trend
     val high = t.highest?.let { points.getOrNull(it) }
     val low = t.lowest?.let { points.getOrNull(it) }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
         TileRow(
             first = { m ->
                 StatTile(
-                    Icons.Rounded.ArrowUpward,
                     "Highest month",
                     money.formatWhole(high?.spent ?: 0L),
                     m,
@@ -840,7 +826,6 @@ private fun TrendTiles(state: InsightsState, modifier: Modifier = Modifier) {
             },
             second = { m ->
                 StatTile(
-                    Icons.Rounded.ArrowDownward,
                     "Lowest month",
                     money.formatWhole(low?.spent ?: 0L),
                     m,
@@ -851,23 +836,19 @@ private fun TrendTiles(state: InsightsState, modifier: Modifier = Modifier) {
         TileRow(
             first = { m ->
                 StatTile(
-                    Icons.Rounded.Payments,
                     "Average income",
                     money.formatWhole(t.averageIncome),
                     m,
                     detail = if (t.months > 0) "Over " + Copy.plural(t.months, "month") else "Nothing logged yet",
-                    tint = MaterialTheme.colorScheme.tertiary,
                     valueColor = MaterialTheme.colorScheme.tertiary,
                 )
             },
             second = { m ->
                 StatTile(
-                    Icons.Rounded.Savings,
                     "Average net",
                     signedWhole(money, t.averageNet),
                     m,
                     detail = "Income less spending, a month",
-                    tint = if (t.averageNet > 0L) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
                 )
             },
         )
@@ -880,7 +861,7 @@ private fun TrendListPanel(state: InsightsState, onOpen: (Int) -> Unit, modifier
     val money = LocalMoney.current
     val newestFirst = remember(state.trend) { state.trend.asReversed() }
     Panel(modifier) {
-        PanelHeader(Icons.Rounded.CalendarMonth, "Month by month", meta = if (newestFirst.isEmpty()) null else "NEWEST FIRST")
+        PanelHeader("Month by month", meta = if (newestFirst.isEmpty()) null else "NEWEST FIRST")
         if (newestFirst.isEmpty()) {
             Spacer(Modifier.height(10.dp))
             EmptyLine(Icons.Rounded.CalendarMonth, "Nothing logged in the last six months")
@@ -964,7 +945,7 @@ private fun CalendarHero(state: InsightsState, periodName: String, onDay: (Local
         }
     }
     HeroPanel(modifier) {
-        LensHeroLabel(Icons.Rounded.CalendarMonth, "Spending days", meta)
+        LensHeroLabel("Spending days", meta)
         Spacer(Modifier.height(14.dp))
         HeroFigure(c.activeDays.toString())
         Text(supporting, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -999,11 +980,10 @@ private fun CalendarTiles(state: InsightsState, modifier: Modifier = Modifier) {
     val c = state.calendar
     val nothing = if (state.isCurrentPeriod) "Nothing spent yet" else "Nothing spent"
     val topDay = c.topWeekday
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
         TileRow(
             first = { m ->
                 StatTile(
-                    Icons.Rounded.Bedtime,
                     "Quiet days",
                     c.quietDays.toString(),
                     m,
@@ -1012,7 +992,6 @@ private fun CalendarTiles(state: InsightsState, modifier: Modifier = Modifier) {
             },
             second = { m ->
                 StatTile(
-                    Icons.Rounded.Speed,
                     "Per spending day",
                     money.formatWhole(c.perActiveDay),
                     m,
@@ -1023,7 +1002,6 @@ private fun CalendarTiles(state: InsightsState, modifier: Modifier = Modifier) {
         TileRow(
             first = { m ->
                 StatTile(
-                    Icons.Rounded.Event,
                     "Busiest weekday",
                     topDay?.let { weekdayName(it) } ?: "None yet",
                     m,
@@ -1034,7 +1012,6 @@ private fun CalendarTiles(state: InsightsState, modifier: Modifier = Modifier) {
             },
             second = { m ->
                 StatTile(
-                    Icons.Rounded.BeachAccess,
                     "Weekends",
                     shareText(c.weekendTotal, c.total),
                     m,
@@ -1055,7 +1032,7 @@ private fun WeekdayPanel(state: InsightsState, periodName: String, modifier: Mod
     val weekdays = state.calendar.weekdays
     val top = remember(weekdays) { weekdays.maxOfOrNull { it.average } ?: 0L }
     Panel(modifier) {
-        PanelHeader(Icons.Rounded.BarChart, "By weekday", meta = if (top > 0L) "AVERAGE A DAY" else null)
+        PanelHeader("By weekday", meta = if (top > 0L) "AVERAGE A DAY" else null)
         if (top <= 0L) {
             Spacer(Modifier.height(10.dp))
             EmptyLine(Icons.Rounded.BarChart, nothingSpentLine(state, periodName))
@@ -1188,7 +1165,7 @@ private fun WorthHero(state: InsightsState, periodName: String, modifier: Modifi
         if (w.invested != 0L) add(Icons.AutoMirrored.Rounded.ShowChart to "Invested " + signedWhole(money, w.invested))
     }
     HeroPanel(modifier) {
-        LensHeroLabel(Icons.Rounded.AccountBalance, "Net worth", if (state.isCurrentPeriod) "TODAY" else "AT MONTH END")
+        LensHeroLabel("Net worth", if (state.isCurrentPeriod) "TODAY" else "AT MONTH END")
         Spacer(Modifier.height(14.dp))
         HeroFigure(money.formatWhole(w.worth))
         Text(
@@ -1256,26 +1233,22 @@ private fun WorthTiles(state: InsightsState, modifier: Modifier = Modifier) {
     val w = state.worth
     val held = w.accounts.count { it.balance > 0L }
     val owing = w.accounts.count { it.balance < 0L }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
         TileRow(
             first = { m ->
                 StatTile(
-                    Icons.Rounded.AccountBalanceWallet,
                     "Held",
                     money.formatWhole(w.assets),
                     m,
                     detail = if (held == 0) "Nothing in credit" else "In " + Copy.plural(held, "account"),
-                    tint = MaterialTheme.colorScheme.tertiary,
                 )
             },
             second = { m ->
                 StatTile(
-                    Icons.Rounded.CreditCard,
                     "Owed",
                     money.formatWhole(w.debts),
                     m,
                     detail = if (owing == 0) "Nothing owed" else "On " + Copy.plural(owing, "account"),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             },
         )
@@ -1283,17 +1256,14 @@ private fun WorthTiles(state: InsightsState, modifier: Modifier = Modifier) {
             first = { m ->
                 val rate = state.savingsRate
                 StatTile(
-                    Icons.Rounded.Savings,
                     "Kept",
                     if (rate == null) "None" else "$rate%",
                     m,
                     detail = if (rate == null) "No income logged" else "Of " + money.formatWhole(state.income) + " income",
-                    tint = if ((rate ?: 0) > 0) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
                 )
             },
             second = { m ->
                 StatTile(
-                    Icons.AutoMirrored.Rounded.ShowChart,
                     "Invested",
                     signedWhole(money, w.invested),
                     m,
@@ -1311,7 +1281,7 @@ private fun AccountsPanel(state: InsightsState, modifier: Modifier = Modifier) {
     val money = LocalMoney.current
     val w = state.worth
     Panel(modifier) {
-        PanelHeader(Icons.Rounded.AccountBalance, "Accounts", meta = w.accounts.size.toString())
+        PanelHeader("Accounts", meta = w.accounts.size.toString())
         Spacer(Modifier.height(4.dp))
         w.accounts.forEach { a ->
             key(a.id) {
@@ -1368,7 +1338,7 @@ private fun WorthListPanel(state: InsightsState, modifier: Modifier = Modifier) 
     val money = LocalMoney.current
     val points = state.worth.points
     Panel(modifier) {
-        PanelHeader(Icons.Rounded.CalendarMonth, "Month by month", meta = "NEWEST FIRST")
+        PanelHeader("Month by month", meta = "NEWEST FIRST")
         Spacer(Modifier.height(4.dp))
         points.indices.reversed().forEach { i ->
             val p = points[i]

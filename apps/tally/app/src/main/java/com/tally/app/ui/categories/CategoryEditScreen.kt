@@ -195,7 +195,7 @@ private fun CategoryPreview(state: CategoryEditState, modifier: Modifier = Modif
         else -> "$percent% of $periodName's $what, ${money.formatWhole(state.periodTotal)} of ${money.formatWhole(state.kindTotal)}"
     }
     val name = d.name.trim()
-    HeroPanel(modifier, tint = hue) {
+    HeroPanel(modifier) {
         // Not a live region: the name comes from a text field, and TalkBack already echoes each key.
         Row(
             Modifier.fillMaxWidth().semantics(mergeDescendants = true) {

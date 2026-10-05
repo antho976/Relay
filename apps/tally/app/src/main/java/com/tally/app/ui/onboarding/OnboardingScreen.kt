@@ -293,7 +293,7 @@ private fun CurrencyStep(state: OnboardingState, actions: OnboardingActions) {
     val locale = LocalMoney.current.locale
     val picked = remember(state.currency, locale) { currencyOption(state.currency, locale) }
     HeroPanel {
-        HeroHead(Icons.Rounded.Payments, "Your currency", end = picked.code)
+        HeroHead("Your currency", end = picked.code)
         Spacer(Modifier.height(12.dp))
         HeroNumber(picked.sample, description = "Amounts will read like ${picked.sample}")
         Text(
@@ -346,7 +346,7 @@ private fun AccountStep(state: OnboardingState, actions: OnboardingActions) {
     val credit = state.accountType == AccountType.CREDIT
     val typeName = defaultAccountName(state.accountType)
     HeroPanel {
-        HeroHead(CategoryIcons.account(state.accountType), "First account", end = typeName.uppercase())
+        HeroHead("First account", end = typeName.uppercase())
         Spacer(Modifier.height(12.dp))
         HeroNumber(
             money.format(state.storedBalance),
@@ -455,7 +455,7 @@ private fun BudgetStep(state: OnboardingState, actions: OnboardingActions) {
         PaceReading(budget, 0L, state.period.days, state.period.elapsedDays(state.today))
     }
     HeroPanel {
-        HeroHead(Icons.Rounded.AccountBalanceWallet, "Left to spend", end = Dates.period(state.period, state.today).uppercase())
+        HeroHead("Left to spend", end = Dates.period(state.period, state.today).uppercase())
         Spacer(Modifier.height(12.dp))
         HeroNumber(
             money.formatWhole(budget),

@@ -11,12 +11,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AccountBalance
-import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.NoAccounts
-import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.Science
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Storage
@@ -86,7 +83,7 @@ private fun LedgerHero(state: SettingsState, modifier: Modifier = Modifier) {
     val money = LocalMoney.current
     val count = remember(state.entries, money.locale) { countText(state.entries, money.locale) }
     HeroPanel(modifier) {
-        HeroHead(Icons.Rounded.PhoneAndroid, "On this phone", end = "OFFLINE")
+        HeroHead("On this phone", end = "OFFLINE")
         Spacer(Modifier.height(12.dp))
         HeroNumber(count, description = Copy.plural(state.entries, "entry", "entries"))
         Text(
@@ -117,7 +114,6 @@ private fun AboutTiles(state: SettingsState, modifier: Modifier = Modifier) {
         modifier,
         first = { m ->
             StatTile(
-                Icons.Rounded.AccountBalance,
                 "Net",
                 money.formatWhole(state.net),
                 m,
@@ -126,7 +122,6 @@ private fun AboutTiles(state: SettingsState, modifier: Modifier = Modifier) {
         },
         second = { m ->
             StatTile(
-                Icons.Rounded.CalendarMonth,
                 "Period",
                 Dates.period(state.period, state.today),
                 m,

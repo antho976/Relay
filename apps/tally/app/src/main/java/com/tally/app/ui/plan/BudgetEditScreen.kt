@@ -14,8 +14,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AccountBalanceWallet
-import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.History
@@ -134,10 +132,9 @@ private fun LimitHero(state: BudgetEditState, modifier: Modifier = Modifier) {
     }
     HeroPanel(modifier) {
         if (state.isOverall) {
-            HeroLabel(Icons.Rounded.AccountBalanceWallet, "Monthly limit", end = money.currency.currencyCode)
+            HeroLabel("Monthly limit", end = money.currency.currencyCode)
         } else {
             HeroLabel(
-                CategoryIcons.of(state.icon),
                 "Monthly limit",
                 end = money.currency.currencyCode,
                 tint = categoryColor(state.color),
@@ -187,7 +184,7 @@ private fun HistoryPanel(state: BudgetEditState, modifier: Modifier = Modifier) 
     }.joinToString(", ") + (limit?.let { ". Limit " + money.formatWhole(it) } ?: "")
     val average = state.average
     Panel(modifier) {
-        PanelHeader(Icons.Rounded.BarChart, "Spending history", meta = "LAST " + state.history.size + " MONTHS")
+        PanelHeader("Spending history", meta = "LAST " + state.history.size + " MONTHS")
         Spacer(Modifier.height(6.dp))
         Text(
             when {

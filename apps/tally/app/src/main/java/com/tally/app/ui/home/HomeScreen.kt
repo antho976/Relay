@@ -20,16 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
-import androidx.compose.material.icons.rounded.AccountBalance
-import androidx.compose.material.icons.rounded.AccountBalanceWallet
-import androidx.compose.material.icons.rounded.ArrowDownward
-import androidx.compose.material.icons.rounded.ArrowUpward
-import androidx.compose.material.icons.rounded.BarChart
-import androidx.compose.material.icons.rounded.DonutLarge
-import androidx.compose.material.icons.rounded.Event
-import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.MaterialTheme
@@ -54,6 +45,7 @@ import com.tally.app.ui.common.ChromeButton
 import com.tally.app.ui.common.Dates
 import com.tally.app.ui.common.DayBars
 import com.tally.app.ui.common.EndsRow
+import com.tally.app.ui.common.FIGURE_GAP
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.HeroPanel
 import com.tally.app.ui.common.LedgerRow
@@ -248,10 +240,9 @@ private fun LeftToSpendHero(state: HomeState, actions: HomeActions, modifier: Mo
     val r = state.reading
     val over = r?.status == PaceStatus.OVER_BUDGET
     val tint = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-    HeroPanel(modifier, tint = tint) {
+    HeroPanel(modifier) {
         // The kit's header: the pace reading drops under the label before the label would wrap.
         PanelHeader(
-            Icons.Rounded.AccountBalanceWallet,
             if (over) "Over budget" else if (r != null) "Left to spend" else "Left from income",
             meta = if (r != null && !over) Copy.paceLine(r, money) else null,
             tint = tint,
@@ -333,17 +324,14 @@ private fun InOutTiles(state: HomeState, modifier: Modifier = Modifier) {
         now > then -> money.formatWhole(now - then) + " more than last month"
         else -> money.formatWhole(then - now) + " less than last month"
     }
-    Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+    Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
         StatTile(
-            Icons.Rounded.ArrowDownward,
             "In",
             money.formatWhole(state.income),
             Modifier.weight(1f).fillMaxHeight(),
             detail = versus(state.income, state.lastPeriodIncomeSameDay),
-            tint = MaterialTheme.colorScheme.tertiary,
         )
         StatTile(
-            Icons.Rounded.ArrowUpward,
             "Out",
             money.formatWhole(state.spent),
             Modifier.weight(1f).fillMaxHeight(),
@@ -368,7 +356,6 @@ private fun WeekPanel(state: HomeState, actions: HomeActions, modifier: Modifier
     }.joinToString(" · ")
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.BarChart,
             "This week",
             action = "insights",
             onAction = actions.openInsights,
@@ -391,7 +378,6 @@ private fun WeekPanel(state: HomeState, actions: HomeActions, modifier: Modifier
 private fun BudgetsPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.DonutLarge,
             "Budgets",
             action = if (state.envelopes.isEmpty()) null else "all",
             onAction = actions.openPlan,
@@ -443,7 +429,6 @@ private fun EnvelopeRow(e: Envelope, onClick: () -> Unit) {
 private fun GoalsPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.Flag,
             "Goals",
             action = if (state.goals.isEmpty()) null else "all",
             onAction = actions.openPlan,
@@ -465,7 +450,6 @@ private fun GoalsPanel(state: HomeState, actions: HomeActions, modifier: Modifie
 private fun RecentPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
     Panel(modifier) {
         PanelHeader(
-            Icons.AutoMirrored.Rounded.ReceiptLong,
             "Recent",
             action = if (state.recent.isEmpty()) null else "view all",
             onAction = actions.openHistory,
@@ -490,7 +474,7 @@ private fun RecentPanel(state: HomeState, actions: HomeActions, modifier: Modifi
 @Composable
 private fun UpcomingPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
     Panel(modifier) {
-        PanelHeader(Icons.Rounded.Event, "Upcoming", meta = if (state.upcoming.isEmpty()) null else "NEXT 14 DAYS")
+        PanelHeader("Upcoming", meta = if (state.upcoming.isEmpty()) null else "NEXT 14 DAYS")
         if (state.upcoming.isEmpty()) {
             Spacer(Modifier.height(8.dp))
             AsideAction("Nothing due in the next two weeks", "add a bill", actions.addBill)
@@ -536,7 +520,7 @@ private fun AccountsPanel(state: HomeState, actions: HomeActions, modifier: Modi
     val money = LocalMoney.current
     val active = state.accounts.filter { !it.archived }
     Panel(modifier) {
-        PanelHeader(Icons.Rounded.AccountBalance, "Accounts", action = "manage", onAction = actions.accounts)
+        PanelHeader("Accounts", action = "manage", onAction = actions.accounts)
         if (active.isEmpty()) {
             Spacer(Modifier.height(8.dp))
             Aside("No accounts yet")

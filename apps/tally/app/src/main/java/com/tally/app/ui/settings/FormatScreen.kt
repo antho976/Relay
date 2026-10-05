@@ -18,7 +18,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Autorenew
 import androidx.compose.material.icons.rounded.CalendarMonth
-import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.Today
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -155,7 +154,7 @@ private fun FormatHero(state: FormatState, modifier: Modifier = Modifier) {
     val locale = LocalMoney.current.locale
     val option = remember(state.currency, locale) { currencyOption(state.currency, locale) }
     HeroPanel(modifier) {
-        HeroHead(Icons.Rounded.Payments, "Currency", end = option.code)
+        HeroHead("Currency", end = option.code)
         Spacer(Modifier.height(12.dp))
         HeroNumber(option.sample, description = "Amounts read like ${option.sample}")
         Text(

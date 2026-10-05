@@ -212,9 +212,8 @@ private fun BillHero(state: BillEditState, modifier: Modifier = Modifier) {
         else -> account
     }
     val line = listOfNotNull(d.name.trim().ifEmpty { "Name it below" }, where).joinToString(" · ")
-    HeroPanel(modifier, tint = tint) {
+    HeroPanel(modifier) {
         HeroLabel(
-            typeIcon(d.type),
             BILL_TYPE_LABELS[BILL_TYPES.indexOf(d.type)],
             end = frequencyLabel(d.frequency, d.interval).uppercase(),
             tint = tint,
@@ -285,7 +284,6 @@ private fun AccountPanel(state: BillEditState, actions: BillEditActions) {
     val d = state.draft
     Panel {
         PanelHeader(
-            if (d.type == TxType.INCOME) Icons.Rounded.ArrowDownward else Icons.Rounded.AccountBalance,
             if (d.type == TxType.INCOME) "Paid into" else "Paid from",
         )
         Spacer(Modifier.height(6.dp))
@@ -307,7 +305,7 @@ private fun AccountPanel(state: BillEditState, actions: BillEditActions) {
 private fun TransferPanel(state: BillEditState, actions: BillEditActions) {
     val d = state.draft
     Panel {
-        PanelHeader(Icons.Rounded.SwapHoriz, "Between accounts")
+        PanelHeader("Between accounts")
         Spacer(Modifier.height(10.dp))
         if (state.accounts.size < 2) {
             EmptyLine(Icons.Rounded.AccountBalance, "A transfer needs two accounts", action = "add account", onAction = actions.addAccount)
@@ -334,7 +332,6 @@ private fun CategoryPanel(state: BillEditState, actions: BillEditActions) {
     val picked = state.category
     Panel {
         PanelHeader(
-            if (picked != null) CategoryIcons.of(picked.icon) else Icons.Rounded.Category,
             "Category",
             meta = if (picked == null) "OPTIONAL" else null,
         )

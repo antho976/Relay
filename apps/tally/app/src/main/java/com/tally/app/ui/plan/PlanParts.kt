@@ -79,13 +79,12 @@ private const val HERO_MAX_SCALE = 1.3f
 /** The lit panel's opening row: glyph tile, the mono label, an optional reading at the end. */
 @Composable
 internal fun HeroLabel(
-    icon: ImageVector,
     label: String,
     modifier: Modifier = Modifier,
     end: String? = null,
     tint: Color = MaterialTheme.colorScheme.primary,
 ) {
-    PanelHeader(icon, label, modifier, meta = end, tint = tint)
+    PanelHeader(label, modifier, meta = end, tint = tint)
 }
 
 /**

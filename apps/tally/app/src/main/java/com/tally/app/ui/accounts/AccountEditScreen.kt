@@ -215,7 +215,6 @@ private fun BalanceHero(state: AccountEditState, onEntries: () -> Unit, modifier
     }
     HeroPanel(modifier) {
         HeroHead(
-            CategoryIcons.account(d.type),
             if (state.isNew) "Opens with" else "Balance",
             end = money.currency.currencyCode,
         )
