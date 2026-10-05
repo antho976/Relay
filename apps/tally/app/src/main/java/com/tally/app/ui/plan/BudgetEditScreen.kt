@@ -232,7 +232,7 @@ private fun QuickFill(state: BudgetEditState, actions: BudgetEditActions) {
         Spacer(Modifier.height(4.dp))
         if (last == null && average == null && (existing == null || existing == minor)) {
             Spacer(Modifier.height(6.dp))
-            EmptyLine(Icons.Rounded.History, "Nothing on record to suggest from yet")
+            EmptyLine("Nothing on record to suggest from yet")
         } else {
             FlowRow(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (last != null) {

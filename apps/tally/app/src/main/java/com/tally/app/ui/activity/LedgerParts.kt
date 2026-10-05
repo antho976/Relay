@@ -21,7 +21,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
@@ -51,7 +50,6 @@ import com.tally.app.ui.common.Dates
 import com.tally.app.ui.common.EndsRow
 import com.tally.app.ui.common.FIGURE_GAP
 import com.tally.app.ui.common.HeroPanel
-import com.tally.app.ui.common.IconBadge
 import com.tally.app.ui.common.LedgerRow
 import com.tally.app.ui.common.LocalMoney
 import com.tally.app.ui.common.Panel
@@ -152,7 +150,6 @@ internal fun DayPanel(group: DayGroup, today: LocalDate, onOpen: (Long) -> Unit,
 private fun DayHeader(group: DayGroup, today: LocalDate) {
     val money = LocalMoney.current
     val label = Dates.day(group.date, today)
-    val isToday = group.date == today
     // What the day did: its spending, or what came in on a day of only income. A day of only
     // transfers moved money between your own accounts and reads as nothing out.
     val total = when {
@@ -169,11 +166,6 @@ private fun DayHeader(group: DayGroup, today: LocalDate) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        IconBadge(
-            Icons.Rounded.CalendarToday,
-            tint = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            size = 28.dp,
-        )
         EndsRow(
             start = {
                 Text(label.uppercase(), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onBackground)
@@ -278,20 +270,16 @@ internal fun TilePair(
     }
 }
 
-/** A list's zero: its glyph and one quiet line, with the one act that changes it when there is one. */
+/** A list's zero: one quiet line, with the one act that changes it when there is one. */
 @Composable
 internal fun EmptyPanel(
-    icon: ImageVector,
     text: String,
     modifier: Modifier = Modifier,
     action: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
     Panel(modifier) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            IconBadge(icon, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            Aside(text, Modifier.weight(1f))
-        }
+        Aside(text)
         if (action != null && onAction != null) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextAction(action, onAction, color = MaterialTheme.colorScheme.primary)

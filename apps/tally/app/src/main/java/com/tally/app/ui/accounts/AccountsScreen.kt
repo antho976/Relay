@@ -18,7 +18,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.AddCard
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -225,7 +224,7 @@ private fun ActivePanel(state: AccountsState, actions: AccountsActions, modifier
         )
         if (state.active.isEmpty()) {
             Spacer(Modifier.height(6.dp))
-            EmptyNote(Icons.Rounded.AddCard, "Add where your money sits: a bank account, a card, cash")
+            EmptyNote("Add where your money sits: a bank account, a card, cash")
         } else {
             Spacer(Modifier.height(4.dp))
             state.active.forEach { line -> AccountRow(line, muted = false) { actions.open(line.account.id) } }

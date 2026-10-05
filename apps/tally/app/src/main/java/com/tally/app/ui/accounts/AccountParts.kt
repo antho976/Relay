@@ -39,7 +39,6 @@ import androidx.compose.ui.unit.dp
 import com.tally.app.ui.common.Aside
 import com.tally.app.ui.common.FIGURE_GAP
 import com.tally.app.ui.common.GlyphBadge
-import com.tally.app.ui.common.IconBadge
 import com.tally.app.ui.common.PanelHeader
 import com.tally.app.ui.common.ROW_PAD
 import com.tally.app.ui.common.slab
@@ -167,17 +166,10 @@ internal fun FieldRow(
     )
 }
 
-/** A zero state inside a panel: the section's glyph and one quiet line. */
+/** A zero state inside a section: one quiet line. */
 @Composable
-internal fun EmptyNote(icon: ImageVector, text: String, modifier: Modifier = Modifier) {
-    Row(
-        modifier.fillMaxWidth().padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        IconBadge(icon, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Aside(text, Modifier.weight(1f))
-    }
+internal fun EmptyNote(text: String, modifier: Modifier = Modifier) {
+    Aside(text, modifier.fillMaxWidth().padding(vertical = 6.dp))
 }
 
 /** Two stat tiles side by side; stacked past 1.5x font so their figures never wrap mid-number. */

@@ -25,9 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalance
-import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.ArrowDownward
-import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Category
@@ -37,7 +35,6 @@ import androidx.compose.material.icons.rounded.DonutLarge
 import androidx.compose.material.icons.rounded.LibraryAdd
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Speed
-import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -52,12 +49,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -83,7 +78,6 @@ import com.tally.app.ui.common.GroupHeader
 import com.tally.app.ui.common.GroupRow
 import com.tally.app.ui.common.HeroAction
 import com.tally.app.ui.common.HeroPanel
-import com.tally.app.ui.common.IconBadge
 import com.tally.app.ui.common.LocalMoney
 import com.tally.app.ui.common.PANEL_GAP
 import com.tally.app.ui.common.Panel
@@ -257,20 +251,7 @@ private fun AmountHero(state: EntryState, modifier: Modifier = Modifier) {
     }
     val line = listOf(what, d.note.trim()).filter { it.isNotEmpty() }.joinToString(" · ")
     HeroPanel(modifier) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            IconBadge(typeIcon(d.type), tint = tint)
-            Text(
-                typeLabel(d.type).uppercase(),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.weight(1f).semantics { heading() },
-            )
-            Text(
-                money.currency.currencyCode,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        PanelHeader(typeLabel(d.type), meta = money.currency.currencyCode, tint = tint)
         Spacer(Modifier.height(10.dp))
         val density = LocalDensity.current
         val scale = density.fontScale.coerceAtMost(HERO_MAX_SCALE)
@@ -318,12 +299,6 @@ private fun amountStyle(length: Int, scale: Float): TextStyle {
     }
 }
 
-private fun typeIcon(type: TxType): ImageVector = when (type) {
-    TxType.EXPENSE -> Icons.Rounded.ArrowUpward
-    TxType.INCOME -> Icons.Rounded.ArrowDownward
-    TxType.TRANSFER -> Icons.Rounded.SwapHoriz
-}
-
 /** The form between the amount and the keypad. Each call below is one block of the scroll. */
 @Composable
 private fun EntryBody(state: EntryState, actions: EntryActions, onPickDate: () -> Unit) {
@@ -341,10 +316,9 @@ private fun EntryBody(state: EntryState, actions: EntryActions, onPickDate: () -
     if (state.isNew) RepeatSection(state, actions)
 }
 
-/** A zero state: the section's glyph, one quiet line, and the act that fills it. */
+/** A zero state: one quiet line, and the act that fills it. */
 @Composable
 private fun EmptyLine(
-    icon: ImageVector,
     text: String,
     action: String,
     onAction: () -> Unit,
@@ -355,7 +329,6 @@ private fun EmptyLine(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        IconBadge(icon, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         Aside(text, Modifier.weight(1f))
         TextAction(action, onAction, color = MaterialTheme.colorScheme.primary)
     }
@@ -405,29 +378,25 @@ private fun NoAccountsPanel(type: TxType, onAdd: () -> Unit) {
     Panel {
         PanelHeader(if (type == TxType.TRANSFER) "Between accounts" else "Account")
         Spacer(Modifier.height(8.dp))
-        EmptyLine(Icons.Rounded.AccountBalanceWallet, "Add an account first", "add account", onAdd)
+        EmptyLine("Add an account first", "add account", onAdd)
     }
 }
 
 @Composable
 private fun CategoryPanel(state: EntryState, actions: EntryActions) {
     val kind = kindOf(state.draft.type) ?: CategoryKind.EXPENSE
-    // Narrower side padding than other panels: four tiles a row need the width for their names.
     Panel {
         PanelHeader(
             "Category",
-            Modifier.padding(horizontal = 6.dp),
             action = "edit",
             onAction = actions.editCategories,
         )
         Spacer(Modifier.height(10.dp))
         if (state.categories.isEmpty()) {
             EmptyLine(
-                Icons.Rounded.Category,
                 if (kind == CategoryKind.INCOME) "No income categories yet" else "No expense categories yet",
                 "add one",
                 { actions.addCategory(kind) },
-                Modifier.padding(horizontal = 6.dp),
             )
         } else {
             CategoryGrid(state.categories, state.draft.categoryId, actions.pickCategory)
@@ -474,7 +443,7 @@ private fun TransferPanel(state: EntryState, actions: EntryActions) {
             }
             state.accounts.size < 2 -> {
                 Spacer(Modifier.height(8.dp))
-                EmptyLine(Icons.Rounded.AccountBalanceWallet, "A transfer needs a second account", "add account", actions.addAccount)
+                EmptyLine("A transfer needs a second account", "add account", actions.addAccount)
             }
         }
     }

@@ -21,7 +21,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
-import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Edit
@@ -29,10 +28,8 @@ import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.Flag
-import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.Remove
-import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -156,7 +153,7 @@ fun GoalScreen(state: GoalState, actions: GoalActions) {
         if (state.loaded && goal == null) {
             item(key = "gone") {
                 Panel(Modifier.padding(horizontal = GUTTER)) {
-                    EmptyLine(Icons.Rounded.Flag, "This goal was deleted", action = "back", onAction = actions.back)
+                    EmptyLine("This goal was deleted", action = "back", onAction = actions.back)
                 }
             }
         }
@@ -393,7 +390,6 @@ private fun BalanceHero(state: GoalState, goal: GoalLine, modifier: Modifier = M
 private fun ReadsNote(goal: GoalLine, modifier: Modifier = Modifier) {
     Panel(modifier) {
         EmptyLine(
-            Icons.Rounded.Info,
             if (goal.accountName != null) {
                 "It moves with ${goal.accountName}: every entry in it, and its value when you update one"
             } else {
@@ -461,7 +457,7 @@ private fun MonthsPanel(state: GoalState, goal: GoalLine, modifier: Modifier = M
         )
         if (months.isEmpty()) {
             Spacer(Modifier.height(8.dp))
-            EmptyLine(Icons.Rounded.CalendarMonth, "Your first full month shows here")
+            EmptyLine("Your first full month shows here")
         } else {
             Spacer(Modifier.height(4.dp))
             months.forEach { m ->
@@ -504,7 +500,7 @@ private fun ContributionsPanel(state: GoalState, actions: GoalActions, modifier:
         )
         if (state.contributions.isEmpty()) {
             Spacer(Modifier.height(8.dp))
-            EmptyLine(Icons.Rounded.Savings, "No money set aside yet")
+            EmptyLine("No money set aside yet")
         } else {
             Spacer(Modifier.height(4.dp))
             Text(

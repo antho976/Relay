@@ -18,8 +18,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
-import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -145,7 +143,6 @@ fun ActivityScreen(state: ActivityState, query: String, actions: ActivityActions
             item(key = "empty") {
                 if (state.searching) {
                     EmptyPanel(
-                        Icons.Rounded.SearchOff,
                         "No entries match \"${state.query}\"",
                         Modifier.padding(horizontal = GUTTER),
                         action = "clear search",
@@ -153,7 +150,6 @@ fun ActivityScreen(state: ActivityState, query: String, actions: ActivityActions
                     )
                 } else {
                     EmptyPanel(
-                        Icons.AutoMirrored.Rounded.ReceiptLong,
                         emptyLine(state.filter, periodName),
                         Modifier.padding(horizontal = GUTTER),
                     )

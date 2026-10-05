@@ -21,12 +21,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CalendarToday
-import androidx.compose.material.icons.rounded.Category
-import androidx.compose.material.icons.rounded.DonutLarge
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.Event
-import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.MaterialTheme
@@ -207,7 +204,7 @@ private fun BudgetHero(state: PlanState, actions: PlanActions, modifier: Modifie
             Spacer(Modifier.height(16.dp))
             PaceMeter(0f, null, "No monthly budget set", height = 14.dp)
             Spacer(Modifier.height(10.dp))
-            EmptyLine(Icons.Rounded.DonutLarge, "No monthly budget")
+            EmptyLine("No monthly budget")
             Spacer(Modifier.height(12.dp))
             HeroAction("Set monthly budget", { actions.openBudget(0L) }, Modifier.fillMaxWidth())
         }
@@ -309,7 +306,6 @@ private fun CategoriesPanel(state: PlanState, actions: PlanActions, modifier: Mo
             Spacer(Modifier.height(8.dp))
             val suggested = b.suggestedCategoryId
             EmptyLine(
-                Icons.Rounded.Category,
                 "No category budgets yet",
                 action = if (suggested != null) "add one" else null,
                 onAction = if (suggested != null) ({ actions.openBudget(suggested) }) else null,
@@ -437,7 +433,6 @@ private fun UnbudgetedPanel(state: PlanState, actions: PlanActions, modifier: Mo
         if (b.unbudgeted.isEmpty()) {
             Spacer(Modifier.height(8.dp))
             EmptyLine(
-                Icons.Rounded.DonutLarge,
                 if (b.spent > 0L) "Every category you spent in has a budget"
                 else "Spending in a category with no budget shows here",
             )
@@ -584,7 +579,7 @@ private fun ActiveBillsPanel(state: PlanState, actions: PlanActions, modifier: M
         PanelHeader("Upcoming", meta = if (bills.isEmpty()) null else bills.size.toString())
         if (bills.isEmpty()) {
             Spacer(Modifier.height(8.dp))
-            EmptyLine(Icons.Rounded.Repeat, "Add rent, phone and subscriptions once, they post on their own")
+            EmptyLine("Add rent, phone and subscriptions once, they post on their own")
         } else {
             Spacer(Modifier.height(4.dp))
             bills.forEach { b -> BillRow(b, paused = false) { actions.openBill(b.id) } }
@@ -725,7 +720,7 @@ private fun GoalsPanel(state: PlanState, actions: PlanActions, modifier: Modifie
         PanelHeader("Goals", meta = if (goals.isEmpty()) null else goals.size.toString())
         if (goals.isEmpty()) {
             Spacer(Modifier.height(8.dp))
-            EmptyLine(Icons.Rounded.Savings, "Name something you are saving for")
+            EmptyLine("Name something you are saving for")
         } else {
             goals.forEach { g -> GoalRow(g, state.today) { actions.openGoal(g.id) } }
         }

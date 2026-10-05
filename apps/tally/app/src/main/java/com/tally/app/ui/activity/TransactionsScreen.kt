@@ -23,8 +23,6 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -145,7 +143,6 @@ fun TransactionsScreen(state: TransactionsState, query: String, actions: Transac
         if (state.missing) {
             item(key = "missing") {
                 EmptyPanel(
-                    Icons.Rounded.Info,
                     if (state.isAccount) "Its entries were removed with it" else "Its entries are still in Activity",
                     Modifier.padding(horizontal = GUTTER),
                 )
@@ -181,7 +178,6 @@ fun TransactionsScreen(state: TransactionsState, query: String, actions: Transac
                 item(key = "empty") {
                     if (state.searching) {
                         EmptyPanel(
-                            Icons.Rounded.SearchOff,
                             "No entries match \"${state.query}\"",
                             Modifier.padding(horizontal = GUTTER),
                             action = "clear search",
@@ -189,7 +185,6 @@ fun TransactionsScreen(state: TransactionsState, query: String, actions: Transac
                         )
                     } else {
                         EmptyPanel(
-                            Icons.AutoMirrored.Rounded.ReceiptLong,
                             "Nothing logged in ${state.name.orEmpty()} yet",
                             Modifier.padding(horizontal = GUTTER),
                             action = "log one",

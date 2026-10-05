@@ -58,7 +58,6 @@ import androidx.compose.ui.unit.dp
 import com.tally.app.ui.common.Aside
 import com.tally.app.ui.common.EndsRow
 import com.tally.app.ui.common.GlyphBadge
-import com.tally.app.ui.common.IconBadge
 import com.tally.app.ui.common.PanelHeader
 import com.tally.app.ui.common.ROW_PAD
 import com.tally.app.ui.common.TextAction
@@ -193,32 +192,24 @@ internal fun FigureRow(cells: List<FigureCell>, modifier: Modifier = Modifier) {
     }
 }
 
-/** A zero state: the section's glyph, one quiet line, and optionally the act that fills it. */
+/** A zero state: one quiet line, and optionally the act that fills it. */
 @Composable
 internal fun EmptyLine(
-    icon: ImageVector,
     text: String,
     modifier: Modifier = Modifier,
     action: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        IconBadge(icon, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        // The act drops under the line before a word of the line would break (200% font).
-        EndsRow(
-            start = { Aside(text) },
-            end = if (action != null && onAction != null) {
-                { TextAction(action, onAction, color = MaterialTheme.colorScheme.primary) }
-            } else {
-                null
-            },
-            modifier = Modifier.weight(1f),
-        )
-    }
+    // The act drops under the line before a word of the line would break (200% font).
+    EndsRow(
+        start = { Aside(text) },
+        end = if (action != null && onAction != null) {
+            { TextAction(action, onAction, color = MaterialTheme.colorScheme.primary) }
+        } else {
+            null
+        },
+        modifier = modifier.fillMaxWidth(),
+    )
 }
 
 /** A mono side label over a run of chips ("FROM", "TO"). */

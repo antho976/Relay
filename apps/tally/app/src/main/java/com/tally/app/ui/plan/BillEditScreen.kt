@@ -18,10 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.ArrowDownward
-import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.DeleteOutline
@@ -31,7 +28,6 @@ import androidx.compose.material.icons.rounded.PauseCircleOutline
 import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Speed
-import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -45,7 +41,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -190,12 +185,6 @@ fun BillEditScreen(state: BillEditState, actions: BillEditActions) {
     }
 }
 
-private fun typeIcon(type: TxType): ImageVector = when (type) {
-    TxType.EXPENSE -> Icons.Rounded.ArrowUpward
-    TxType.INCOME -> Icons.Rounded.ArrowDownward
-    TxType.TRANSFER -> Icons.Rounded.SwapHoriz
-}
-
 /** The amount and its rhythm under the light; money in takes the green. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -289,7 +278,7 @@ private fun AccountPanel(state: BillEditState, actions: BillEditActions) {
         Spacer(Modifier.height(6.dp))
         if (state.accounts.isEmpty()) {
             Spacer(Modifier.height(2.dp))
-            EmptyLine(Icons.Rounded.AccountBalance, "Add an account first", action = "add account", onAction = actions.addAccount)
+            EmptyLine("Add an account first", action = "add account", onAction = actions.addAccount)
         } else {
             AccountChips(state.accounts, d.accountId, actions.pickAccount)
         }
@@ -308,7 +297,7 @@ private fun TransferPanel(state: BillEditState, actions: BillEditActions) {
         PanelHeader("Between accounts")
         Spacer(Modifier.height(10.dp))
         if (state.accounts.size < 2) {
-            EmptyLine(Icons.Rounded.AccountBalance, "A transfer needs two accounts", action = "add account", onAction = actions.addAccount)
+            EmptyLine("A transfer needs two accounts", action = "add account", onAction = actions.addAccount)
         } else {
             SideLabel("From")
             AccountChips(state.accounts, d.accountId, actions.pickAccount)
@@ -339,7 +328,6 @@ private fun CategoryPanel(state: BillEditState, actions: BillEditActions) {
         if (state.categories.isEmpty()) {
             Spacer(Modifier.height(2.dp))
             EmptyLine(
-                Icons.Rounded.Category,
                 if (kind == CategoryKind.INCOME) "No income categories yet" else "No expense categories yet",
                 action = "add one",
                 onAction = { actions.addCategory(kind) },

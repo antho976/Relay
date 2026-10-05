@@ -19,7 +19,6 @@ import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Inventory2
-import androidx.compose.material.icons.rounded.NewLabel
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -257,7 +256,6 @@ private fun ActivePanel(
         if (s.active.isEmpty()) {
             Spacer(Modifier.height(6.dp))
             EmptyNote(
-                Icons.Rounded.NewLabel,
                 if (kind == CategoryKind.INCOME) "No income categories. Add one to say where money comes from"
                 else "No spending categories. Add one to say where money goes",
             )

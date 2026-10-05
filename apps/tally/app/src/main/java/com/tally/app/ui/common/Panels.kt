@@ -76,19 +76,6 @@ fun HeroPanel(
     Column(modifier.fillMaxWidth(), content = content)
 }
 
-/** A bare glyph in its tint: the mark beside a quiet line. No tile behind it. */
-@Composable
-fun IconBadge(
-    icon: ImageVector,
-    modifier: Modifier = Modifier,
-    tint: Color = MaterialTheme.colorScheme.primary,
-    size: Dp = 32.dp,
-) {
-    Box(modifier.size(size), contentAlignment = Alignment.Center) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(size * 0.62f))
-    }
-}
-
 /**
  * Two ends of one line: [start] takes the room, [end] sits at the far edge. When the longest word
  * of [start] and the whole of [end] cannot share the width (a 200% font, a long reading), [end]

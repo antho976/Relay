@@ -29,21 +29,14 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.ShowChart
 import androidx.compose.material.icons.automirrored.rounded.TrendingDown
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
-import androidx.compose.material.icons.rounded.AccountBalance
-import androidx.compose.material.icons.rounded.BarChart
-import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Category
-import androidx.compose.material.icons.rounded.DonutLarge
 import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.Flag
-import androidx.compose.material.icons.rounded.LocalOffer
 import androidx.compose.material.icons.rounded.MoreHoriz
-import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.Speed
-import androidx.compose.material.icons.rounded.Storefront
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -85,7 +78,6 @@ import com.tally.app.ui.common.FIGURE_GAP
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.HeroPanel
-import com.tally.app.ui.common.IconBadge
 import com.tally.app.ui.common.LedgerRow
 import com.tally.app.ui.common.LegendDot
 import com.tally.app.ui.common.LocalMoney
@@ -288,17 +280,10 @@ private fun TileRow(
     }
 }
 
-/** A section's zero: its glyph and one quiet line. */
+/** A section's zero: one quiet line. */
 @Composable
-private fun EmptyLine(icon: ImageVector, text: String, modifier: Modifier = Modifier) {
-    Row(
-        modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        IconBadge(icon, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Aside(text, Modifier.weight(1f))
-    }
+private fun EmptyLine(text: String, modifier: Modifier = Modifier) {
+    Aside(text, modifier.fillMaxWidth())
 }
 
 @Composable
@@ -529,7 +514,7 @@ private fun WherePanel(state: InsightsState, periodName: String, onCategory: (Lo
         StackedBar(segments, description, height = 12.dp)
         if (slices.isEmpty()) {
             Spacer(Modifier.height(14.dp))
-            EmptyLine(Icons.Rounded.DonutLarge, nothingSpentLine(state, periodName))
+            EmptyLine(nothingSpentLine(state, periodName))
         } else {
             Spacer(Modifier.height(4.dp))
             slices.forEach { s ->
@@ -625,7 +610,6 @@ private fun LargestPanel(state: InsightsState, periodName: String, onEntry: (Lon
         if (rows.isEmpty()) {
             Spacer(Modifier.height(10.dp))
             EmptyLine(
-                Icons.Rounded.LocalOffer,
                 if (state.isCurrentPeriod) "No spending to rank in $periodName yet" else "No spending to rank in $periodName",
             )
         } else {
@@ -648,16 +632,13 @@ private fun PayeesPanel(state: InsightsState, modifier: Modifier = Modifier) {
             key(p.note) {
                 val amount = money.formatWhole(p.total)
                 val meta = Copy.plural(p.count, "entry", "entries") + " · " + shareText(p.total, state.spent) + " of spending"
-                Row(
+                // A ranked comparison: each payee's share of the period's spending as a thin bar.
+                Column(
                     Modifier
                         .fillMaxWidth()
                         .semantics(mergeDescendants = true) { contentDescription = "${p.note}, $amount, $meta" }
-                        .heightIn(min = 60.dp)
-                        .padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        .padding(top = 10.dp, bottom = 6.dp),
                 ) {
-                    IconBadge(Icons.Rounded.Storefront, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = 36.dp)
                     EndsRow(
                         start = {
                             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -668,7 +649,13 @@ private fun PayeesPanel(state: InsightsState, modifier: Modifier = Modifier) {
                         end = {
                             Text(amount, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
                         },
-                        modifier = Modifier.weight(1f).clearAndSetSemantics { },
+                        modifier = Modifier.clearAndSetSemantics { },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    ThinBar(
+                        if (state.spent > 0L) p.total.toFloat() / state.spent else 0f,
+                        MaterialTheme.colorScheme.primary,
+                        description = shareText(p.total, state.spent) + " of spending",
                     )
                 }
             }
@@ -690,7 +677,6 @@ private fun IncomePanel(state: InsightsState, periodName: String, onCategory: (L
         if (sources.isEmpty()) {
             Spacer(Modifier.height(10.dp))
             EmptyLine(
-                Icons.Rounded.Payments,
                 if (state.isCurrentPeriod) "No income logged in $periodName yet" else "No income logged in $periodName",
             )
         } else {
@@ -799,7 +785,7 @@ private fun TrendHero(state: InsightsState, modifier: Modifier = Modifier) {
         }
         if (empty) {
             Spacer(Modifier.height(14.dp))
-            EmptyLine(Icons.Rounded.BarChart, "Nothing logged in the last six months")
+            EmptyLine("Nothing logged in the last six months")
         } else {
             Spacer(Modifier.height(16.dp))
             ChipRow(chips)
@@ -864,7 +850,7 @@ private fun TrendListPanel(state: InsightsState, onOpen: (Int) -> Unit, modifier
         PanelHeader("Month by month", meta = if (newestFirst.isEmpty()) null else "NEWEST FIRST")
         if (newestFirst.isEmpty()) {
             Spacer(Modifier.height(10.dp))
-            EmptyLine(Icons.Rounded.CalendarMonth, "Nothing logged in the last six months")
+            EmptyLine("Nothing logged in the last six months")
         } else {
             Spacer(Modifier.height(4.dp))
             newestFirst.forEach { p ->
@@ -882,9 +868,10 @@ private fun TrendListPanel(state: InsightsState, onOpen: (Int) -> Unit, modifier
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
-                        IconBadge(
+                        GlyphBadge(
                             Icons.Rounded.CalendarMonth,
-                            tint = if (p.offset == state.offset) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (p.offset == state.offset) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
+                            size = 36.dp,
                         )
                         EndsRow(
                             start = {
@@ -1035,7 +1022,7 @@ private fun WeekdayPanel(state: InsightsState, periodName: String, modifier: Mod
         PanelHeader("By weekday", meta = if (top > 0L) "AVERAGE A DAY" else null)
         if (top <= 0L) {
             Spacer(Modifier.height(10.dp))
-            EmptyLine(Icons.Rounded.BarChart, nothingSpentLine(state, periodName))
+            EmptyLine(nothingSpentLine(state, periodName))
         } else {
             Spacer(Modifier.height(4.dp))
             weekdays.forEach { w ->
@@ -1095,7 +1082,6 @@ private fun DaySheet(date: LocalDate, state: InsightsState, onEntry: (Long) -> U
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                IconBadge(Icons.Rounded.CalendarToday)
                 // The reading drops under the day before the day's name would break mid-word.
                 EndsRow(
                     start = {
@@ -1114,7 +1100,6 @@ private fun DaySheet(date: LocalDate, state: InsightsState, onEntry: (Long) -> U
             Spacer(Modifier.height(8.dp))
             if (rows.isEmpty()) {
                 EmptyLine(
-                    Icons.Rounded.Bedtime,
                     nothingLoggedLine(date, state.today),
                     Modifier.padding(vertical = 8.dp),
                 )
@@ -1175,7 +1160,7 @@ private fun WorthHero(state: InsightsState, periodName: String, modifier: Modifi
         )
         if (w.accounts.isEmpty()) {
             Spacer(Modifier.height(14.dp))
-            EmptyLine(Icons.Rounded.AccountBalance, "Add an account to follow what you hold and what you owe")
+            EmptyLine("Add an account to follow what you hold and what you owe")
             return@HeroPanel
         }
         Spacer(Modifier.height(18.dp))
