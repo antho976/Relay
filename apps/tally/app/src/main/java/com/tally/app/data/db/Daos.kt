@@ -330,7 +330,8 @@ interface GoalDao {
     @Query("SELECT COUNT(*) FROM goals") suspend fun count(): Int
 
     @Query(
-        """SELECT g.*, COALESCE((SELECT SUM(amount) FROM goal_contributions WHERE goalId = g.id), 0) AS saved
+        """SELECT g.*, COALESCE((SELECT SUM(amount) FROM goal_contributions WHERE goalId = g.id), 0) AS saved,
+                  (SELECT MIN(date) FROM goal_contributions WHERE goalId = g.id) AS firstDate
            FROM goals g ORDER BY g.archived, g.targetDate IS NULL, g.targetDate, g.id"""
     )
     fun observeAll(): Flow<List<GoalWithSaved>>

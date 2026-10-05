@@ -29,11 +29,14 @@ class HomeScreenshotTest {
         income = 430_000,
         spent = 128_450,
         reading = PaceReading(290_000, 128_450, period.days, elapsed),
-        envelopes = listOf(
-            Envelope(2, "Dining", "dining", 6, PaceReading(32_000, 21_800, period.days, elapsed)),
-            Envelope(1, "Groceries", "cart", 0, PaceReading(50_000, 23_100, period.days, elapsed)),
-            Envelope(3, "Transport", "transport", 2, PaceReading(12_000, 4_100, period.days, elapsed)),
-            Envelope(4, "Shopping", "bag", 4, PaceReading(15_000, 19_999, period.days, elapsed)),
+        // Sorted as the view model sorts them, so the goldens show the order the app draws.
+        envelopes = sortEnvelopes(
+            listOf(
+                Envelope(2, "Dining", "dining", 6, PaceReading(32_000, 21_800, period.days, elapsed)),
+                Envelope(1, "Groceries", "cart", 0, PaceReading(50_000, 23_100, period.days, elapsed)),
+                Envelope(3, "Transport", "transport", 2, PaceReading(12_000, 4_100, period.days, elapsed)),
+                Envelope(4, "Shopping", "bag", 4, PaceReading(15_000, 19_999, period.days, elapsed)),
+            )
         ),
         upcoming = listOf(
             UpcomingBill(1, "Hydro-Québec", 7_840, com.tally.core.TxType.EXPENSE, Fixtures.TODAY.plusDays(4), 4, "bolt", 7, "Chequing", true),

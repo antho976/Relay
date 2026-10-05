@@ -2,6 +2,7 @@ package com.tally.app.ui.home
 
 import androidx.compose.ui.unit.dp
 import com.tally.core.BudgetPeriod
+import com.tally.core.PaceReading
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -92,6 +93,23 @@ class HomeLogicTest {
         assertEquals(4, state.weekDaysBeforePeriod)
         assertEquals(10_000L, state.weekSpentBeforePeriod)
         assertEquals(10_500L, state.weekSpent)
+    }
+
+    @Test fun envelopesLeadWithTheFurthestOverPaceForTheirSize() {
+        // Day 14 of October's 31.
+        val period = BudgetPeriod.containing(LocalDate.of(2026, 10, 14))
+        fun envelope(id: Long, name: String, budget: Long, spent: Long) =
+            Envelope(id, name, null, null, PaceReading(budget, spent, period.days, 14))
+        val dining = envelope(2, "Dining", 32_000, 21_800)
+        val groceries = envelope(1, "Groceries", 50_000, 23_100)
+        val transport = envelope(3, "Transport", 12_000, 4_100)
+        val shopping = envelope(4, "Shopping", 15_000, 19_999)
+        // Further over pace in dollars than Shopping, but by less of its own size.
+        val rent = envelope(5, "Rent", 200_000, 105_000)
+        assertEquals(
+            listOf("Shopping", "Dining", "Rent", "Groceries", "Transport"),
+            sortEnvelopes(listOf(dining, groceries, transport, rent, shopping)).map { it.name },
+        )
     }
 
     @Test fun homeMatchesTheWidthItIsGiven() {

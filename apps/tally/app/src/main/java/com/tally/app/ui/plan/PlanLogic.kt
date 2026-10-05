@@ -21,6 +21,7 @@ import com.tally.core.TxType
 import com.tally.core.nextDueOnSave
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
+import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
 /*
@@ -436,6 +437,8 @@ data class GoalLine(
     val targetDate: LocalDate?,
     /** Whole months to the target date, at least 1 until it passes, then 0. Null without a date. */
     val monthsLeft: Int?,
+    /** Where the meter's pace tick stands (see [goalPaceFraction]); null once reached, or without a date. */
+    val paceFraction: Float?,
 ) {
     val fraction: Float get() = if (target <= 0L) 0f else (saved.toDouble() / target).toFloat().coerceAtLeast(0f)
     val reached: Boolean get() = target > 0L && saved >= target
@@ -465,15 +468,43 @@ internal fun monthsUntil(today: LocalDate, date: LocalDate): Int {
     return months.coerceAtLeast(1)
 }
 
-internal fun goalLine(row: GoalWithSaved, today: LocalDate): GoalLine = GoalLine(
-    id = row.goal.id,
-    name = row.goal.name,
-    color = row.goal.color,
-    saved = row.saved,
-    target = row.goal.target,
-    targetDate = row.goal.targetDate,
-    monthsLeft = row.goal.targetDate?.let { monthsUntil(today, it) },
-)
+/**
+ * Where the pace tick stands on a goal's meter: the share of the days from the [first]
+ * contribution to the [targetDate] that have gone by [today], which is how full an even saving
+ * would have it now. Null without a first contribution or a date, or when the date is not after
+ * the first contribution; past the date it holds at the end.
+ */
+internal fun goalPaceFraction(first: LocalDate?, targetDate: LocalDate?, today: LocalDate): Float? {
+    if (first == null || targetDate == null || !first.isBefore(targetDate)) return null
+    val span = ChronoUnit.DAYS.between(first, targetDate)
+    val gone = ChronoUnit.DAYS.between(first, today)
+    return (gone.toDouble() / span).toFloat().coerceIn(0f, 1f)
+}
+
+/**
+ * What a goal meter says after its amounts: the share saved and, when it has a tick, where an even
+ * pace would stand. "58 percent; an even pace would hold 34 percent by today".
+ */
+internal fun goalMeterWords(fraction: Float, paceFraction: Float?): String {
+    val saved = "${(fraction * 100f).roundToInt()} percent"
+    if (paceFraction == null) return saved
+    return "$saved; an even pace would hold ${(paceFraction * 100f).roundToInt()} percent by today"
+}
+
+internal fun goalLine(row: GoalWithSaved, today: LocalDate): GoalLine {
+    val line = GoalLine(
+        id = row.goal.id,
+        name = row.goal.name,
+        color = row.goal.color,
+        saved = row.saved,
+        target = row.goal.target,
+        targetDate = row.goal.targetDate,
+        monthsLeft = row.goal.targetDate?.let { monthsUntil(today, it) },
+        paceFraction = null,
+    )
+    // A reached goal has no pace left to keep, so its meter carries no tick.
+    return if (line.reached) line else line.copy(paceFraction = goalPaceFraction(row.firstDate, row.goal.targetDate, today))
+}
 
 internal fun goalsReading(rows: List<GoalWithSaved>, today: LocalDate): GoalsReading {
     val goals = rows.map { goalLine(it, today) }

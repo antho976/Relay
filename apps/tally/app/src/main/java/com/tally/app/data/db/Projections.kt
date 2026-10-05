@@ -89,8 +89,11 @@ data class CategoryWithCount(
     val entryCount: Int,
 )
 
+/** A goal with what its contributions add up to, and the day of the first one (null with none). */
 @Immutable
 data class GoalWithSaved(
     @Embedded val goal: GoalEntity,
     val saved: Long,
+    /** Where an even saving towards the target date starts: the pace tick's day zero. */
+    val firstDate: LocalDate? = null,
 )

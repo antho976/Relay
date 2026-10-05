@@ -128,9 +128,9 @@ class PlanScreenshotTest {
 
     private val goalFold = goalsReading(
         listOf(
-            GoalWithSaved(GoalEntity(id = 1, name = "Lisbon in May", target = 320_000, targetDate = LocalDate.of(2027, 5, 1), color = 1), 186_000),
-            GoalWithSaved(GoalEntity(id = 2, name = "Emergency cushion", target = 1_200_000, color = 3), 415_000),
-            GoalWithSaved(GoalEntity(id = 3, name = "New bike", target = 90_000, targetDate = LocalDate.of(2026, 12, 1), color = 7), 90_000),
+            GoalWithSaved(GoalEntity(id = 1, name = "Lisbon in May", target = 320_000, targetDate = LocalDate.of(2027, 5, 1), color = 1), 186_000, LocalDate.of(2026, 7, 2)),
+            GoalWithSaved(GoalEntity(id = 2, name = "Emergency cushion", target = 1_200_000, color = 3), 415_000, LocalDate.of(2026, 3, 1)),
+            GoalWithSaved(GoalEntity(id = 3, name = "New bike", target = 90_000, targetDate = LocalDate.of(2026, 12, 1), color = 7), 90_000, LocalDate.of(2026, 4, 10)),
         ),
         today,
     )
