@@ -89,6 +89,7 @@ class DataRepositoryTest {
         recurring = recurring.sortedBy { it.id },
         goals = goals.sortedBy { it.id },
         contributions = contributions.sortedBy { it.id },
+        values = values.sortedBy { it.id },
     )
 
     /**

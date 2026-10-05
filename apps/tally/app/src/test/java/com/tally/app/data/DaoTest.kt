@@ -1,5 +1,6 @@
 package com.tally.app.data
 
+import com.tally.app.data.db.AccountValueEntity
 import com.tally.app.data.db.BudgetEntity
 import com.tally.app.data.db.ContributionEntity
 import com.tally.app.data.db.GoalEntity
@@ -60,6 +61,21 @@ class DaoTest {
         assertEquals(2, balances.getValue(visa).entryCount)
         assertEquals(1, balances.getValue(savings).entryCount)
         assertEquals(0, balances.getValue(untouched).entryCount)
+    }
+
+    @Test fun aRecordedValueReplacesTheOpeningAndEverythingBeforeIt() = runTest {
+        val tfsa = db.addAccount("TFSA", AccountType.INVESTMENT, opening = 1_000_00)
+        db.addIncome(100_00, day.minusDays(10), tfsa)
+        db.values().insert(AccountValueEntity(accountId = tfsa, date = day.minusDays(5), value = 1_250_00))
+        db.addIncome(40_00, day, tfsa)
+
+        val balance = db.accounts().observeBalances().first().single()
+        assertEquals("The value, then only what came after it", 1_250_00L + 40_00, balance.balance)
+        assertEquals(day.minusDays(5), balance.valuedOn)
+
+        // A newer value wins; one on the same day as an entry already holds it.
+        db.values().insert(AccountValueEntity(accountId = tfsa, date = day, value = 1_300_00))
+        assertEquals(1_300_00L, db.accounts().observeBalances().first().single().balance)
     }
 
     @Test fun balancesListActiveAccountsBySortOrderAndArchivedLast() = runTest {
