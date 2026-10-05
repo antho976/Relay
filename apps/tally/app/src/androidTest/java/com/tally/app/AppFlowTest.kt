@@ -5,12 +5,14 @@ import androidx.compose.ui.test.ComposeTimeoutException
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import leakcanary.DetectLeaksAfterTestSuccess
 import org.junit.Rule
@@ -79,6 +81,16 @@ class AppFlowTest {
         compose.waitForIdle()
     }
 
+    /**
+     * Screens are lazy lists: a row below the fold is not composed, so it cannot be waited for.
+     * Scroll the screen's list to it first, as a person would.
+     */
+    private fun scrollToText(text: String) {
+        compose.onAllNodes(hasScrollToNodeAction()).onFirst()
+            .performScrollToNode(hasText(text, substring = true, ignoreCase = true))
+        waitForText(text)
+    }
+
     private fun exists(text: String): Boolean =
         compose.onAllNodes(hasText(text, substring = true, ignoreCase = true)).fetchSemanticsNodes().isNotEmpty()
 
@@ -121,9 +133,10 @@ class AppFlowTest {
         tap("Insights", substring = false)
         tap("Home", substring = false)
 
-        // Settings and back.
+        // Settings and back. Its page title is always on screen; its rows depend on screen height.
         tapDescription("Settings")
-        waitForText("Appearance")
+        waitForText("Settings", substring = false)
+        scrollToText("Appearance")
         compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
         waitForHome()
     }
