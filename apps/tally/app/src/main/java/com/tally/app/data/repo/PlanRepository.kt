@@ -44,6 +44,11 @@ class PlanRepository @Inject constructor(
 
     suspend fun budgetFor(categoryId: Long): BudgetEntity? = budgets.getFor(categoryId)
 
+    /** Sets several limits as one write (zero removes one), so an undo restores all of them or none. */
+    suspend fun setBudgets(amounts: Map<Long, Long>) = db.withTransaction {
+        amounts.forEach { (categoryId, amount) -> setBudget(categoryId, amount) }
+    }
+
     // ── Recurring ────────────────────────────────────────────────────────────
 
     fun recurring(): Flow<List<RecurringRow>> = recurring.observeAll()

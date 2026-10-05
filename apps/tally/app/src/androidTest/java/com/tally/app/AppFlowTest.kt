@@ -128,7 +128,6 @@ class AppFlowTest {
         waitForHome()
 
         // Every tab, then back home.
-        tap("Activity", substring = false)
         tap("Plan", substring = false)
         tap("Insights", substring = false)
         tap("Home", substring = false)

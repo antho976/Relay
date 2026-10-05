@@ -8,6 +8,7 @@ import com.tally.app.data.db.BudgetEntity
 import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.db.CategoryTotal
 import com.tally.app.data.db.DayTotal
+import com.tally.app.data.db.PayeeTotal
 import com.tally.app.data.db.TransactionRow
 import com.tally.app.data.db.TypeTotal
 import com.tally.app.data.prefs.SettingsRepository
@@ -49,7 +50,11 @@ enum class InsightsLens(val label: String) {
     MONTH("Month"),
     TREND("Trend"),
     CALENDAR("Calendar"),
+    WORTH("Worth"),
 }
+
+/** How many payees the Month lens lists. */
+internal const val TOP_PAYEES = 5
 
 /**
  * One row of a breakdown: a category, the uncategorized pool ([categoryId] null, [folded] 0), or
@@ -167,12 +172,18 @@ data class InsightsState(
     /** The trend periods, oldest first, ending at [period]. */
     val trend: List<TrendPoint> = emptyList(),
     val trendSummary: TrendSummary = TrendSummary(),
+    /** The period's biggest payees by what they took, from the entries' notes. */
+    val payees: List<PayeeTotal> = emptyList(),
+    val worth: WorthReading = WorthReading(),
     val loaded: Boolean = false,
 ) {
     val isCurrentPeriod: Boolean get() = offset >= 0
     val daysLeft: Int get() = if (isCurrentPeriod) period.daysLeft(today) else 0
     val perDay: Long get() = if (elapsedDays > 0) spent / elapsedDays else 0L
     val net: Long get() = income - spent
+
+    /** The share of the period's income not spent; null with no income. */
+    val savingsRate: Int? get() = keptShare(income, spent)
 
     /** Where an even spend of today's rate would end the period; null once the period is over or before any spend. */
     val projected: Long?
@@ -380,6 +391,8 @@ internal fun buildInsights(
     budget: Long?,
     lastPeriodSameDay: Long,
     trend: List<TrendPoint>,
+    payees: List<PayeeTotal> = emptyList(),
+    worth: WorthReading = WorthReading(),
 ): InsightsState {
     // Today falls after every past period, so this is every day of one and the days so far of the current.
     val elapsed = period.elapsedDays(today)
@@ -417,6 +430,8 @@ internal fun buildInsights(
         calendar = summarizeCalendar(daily, period, elapsed, weekStartsMonday),
         trend = trend,
         trendSummary = summarizeTrend(trend, positiveBudget),
+        payees = payees,
+        worth = worth,
         loaded = true,
     )
 }
@@ -456,7 +471,7 @@ class InsightsViewModel @Inject constructor(
         val categories: List<CategoryEntity>,
     )
 
-    private data class Frame(val budget: Long?, val lastSameDay: Long, val trend: List<TrendPoint>)
+    private data class Frame(val budget: Long?, val lastSameDay: Long, val trend: List<TrendPoint>, val payees: List<PayeeTotal>)
 
     private val inputs = combine(settings.settings, today, periodOffset) { s, d, o ->
         Inputs(s.periodFor(d), o, d, s.weekStartsMonday)
@@ -486,15 +501,22 @@ class InsightsViewModel @Inject constructor(
             plan.budgets(),
             ledger.typeTotals(previous.start, previousEnd),
             trend,
-        ) { budgets, last, points ->
+            ledger.payees(TxType.EXPENSE, period.start, period.endExclusive, TOP_PAYEES),
+        ) { budgets, last, points, payees ->
             Frame(
                 budget = budgets.firstOrNull { it.categoryId == BudgetEntity.OVERALL }?.amount,
                 lastSameDay = last.firstOrNull { it.type == TxType.EXPENSE }?.total ?: 0L,
                 trend = points,
+                payees = payees,
             )
         }
 
-        combine(reads, frame) { r, c ->
+        // Net worth rebuilt from every entry: read once per change, not per lens.
+        val worth = combine(ledger.balances(), ledger.allValues(), ledger.flows()) { accounts, values, flows ->
+            worthReading(accounts, values, flows, i.current, i.offset, i.day)
+        }
+
+        combine(reads, frame, worth) { r, c, w ->
             buildInsights(
                 today = i.day,
                 period = period,
@@ -508,6 +530,8 @@ class InsightsViewModel @Inject constructor(
                 budget = c.budget,
                 lastPeriodSameDay = c.lastSameDay,
                 trend = c.trend,
+                payees = c.payees,
+                worth = w,
             )
         }
     }.stateIn(

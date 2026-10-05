@@ -419,9 +419,10 @@ Tactile and few. A view has one hero action at most.
 - **Keypad:** container-high keys with 12dp corners, at least 52dp, on 2dp seams, digits in sans.
 
 ### Navigation
-- **Bottom bar:** container-low, a 1dp outline-variant top edge, 72dp plus the system inset, four equal full-height tab targets. Each item is a 24dp glyph over a body-small label; the picked one puts its glyph in the accent on a 60 by 32dp indicator pill (16dp corners, accent at 16%) and its label in on-ground semibold; idle items are muted. The pill fades in over 150ms. Each item announces as a tab.
+- **Bottom bar:** container-low, a 1dp outline-variant top edge, 72dp plus the system inset, three equal full-height tab targets: Home, Plan, Insights. The ledger is not a tab: History opens from Home's Recent panel ("view all"), as Avex reads its log, so the entries are never shown twice. Each item is a 24dp glyph over a body-small label; the picked one puts its glyph in the accent on a 60 by 32dp indicator pill (16dp corners, accent at 16%) and its label in on-ground semibold; idle items are muted. The pill fades in over 150ms. Each item announces as a tab.
 - **Rail (600dp and up):** the same items, 72dp tall each, in an 88dp column under the FAB.
 - **Tab change:** a 150ms cross-fade; each tab keeps its scroll. Pushed screens slide in by an eighth of the width over 320ms with a fade.
+- **Settings:** Avex's grouped list: a search slab at the top that filters every page and setting by its words, then General, Money, Data and Reset groups of slab rows, each led by a neutral glyph badge, then About. Backup, Export, Import and About are pages of their own, each a page head over groups; Reset's acts confirm in a dialog.
 - **Snackbar:** container-highest with on-ground text and an accent action, lifted clear of the bar and the FAB. Deletes offer Undo here instead of a confirm.
 
 ### Lists and rows
@@ -438,6 +439,7 @@ The app's signature mark, on every budget, envelope and goal with a date. A full
 - **Trend bars (Insights):** one thin rounded bar per period, at most 18dp wide, for what went out: the running period in the accent, past ones in the secondary rung; an on-ground dot for what came in; the budget as the day bars' dashed guide. The picked period stands on a recessed container-high column with 12dp corners; a tap on a bar or its label picks it.
 - **Heat grid (Insights calendar):** the period as 6dp-cornered squares under weekday initials, lit by the accent at 25, 45, 70 and 100% for more spent against the busiest day, container-high for a day with nothing. Today is ringed 1.5dp in on-ground; days ahead are bare 1dp outline rings and take no tap. Each square sits 2dp inside a full-column slot at least 48dp tall, and the slot is the tap.
 - **Stacked bar:** shares of a whole as segments 10dp to 14dp tall (category hues for where the month went) with 2dp gaps and 4dp corners; a share under 1% still gets a 2dp sliver.
+- **Worth bars (Insights worth):** six period closes as rounded bars from zero, each in a full-height slot with 10dp gaps; the period picked in the accent, earlier ones in the secondary rung at 55%, a close in debt in the over-budget red; month initials in label-small below, the picked one in on-ground. Bars start at zero so a small change reads small; the hero's line and the Month by month rows carry the exact moves.
 - **Thin bar:** a 4dp ranked-comparison bar on a container-high track.
 - **Legend dot:** an 8dp hue dot and a body-small muted label.
 - **Draw-in:** every fill draws in once from zero over 900ms on an even ease-out and is remembered, so a row that scrolls away and back shows its settled value. Each chart is announced by a sentence of its values.

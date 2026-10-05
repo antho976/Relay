@@ -80,7 +80,65 @@ data class BudgetsReading(
     val unbudgetedSpent: Long = 0,
     /** Where "add one" lands when there are no category budgets yet. */
     val suggestedCategoryId: Long? = null,
+    /** Where this period's spending lands at its current pace; null too early in the period to say. */
+    val projected: Long? = null,
+    /** Budgets the last periods' spending suggests for categories that have none, biggest first. */
+    val suggestions: List<BudgetSuggestion> = emptyList(),
+) {
+    val suggestedTotal: Long get() = suggestions.sumOf { it.amount }
+}
+
+/** A budget the owner's own spending suggests: the recent average, rounded to a tidy figure. */
+@Immutable
+data class BudgetSuggestion(
+    val categoryId: Long,
+    val name: String,
+    val icon: String?,
+    val color: Int?,
+    val amount: Long,
+    /** How many of the recent periods had spending in the category. */
+    val months: Int,
 )
+
+/** The periods a suggestion averages: the three before this one. */
+internal const val SUGGEST_PERIODS = 3
+
+/** A suggestion needs spending in at least this many of those periods, so a one-off buys nothing. */
+internal const val SUGGEST_MIN_MONTHS = 2
+
+/** The most suggestions the Budgets lens lists. */
+internal const val SUGGEST_MAX = 6
+
+/** Days into the period before a projection means anything. */
+internal const val PROJECT_AFTER_DAYS = 3
+
+/** Where [spent] lands by the period's end at the pace so far; null in the first days or with nothing spent. */
+internal fun projectedSpend(spent: Long, days: Int, elapsed: Int): Long? {
+    if (spent <= 0L || elapsed < PROJECT_AFTER_DAYS || days <= 0) return null
+    if (elapsed >= days) return spent
+    return (spent.toDouble() * days / elapsed).roundToLong()
+}
+
+/**
+ * Budgets for the expense categories with no budget, each the average of the [SUGGEST_PERIODS]
+ * periods before this one (months with no spending left out), rounded to [step].
+ */
+internal fun budgetSuggestions(
+    history: List<List<CategoryTotal>>,
+    budgeted: Set<Long>,
+    categories: List<CategoryEntity>,
+    step: Long,
+): List<BudgetSuggestion> {
+    val live = categories.filter { it.kind == CategoryKind.EXPENSE && !it.archived && it.id !in budgeted }
+    return live.mapNotNull { c ->
+        val values = history.map { period -> period.firstOrNull { it.categoryId == c.id }?.total ?: 0L }
+        val months = values.count { it > 0L }
+        if (months < SUGGEST_MIN_MONTHS) return@mapNotNull null
+        val average = averageOnRecord(values) ?: return@mapNotNull null
+        val amount = roundUpTo(average, step)
+        if (amount <= 0L) null else BudgetSuggestion(c.id, c.name, c.icon, c.color, amount, months)
+    }.sortedByDescending { it.amount }.take(SUGGEST_MAX)
+}
 
 /** Furthest over pace first, measured against each budget's size so a small envelope can lead. */
 internal fun sortEnvelopes(lines: List<BudgetLine>): List<BudgetLine> =
@@ -118,6 +176,8 @@ internal fun budgetsReading(
     totals: List<TypeTotal>,
     lastTotals: List<TypeTotal>,
     categories: List<CategoryEntity>,
+    history: List<List<CategoryTotal>> = emptyList(),
+    step: Long = 0L,
 ): BudgetsReading {
     val spent = totals.firstOrNull { it.type == TxType.EXPENSE }?.total ?: 0L
     val last = lastTotals.firstOrNull { it.type == TxType.EXPENSE }?.total ?: 0L
@@ -147,6 +207,8 @@ internal fun budgetsReading(
         unbudgeted = unbudgeted,
         unbudgetedSpent = unbudgeted.sumOf { it.spent },
         suggestedCategoryId = suggestedBudgetCategory(unbudgeted, categories, budgetedIds),
+        projected = projectedSpend(spent, period.days, elapsed),
+        suggestions = budgetSuggestions(history, budgetedIds, categories, step),
     )
 }
 

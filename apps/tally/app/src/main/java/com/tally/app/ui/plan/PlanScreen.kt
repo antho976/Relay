@@ -18,6 +18,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.TrendingUp
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CalendarToday
@@ -105,6 +107,7 @@ fun PlanTab(nav: AppNav) {
             addBill = { nav.billEdit(0) },
             openGoal = { nav.goal(it) },
             addGoal = { nav.goalEdit(0) },
+            applySuggestions = viewModel::applySuggestions,
         )
     }
     PlanScreen(state, actions, lens = lens, onLens = { lens = it })
@@ -118,6 +121,8 @@ data class PlanActions(
     val addBill: () -> Unit = {},
     val openGoal: (Long) -> Unit = {},
     val addGoal: () -> Unit = {},
+    /** Sets every budget the averages suggest. */
+    val applySuggestions: () -> Unit = {},
 )
 
 /**
@@ -176,6 +181,9 @@ private fun LazyListScope.budgetsLens(state: PlanState, actions: PlanActions) {
     item(key = "b-hero") { BudgetHero(state, actions, Modifier.padding(horizontal = GUTTER)) }
     item(key = "b-tiles") { BudgetTiles(state, Modifier.padding(horizontal = GUTTER)) }
     item(key = "b-categories") { CategoriesPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+    if (state.budgets.suggestions.isNotEmpty()) {
+        item(key = "b-suggested") { SuggestedPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+    }
     item(key = "b-unbudgeted") { UnbudgetedPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
 }
 
@@ -249,6 +257,10 @@ private fun BudgetHero(state: PlanState, actions: PlanActions, modifier: Modifie
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             // The days left are in the context line under the title; the allowance names them.
             if (!over) StatChip(Icons.Rounded.Speed, Copy.marginLine(r, money))
+            val projected = b.projected
+            if (projected != null && projected != r.spent) {
+                StatChip(Icons.AutoMirrored.Rounded.TrendingUp, "On pace for " + money.formatWhole(projected))
+            }
             StatChip(Icons.Rounded.Event, "Resets " + Dates.short(state.period.endExclusive, state.today))
         }
     }
@@ -361,6 +373,65 @@ private fun EnvelopeRow(e: BudgetLine, onClick: () -> Unit) {
         }
         Spacer(Modifier.height(10.dp))
         PaceMeter(r.spentFraction, r.paceFraction, "${e.name}: $reading. $pace", height = 6.dp)
+    }
+}
+
+/**
+ * Budgets for the categories that have none, each the average of the last three months it was
+ * spent in: one tap sets them all (with an undo), or a row opens that budget to set it by hand.
+ */
+@Composable
+private fun SuggestedPanel(state: PlanState, actions: PlanActions, modifier: Modifier = Modifier) {
+    val money = LocalMoney.current
+    val b = state.budgets
+    Panel(modifier) {
+        PanelHeader(Icons.Rounded.AutoAwesome, "Suggested budgets", meta = "3-MONTH AVERAGE")
+        Spacer(Modifier.height(6.dp))
+        Text(
+            money.formatWhole(b.suggestedTotal) + " a month across " + Copy.plural(b.suggestions.size, "category", "categories") +
+                ", from what you spent",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        b.suggestions.forEach { sug -> SuggestionRow(sug) { actions.openBudget(sug.categoryId) } }
+        Spacer(Modifier.height(12.dp))
+        SecondaryAction(
+            if (b.suggestions.size == 1) "Set this budget" else "Set all " + b.suggestions.size,
+            actions.applySuggestions,
+            Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun SuggestionRow(sug: BudgetSuggestion, onClick: () -> Unit) {
+    val money = LocalMoney.current
+    val amount = money.formatWhole(sug.amount)
+    val meta = "Spent in " + sug.months + " of the last " + SUGGEST_PERIODS + " months"
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .bounceClick(label = "Set a ${sug.name} budget", focusOutset = ROW_FOCUS_OUTSET, onClick = onClick)
+            .semantics(mergeDescendants = true) { contentDescription = "${sug.name}, suggested $amount a month, $meta" }
+            .heightIn(min = 64.dp)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        CategoryBadge(sug.icon, sug.color, size = 36.dp)
+        EndsRow(
+            start = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(sug.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                    Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            end = {
+                Text(amount, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
+            },
+            modifier = Modifier.weight(1f).clearAndSetSemantics { },
+        )
     }
 }
 
@@ -481,10 +552,11 @@ private fun BillsHero(state: PlanState, modifier: Modifier = Modifier) {
             )
         }
         val next = r.active.firstOrNull()
-        if (next != null || r.reminders > 0) {
+        if (next != null || r.reminders > 0 || r.monthlyCost > 0L) {
             Spacer(Modifier.height(16.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (next != null) StatChip(Icons.Rounded.Event, next.name + " · " + Copy.dueLine(next.daysUntil))
+                if (r.monthlyCost > 0L) StatChip(Icons.Rounded.CalendarMonth, money.formatWhole(r.monthlyCost * 12) + " a year")
                 if (r.reminders > 0) StatChip(Icons.Rounded.EditNote, Copy.plural(r.reminders, "reminder") + " you log yourself")
             }
         }
