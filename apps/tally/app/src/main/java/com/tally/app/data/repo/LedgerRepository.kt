@@ -233,6 +233,9 @@ class LedgerRepository @Inject constructor(
         transactions.insert(tx)
     }
 
+    /** Several new accounts in one write, in order: a failure adds none of them. Their ids, same order. */
+    suspend fun saveNewAccounts(list: List<AccountEntity>): List<Long> = db.withTransaction { list.map { saveAccount(it) } }
+
     suspend fun saveAccount(account: AccountEntity): Long =
         if (account.id == 0L) accounts.insert(account.copy(name = account.name.trim(), sortOrder = accounts.nextSortOrder()))
         else { accounts.update(account.copy(name = account.name.trim())); account.id }

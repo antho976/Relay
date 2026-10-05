@@ -77,7 +77,14 @@ class OnboardingViewModel @Inject constructor(
     /** Writes the pick at once, and reads any amount already typed again at the new currency's decimals. */
     fun pickCurrency(code: String) {
         val fmt = MoneyFormatter(code, Locale.getDefault())
-        draft.update { it.copy(currency = code, balance = fmt.parse(it.balanceText), budget = fmt.parse(it.budgetText)) }
+        draft.update {
+            it.copy(
+                currency = code,
+                accounts = it.accounts.map { a -> a.copy(balance = fmt.parse(a.balanceText) ?: 0L) },
+                balance = fmt.parse(it.balanceText),
+                budget = fmt.parse(it.budgetText),
+            )
+        }
         viewModelScope.launch { settings.setCurrency(code) }
     }
 
@@ -92,6 +99,31 @@ class OnboardingViewModel @Inject constructor(
     fun setBalance(text: String, parsed: Long?) = draft.update { it.copy(balanceText = text, balance = parsed, error = null) }
 
     fun setBudget(text: String, parsed: Long?) = draft.update { it.copy(budgetText = text, budget = parsed, error = null) }
+
+    /** Moves the form's account into the list and closes the form; "Add another account" opens a fresh one. */
+    fun addAccount() = draft.update { d ->
+        if (!d.formOpen || d.balanceProblem != null || d.busy) return@update d
+        cleared(d.copy(accounts = d.accounts + d.draftAccount, editing = false, error = null))
+    }
+
+    /** Opens the form for one more account, on the next usual type. */
+    fun openNewAccount() = draft.update { d -> if (d.busy) d else cleared(d).copy(editing = true) }
+
+    /** Closes a form opened by mistake; only once there is an account in the list. */
+    fun cancelNewAccount() = draft.update { d -> if (d.accounts.isEmpty() || d.busy) d else cleared(d).copy(editing = false, error = null) }
+
+    /** Takes an added account back out; with none left, the form opens again. */
+    fun removeAccount(index: Int) = draft.update { d ->
+        if (d.busy || index !in d.accounts.indices) return@update d
+        val left = d.accounts.filterIndexed { i, _ -> i != index }
+        d.copy(accounts = left, editing = d.editing || left.isEmpty())
+    }
+
+    /** A blank form on the type the list does not have yet. */
+    private fun cleared(d: OnboardingState): OnboardingState {
+        val type = suggestedType(d.accounts)
+        return d.copy(accountType = type, accountName = defaultAccountName(type), balanceText = "", balance = null)
+    }
 
     /** The step's main act: on to the next question, or set everything up after the last. */
     fun next() {
@@ -121,10 +153,11 @@ class OnboardingViewModel @Inject constructor(
             val ok = runCatching {
                 settings.setCurrency(d.currency)
                 ledger.seedCategoriesIfEmpty()
-                val id = ledger.saveAccount(
-                    AccountEntity(name = accountNameToSave(d.accountName, d.accountType), type = d.accountType, openingBalance = d.storedBalance)
+                // Every account in one write; the first added is where new entries start.
+                val ids = ledger.saveNewAccounts(
+                    d.toCreate.map { AccountEntity(name = it.name, type = it.type, openingBalance = it.storedBalance) }
                 )
-                settings.setDefaultAccount(id)
+                ids.firstOrNull()?.let { settings.setDefaultAccount(it) }
                 val budget = d.budget ?: 0L
                 if (withBudget && budget > 0L) plan.setBudget(BudgetEntity.OVERALL, budget)
                 settings.setOnboarded(true)

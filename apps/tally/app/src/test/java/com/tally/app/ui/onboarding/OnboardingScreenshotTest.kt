@@ -48,6 +48,24 @@ class OnboardingScreenshotTest {
     }
     @Test fun account200() = compose.shoot("onboarding-account-200", fontScale = 2f) { OnboardingScreen(account, OnboardingActions()) }
 
+    private val added = listOf(
+        OnboardAccount("Chequing", AccountType.CHEQUING, "3184.50", 318_450),
+        OnboardAccount("Visa", AccountType.CREDIT, "412.20", 41_220),
+    )
+
+    @Test fun accountsAdded() = compose.shoot("onboarding-accounts") {
+        OnboardingScreen(
+            account.copy(accounts = added, editing = false, accountType = AccountType.SAVINGS, accountName = "Savings", balanceText = "", balance = null),
+            OnboardingActions(),
+        )
+    }
+    @Test fun accountsNext() = compose.shoot("onboarding-accounts-next") {
+        OnboardingScreen(
+            account.copy(accounts = added, editing = true, accountType = AccountType.SAVINGS, accountName = "Savings", balanceText = "7250", balance = 725_000),
+            OnboardingActions(),
+        )
+    }
+
     @Test fun budget() = compose.shoot("onboarding-budget") { OnboardingScreen(budget, OnboardingActions()) }
     @Test fun budgetZero() = compose.shoot("onboarding-budget-zero") {
         OnboardingScreen(base.copy(step = OnboardingStep.BUDGET), OnboardingActions())
