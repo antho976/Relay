@@ -115,7 +115,7 @@ class OnboardingLogicTest {
     @Test fun addedAccountsSurviveAProcessDeathAndReadAgainAtTheCurrency() {
         val answered = ready.copy(step = OnboardingStep.ACCOUNT, accounts = listOf(chequing, visa), editing = false)
         val saved = SavedOnboarding.of(answered)
-        val back = saved.applyTo(ready) { text -> text.toBigDecimal().movePointRight(2).toLong() }
+        val back = saved.applyTo(ready) { text -> text.takeIf { it.isNotBlank() }?.toBigDecimal()?.movePointRight(2)?.toLong() }
         assertEquals(listOf("Chequing", "Visa"), back.accounts.map { it.name })
         assertEquals(listOf(318_450L, 41_220L), back.accounts.map { it.balance })
         assertFalse(back.editing)
