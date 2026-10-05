@@ -150,7 +150,7 @@ class PlanEditorsScreenshotTest {
     )
 
     private val lisbon = goalLine(
-        GoalWithSaved(GoalEntity(id = 1, name = "Lisbon in May", target = 320_000, targetDate = LocalDate.of(2027, 5, 1), color = 1), 186_000),
+        GoalWithSaved(GoalEntity(id = 1, name = "Lisbon in May", target = 320_000, targetDate = LocalDate.of(2027, 5, 1), color = 1), 186_000, LocalDate.of(2026, 7, 2)),
         today,
     )
 
@@ -194,6 +194,7 @@ class PlanEditorsScreenshotTest {
         loaded = true,
         stored = true,
         saved = 186_000,
+        firstDate = LocalDate.of(2026, 7, 2),
         monthsLeft = monthsUntil(today, LocalDate.of(2027, 5, 1)),
         problems = goalProblems(goalDraft),
     )

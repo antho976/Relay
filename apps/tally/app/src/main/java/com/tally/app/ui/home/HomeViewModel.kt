@@ -38,6 +38,13 @@ data class Envelope(
     val reading: PaceReading,
 )
 
+/**
+ * Furthest over pace first, measured against each budget's size so a small envelope can lead.
+ * Plan's sortEnvelopes keeps the same rule, so both tabs list the envelopes in one order.
+ */
+internal fun sortEnvelopes(envelopes: List<Envelope>): List<Envelope> =
+    envelopes.sortedByDescending { it.reading.paceDelta.toDouble() / it.reading.budget.coerceAtLeast(1) }
+
 @Immutable
 data class UpcomingBill(
     val id: Long,
@@ -119,15 +126,17 @@ class HomeViewModel @Inject constructor(
             val elapsed = period.elapsedDays(day)
             val overall = budgets.firstOrNull { it.categoryId == BudgetEntity.OVERALL }
                 ?.let { PaceReading(it.amount, spent, period.days, elapsed) }
-            val envelopes = budgets.filter { it.categoryId != BudgetEntity.OVERALL && it.categoryName != null }.map {
-                Envelope(
-                    categoryId = it.categoryId,
-                    name = it.categoryName.orEmpty(),
-                    icon = it.categoryIcon,
-                    color = it.categoryColor,
-                    reading = PaceReading(it.amount, spentBy[it.categoryId] ?: 0L, period.days, elapsed),
-                )
-            }.sortedByDescending { it.reading.paceDelta.toDouble() / it.reading.budget.coerceAtLeast(1) }
+            val envelopes = sortEnvelopes(
+                budgets.filter { it.categoryId != BudgetEntity.OVERALL && it.categoryName != null }.map {
+                    Envelope(
+                        categoryId = it.categoryId,
+                        name = it.categoryName.orEmpty(),
+                        icon = it.categoryIcon,
+                        color = it.categoryColor,
+                        reading = PaceReading(it.amount, spentBy[it.categoryId] ?: 0L, period.days, elapsed),
+                    )
+                }
+            )
             Triple(income to spent, overall, envelopes)
         }
         val upcoming = plan.recurring().map { rows ->

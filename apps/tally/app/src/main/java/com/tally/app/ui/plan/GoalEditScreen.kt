@@ -170,10 +170,17 @@ private fun TargetHero(state: GoalEditState, modifier: Modifier = Modifier) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(14.dp))
+        // The tick follows the date being edited; a new goal, an undated or a reached one has none.
+        val pace = if (target > 0L && state.saved < target) {
+            goalPaceFraction(state.firstDate, d.targetDate, state.today)
+        } else {
+            null
+        }
         PaceMeter(
             fraction,
-            null,
-            "Holds ${money.formatWhole(state.saved)} of ${money.formatWhole(target)}",
+            pace,
+            "Holds ${money.formatWhole(state.saved)} of ${money.formatWhole(target)}" +
+                (if (target > 0L) ", " + goalMeterWords(fraction, pace) else ""),
             height = 14.dp,
             fill = hue,
         )

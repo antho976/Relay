@@ -348,6 +348,37 @@ class PlanLogicTest {
         assertEquals(134_000L, g.goals.first().left)
     }
 
+    @Test fun goalPaceTickStandsWhereAnEvenSavingWouldBeToday() {
+        val first = LocalDate.of(2026, 7, 2)
+        val date = LocalDate.of(2027, 5, 1)
+        // 104 of the 303 days from 2 Jul 2026 to 1 May 2027 have gone by 14 Oct 2026.
+        assertEquals(104f / 303f, goalPaceFraction(first, date, today)!!, 1e-6f)
+        assertEquals(0f, goalPaceFraction(first, date, first)!!, 0f)
+        assertEquals("Past the date it holds at the end", 1f, goalPaceFraction(first, date, date.plusDays(40))!!, 0f)
+        assertEquals("A first contribution dated ahead holds at the start", 0f, goalPaceFraction(today.plusDays(3), date, today)!!, 0f)
+        assertNull("No date", goalPaceFraction(first, null, today))
+        assertNull("No contributions", goalPaceFraction(null, date, today))
+        assertNull("The date is not after the first contribution", goalPaceFraction(date, date, today))
+        assertNull(goalPaceFraction(date.plusDays(1), date, today))
+    }
+
+    @Test fun goalLinesCarryATickOnlyWhenDatedFundedAndNotReached() {
+        val first = LocalDate.of(2026, 7, 2)
+        val dated = goalLine(GoalWithSaved(GoalEntity(id = 1, name = "Lisbon", target = 320_000, targetDate = LocalDate.of(2027, 5, 1)), 186_000, first), today)
+        assertEquals(104f / 303f, dated.paceFraction!!, 1e-6f)
+        val undated = goalLine(GoalWithSaved(GoalEntity(id = 2, name = "Cushion", target = 500_000), 120_000, first), today)
+        assertNull(undated.paceFraction)
+        val reached = goalLine(GoalWithSaved(GoalEntity(id = 3, name = "Bike", target = 90_000, targetDate = LocalDate.of(2026, 12, 1)), 90_000, first), today)
+        assertNull("A reached goal has no pace left to keep", reached.paceFraction)
+        val unfunded = goalLine(GoalWithSaved(GoalEntity(id = 4, name = "Car", target = 900_000, targetDate = LocalDate.of(2027, 5, 1)), 0), today)
+        assertNull(unfunded.paceFraction)
+    }
+
+    @Test fun goalMeterWordsSayTheShareAndTheEvenPace() {
+        assertEquals("58 percent", goalMeterWords(0.58125f, null))
+        assertEquals("58 percent; an even pace would hold 34 percent by today", goalMeterWords(0.58125f, 104f / 303f))
+    }
+
     @Test fun goalPaceAveragesSinceTheFirstContribution() {
         val contributions = listOf(
             ContributionEntity(id = 2, goalId = 1, amount = 40_000, date = today.minusDays(10)),

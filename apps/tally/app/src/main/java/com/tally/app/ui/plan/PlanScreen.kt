@@ -632,6 +632,7 @@ private fun GoalsHero(state: PlanState, modifier: Modifier = Modifier) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(16.dp))
+        // No tick: the total spans many dates and some goals have none, so an even pace means nothing here.
         PaceMeter(
             g.fraction,
             null,
@@ -701,6 +702,12 @@ private fun GoalRow(g: GoalLine, state: PlanState, onClick: () -> Unit) {
             )
         }
         Spacer(Modifier.height(10.dp))
-        PaceMeter(g.fraction, null, "${g.name}: $reading. $line", height = 6.dp, fill = hue)
+        PaceMeter(
+            g.fraction,
+            g.paceFraction,
+            "${g.name}: $reading, ${goalMeterWords(g.fraction, g.paceFraction)}. $line",
+            height = 6.dp,
+            fill = hue,
+        )
     }
 }

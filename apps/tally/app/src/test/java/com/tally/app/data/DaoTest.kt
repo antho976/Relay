@@ -322,6 +322,8 @@ class DaoTest {
         assertEquals("Dated goals sort before undated ones", listOf(trip, fund), goals.map { it.goal.id })
         assertEquals(450_00L, goals.first { it.goal.id == trip }.saved)
         assertEquals("No contributions reads as zero, not null", 0L, goals.first { it.goal.id == fund }.saved)
+        assertEquals("The first contribution starts the pace", day.minusDays(30), goals.first { it.goal.id == trip }.firstDate)
+        assertNull("No contributions, no first date", goals.first { it.goal.id == fund }.firstDate)
 
         val history = db.goals().observeContributions(trip).first()
         assertEquals("Newest first", listOf(day, day.minusDays(10), day.minusDays(30)), history.map { it.date })

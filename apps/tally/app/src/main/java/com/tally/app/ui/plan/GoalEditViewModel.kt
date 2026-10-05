@@ -38,6 +38,8 @@ data class GoalEditState(
     val stored: Boolean = false,
     /** What the goal already holds, for the preview. */
     val saved: Long = 0,
+    /** The stored goal's first contribution, where the preview's pace tick starts; null for a new goal or none. */
+    val firstDate: LocalDate? = null,
     val monthsLeft: Int? = null,
     val problems: GoalProblems = GoalProblems(),
     /** True once a save was tried with problems: the form then says what is missing. */
@@ -71,12 +73,14 @@ class GoalEditViewModel @Inject constructor(
     private var busy = false
 
     val state: StateFlow<GoalEditState> = combine(draft, stored, plan.goals(), ready, showErrors) { d, st, goals, isReady, errors ->
+        val row = if (st == null) null else goals.firstOrNull { it.goal.id == st.id }
         GoalEditState(
             draft = d,
             today = today,
             loaded = isReady,
             stored = st != null,
-            saved = if (st == null) 0L else goals.firstOrNull { it.goal.id == st.id }?.saved ?: 0L,
+            saved = row?.saved ?: 0L,
+            firstDate = row?.firstDate,
             monthsLeft = d.targetDate?.let { monthsUntil(today, it) },
             problems = goalProblems(d),
             showErrors = errors,

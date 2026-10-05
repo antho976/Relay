@@ -217,10 +217,12 @@ private fun GoalHero(state: GoalState, goal: GoalLine, modifier: Modifier = Modi
         HeroFigure(money.formatWhole(goal.saved))
         Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(16.dp))
+        // The tick stands where an even saving from the first contribution to the date would be today.
         PaceMeter(
             goal.fraction,
-            null,
-            "Saved ${money.formatWhole(goal.saved)} of ${money.formatWhole(goal.target)}, $percent percent",
+            goal.paceFraction,
+            "Saved ${money.formatWhole(goal.saved)} of ${money.formatWhole(goal.target)}, " +
+                goalMeterWords(goal.fraction, goal.paceFraction),
             height = 14.dp,
             fill = hue,
         )
