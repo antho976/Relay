@@ -35,10 +35,14 @@ understands "33 a day for 27 days", glances at the envelope that is furthest ahe
 then logs with the FAB or leaves.
 
 FIRST VIEWPORT: top bar with only a settings capsule at the end. Serif month title, sans period
-line under it. The lit hero panel: wallet glyph + MARGIN label + pace verdict, the margin as the
-display serif figure, "of budget, spent" line, the meter with its pace tick, chips (days left,
-per day, pace). Under it IN and OUT stat tiles side by side, each against last month. Then the
-week's day bars against the daily budget. FAB bottom end; raised nav bar under.
+line under it (days left, reset date). The lit hero panel: wallet glyph + LEFT TO SPEND label +
+pace verdict, the room left of the budget as the display serif figure, "left of your budget ·
+spent" line, the meter with its pace tick, chips (per day for the days left, pace). Under it IN
+and OUT stat tiles side by side, each figure over its label and against last month. Then the
+week's day bars against the daily budget, naming what the week spent before the period began.
+FAB bottom end; raised nav bar under. On a tablet (840dp and wider) this viewport is the start
+pane under the same title, with the envelopes, recent entries, bills and accounts in the end
+pane; from 600dp a single column is capped at the reading width and centred.
 
 FORM: in / out ledger, candidate 7 of 7, seed key 3a18b5e6. Signature move: the pace tick, a
 thin onBackground tick on every meter in the app at where an even spend would be today; fill past

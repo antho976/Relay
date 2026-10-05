@@ -40,6 +40,13 @@ import com.tally.app.ui.theme.MonoSectionAnchor
 val GUTTER = 24.dp
 
 /**
+ * The widest one column of reading grows, gutters included. On a tablet a phone column stretched
+ * to the window puts a label a screen away from its reading; past this width a single column
+ * stops and centres instead.
+ */
+val READING_WIDTH = 640.dp
+
+/**
  * A screen names itself with this serif title and nothing else (never a top-bar title). The
  * [context] line sits UNDER it in sans, Avex's Academy voice: no eyebrow above a heading.
  */

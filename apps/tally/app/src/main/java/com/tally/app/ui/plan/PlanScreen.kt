@@ -180,8 +180,8 @@ private fun LazyListScope.budgetsLens(state: PlanState, actions: PlanActions) {
 
 /**
  * The overall monthly budget under the accent's light: what is left, the meter with today's pace
- * tick, three figures, and chips for the time left. The whole block opens the budget. Without
- * one, the meter sits at zero beside the act that sets it.
+ * tick, three figures, and chips for the allowance and the reset. The whole block opens the
+ * budget. Without one, the meter sits at zero beside the act that sets it.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -246,8 +246,8 @@ private fun BudgetHero(state: PlanState, actions: PlanActions, modifier: Modifie
         )
         Spacer(Modifier.height(16.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatChip(Icons.Rounded.CalendarToday, Copy.plural(r.daysLeft, "day") + " left")
-            if (!over) StatChip(Icons.Rounded.Speed, money.formatWhole(r.dailyAllowance) + " a day")
+            // The days left are in the context line under the title; the allowance names them.
+            if (!over) StatChip(Icons.Rounded.Speed, Copy.marginLine(r, money))
             StatChip(Icons.Rounded.Event, "Resets " + Dates.short(state.period.endExclusive, state.today))
         }
     }
