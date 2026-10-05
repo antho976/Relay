@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Four tally marks crossed by the fifth: the count Tally keeps. The cream strokes lean a hair off
-  true like a hand made them; the ember slash is cut out of them by a ground-coloured edge so it
+  true like a hand made them; the ember slash is cut out of them by an edge in the ground colour so it
   reads in front. Everything sits inside the 66dp safe circle.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -16,7 +16,7 @@
     <path android:strokeColor="#FFF2EFEA" android:strokeWidth="6" android:strokeLineCap="round"
         android:pathData="M69,34 L68.5,73" />
     <!-- The slash's cut, then the slash. -->
-    <path android:strokeColor="#FF1A130D" android:strokeWidth="12" android:strokeLineCap="round"
+    <path android:strokeColor="#FF1E1610" android:strokeWidth="12" android:strokeLineCap="round"
         android:pathData="M30,65 L78,43" />
     <path android:strokeColor="#FFD4761F" android:strokeWidth="6.5" android:strokeLineCap="round"
         android:pathData="M30,65 L78,43" />

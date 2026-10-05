@@ -21,14 +21,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -55,6 +53,9 @@ import androidx.compose.ui.unit.dp
 val PANEL_RADIUS = 20.dp
 val PANEL_PAD = 18.dp
 
+/** The hero panel's accent tint: one flat layer over the panel fill, never a gradient. */
+const val HERO_TINT = 0.10f
+
 /** A section's surface: the raised warm fill, a quiet edge, 20dp corners. */
 @Composable
 fun Panel(
@@ -75,8 +76,9 @@ fun Panel(
 }
 
 /**
- * The screen's one lit panel: the accent washes in from the top so the hero reading sits under a
- * warm light. Used once per screen, for the figure the screen exists to show.
+ * The screen's one lit panel: an even, flat tint of the accent over the panel fill and an accent
+ * edge, so the hero reading stands apart without a gradient. Used once per screen, for the figure
+ * the screen exists to show.
  */
 @Composable
 fun HeroPanel(
@@ -86,15 +88,12 @@ fun HeroPanel(
 ) {
     val shape = RoundedCornerShape(24.dp)
     val base = MaterialTheme.colorScheme.surfaceContainer
-    val brush = remember(tint, base) {
-        Brush.verticalGradient(listOf(tint.copy(alpha = 0.22f), tint.copy(alpha = 0.06f), base))
-    }
     Column(
         modifier
             .fillMaxWidth()
             .clip(shape)
             .background(base)
-            .background(brush)
+            .background(tint.copy(alpha = HERO_TINT))
             .border(1.dp, tint.copy(alpha = 0.28f), shape)
             .padding(20.dp),
         content = content,

@@ -9,8 +9,6 @@ val PearlSurfaceVar = Color(0xFF221C16)
 val PearlOutline = Color(0xFF38302A)
 val PearlOnBg = Color(0xFFF2EFEA)      // 16.7:1 on the ground
 val PearlMuted = Color(0xFFBFB6AA)     // 9.6:1 full, 4.65:1 at 0.65 (the floor; 0.6 fails)
-val PearlGradTop = Color(0xFF17120E)
-val PearlGradBottom = Color(0xFF0A0806)
 
 // ── State colours: true states only, never decoration ─────────────────────────────────────────
 /** Over budget. As a mark it clears 3:1; never body text (3.7:1). */

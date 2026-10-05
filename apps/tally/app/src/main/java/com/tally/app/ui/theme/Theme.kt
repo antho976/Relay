@@ -9,7 +9,6 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 
@@ -39,12 +38,9 @@ fun TallyTheme(
     // Remembered: ColorScheme compares by identity, and a scheme rebuilt every pass would
     // invalidate every reader of MaterialTheme.colorScheme with nothing changed.
     val scheme = remember(effectiveAccent, amoled) { tallyColorScheme(effectiveAccent, amoled) }
-    val ground = remember(amoled) {
-        if (amoled) Brush.verticalGradient(listOf(Color.Black, Color(0xFF050507)))
-        else Brush.verticalGradient(listOf(PearlGradTop, PearlGradBottom))
-    }
     MaterialTheme(colorScheme = scheme, typography = TallyTypography, shapes = TallyShapes) {
-        Box(Modifier.fillMaxSize().background(ground)) { content() }
+        // The ground is one flat colour, the same the window paints before Compose draws.
+        Box(Modifier.fillMaxSize().background(scheme.background)) { content() }
     }
 }
 

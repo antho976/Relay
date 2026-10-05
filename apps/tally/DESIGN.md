@@ -5,8 +5,6 @@ colors:
   ember: "#D4761F"
   accent-red: "#E23D3D"
   pearl-ground: "#110F0C"
-  pearl-ground-top: "#17120E"
-  pearl-ground-bottom: "#0A0806"
   container-lowest: "#0C0A08"
   container-low: "#16120F"
   container: "#1A1613"
@@ -17,7 +15,6 @@ colors:
   on-ground: "#F2EFEA"
   muted: "#BFB6AA"
   amoled-ground: "#000000"
-  amoled-ground-bottom: "#050507"
   amoled-container-low: "#060606"
   amoled-surface: "#080808"
   amoled-container: "#0A0A0A"
@@ -273,12 +270,12 @@ components:
 
 Tally is a month kept as a ledger on a warm near-black desk, with one lamp over the figure that matters. The world is inherited from the sibling app Avex (warm Pearl ground, serif figures, sans rows, mono uppercase labels, one owner-chosen accent) and deliberately made richer at the owner's binding call: every section sits on its own raised panel, every section header and every stat is led by a drawn glyph on a tinted tile, the reading a screen exists for sits in the one accent-lit hero panel, and screens carry more readings and charts than Avex's open page. The result is dense but ordered: blocks of readings, each one quietly edged, none shouting.
 
-Depth is tonal, not cast. Panels are a warm rung above the ground with a 1dp edge; tappable things are a further rung up and edgeless; the hero is lit from its top edge by a wash of the accent. Colour is spent with intent: the accent marks what the owner acts on and where the month stands, the twelve category hues are a data series, and red and green appear only when something is really over or under. Readings travel with their numbers: a meter always carries its pace tick, a figure always carries the line that explains it.
+Depth is tonal, not cast. Panels are a warm rung above the ground with a 1dp edge; tappable things are a further rung up and edgeless; the hero is lit by one flat tint of the accent. Nothing in the app is a gradient. Colour is spent with intent: the accent marks what the owner acts on and where the month stands, the twelve category hues are a data series, and red and green appear only when something is really over or under. Readings travel with their numbers: a meter always carries its pace tick, a figure always carries the line that explains it.
 
 Motion is short and physical. Fills draw in once over 900ms and never replay when a row scrolls back, a press is a 0.97 bounce rather than a ripple, and every animation collapses to a cut when the system's Remove animations is on.
 
 **Key Characteristics:**
-- Warm near-black Pearl ground with a top-to-bottom gradient; a pure-black variant for OLED.
+- Warm near-black Pearl ground, one flat colour; a pure-black variant for OLED.
 - Three type voices: serif figures and titles, sans rows and prose, mono uppercase labels.
 - One owner-chosen accent (Ember by default), with a near-white fallback when colour is off.
 - Raised 20dp panels with a 1dp quiet edge, one 24dp lit hero panel per view.
@@ -303,7 +300,7 @@ A warm, low-chroma ladder of browns under a single saturated accent, with a twel
 - **Under-budget green** (state-under): a true state only, for money in and for a reading that is genuinely under. As a mark it clears 3:1 on the ground.
 
 ### Neutral
-- **Pearl ground** (pearl-ground): the background; the page itself is a vertical gradient from pearl-ground-top to pearl-ground-bottom behind everything.
+- **Pearl ground** (pearl-ground): the background: one flat colour behind everything, the same the window paints before the first frame.
 - **Container ladder** (container-lowest, container-low, container, container-high, container-highest): the warm tonal steps. Lowest is the recessed segmented-control track; low is the nav bar; container is every panel and stat tile; high is every tappable slab (rows, fields, keys, secondary actions, chrome capsules); highest is meter and bar tracks, chip fills, glyph-badge fills and the snackbar.
 - **Edges** (outline, outline-variant): outline-variant is the 1dp edge of panels, stat tiles and the nav bar's top; outline is the switch border, the ring of a day still ahead in the heat grid and, at 35%, the idle ring of a choice.
 - **Text** (on-ground, muted): on-ground for figures, titles and row text (16.7:1 on the ground); muted for subtitles, captions, labels and idle choices (9.6:1, and never below 0.65 alpha, where it still holds 4.65:1).
@@ -316,7 +313,7 @@ A warm, low-chroma ladder of browns under a single saturated accent, with a twel
 - **The twelve hues** (hue-sage through hue-brick): mid-tones that each clear 3:1 as a mark on the ground and stay distinct from one another. A category's glyph is drawn in its hue on a 15% wash of that hue; the same hue colours its segment in stacked bars, its ranked bar and its legend dot.
 
 ### Named Rules
-**The One Light Rule.** The accent is the owner's single colour and the only light in the room. It marks what can be acted on and where the month stands; the hero panel's wash is the only gradient on any raised surface. The ground's own dark fall carries no colour, and the month line's area fade is a data mark, not a light.
+**The One Light Rule.** The accent is the owner's single colour and the only light in the room. It marks what can be acted on and where the month stands; the hero panel's flat tint is the only accent fill on a raised surface. There are no gradients: not on the ground, not on a panel, not under a chart line, not in the launcher icon.
 
 **The Data Series Rule.** Category hues are data, not decoration: they appear on a category's badge and in charts, never on text, never on chrome. Their order is stored, so a new hue is appended, never inserted or reordered.
 
@@ -407,7 +404,7 @@ Tactile and few. A view has one hero action at most.
 ### Cards / Containers
 - **Panel:** every section. 20dp corners, container fill, 1dp outline-variant edge, 18dp padding. One panel per section, never a panel inside a panel.
 - **Panel header:** a 32dp glyph tile (the glyph at 56% of the tile, in the accent on a 16% wash, 10dp corners), then the panel's name in label-large uppercase on-ground, then at the end either a reading in label-medium muted or a text action. At least 40dp tall. The name keeps one line: when the name and the end cannot share the width whole, the end drops under the name. The name labels the panel beside its glyph; it is not a line above a heading.
-- **Hero panel:** the lit panel. 24dp corners, container fill under the accent wash (22% to 6% to the fill), a 1dp accent edge at 28%, 20dp padding. Holds a panel header, the display figure, one explaining line in body-medium muted, a pace meter, and stat chips. On the monthly budget it is also the tap into its own editor. Home's hero names its figure for what it is, the room left of the budget: LEFT TO SPEND (OVER BUDGET when over, LEFT FROM INCOME with no budget), with the pace verdict at the header's end, the line "left of your $2,900 budget · $1,284 spent" ("over your" when over), and two chips, the allowance in the story's words ("$90 a day for 18 days") and the even pace (over budget, only the pace). Plan's hero keeps MONTHLY BUDGET as its name but words its line ("left of your $2,900 budget") and its allowance chip the same way; the Appearance and onboarding samples carry Home's LEFT TO SPEND. "Margin" is kept for In minus Out, as Activity's hero uses it.
+- **Hero panel:** the lit panel. 24dp corners, container fill under one flat accent tint at 10%, a 1dp accent edge at 28%, 20dp padding. Holds a panel header, the display figure, one explaining line in body-medium muted, a pace meter, and stat chips. On the monthly budget it is also the tap into its own editor. Home's hero names its figure for what it is, the room left of the budget: LEFT TO SPEND (OVER BUDGET when over, LEFT FROM INCOME with no budget), with the pace verdict at the header's end, the line "left of your $2,900 budget · $1,284 spent" ("over your" when over), and two chips, the allowance in the story's words ("$90 a day for 18 days") and the even pace (over budget, only the pace). Plan's hero keeps MONTHLY BUDGET as its name but words its line ("left of your $2,900 budget") and its allowance chip the same way; the Appearance and onboarding samples carry Home's LEFT TO SPEND. "Margin" is kept for In minus Out, as Activity's hero uses it.
 - **Stat tile:** one reading per tile, always in pairs of different readings. 18dp corners, container fill, 1dp edge, 16dp padding: a 30dp glyph tile, the value in headline-small serif, the label in label-medium uppercase muted 2dp under it, an optional body-small detail 6dp below. The label sits under its figure as every figure in the kit reads (the figure row, Avex's stats), never above it as an eyebrow. Announced to TalkBack as one sentence: label, value, detail.
 
 ### Inputs / Fields
@@ -435,7 +432,7 @@ The app's signature mark, on every budget, envelope and goal with a date. A full
 
 ### Charts
 - **Day bars:** the week as rounded bars on full-height container-highest tracks with 8dp gaps; past days in the accent at 55%, today in the full accent, days ahead as empty tracks, any day over its allowance in red; the daily allowance as a 1.5dp dashed line (6dp on, 5dp off) in muted at 60%; day initials in label-medium below, today's in on-ground. Early in a month the week can open in the last one: those leading days draw in muted at 50% with their initials at 65%, are never held red against this month's allowance, and the panel's line names what they spent ("$236 spent · $176 before 1 Oct · $94 a day budgeted") so the week and the month's Out add up.
-- **Month line (Insights):** cumulative spend as a 2.5dp accent line over a 15% accent area that fades to nothing, ending in a dot at today, the even pace as a dashed muted diagonal (50%), the budget as a quiet 1dp line at the top (muted at 35%), a 1dp outline-variant baseline, mono date ends in label-small, with legend dots below; tap or drag across it to scrub days, the picked day marked by a 1.5dp on-ground line and a ringed dot.
+- **Month line (Insights):** cumulative spend as a 2.5dp accent line over a flat 10% accent area, ending in a dot at today, the even pace as a dashed muted diagonal (50%), the budget as a quiet 1dp line at the top (muted at 35%), a 1dp outline-variant baseline, mono date ends in label-small, with legend dots below; tap or drag across it to scrub days, the picked day marked by a 1.5dp on-ground line and a ringed dot.
 - **Trend bars (Insights):** one thin rounded bar per period, at most 18dp wide, for what went out: the running period in the accent, past ones in the secondary rung; an on-ground dot for what came in; the budget as the day bars' dashed guide. The picked period stands on a recessed container-high column with 12dp corners; a tap on a bar or its label picks it.
 - **Heat grid (Insights calendar):** the period as 6dp-cornered squares under weekday initials, lit by the accent at 25, 45, 70 and 100% for more spent against the busiest day, container-high for a day with nothing. Today is ringed 1.5dp in on-ground; days ahead are bare 1dp outline rings and take no tap. Each square sits 2dp inside a full-column slot at least 48dp tall, and the slot is the tap.
 - **Stacked bar:** shares of a whole as segments 10dp to 14dp tall (category hues for where the month went) with 2dp gaps and 4dp corners; a share under 1% still gets a 2dp sliver.
