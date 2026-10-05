@@ -291,12 +291,12 @@ Motion is short and physical. Fills draw in once over 900ms and never replay whe
 A warm, low-chroma ladder of browns under a single saturated accent, with a twelve-hue data series and two true-state colours.
 
 ### Primary
-- **Ember** (ember): the default owner accent. Fills the hero action and the add FAB, colours meter fills, today's day bar, the selected nav glyph and its 16% indicator pill, selection rings with their 15% wash, text actions in panel headers, the text cursor, and the 16% wash behind panel and stat glyph tiles. It also lights the hero panel: a vertical wash from 22% to 6% over the panel fill, edged at 28%.
+- **Ember** (ember): the default owner accent. Fills the hero action and the add FAB, colours meter fills, today's day bar, the selected nav glyph and its 16% indicator pill, selection rings with their 15% wash, text actions in panel headers, the text cursor, the keyboard focus ring, the heat grid's steps, and the 16% wash behind panel and stat glyph tiles. It also lights the hero panel: a vertical wash from 22% to 6% over the panel fill, edged at 28%.
 - **Owner accents**: the Appearance picker offers Ember, a clear red (accent-red), and six of the category hues as accents (sage, teal, sky, iris, rose, and amber under the name Gold). Whichever is picked takes every Ember role above; nothing else changes.
 - **Accent off**: the accent becomes the near-white text colour (on-ground), so selection, meters and the primary act still read in black and white (see home-mono).
 
 ### Secondary
-- **Past-day rung**: the accent at 55% for days already behind today in the week's day bars; the scheme's secondary is the accent at 60%. Never a separate hue.
+- **Past-day rung**: the accent at 55% for days already behind today in the week's day bars; the scheme's secondary is the accent at 60%, which past periods take in the trend bars. Never a separate hue.
 - **Before-period rung**: muted at 50% for the days of this week that fall before the budget period began. They belong to the last period, so they take no accent and no state colour.
 
 ### Tertiary
@@ -305,7 +305,7 @@ A warm, low-chroma ladder of browns under a single saturated accent, with a twel
 ### Neutral
 - **Pearl ground** (pearl-ground): the background; the page itself is a vertical gradient from pearl-ground-top to pearl-ground-bottom behind everything.
 - **Container ladder** (container-lowest, container-low, container, container-high, container-highest): the warm tonal steps. Lowest is the recessed segmented-control track; low is the nav bar; container is every panel and stat tile; high is every tappable slab (rows, fields, keys, secondary actions, chrome capsules); highest is meter and bar tracks, chip fills, glyph-badge fills and the snackbar.
-- **Edges** (outline, outline-variant): outline-variant is the 1dp edge of panels, stat tiles and the nav bar's top; outline is the switch border and, at 35%, the idle ring of a choice.
+- **Edges** (outline, outline-variant): outline-variant is the 1dp edge of panels, stat tiles and the nav bar's top; outline is the switch border, the ring of a day still ahead in the heat grid and, at 35%, the idle ring of a choice.
 - **Text** (on-ground, muted): on-ground for figures, titles and row text (16.7:1 on the ground); muted for subtitles, captions, labels and idle choices (9.6:1, and never below 0.65 alpha, where it still holds 4.65:1).
 - **Pure black** (amoled-*): the OLED ground swaps the warm ladder for neutral near-blacks from amoled-ground up to amoled-container-highest, with amoled-outline-variant as the edge. The accent, the text pair and the hues are unchanged.
 
@@ -316,7 +316,7 @@ A warm, low-chroma ladder of browns under a single saturated accent, with a twel
 - **The twelve hues** (hue-sage through hue-brick): mid-tones that each clear 3:1 as a mark on the ground and stay distinct from one another. A category's glyph is drawn in its hue on a 15% wash of that hue; the same hue colours its segment in stacked bars, its ranked bar and its legend dot.
 
 ### Named Rules
-**The One Light Rule.** The accent is the owner's single colour and the only light in the room. It marks what can be acted on and where the month stands; the hero panel's wash is the only gradient on any surface.
+**The One Light Rule.** The accent is the owner's single colour and the only light in the room. It marks what can be acted on and where the month stands; the hero panel's wash is the only gradient on any raised surface. The ground's own dark fall carries no colour, and the month line's area fade is a data mark, not a light.
 
 **The Data Series Rule.** Category hues are data, not decoration: they appear on a category's badge and in charts, never on text, never on chrome. Their order is stored, so a new hue is appended, never inserted or reordered.
 
@@ -335,9 +335,9 @@ A warm, low-chroma ladder of browns under a single saturated accent, with a twel
 ### Hierarchy
 - **Display** (400, 52sp / 44sp, 58 / 50 line): the hero figure inside the lit panel. It steps down through display-medium, headline-large and headline-medium as the text grows, and its font scale is capped at 1.3x so a long amount at 200% stays on one line.
 - **Headline** (400, 36sp / 28sp / 22sp): headline-large is every page title; headline-medium is a secondary panel figure such as the net across accounts; headline-small is the value in a stat tile.
-- **Title** (500, 18sp / 16sp / 14sp, tabular): amounts at a row's end (title-medium), compact readings (title-small), and the sans group header over a slab group (title-small in muted).
+- **Title** (500, 18sp / 16sp / 14sp, tabular): keypad digits (title-large), amounts at a row's end (title-medium), compact readings (title-small), and the sans group header over a slab group (title-small in muted).
 - **Body** (400, 16sp / 14sp / 12sp): body-large for row titles, field text, segment labels and the context line under a page title; body-medium for row subtitles and the line under a hero figure; body-small for chip text, captions, tile details, legend labels and nav labels.
-- **Label** (mono, 13sp / 11sp / 10sp, 0.8 / 0.6 / 0.5sp tracking, uppercase): label-large for panel names and text actions; label-medium for the stat-tile label under its value, panel-header readings and day-bar initials.
+- **Label** (mono, 13sp / 11sp / 10sp, 0.8 / 0.6 / 0.5sp tracking, uppercase): label-large for panel names, text actions and a field's currency suffix; label-medium for the stat-tile label under its value, panel-header readings and day-bar initials; label-small for chart axis ends and the heat grid's day numbers.
 - **Action** (mono 700, 16sp, 1sp tracking, sentence case): the label on the hero and secondary actions ("Save expense").
 
 ### Named Rules
@@ -357,9 +357,9 @@ A page opens with the top bar on the page itself, inset below the status bar at 
 
 Inside a panel, content sits on 18dp padding (panel-pad), the hero on 20dp (hero-pad), a stat tile on 16dp (tile-pad), a row on 18dp horizontal and 14dp vertical (row-pad). A label and its reading share one line until they cannot; then the reading drops beneath the label instead of breaking a word. A panel header holds its label to one line: the reading or text action drops beneath the name as soon as the name would wrap at all, so "IN AND OUT" never stacks word by word beside "DAY 14 OF 31". Rows and group headers, whose start is a sentence that may wrap, drop their reading only when a word would break. Every touch target is at least 48dp, rows at least 56dp, and every height grows with its text.
 
-At 200% font, worded segmented controls past 1.3x turn into wrapping choice chips, compact choice rows stack their control under the label, and rows of small figures stack into label-and-value lines. User content always wraps; only the nav labels are held to one line.
+At 200% font, worded segmented controls past 1.3x turn into wrapping choice chips, compact choice rows stack their control under the label, rows of small figures stack into label-and-value lines, and a hero action paired with a secondary one stacks above it. Pairs of stat tiles stack into one column past 1.5x (past 1.3x on the Settings pages, whose labels run longer). User content always wraps; only the nav labels are held to one line.
 
-At 600dp and wider the bottom bar becomes an 88dp rail at the start with the add button at its top, so a tablet never wears a stretched phone bar. The screen inside matches its window too, measured on the width the rail leaves it, so no reading sits a screen away from its label. Home keeps the phone column below 600dp; from 600dp the same column is capped at 640dp (reading-width, `READING_WIDTH`, gutters included) and centred; from 840dp it splits into two panes on the gutter with the 14dp panel gap between, under one title and one scroll: the hero, In and Out, and the week at the start in story order, then the envelopes, recent entries, bills and accounts at the end, the pair capped at twice the reading width. In the capped column and the panes the add button is always in the rail, so Home's list ends on the gutter and the system bar instead of the fab-clearance; the phone column keeps the fab-clearance. Activity, Plan and Insights still run one full-width column at these widths; READING_WIDTH is the cap they take next.
+At 600dp and wider the bottom bar becomes an 88dp rail at the start with the add button at its top, so a tablet never wears a stretched phone bar. The screen inside matches its window too, measured on the width the rail leaves it, so no reading sits a screen away from its label. Home keeps the phone column below 600dp; from 600dp the same column is capped at 640dp (reading-width, `READING_WIDTH`, gutters included) and centred; from 840dp it splits into two panes on the gutter with the 14dp panel gap between, under one title and one scroll: the hero, In and Out, and the week at the start in story order, then the envelopes, recent entries, bills and accounts at the end, the pair capped at twice the reading width. In the capped column and the panes the add button is always in the rail, so Home's list ends on the gutter and the system bar instead of the fab-clearance; the phone column keeps the fab-clearance. Every other screen, the tabs and the pushed screens alike, still runs one full-width column at these widths; READING_WIDTH is the cap they take next.
 
 Layout is mirrored for right-to-left: start and end only, and every chart draws from the reading edge.
 
@@ -370,7 +370,7 @@ Layout is mirrored for right-to-left: start and end only, and every chart draws 
 
 ## Elevation & Depth
 
-Depth is a tonal ladder, not a shadow system. The ground is the lowest plane; a panel is one warm rung up (container) with a 1dp outline-variant edge; a tappable slab is a further rung (container-high) without an edge; tracks and chips sit on the top rung (container-highest). The tonal tint Material would wash over every sheet is switched off, so sheets, menus and pickers land on the same warm ladder instead of an accent-tinted grey. The hero panel is raised by light, not height: the accent washes down from its top edge and its edge takes the accent at 28%. The one element that casts a shadow is the add FAB, at 2dp resting and 4dp pressed, because it floats over scrolling content.
+Depth is a tonal ladder, not a shadow system. The ground is the lowest plane; a panel is one warm rung up (container) with a 1dp outline-variant edge; a tappable slab is a further rung (container-high) without an edge; tracks and chips sit on the top rung (container-highest). The tonal tint Material would wash over every sheet is switched off, so sheets, menus and pickers land on the same warm ladder instead of an accent-tinted grey. The hero panel is raised by light, not height: the accent washes down from its top edge and its edge takes the accent at 28%. The one element the app gives a shadow is the add FAB, at 2dp resting and 4dp pressed, because it floats over scrolling content; the snackbar keeps the 6dp shadow Material's snackbar casts.
 
 ### Shadow Vocabulary
 - **FAB lift** (Material elevation 2dp, 4dp pressed): the add button only, floating over the tab content.
@@ -394,14 +394,15 @@ Tactile and few. A view has one hero action at most.
 - **Shape:** gently rounded rectangles (12dp), at least 56dp tall and growing with their text.
 - **Hero action:** the accent fill with the measured on-accent foreground, mono 700 label in sentence case, 20dp by 16dp padding. Disabled drops the fill to 35%.
 - **Secondary action:** the same shape on the container-high slab with an on-ground mono label; destructive swaps the label to the over-budget red.
-- **Press:** every tappable thing scales to 0.97 on a soft spring and back, with no ripple; under TalkBack, where a press is never seen, the ripple returns.
+- **Press:** every tappable thing in the kit scales to 0.97 on a soft spring and back, with no ripple; under TalkBack, where a press is never seen, the ripple returns. The nav items, Material's FAB and its dialog text buttons keep Material's ripple.
+- **Focus:** focus from a keyboard, a D-pad or a Chromebook draws a 2dp ring in the accent along the target's own shape (12dp corners when a target has none of its own), on its inner edge so a clip never cuts it. On the hero action's accent fill the ring takes the label's colour instead. A bare row inside a panel draws its ring 4dp outside itself, in the panel's padding, so it never crosses the badge (the Categories and Accounts lists still draw theirs inside). Touch never moves focus, so a finger never sees the ring.
 - **Chrome button:** a 44dp container-high capsule drawn inside a 48dp target, holding a 22dp glyph (back, settings, month stepping).
 - **Text action:** a mono lowercase label followed by an arrow ("insights →", "manage →"), padded to 48dp, in the accent inside panel headers.
 - **Add FAB:** 56dp, 16dp corners, accent fill, a 28dp plus glyph, bottom end at 20dp and 16dp; on wide screens it heads the rail.
 
 ### Chips
 - **Stat chip:** a capsule of context inside a panel ("$90 a day for 18 days", "Pace $1,310", "Resets 1 Nov"): container-highest at 70%, a 16dp muted glyph, body-small text in on-ground, 12dp by 7dp padding. Not tappable. A chip never repeats the context line under the page title; a daily allowance always says over how many days.
-- **Choice chip:** a capsule choice at least 48dp tall. Idle: no fill, a 1dp ring of outline at 35%, muted body-medium text. Selected: the accent ring over a 15% accent wash, text in on-ground. Ring and wash cross-fade over 150ms.
+- **Choice chip:** a capsule choice drawn at least 40dp tall in a 48dp slot, 16dp by 9dp padding. Idle: no fill, a 1dp ring of outline at 35%, muted body-medium text. Selected: the accent ring over a 15% accent wash, text in on-ground. Ring and wash cross-fade over 150ms. Only one of a set is picked, so a chip announces as a radio button and its row is a selectable group, letting TalkBack read its place in the set. A chip that acts rather than picks (a note suggestion) is a plain button and never shows as picked; worded segments that wrap into chips still announce as tabs.
 
 ### Cards / Containers
 - **Panel:** every section. 20dp corners, container fill, 1dp outline-variant edge, 18dp padding. One panel per section, never a panel inside a panel.
@@ -414,11 +415,11 @@ Tactile and few. A view has one hero action at most.
 - **Focus:** the accent text cursor.
 - **Error:** a 1dp over-budget red edge on the slab, with the quiet error line under its group in body-small red.
 - **Switch row:** the whole row toggles and announces On or Off; the switch is drawn, not a second target. Checked: accent track, ground-coloured thumb with an accent check. Unchecked: container-highest track, muted thumb, outline border. Disabled drops the row to 35%.
-- **Sliding segments:** a recessed container-lowest track with 12dp corners and equal cells at least 48dp tall; one thumb inset 3dp with 10dp corners, a 1.5dp accent ring and 15% wash, gliding to the pick on a no-bounce spring. Labels in body-large, on-ground when picked, muted when not.
+- **Sliding segments:** a recessed container-lowest track with 12dp corners and equal cells at least 48dp tall; one thumb inset 3dp with 10dp corners, a 1.5dp accent ring and 15% wash, gliding to the pick on a no-bounce spring. Labels in body-large, on-ground when picked, muted when not. Each cell announces as a tab of a selectable group.
 - **Keypad:** container-high keys with 12dp corners, at least 52dp, on 2dp seams, digits in sans.
 
 ### Navigation
-- **Bottom bar:** container-low, a 1dp outline-variant top edge, 72dp plus the system inset, four equal full-height tab targets. Each item is a 24dp glyph over a body-small label; the picked one puts its glyph in the accent on a 60 by 32dp indicator pill (16dp corners, accent at 16%) and its label in on-ground semibold; idle items are muted. The pill fades in over 150ms.
+- **Bottom bar:** container-low, a 1dp outline-variant top edge, 72dp plus the system inset, four equal full-height tab targets. Each item is a 24dp glyph over a body-small label; the picked one puts its glyph in the accent on a 60 by 32dp indicator pill (16dp corners, accent at 16%) and its label in on-ground semibold; idle items are muted. The pill fades in over 150ms. Each item announces as a tab.
 - **Rail (600dp and up):** the same items, 72dp tall each, in an 88dp column under the FAB.
 - **Tab change:** a 150ms cross-fade; each tab keeps its scroll. Pushed screens slide in by an eighth of the width over 320ms with a fade.
 - **Snackbar:** container-highest with on-ground text and an accent action, lifted clear of the bar and the FAB. Deletes offer Undo here instead of a confirm.
@@ -426,15 +427,17 @@ Tactile and few. A view has one hero action at most.
 ### Lists and rows
 - **Slab group:** a sans group header in title-small muted, then slabs on 2dp seams with 16dp outer and 4dp inner corners, then at most one footer note in body-small.
 - **Row:** at least 56dp; a 44dp glyph badge at the start (12dp corners; container-highest with an on-ground glyph, or a category's hue on a 15% wash of it), a body-large title over a body-medium muted subtitle, a reading at the end, and a muted chevron only when the row opens something. A row without an action is drawn passive: no press, no chevron.
-- **Rows inside a panel:** bare taps on the panel fill, led by the same badge, never further boxes.
+- **Rows inside a panel:** bare taps on the panel fill, at least 56dp, led by a glyph badge (44dp on entry, bill, category and account rows; 36dp on the denser envelope, goal, unbudgeted and Insights category rows), never further boxes. Their focus ring stands 4dp outside them.
 
 ### The Pace Meter (signature)
-The app's signature mark, on every budget, envelope and goal with a date. A fully rounded track in container-highest (10dp in the hero, 6dp in rows), the spent fill in the accent, and a 2dp on-ground tick standing at where an even spend would be today; fill past the tick is the reading. Past the budget the scale stretches to the spend, the budget's own edge becomes a notch in the track colour, and the overrun draws in the over-budget red, so "over" is a visible length. On a goal the tick stands where an even saving from its first contribution to its date would be today; a reached goal, and the Goals total, which spans many dates, carry none. Every meter carries a spoken description of its reading.
+The app's signature mark, on every budget, envelope and goal with a date. A fully rounded track in container-highest (14dp in a hero, 6dp in rows), the spent fill in the accent (a goal's own hue on a goal), and a 2dp on-ground tick standing at where an even spend would be today; fill past the tick is the reading. Past the budget the scale stretches to the spend, the budget's own edge becomes a notch in the track colour, and the overrun draws in the over-budget red, so "over" is a visible length. On a goal the tick stands where an even saving from its first contribution to its date would be today; a reached goal, and the Goals total, which spans many dates, carry none. The category and account editors reuse the track as an 8dp share bar, in the category's hue or, for an account, the accent (muted for one that owes), with no tick, because a share has no pace. Every meter carries a spoken description of its reading.
 
 ### Charts
 - **Day bars:** the week as rounded bars on full-height container-highest tracks with 8dp gaps; past days in the accent at 55%, today in the full accent, days ahead as empty tracks, any day over its allowance in red; the daily allowance as a 1.5dp dashed line (6dp on, 5dp off) in muted at 60%; day initials in label-medium below, today's in on-ground. Early in a month the week can open in the last one: those leading days draw in muted at 50% with their initials at 65%, are never held red against this month's allowance, and the panel's line names what they spent ("$236 spent · $176 before 1 Oct · $94 a day budgeted") so the week and the month's Out add up.
-- **Month line (Insights):** cumulative spend as an accent line ending in a dot at today, the even pace as a dashed muted diagonal, the budget as a quiet line at the top, mono date ends, with legend dots below; drag across it to scrub days.
-- **Stacked bar:** shares of the month as 14dp category-hue segments with 2dp gaps and 4dp corners; a share under 1% still gets a 2dp sliver.
+- **Month line (Insights):** cumulative spend as a 2.5dp accent line over a 15% accent area that fades to nothing, ending in a dot at today, the even pace as a dashed muted diagonal (50%), the budget as a quiet 1dp line at the top (muted at 35%), a 1dp outline-variant baseline, mono date ends in label-small, with legend dots below; tap or drag across it to scrub days, the picked day marked by a 1.5dp on-ground line and a ringed dot.
+- **Trend bars (Insights):** one thin rounded bar per period, at most 18dp wide, for what went out: the running period in the accent, past ones in the secondary rung; an on-ground dot for what came in; the budget as the day bars' dashed guide. The picked period stands on a recessed container-high column with 12dp corners; a tap on a bar or its label picks it.
+- **Heat grid (Insights calendar):** the period as 6dp-cornered squares under weekday initials, lit by the accent at 25, 45, 70 and 100% for more spent against the busiest day, container-high for a day with nothing. Today is ringed 1.5dp in on-ground; days ahead are bare 1dp outline rings and take no tap. Each square sits 2dp inside a full-column slot at least 48dp tall, and the slot is the tap.
+- **Stacked bar:** shares of a whole as segments 10dp to 14dp tall (category hues for where the month went) with 2dp gaps and 4dp corners; a share under 1% still gets a 2dp sliver.
 - **Thin bar:** a 4dp ranked-comparison bar on a container-high track.
 - **Legend dot:** an 8dp hue dot and a body-small muted label.
 - **Draw-in:** every fill draws in once from zero over 900ms on an even ease-out and is remembered, so a row that scrolls away and back shows its settled value. Each chart is announced by a sentence of its values.
@@ -452,7 +455,7 @@ The app's signature mark, on every budget, envelope and goal with a date. A full
 
 ### Do:
 - **Do** put every section on one panel (20dp corners, container fill, 1dp outline-variant edge, 18dp padding) with 14dp between panels and a 24dp gutter.
-- **Do** lead every panel header and stat tile with a glyph tile (32dp or 30dp, 10dp corners, the accent on a 16% wash) and every row with a 44dp glyph badge.
+- **Do** lead every panel header and stat tile with a glyph tile (32dp or 30dp, 10dp corners, the accent on a 16% wash) and every row with a glyph badge (44dp, 36dp on a denser row inside a panel).
 - **Do** give each view exactly one hero panel for its main figure, tinted red when that figure is over.
 - **Do** draw the pace tick on every meter where an even spend means something, and let an overrun show as a red length past a budget notch.
 - **Do** take every colour from the scheme or the category palette and every size from the type scale.
@@ -462,6 +465,7 @@ The app's signature mark, on every budget, envelope and goal with a date. A full
 - **Do** match a screen to its window: from 600dp cap a single column at READING_WIDTH (640dp) and centre it, as Home does, and from 840dp give Home its two panes.
 - **Do** write layout in start and end, and draw charts from the reading edge in right-to-left.
 - **Do** make a press a 0.97 bounce and make every animation collapse to a cut when animations are removed.
+- **Do** draw keyboard and D-pad focus as a 2dp accent ring along the target's own shape, and announce a one-of-many choice as a radio button in a selectable group.
 
 ### Don't:
 - **Don't** draw a divider or hairline rule between sections; space and panel edges do that work.

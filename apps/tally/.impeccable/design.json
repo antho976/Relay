@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-04T19:57:10+00:00",
+  "generatedAt": "2026-10-05T01:51:09+00:00",
   "title": "Design System: Tally",
   "extensions": {
     "platform": "android (Jetpack Compose, Material 3); dp and sp units; tokens live in ui/theme/*.kt",
@@ -604,8 +604,8 @@
         "purpose": "The serif value in a stat tile, over its mono label."
       },
       "title-large": {
-        "displayName": "Title Large",
-        "purpose": "Sans titles, tabular."
+        "displayName": "Keypad Digit",
+        "purpose": "Keypad digits, tabular."
       },
       "title-medium": {
         "displayName": "Row Amount",
@@ -629,15 +629,15 @@
       },
       "label-large": {
         "displayName": "Panel Name",
-        "purpose": "Mono uppercase panel names and lowercase text actions."
+        "purpose": "Mono uppercase panel names, lowercase text actions, a field's currency suffix."
       },
       "label-medium": {
         "displayName": "Stat Label",
         "purpose": "Mono uppercase stat-tile labels under their values, panel readings, day initials."
       },
       "label-small": {
-        "displayName": "Label Small",
-        "purpose": "The smallest mono label."
+        "displayName": "Axis Label",
+        "purpose": "Chart axis ends and the heat grid's day numbers."
       },
       "mono-action": {
         "displayName": "Action Label",
@@ -648,7 +648,7 @@
       {
         "name": "fab-lift",
         "value": "Material elevation 2dp, 4dp pressed",
-        "purpose": "The add FAB only; every other surface is flat and rises by the tonal ladder."
+        "purpose": "The add FAB only; every other surface the app draws is flat and rises by the tonal ladder (the snackbar keeps Material's own 6dp shadow)."
       }
     ],
     "surfaces": [
@@ -681,6 +681,11 @@
         "name": "disabled",
         "value": "alpha 0.35",
         "purpose": "Disabled actions and rows."
+      },
+      {
+        "name": "focus-ring",
+        "value": "2dp stroke in the accent along the target's own shape (12dp corners by default), on its inner edge; the on-accent colour on the hero action; 4dp outside a bare row inside a panel (the Categories and Accounts lists still draw it inside)",
+        "purpose": "Keyboard, D-pad and Chromebook focus only; touch never shows it."
       }
     ],
     "motion": [
@@ -749,7 +754,7 @@
       {
         "name": "medium",
         "value": "600dp",
-        "purpose": "An 88dp nav rail at the start with the FAB at its top; Home's column caps at READING_WIDTH (640dp, gutters included) and centres."
+        "purpose": "An 88dp nav rail at the start with the FAB at its top; Home's column caps at READING_WIDTH (640dp, gutters included) and centres; every other screen stays one full-width column."
       },
       {
         "name": "expanded",
@@ -759,7 +764,12 @@
       {
         "name": "font-1.3x",
         "value": "fontScale > 1.3",
-        "purpose": "Segments wrap into chips, choice rows and figure rows stack; hero figure stops growing."
+        "purpose": "Segments wrap into chips, choice rows and figure rows stack, paired actions stack; hero figure stops growing; Settings tile pairs stack."
+      },
+      {
+        "name": "font-1.5x",
+        "value": "fontScale > 1.5",
+        "purpose": "Pairs of stat tiles stack into one column."
       }
     ]
   },
@@ -770,7 +780,7 @@
       "refersTo": "button-hero",
       "description": "A view's one do-it-now act: accent fill, measured on-accent label, mono bold, at least 56dp.",
       "html": "<button class=\"ds-hero-action\">Save expense</button>",
-      "css": ".ds-hero-action { min-height: 56px; min-width: 280px; padding: 16px 20px; border: none; border-radius: 12px; background: #D4761F; color: #110F0C; font-family: 'Droid Sans Mono', ui-monospace, monospace; font-weight: 700; font-size: 16px; line-height: 20px; letter-spacing: 1px; cursor: pointer; transition: transform 180ms cubic-bezier(0.2,0,0,1); } .ds-hero-action:hover { background: #DE8530; } .ds-hero-action:active { transform: scale(0.97); } .ds-hero-action:focus-visible { outline: 2px solid #F2EFEA; outline-offset: 3px; } .ds-hero-action:disabled { background: rgba(212,118,31,0.35); cursor: default; }"
+      "css": ".ds-hero-action { min-height: 56px; min-width: 280px; padding: 16px 20px; border: none; border-radius: 12px; background: #D4761F; color: #110F0C; font-family: 'Droid Sans Mono', ui-monospace, monospace; font-weight: 700; font-size: 16px; line-height: 20px; letter-spacing: 1px; cursor: pointer; transition: transform 180ms cubic-bezier(0.2,0,0,1); } .ds-hero-action:hover { background: #DE8530; } .ds-hero-action:active { transform: scale(0.97); } .ds-hero-action:focus-visible { outline: 2px solid #110F0C; outline-offset: -2px; } .ds-hero-action:disabled { background: rgba(212,118,31,0.35); cursor: default; }"
     },
     {
       "name": "Secondary Action",
@@ -778,7 +788,7 @@
       "refersTo": "button-secondary",
       "description": "The hero's sidekick: same shape on the raised slab, mono label; destructive turns the label red.",
       "html": "<div class=\"ds-sec-row\"><button class=\"ds-sec-action\">Load sample data</button><button class=\"ds-sec-action ds-sec-danger\">Erase everything</button></div>",
-      "css": ".ds-sec-row { display: flex; gap: 12px; flex-wrap: wrap; } .ds-sec-action { min-height: 56px; padding: 16px 20px; border: none; border-radius: 12px; background: #221C16; color: #F2EFEA; font-family: 'Droid Sans Mono', ui-monospace, monospace; font-weight: 700; font-size: 16px; line-height: 20px; letter-spacing: 1px; cursor: pointer; transition: transform 180ms cubic-bezier(0.2,0,0,1); } .ds-sec-action:hover { background: #2A231C; } .ds-sec-action:active { transform: scale(0.97); } .ds-sec-action:focus-visible { outline: 2px solid #D4761F; outline-offset: 3px; } .ds-sec-danger { color: #D9534A; }"
+      "css": ".ds-sec-row { display: flex; gap: 12px; flex-wrap: wrap; } .ds-sec-action { min-height: 56px; padding: 16px 20px; border: none; border-radius: 12px; background: #221C16; color: #F2EFEA; font-family: 'Droid Sans Mono', ui-monospace, monospace; font-weight: 700; font-size: 16px; line-height: 20px; letter-spacing: 1px; cursor: pointer; transition: transform 180ms cubic-bezier(0.2,0,0,1); } .ds-sec-action:hover { background: #2A231C; } .ds-sec-action:active { transform: scale(0.97); } .ds-sec-action:focus-visible { outline: 2px solid #D4761F; outline-offset: -2px; } .ds-sec-danger { color: #D9534A; }"
     },
     {
       "name": "Text Field",
@@ -786,7 +796,7 @@
       "refersTo": "text-field",
       "description": "A filled slab led by a glyph badge; the accent cursor marks focus, a 1dp red edge marks an error.",
       "html": "<label class=\"ds-field\"><span class=\"ds-field-badge\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"4\" y=\"5\" width=\"16\" height=\"15\" rx=\"2\"/><path d=\"M4 10h16M9 3v4M15 3v4\"/></svg></span><input class=\"ds-field-input\" placeholder=\"Name this bill\"><span class=\"ds-field-suffix\">CAD</span></label>",
-      "css": ".ds-field { display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 14px 18px; border-radius: 16px; background: #221C16; border: 1px solid transparent; max-width: 380px; } .ds-field:hover { background: #2A231C; } .ds-field:focus-within { border-color: rgba(212,118,31,0.6); } .ds-field-badge { width: 44px; height: 44px; flex: none; border-radius: 12px; background: #2A231C; color: #F2EFEA; display: grid; place-items: center; } .ds-field-input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: #F2EFEA; caret-color: #D4761F; font-family: Roboto, system-ui, sans-serif; font-size: 16px; line-height: 24px; } .ds-field-input::placeholder { color: #BFB6AA; } .ds-field-suffix { font-family: 'Droid Sans Mono', ui-monospace, monospace; font-size: 13px; letter-spacing: 0.8px; color: #BFB6AA; }"
+      "css": ".ds-field { display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 14px 18px; border-radius: 16px; background: #221C16; border: 1px solid transparent; max-width: 380px; } .ds-field:hover { background: #2A231C; } .ds-field-badge { width: 44px; height: 44px; flex: none; border-radius: 12px; background: #2A231C; color: #F2EFEA; display: grid; place-items: center; } .ds-field-input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: #F2EFEA; caret-color: #D4761F; font-family: Roboto, system-ui, sans-serif; font-size: 16px; line-height: 24px; } .ds-field-input::placeholder { color: #BFB6AA; } .ds-field-suffix { font-family: 'Droid Sans Mono', ui-monospace, monospace; font-size: 13px; letter-spacing: 0.8px; color: #BFB6AA; }"
     },
     {
       "name": "Bottom Navigation",
@@ -794,15 +804,15 @@
       "refersTo": "nav-bar",
       "description": "Four tabs on the raised low rung; the picked tab's glyph sits in the accent on a 16% pill.",
       "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item ds-nav-on\" href=\"#\"><span class=\"ds-nav-pill\"><svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 11l8-6 8 6v8a1 1 0 0 1-1 1h-4v-5h-6v5H5a1 1 0 0 1-1-1z\"/></svg></span><span>Home</span></a><a class=\"ds-nav-item\" href=\"#\"><span class=\"ds-nav-pill\"><svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M6 4h12v16l-3-2-3 2-3-2-3 2z\"/><path d=\"M9 9h6M9 13h6\"/></svg></span><span>Activity</span></a><a class=\"ds-nav-item\" href=\"#\"><span class=\"ds-nav-pill\"><svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><circle cx=\"11\" cy=\"12\" r=\"6.5\"/><path d=\"M17 11h2v3h-2\"/></svg></span><span>Plan</span></a><a class=\"ds-nav-item\" href=\"#\"><span class=\"ds-nav-pill\"><svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M6 19v-7M12 19V5M18 19v-10\"/></svg></span><span>Insights</span></a></nav>",
-      "css": ".ds-nav { display: flex; height: 72px; background: #16120F; border-top: 1px solid #2A241F; max-width: 420px; } .ds-nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #BFB6AA; text-decoration: none; font-family: Roboto, system-ui, sans-serif; font-size: 12px; line-height: 16px; } .ds-nav-pill { width: 60px; height: 32px; border-radius: 16px; display: grid; place-items: center; transition: background 150ms cubic-bezier(0.2,0,0,1); } .ds-nav-item:hover .ds-nav-pill { background: rgba(242,239,234,0.06); } .ds-nav-item:focus-visible { outline: 2px solid #D4761F; outline-offset: 3px; } .ds-nav-on { color: #F2EFEA; font-weight: 600; } .ds-nav-on .ds-nav-pill, .ds-nav-on:hover .ds-nav-pill { background: rgba(212,118,31,0.16); color: #D4761F; }"
+      "css": ".ds-nav { display: flex; height: 72px; background: #16120F; border-top: 1px solid #2A241F; max-width: 420px; } .ds-nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #BFB6AA; text-decoration: none; font-family: Roboto, system-ui, sans-serif; font-size: 12px; line-height: 16px; } .ds-nav-pill { width: 60px; height: 32px; border-radius: 16px; display: grid; place-items: center; transition: background 150ms cubic-bezier(0.2,0,0,1); } .ds-nav-item:hover .ds-nav-pill { background: rgba(242,239,234,0.06); } .ds-nav-item:focus-visible { outline: none; background: rgba(191,182,170,0.1); } .ds-nav-on { color: #F2EFEA; font-weight: 600; } .ds-nav-on .ds-nav-pill, .ds-nav-on:hover .ds-nav-pill { background: rgba(212,118,31,0.16); color: #D4761F; }"
     },
     {
       "name": "Choice Chip",
       "kind": "chip",
       "refersTo": "choice-chip",
-      "description": "A capsule choice: a faint outline ring idle, the accent ring over a 15% wash when picked.",
-      "html": "<div class=\"ds-chips\"><button class=\"ds-chip ds-chip-on\" aria-pressed=\"true\">Monthly</button><button class=\"ds-chip\">Weekly</button><button class=\"ds-chip\">Yearly</button></div>",
-      "css": ".ds-chips { display: flex; flex-wrap: wrap; gap: 8px; } .ds-chip { min-height: 40px; padding: 9px 16px; border-radius: 999px; background: transparent; border: 1px solid rgba(56,48,42,0.35); color: #BFB6AA; font-family: Roboto, system-ui, sans-serif; font-size: 14px; line-height: 20px; cursor: pointer; transition: border-color 150ms cubic-bezier(0.2,0,0,1), background 150ms cubic-bezier(0.2,0,0,1), transform 180ms; } .ds-chip:hover { border-color: #38302A; color: #F2EFEA; } .ds-chip:active { transform: scale(0.97); } .ds-chip:focus-visible { outline: 2px solid #D4761F; outline-offset: 3px; } .ds-chip-on { border-color: #D4761F; background: rgba(212,118,31,0.15); color: #F2EFEA; }"
+      "description": "A capsule choice announced as a radio button in its group: a faint outline ring idle, the accent ring over a 15% wash when picked.",
+      "html": "<div class=\"ds-chips\" role=\"radiogroup\"><button class=\"ds-chip ds-chip-on\" role=\"radio\" aria-checked=\"true\">Monthly</button><button class=\"ds-chip\" role=\"radio\" aria-checked=\"false\">Weekly</button><button class=\"ds-chip\" role=\"radio\" aria-checked=\"false\">Yearly</button></div>",
+      "css": ".ds-chips { display: flex; flex-wrap: wrap; gap: 8px; } .ds-chip { min-height: 40px; padding: 9px 16px; border-radius: 999px; background: transparent; border: 1px solid rgba(56,48,42,0.35); color: #BFB6AA; font-family: Roboto, system-ui, sans-serif; font-size: 14px; line-height: 20px; cursor: pointer; transition: border-color 150ms cubic-bezier(0.2,0,0,1), background 150ms cubic-bezier(0.2,0,0,1), transform 180ms; } .ds-chip:hover { border-color: #38302A; color: #F2EFEA; } .ds-chip:active { transform: scale(0.97); } .ds-chip:focus-visible { outline: 2px solid #D4761F; outline-offset: -2px; } .ds-chip-on { border-color: #D4761F; background: rgba(212,118,31,0.15); color: #F2EFEA; }"
     },
     {
       "name": "Sliding Segments",
@@ -810,7 +820,7 @@
       "refersTo": "segmented-track",
       "description": "A recessed track of equal cells with one ringed thumb that glides to the pick.",
       "html": "<div class=\"ds-seg\" role=\"tablist\"><button class=\"ds-seg-cell ds-seg-on\" role=\"tab\" aria-selected=\"true\">Budgets</button><button class=\"ds-seg-cell\" role=\"tab\">Bills</button><button class=\"ds-seg-cell\" role=\"tab\">Goals</button></div>",
-      "css": ".ds-seg { display: flex; border-radius: 12px; background: #0C0A08; max-width: 400px; padding: 3px; } .ds-seg-cell { flex: 1; min-height: 42px; border: 1.5px solid transparent; border-radius: 10px; background: transparent; color: #BFB6AA; font-family: Roboto, system-ui, sans-serif; font-size: 16px; line-height: 24px; cursor: pointer; transition: border-color 150ms, background 150ms, transform 180ms; } .ds-seg-cell:hover { color: #F2EFEA; } .ds-seg-cell:active { transform: scale(0.97); } .ds-seg-cell:focus-visible { outline: 2px solid #D4761F; outline-offset: 3px; } .ds-seg-on { border-color: #D4761F; background: rgba(212,118,31,0.15); color: #F2EFEA; }"
+      "css": ".ds-seg { display: flex; border-radius: 12px; background: #0C0A08; max-width: 400px; padding: 3px; } .ds-seg-cell { flex: 1; min-height: 42px; border: 1.5px solid transparent; border-radius: 10px; background: transparent; color: #BFB6AA; font-family: Roboto, system-ui, sans-serif; font-size: 16px; line-height: 24px; cursor: pointer; transition: border-color 150ms, background 150ms, transform 180ms; } .ds-seg-cell:hover { color: #F2EFEA; } .ds-seg-cell:active { transform: scale(0.97); } .ds-seg-cell:focus-visible { outline: 2px solid #D4761F; outline-offset: -2px; } .ds-seg-on { border-color: #D4761F; background: rgba(212,118,31,0.15); color: #F2EFEA; }"
     },
     {
       "name": "Hero Panel with Pace Meter",
@@ -818,7 +828,7 @@
       "refersTo": "hero-panel",
       "description": "The one lit panel per view: glyph-led header with the pace verdict, the serif figure (on Home, what is left to spend), its explaining line, the pace meter with its tick, and stat chips that never repeat the context line.",
       "html": "<section class=\"ds-hero\"><div class=\"ds-ph\"><span class=\"ds-badge\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"3\" y=\"6\" width=\"18\" height=\"13\" rx=\"2.5\"/><path d=\"M16 12.5h2\"/><path d=\"M5 6l10-3v3\"/></svg></span><span class=\"ds-ph-name\">LEFT TO SPEND</span><span class=\"ds-ph-meta\">On pace</span></div><div class=\"ds-hero-fig\">$1,616</div><p class=\"ds-hero-line\">left of your $2,900 budget · $1,284 spent</p><div class=\"ds-meter\" role=\"img\" aria-label=\"Spent 44 percent, even pace 45 percent\"><span class=\"ds-meter-fill\" style=\"width:44%\"></span><span class=\"ds-meter-tick\" style=\"left:45%\"></span></div><div class=\"ds-chiprow\"><span class=\"ds-stat-chip\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 16a8 8 0 1 1 16 0\"/><path d=\"M12 16l4-5\"/></svg>$90 a day for 18 days</span><span class=\"ds-stat-chip\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M3 17l6-6 4 4 8-8\"/><path d=\"M15 7h6v6\"/></svg>Pace $1,310</span></div></section>",
-      "css": ".ds-hero { max-width: 400px; padding: 20px; border-radius: 24px; background: linear-gradient(180deg, rgba(212,118,31,0.22), rgba(212,118,31,0.06) 50%, #1A1613), #1A1613; border: 1px solid rgba(212,118,31,0.28); color: #F2EFEA; } .ds-ph { display: flex; align-items: center; gap: 12px; min-height: 40px; } .ds-badge { width: 32px; height: 32px; flex: none; border-radius: 10px; background: rgba(212,118,31,0.16); color: #D4761F; display: grid; place-items: center; } .ds-ph-name { flex: 1; font-family: 'Droid Sans Mono', ui-monospace, monospace; font-weight: 500; font-size: 13px; letter-spacing: 0.8px; } .ds-ph-meta { font-family: 'Droid Sans Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.6px; color: #BFB6AA; } .ds-hero-fig { margin-top: 16px; font-family: 'Noto Serif', Georgia, serif; font-size: 52px; line-height: 58px; font-variant-numeric: tabular-nums; } .ds-hero-line { margin: 0 0 16px; font-family: Roboto, system-ui, sans-serif; font-size: 14px; line-height: 20px; color: #BFB6AA; } .ds-meter { position: relative; height: 18px; } .ds-meter::before { content: ''; position: absolute; inset: 4px 0; border-radius: 5px; background: #2A231C; } .ds-meter-fill { position: absolute; top: 4px; bottom: 4px; left: 0; border-radius: 5px; background: #D4761F; animation: ds-draw 900ms cubic-bezier(0.39,0.575,0.565,1); } .ds-meter-tick { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; border-radius: 1px; background: #F2EFEA; } @keyframes ds-draw { from { width: 0; } } @media (prefers-reduced-motion: reduce) { .ds-meter-fill { animation: none; } } .ds-chiprow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; } .ds-stat-chip { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px; background: rgba(42,35,28,0.7); color: #F2EFEA; font-family: Roboto, system-ui, sans-serif; font-size: 12px; line-height: 16px; } .ds-stat-chip svg { color: #BFB6AA; width: 16px; height: 16px; }"
+      "css": ".ds-hero { max-width: 400px; padding: 20px; border-radius: 24px; background: linear-gradient(180deg, rgba(212,118,31,0.22), rgba(212,118,31,0.06) 50%, #1A1613), #1A1613; border: 1px solid rgba(212,118,31,0.28); color: #F2EFEA; } .ds-ph { display: flex; align-items: center; gap: 12px; min-height: 40px; } .ds-badge { width: 32px; height: 32px; flex: none; border-radius: 10px; background: rgba(212,118,31,0.16); color: #D4761F; display: grid; place-items: center; } .ds-ph-name { flex: 1; font-family: 'Droid Sans Mono', ui-monospace, monospace; font-weight: 500; font-size: 13px; letter-spacing: 0.8px; } .ds-ph-meta { font-family: 'Droid Sans Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: 0.6px; color: #BFB6AA; } .ds-hero-fig { margin-top: 16px; font-family: 'Noto Serif', Georgia, serif; font-size: 52px; line-height: 58px; font-variant-numeric: tabular-nums; } .ds-hero-line { margin: 0 0 16px; font-family: Roboto, system-ui, sans-serif; font-size: 14px; line-height: 20px; color: #BFB6AA; } .ds-meter { position: relative; height: 22px; } .ds-meter::before { content: ''; position: absolute; inset: 4px 0; border-radius: 7px; background: #2A231C; } .ds-meter-fill { position: absolute; top: 4px; bottom: 4px; left: 0; border-radius: 7px; background: #D4761F; animation: ds-draw 900ms cubic-bezier(0.39,0.575,0.565,1); } .ds-meter-tick { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; border-radius: 1px; background: #F2EFEA; } @keyframes ds-draw { from { width: 0; } } @media (prefers-reduced-motion: reduce) { .ds-meter-fill { animation: none; } } .ds-chiprow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; } .ds-stat-chip { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px; background: rgba(42,35,28,0.7); color: #F2EFEA; font-family: Roboto, system-ui, sans-serif; font-size: 12px; line-height: 16px; } .ds-stat-chip svg { color: #BFB6AA; width: 16px; height: 16px; }"
     },
     {
       "name": "Stat Tile Pair",
@@ -834,7 +844,7 @@
       "refersTo": "group-row",
       "description": "Tappable rows as one rounded group of slabs on 2dp seams: glyph badge, title over subtitle, chevron.",
       "html": "<div class=\"ds-group\"><p class=\"ds-group-head\">Money</p><a class=\"ds-row ds-row-first\" href=\"#\"><span class=\"ds-glyph\" style=\"background:rgba(127,178,122,0.15)\"><svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#7FB27A\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 5h2l2 10h9l2-7H7\"/><circle cx=\"9\" cy=\"19\" r=\"1\"/><circle cx=\"16\" cy=\"19\" r=\"1\"/></svg></span><span class=\"ds-row-text\"><span class=\"ds-row-title\">Categories</span><span class=\"ds-row-sub\">12 expense · 3 income</span></span><span class=\"ds-chev\"><svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10 7l5 5-5 5\"/></svg></span></a><a class=\"ds-row ds-row-last\" href=\"#\"><span class=\"ds-glyph\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"3\" y=\"6\" width=\"18\" height=\"13\" rx=\"2.5\"/><path d=\"M16 12.5h2\"/><path d=\"M5 6l10-3v3\"/></svg></span><span class=\"ds-row-text\"><span class=\"ds-row-title\">Accounts</span><span class=\"ds-row-sub\">4 accounts · net $10,096</span></span><span class=\"ds-chev\"><svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10 7l5 5-5 5\"/></svg></span></a></div>",
-      "css": ".ds-group { display: flex; flex-direction: column; gap: 2px; max-width: 400px; } .ds-group-head { margin: 0 18px 8px; font-family: Roboto, system-ui, sans-serif; font-weight: 500; font-size: 14px; line-height: 20px; letter-spacing: 0.1px; color: #BFB6AA; } .ds-row { display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 14px 18px; background: #221C16; border-radius: 4px; color: #F2EFEA; text-decoration: none; transition: transform 180ms cubic-bezier(0.2,0,0,1); } .ds-row-first { border-radius: 16px 16px 4px 4px; } .ds-row-last { border-radius: 4px 4px 16px 16px; } .ds-row:hover { background: #2A231C; } .ds-row:active { transform: scale(0.97); } .ds-row:focus-visible { outline: 2px solid #D4761F; outline-offset: 3px; } .ds-glyph { width: 44px; height: 44px; flex: none; border-radius: 12px; background: #2A231C; color: #F2EFEA; display: grid; place-items: center; } .ds-row-text { flex: 1; display: flex; flex-direction: column; gap: 2px; } .ds-row-title { font-family: Roboto, system-ui, sans-serif; font-size: 16px; line-height: 24px; } .ds-row-sub { font-family: Roboto, system-ui, sans-serif; font-size: 14px; line-height: 20px; color: #BFB6AA; } .ds-chev { color: #BFB6AA; display: grid; }"
+      "css": ".ds-group { display: flex; flex-direction: column; gap: 2px; max-width: 400px; } .ds-group-head { margin: 0 18px 8px; font-family: Roboto, system-ui, sans-serif; font-weight: 500; font-size: 14px; line-height: 20px; letter-spacing: 0.1px; color: #BFB6AA; } .ds-row { display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 14px 18px; background: #221C16; border-radius: 4px; color: #F2EFEA; text-decoration: none; transition: transform 180ms cubic-bezier(0.2,0,0,1); } .ds-row-first { border-radius: 16px 16px 4px 4px; } .ds-row-last { border-radius: 4px 4px 16px 16px; } .ds-row:hover { background: #2A231C; } .ds-row:active { transform: scale(0.97); } .ds-row:focus-visible { outline: 2px solid #D4761F; outline-offset: -2px; } .ds-glyph { width: 44px; height: 44px; flex: none; border-radius: 12px; background: #2A231C; color: #F2EFEA; display: grid; place-items: center; } .ds-row-text { flex: 1; display: flex; flex-direction: column; gap: 2px; } .ds-row-title { font-family: Roboto, system-ui, sans-serif; font-size: 16px; line-height: 24px; } .ds-row-sub { font-family: Roboto, system-ui, sans-serif; font-size: 14px; line-height: 20px; color: #BFB6AA; } .ds-chev { color: #BFB6AA; display: grid; }"
     },
     {
       "name": "Chrome Button",
@@ -842,7 +852,7 @@
       "refersTo": "chrome-button",
       "description": "The round raised capsule for back, settings and stepping, 44dp drawn inside a 48dp target.",
       "html": "<button class=\"ds-chrome\" aria-label=\"Back\"><svg width=\"22\" height=\"22\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M19 12H5\"/><path d=\"M11 6l-6 6 6 6\"/></svg></button>",
-      "css": ".ds-chrome { width: 44px; height: 44px; margin: 2px; border: none; border-radius: 999px; background: #221C16; color: #F2EFEA; display: grid; place-items: center; cursor: pointer; transition: transform 180ms cubic-bezier(0.2,0,0,1); } .ds-chrome:hover { background: #2A231C; } .ds-chrome:active { transform: scale(0.97); } .ds-chrome:focus-visible { outline: 2px solid #D4761F; outline-offset: 3px; }"
+      "css": ".ds-chrome { width: 44px; height: 44px; margin: 2px; border: none; border-radius: 999px; background: #221C16; color: #F2EFEA; display: grid; place-items: center; cursor: pointer; transition: transform 180ms cubic-bezier(0.2,0,0,1); } .ds-chrome:hover { background: #2A231C; } .ds-chrome:active { transform: scale(0.97); } .ds-chrome:focus-visible { outline: 2px solid #D4761F; outline-offset: -2px; }"
     }
   ],
   "narrative": {
@@ -860,7 +870,7 @@
     "rules": [
       {
         "name": "The One Light Rule",
-        "body": "The accent is the owner's single colour and the only light in the room. It marks what can be acted on and where the month stands; the hero panel's wash is the only gradient on any surface.",
+        "body": "The accent is the owner's single colour and the only light in the room. It marks what can be acted on and where the month stands; the hero panel's wash is the only gradient on any raised surface. The ground's own dark fall carries no colour, and the month line's area fade is a data mark, not a light.",
         "section": "colors"
       },
       {
@@ -946,7 +956,7 @@
     ],
     "dos": [
       "Do put every section on one panel (20dp corners, container fill, 1dp outline-variant edge, 18dp padding) with 14dp between panels and a 24dp gutter.",
-      "Do lead every panel header and stat tile with a glyph tile (32dp or 30dp, 10dp corners, the accent on a 16% wash) and every row with a 44dp glyph badge.",
+      "Do lead every panel header and stat tile with a glyph tile (32dp or 30dp, 10dp corners, the accent on a 16% wash) and every row with a glyph badge (44dp, 36dp on a denser row inside a panel).",
       "Do give each view exactly one hero panel for its main figure, tinted red when that figure is over.",
       "Do draw the pace tick on every meter where an even spend means something, and let an overrun show as a red length past a budget notch.",
       "Do take every colour from the scheme or the category palette and every size from the type scale.",
@@ -955,7 +965,8 @@
       "Do let every row and control grow with its text at 200% and let readings drop under their labels rather than break; a panel header's label keeps one line.",
       "Do match a screen to its window: from 600dp cap a single column at READING_WIDTH (640dp) and centre it, as Home does, and from 840dp give Home its two panes.",
       "Do write layout in start and end, and draw charts from the reading edge in right-to-left.",
-      "Do make a press a 0.97 bounce and make every animation collapse to a cut when animations are removed."
+      "Do make a press a 0.97 bounce and make every animation collapse to a cut when animations are removed.",
+      "Do draw keyboard and D-pad focus as a 2dp accent ring along the target's own shape, and announce a one-of-many choice as a radio button in a selectable group."
     ],
     "donts": [
       "Don't draw a divider or hairline rule between sections; space and panel edges do that work.",
