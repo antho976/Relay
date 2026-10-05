@@ -119,4 +119,22 @@ class SettingsLogicTest {
         ) + DataOp.entries.map { it.working }
         lines.forEach { line -> Copy.banned.forEach { bad -> assertFalse("\"$line\" contains \"$bad\"", line.contains(bad, ignoreCase = true)) } }
     }
+
+    @Test fun searchFindsPagesBySynonymAndNamesFirst() {
+        assertEquals(SettingsDest.IMPORT, searchSettings("desjardins").first().dest)
+        assertEquals(SettingsDest.IMPORT, searchSettings("Wealthsimple").first().dest)
+        // A name that starts with the words outranks one that only mentions them.
+        val back = searchSettings("back").map { it.name }
+        assertEquals(listOf("Back up now", "Backup", "Backup folder"), back.take(3))
+        assertTrue("Weekly backup" in back.drop(3))
+        assertTrue(searchSettings("   ").isEmpty())
+        assertTrue(searchSettings("zzzz").isEmpty())
+        assertEquals("Data", searchSettings("backup").first().where)
+    }
+
+    @Test fun theBackupLineSaysWhenAndWhetherItRuns() {
+        assertEquals("Weekly · no backup yet", backupSummary(auto = true, lastOn = null, failed = false))
+        assertEquals("Off · last 3 Oct", backupSummary(auto = false, lastOn = "3 Oct", failed = false))
+        assertEquals("Last backup failed · back up now", backupSummary(auto = true, lastOn = "3 Oct", failed = true))
+    }
 }
