@@ -41,6 +41,7 @@ class PlanViewModel @Inject constructor(
     plan: PlanRepository,
     ledger: LedgerRepository,
     settings: SettingsRepository,
+    goalSource: GoalSource,
     private val clock: Clock,
 ) : ViewModel() {
 
@@ -63,7 +64,7 @@ class PlanViewModel @Inject constructor(
             budgetsReading(period, day, rows, spending, totals, lastTotals, categories)
         }
         val bills = plan.recurring().map { rows -> billsReading(rows, day) }
-        val goals = plan.goals().map { rows -> goalsReading(rows, day) }
+        val goals = goalSource.reading(period, day)
         combine(budgets, bills, goals) { b, r, g ->
             PlanState(today = day, period = period, loaded = true, budgets = b, bills = r, goals = g)
         }

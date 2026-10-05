@@ -1,5 +1,6 @@
 package com.tally.app.ui.entry
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -14,25 +15,30 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DonutLarge
+import androidx.compose.material.icons.rounded.LibraryAdd
 import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -46,6 +52,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
@@ -61,8 +68,10 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tally.app.data.db.AccountBalance
+import com.tally.app.data.db.QuickPick
 import com.tally.app.ui.common.Aside
 import com.tally.app.ui.common.Caption
+import com.tally.app.ui.common.CategoryBadge
 import com.tally.app.ui.common.CategoryIcons
 import com.tally.app.ui.common.ChoiceChip
 import com.tally.app.ui.common.ChoiceRow
@@ -87,6 +96,7 @@ import com.tally.app.ui.common.StatTile
 import com.tally.app.ui.common.SwitchRow
 import com.tally.app.ui.common.TextAction
 import com.tally.app.ui.common.TopBar
+import com.tally.app.ui.common.bounceClick
 import com.tally.app.ui.nav.AppNav
 import com.tally.core.CategoryKind
 import com.tally.core.Copy
@@ -125,7 +135,9 @@ fun EntryRoute(nav: AppNav) {
             pickSuggestion = viewModel::pickSuggestion,
             setRepeat = viewModel::setRepeat,
             setFrequency = viewModel::setFrequency,
+            pickQuick = viewModel::pickQuick,
             save = viewModel::save,
+            saveAndNew = viewModel::saveAndNew,
             editCategories = nav::categories,
             addCategory = { kind -> nav.categoryEdit(kind = kind) },
             addAccount = { nav.accountEdit(0) },
@@ -149,7 +161,10 @@ data class EntryActions(
     val pickSuggestion: (String) -> Unit = {},
     val setRepeat: (Boolean) -> Unit = {},
     val setFrequency: (Frequency) -> Unit = {},
+    val pickQuick: (QuickPick) -> Unit = {},
     val save: () -> Unit = {},
+    /** Saves and stays, emptied, for the next entry. New entries only. */
+    val saveAndNew: () -> Unit = {},
     val editCategories: () -> Unit = {},
     val addCategory: (CategoryKind) -> Unit = {},
     val addAccount: () -> Unit = {},
@@ -179,6 +194,9 @@ fun EntryScreen(state: EntryState, actions: EntryActions) {
                 if (!state.isNew) {
                     ChromeButton(Icons.Rounded.ContentCopy, "Duplicate", actions.duplicate)
                     ChromeButton(Icons.Rounded.DeleteOutline, "Delete entry", actions.delete)
+                } else if (state.canSave) {
+                    // A stack of receipts: save this one and stay for the next.
+                    ChromeButton(Icons.Rounded.LibraryAdd, "Save and add another", actions.saveAndNew)
                 }
             }
             if (pinHead) {
@@ -278,6 +296,13 @@ private fun AmountHero(state: EntryState, modifier: Modifier = Modifier) {
                 StatChip(Icons.Rounded.Repeat, "Repeats " + FREQUENCY_LABELS[FREQUENCIES.indexOf(d.frequency)].lowercase())
             }
             if (!state.isNew && d.recurringId != null) StatChip(Icons.Rounded.Repeat, "Posted by a bill")
+            val left = state.leftAfter
+            if (left != null && minor > 0) {
+                StatChip(
+                    Icons.Rounded.Speed,
+                    if (left >= 0) "Leaves " + money.formatWhole(left) + " of the month" else money.formatWhole(-left) + " over the month",
+                )
+            }
         }
     }
 }
@@ -306,6 +331,7 @@ private fun typeIcon(type: TxType): ImageVector = when (type) {
 private fun EntryBody(state: EntryState, actions: EntryActions, onPickDate: () -> Unit) {
     val noAccounts = state.accounts.isEmpty()
     if (noAccounts) NoAccountsPanel(state.draft.type, actions.addAccount)
+    if (state.isNew && state.quickPicks.isNotEmpty() && !noAccounts) QuickPicksPanel(state, actions)
     if (state.draft.type == TxType.TRANSFER) {
         if (!noAccounts) TransferPanel(state, actions)
     } else {
@@ -334,6 +360,45 @@ private fun EmptyLine(
         IconBadge(icon, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         Aside(text, Modifier.weight(1f))
         TextAction(action, onAction, color = MaterialTheme.colorScheme.primary)
+    }
+}
+
+/**
+ * The entries logged most often, one tap from filled: note, category and the amount last paid.
+ * Shown while the form is empty; the save is still the owner's.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun QuickPicksPanel(state: EntryState, actions: EntryActions) {
+    Panel {
+        PanelHeader(Icons.Rounded.Bolt, "Quick add", meta = "LOGGED MOST")
+        Spacer(Modifier.height(10.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            state.quickPicks.forEach { pick -> QuickChip(pick) { actions.pickQuick(pick) } }
+        }
+    }
+}
+
+@Composable
+private fun QuickChip(pick: QuickPick, onClick: () -> Unit) {
+    val money = LocalMoney.current
+    val amount = money.format(pick.lastAmount)
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        Modifier
+            .heightIn(min = 48.dp)
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .bounceClick(label = "Fill ${pick.note}, ${pick.categoryName}, $amount", role = Role.Button, focusShape = shape, onClick = onClick)
+            .padding(start = 6.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        CategoryBadge(pick.categoryIcon, pick.categoryColor, size = 32.dp)
+        Column {
+            Text(pick.note, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+            Text(amount, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 

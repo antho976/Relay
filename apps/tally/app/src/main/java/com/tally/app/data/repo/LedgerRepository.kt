@@ -5,16 +5,22 @@ import com.tally.app.data.Clock
 import com.tally.app.data.db.AccountBalance
 import com.tally.app.data.db.AccountDao
 import com.tally.app.data.db.AccountEntity
+import com.tally.app.data.db.AccountValueEntity
 import com.tally.app.data.db.BudgetDao
 import com.tally.app.data.db.CategoryDao
 import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.db.CategoryTotal
 import com.tally.app.data.db.DayTotal
+import com.tally.app.data.db.FlowRow
 import com.tally.app.data.db.LedgerTotals
+import com.tally.app.data.db.NoteUse
+import com.tally.app.data.db.PayeeTotal
+import com.tally.app.data.db.QuickPick
 import com.tally.app.data.db.TallyDatabase
 import com.tally.app.data.db.TransactionDao
 import com.tally.app.data.db.TransactionEntity
 import com.tally.app.data.db.TransactionRow
+import com.tally.app.data.db.TransferRow
 import com.tally.app.data.db.TypeTotal
 import com.tally.core.BudgetPeriod
 import com.tally.core.CategoryKind
@@ -122,6 +128,49 @@ class LedgerRepository @Inject constructor(
     fun activeCategories(kind: CategoryKind): Flow<List<CategoryEntity>> = categories.observeActive(kind)
     fun count(): Flow<Int> = transactions.observeCount()
 
+    fun transfers(start: LocalDate, endExclusive: LocalDate): Flow<List<TransferRow>> =
+        transactions.observeTransfers(start, endExclusive)
+
+    /** The entries logged most often since [since]: the editor's quick picks. */
+    fun quickPicks(type: TxType, since: LocalDate, limit: Int): Flow<List<QuickPick>> =
+        transactions.observeQuickPicks(type, since, limit)
+
+    fun payees(type: TxType, start: LocalDate, endExclusive: LocalDate, limit: Int): Flow<List<PayeeTotal>> =
+        transactions.observePayees(type, start, endExclusive, limit)
+
+    /** Every entry's effect on balances, oldest first. */
+    fun flows(): Flow<List<FlowRow>> = transactions.observeFlows()
+
+    suspend fun touching(accountId: Long, start: LocalDate, endInclusive: LocalDate): List<TransactionEntity> =
+        transactions.touching(accountId, start, endInclusive)
+
+    suspend fun notesSince(since: LocalDate): List<NoteUse> = transactions.notesSince(since)
+
+    // ── Account values ───────────────────────────────────────────────────────
+
+    fun values(accountId: Long): Flow<List<AccountValueEntity>> = db.values().observeFor(accountId)
+    fun allValues(): Flow<List<AccountValueEntity>> = db.values().observeAll()
+
+    /** Records what [accountId] was worth on [date]; a second value the same day replaces the first. */
+    suspend fun setValue(accountId: Long, date: LocalDate, value: Long): Long = db.withTransaction {
+        val same = db.values().on(accountId, date)
+        if (same != null) {
+            db.values().update(same.copy(value = value))
+            same.id
+        } else {
+            db.values().insert(AccountValueEntity(accountId = accountId, date = date, value = value))
+        }
+    }
+
+    /** Deletes one recorded value and hands it back for Undo. */
+    suspend fun deleteValue(id: Long): AccountValueEntity? {
+        val row = db.values().get(id) ?: return null
+        db.values().delete(id)
+        return row
+    }
+
+    suspend fun restoreValue(value: AccountValueEntity) { db.values().insertAll(listOf(value)) }
+
     suspend fun transaction(id: Long): TransactionEntity? = transactions.get(id)
     suspend fun account(id: Long): AccountEntity? = accounts.get(id)
     suspend fun category(id: Long): CategoryEntity? = categories.get(id)
@@ -194,7 +243,11 @@ class LedgerRepository @Inject constructor(
      * [accountUse] counts all of that first, for the dialog that asks.
      */
     suspend fun deleteAccount(id: Long) {
-        accounts.get(id)?.let { accounts.delete(it) }
+        db.withTransaction {
+            // Its goals read everything from now on; its values go with it through the foreign key.
+            db.goals().forgetAccount(id)
+            accounts.get(id)?.let { accounts.delete(it) }
+        }
     }
 
     suspend fun saveCategory(category: CategoryEntity): Long =

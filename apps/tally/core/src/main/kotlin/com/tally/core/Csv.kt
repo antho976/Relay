@@ -85,9 +85,10 @@ object CsvCodec {
      * Splits CSV text into records of fields, honouring quotes, doubled quotes and CRLF. A quote
      * opens a quoted section only at the start of a field (spaces before it are dropped); anywhere
      * else it is a plain character, as spreadsheets read it, so the inch mark in `TV 55" stand`
-     * cannot swallow the rows that follow it.
+     * cannot swallow the rows that follow it. [delimiter] separates fields: a comma by default, a
+     * semicolon or a tab for the bank exports that use one.
      */
-    fun parseRecords(text: String): List<List<String>> {
+    fun parseRecords(text: String, delimiter: Char = ','): List<List<String>> {
         val records = ArrayList<List<String>>()
         val field = StringBuilder()
         var record = ArrayList<String>()
@@ -110,7 +111,7 @@ object CsvCodec {
                 } else {
                     field.append(c)
                 }
-                ',' -> { record.add(field.toString()); field.clear(); quoted = false }
+                delimiter -> { record.add(field.toString()); field.clear(); quoted = false }
                 '\r' -> {}
                 '\n' -> { record.add(field.toString()); field.clear(); quoted = false; records.add(record); record = ArrayList() }
                 else -> field.append(c)

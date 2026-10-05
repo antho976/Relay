@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.tally.app.BuildConfig
 import com.tally.app.data.Clock
 import com.tally.app.data.prefs.Accent
+import com.tally.app.data.prefs.BackupPrefs
 import com.tally.app.data.prefs.Settings
 import com.tally.app.data.prefs.SettingsRepository
 import com.tally.app.data.repo.CurrencyPlan
@@ -45,8 +46,12 @@ data class SettingsState(
     val budgets: Int = 0,
     val bills: Int = 0,
     val goals: Int = 0,
+    val backup: BackupPrefs = BackupPrefs(),
     val loaded: Boolean = false,
-)
+) {
+    /** The sample loads only into an app with nothing the owner made (the seeded categories aside). */
+    val canLoadSample: Boolean get() = entries == 0 && accounts == 0 && budgets == 0 && bills == 0 && goals == 0
+}
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -81,7 +86,7 @@ class SettingsViewModel @Inject constructor(
         )
     }
 
-    val state: StateFlow<SettingsState> = combine(settings.settings, ledgerCounts, planCounts) { s, l, p ->
+    val state: StateFlow<SettingsState> = combine(settings.settings, ledgerCounts, planCounts, settings.backup) { s, l, p, b ->
         SettingsState(
             today = today,
             settings = s,
@@ -95,6 +100,7 @@ class SettingsViewModel @Inject constructor(
             budgets = p.budgets,
             bills = p.bills,
             goals = p.goals,
+            backup = b,
             loaded = true,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsState(today = today))

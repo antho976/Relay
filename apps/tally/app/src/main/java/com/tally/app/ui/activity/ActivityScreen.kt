@@ -2,10 +2,15 @@ package com.tally.app.ui.activity
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -14,14 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
-import androidx.compose.material.icons.rounded.AccountBalanceWallet
-import androidx.compose.material.icons.rounded.CalendarToday
-import androidx.compose.material.icons.rounded.LocalOffer
-import androidx.compose.material.icons.rounded.Receipt
-import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SearchOff
-import androidx.compose.material.icons.rounded.Speed
-import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,25 +39,23 @@ import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.ui.common.Caption
 import com.tally.app.ui.common.ChromeButton
 import com.tally.app.ui.common.Dates
+import com.tally.app.ui.common.Figure
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.LocalMoney
 import com.tally.app.ui.common.PANEL_GAP
 import com.tally.app.ui.common.PageTitle
 import com.tally.app.ui.common.SlidingSegments
-import com.tally.app.ui.common.StatTile
 import com.tally.app.ui.common.TopBar
 import com.tally.app.ui.nav.AppNav
-import com.tally.app.ui.nav.FAB_CLEARANCE
 import com.tally.core.Copy
-import com.tally.core.TxType
-import java.time.LocalDate
 
 /**
- * The Activity tab. The search text lives here, in saveable UI state, so typing never waits on a
- * flow round trip; the ViewModel receives it and settles it before searching.
+ * History: every entry by day, Home's Recent "view all", as Avex keeps it. The search text lives
+ * here, in saveable UI state, so typing never waits on a flow round trip; the ViewModel receives
+ * it and settles it before searching.
  */
 @Composable
-fun ActivityTab(nav: AppNav) {
+fun HistoryRoute(nav: AppNav) {
     val viewModel: ActivityViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
     var text by rememberSaveable { mutableStateOf("") }
@@ -72,6 +68,7 @@ fun ActivityTab(nav: AppNav) {
         state = state,
         query = text,
         actions = ActivityActions(
+            back = nav::back,
             onQuery = { text = it },
             previousPeriod = viewModel::previousPeriod,
             nextPeriod = viewModel::nextPeriod,
@@ -81,8 +78,9 @@ fun ActivityTab(nav: AppNav) {
     )
 }
 
-/** Everything Activity can do, as plain lambdas, so the screen renders in a test with no graph. */
+/** Everything History can do, as plain lambdas, so the screen renders in a test with no graph. */
 data class ActivityActions(
+    val back: () -> Unit = {},
     val onQuery: (String) -> Unit = {},
     val previousPeriod: () -> Unit = {},
     val nextPeriod: () -> Unit = {},
@@ -91,22 +89,24 @@ data class ActivityActions(
 )
 
 /**
- * The ledger browser: the period's money out and in under the lit panel, its largest and average
- * entry, then the filled search and the type lens, and the entries day by day, each day on its
- * own panel. A typed query searches every month.
+ * The ledger as Avex's History reads a log: the title and its figures (out, in, how many), the
+ * filled search, the type lens, then the entries day by day, each day on its own panel. The
+ * figures read the current lens, so a tap on "Income" is answered by the numbers moving. A typed
+ * query searches every month.
  */
 @Composable
 fun ActivityScreen(state: ActivityState, query: String, actions: ActivityActions) {
     val periodName = remember(state.period, state.today) { Dates.period(state.period, state.today) }
     val options = remember { ActivityFilter.entries.map { it.label } }
+    val bottom = 32.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     LazyColumn(
         Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = FAB_CLEARANCE),
+        contentPadding = PaddingValues(bottom = bottom),
         verticalArrangement = Arrangement.spacedBy(PANEL_GAP),
     ) {
         item(key = "head") {
             Column {
-                TopBar(onBack = null) {
+                TopBar(onBack = actions.back) {
                     PeriodStepper(
                         label = periodName,
                         searching = state.searching,
@@ -121,14 +121,13 @@ fun ActivityScreen(state: ActivityState, query: String, actions: ActivityActions
                     else -> periodName + " · " + Copy.plural(state.summary.count, "entry", "entries")
                 }
                 PageTitle(
-                    "Activity",
+                    "History",
                     Modifier.padding(horizontal = GUTTER).padding(top = 4.dp, bottom = 6.dp),
                     context = context,
                 )
             }
         }
-        item(key = "hero") { ActivityHero(state, Modifier.padding(horizontal = GUTTER)) }
-        item(key = "tiles") { SummaryTiles(state.summary, state.today, Modifier.padding(horizontal = GUTTER)) }
+        item(key = "figures") { HistoryFigures(state, Modifier.padding(horizontal = GUTTER)) }
         item(key = "controls") {
             Column(Modifier.padding(horizontal = GUTTER), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 SearchField(query, actions.onQuery)
@@ -211,67 +210,32 @@ private fun PeriodStepper(
     }
 }
 
+/**
+ * Avex's tiny hero: open serif figures on the page, no panel, honest at zero. What went out,
+ * what came in, and how many entries, for what the lens shows; then the one entry that stood out.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ActivityHero(state: ActivityState, modifier: Modifier = Modifier) {
+private fun HistoryFigures(state: ActivityState, modifier: Modifier = Modifier) {
     val money = LocalMoney.current
     val s = state.summary
-    val meta = when {
-        state.searching -> "ALL TIME"
-        state.isCurrentPeriod -> "DAY ${state.period.elapsedDays(state.today)} OF ${state.period.days}"
-        else -> Copy.plural(state.period.days, "day").uppercase()
-    }
-    val chips = buildList {
-        add(HeroChip(Icons.Rounded.CalendarToday, "Active on " + Copy.plural(s.activeDays, "day")))
-        val perDay = state.perDay
-        if (perDay != null && (state.filter == ActivityFilter.ALL || state.filter == ActivityFilter.SPENT)) {
-            add(HeroChip(Icons.Rounded.Speed, money.formatWhole(perDay) + " a day out"))
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Figure(money.formatWhole(s.spent), "Out")
+            Figure(money.formatWhole(s.income), "In", valueColor = if (s.income > 0L) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onBackground)
+            Figure(s.count.toString(), if (s.count == 1) "Entry" else "Entries")
         }
-        if (s.moved > 0) add(HeroChip(Icons.Rounded.SwapHoriz, money.formatWhole(s.moved) + " moved"))
+        val largest = s.largest
+        val line = buildList {
+            if (s.spent > 0L || s.income > 0L) add(netLine(s.spent, s.income) { money.formatWhole(it) })
+            if (largest != null) add("largest " + money.format(largest.amount) + ", " + entryTitle(largest) + " on " + Dates.short(largest.date, state.today))
+            val perDay = state.perDay
+            if (perDay != null && perDay > 0L && (state.filter == ActivityFilter.ALL || state.filter == ActivityFilter.SPENT)) {
+                add(money.formatWhole(perDay) + " a day out")
+            }
+        }.joinToString(" · ")
+        if (line.isNotEmpty()) {
+            Text(line.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
-    FlowHero(
-        icon = if (state.searching) Icons.Rounded.Search else Icons.Rounded.AccountBalanceWallet,
-        // The period already names itself twice above (the stepper and the title's line).
-        label = if (state.searching) "Matches" else "In and out",
-        meta = meta,
-        spent = s.spent,
-        income = s.income,
-        chips = chips,
-        modifier = modifier,
-    )
-}
-
-/** The largest and the average entry of what is shown, of spending when there is any. */
-@Composable
-private fun SummaryTiles(s: LedgerSummary, today: LocalDate, modifier: Modifier = Modifier) {
-    val money = LocalMoney.current
-    val noun = basisNoun(s.basis)
-    val isIn = s.basis == TxType.INCOME
-    val tint = if (isIn) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary
-    val valueColor = if (isIn) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onBackground
-    val largest = s.largest
-    TilePair(
-        modifier,
-        first = { m ->
-            StatTile(
-                Icons.Rounded.LocalOffer,
-                "Largest $noun",
-                money.format(largest?.amount ?: 0L),
-                m,
-                detail = largest?.let { entryTitle(it) + " · " + Dates.short(it.date, today) } ?: "Nothing logged",
-                tint = tint,
-                valueColor = valueColor,
-            )
-        },
-        second = { m ->
-            StatTile(
-                Icons.Rounded.Receipt,
-                "Average $noun",
-                money.format(s.average),
-                m,
-                detail = if (s.basisCount > 0) "Across " + Copy.plural(s.basisCount, "entry", "entries") else "Nothing logged",
-                tint = tint,
-                valueColor = valueColor,
-            )
-        },
-    )
 }

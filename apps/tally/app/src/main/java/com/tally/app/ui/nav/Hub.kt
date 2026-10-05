@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Home
@@ -52,15 +51,17 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.tally.app.ui.activity.ActivityTab
 import com.tally.app.ui.home.HomeTab
 import com.tally.app.ui.insights.InsightsTab
 import com.tally.app.ui.plan.PlanTab
 import com.tally.app.ui.theme.TallyMotion
 
+/**
+ * The tabs. Activity was one until Home took its place (2026-10-05, the owner: "no need to have
+ * it twice"): Home's Recent is the trim and its "view all" opens the full History, as in Avex.
+ */
 enum class HubTab(val label: String, val icon: ImageVector) {
     HOME("Home", Icons.Rounded.Home),
-    ACTIVITY("Activity", Icons.AutoMirrored.Rounded.ReceiptLong),
     PLAN("Plan", Icons.Rounded.Savings),
     INSIGHTS("Insights", Icons.Rounded.BarChart),
 }
@@ -69,7 +70,7 @@ enum class HubTab(val label: String, val icon: ImageVector) {
 val LocalSnackbarLift = staticCompositionLocalOf { mutableStateOf(0.dp) }
 
 /**
- * The hub: four tabs with one add FAB that stays put across them, because logging is the most
+ * The hub: three tabs with one add FAB that stays put across them, because logging is the most
  * frequent act and must cost one tap from anywhere. Compact width gets a bottom bar; 600dp and up
  * a rail, so a tablet never wears a stretched phone bar. Each tab keeps its scroll position.
  * Home is the start: Back from any other tab returns there, and only Back on Home leaves the app.
@@ -97,7 +98,6 @@ fun Hub(nav: AppNav) {
                 holder.SaveableStateProvider(current.name) {
                     when (current) {
                         HubTab.HOME -> HomeTab(nav, openTab = { tab = it })
-                        HubTab.ACTIVITY -> ActivityTab(nav)
                         HubTab.PLAN -> PlanTab(nav)
                         HubTab.INSIGHTS -> InsightsTab(nav)
                     }

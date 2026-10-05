@@ -28,10 +28,14 @@ data class BackupFile(
     val recurring: List<RecurringDto> = emptyList(),
     val goals: List<GoalDto> = emptyList(),
     val contributions: List<ContributionDto> = emptyList(),
+    /** What investment accounts were worth on a day, as typed by the owner. Absent before version 2. */
+    val values: List<AccountValueDto> = emptyList(),
 ) {
     companion object {
         const val FORMAT = "tally-backup"
-        const val VERSION = 1
+
+        /** 2 added goal kinds, investment accounts and their values. A version 1 file still reads. */
+        const val VERSION = 2
     }
 }
 
@@ -103,6 +107,22 @@ data class GoalDto(
     val targetDate: String? = null,
     val color: Int = 0,
     val archived: Boolean = false,
+    val kind: GoalKind = GoalKind.SAVINGS,
+    /** The account a balance or invest goal reads; null reads every account (or every investment one). */
+    val accountId: Long? = null,
+    /** A monthly goal's share of what came in, 1 to 100; 0 means [target] is a set amount a month. */
+    val percent: Int = 0,
+    /** Where a balance goal started from: the day it was set, and what it read then. */
+    val startDate: String? = null,
+    val startAmount: Long = 0,
+)
+
+@Serializable
+data class AccountValueDto(
+    val id: Long,
+    val accountId: Long,
+    val date: String,
+    val value: Long,
 )
 
 @Serializable
@@ -182,7 +202,13 @@ object BackupCodec {
         }
         file.goals.forEach { g ->
             if (g.target < 0) return BackupReadResult.Invalid("A goal has a negative target.")
-            if (!readable(g.targetDate)) return BackupReadResult.Invalid("A goal has an unreadable date.")
+            if (!readable(g.targetDate) || !readable(g.startDate)) return BackupReadResult.Invalid("A goal has an unreadable date.")
+            if (g.percent !in 0..100) return BackupReadResult.Invalid("A goal asks for a share outside 0 to 100 percent.")
+            if (g.accountId != null && g.accountId !in accounts) return BackupReadResult.Invalid("A goal points at an account that is not in the file.")
+        }
+        file.values.forEach { v ->
+            if (v.accountId !in accounts) return BackupReadResult.Invalid("An account value points at an account that is not in the file.")
+            if (!readable(v.date)) return BackupReadResult.Invalid("An account value has an unreadable date.")
         }
         file.contributions.forEach { c ->
             if (c.goalId !in goals) return BackupReadResult.Invalid("A contribution points at a goal that is not in the file.")

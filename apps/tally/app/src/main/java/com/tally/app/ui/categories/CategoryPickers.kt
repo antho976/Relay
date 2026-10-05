@@ -71,22 +71,30 @@ private fun columnsFor(width: Dp, fallback: Int): Int =
     if ((width - TILE_GAP * 5) / 6 >= MIN_CELL) 6 else fallback
 
 /**
- * Every glyph in [CategoryIcons.all] as one radio group of tiles, six to a row. The picked tile
- * wears the accent ring and wash and shows its glyph in the category's own hue.
+ * Every glyph in [CategoryIcons.all] as one radio group of tiles, six to a row, in the picker's
+ * sections (food, getting around, home and bills...) each under its own quiet header. The picked
+ * tile wears the accent ring and wash and shows its glyph in the category's own hue.
  */
 @Composable
 internal fun IconGrid(selected: String, hue: Color, onPick: (String) -> Unit, modifier: Modifier = Modifier) {
-    val keys = remember { CategoryIcons.all.keys.toList() }
     BoxWithConstraints(modifier.fillMaxWidth()) {
         val columns = columnsFor(maxWidth, fallback = 5)
-        val rows = remember(columns) { keys.chunked(columns) }
+        val sections = remember(columns) { CategoryIcons.groups.map { (title, keys) -> title to keys.chunked(columns) } }
         Column(Modifier.fillMaxWidth().selectableGroup(), verticalArrangement = Arrangement.spacedBy(TILE_GAP)) {
-            rows.forEach { row ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(TILE_GAP)) {
-                    row.forEach { key ->
-                        IconTile(key, key == selected, hue, Modifier.weight(1f)) { onPick(key) }
+            sections.forEachIndexed { i, (title, rows) ->
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = if (i == 0) 0.dp else 10.dp, bottom = 2.dp).semantics { heading() },
+                )
+                rows.forEach { row ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(TILE_GAP)) {
+                        row.forEach { key ->
+                            IconTile(key, key == selected, hue, Modifier.weight(1f)) { onPick(key) }
+                        }
+                        repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                     }
-                    repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
         }

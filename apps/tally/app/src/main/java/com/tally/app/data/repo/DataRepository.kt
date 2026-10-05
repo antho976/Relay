@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.room.withTransaction
 import com.tally.app.data.Clock
 import com.tally.app.data.db.AccountEntity
+import com.tally.app.data.db.AccountValueEntity
 import com.tally.app.data.db.BudgetEntity
 import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.db.ContributionEntity
@@ -15,6 +16,7 @@ import com.tally.app.data.db.TransactionEntity
 import com.tally.app.data.prefs.SettingsRepository
 import com.tally.core.AccountDto
 import com.tally.core.AccountType
+import com.tally.core.AccountValueDto
 import com.tally.core.BackupCodec
 import com.tally.core.BackupFile
 import com.tally.core.BackupReadResult
@@ -91,8 +93,15 @@ class DataRepository @Inject constructor(
                         it.interval, it.anchorDate.toString(), it.nextDate.toString(), it.endDate?.toString(), it.autoPost, it.active,
                     )
                 },
-                goals = db.goals().all().map { GoalDto(it.id, it.name, it.target, it.targetDate?.toString(), it.color, it.archived) },
+                goals = db.goals().all().map {
+                    GoalDto(
+                        it.id, it.name, it.target, it.targetDate?.toString(), it.color, it.archived,
+                        kind = it.kind, accountId = it.accountId, percent = it.percent,
+                        startDate = it.startDate?.toString(), startAmount = it.startAmount,
+                    )
+                },
                 contributions = db.goals().allContributions().map { ContributionDto(it.id, it.goalId, it.amount, it.date.toString(), it.note) },
+                values = db.values().all().map { AccountValueDto(it.id, it.accountId, it.date.toString(), it.value) },
             )
         }
     }
@@ -149,11 +158,19 @@ class DataRepository @Inject constructor(
             TransactionEntity(it.id, it.type, it.amount, LocalDate.parse(it.date), it.accountId, it.toAccountId, it.categoryId, it.note, it.recurringId)
         })
         db.budgets().insertAll(file.budgets.map { BudgetEntity(it.id, it.categoryId ?: BudgetEntity.OVERALL, it.amount) })
-        db.goals().insertAll(file.goals.map { GoalEntity(it.id, it.name, it.target, it.targetDate?.let(LocalDate::parse), it.color, it.archived) })
+        db.goals().insertAll(file.goals.map {
+            GoalEntity(
+                it.id, it.name, it.target, it.targetDate?.let(LocalDate::parse), it.color, it.archived,
+                kind = it.kind, accountId = it.accountId, percent = it.percent,
+                startDate = it.startDate?.let(LocalDate::parse), startAmount = it.startAmount,
+            )
+        })
         db.goals().insertContributions(file.contributions.map { ContributionEntity(it.id, it.goalId, it.amount, LocalDate.parse(it.date), it.note) })
+        db.values().insertAll(file.values.map { AccountValueEntity(it.id, it.accountId, LocalDate.parse(it.date), it.value) })
     }
 
     private suspend fun wipeTables() {
+        db.values().deleteAll()
         db.goals().deleteAllContributions()
         db.goals().deleteAll()
         db.budgets().deleteAll()
@@ -163,11 +180,14 @@ class DataRepository @Inject constructor(
         db.accounts().deleteAll()
     }
 
-    suspend fun writeCsv(uri: Uri): DataResult = withContext(Dispatchers.IO) {
+    /** Every entry as CSV, or those from [start] (inclusive) to [end] (exclusive) when given. */
+    suspend fun writeCsv(uri: Uri, start: LocalDate? = null, end: LocalDate? = null): DataResult = withContext(Dispatchers.IO) {
         runCatching {
             val s = settings.current()
             val fmt = MoneyFormatter(s.currency, Locale.getDefault())
-            val rows = db.transactions().allRows().map {
+            val all = db.transactions().allRows()
+            val picked = all.filter { (start == null || !it.date.isBefore(start)) && (end == null || it.date.isBefore(end)) }
+            val rows = picked.map {
                 CsvRow(it.date, it.type, it.amount, it.categoryName, it.accountName, it.toAccountName, it.note)
             }
             val text = CsvCodec.encode(rows, fmt.currency.currencyCode, fmt.fractionDigits)
@@ -187,6 +207,11 @@ class DataRepository @Inject constructor(
         val text = runCatching {
             context.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
         }.getOrNull() ?: return@withContext DataResult.Failed("That file could not be opened.")
+        importCsvText(text)
+    }
+
+    /** [importCsv] over text already read, for a file the bank import recognised as Tally's own. */
+    suspend fun importCsvText(text: String): DataResult = withContext(Dispatchers.IO) {
         val s = settings.current()
         val fmt = MoneyFormatter(s.currency, Locale.getDefault())
         val defaultAccount = db.accounts().get(s.defaultAccountId)?.name ?: db.accounts().all().firstOrNull()?.name ?: "Imported"
@@ -246,7 +271,7 @@ class DataRepository @Inject constructor(
     /**
      * What switching to [code] does to the stored amounts, read before anything changes. Null
      * when [code] is already the currency. [rounded] counts the amounts that would lose digits
-     * (entries, opening balances, budgets, bills, goals and contributions); zero means the switch
+     * (entries, opening balances, budgets, bills, goals, contributions and account values); zero means the switch
      * is exact and needs no confirm.
      */
     suspend fun planCurrencyChange(code: String): CurrencyPlan? = withContext(Dispatchers.IO) {
@@ -295,8 +320,9 @@ class DataRepository @Inject constructor(
             db.accounts().all().map { it.openingBalance } +
             db.budgets().all().map { it.amount } +
             db.recurring().all().map { it.amount } +
-            db.goals().all().map { it.target } +
-            db.goals().allContributions().map { it.amount }
+            db.goals().all().flatMap { listOf(it.target, it.startAmount) } +
+            db.goals().allContributions().map { it.amount } +
+            db.values().all().map { it.value }
 
     /** Rewrites every stored amount through [rescale]. Runs inside the caller's transaction. */
     private suspend fun rescaleAmounts(rescale: (Long) -> Long) {
@@ -304,8 +330,9 @@ class DataRepository @Inject constructor(
         db.accounts().updateAll(db.accounts().all().map { it.copy(openingBalance = rescale(it.openingBalance)) })
         db.budgets().updateAll(db.budgets().all().map { it.copy(amount = rescale(it.amount)) })
         db.recurring().updateAll(db.recurring().all().map { it.copy(amount = rescale(it.amount)) })
-        db.goals().updateAll(db.goals().all().map { it.copy(target = rescale(it.target)) })
+        db.goals().updateAll(db.goals().all().map { it.copy(target = rescale(it.target), startAmount = rescale(it.startAmount)) })
         db.goals().updateContributions(db.goals().allContributions().map { it.copy(amount = rescale(it.amount)) })
+        db.values().updateAll(db.values().all().map { it.copy(value = rescale(it.value)) })
     }
 
     /**

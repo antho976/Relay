@@ -1,6 +1,7 @@
 package com.tally.app.ui.plan
 
 import com.tally.core.Frequency
+import com.tally.core.GoalKind
 import com.tally.core.TxType
 import kotlinx.serialization.Serializable
 import java.time.LocalDate
@@ -72,6 +73,10 @@ internal data class SavedGoal(
     val targetEpochDay: Long? = null,
     val color: Int = 0,
     val archived: Boolean = false,
+    val kind: GoalKind = GoalKind.SAVINGS,
+    val accountId: Long? = null,
+    val percent: Int = 10,
+    val byShare: Boolean = true,
 ) {
     fun toDraft(): GoalDraft = GoalDraft(
         id = id,
@@ -81,6 +86,10 @@ internal data class SavedGoal(
         targetDate = targetEpochDay?.let { LocalDate.ofEpochDay(it) },
         color = color,
         archived = archived,
+        kind = kind,
+        accountId = accountId,
+        percent = percent,
+        byShare = byShare,
     )
 
     companion object {
@@ -92,6 +101,10 @@ internal data class SavedGoal(
             targetEpochDay = d.targetDate?.toEpochDay(),
             color = d.color,
             archived = d.archived,
+            kind = d.kind,
+            accountId = d.accountId,
+            percent = d.percent,
+            byShare = d.byShare,
         )
     }
 }

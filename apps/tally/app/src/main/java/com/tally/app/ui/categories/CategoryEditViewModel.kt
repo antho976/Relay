@@ -16,6 +16,7 @@ import com.tally.app.ui.common.savedDraft
 import com.tally.app.ui.nav.Args
 import com.tally.core.BudgetPeriod
 import com.tally.core.CategoryKind
+import com.tally.core.IconHints
 import com.tally.core.MoneyFormatter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -46,6 +47,8 @@ data class CategoryDraft(
     val icon: String = "dots",
     val color: Int = 10,
     val archived: Boolean = false,
+    /** True once the owner picked the icon; until then a new category's name suggests one. */
+    val iconChosen: Boolean = false,
 )
 
 /** Everything the category editor draws. */
@@ -150,7 +153,7 @@ class CategoryEditViewModel @Inject constructor(
             val kept = savedStateHandle.savedDraft(CategoryDraft.serializer())
             val existing = if (argId != 0L) ledger.category(argId) else null
             if (existing != null) {
-                draft.value = kept ?: CategoryDraft(existing.name, existing.icon, existing.color, existing.archived)
+                draft.value = kept ?: CategoryDraft(existing.name, existing.icon, existing.color, existing.archived, iconChosen = true)
                 kind.value = existing.kind
                 stored.value = existing
             } else {
@@ -164,9 +167,13 @@ class CategoryEditViewModel @Inject constructor(
         }
     }
 
-    fun setName(name: String) = draft.update { it.copy(name = name) }
+    /** A new category's name picks its icon ("Coffee" the cup) until the owner picks one. */
+    fun setName(name: String) = draft.update { d ->
+        val hint = if (d.iconChosen || stored.value != null) null else IconHints.suggest(name)
+        d.copy(name = name, icon = hint ?: if (d.iconChosen || stored.value != null) d.icon else "dots")
+    }
 
-    fun setIcon(icon: String) = draft.update { it.copy(icon = icon) }
+    fun setIcon(icon: String) = draft.update { it.copy(icon = icon, iconChosen = true) }
 
     fun setColor(color: Int) = draft.update { it.copy(color = color) }
 

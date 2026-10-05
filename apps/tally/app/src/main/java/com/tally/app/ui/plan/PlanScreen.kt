@@ -81,6 +81,7 @@ import com.tally.app.ui.theme.categoryColor
 import com.tally.core.Copy
 import com.tally.core.PaceStatus
 import com.tally.core.TxType
+import java.time.LocalDate
 
 private val LENSES = listOf("Budgets", "Bills", "Goals")
 
@@ -611,38 +612,46 @@ private fun LazyListScope.goalsLens(state: PlanState, actions: PlanActions) {
     }
 }
 
-/** Everything set aside across the goals, against everything they aim for. */
+/**
+ * How the goals stand: how many are on track (or reached) as the figure, the share of them as the
+ * meter, and chips for the money in savings pots and the next date. Goals of different kinds do
+ * not add up as money, so the figure counts goals.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun GoalsHero(state: PlanState, modifier: Modifier = Modifier) {
     val money = LocalMoney.current
     val g = state.goals
-    HeroPanel(modifier) {
+    val good = g.onTrack + g.reached
+    val total = g.goals.size
+    HeroPanel(modifier, tint = if (g.behind > 0 && good == 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) {
         HeroLabel(
-            Icons.Rounded.Savings,
-            "Saved",
-            end = if (g.goals.isEmpty()) null else Copy.plural(g.goals.size, "goal"),
+            Icons.Rounded.Flag,
+            "Goals",
+            end = if (total == 0) null else Copy.plural(total, "goal").uppercase(),
         )
         Spacer(Modifier.height(14.dp))
-        HeroFigure(money.formatWhole(g.saved))
+        HeroFigure(if (total == 0) "0" else "$good of $total", description = if (total == 0) "No goals yet" else "$good of $total goals on track or reached")
         Text(
-            if (g.goals.isEmpty()) "Nothing set aside yet"
-            else "of " + money.formatWhole(g.target) + " across " + Copy.plural(g.goals.size, "goal"),
+            when {
+                total == 0 -> "Save for something, reach an amount by a date, or invest a share of every month"
+                g.behind == 0 -> "on track or reached"
+                else -> "on track or reached · " + g.behind + " behind its pace"
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(16.dp))
-        // No tick: the total spans many dates and some goals have none, so an even pace means nothing here.
         PaceMeter(
-            g.fraction,
+            if (total == 0) 0f else good.toFloat() / total,
             null,
-            if (g.goals.isEmpty()) "No goals yet" else "Saved ${money.formatWhole(g.saved)} of ${money.formatWhole(g.target)}",
+            if (total == 0) "No goals yet" else "$good of $total goals on track or reached",
             height = 14.dp,
         )
-        if (g.goals.isNotEmpty()) {
+        if (total > 0) {
             Spacer(Modifier.height(16.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatChip(Icons.Rounded.Flag, money.formatWhole(g.left) + " to go")
+                if (g.pots > 0) StatChip(Icons.Rounded.Savings, money.formatWhole(g.saved) + " in " + Copy.plural(g.pots, "pot"))
                 if (g.reached > 0) StatChip(Icons.Rounded.EmojiEvents, Copy.plural(g.reached, "goal") + " reached")
                 val date = g.nextDate
                 if (date != null) {
@@ -662,18 +671,22 @@ private fun GoalsPanel(state: PlanState, actions: PlanActions, modifier: Modifie
             Spacer(Modifier.height(8.dp))
             EmptyLine(Icons.Rounded.Savings, "Name something you are saving for")
         } else {
-            goals.forEach { g -> GoalRow(g, state) { actions.openGoal(g.id) } }
+            goals.forEach { g -> GoalRow(g, state.today) { actions.openGoal(g.id) } }
         }
     }
 }
 
+/**
+ * One goal of any kind: its badge in its own hue (a cup once reached), its name over what it needs
+ * next, its reading at the end, and its meter with the even-pace tick where it has one.
+ */
 @Composable
-private fun GoalRow(g: GoalLine, state: PlanState, onClick: () -> Unit) {
+internal fun GoalRow(g: GoalLine, today: LocalDate, onClick: () -> Unit) {
     val money = LocalMoney.current
     val hue = categoryColor(g.color)
-    val reading = money.formatWhole(g.saved) + " of " + money.formatWhole(g.target)
-    val line = Copy.goalLine(g.saved, g.target, g.monthsLeft, money) +
-        (g.targetDate?.let { " · by " + Dates.short(it, state.today) } ?: "")
+    val reading = goalReading(g, money)
+    val line = goalRowLine(g, money, today)
+    val behind = g.status == GoalStatus.BEHIND
     Column(
         Modifier
             .fillMaxWidth()
@@ -683,7 +696,7 @@ private fun GoalRow(g: GoalLine, state: PlanState, onClick: () -> Unit) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             GlyphBadge(
-                if (g.reached) Icons.Rounded.EmojiEvents else Icons.Rounded.Flag,
+                if (g.reached) Icons.Rounded.EmojiEvents else goalKindIcon(g.kind),
                 tint = hue,
                 fill = hue.copy(alpha = 0.15f),
                 size = 36.dp,
@@ -696,7 +709,10 @@ private fun GoalRow(g: GoalLine, state: PlanState, onClick: () -> Unit) {
                     }
                 },
                 end = {
-                    Text(reading, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(reading, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
+                        if (behind) Text("BEHIND", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 },
                 modifier = Modifier.weight(1f),
             )

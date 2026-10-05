@@ -183,6 +183,55 @@ interface TransactionDao {
     @Query("UPDATE transactions SET categoryId = :to WHERE categoryId = :from")
     suspend fun moveCategory(from: Long, to: Long)
 
+    /** Every transfer between [start] and [end]: what the invest goals count, by the accounts at each end. */
+    @Query(
+        """SELECT date, amount, accountId, toAccountId FROM transactions
+           WHERE type = 'TRANSFER' AND toAccountId IS NOT NULL AND date >= :start AND date < :end"""
+    )
+    fun observeTransfers(start: LocalDate, end: LocalDate): Flow<List<TransferRow>>
+
+    /**
+     * The entries logged most often since [since], by note and category, each with the amount it
+     * was last logged at: the editor's one-tap quick picks. Archived categories are left out.
+     */
+    @Query(
+        """SELECT t.note AS note, t.categoryId AS categoryId, COUNT(*) AS uses,
+                  (SELECT t2.amount FROM transactions t2
+                   WHERE t2.note = t.note AND t2.type = :type AND t2.categoryId = t.categoryId
+                   ORDER BY t2.date DESC, t2.id DESC LIMIT 1) AS lastAmount,
+                  c.name AS categoryName, c.icon AS categoryIcon, c.color AS categoryColor
+           FROM transactions t JOIN categories c ON c.id = t.categoryId
+           WHERE t.type = :type AND t.note != '' AND t.date >= :since AND c.archived = 0
+           GROUP BY t.note, t.categoryId
+           HAVING COUNT(*) >= 2
+           ORDER BY uses DESC, MAX(t.date) DESC
+           LIMIT :limit"""
+    )
+    fun observeQuickPicks(type: TxType, since: LocalDate, limit: Int): Flow<List<QuickPick>>
+
+    /** Every entry that moves [accountId] between [start] and [end]: what an import checks for lines already logged. */
+    @Query(
+        """SELECT * FROM transactions
+           WHERE (accountId = :accountId OR toAccountId = :accountId) AND date >= :start AND date <= :end"""
+    )
+    suspend fun touching(accountId: Long, start: LocalDate, end: LocalDate): List<TransactionEntity>
+
+    /** Notes and the category they were filed under since [since]: what an import learns payees from. */
+    @Query("SELECT note, categoryId, type FROM transactions WHERE note != '' AND categoryId IS NOT NULL AND date >= :since")
+    suspend fun notesSince(since: LocalDate): List<NoteUse>
+
+    /** Every entry's effect on balances, oldest first: what net worth over time is rebuilt from. */
+    @Query("SELECT date, type, amount, accountId, toAccountId FROM transactions ORDER BY date, id")
+    fun observeFlows(): Flow<List<FlowRow>>
+
+    /** Where the money went by payee (the note): totals of [type] between [start] and [end], largest first. */
+    @Query(
+        """SELECT note, SUM(amount) AS total, COUNT(*) AS count FROM transactions
+           WHERE type = :type AND note != '' AND date >= :start AND date < :end
+           GROUP BY note ORDER BY total DESC LIMIT :limit"""
+    )
+    fun observePayees(type: TxType, start: LocalDate, end: LocalDate, limit: Int): Flow<List<PayeeTotal>>
+
     @Query("DELETE FROM transactions") suspend fun deleteAll()
 }
 
@@ -199,16 +248,25 @@ interface AccountDao {
     @Query("SELECT COUNT(*) FROM accounts") suspend fun count(): Int
     @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM accounts") suspend fun nextSortOrder(): Int
 
-    /** Opening balance, plus income, minus expenses and outgoing transfers, plus incoming ones. */
+    /**
+     * Opening balance, plus income, minus expenses and outgoing transfers, plus incoming ones. An
+     * account with a recorded value starts from its newest value instead, and counts only the
+     * entries dated after it: the value already holds everything up to its day.
+     */
     @Query(
         """SELECT a.id, a.name, a.type, a.openingBalance, a.archived, a.sortOrder,
-              a.openingBalance
+              COALESCE(v.value, a.openingBalance)
               + COALESCE((SELECT SUM(CASE WHEN t.type = 'INCOME' THEN t.amount ELSE -t.amount END)
-                          FROM transactions t WHERE t.accountId = a.id), 0)
+                          FROM transactions t WHERE t.accountId = a.id AND (v.date IS NULL OR t.date > v.date)), 0)
               + COALESCE((SELECT SUM(t.amount) FROM transactions t
-                          WHERE t.type = 'TRANSFER' AND t.toAccountId = a.id), 0) AS balance,
-              (SELECT COUNT(*) FROM transactions t WHERE t.accountId = a.id OR t.toAccountId = a.id) AS entryCount
-           FROM accounts a ORDER BY a.archived, a.sortOrder, a.id"""
+                          WHERE t.type = 'TRANSFER' AND t.toAccountId = a.id AND (v.date IS NULL OR t.date > v.date)), 0) AS balance,
+              (SELECT COUNT(*) FROM transactions t WHERE t.accountId = a.id OR t.toAccountId = a.id) AS entryCount,
+              v.date AS valuedOn
+           FROM accounts a
+           LEFT JOIN account_values v ON v.id = (
+               SELECT v2.id FROM account_values v2 WHERE v2.accountId = a.id ORDER BY v2.date DESC, v2.id DESC LIMIT 1
+           )
+           ORDER BY a.archived, a.sortOrder, a.id"""
     )
     fun observeBalances(): Flow<List<AccountBalance>>
 
@@ -347,4 +405,25 @@ interface GoalDao {
 
     @Query("DELETE FROM goal_contributions") suspend fun deleteAllContributions()
     @Query("DELETE FROM goals") suspend fun deleteAll()
+
+    /** A deleted account's goals read everything from then on, rather than an account that is gone. */
+    @Query("UPDATE goals SET accountId = NULL WHERE accountId = :accountId")
+    suspend fun forgetAccount(accountId: Long)
+}
+
+@Dao
+interface AccountValueDao {
+    @Insert suspend fun insert(value: AccountValueEntity): Long
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertAll(values: List<AccountValueEntity>)
+    @Update suspend fun updateAll(values: List<AccountValueEntity>)
+    @Update suspend fun update(value: AccountValueEntity)
+    @Query("DELETE FROM account_values WHERE id = :id") suspend fun delete(id: Long)
+    @Query("SELECT * FROM account_values WHERE accountId = :accountId AND date = :date LIMIT 1")
+    suspend fun on(accountId: Long, date: LocalDate): AccountValueEntity?
+    @Query("SELECT * FROM account_values WHERE id = :id") suspend fun get(id: Long): AccountValueEntity?
+    @Query("SELECT * FROM account_values WHERE accountId = :accountId ORDER BY date DESC, id DESC")
+    fun observeFor(accountId: Long): Flow<List<AccountValueEntity>>
+    @Query("SELECT * FROM account_values ORDER BY date, id") fun observeAll(): Flow<List<AccountValueEntity>>
+    @Query("SELECT * FROM account_values ORDER BY date, id") suspend fun all(): List<AccountValueEntity>
+    @Query("DELETE FROM account_values") suspend fun deleteAll()
 }

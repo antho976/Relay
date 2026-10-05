@@ -23,6 +23,7 @@ object SampleData {
             AccountDto(2, "$ACCOUNT_PREFIX Visa", AccountType.CREDIT, 0, sortOrder = 1),
             AccountDto(3, "$ACCOUNT_PREFIX savings", AccountType.SAVINGS, money(6_500.0), sortOrder = 2),
             AccountDto(4, "$ACCOUNT_PREFIX cash", AccountType.CASH, money(120.0), sortOrder = 3),
+            AccountDto(5, "$ACCOUNT_PREFIX TFSA", AccountType.INVESTMENT, money(8_200.0), sortOrder = 4),
         )
         val categories = Defaults.categories.mapIndexed { i, c ->
             CategoryDto(id = i + 1L, name = c.name, kind = c.kind, color = c.color, icon = c.icon, sortOrder = i)
@@ -85,6 +86,7 @@ object SampleData {
         bill(7, "Salary", TxType.INCOME, money(2_150.0), 1, cat("Salary"), Frequency.WEEKLY, 2, start.plusDays(4))
         bill(8, "Card payment", TxType.TRANSFER, money(900.0), 1, null, Frequency.MONTHLY, 1, start.plusDays(24), to = 2)
         bill(9, "To savings", TxType.TRANSFER, money(250.0), 1, null, Frequency.MONTHLY, 1, start.plusDays(5), to = 3)
+        bill(10, "To TFSA", TxType.TRANSFER, money(300.0), 1, null, Frequency.MONTHLY, 1, start.plusDays(6), to = 5)
 
         val budgets = listOf(
             BudgetDto(1, null, money(2_900.0)),
@@ -97,7 +99,15 @@ object SampleData {
         val goals = listOf(
             GoalDto(1, "Emergency fund", money(10_000.0), today.plusMonths(14).withDayOfMonth(1).toString(), color = 1),
             GoalDto(2, "Lisbon trip", money(2_400.0), today.plusMonths(6).withDayOfMonth(1).toString(), color = 6),
+            GoalDto(3, "Invest a tenth of pay", 0, color = 2, kind = GoalKind.INVEST, percent = 10),
+            GoalDto(
+                4, "Worth 25k", money(25_000.0), today.plusMonths(12).withDayOfMonth(1).toString(), color = 7,
+                kind = GoalKind.BALANCE, startDate = start.toString(), startAmount = money(17_220.0),
+            ),
         )
+        // The TFSA's value as read off the statement once, a little above what was put in.
+        val values = listOf(AccountValueDto(1, 5, start.plusMonths(1).plusDays(27).toString(), money(9_050.0)))
+            .filter { !LocalDate.parse(it.date).isAfter(today) }
         val contributions = listOf(
             ContributionDto(1, 1, money(3_200.0), start.toString(), "Starting balance"),
             ContributionDto(2, 1, money(250.0), start.plusMonths(1).plusDays(5).toString()),
@@ -115,6 +125,7 @@ object SampleData {
             recurring = recurring,
             goals = goals,
             contributions = contributions,
+            values = values,
         )
     }
 }

@@ -10,6 +10,9 @@ import com.tally.app.data.db.TransactionRow
 import com.tally.app.data.prefs.SettingsRepository
 import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.data.repo.PlanRepository
+import com.tally.app.ui.plan.GoalLine
+import com.tally.app.ui.plan.GoalSource
+import com.tally.app.ui.plan.GoalStatus
 import com.tally.core.BudgetPeriod
 import com.tally.core.PaceReading
 import com.tally.core.TxType
@@ -82,6 +85,8 @@ data class HomeState(
     /** What the previous period had spent by the same day, for "vs last month". */
     val lastPeriodSameDay: Long = 0,
     val lastPeriodIncomeSameDay: Long = 0,
+    /** Up to [HomeViewModel.GOALS] goals, the ones that need attention first. */
+    val goals: List<GoalLine> = emptyList(),
 ) {
     val todayInWeek: Int get() = ChronoUnit.DAYS.between(weekStart, today).toInt().coerceIn(0, 6)
     val weekSpent: Long get() = week.take(todayInWeek + 1).sum()
@@ -95,12 +100,23 @@ data class HomeState(
     val net: Long get() = accounts.filter { !it.archived }.sumOf { it.balance }
 }
 
+/** Home's goals: the ones behind their pace first, then the ones still open, reached ones last. */
+internal fun homeGoals(goals: List<GoalLine>): List<GoalLine> =
+    goals.sortedBy {
+        when (it.status) {
+            GoalStatus.BEHIND -> 0
+            GoalStatus.ON_TRACK, GoalStatus.OPEN -> 1
+            GoalStatus.REACHED -> 2
+        }
+    }.take(HomeViewModel.GOALS)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     settings: SettingsRepository,
     ledger: LedgerRepository,
     plan: PlanRepository,
+    goalSource: GoalSource,
     private val clock: Clock,
 ) : ViewModel() {
 
@@ -191,7 +207,9 @@ class HomeViewModel @Inject constructor(
                 weekStart = weekStart,
             )
         }
-        combine(base, extras) { b, x -> b.copy(week = x.first, lastPeriodSameDay = x.second, lastPeriodIncomeSameDay = x.third) }
+        combine(base, extras, goalSource.reading(period, day)) { b, x, g ->
+            b.copy(week = x.first, lastPeriodSameDay = x.second, lastPeriodIncomeSameDay = x.third, goals = homeGoals(g.goals))
+        }
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
@@ -199,7 +217,8 @@ class HomeViewModel @Inject constructor(
     )
 
     companion object {
-        const val RECENT = 5
+        const val RECENT = 6
         const val UPCOMING_DAYS = 14L
+        const val GOALS = 3
     }
 }

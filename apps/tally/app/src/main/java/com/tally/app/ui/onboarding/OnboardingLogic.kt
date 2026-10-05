@@ -60,6 +60,7 @@ internal fun defaultAccountName(type: AccountType): String = when (type) {
     AccountType.CHEQUING -> "Chequing"
     AccountType.SAVINGS -> "Savings"
     AccountType.CREDIT -> "Credit card"
+    AccountType.INVESTMENT -> "Investments"
 }
 
 /** Follows the type with the name while the owner has not typed one of their own. */

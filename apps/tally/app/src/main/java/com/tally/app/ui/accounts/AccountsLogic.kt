@@ -20,6 +20,7 @@ internal fun typeLabel(type: AccountType): String = when (type) {
     AccountType.CHEQUING -> "Chequing"
     AccountType.SAVINGS -> "Savings"
     AccountType.CREDIT -> "Credit card"
+    AccountType.INVESTMENT -> "Investment"
 }
 
 /** The one line under each type in the editor's choice. */
@@ -28,6 +29,30 @@ internal fun typeHint(type: AccountType): String = when (type) {
     AccountType.CHEQUING -> "The everyday bank account"
     AccountType.SAVINGS -> "Money set aside, earning or waiting"
     AccountType.CREDIT -> "A card you pay off later"
+    AccountType.INVESTMENT -> "A TFSA, an RRSP or a brokerage account, its value updated by hand"
+}
+
+/** A ready-made account for the banks the owner uses: one tap fills the name and the type. */
+@Immutable
+data class AccountTemplate(val name: String, val type: AccountType)
+
+/** Desjardins and Wealthsimple first, as the owner banks there; cash last. */
+internal val ACCOUNT_TEMPLATES: List<AccountTemplate> = listOf(
+    AccountTemplate("Desjardins chequing", AccountType.CHEQUING),
+    AccountTemplate("Desjardins savings", AccountType.SAVINGS),
+    AccountTemplate("Desjardins Visa", AccountType.CREDIT),
+    AccountTemplate("Wealthsimple Chequing", AccountType.CHEQUING),
+    AccountTemplate("Wealthsimple TFSA", AccountType.INVESTMENT),
+    AccountTemplate("Wealthsimple RRSP", AccountType.INVESTMENT),
+    AccountTemplate("Wealthsimple FHSA", AccountType.INVESTMENT),
+    AccountTemplate("Wealthsimple credit card", AccountType.CREDIT),
+    AccountTemplate("Cash", AccountType.CASH),
+)
+
+/** The templates not yet taken: an account by that name already exists, in any case. */
+internal fun freeTemplates(existing: List<String>): List<AccountTemplate> {
+    val taken = existing.map { it.trim().lowercase() }.toSet()
+    return ACCOUNT_TEMPLATES.filter { it.name.lowercase() !in taken }
 }
 
 /** One account row: its balance, and the share it is of its side (what you hold, or what you owe). */

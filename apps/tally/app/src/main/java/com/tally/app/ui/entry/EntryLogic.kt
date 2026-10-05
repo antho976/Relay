@@ -205,3 +205,29 @@ internal fun EntryDraft.toEntity(original: TransactionEntity?, recurringId: Long
         createdAt = original?.createdAt ?: 0L,
     )
 }
+
+/**
+ * The grid's order: the categories used most in the last few months first, the rest in their own
+ * order after them. The two-second log starts where the thumb usually goes.
+ */
+internal fun byUse(categories: List<CategoryEntity>, uses: Map<Long, Int>): List<CategoryEntity> =
+    categories.withIndex()
+        .sortedWith(compareByDescending<IndexedValue<CategoryEntity>> { uses[it.value.id] ?: 0 }.thenBy { it.index })
+        .map { it.value }
+
+/**
+ * What the month's [budget] has left once this draft is saved. [spent] is the period's spending as
+ * stored, which for an edit already holds the stored entry, so that is taken out first.
+ */
+internal fun leftAfter(budget: Long, spent: Long, original: TransactionEntity?, draft: EntryDraft, period: BudgetPeriod): Long {
+    var total = spent
+    if (original != null && original.type == TxType.EXPENSE && original.date in period) total -= original.amount
+    if (draft.type == TxType.EXPENSE && draft.date in period) total += draft.amount.minor
+    return budget - total
+}
+
+/** The notice after a save that stays for the next one: "Groceries expense saved". */
+internal fun savedLine(type: TxType, categoryName: String?): String = when (type) {
+    TxType.TRANSFER -> "Transfer saved"
+    else -> listOfNotNull(categoryName, typeLabel(type).lowercase()).joinToString(" ").replaceFirstChar { it.uppercase() } + " saved"
+}
