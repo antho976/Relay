@@ -1,18 +1,23 @@
 package com.tally.app.ui.home
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
@@ -22,7 +27,6 @@ import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.BarChart
-import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.DonutLarge
 import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.Settings
@@ -36,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -56,6 +61,7 @@ import com.tally.app.ui.common.PaceMeter
 import com.tally.app.ui.common.PageTitle
 import com.tally.app.ui.common.Panel
 import com.tally.app.ui.common.PanelHeader
+import com.tally.app.ui.common.READING_WIDTH
 import com.tally.app.ui.common.ROW_FOCUS_OUTSET
 import com.tally.app.ui.common.StatChip
 import com.tally.app.ui.common.StatTile
@@ -112,63 +118,130 @@ data class HomeActions(
 )
 
 /**
- * Home: the month's margin in the one lit panel, money in and out beside last month, the week's
- * days against the daily budget, then the envelopes furthest over pace, the newest entries, what is
- * due, and where the money sits. Each section is one panel led by its glyph.
+ * Home: what is left to spend this month in the one lit panel, money in and out beside last month,
+ * the week's days against the daily budget, then the envelopes furthest over pace, the newest
+ * entries, what is due, and where the money sits. Each section is one panel led by its glyph.
+ *
+ * The layout follows the width it is given ([homeLayout]): the phone column; from 600dp the same
+ * column capped at [READING_WIDTH] and centred, so no reading sits a screen away from its label;
+ * from 840dp two panes under one title, the story at the start and the ledger at the end.
  */
 @Composable
 fun HomeScreen(state: HomeState, actions: HomeActions) {
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = FAB_CLEARANCE),
-        verticalArrangement = Arrangement.spacedBy(PANEL_GAP),
-    ) {
-        item(key = "head") {
-            Column {
-                TopBar(onBack = null) { ChromeButton(Icons.Rounded.Settings, "Settings", actions.settings) }
-                val context = buildList {
-                    add(Copy.plural(state.daysLeft, "day") + " left")
-                    add("resets " + Dates.short(state.period.endExclusive, state.today))
-                    if (state.sampleLoaded) add("sample data")
-                }.joinToString(" · ")
-                PageTitle(
-                    Dates.period(state.period, state.today),
-                    Modifier.padding(horizontal = GUTTER).padding(top = 4.dp, bottom = 6.dp),
-                    context = context,
-                )
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val layout = homeLayout(maxWidth)
+        // On a phone the add FAB floats over the list's end; wider, it heads the rail, so the list
+        // only keeps clear of the system bar.
+        val bottom = if (layout == HomeLayout.PHONE) {
+            FAB_CLEARANCE
+        } else {
+            GUTTER + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        }
+        val lane = when (layout) {
+            HomeLayout.PHONE -> Modifier
+            HomeLayout.COLUMN -> Modifier.widthIn(max = READING_WIDTH)
+            HomeLayout.PANES -> Modifier.widthIn(max = READING_WIDTH * 2)
+        }
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = bottom),
+            verticalArrangement = Arrangement.spacedBy(PANEL_GAP),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            item(key = "head") { HomeHead(state, actions, lane) }
+            // Until the first read lands every figure is a placeholder zero: drawing "$0" and "No
+            // accounts yet" over a full ledger would say something untrue, so only the frame shows.
+            if (state.loaded) {
+                if (layout == HomeLayout.PANES) {
+                    item(key = "panes") { HomePanes(state, actions, lane) }
+                } else {
+                    val panel = lane.padding(horizontal = GUTTER)
+                    item(key = "left") { LeftToSpendHero(state, actions, panel) }
+                    item(key = "inout") { InOutTiles(state, panel) }
+                    item(key = "week") { WeekPanel(state, actions, panel) }
+                    item(key = "budgets") { BudgetsPanel(state, actions, panel) }
+                    item(key = "recent") { RecentPanel(state, actions, panel) }
+                    item(key = "upcoming") { UpcomingPanel(state, actions, panel) }
+                    item(key = "accounts") { AccountsPanel(state, actions, panel) }
+                }
             }
         }
-        // Until the first read lands every figure is a placeholder zero: drawing "$0" and "No
-        // accounts yet" over a full ledger would say something untrue, so only the frame shows.
-        if (state.loaded) {
-            item(key = "margin") { MarginHero(state, actions, Modifier.padding(horizontal = GUTTER)) }
-            item(key = "inout") { InOutTiles(state, Modifier.padding(horizontal = GUTTER)) }
-            item(key = "week") { WeekPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
-            item(key = "budgets") { BudgetsPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
-            item(key = "recent") { RecentPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
-            item(key = "upcoming") { UpcomingPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
-            item(key = "accounts") { AccountsPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+    }
+}
+
+/** How Home sits in the width it is given. */
+internal enum class HomeLayout { PHONE, COLUMN, PANES }
+
+/** The phone column below 600dp, one capped column from 600dp, two panes from 840dp. */
+internal fun homeLayout(width: Dp): HomeLayout = when {
+    width >= PANES_FROM -> HomeLayout.PANES
+    width >= COLUMN_FROM -> HomeLayout.COLUMN
+    else -> HomeLayout.PHONE
+}
+
+private val COLUMN_FROM = 600.dp
+private val PANES_FROM = 840.dp
+
+/** The top bar with its settings capsule, then the month's title and its context line. */
+@Composable
+private fun HomeHead(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        TopBar(onBack = null) { ChromeButton(Icons.Rounded.Settings, "Settings", actions.settings) }
+        val context = buildList {
+            add(Copy.plural(state.daysLeft, "day") + " left")
+            add("resets " + Dates.short(state.period.endExclusive, state.today))
+            if (state.sampleLoaded) add("sample data")
+        }.joinToString(" · ")
+        PageTitle(
+            Dates.period(state.period, state.today),
+            Modifier.padding(horizontal = GUTTER).padding(top = 4.dp, bottom = 6.dp),
+            context = context,
+        )
+    }
+}
+
+/**
+ * Two panes on the gutter with the panel gap between: the story in reading order at the start
+ * (what is left, money in and out, the week), the ledger at the end (envelopes, recent entries,
+ * what is due, the accounts). One title and one scroll serve both.
+ */
+@Composable
+private fun HomePanes(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
+    Row(
+        modifier.fillMaxWidth().padding(horizontal = GUTTER),
+        horizontalArrangement = Arrangement.spacedBy(PANEL_GAP),
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+            LeftToSpendHero(state, actions)
+            InOutTiles(state)
+            WeekPanel(state, actions)
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+            BudgetsPanel(state, actions)
+            RecentPanel(state, actions)
+            UpcomingPanel(state, actions)
+            AccountsPanel(state, actions)
         }
     }
 }
 
 /**
- * The margin, drawn: the screen's one serif hero under the accent's light, the budget meter with
- * today's pace tick, and chips for the readings that say what to do. Without a budget it measures
- * against income, honestly labelled, and offers the budget.
+ * What is left of the month's budget, drawn: the screen's one serif hero under the accent's
+ * light, the budget meter with today's pace tick, and chips for the readings that say what to do.
+ * Without a budget it measures against income, honestly labelled, and offers the budget.
  */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun MarginHero(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
+private fun LeftToSpendHero(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
     val money = LocalMoney.current
     val r = state.reading
     val over = r?.status == PaceStatus.OVER_BUDGET
     val tint = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     HeroPanel(modifier, tint = tint) {
-        // The kit's header: the pace reading drops under the label before "MARGIN" would break.
+        // The kit's header: the pace reading drops under the label before the label would wrap.
         PanelHeader(
             Icons.Rounded.AccountBalanceWallet,
-            if (over) "Over budget" else if (r != null) "Margin" else "Left from income",
+            if (over) "Over budget" else if (r != null) "Left to spend" else "Left from income",
             meta = if (r != null && !over) Copy.paceLine(r, money) else null,
             tint = tint,
         )
@@ -180,7 +253,8 @@ private fun MarginHero(state: HomeState, actions: HomeActions, modifier: Modifie
                 color = MaterialTheme.colorScheme.onBackground,
             )
             Text(
-                "of " + money.formatWhole(r.budget) + " budget, " + money.formatWhole(r.spent) + " spent",
+                (if (over) "over your " else "left of your ") + money.formatWhole(r.budget) + " budget · " +
+                    money.formatWhole(r.spent) + " spent",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -193,9 +267,10 @@ private fun MarginHero(state: HomeState, actions: HomeActions, modifier: Modifie
                 height = 14.dp,
             )
             Spacer(Modifier.height(16.dp))
+            // The days left are in the context line under the title; the allowance says them in
+            // the same breath ("$49 a day for 28 days") instead of repeating them as a chip.
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatChip(Icons.Rounded.CalendarToday, Copy.plural(r.daysLeft, "day") + " left")
-                if (!over) StatChip(Icons.Rounded.Speed, money.formatWhole(r.dailyAllowance) + " a day")
+                if (!over) StatChip(Icons.Rounded.Speed, Copy.marginLine(r, money))
                 StatChip(Icons.AutoMirrored.Rounded.TrendingUp, "Pace " + money.formatWhole(r.expected))
             }
         } else {
@@ -270,7 +345,16 @@ private fun InOutTiles(state: HomeState, modifier: Modifier = Modifier) {
 private fun WeekPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
     val money = LocalMoney.current
     val labels = List(7) { Dates.weekdayInitial(state.weekStart.plusDays(it.toLong()).dayOfWeek) }
-    val desc = weekDescription(state.weekStart, state.week, state.todayInWeek) { money.formatWhole(it) }
+    val before = state.weekSpentBeforePeriod
+    val desc = weekDescription(state.weekStart, state.week, state.todayInWeek, before, state.period.start) { money.formatWhole(it) }
+    // Early in a month the week opens in the last one. What those days spent is named, so the
+    // week's figure and the month's Out add up on screen.
+    val daily = state.dailyBudget
+    val line = buildList {
+        add(money.formatWhole(state.weekSpent) + " spent")
+        if (before > 0L) add(money.formatWhole(before) + " before " + Dates.short(state.period.start, state.today))
+        if (daily != null) add(money.formatWhole(daily) + " a day budgeted")
+    }.joinToString(" · ")
     Panel(modifier) {
         PanelHeader(
             Icons.Rounded.BarChart,
@@ -279,14 +363,16 @@ private fun WeekPanel(state: HomeState, actions: HomeActions, modifier: Modifier
             onAction = actions.openInsights,
         )
         Spacer(Modifier.height(6.dp))
-        Text(
-            money.formatWhole(state.weekSpent) + " spent" +
-                (state.dailyBudget?.let { " · " + money.formatWhole(it) + " a day budgeted" } ?: ""),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(14.dp))
-        DayBars(state.week, labels, state.todayInWeek, desc, allowance = state.dailyBudget)
+        DayBars(
+            state.week,
+            labels,
+            state.todayInWeek,
+            desc,
+            allowance = state.dailyBudget,
+            beforeCount = state.weekDaysBeforePeriod,
+        )
     }
 }
 
@@ -453,12 +539,23 @@ private fun AccountsPanel(state: HomeState, actions: HomeActions, modifier: Modi
 
 /**
  * The week chart's spoken reading, each day so far by its full name: initials would read
- * Tuesday and Thursday, Saturday and Sunday, as the same letter.
+ * Tuesday and Thursday, Saturday and Sunday, as the same letter. When the week opens before the
+ * period began, it ends with what those days spent ("$197 of it before 1 October").
  */
-internal fun weekDescription(weekStart: LocalDate, week: List<Long>, todayInWeek: Int, format: (Long) -> String): String =
-    "This week: " + week.take(todayInWeek + 1).mapIndexed { i, v ->
+internal fun weekDescription(
+    weekStart: LocalDate,
+    week: List<Long>,
+    todayInWeek: Int,
+    spentBeforePeriod: Long = 0L,
+    periodStart: LocalDate = weekStart,
+    format: (Long) -> String,
+): String {
+    val days = "This week: " + week.take(todayInWeek + 1).mapIndexed { i, v ->
         Dates.weekday(weekStart.plusDays(i.toLong()).dayOfWeek) + " " + format(v)
     }.joinToString(", ")
+    if (spentBeforePeriod <= 0L) return days
+    return days + ", " + format(spentBeforePeriod) + " of it before " + periodStart.dayOfMonth + " " + Dates.month(periodStart)
+}
 
 /** "NET ACROSS 1 ACCOUNT", "NET ACROSS 4 ACCOUNTS": onboarding makes exactly one. */
 internal fun netAcrossLabel(accounts: Int): String = "NET ACROSS " + Copy.plural(accounts, "account").uppercase()

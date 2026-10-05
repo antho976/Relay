@@ -23,7 +23,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
-import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Palette
@@ -88,7 +87,7 @@ data class AppearanceActions(
 )
 
 /**
- * Appearance: a working sample of Home's margin under the current look, the two choices as tiles,
+ * Appearance: a working sample of Home's hero under the current look, the two choices as tiles,
  * then the ground and the accent. The whole app re-themes as each one changes, the sample with it.
  */
 @Composable
@@ -123,7 +122,7 @@ private const val SAMPLE_ELAPSED = 14
 private const val SAMPLE_BUDGET_UNITS = 2_900L
 private const val SAMPLE_SPENT_UNITS = 1_798L
 
-/** Home's margin hero in miniature, drawn with whatever accent and ground are set right now. */
+/** Home's left-to-spend hero in miniature, drawn with whatever accent and ground are set right now. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SampleHero(modifier: Modifier = Modifier) {
@@ -133,11 +132,11 @@ private fun SampleHero(modifier: Modifier = Modifier) {
         PaceReading(SAMPLE_BUDGET_UNITS * unit, SAMPLE_SPENT_UNITS * unit, SAMPLE_DAYS, SAMPLE_ELAPSED)
     }
     HeroPanel(modifier) {
-        HeroHead(Icons.Rounded.AccountBalanceWallet, "Margin", end = "SAMPLE")
+        HeroHead(Icons.Rounded.AccountBalanceWallet, "Left to spend", end = "SAMPLE")
         Spacer(Modifier.height(14.dp))
-        HeroNumber(money.formatWhole(reading.remaining), description = "Sample margin, " + money.formatWhole(reading.remaining))
+        HeroNumber(money.formatWhole(reading.remaining), description = "Sample, " + money.formatWhole(reading.remaining) + " left to spend")
         Text(
-            "of " + money.formatWhole(reading.budget) + " budget, " + money.formatWhole(reading.spent) + " spent",
+            "left of your " + money.formatWhole(reading.budget) + " budget · " + money.formatWhole(reading.spent) + " spent",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -151,8 +150,7 @@ private fun SampleHero(modifier: Modifier = Modifier) {
         )
         Spacer(Modifier.height(16.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatChip(Icons.Rounded.CalendarToday, Copy.plural(reading.daysLeft, "day") + " left")
-            StatChip(Icons.Rounded.Speed, money.formatWhole(reading.dailyAllowance) + " a day")
+            StatChip(Icons.Rounded.Speed, Copy.marginLine(reading, money))
             StatChip(Icons.AutoMirrored.Rounded.TrendingUp, Copy.paceLine(reading, money))
         }
     }

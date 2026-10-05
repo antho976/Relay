@@ -445,7 +445,7 @@ private fun TypeTile(type: AccountType, picked: Boolean, modifier: Modifier = Mo
 
 // ── Step 3: the month's budget ───────────────────────────────────────────────
 
-/** Under the question, the thing being built: Home's margin at zero spent, with the typed budget as its figure. */
+/** Under the question, the thing being built: Home's hero at zero spent, with the typed budget as its figure. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun BudgetStep(state: OnboardingState, actions: OnboardingActions) {
@@ -455,7 +455,7 @@ private fun BudgetStep(state: OnboardingState, actions: OnboardingActions) {
         PaceReading(budget, 0L, state.period.days, state.period.elapsedDays(state.today))
     }
     HeroPanel {
-        HeroHead(Icons.Rounded.AccountBalanceWallet, "Margin", end = Dates.period(state.period, state.today).uppercase())
+        HeroHead(Icons.Rounded.AccountBalanceWallet, "Left to spend", end = Dates.period(state.period, state.today).uppercase())
         Spacer(Modifier.height(12.dp))
         HeroNumber(
             money.formatWhole(budget),
@@ -479,11 +479,16 @@ private fun BudgetStep(state: OnboardingState, actions: OnboardingActions) {
             height = 14.dp,
         )
         Spacer(Modifier.height(8.dp))
-        Caption("Your margin starts here")
+        Caption("Home counts down from this figure")
         Spacer(Modifier.height(14.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatChip(Icons.Rounded.CalendarToday, Copy.plural(reading.daysLeft, "day") + " left")
-            if (budget > 0L) StatChip(Icons.Rounded.Speed, money.formatWhole(reading.dailyAllowance) + " a day")
+            // Home's allowance chip, in its words ("$94 a day for 31 days"); with no budget yet,
+            // only the days it would cover.
+            if (budget > 0L) {
+                StatChip(Icons.Rounded.Speed, Copy.marginLine(reading, money))
+            } else {
+                StatChip(Icons.Rounded.CalendarToday, Copy.plural(reading.daysLeft, "day") + " left")
+            }
         }
     }
     Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {

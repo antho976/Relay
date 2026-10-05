@@ -78,6 +78,10 @@ data class HomeState(
 ) {
     val todayInWeek: Int get() = ChronoUnit.DAYS.between(weekStart, today).toInt().coerceIn(0, 6)
     val weekSpent: Long get() = week.take(todayInWeek + 1).sum()
+    /** The week's leading days that fall before [period] began: early in a month, the week opens in the last one. */
+    val weekDaysBeforePeriod: Int get() = ChronoUnit.DAYS.between(weekStart, period.start).toInt().coerceIn(0, 7)
+    /** What those days spent, so the week's figure and the month's Out add up on screen. */
+    val weekSpentBeforePeriod: Long get() = week.take(minOf(weekDaysBeforePeriod, todayInWeek + 1)).sum()
     /** An even day's share of the overall budget, the dashed line on the week bars. */
     val dailyBudget: Long? get() = reading?.let { it.budget / period.days }
     val daysLeft: Int get() = period.daysLeft(today)

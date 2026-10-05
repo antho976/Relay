@@ -110,7 +110,7 @@ class CaptureTest {
      * the load brings; its label reads one of these three.
      */
     private fun homeDrawn(): Boolean =
-        exists("Margin") || exists("Over budget") || exists("Left from income")
+        exists("Left to spend") || exists("Over budget") || exists("Left from income")
 
     /** Runs [command] as the shell user and waits for it to finish. */
     private fun shell(command: String) {

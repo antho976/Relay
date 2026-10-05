@@ -11,6 +11,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import java.time.LocalDate
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -58,4 +59,34 @@ class HomeScreenshotTest {
         HomeScreen(populated.copy(spent = 312_000, reading = PaceReading(290_000, 312_000, period.days, elapsed)), HomeActions())
     }
     @Test fun homeMonochrome() = compose.shoot("home-mono", accentEnabled = false) { HomeScreen(populated, HomeActions()) }
+
+    /**
+     * Early in a month the week opens in the last one: Monday 28 Sep to Sunday 4 Oct, today Friday
+     * 2 Oct. September's three days read dimmed, Tuesday's included although it ran past October's
+     * daily allowance, and the line names what they spent so the week and Out add up.
+     */
+    @Test fun homeWeekBeforePeriod() = compose.shoot("home-week-before") {
+        val today = period.start.plusDays(1)
+        HomeScreen(
+            populated.copy(
+                today = today,
+                income = 215_000,
+                spent = 6_000,
+                reading = PaceReading(290_000, 6_000, period.days, period.elapsedDays(today)),
+                week = listOf(3_100L, 12_400L, 2_100L, 4_200L, 1_800L, 0L, 0L),
+                weekStart = LocalDate.of(2026, 9, 28),
+                lastPeriodSameDay = 9_800,
+                lastPeriodIncomeSameDay = 215_000,
+            ),
+            HomeActions(),
+        )
+    }
+
+    /** A landscape tablet: two panes under one title. */
+    @Config(qualifiers = "w1280dp-h800dp-xhdpi")
+    @Test fun homeTablet() = compose.shoot("home-tablet") { HomeScreen(populated, HomeActions()) }
+
+    /** A portrait tablet: one column capped at the reading width, centred. */
+    @Config(qualifiers = "w800dp-h1280dp-xhdpi")
+    @Test fun homeTabletPortrait() = compose.shoot("home-tablet-portrait") { HomeScreen(populated, HomeActions()) }
 }

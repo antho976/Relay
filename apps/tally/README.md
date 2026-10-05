@@ -25,9 +25,10 @@ they can never pass for real data; Erase everything removes them.
 
 ## What it does
 
-- **Home**: money in and out this month, the margin drawn as the budget meter with today's pace
-  tick, what each remaining day can take, the envelopes furthest over pace, recent entries,
-  upcoming bills, account balances.
+- **Home**: what is left to spend this month drawn as the budget meter with today's pace tick,
+  what each remaining day can take, money in and out, the week against the daily budget, the
+  envelopes furthest over pace, recent entries, upcoming bills, account balances. On a tablet it
+  splits into two panes.
 - **Activity**: every entry by day, month by month, with search across all time and filters.
 - **Add entry** (the + button, from every tab): keypad, category, account, date, note with
   suggestions, transfers between accounts, optional repeat.

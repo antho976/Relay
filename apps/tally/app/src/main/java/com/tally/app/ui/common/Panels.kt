@@ -121,6 +121,10 @@ fun IconBadge(
  * Two ends of one line: [start] takes the room, [end] sits at the far edge. When the longest word
  * of [start] and the whole of [end] cannot share the width (a 200% font, a long reading), [end]
  * drops under [start] instead of squeezing it until a word breaks in the middle.
+ *
+ * With [keepStartOnOneLine] the bar is higher: [end] drops as soon as [start] would wrap at all,
+ * so a short label ("IN AND OUT") never stacks word by word beside its reading. Panel headers use
+ * it; rows and group headers, whose start is a sentence that may wrap, keep the longest-word rule.
  */
 @Composable
 fun EndsRow(
@@ -129,6 +133,7 @@ fun EndsRow(
     modifier: Modifier = Modifier,
     gap: Dp = 12.dp,
     stackedGap: Dp = 2.dp,
+    keepStartOnOneLine: Boolean = false,
 ) {
     if (end == null) {
         Box(modifier) { start() }
@@ -142,7 +147,12 @@ fun EndsRow(
         val endPlaceable = last.measure(loose)
         val bounded = constraints.hasBoundedWidth
         val room = constraints.maxWidth
-        val sideBySide = !bounded || first.minIntrinsicWidth(Constraints.Infinity) + gapPx + endPlaceable.width <= room
+        val startNeeds = if (keepStartOnOneLine) {
+            first.maxIntrinsicWidth(Constraints.Infinity)
+        } else {
+            first.minIntrinsicWidth(Constraints.Infinity)
+        }
+        val sideBySide = !bounded || endsShareLine(startNeeds, gapPx, endPlaceable.width, room)
         if (sideBySide) {
             val startMax = if (bounded) room - gapPx - endPlaceable.width else Constraints.Infinity
             val startPlaceable = first.measure(loose.copy(maxWidth = startMax.coerceAtLeast(0)))
@@ -165,8 +175,16 @@ fun EndsRow(
 }
 
 /**
+ * The [EndsRow] decision: the start's needed width (its longest word, or its whole line when it
+ * must not wrap), the gap and the end fit the room, so the two share one line.
+ */
+internal fun endsShareLine(startNeeds: Int, gap: Int, endWidth: Int, room: Int): Boolean =
+    startNeeds + gap + endWidth <= room
+
+/**
  * A panel's header: icon tile, the mono label, and either a reading or a `view all →` at the end.
- * The label names the panel; it is not a kicker above a heading.
+ * The label names the panel; it is not a kicker above a heading. The label keeps one line: when
+ * it and the end cannot share the width whole, the end drops under the label.
  */
 @Composable
 fun PanelHeader(
@@ -207,13 +225,15 @@ fun PanelHeader(
                 null
             },
             modifier = Modifier.weight(1f),
+            keepStartOnOneLine = true,
         )
     }
 }
 
 /**
- * One reading as a tile: glyph, mono label, the value in serif, an optional detail line. For a
- * grid of DIFFERENT readings (per day, vs last month, biggest category), never a wall of the same.
+ * One reading as a tile: glyph, the value in serif with its mono label under it (as every figure
+ * in the kit reads), an optional detail line. For a grid of DIFFERENT readings (per day, vs last
+ * month, biggest category), never a wall of the same. TalkBack hears label, value, detail.
  */
 @Composable
 fun StatTile(
@@ -236,17 +256,19 @@ fun StatTile(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         IconBadge(icon, tint = tint, size = 30.dp)
-        Column(Modifier.clearAndSetSemantics { }, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(label.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.clearAndSetSemantics { }) {
             Text(value, style = MaterialTheme.typography.headlineSmall, color = valueColor)
+            Spacer(Modifier.height(2.dp))
+            Text(label.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (detail != null) {
+                Spacer(Modifier.height(6.dp))
                 Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
 }
 
-/** A small pill of context inside a panel: glyph and a few words ("$58 a day", "17 days left"). */
+/** A small pill of context inside a panel: glyph and a few words ("$58 a day for 17 days"). */
 @Composable
 fun StatChip(icon: ImageVector, text: String, modifier: Modifier = Modifier) {
     Row(
@@ -267,6 +289,9 @@ fun StatChip(icon: ImageVector, text: String, modifier: Modifier = Modifier) {
  * run of days) at a glance. [highlight] is today's index, drawn in the accent; past days take the
  * secondary rung; days still ahead draw as empty stubs. Bars over the allowance take the error
  * colour, a true state.
+ *
+ * The first [beforeCount] days fall before the period began (a week can open in last month):
+ * they draw in the muted rung, initials dimmed, and are never held to this period's allowance.
  */
 @Composable
 fun DayBars(
@@ -277,9 +302,11 @@ fun DayBars(
     modifier: Modifier = Modifier,
     allowance: Long? = null,
     height: Dp = 96.dp,
+    beforeCount: Int = 0,
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val past = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+    val before = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
     val over = MaterialTheme.colorScheme.error
     val track = MaterialTheme.colorScheme.surfaceContainerHighest
     val guide = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
@@ -301,6 +328,7 @@ fun DayBars(
                 val h = size.height * (v / max) * progress.value
                 if (h <= 0f) return@forEachIndexed
                 val color = when {
+                    i < beforeCount -> before
                     allowance != null && allowance > 0 && v > allowance -> over
                     i == highlight -> accent
                     else -> past
@@ -322,7 +350,11 @@ fun DayBars(
                     label,
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (i == highlight) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = when {
+                        i < beforeCount -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                        i == highlight -> MaterialTheme.colorScheme.onBackground
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                     textAlign = TextAlign.Center,
                 )
             }
