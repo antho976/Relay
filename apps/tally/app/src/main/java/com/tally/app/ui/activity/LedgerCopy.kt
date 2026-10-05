@@ -18,6 +18,7 @@ internal fun accountTypeLabel(type: AccountType): String = when (type) {
     AccountType.CHEQUING -> "Chequing"
     AccountType.SAVINGS -> "Savings"
     AccountType.CREDIT -> "Credit card"
+    AccountType.INVESTMENT -> "Investment"
 }
 
 /** The noun the largest and average readings speak of. */

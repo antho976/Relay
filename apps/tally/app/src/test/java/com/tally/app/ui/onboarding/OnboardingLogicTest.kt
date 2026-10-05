@@ -74,4 +74,50 @@ class OnboardingLogicTest {
             listOfNotNull(amountProblem("x", null))
         lines.forEach { line -> Copy.banned.forEach { bad -> assertFalse("\"$line\" contains \"$bad\"", line.contains(bad, ignoreCase = true)) } }
     }
+
+    // ── Several accounts ─────────────────────────────────────────────────────
+
+    private val chequing = OnboardAccount("Chequing", AccountType.CHEQUING, "3184.50", 318_450)
+    private val visa = OnboardAccount("Visa", AccountType.CREDIT, "412.20", 41_220)
+
+    @Test fun theNextFormSuggestsTheNextUsualType() {
+        assertEquals(AccountType.CHEQUING, suggestedType(emptyList()))
+        assertEquals(AccountType.CREDIT, suggestedType(listOf(chequing)))
+        assertEquals(AccountType.SAVINGS, suggestedType(listOf(chequing, visa)))
+        assertEquals(AccountType.CHEQUING, suggestedType(AccountType.entries.map { OnboardAccount(it.name, it) }))
+    }
+
+    @Test fun theOpenFormIsOneMoreAccountToCreate() {
+        val step = ready.copy(step = OnboardingStep.ACCOUNT, accounts = listOf(chequing, visa))
+        // A form closed after adding: only what was added.
+        val closed = step.copy(editing = false)
+        assertFalse(closed.formOpen)
+        assertEquals(listOf("Chequing", "Visa"), closed.toCreate.map { it.name })
+        assertEquals(318_450L - 41_220L, closed.net)
+        assertTrue("Nothing to read in a closed form", closed.copy(balanceText = "abc", balance = null).canContinue)
+        // An open form adds its own account, named for its type when the name was cleared.
+        val open = step.copy(editing = true, accountType = AccountType.SAVINGS, accountName = " ", balanceText = "100", balance = 10_000)
+        assertEquals(listOf("Chequing", "Visa", "Savings"), open.toCreate.map { it.name })
+        assertEquals(318_450L - 41_220L + 10_000L, open.net)
+        // With nothing added yet the form is always open.
+        assertTrue(ready.copy(editing = false).formOpen)
+    }
+
+    @Test fun theNamesReadAsOneLine() {
+        assertEquals("", accountNames(emptyList()))
+        assertEquals("Chequing", accountNames(listOf(chequing)))
+        assertEquals("Chequing and Visa", accountNames(listOf(chequing, visa)))
+        val savings = OnboardAccount("Savings", AccountType.SAVINGS)
+        assertEquals("Chequing, Visa and Savings", accountNames(listOf(chequing, visa, savings)))
+        assertEquals("Chequing, Visa and 2 more", accountNames(listOf(chequing, visa, savings, savings)))
+    }
+
+    @Test fun addedAccountsSurviveAProcessDeathAndReadAgainAtTheCurrency() {
+        val answered = ready.copy(step = OnboardingStep.ACCOUNT, accounts = listOf(chequing, visa), editing = false)
+        val saved = SavedOnboarding.of(answered)
+        val back = saved.applyTo(ready) { text -> text.takeIf { it.isNotBlank() }?.toBigDecimal()?.movePointRight(2)?.toLong() }
+        assertEquals(listOf("Chequing", "Visa"), back.accounts.map { it.name })
+        assertEquals(listOf(318_450L, 41_220L), back.accounts.map { it.balance })
+        assertFalse(back.editing)
+    }
 }

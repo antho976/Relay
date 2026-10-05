@@ -5,13 +5,16 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tally.app.data.Clock
+import com.tally.app.data.db.AccountBalance
 import com.tally.app.data.db.GoalEntity
 import com.tally.app.data.prefs.SettingsRepository
+import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.data.repo.PlanRepository
 import com.tally.app.ui.common.Notices
 import com.tally.app.ui.common.keepDraft
 import com.tally.app.ui.common.savedDraft
 import com.tally.app.ui.nav.Args
+import com.tally.core.GoalKind
 import com.tally.core.MoneyFormatter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
@@ -20,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -44,6 +48,10 @@ data class GoalEditState(
     val problems: GoalProblems = GoalProblems(),
     /** True once a save was tried with problems: the form then says what is missing. */
     val showErrors: Boolean = false,
+    /** The open accounts a balance or invest goal can read. */
+    val accounts: List<AccountBalance> = emptyList(),
+    /** What a balance goal's pick reads now: the account's balance, or the net of every open one. */
+    val balanceNow: Long = 0,
 ) {
     val isNew: Boolean get() = !stored
 }
@@ -52,6 +60,7 @@ data class GoalEditState(
 class GoalEditViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val plan: PlanRepository,
+    private val ledger: LedgerRepository,
     private val settings: SettingsRepository,
     private val notices: Notices,
     clock: Clock,
@@ -72,24 +81,34 @@ class GoalEditViewModel @Inject constructor(
     /** One write per visit. */
     private var busy = false
 
-    val state: StateFlow<GoalEditState> = combine(draft, stored, plan.goals(), ready, showErrors) { d, st, goals, isReady, errors ->
+    private data class Flags(val ready: Boolean, val errors: Boolean)
+
+    private val flags = combine(ready, showErrors) { r, e -> Flags(r, e) }
+
+    val state: StateFlow<GoalEditState> = combine(draft, stored, plan.goals(), ledger.balances(), flags) { d, st, goals, balances, f ->
         val row = if (st == null) null else goals.firstOrNull { it.goal.id == st.id }
         GoalEditState(
             draft = d,
             today = today,
-            loaded = isReady,
+            loaded = f.ready,
             stored = st != null,
             saved = row?.saved ?: 0L,
             firstDate = row?.firstDate,
             monthsLeft = d.targetDate?.let { monthsUntil(today, it) },
             problems = goalProblems(d),
-            showErrors = errors,
+            showErrors = f.errors,
+            accounts = balances.filter { !it.archived || it.id == d.accountId },
+            balanceNow = reading(d.accountId, balances),
         )
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
         GoalEditState(draft = draft.value, today = today),
     )
+
+    /** A balance goal's reading: the picked account's balance, or the net of every open account. */
+    private fun reading(accountId: Long?, balances: List<AccountBalance>): Long =
+        accountId?.let { id -> balances.firstOrNull { it.id == id }?.balance } ?: netWorth(balances)
 
     init {
         viewModelScope.launch {
@@ -103,11 +122,15 @@ class GoalEditViewModel @Inject constructor(
                 draft.value = kept ?: GoalDraft(
                     id = goal.id,
                     name = goal.name,
-                    targetText = money.formatInput(goal.target),
+                    targetText = if (goal.target > 0L || goal.kind == GoalKind.BALANCE) money.formatInput(goal.target) else "",
                     target = goal.target,
                     targetDate = goal.targetDate,
                     color = goal.color,
                     archived = goal.archived,
+                    kind = goal.kind,
+                    accountId = goal.accountId,
+                    percent = if (goal.percent > 0) goal.percent else 10,
+                    byShare = goal.percent > 0 || goal.target <= 0L,
                 )
             } else {
                 draft.value = (kept ?: draft.value).copy(id = 0L)
@@ -126,6 +149,18 @@ class GoalEditViewModel @Inject constructor(
 
     fun setColor(color: Int) = draft.update { it.copy(color = color) }
 
+    /** The kind is picked once, on a new goal: a pot's contributions mean nothing to another kind. */
+    fun setKind(kind: GoalKind) {
+        if (stored.value != null) return
+        draft.update { it.copy(kind = kind, accountId = null) }
+    }
+
+    fun setAccount(id: Long?) = draft.update { it.copy(accountId = id) }
+
+    fun setPercent(percent: Int) = draft.update { it.copy(percent = percent.coerceIn(1, 100)) }
+
+    fun setByShare(byShare: Boolean) = draft.update { it.copy(byShare = byShare) }
+
     fun save() {
         if (busy) return
         val s = state.value
@@ -135,18 +170,38 @@ class GoalEditViewModel @Inject constructor(
             return
         }
         val d = s.draft
-        val target = d.target ?: return
         val original = stored.value
         busy = true
         viewModelScope.launch {
+            val balances = ledger.balances().first()
+            val monthly = d.kind == GoalKind.INVEST || d.kind == GoalKind.SAVE
+            // A balance goal's pace starts the day it is set, from what its pick reads then; an edit
+            // keeps that start unless the pick changed under it.
+            val keepStart = original != null && original.kind == GoalKind.BALANCE && original.accountId == d.accountId
             plan.saveGoal(
                 GoalEntity(
                     id = original?.id ?: 0L,
                     name = d.name.trim(),
-                    target = target,
-                    targetDate = d.targetDate,
+                    target = when {
+                        monthly && d.byShare -> 0L
+                        else -> d.target ?: 0L
+                    },
+                    targetDate = if (monthly) null else d.targetDate,
                     color = d.color,
                     archived = original?.archived ?: false,
+                    kind = d.kind,
+                    accountId = if (d.kind == GoalKind.SAVINGS || d.kind == GoalKind.SAVE) null else d.accountId,
+                    percent = if (monthly && d.byShare) d.percent else 0,
+                    startDate = when {
+                        d.kind != GoalKind.BALANCE -> null
+                        keepStart -> original?.startDate ?: today
+                        else -> today
+                    },
+                    startAmount = when {
+                        d.kind != GoalKind.BALANCE -> 0L
+                        keepStart -> original?.startAmount ?: 0L
+                        else -> reading(d.accountId, balances)
+                    },
                 )
             )
             finished.send(Unit)

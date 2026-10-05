@@ -106,8 +106,11 @@ class MoneyFormatter(currencyCode: String, val locale: Locale) {
             return r
         }
 
-        /** A minus (hyphen or true minus) or an opening bracket: the text says the amount is negative. */
-        fun hasSign(text: String): Boolean = text.any { it == '-' || it == '−' || it == '(' }
+        /**
+         * A minus (hyphen, true minus, or the en dash some bank statements print) or an opening
+         * bracket: the text says the amount is negative.
+         */
+        fun hasSign(text: String): Boolean = text.any { it == '-' || it == '−' || it == '\u2013' || it == '(' }
 
         /**
          * [minor] written with [fromDigits] decimals, rewritten with [toDigits]: the same figure in a

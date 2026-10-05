@@ -20,15 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
-import androidx.compose.material.icons.rounded.AccountBalance
-import androidx.compose.material.icons.rounded.AccountBalanceWallet
-import androidx.compose.material.icons.rounded.ArrowDownward
-import androidx.compose.material.icons.rounded.ArrowUpward
-import androidx.compose.material.icons.rounded.BarChart
-import androidx.compose.material.icons.rounded.DonutLarge
-import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.MaterialTheme
@@ -39,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -52,6 +45,7 @@ import com.tally.app.ui.common.ChromeButton
 import com.tally.app.ui.common.Dates
 import com.tally.app.ui.common.DayBars
 import com.tally.app.ui.common.EndsRow
+import com.tally.app.ui.common.FIGURE_GAP
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.HeroPanel
 import com.tally.app.ui.common.LedgerRow
@@ -72,6 +66,7 @@ import com.tally.app.ui.common.bounceClick
 import com.tally.app.ui.nav.AppNav
 import com.tally.app.ui.nav.FAB_CLEARANCE
 import com.tally.app.ui.nav.HubTab
+import com.tally.app.ui.plan.GoalRow
 import com.tally.core.Copy
 import com.tally.core.PaceStatus
 import com.tally.core.TxType
@@ -90,7 +85,7 @@ fun HomeTab(nav: AppNav, openTab: (HubTab) -> Unit, viewModel: HomeViewModel = h
             settings = nav::settings,
             setBudget = { nav.budgetEdit(0) },
             openPlan = { openTab(HubTab.PLAN) },
-            openActivity = { openTab(HubTab.ACTIVITY) },
+            openHistory = nav::history,
             openInsights = { openTab(HubTab.INSIGHTS) },
             openCategory = { nav.transactions(categoryId = it) },
             openEntry = { nav.entry(id = it) },
@@ -98,6 +93,8 @@ fun HomeTab(nav: AppNav, openTab: (HubTab) -> Unit, viewModel: HomeViewModel = h
             addBill = { nav.billEdit(0) },
             openAccount = { nav.transactions(accountId = it) },
             accounts = nav::accounts,
+            openGoal = { nav.goal(it) },
+            addGoal = { nav.goalEdit(0) },
         ),
     )
 }
@@ -107,7 +104,8 @@ data class HomeActions(
     val settings: () -> Unit = {},
     val setBudget: () -> Unit = {},
     val openPlan: () -> Unit = {},
-    val openActivity: () -> Unit = {},
+    /** Every entry, day by day: Recent's "view all". */
+    val openHistory: () -> Unit = {},
     val openInsights: () -> Unit = {},
     val openCategory: (Long) -> Unit = {},
     val openEntry: (Long) -> Unit = {},
@@ -115,12 +113,15 @@ data class HomeActions(
     val addBill: () -> Unit = {},
     val openAccount: (Long) -> Unit = {},
     val accounts: () -> Unit = {},
+    val openGoal: (Long) -> Unit = {},
+    val addGoal: () -> Unit = {},
 )
 
 /**
  * Home: what is left to spend this month in the one lit panel, money in and out beside last month,
- * the week's days against the daily budget, then the envelopes furthest over pace, the newest
- * entries, what is due, and where the money sits. Each section is one panel led by its glyph.
+ * the week's days against the daily budget, then the envelopes furthest over pace, the goals that
+ * need attention, the newest entries by day (History's trim, as Avex's Home keeps its Recent), what
+ * is due, and where the money sits. Each section is one panel led by its glyph.
  *
  * The layout follows the width it is given ([homeLayout]): the phone column; from 600dp the same
  * column capped at [READING_WIDTH] and centred, so no reading sits a screen away from its label;
@@ -160,6 +161,7 @@ fun HomeScreen(state: HomeState, actions: HomeActions) {
                     item(key = "inout") { InOutTiles(state, panel) }
                     item(key = "week") { WeekPanel(state, actions, panel) }
                     item(key = "budgets") { BudgetsPanel(state, actions, panel) }
+                    item(key = "goals") { GoalsPanel(state, actions, panel) }
                     item(key = "recent") { RecentPanel(state, actions, panel) }
                     item(key = "upcoming") { UpcomingPanel(state, actions, panel) }
                     item(key = "accounts") { AccountsPanel(state, actions, panel) }
@@ -218,6 +220,7 @@ private fun HomePanes(state: HomeState, actions: HomeActions, modifier: Modifier
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
             BudgetsPanel(state, actions)
+            GoalsPanel(state, actions)
             RecentPanel(state, actions)
             UpcomingPanel(state, actions)
             AccountsPanel(state, actions)
@@ -237,10 +240,9 @@ private fun LeftToSpendHero(state: HomeState, actions: HomeActions, modifier: Mo
     val r = state.reading
     val over = r?.status == PaceStatus.OVER_BUDGET
     val tint = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-    HeroPanel(modifier, tint = tint) {
+    HeroPanel(modifier) {
         // The kit's header: the pace reading drops under the label before the label would wrap.
         PanelHeader(
-            Icons.Rounded.AccountBalanceWallet,
             if (over) "Over budget" else if (r != null) "Left to spend" else "Left from income",
             meta = if (r != null && !over) Copy.paceLine(r, money) else null,
             tint = tint,
@@ -322,17 +324,14 @@ private fun InOutTiles(state: HomeState, modifier: Modifier = Modifier) {
         now > then -> money.formatWhole(now - then) + " more than last month"
         else -> money.formatWhole(then - now) + " less than last month"
     }
-    Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+    Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
         StatTile(
-            Icons.Rounded.ArrowDownward,
             "In",
             money.formatWhole(state.income),
             Modifier.weight(1f).fillMaxHeight(),
             detail = versus(state.income, state.lastPeriodIncomeSameDay),
-            tint = MaterialTheme.colorScheme.tertiary,
         )
         StatTile(
-            Icons.Rounded.ArrowUpward,
             "Out",
             money.formatWhole(state.spent),
             Modifier.weight(1f).fillMaxHeight(),
@@ -357,7 +356,6 @@ private fun WeekPanel(state: HomeState, actions: HomeActions, modifier: Modifier
     }.joinToString(" · ")
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.BarChart,
             "This week",
             action = "insights",
             onAction = actions.openInsights,
@@ -380,7 +378,6 @@ private fun WeekPanel(state: HomeState, actions: HomeActions, modifier: Modifier
 private fun BudgetsPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.DonutLarge,
             "Budgets",
             action = if (state.envelopes.isEmpty()) null else "all",
             onAction = actions.openPlan,
@@ -424,22 +421,51 @@ private fun EnvelopeRow(e: Envelope, onClick: () -> Unit) {
     }
 }
 
+/**
+ * The goals that need attention, Avex's Home section in Tally's panel: behind first, reached last,
+ * three at most, each opening its goal.
+ */
+@Composable
+private fun GoalsPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
+    Panel(modifier) {
+        PanelHeader(
+            "Goals",
+            action = if (state.goals.isEmpty()) null else "all",
+            onAction = actions.openPlan,
+        )
+        if (state.goals.isEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            AsideAction("A goal: a pot, an amount by a date, or a share of every month invested", "add one", actions.addGoal)
+        } else {
+            state.goals.forEach { g -> GoalRow(g, state.today) { actions.openGoal(g.id) } }
+        }
+    }
+}
+
+/**
+ * The newest entries, grouped under their day as History groups them, with "view all" opening
+ * History itself. The day says when once, so the rows carry only where.
+ */
 @Composable
 private fun RecentPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
     Panel(modifier) {
         PanelHeader(
-            Icons.AutoMirrored.Rounded.ReceiptLong,
             "Recent",
             action = if (state.recent.isEmpty()) null else "view all",
-            onAction = actions.openActivity,
+            onAction = actions.openHistory,
         )
         if (state.recent.isEmpty()) {
             Spacer(Modifier.height(8.dp))
             Aside("Your first entry lands here. Tap + to log one")
         } else {
-            Spacer(Modifier.height(4.dp))
-            state.recent.forEach { row ->
-                LedgerRow(row, Dates.day(row.date, state.today), onClick = { actions.openEntry(row.id) })
+            state.recent.groupBy { it.date }.forEach { (date, rows) ->
+                Text(
+                    Dates.day(date, state.today).uppercase(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (date == state.today) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp).semantics { heading() },
+                )
+                rows.forEach { row -> LedgerRow(row, meta = "", onClick = { actions.openEntry(row.id) }) }
             }
         }
     }
@@ -448,7 +474,7 @@ private fun RecentPanel(state: HomeState, actions: HomeActions, modifier: Modifi
 @Composable
 private fun UpcomingPanel(state: HomeState, actions: HomeActions, modifier: Modifier = Modifier) {
     Panel(modifier) {
-        PanelHeader(Icons.Rounded.Event, "Upcoming", meta = if (state.upcoming.isEmpty()) null else "NEXT 14 DAYS")
+        PanelHeader("Upcoming", meta = if (state.upcoming.isEmpty()) null else "NEXT 14 DAYS")
         if (state.upcoming.isEmpty()) {
             Spacer(Modifier.height(8.dp))
             AsideAction("Nothing due in the next two weeks", "add a bill", actions.addBill)
@@ -494,7 +520,7 @@ private fun AccountsPanel(state: HomeState, actions: HomeActions, modifier: Modi
     val money = LocalMoney.current
     val active = state.accounts.filter { !it.archived }
     Panel(modifier) {
-        PanelHeader(Icons.Rounded.AccountBalance, "Accounts", action = "manage", onAction = actions.accounts)
+        PanelHeader("Accounts", action = "manage", onAction = actions.accounts)
         if (active.isEmpty()) {
             Spacer(Modifier.height(8.dp))
             Aside("No accounts yet")

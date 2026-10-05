@@ -24,7 +24,9 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.Flag
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Inventory2
+import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -36,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -54,9 +57,14 @@ import com.tally.app.data.repo.AccountUse
 import com.tally.app.ui.common.AccountBadge
 import com.tally.app.ui.common.Caption
 import com.tally.app.ui.common.CategoryIcons
+import com.tally.app.ui.common.ChoiceChip
 import com.tally.app.ui.common.ChromeButton
+import com.tally.app.ui.common.Dates
+import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.Group
+import com.tally.app.ui.common.GroupBlock
+import com.tally.app.ui.common.GroupRow
 import com.tally.app.ui.common.HeroAction
 import com.tally.app.ui.common.HeroPanel
 import com.tally.app.ui.common.LocalMoney
@@ -74,8 +82,10 @@ import com.tally.app.ui.common.refusalLine
 import com.tally.app.ui.common.selectableColors
 import com.tally.app.ui.common.slab
 import com.tally.app.ui.nav.AppNav
+import com.tally.app.data.db.AccountValueEntity
 import com.tally.core.AccountType
 import com.tally.core.Copy
+import java.time.LocalDate
 
 @Composable
 fun AccountEditRoute(nav: AppNav) {
@@ -87,6 +97,9 @@ fun AccountEditRoute(nav: AppNav) {
             back = nav::back,
             setName = viewModel::setName,
             setType = viewModel::setType,
+            applyTemplate = viewModel::applyTemplate,
+            recordValue = viewModel::recordValue,
+            deleteValue = viewModel::deleteValue,
             setOpening = viewModel::setOpening,
             setOwe = viewModel::setOwe,
             setDefault = viewModel::setDefault,
@@ -107,6 +120,10 @@ data class AccountEditActions(
     val back: () -> Unit = {},
     val setName: (String) -> Unit = {},
     val setType: (AccountType) -> Unit = {},
+    val applyTemplate: (AccountTemplate) -> Unit = {},
+    /** Records an investment account's value today. */
+    val recordValue: (Long) -> Unit = {},
+    val deleteValue: (Long) -> Unit = {},
     /** The typed text and that text read as an amount (null when it is not one). */
     val setOpening: (String, Long?) -> Unit = { _, _ -> },
     val setOwe: (Boolean) -> Unit = {},
@@ -150,9 +167,11 @@ fun AccountEditScreen(state: AccountEditState, actions: AccountEditActions) {
             )
             if (state.loaded) {
                 BalanceHero(state, onEntries = { actions.viewEntries(state.id) })
+                if (state.isNew && state.templates.isNotEmpty()) QuickStartGroup(state, actions)
                 NameGroup(state, actions)
                 TypeGroup(d.type, actions.setType)
                 OpeningGroup(state, actions)
+                if (!state.isNew && d.type == AccountType.INVESTMENT) ValueGroup(state, actions)
                 UseGroup(d, actions)
                 Column(Modifier.fillMaxWidth()) {
                     SaveRefusal(
@@ -196,7 +215,6 @@ private fun BalanceHero(state: AccountEditState, onEntries: () -> Unit, modifier
     }
     HeroPanel(modifier) {
         HeroHead(
-            CategoryIcons.account(d.type),
             if (state.isNew) "Opens with" else "Balance",
             end = money.currency.currencyCode,
         )
@@ -233,6 +251,77 @@ private fun BalanceHero(state: AccountEditState, onEntries: () -> Unit, modifier
             TextAction("view entries", onEntries, Modifier.align(Alignment.End), color = MaterialTheme.colorScheme.primary)
         }
     }
+}
+
+/** A new account in one tap: the banks the owner uses, each with its usual type. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun QuickStartGroup(state: AccountEditState, actions: AccountEditActions) {
+    val block: @Composable (Shape) -> Unit = { shape ->
+        GroupBlock(shape) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                state.templates.forEach { t ->
+                    ChoiceChip(t.name, state.draft.name == t.name && state.draft.type == t.type, role = Role.Button) { actions.applyTemplate(t) }
+                }
+            }
+        }
+    }
+    Group(
+        rows = listOf(block),
+        title = "Quick start",
+        footer = "Fills the name and the type. Import its statement from Settings once it exists",
+    )
+}
+
+/**
+ * What an investment account is worth: the value read off a statement today, and the ones
+ * recorded before. The newest value is the balance from its day on; a tap on an older one removes
+ * it, with Undo.
+ */
+@Composable
+private fun ValueGroup(state: AccountEditState, actions: AccountEditActions) {
+    val money = LocalMoney.current
+    var text by rememberSaveable { mutableStateOf("") }
+    val value = money.parse(text)
+    val field: @Composable (Shape) -> Unit = { shape ->
+        FieldRow(
+            text,
+            { text = it },
+            "Worth today",
+            Icons.Rounded.Payments,
+            shape,
+            keyboardType = KeyboardType.Decimal,
+            suffix = money.currency.currencyCode,
+        )
+    }
+    val record: @Composable (Shape) -> Unit = { shape ->
+        GroupRow(
+            if (value != null) "Record " + money.format(value) else "Record the value",
+            shape,
+            subtitle = "Market moves land in the balance, never in spending or income",
+            leading = { GlyphBadge(Icons.Rounded.Check) },
+            chevron = false,
+            onClick = if (value != null) ({ actions.recordValue(value); text = "" }) else null,
+        )
+    }
+    val history: List<@Composable (Shape) -> Unit> = state.values.take(4).map { v -> valueRow(v, state.today, actions.deleteValue) }
+    Group(
+        rows = listOf(field, record) + history,
+        title = "Value",
+        footer = if (state.values.isEmpty()) "Until a value is recorded, the balance counts what went in" else "Tap an older value to remove it",
+    )
+}
+
+private fun valueRow(v: AccountValueEntity, today: LocalDate, onDelete: (Long) -> Unit): @Composable (Shape) -> Unit = { shape ->
+    val money = LocalMoney.current
+    GroupRow(
+        money.format(v.value),
+        shape,
+        subtitle = "Read " + Dates.day(v.date, today),
+        leading = { GlyphBadge(Icons.Rounded.History) },
+        chevron = false,
+        onClick = { onDelete(v.id) },
+    )
 }
 
 @Composable

@@ -1,12 +1,12 @@
 package com.tally.app.ui.entry
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -14,26 +14,27 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalance
-import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.ArrowDownward
-import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DonutLarge
+import androidx.compose.material.icons.rounded.LibraryAdd
 import androidx.compose.material.icons.rounded.Repeat
-import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,13 +47,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -61,13 +61,16 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tally.app.data.db.AccountBalance
+import com.tally.app.data.db.QuickPick
 import com.tally.app.ui.common.Aside
 import com.tally.app.ui.common.Caption
+import com.tally.app.ui.common.CategoryBadge
 import com.tally.app.ui.common.CategoryIcons
 import com.tally.app.ui.common.ChoiceChip
 import com.tally.app.ui.common.ChoiceRow
 import com.tally.app.ui.common.ChromeButton
 import com.tally.app.ui.common.Dates
+import com.tally.app.ui.common.FIGURE_GAP
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.Group
@@ -75,10 +78,8 @@ import com.tally.app.ui.common.GroupHeader
 import com.tally.app.ui.common.GroupRow
 import com.tally.app.ui.common.HeroAction
 import com.tally.app.ui.common.HeroPanel
-import com.tally.app.ui.common.IconBadge
 import com.tally.app.ui.common.LocalMoney
 import com.tally.app.ui.common.PANEL_GAP
-import com.tally.app.ui.common.PANEL_PAD
 import com.tally.app.ui.common.Panel
 import com.tally.app.ui.common.PanelHeader
 import com.tally.app.ui.common.SlidingSegments
@@ -87,6 +88,7 @@ import com.tally.app.ui.common.StatTile
 import com.tally.app.ui.common.SwitchRow
 import com.tally.app.ui.common.TextAction
 import com.tally.app.ui.common.TopBar
+import com.tally.app.ui.common.bounceClick
 import com.tally.app.ui.nav.AppNav
 import com.tally.core.CategoryKind
 import com.tally.core.Copy
@@ -125,7 +127,9 @@ fun EntryRoute(nav: AppNav) {
             pickSuggestion = viewModel::pickSuggestion,
             setRepeat = viewModel::setRepeat,
             setFrequency = viewModel::setFrequency,
+            pickQuick = viewModel::pickQuick,
             save = viewModel::save,
+            saveAndNew = viewModel::saveAndNew,
             editCategories = nav::categories,
             addCategory = { kind -> nav.categoryEdit(kind = kind) },
             addAccount = { nav.accountEdit(0) },
@@ -149,7 +153,10 @@ data class EntryActions(
     val pickSuggestion: (String) -> Unit = {},
     val setRepeat: (Boolean) -> Unit = {},
     val setFrequency: (Frequency) -> Unit = {},
+    val pickQuick: (QuickPick) -> Unit = {},
     val save: () -> Unit = {},
+    /** Saves and stays, emptied, for the next entry. New entries only. */
+    val saveAndNew: () -> Unit = {},
     val editCategories: () -> Unit = {},
     val addCategory: (CategoryKind) -> Unit = {},
     val addAccount: () -> Unit = {},
@@ -179,6 +186,9 @@ fun EntryScreen(state: EntryState, actions: EntryActions) {
                 if (!state.isNew) {
                     ChromeButton(Icons.Rounded.ContentCopy, "Duplicate", actions.duplicate)
                     ChromeButton(Icons.Rounded.DeleteOutline, "Delete entry", actions.delete)
+                } else if (state.canSave) {
+                    // A stack of receipts: save this one and stay for the next.
+                    ChromeButton(Icons.Rounded.LibraryAdd, "Save and add another", actions.saveAndNew)
                 }
             }
             if (pinHead) {
@@ -240,21 +250,8 @@ private fun AmountHero(state: EntryState, modifier: Modifier = Modifier) {
         else -> state.category?.name ?: "Pick a category"
     }
     val line = listOf(what, d.note.trim()).filter { it.isNotEmpty() }.joinToString(" · ")
-    HeroPanel(modifier, tint = tint) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            IconBadge(typeIcon(d.type), tint = tint)
-            Text(
-                typeLabel(d.type).uppercase(),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.weight(1f).semantics { heading() },
-            )
-            Text(
-                money.currency.currencyCode,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+    HeroPanel(modifier) {
+        PanelHeader(typeLabel(d.type), meta = money.currency.currencyCode, tint = tint)
         Spacer(Modifier.height(10.dp))
         val density = LocalDensity.current
         val scale = density.fontScale.coerceAtMost(HERO_MAX_SCALE)
@@ -278,6 +275,13 @@ private fun AmountHero(state: EntryState, modifier: Modifier = Modifier) {
                 StatChip(Icons.Rounded.Repeat, "Repeats " + FREQUENCY_LABELS[FREQUENCIES.indexOf(d.frequency)].lowercase())
             }
             if (!state.isNew && d.recurringId != null) StatChip(Icons.Rounded.Repeat, "Posted by a bill")
+            val left = state.leftAfter
+            if (left != null && minor > 0) {
+                StatChip(
+                    Icons.Rounded.Speed,
+                    if (left >= 0) "Leaves " + money.formatWhole(left) + " of the month" else money.formatWhole(-left) + " over the month",
+                )
+            }
         }
     }
 }
@@ -295,17 +299,12 @@ private fun amountStyle(length: Int, scale: Float): TextStyle {
     }
 }
 
-private fun typeIcon(type: TxType): ImageVector = when (type) {
-    TxType.EXPENSE -> Icons.Rounded.ArrowUpward
-    TxType.INCOME -> Icons.Rounded.ArrowDownward
-    TxType.TRANSFER -> Icons.Rounded.SwapHoriz
-}
-
 /** The form between the amount and the keypad. Each call below is one block of the scroll. */
 @Composable
 private fun EntryBody(state: EntryState, actions: EntryActions, onPickDate: () -> Unit) {
     val noAccounts = state.accounts.isEmpty()
     if (noAccounts) NoAccountsPanel(state.draft.type, actions.addAccount)
+    if (state.isNew && state.quickPicks.isNotEmpty() && !noAccounts) QuickPicksPanel(state, actions)
     if (state.draft.type == TxType.TRANSFER) {
         if (!noAccounts) TransferPanel(state, actions)
     } else {
@@ -317,10 +316,9 @@ private fun EntryBody(state: EntryState, actions: EntryActions, onPickDate: () -
     if (state.isNew) RepeatSection(state, actions)
 }
 
-/** A zero state: the section's glyph, one quiet line, and the act that fills it. */
+/** A zero state: one quiet line, and the act that fills it. */
 @Composable
 private fun EmptyLine(
-    icon: ImageVector,
     text: String,
     action: String,
     onAction: () -> Unit,
@@ -331,41 +329,74 @@ private fun EmptyLine(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        IconBadge(icon, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         Aside(text, Modifier.weight(1f))
         TextAction(action, onAction, color = MaterialTheme.colorScheme.primary)
+    }
+}
+
+/**
+ * The entries logged most often, one tap from filled: note, category and the amount last paid.
+ * Shown while the form is empty; the save is still the owner's.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun QuickPicksPanel(state: EntryState, actions: EntryActions) {
+    Panel {
+        PanelHeader("Quick add", meta = "LOGGED MOST")
+        Spacer(Modifier.height(10.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            state.quickPicks.forEach { pick -> QuickChip(pick) { actions.pickQuick(pick) } }
+        }
+    }
+}
+
+@Composable
+private fun QuickChip(pick: QuickPick, onClick: () -> Unit) {
+    val money = LocalMoney.current
+    val amount = money.format(pick.lastAmount)
+    val shape = RoundedCornerShape(14.dp)
+    Row(
+        Modifier
+            .heightIn(min = 48.dp)
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .bounceClick(label = "Fill ${pick.note}, ${pick.categoryName}, $amount", role = Role.Button, focusShape = shape, onClick = onClick)
+            .padding(start = 6.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        CategoryBadge(pick.categoryIcon, pick.categoryColor, size = 32.dp)
+        Column {
+            Text(pick.note, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+            Text(amount, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
 @Composable
 private fun NoAccountsPanel(type: TxType, onAdd: () -> Unit) {
     Panel {
-        PanelHeader(Icons.Rounded.AccountBalance, if (type == TxType.TRANSFER) "Between accounts" else "Account")
+        PanelHeader(if (type == TxType.TRANSFER) "Between accounts" else "Account")
         Spacer(Modifier.height(8.dp))
-        EmptyLine(Icons.Rounded.AccountBalanceWallet, "Add an account first", "add account", onAdd)
+        EmptyLine("Add an account first", "add account", onAdd)
     }
 }
 
 @Composable
 private fun CategoryPanel(state: EntryState, actions: EntryActions) {
     val kind = kindOf(state.draft.type) ?: CategoryKind.EXPENSE
-    // Narrower side padding than other panels: four tiles a row need the width for their names.
-    Panel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = PANEL_PAD)) {
+    Panel {
         PanelHeader(
-            Icons.Rounded.Category,
             "Category",
-            Modifier.padding(horizontal = 6.dp),
             action = "edit",
             onAction = actions.editCategories,
         )
         Spacer(Modifier.height(10.dp))
         if (state.categories.isEmpty()) {
             EmptyLine(
-                Icons.Rounded.Category,
                 if (kind == CategoryKind.INCOME) "No income categories yet" else "No expense categories yet",
                 "add one",
                 { actions.addCategory(kind) },
-                Modifier.padding(horizontal = 6.dp),
             )
         } else {
             CategoryGrid(state.categories, state.draft.categoryId, actions.pickCategory)
@@ -384,7 +415,7 @@ private fun AccountChips(accounts: List<AccountBalance>, selected: Long?, onPick
 @Composable
 private fun AccountPanel(state: EntryState, actions: EntryActions) {
     Panel {
-        PanelHeader(Icons.Rounded.AccountBalance, "Account")
+        PanelHeader("Account")
         Spacer(Modifier.height(6.dp))
         AccountChips(state.accounts, state.draft.accountId, actions.pickAccount)
     }
@@ -398,7 +429,7 @@ private fun SideLabel(text: String) {
 @Composable
 private fun TransferPanel(state: EntryState, actions: EntryActions) {
     Panel {
-        PanelHeader(Icons.Rounded.SwapHoriz, "Between accounts")
+        PanelHeader("Between accounts")
         Spacer(Modifier.height(10.dp))
         SideLabel("From")
         AccountChips(state.accounts, state.draft.accountId, actions.pickAccount)
@@ -412,7 +443,7 @@ private fun TransferPanel(state: EntryState, actions: EntryActions) {
             }
             state.accounts.size < 2 -> {
                 Spacer(Modifier.height(8.dp))
-                EmptyLine(Icons.Rounded.AccountBalanceWallet, "A transfer needs a second account", "add account", actions.addAccount)
+                EmptyLine("A transfer needs a second account", "add account", actions.addAccount)
             }
         }
     }
@@ -433,7 +464,7 @@ private fun ReadingTiles(state: EntryState) {
     } else {
         Row(
             Modifier.fillMaxWidth().height(IntrinsicSize.Min),
-            horizontalArrangement = Arrangement.spacedBy(PANEL_GAP),
+            horizontalArrangement = Arrangement.spacedBy(FIGURE_GAP),
         ) {
             FirstTile(state, Modifier.weight(1f).fillMaxHeight())
             SecondTile(state, Modifier.weight(1f).fillMaxHeight())
@@ -469,12 +500,10 @@ private fun MonthTile(state: EntryState, modifier: Modifier) {
     val category = state.category
     if (category == null) {
         StatTile(
-            icon,
             label,
             money.formatWhole(0),
             modifier,
             detail = "Pick a category to see its month",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     } else {
         val total = state.month.total
@@ -486,16 +515,10 @@ private fun MonthTile(state: EntryState, modifier: Modifier) {
             else -> money.formatWhole(budget - total) + " left of " + money.formatWhole(budget)
         }
         StatTile(
-            icon,
             label,
             money.formatWhole(total),
             modifier,
             detail = detail,
-            tint = when {
-                over -> MaterialTheme.colorScheme.error
-                income -> MaterialTheme.colorScheme.tertiary
-                else -> MaterialTheme.colorScheme.primary
-            },
         )
     }
 }
@@ -513,16 +536,13 @@ private fun BalanceTile(
     val money = LocalMoney.current
     if (account == null || after == null) {
         StatTile(
-            Icons.Rounded.AccountBalanceWallet,
             missingLabel,
             "None yet",
             modifier,
             detail = missingDetail,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     } else {
         StatTile(
-            CategoryIcons.account(account.type),
             account.name,
             money.format(after),
             modifier,

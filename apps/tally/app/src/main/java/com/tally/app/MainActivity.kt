@@ -1,6 +1,9 @@
 package com.tally.app
 
+import android.content.Intent
 import android.database.ContentObserver
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -33,6 +36,7 @@ import com.tally.app.ui.common.ProvideTouchExploration
 import com.tally.app.ui.common.rememberMoney
 import com.tally.app.ui.nav.LocalSnackbarLift
 import com.tally.app.ui.nav.TallyNavHost
+import com.tally.app.ui.settings.IncomingFiles
 import com.tally.app.ui.theme.TallyMotion
 import com.tally.app.ui.theme.TallyTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -42,6 +46,7 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var notices: Notices
+    @Inject lateinit var incoming: IncomingFiles
 
     private val root: RootViewModel by viewModels()
 
@@ -59,6 +64,8 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
         readAnimatorScale()
+        // A statement opened with Tally, or shared to it. Not on a rotation: it was taken already.
+        if (savedInstanceState == null) receive(intent)
         contentResolver.registerContentObserver(
             SystemSettings.Global.getUriFor(SystemSettings.Global.ANIMATOR_DURATION_SCALE), false, animatorObserver,
         )
@@ -75,7 +82,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     ProvideTouchExploration {
                         Box(Modifier.fillMaxSize()) {
-                            TallyNavHost(onboarded = s.onboarded)
+                            TallyNavHost(onboarded = s.onboarded, incoming = incoming)
                             NoticeHost(
                                 notices,
                                 snackbar,
@@ -90,6 +97,26 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        receive(intent)
+    }
+
+    /** Hands a file opened with or shared to Tally to the import. Anything else is ignored. */
+    private fun receive(intent: Intent?) {
+        val uri: Uri? = when (intent?.action) {
+            Intent.ACTION_VIEW -> intent.data
+            Intent.ACTION_SEND -> if (Build.VERSION.SDK_INT >= 33) {
+                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(Intent.EXTRA_STREAM)
+            }
+            else -> null
+        }
+        if (uri != null) incoming.offer(uri)
     }
 
     override fun onDestroy() {

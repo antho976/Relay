@@ -7,7 +7,10 @@ import com.tally.app.data.Clock
 import com.tally.app.data.prefs.SettingsRepository
 import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.data.repo.PlanRepository
+import com.tally.app.ui.common.Notices
 import com.tally.core.BudgetPeriod
+import com.tally.core.Copy
+import com.tally.core.MoneyFormatter
 import com.tally.core.TxType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -19,7 +22,9 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.util.Locale
 import javax.inject.Inject
 
 /** Everything the Plan tab draws, its three lenses folded in the ViewModel. */
@@ -38,9 +43,11 @@ data class PlanState(
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class PlanViewModel @Inject constructor(
-    plan: PlanRepository,
+    private val plan: PlanRepository,
     ledger: LedgerRepository,
     settings: SettingsRepository,
+    goalSource: GoalSource,
+    private val notices: Notices,
     private val clock: Clock,
 ) : ViewModel() {
 
@@ -49,21 +56,37 @@ class PlanViewModel @Inject constructor(
 
     fun onResume() { today.value = clock.today() }
 
-    private val context = combine(settings.settings, today) { s, d -> s.periodFor(d) to d }.distinctUntilChanged()
+    private data class Context(val period: BudgetPeriod, val day: LocalDate, val step: Long)
 
-    val state: StateFlow<PlanState> = context.flatMapLatest { (period, day) ->
+    private val context = combine(settings.settings, today) { s, d ->
+        // Suggested budgets round up to tens of the currency's whole unit.
+        val digits = MoneyFormatter(s.currency, Locale.getDefault()).fractionDigits
+        Context(s.periodFor(d), d, 10 * MoneyFormatter.pow10(digits))
+    }.distinctUntilChanged()
+
+    val state: StateFlow<PlanState> = context.flatMapLatest { (period, day, step) ->
         val previous = period.shift(-1)
+        val history = combine(
+            (SUGGEST_PERIODS downTo 1).map { back ->
+                val p = period.shift(-back.toLong())
+                ledger.byCategory(TxType.EXPENSE, p.start, p.endExclusive)
+            }
+        ) { periods -> periods.toList() }
+        val spending = combine(
+            ledger.byCategory(TxType.EXPENSE, period.start, period.endExclusive),
+            history,
+        ) { now, before -> now to before }
         val budgets = combine(
             plan.budgets(),
-            ledger.byCategory(TxType.EXPENSE, period.start, period.endExclusive),
+            spending,
             ledger.typeTotals(period.start, period.endExclusive),
             ledger.typeTotals(previous.start, previous.endExclusive),
             ledger.categories(),
-        ) { rows, spending, totals, lastTotals, categories ->
-            budgetsReading(period, day, rows, spending, totals, lastTotals, categories)
+        ) { rows, (now, before), totals, lastTotals, categories ->
+            budgetsReading(period, day, rows, now, totals, lastTotals, categories, before, step)
         }
         val bills = plan.recurring().map { rows -> billsReading(rows, day) }
-        val goals = plan.goals().map { rows -> goalsReading(rows, day) }
+        val goals = goalSource.reading(period, day)
         combine(budgets, bills, goals) { b, r, g ->
             PlanState(today = day, period = period, loaded = true, budgets = b, bills = r, goals = g)
         }
@@ -72,4 +95,16 @@ class PlanViewModel @Inject constructor(
         SharingStarted.WhileSubscribed(5_000),
         PlanState(today = clock.today(), period = BudgetPeriod.containing(clock.today())),
     )
+
+    /** Sets every suggested budget at once; the notice offers the undo. */
+    fun applySuggestions() {
+        val suggestions = state.value.budgets.suggestions
+        if (suggestions.isEmpty()) return
+        viewModelScope.launch {
+            plan.setBudgets(suggestions.associate { it.categoryId to it.amount })
+            notices.showUndo(Copy.plural(suggestions.size, "budget") + " set from your averages") {
+                plan.setBudgets(suggestions.associate { it.categoryId to 0L })
+            }
+        }
+    }
 }

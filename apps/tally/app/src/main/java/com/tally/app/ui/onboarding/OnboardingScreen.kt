@@ -37,8 +37,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -93,6 +93,8 @@ import com.tally.app.ui.common.LocalMoney
 import com.tally.app.ui.common.PANEL_GAP
 import com.tally.app.ui.common.PaceMeter
 import com.tally.app.ui.common.ROW_PAD
+import com.tally.app.ui.common.RowPill
+import com.tally.app.ui.common.SecondaryAction
 import com.tally.app.ui.common.StatChip
 import com.tally.app.ui.common.TextAction
 import com.tally.app.ui.common.bounceClick
@@ -129,6 +131,10 @@ fun OnboardingRoute(nav: AppNav) {
             setType = viewModel::setType,
             setBalance = viewModel::setBalance,
             setBudget = viewModel::setBudget,
+            addAccount = viewModel::addAccount,
+            openNewAccount = viewModel::openNewAccount,
+            cancelNewAccount = viewModel::cancelNewAccount,
+            removeAccount = viewModel::removeAccount,
         )
     }
     OnboardingScreen(state, actions)
@@ -146,6 +152,13 @@ data class OnboardingActions(
     val setType: (AccountType) -> Unit = {},
     val setBalance: (String, Long?) -> Unit = { _, _ -> },
     val setBudget: (String, Long?) -> Unit = { _, _ -> },
+    /** Moves the form's account into the list. */
+    val addAccount: () -> Unit = {},
+    /** Opens the form for one more account. */
+    val openNewAccount: () -> Unit = {},
+    val cancelNewAccount: () -> Unit = {},
+    /** Takes the account at this place in the list back out. */
+    val removeAccount: (Int) -> Unit = {},
 )
 
 /**
@@ -293,7 +306,7 @@ private fun CurrencyStep(state: OnboardingState, actions: OnboardingActions) {
     val locale = LocalMoney.current.locale
     val picked = remember(state.currency, locale) { currencyOption(state.currency, locale) }
     HeroPanel {
-        HeroHead(Icons.Rounded.Payments, "Your currency", end = picked.code)
+        HeroHead("Your currency", end = picked.code)
         Spacer(Modifier.height(12.dp))
         HeroNumber(picked.sample, description = "Amounts will read like ${picked.sample}")
         Text(
@@ -337,62 +350,117 @@ private fun CurrencyStep(state: OnboardingState, actions: OnboardingActions) {
     )
 }
 
-// ── Step 2: the first account ────────────────────────────────────────────────
+// ── Step 2: the accounts ─────────────────────────────────────────────────────
 
-@OptIn(ExperimentalLayoutApi::class)
+/**
+ * The accounts being built, open under the question: with one in the form, its balance; with
+ * several, their net. Then the accounts added so far, each one tap from removed, and the form for
+ * the next. Continue adds an open form's account too, so one account takes no extra tap.
+ */
 @Composable
 private fun AccountStep(state: OnboardingState, actions: OnboardingActions) {
     val money = LocalMoney.current
     val credit = state.accountType == AccountType.CREDIT
     val typeName = defaultAccountName(state.accountType)
+    val several = state.accounts.isNotEmpty()
     HeroPanel {
-        HeroHead(CategoryIcons.account(state.accountType), "First account", end = typeName.uppercase())
-        Spacer(Modifier.height(12.dp))
-        HeroNumber(
-            money.format(state.storedBalance),
-            color = if ((state.balance ?: 0L) > 0L) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
-            description = "Starting balance, " + money.format(state.storedBalance),
-        )
-        Text(
-            accountNameToSave(state.accountName, state.accountType) + " · " + if (credit) "owed today" else "balance today",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(16.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatChip(Icons.Rounded.AccountBalance, "Add the rest later in Accounts")
+        if (several) {
+            val all = state.toCreate
+            HeroHead("Your accounts", end = Copy.plural(all.size, "account").uppercase())
+            Spacer(Modifier.height(12.dp))
+            HeroNumber(money.format(state.net), description = "Net across your accounts, " + money.format(state.net))
+            Text(
+                "net across " + accountNames(all),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            HeroHead("First account", end = typeName.uppercase())
+            Spacer(Modifier.height(12.dp))
+            HeroNumber(
+                money.format(state.storedBalance),
+                color = if ((state.balance ?: 0L) > 0L) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+                description = "Starting balance, " + money.format(state.storedBalance),
+            )
+            Text(
+                accountNameToSave(state.accountName, state.accountType) + " · " + if (credit) "owed today" else "balance today",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
-    Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-        GroupHeader("Name")
-        OnboardField(
-            value = state.accountName,
-            onChange = actions.setName,
-            label = "Account name",
-            placeholder = typeName,
-            icon = Icons.Rounded.EditNote,
-            capitalization = KeyboardCapitalization.Words,
-        )
+    if (several) {
+        val rows: List<@Composable (Shape) -> Unit> = state.accounts.mapIndexed { i, a -> addedRow(a, i, actions) } +
+            if (state.formOpen) emptyList() else listOf(anotherRow(actions))
+        Group(rows = rows, modifier = Modifier.padding(top = 6.dp), title = "Added", trailing = Copy.plural(state.accounts.size, "account"))
     }
-    Column(Modifier.fillMaxWidth()) {
-        GroupHeader("Type")
-        TypeTiles(state.accountType, actions.setType)
+    if (state.formOpen) {
+        Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+            GroupHeader(if (several) "Next account" else "Name")
+            OnboardField(
+                value = state.accountName,
+                onChange = actions.setName,
+                label = "Account name",
+                placeholder = typeName,
+                icon = Icons.Rounded.EditNote,
+                capitalization = KeyboardCapitalization.Words,
+            )
+        }
+        Column(Modifier.fillMaxWidth()) {
+            GroupHeader("Type")
+            TypeTiles(state.accountType, actions.setType)
+        }
+        Column(Modifier.fillMaxWidth()) {
+            GroupHeader(if (credit) "Owed on it today" else "Balance today", trailing = money.currency.currencyCode)
+            OnboardField(
+                value = state.balanceText,
+                onChange = { text -> actions.setBalance(text, money.parse(text)) },
+                label = if (credit) "Amount owed" else "Starting balance",
+                placeholder = money.formatInput(0L),
+                icon = Icons.Rounded.Payments,
+                keyboardType = if (money.fractionDigits > 0) KeyboardType.Decimal else KeyboardType.Number,
+                suffix = money.symbol,
+                isError = state.balanceProblem != null,
+            )
+            val problem = state.balanceProblem
+            if (problem != null) GroupFooter(problem, isError = true)
+        }
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            SecondaryAction(
+                "Add this account",
+                actions.addAccount,
+                Modifier.fillMaxWidth(),
+                enabled = state.balanceProblem == null && !state.busy,
+            )
+            if (several) TextAction("cancel", actions.cancelNewAccount, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
-    Column(Modifier.fillMaxWidth()) {
-        GroupHeader(if (credit) "Owed on it today" else "Balance today", trailing = money.currency.currencyCode)
-        OnboardField(
-            value = state.balanceText,
-            onChange = { text -> actions.setBalance(text, money.parse(text)) },
-            label = if (credit) "Amount owed" else "Starting balance",
-            placeholder = money.formatInput(0L),
-            icon = Icons.Rounded.Payments,
-            keyboardType = if (money.fractionDigits > 0) KeyboardType.Decimal else KeyboardType.Number,
-            suffix = money.symbol,
-            isError = state.balanceProblem != null,
-        )
-        val problem = state.balanceProblem
-        if (problem != null) GroupFooter(problem, isError = true)
-    }
+}
+
+/** One added account: its kind, name and balance; the whole row takes it back out. */
+private fun addedRow(a: OnboardAccount, index: Int, actions: OnboardingActions): @Composable (Shape) -> Unit = { shape ->
+    val money = LocalMoney.current
+    GroupRow(
+        a.name,
+        shape,
+        subtitle = defaultAccountName(a.type) + " · " + money.format(a.storedBalance),
+        leading = { GlyphBadge(CategoryIcons.account(a.type)) },
+        trailing = { RowPill("Remove") },
+        chevron = false,
+        onClick = { actions.removeAccount(index) },
+    )
+}
+
+/** The row that opens the form for one more account. */
+private fun anotherRow(actions: OnboardingActions): @Composable (Shape) -> Unit = { shape ->
+    GroupRow(
+        "Add another account",
+        shape,
+        subtitle = "A card, savings, cash or investments",
+        leading = { RowBadge(Icons.Rounded.Add) },
+        chevron = false,
+        onClick = actions.openNewAccount,
+    )
 }
 
 /** The four account kinds as tiles; one radio group. Two a row once the font is large. */
@@ -455,7 +523,7 @@ private fun BudgetStep(state: OnboardingState, actions: OnboardingActions) {
         PaceReading(budget, 0L, state.period.days, state.period.elapsedDays(state.today))
     }
     HeroPanel {
-        HeroHead(Icons.Rounded.AccountBalanceWallet, "Left to spend", end = Dates.period(state.period, state.today).uppercase())
+        HeroHead("Left to spend", end = Dates.period(state.period, state.today).uppercase())
         Spacer(Modifier.height(12.dp))
         HeroNumber(
             money.formatWhole(budget),

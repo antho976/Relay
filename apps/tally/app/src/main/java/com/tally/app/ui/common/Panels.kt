@@ -2,7 +2,6 @@ package com.tally.app.ui.common
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,14 +20,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -43,78 +40,40 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import com.tally.app.ui.theme.MonoSectionAnchor
 
 /*
- * Panels: Tally's departure from Avex's open page, at the owner's call (2026-10-04: "professional,
- * with icons, backgrounds, more details; a gym app is more discreet than this"). Avex's ground,
- * type voices and accent stay; content now sits on raised panels so a dense money screen reads as
- * organised blocks. One panel per section, never a panel inside a panel. Interactive rows inside a
- * panel are bare taps, not further boxes.
+ * Open editorial, Avex's language (the owner's call, 2026-10-05: "I don't like these big boxes,
+ * look at what I did for Avex"). Content sits straight on the page: no fill, no edge around
+ * anything that cannot be tapped. A section is its mono header and the air around it; a reading is
+ * a serif figure over a mono label; a line of context is a quiet muted line. Surfaces are earned by
+ * interactivity: slab groups, chips, fields and buttons keep theirs.
  */
 
-val PANEL_RADIUS = 20.dp
-val PANEL_PAD = 18.dp
-
-/** A section's surface: the raised warm fill, a quiet edge, 20dp corners. */
+/**
+ * An open section: its content straight on the page. No fill and no edge, because a box is a
+ * promise of a tap; the air around it and its [PanelHeader] are the only separator.
+ */
 @Composable
 fun Panel(
     modifier: Modifier = Modifier,
-    contentPadding: PaddingValues = PaddingValues(PANEL_PAD),
+    contentPadding: PaddingValues = PaddingValues(0.dp),
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(PANEL_RADIUS)
-    Column(
-        modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
-            .padding(contentPadding),
-        content = content,
-    )
+    Column(modifier.fillMaxWidth().padding(contentPadding), content = content)
 }
 
 /**
- * The screen's one lit panel: the accent washes in from the top so the hero reading sits under a
- * warm light. Used once per screen, for the figure the screen exists to show.
+ * The screen's lead section: the figure the screen exists to show, open on the page like every
+ * other section. It is told apart by its serif figure, never by a box or a wash. Used once per
+ * screen.
  */
 @Composable
 fun HeroPanel(
     modifier: Modifier = Modifier,
-    tint: Color = MaterialTheme.colorScheme.primary,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(24.dp)
-    val base = MaterialTheme.colorScheme.surfaceContainer
-    val brush = remember(tint, base) {
-        Brush.verticalGradient(listOf(tint.copy(alpha = 0.22f), tint.copy(alpha = 0.06f), base))
-    }
-    Column(
-        modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(base)
-            .background(brush)
-            .border(1.dp, tint.copy(alpha = 0.28f), shape)
-            .padding(20.dp),
-        content = content,
-    )
-}
-
-/** A small rounded glyph tile: the icon that leads a panel header or a stat. */
-@Composable
-fun IconBadge(
-    icon: ImageVector,
-    modifier: Modifier = Modifier,
-    tint: Color = MaterialTheme.colorScheme.primary,
-    size: Dp = 32.dp,
-) {
-    Box(
-        modifier.size(size).clip(RoundedCornerShape(10.dp)).background(tint.copy(alpha = 0.16f)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(size * 0.56f))
-    }
+    Column(modifier.fillMaxWidth(), content = content)
 }
 
 /**
@@ -182,13 +141,13 @@ internal fun endsShareLine(startNeeds: Int, gap: Int, endWidth: Int, room: Int):
     startNeeds + gap + endWidth <= room
 
 /**
- * A panel's header: icon tile, the mono label, and either a reading or a `view all →` at the end.
- * The label names the panel; it is not a kicker above a heading. The label keeps one line: when
- * it and the end cannot share the width whole, the end drops under the label.
+ * A section's mono anchor, Avex's: the label in small caps, and either a reading or a `view all →`
+ * at the end. No glyph and no rule: the header and the air above it are the separator. The label
+ * keeps one line: when it and the end cannot share the width whole, the end drops under it. A
+ * [tint] other than the accent colours the label for a true state (over budget, money in).
  */
 @Composable
 fun PanelHeader(
-    icon: ImageVector,
     title: String,
     modifier: Modifier = Modifier,
     meta: String? = null,
@@ -198,64 +157,48 @@ fun PanelHeader(
 ) {
     val actionLabel = action?.takeIf { onAction != null }
     val reading = meta?.takeIf { it.isNotBlank() }
-    Row(
-        modifier.fillMaxWidth().heightIn(min = 40.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        IconBadge(icon, tint = tint)
-        EndsRow(
-            start = {
-                Text(
-                    title.uppercase(),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.semantics { heading() },
-                )
-            },
-            end = if (actionLabel != null || reading != null) {
-                {
-                    if (actionLabel != null && onAction != null) {
-                        TextAction(actionLabel, onAction, color = MaterialTheme.colorScheme.primary)
-                    } else if (reading != null) {
-                        Text(reading, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+    val labelColor = if (tint == MaterialTheme.colorScheme.primary) MaterialTheme.colorScheme.onSurfaceVariant else tint
+    EndsRow(
+        start = {
+            Text(
+                title.uppercase(),
+                style = MonoSectionAnchor,
+                color = labelColor,
+                modifier = Modifier.semantics { heading() },
+            )
+        },
+        end = if (actionLabel != null || reading != null) {
+            {
+                if (actionLabel != null && onAction != null) {
+                    TextAction(actionLabel, onAction, color = MaterialTheme.colorScheme.primary)
+                } else if (reading != null) {
+                    Text(reading, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-            } else {
-                null
-            },
-            modifier = Modifier.weight(1f),
-            keepStartOnOneLine = true,
-        )
-    }
+            }
+        } else {
+            null
+        },
+        modifier = modifier.fillMaxWidth().heightIn(min = 32.dp),
+        keepStartOnOneLine = true,
+    )
 }
 
 /**
- * One reading as a tile: glyph, the value in serif with its mono label under it (as every figure
- * in the kit reads), an optional detail line. For a grid of DIFFERENT readings (per day, vs last
- * month, biggest category), never a wall of the same. TalkBack hears label, value, detail.
+ * One open reading: the value in serif straight on the page, its mono label under it, an optional
+ * detail line. Avex's figure, with room for the one line that explains it. For a row of DIFFERENT
+ * readings, never a wall of the same. TalkBack hears label, value, detail.
  */
 @Composable
 fun StatTile(
-    icon: ImageVector,
     label: String,
     value: String,
     modifier: Modifier = Modifier,
     detail: String? = null,
-    tint: Color = MaterialTheme.colorScheme.primary,
     valueColor: Color = MaterialTheme.colorScheme.onBackground,
 ) {
-    val shape = RoundedCornerShape(18.dp)
     Column(
-        modifier
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
-            .semantics(mergeDescendants = true) { contentDescription = listOfNotNull(label, value, detail).joinToString(", ") }
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier.semantics(mergeDescendants = true) { contentDescription = listOfNotNull(label, value, detail).joinToString(", ") },
     ) {
-        IconBadge(icon, tint = tint, size = 30.dp)
         Column(Modifier.clearAndSetSemantics { }) {
             Text(value, style = MaterialTheme.typography.headlineSmall, color = valueColor)
             Spacer(Modifier.height(2.dp))
@@ -268,19 +211,16 @@ fun StatTile(
     }
 }
 
-/** A small pill of context inside a panel: glyph and a few words ("$58 a day for 17 days"). */
+/** A quiet line of context under a figure: a muted glyph and a few words ("$58 a day for 17 days"). No pill. */
 @Composable
 fun StatChip(icon: ImageVector, text: String, modifier: Modifier = Modifier) {
     Row(
-        modifier
-            .clip(RoundedCornerShape(50))
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.7f))
-            .padding(horizontal = 12.dp, vertical = 7.dp),
+        modifier.padding(end = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
-        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onBackground)
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -371,9 +311,12 @@ fun LegendDot(color: Color, label: String, modifier: Modifier = Modifier) {
     }
 }
 
-/** Vertical space between panels on a page. */
-val PANEL_GAP = 14.dp
+/** Air between two open sections on a page: with the section's header, the only separator. */
+val PANEL_GAP = 28.dp
 
-/** Space for a width-only spacer in rows of tiles. */
+/** Space between two figures side by side. */
+val FIGURE_GAP = 20.dp
+
+/** Space for a width-only spacer in rows of figures. */
 @Composable
-fun TileGap() = Spacer(Modifier.width(PANEL_GAP))
+fun TileGap() = Spacer(Modifier.width(FIGURE_GAP))

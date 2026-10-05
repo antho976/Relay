@@ -18,18 +18,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AccountBalanceWallet
+import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CalendarToday
-import androidx.compose.material.icons.rounded.Category
-import androidx.compose.material.icons.rounded.DonutLarge
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.Event
-import androidx.compose.material.icons.rounded.Flag
-import androidx.compose.material.icons.rounded.MoneyOff
-import androidx.compose.material.icons.rounded.PauseCircleOutline
-import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.MaterialTheme
@@ -55,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tally.app.ui.common.CategoryBadge
 import com.tally.app.ui.common.Dates
 import com.tally.app.ui.common.EndsRow
+import com.tally.app.ui.common.FIGURE_GAP
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.HeroAction
@@ -81,6 +76,7 @@ import com.tally.app.ui.theme.categoryColor
 import com.tally.core.Copy
 import com.tally.core.PaceStatus
 import com.tally.core.TxType
+import java.time.LocalDate
 
 private val LENSES = listOf("Budgets", "Bills", "Goals")
 
@@ -104,6 +100,7 @@ fun PlanTab(nav: AppNav) {
             addBill = { nav.billEdit(0) },
             openGoal = { nav.goal(it) },
             addGoal = { nav.goalEdit(0) },
+            applySuggestions = viewModel::applySuggestions,
         )
     }
     PlanScreen(state, actions, lens = lens, onLens = { lens = it })
@@ -117,6 +114,8 @@ data class PlanActions(
     val addBill: () -> Unit = {},
     val openGoal: (Long) -> Unit = {},
     val addGoal: () -> Unit = {},
+    /** Sets every budget the averages suggest. */
+    val applySuggestions: () -> Unit = {},
 )
 
 /**
@@ -157,12 +156,12 @@ fun PlanScreen(state: PlanState, actions: PlanActions, lens: Int = 0, onLens: (I
 @Composable
 internal fun TilePair(modifier: Modifier = Modifier, first: @Composable (Modifier) -> Unit, second: @Composable (Modifier) -> Unit) {
     if (LocalDensity.current.fontScale > 1.5f) {
-        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
             first(Modifier.fillMaxWidth())
             second(Modifier.fillMaxWidth())
         }
     } else {
-        Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+        Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
             first(Modifier.weight(1f).fillMaxHeight())
             second(Modifier.weight(1f).fillMaxHeight())
         }
@@ -175,6 +174,9 @@ private fun LazyListScope.budgetsLens(state: PlanState, actions: PlanActions) {
     item(key = "b-hero") { BudgetHero(state, actions, Modifier.padding(horizontal = GUTTER)) }
     item(key = "b-tiles") { BudgetTiles(state, Modifier.padding(horizontal = GUTTER)) }
     item(key = "b-categories") { CategoriesPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+    if (state.budgets.suggestions.isNotEmpty()) {
+        item(key = "b-suggested") { SuggestedPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+    }
     item(key = "b-unbudgeted") { UnbudgetedPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
 }
 
@@ -191,7 +193,7 @@ private fun BudgetHero(state: PlanState, actions: PlanActions, modifier: Modifie
     val r = b.overall
     if (r == null) {
         HeroPanel(modifier) {
-            HeroLabel(Icons.Rounded.AccountBalanceWallet, "Monthly budget")
+            HeroLabel("Monthly budget")
             Spacer(Modifier.height(14.dp))
             HeroFigure(money.formatWhole(b.spent), description = "Spent ${money.formatWhole(b.spent)} so far")
             Text(
@@ -202,7 +204,7 @@ private fun BudgetHero(state: PlanState, actions: PlanActions, modifier: Modifie
             Spacer(Modifier.height(16.dp))
             PaceMeter(0f, null, "No monthly budget set", height = 14.dp)
             Spacer(Modifier.height(10.dp))
-            EmptyLine(Icons.Rounded.DonutLarge, "No monthly budget")
+            EmptyLine("No monthly budget")
             Spacer(Modifier.height(12.dp))
             HeroAction("Set monthly budget", { actions.openBudget(0L) }, Modifier.fillMaxWidth())
         }
@@ -213,10 +215,8 @@ private fun BudgetHero(state: PlanState, actions: PlanActions, modifier: Modifie
     val pace = Copy.paceLine(r, money)
     HeroPanel(
         modifier.bounceClick(label = "Change monthly budget", focusShape = RoundedCornerShape(24.dp)) { actions.openBudget(0L) },
-        tint = tint,
     ) {
         HeroLabel(
-            Icons.Rounded.AccountBalanceWallet,
             if (over) "Over budget" else "Monthly budget",
             end = pace.takeIf { !over && it.isNotEmpty() },
             tint = tint,
@@ -248,6 +248,10 @@ private fun BudgetHero(state: PlanState, actions: PlanActions, modifier: Modifie
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             // The days left are in the context line under the title; the allowance names them.
             if (!over) StatChip(Icons.Rounded.Speed, Copy.marginLine(r, money))
+            val projected = b.projected
+            if (projected != null && projected != r.spent) {
+                StatChip(Icons.AutoMirrored.Rounded.TrendingUp, "On pace for " + money.formatWhole(projected))
+            }
             StatChip(Icons.Rounded.Event, "Resets " + Dates.short(state.period.endExclusive, state.today))
         }
     }
@@ -263,7 +267,6 @@ private fun BudgetTiles(state: PlanState, modifier: Modifier = Modifier) {
         modifier,
         first = { m ->
             StatTile(
-                Icons.Rounded.Category,
                 "Budgeted",
                 money.formatWhole(b.budgeted),
                 m,
@@ -277,7 +280,6 @@ private fun BudgetTiles(state: PlanState, modifier: Modifier = Modifier) {
         },
         second = { m ->
             StatTile(
-                Icons.Rounded.MoneyOff,
                 "Unbudgeted",
                 money.formatWhole(b.unbudgetedSpent),
                 m,
@@ -286,7 +288,6 @@ private fun BudgetTiles(state: PlanState, modifier: Modifier = Modifier) {
                     b.spent > 0L -> "Every category you spent in has a budget"
                     else -> "Nothing spent yet this month"
                 },
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
     )
@@ -298,7 +299,6 @@ private fun CategoriesPanel(state: PlanState, actions: PlanActions, modifier: Mo
     val b = state.budgets
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.DonutLarge,
             "Categories",
             meta = if (b.envelopes.isEmpty()) null else b.envelopes.size.toString(),
         )
@@ -306,7 +306,6 @@ private fun CategoriesPanel(state: PlanState, actions: PlanActions, modifier: Mo
             Spacer(Modifier.height(8.dp))
             val suggested = b.suggestedCategoryId
             EmptyLine(
-                Icons.Rounded.Category,
                 "No category budgets yet",
                 action = if (suggested != null) "add one" else null,
                 onAction = if (suggested != null) ({ actions.openBudget(suggested) }) else null,
@@ -363,12 +362,70 @@ private fun EnvelopeRow(e: BudgetLine, onClick: () -> Unit) {
     }
 }
 
+/**
+ * Budgets for the categories that have none, each the average of the last three months it was
+ * spent in: one tap sets them all (with an undo), or a row opens that budget to set it by hand.
+ */
+@Composable
+private fun SuggestedPanel(state: PlanState, actions: PlanActions, modifier: Modifier = Modifier) {
+    val money = LocalMoney.current
+    val b = state.budgets
+    Panel(modifier) {
+        PanelHeader("Suggested budgets", meta = "3-MONTH AVERAGE")
+        Spacer(Modifier.height(6.dp))
+        Text(
+            money.formatWhole(b.suggestedTotal) + " a month across " + Copy.plural(b.suggestions.size, "category", "categories") +
+                ", from what you spent",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        b.suggestions.forEach { sug -> SuggestionRow(sug) { actions.openBudget(sug.categoryId) } }
+        Spacer(Modifier.height(12.dp))
+        SecondaryAction(
+            if (b.suggestions.size == 1) "Set this budget" else "Set all " + b.suggestions.size,
+            actions.applySuggestions,
+            Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun SuggestionRow(sug: BudgetSuggestion, onClick: () -> Unit) {
+    val money = LocalMoney.current
+    val amount = money.formatWhole(sug.amount)
+    val meta = "Spent in " + sug.months + " of the last " + SUGGEST_PERIODS + " months"
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .bounceClick(label = "Set a ${sug.name} budget", focusOutset = ROW_FOCUS_OUTSET, onClick = onClick)
+            .semantics(mergeDescendants = true) { contentDescription = "${sug.name}, suggested $amount a month, $meta" }
+            .heightIn(min = 64.dp)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        CategoryBadge(sug.icon, sug.color, size = 36.dp)
+        EndsRow(
+            start = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(sug.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                    Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            end = {
+                Text(amount, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
+            },
+            modifier = Modifier.weight(1f).clearAndSetSemantics { },
+        )
+    }
+}
+
 @Composable
 private fun UnbudgetedPanel(state: PlanState, actions: PlanActions, modifier: Modifier = Modifier) {
     val b = state.budgets
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.MoneyOff,
             "Unbudgeted",
             meta = if (b.unbudgeted.isEmpty()) null else b.unbudgeted.size.toString(),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -376,7 +433,6 @@ private fun UnbudgetedPanel(state: PlanState, actions: PlanActions, modifier: Mo
         if (b.unbudgeted.isEmpty()) {
             Spacer(Modifier.height(8.dp))
             EmptyLine(
-                Icons.Rounded.DonutLarge,
                 if (b.spent > 0L) "Every category you spent in has a budget"
                 else "Spending in a category with no budget shows here",
             )
@@ -456,7 +512,6 @@ private fun BillsHero(state: PlanState, modifier: Modifier = Modifier) {
     }
     HeroPanel(modifier) {
         HeroLabel(
-            Icons.Rounded.Repeat,
             "Monthly cost",
             end = if (r.active.isEmpty()) null else Copy.plural(r.active.size, "active bill"),
         )
@@ -480,10 +535,11 @@ private fun BillsHero(state: PlanState, modifier: Modifier = Modifier) {
             )
         }
         val next = r.active.firstOrNull()
-        if (next != null || r.reminders > 0) {
+        if (next != null || r.reminders > 0 || r.monthlyCost > 0L) {
             Spacer(Modifier.height(16.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (next != null) StatChip(Icons.Rounded.Event, next.name + " · " + Copy.dueLine(next.daysUntil))
+                if (r.monthlyCost > 0L) StatChip(Icons.Rounded.CalendarMonth, money.formatWhole(r.monthlyCost * 12) + " a year")
                 if (r.reminders > 0) StatChip(Icons.Rounded.EditNote, Copy.plural(r.reminders, "reminder") + " you log yourself")
             }
         }
@@ -499,7 +555,6 @@ private fun BillTiles(state: PlanState, modifier: Modifier = Modifier) {
         modifier,
         first = { m ->
             StatTile(
-                Icons.Rounded.CalendarToday,
                 "Next 7 days",
                 money.formatWhole(r.week.total),
                 m,
@@ -508,7 +563,6 @@ private fun BillTiles(state: PlanState, modifier: Modifier = Modifier) {
         },
         second = { m ->
             StatTile(
-                Icons.Rounded.CalendarMonth,
                 "Next 30 days",
                 money.formatWhole(r.month.total),
                 m,
@@ -522,10 +576,10 @@ private fun BillTiles(state: PlanState, modifier: Modifier = Modifier) {
 private fun ActiveBillsPanel(state: PlanState, actions: PlanActions, modifier: Modifier = Modifier) {
     val bills = state.bills.active
     Panel(modifier) {
-        PanelHeader(Icons.Rounded.Event, "Upcoming", meta = if (bills.isEmpty()) null else bills.size.toString())
+        PanelHeader("Upcoming", meta = if (bills.isEmpty()) null else bills.size.toString())
         if (bills.isEmpty()) {
             Spacer(Modifier.height(8.dp))
-            EmptyLine(Icons.Rounded.Repeat, "Add rent, phone and subscriptions once, they post on their own")
+            EmptyLine("Add rent, phone and subscriptions once, they post on their own")
         } else {
             Spacer(Modifier.height(4.dp))
             bills.forEach { b -> BillRow(b, paused = false) { actions.openBill(b.id) } }
@@ -538,7 +592,6 @@ private fun PausedBillsPanel(state: PlanState, actions: PlanActions, modifier: M
     val bills = state.bills.paused
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.PauseCircleOutline,
             "Paused",
             meta = bills.size.toString(),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -611,38 +664,45 @@ private fun LazyListScope.goalsLens(state: PlanState, actions: PlanActions) {
     }
 }
 
-/** Everything set aside across the goals, against everything they aim for. */
+/**
+ * How the goals stand: how many are on track (or reached) as the figure, the share of them as the
+ * meter, and chips for the money in savings pots and the next date. Goals of different kinds do
+ * not add up as money, so the figure counts goals.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun GoalsHero(state: PlanState, modifier: Modifier = Modifier) {
     val money = LocalMoney.current
     val g = state.goals
+    val good = g.onTrack + g.reached
+    val total = g.goals.size
     HeroPanel(modifier) {
         HeroLabel(
-            Icons.Rounded.Savings,
-            "Saved",
-            end = if (g.goals.isEmpty()) null else Copy.plural(g.goals.size, "goal"),
+            "Goals",
+            end = if (total == 0) null else Copy.plural(total, "goal").uppercase(),
         )
         Spacer(Modifier.height(14.dp))
-        HeroFigure(money.formatWhole(g.saved))
+        HeroFigure(if (total == 0) "0" else "$good of $total", description = if (total == 0) "No goals yet" else "$good of $total goals on track or reached")
         Text(
-            if (g.goals.isEmpty()) "Nothing set aside yet"
-            else "of " + money.formatWhole(g.target) + " across " + Copy.plural(g.goals.size, "goal"),
+            when {
+                total == 0 -> "Save for something, reach an amount by a date, or invest a share of every month"
+                g.behind == 0 -> "on track or reached"
+                else -> "on track or reached · " + g.behind + " behind its pace"
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(16.dp))
-        // No tick: the total spans many dates and some goals have none, so an even pace means nothing here.
         PaceMeter(
-            g.fraction,
+            if (total == 0) 0f else good.toFloat() / total,
             null,
-            if (g.goals.isEmpty()) "No goals yet" else "Saved ${money.formatWhole(g.saved)} of ${money.formatWhole(g.target)}",
+            if (total == 0) "No goals yet" else "$good of $total goals on track or reached",
             height = 14.dp,
         )
-        if (g.goals.isNotEmpty()) {
+        if (total > 0) {
             Spacer(Modifier.height(16.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatChip(Icons.Rounded.Flag, money.formatWhole(g.left) + " to go")
+                if (g.pots > 0) StatChip(Icons.Rounded.Savings, money.formatWhole(g.saved) + " in " + Copy.plural(g.pots, "pot"))
                 if (g.reached > 0) StatChip(Icons.Rounded.EmojiEvents, Copy.plural(g.reached, "goal") + " reached")
                 val date = g.nextDate
                 if (date != null) {
@@ -657,23 +717,27 @@ private fun GoalsHero(state: PlanState, modifier: Modifier = Modifier) {
 private fun GoalsPanel(state: PlanState, actions: PlanActions, modifier: Modifier = Modifier) {
     val goals = state.goals.goals
     Panel(modifier) {
-        PanelHeader(Icons.Rounded.Flag, "Goals", meta = if (goals.isEmpty()) null else goals.size.toString())
+        PanelHeader("Goals", meta = if (goals.isEmpty()) null else goals.size.toString())
         if (goals.isEmpty()) {
             Spacer(Modifier.height(8.dp))
-            EmptyLine(Icons.Rounded.Savings, "Name something you are saving for")
+            EmptyLine("Name something you are saving for")
         } else {
-            goals.forEach { g -> GoalRow(g, state) { actions.openGoal(g.id) } }
+            goals.forEach { g -> GoalRow(g, state.today) { actions.openGoal(g.id) } }
         }
     }
 }
 
+/**
+ * One goal of any kind: its badge in its own hue (a cup once reached), its name over what it needs
+ * next, its reading at the end, and its meter with the even-pace tick where it has one.
+ */
 @Composable
-private fun GoalRow(g: GoalLine, state: PlanState, onClick: () -> Unit) {
+internal fun GoalRow(g: GoalLine, today: LocalDate, onClick: () -> Unit) {
     val money = LocalMoney.current
     val hue = categoryColor(g.color)
-    val reading = money.formatWhole(g.saved) + " of " + money.formatWhole(g.target)
-    val line = Copy.goalLine(g.saved, g.target, g.monthsLeft, money) +
-        (g.targetDate?.let { " · by " + Dates.short(it, state.today) } ?: "")
+    val reading = goalReading(g, money)
+    val line = goalRowLine(g, money, today)
+    val behind = g.status == GoalStatus.BEHIND
     Column(
         Modifier
             .fillMaxWidth()
@@ -683,7 +747,7 @@ private fun GoalRow(g: GoalLine, state: PlanState, onClick: () -> Unit) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             GlyphBadge(
-                if (g.reached) Icons.Rounded.EmojiEvents else Icons.Rounded.Flag,
+                if (g.reached) Icons.Rounded.EmojiEvents else goalKindIcon(g.kind),
                 tint = hue,
                 fill = hue.copy(alpha = 0.15f),
                 size = 36.dp,
@@ -696,7 +760,10 @@ private fun GoalRow(g: GoalLine, state: PlanState, onClick: () -> Unit) {
                     }
                 },
                 end = {
-                    Text(reading, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(reading, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
+                        if (behind) Text("BEHIND", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 },
                 modifier = Modifier.weight(1f),
             )

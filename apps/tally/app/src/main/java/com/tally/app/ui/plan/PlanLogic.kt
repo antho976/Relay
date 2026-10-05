@@ -1,6 +1,7 @@
 package com.tally.app.ui.plan
 
 import androidx.compose.runtime.Immutable
+import com.tally.app.data.db.AccountBalance
 import com.tally.app.data.db.AccountEntity
 import com.tally.app.data.db.BudgetEntity
 import com.tally.app.data.db.BudgetRow
@@ -10,11 +11,17 @@ import com.tally.app.data.db.ContributionEntity
 import com.tally.app.data.db.GoalWithSaved
 import com.tally.app.data.db.RecurringEntity
 import com.tally.app.data.db.RecurringRow
+import com.tally.app.data.db.TransferRow
 import com.tally.app.data.db.TypeTotal
+import com.tally.app.ui.common.Dates
+import com.tally.core.AccountType
 import com.tally.core.BillSchedule
 import com.tally.core.BudgetPeriod
 import com.tally.core.CategoryKind
+import com.tally.core.Copy
 import com.tally.core.Frequency
+import com.tally.core.GoalKind
+import com.tally.core.MoneyFormatter
 import com.tally.core.PaceReading
 import com.tally.core.Recurrence
 import com.tally.core.TxType
@@ -73,7 +80,65 @@ data class BudgetsReading(
     val unbudgetedSpent: Long = 0,
     /** Where "add one" lands when there are no category budgets yet. */
     val suggestedCategoryId: Long? = null,
+    /** Where this period's spending lands at its current pace; null too early in the period to say. */
+    val projected: Long? = null,
+    /** Budgets the last periods' spending suggests for categories that have none, biggest first. */
+    val suggestions: List<BudgetSuggestion> = emptyList(),
+) {
+    val suggestedTotal: Long get() = suggestions.sumOf { it.amount }
+}
+
+/** A budget the owner's own spending suggests: the recent average, rounded to a tidy figure. */
+@Immutable
+data class BudgetSuggestion(
+    val categoryId: Long,
+    val name: String,
+    val icon: String?,
+    val color: Int?,
+    val amount: Long,
+    /** How many of the recent periods had spending in the category. */
+    val months: Int,
 )
+
+/** The periods a suggestion averages: the three before this one. */
+internal const val SUGGEST_PERIODS = 3
+
+/** A suggestion needs spending in at least this many of those periods, so a one-off buys nothing. */
+internal const val SUGGEST_MIN_MONTHS = 2
+
+/** The most suggestions the Budgets lens lists. */
+internal const val SUGGEST_MAX = 6
+
+/** Days into the period before a projection means anything. */
+internal const val PROJECT_AFTER_DAYS = 3
+
+/** Where [spent] lands by the period's end at the pace so far; null in the first days or with nothing spent. */
+internal fun projectedSpend(spent: Long, days: Int, elapsed: Int): Long? {
+    if (spent <= 0L || elapsed < PROJECT_AFTER_DAYS || days <= 0) return null
+    if (elapsed >= days) return spent
+    return (spent.toDouble() * days / elapsed).roundToLong()
+}
+
+/**
+ * Budgets for the expense categories with no budget, each the average of the [SUGGEST_PERIODS]
+ * periods before this one (months with no spending left out), rounded to [step].
+ */
+internal fun budgetSuggestions(
+    history: List<List<CategoryTotal>>,
+    budgeted: Set<Long>,
+    categories: List<CategoryEntity>,
+    step: Long,
+): List<BudgetSuggestion> {
+    val live = categories.filter { it.kind == CategoryKind.EXPENSE && !it.archived && it.id !in budgeted }
+    return live.mapNotNull { c ->
+        val values = history.map { period -> period.firstOrNull { it.categoryId == c.id }?.total ?: 0L }
+        val months = values.count { it > 0L }
+        if (months < SUGGEST_MIN_MONTHS) return@mapNotNull null
+        val average = averageOnRecord(values) ?: return@mapNotNull null
+        val amount = roundUpTo(average, step)
+        if (amount <= 0L) null else BudgetSuggestion(c.id, c.name, c.icon, c.color, amount, months)
+    }.sortedByDescending { it.amount }.take(SUGGEST_MAX)
+}
 
 /** Furthest over pace first, measured against each budget's size so a small envelope can lead. */
 internal fun sortEnvelopes(lines: List<BudgetLine>): List<BudgetLine> =
@@ -111,6 +176,8 @@ internal fun budgetsReading(
     totals: List<TypeTotal>,
     lastTotals: List<TypeTotal>,
     categories: List<CategoryEntity>,
+    history: List<List<CategoryTotal>> = emptyList(),
+    step: Long = 0L,
 ): BudgetsReading {
     val spent = totals.firstOrNull { it.type == TxType.EXPENSE }?.total ?: 0L
     val last = lastTotals.firstOrNull { it.type == TxType.EXPENSE }?.total ?: 0L
@@ -140,6 +207,8 @@ internal fun budgetsReading(
         unbudgeted = unbudgeted,
         unbudgetedSpent = unbudgeted.sumOf { it.spent },
         suggestedCategoryId = suggestedBudgetCategory(unbudgeted, categories, budgetedIds),
+        projected = projectedSpend(spent, period.days, elapsed),
+        suggestions = budgetSuggestions(history, budgetedIds, categories, step),
     )
 }
 
@@ -426,7 +495,24 @@ internal fun nextDates(
 
 // ── Goals ────────────────────────────────────────────────────────────────────
 
-/** One savings goal as the Goals lens and the goal screen draw it. */
+/** How a goal stands today. */
+enum class GoalStatus { REACHED, ON_TRACK, BEHIND, OPEN }
+
+/** One month of a monthly goal: what it asked, what happened, and what came in. */
+@Immutable
+data class GoalMonth(val start: LocalDate, val achieved: Long, val asked: Long, val income: Long) {
+    val met: Boolean get() = asked > 0L && achieved >= asked
+}
+
+/**
+ * One goal as the Goals lens, Home and the goal screen draw it, whatever its [kind]:
+ *
+ * - [GoalKind.SAVINGS]: [saved] is what its contributions hold, against [target].
+ * - [GoalKind.BALANCE]: [saved] is the balance read now, from [start] (what it read when set)
+ *   toward [target] by [targetDate].
+ * - [GoalKind.INVEST], [GoalKind.SAVE]: [saved] is what this month moved into investments, or
+ *   kept of what came in; [target] is this month's ask, [percent] of [income] or a set amount.
+ */
 @Immutable
 data class GoalLine(
     val id: Long,
@@ -439,13 +525,55 @@ data class GoalLine(
     val monthsLeft: Int?,
     /** Where the meter's pace tick stands (see [goalPaceFraction]); null once reached, or without a date. */
     val paceFraction: Float?,
+    val kind: GoalKind = GoalKind.SAVINGS,
+    val start: Long = 0L,
+    val percent: Int = 0,
+    val income: Long = 0L,
+    /** The account a balance or invest goal reads; null when it reads every one. */
+    val accountName: String? = null,
+    /** A monthly goal's earlier months, oldest first. */
+    val history: List<GoalMonth> = emptyList(),
 ) {
-    val fraction: Float get() = if (target <= 0L) 0f else (saved.toDouble() / target).toFloat().coerceAtLeast(0f)
-    val reached: Boolean get() = target > 0L && saved >= target
-    val left: Long get() = (target - saved).coerceAtLeast(0L)
+    val monthly: Boolean get() = kind == GoalKind.INVEST || kind == GoalKind.SAVE
+
+    /** A balance goal heading down (a card to pay off, a debt to clear) rather than up. */
+    private val falling: Boolean get() = kind == GoalKind.BALANCE && target < start
+
+    val fraction: Float
+        get() = when {
+            kind == GoalKind.BALANCE -> {
+                val span = target - start
+                if (span == 0L) (if (saved == target) 1f else 0f) else ((saved - start).toDouble() / span).toFloat().coerceAtLeast(0f)
+            }
+            target <= 0L -> 0f
+            else -> (saved.toDouble() / target).toFloat().coerceAtLeast(0f)
+        }
+
+    val reached: Boolean
+        get() = when {
+            kind == GoalKind.BALANCE -> if (falling) saved <= target else saved >= target && target != start
+            else -> target > 0L && saved >= target
+        }
+
+    val left: Long get() = (if (falling) saved - target else target - saved).coerceAtLeast(0L)
+
+    /** A monthly goal's share of what came in, in whole percent; null with nothing in. */
+    val achievedPercent: Int? get() = if (income > 0L) (saved * 100 / income).toInt() else null
+
+    /** Months in a row met, counting back from the last full one. */
+    val streak: Int get() = history.asReversed().takeWhile { it.met }.size
+
+    val status: GoalStatus
+        get() = when {
+            reached -> GoalStatus.REACHED
+            monthly && target <= 0L -> GoalStatus.OPEN
+            paceFraction == null -> GoalStatus.OPEN
+            fraction + 0.005f >= paceFraction -> GoalStatus.ON_TRACK
+            else -> GoalStatus.BEHIND
+        }
 }
 
-/** The Goals lens, folded once in the ViewModel. */
+/** The Goals lens, folded once in the ViewModel. [saved] and [target] add up the savings pots only. */
 @Immutable
 data class GoalsReading(
     val goals: List<GoalLine> = emptyList(),
@@ -455,6 +583,10 @@ data class GoalsReading(
     /** The soonest target date still ahead among goals not yet reached. */
     val nextDate: LocalDate? = null,
     val nextDateName: String? = null,
+    val onTrack: Int = 0,
+    val behind: Int = 0,
+    /** How many goals are savings pots, the ones [saved] and [target] add up. */
+    val pots: Int = 0,
 ) {
     val fraction: Float get() = if (target <= 0L) 0f else (saved.toDouble() / target).toFloat().coerceAtLeast(0f)
     val left: Long get() = (target - saved).coerceAtLeast(0L)
@@ -491,6 +623,7 @@ internal fun goalMeterWords(fraction: Float, paceFraction: Float?): String {
     return "$saved; an even pace would hold ${(paceFraction * 100f).roundToInt()} percent by today"
 }
 
+/** A savings pot from its contributions. */
 internal fun goalLine(row: GoalWithSaved, today: LocalDate): GoalLine {
     val line = GoalLine(
         id = row.goal.id,
@@ -506,20 +639,110 @@ internal fun goalLine(row: GoalWithSaved, today: LocalDate): GoalLine {
     return if (line.reached) line else line.copy(paceFraction = goalPaceFraction(row.firstDate, row.goal.targetDate, today))
 }
 
-internal fun goalsReading(rows: List<GoalWithSaved>, today: LocalDate): GoalsReading {
-    val goals = rows.map { goalLine(it, today) }
+/** Everything the goal readings need besides the goals: the accounts, and the months they are read over. */
+@Immutable
+data class GoalInputs(
+    val today: LocalDate,
+    /** The month running now, then the ones before it, newest first. */
+    val periods: List<BudgetPeriod>,
+    /** Each of [periods]' type totals, in the same order. */
+    val totals: List<List<TypeTotal>>,
+    val balances: List<AccountBalance> = emptyList(),
+    /** Every transfer over [periods]. */
+    val transfers: List<TransferRow> = emptyList(),
+)
+
+/** The open accounts' net: what you hold less what you owe. */
+internal fun netWorth(balances: List<AccountBalance>): Long = balances.filter { !it.archived }.sumOf { it.balance }
+
+/**
+ * What a month moved into [into] from the other accounts, less what it moved back out. A move
+ * between two of [into] (TFSA to RRSP) is neither.
+ */
+internal fun movedInto(into: Set<Long>, transfers: List<TransferRow>, period: BudgetPeriod): Long =
+    transfers.filter { it.date in period }.sumOf { t ->
+        val toIn = t.toAccountId in into
+        val fromIn = t.accountId in into
+        when {
+            toIn && !fromIn -> t.amount
+            fromIn && !toIn -> -t.amount
+            else -> 0L
+        }
+    }
+
+private fun List<TypeTotal>.of(type: TxType): Long = firstOrNull { it.type == type }?.total ?: 0L
+
+/** A monthly goal's ask from a month's income: [percent] of it, or [amount] when no share is set. */
+internal fun monthlyAsk(percent: Int, amount: Long, income: Long): Long =
+    if (percent > 0) income * percent / 100 else amount
+
+/** Any goal, read against [inputs]. A savings pot reads its contributions, as [goalLine] does. */
+internal fun goalLineOf(row: GoalWithSaved, inputs: GoalInputs): GoalLine {
+    val g = row.goal
+    val today = inputs.today
+    return when (g.kind) {
+        GoalKind.SAVINGS -> goalLine(row, today)
+        GoalKind.BALANCE -> {
+            val account = g.accountId?.let { id -> inputs.balances.firstOrNull { it.id == id } }
+            val now = account?.balance ?: netWorth(inputs.balances)
+            val base = GoalLine(
+                id = g.id, name = g.name, color = g.color, saved = now, target = g.target, targetDate = g.targetDate,
+                monthsLeft = g.targetDate?.let { monthsUntil(today, it) }, paceFraction = null, kind = g.kind,
+                start = g.startAmount, accountName = account?.name,
+            )
+            if (base.reached) base else base.copy(paceFraction = goalPaceFraction(g.startDate, g.targetDate, today))
+        }
+        GoalKind.INVEST, GoalKind.SAVE -> {
+            val into: Set<Long> = if (g.accountId != null) setOf(g.accountId) else {
+                inputs.balances.filter { it.type == AccountType.INVESTMENT }.map { it.id }.toSet()
+            }
+            fun month(i: Int): GoalMonth {
+                val p = inputs.periods[i]
+                val t = inputs.totals.getOrElse(i) { emptyList() }
+                val income = t.of(TxType.INCOME)
+                val achieved = if (g.kind == GoalKind.INVEST) movedInto(into, inputs.transfers, p) else income - t.of(TxType.EXPENSE)
+                return GoalMonth(p.start, achieved, monthlyAsk(g.percent, g.target, income), income)
+            }
+            val current = if (inputs.periods.isEmpty()) GoalMonth(today, 0L, monthlyAsk(g.percent, g.target, 0L), 0L) else month(0)
+            val period = inputs.periods.firstOrNull()
+            GoalLine(
+                id = g.id, name = g.name, color = g.color, saved = current.achieved, target = current.asked,
+                targetDate = null, monthsLeft = null,
+                paceFraction = period?.let { (it.elapsedDays(today).toFloat() / it.days).coerceIn(0f, 1f) },
+                kind = g.kind, percent = g.percent, income = current.income,
+                accountName = g.accountId?.let { id -> inputs.balances.firstOrNull { it.id == id }?.name },
+                history = (1 until inputs.periods.size).map { month(it) }.reversed(),
+            ).let { if (it.reached) it.copy(paceFraction = null) else it }
+        }
+    }
+}
+
+/** The lens's figures over [goals]. */
+internal fun readGoals(goals: List<GoalLine>, today: LocalDate): GoalsReading {
+    val pots = goals.filter { it.kind == GoalKind.SAVINGS }
     val next = goals
         .filter { !it.reached && it.targetDate != null && !it.targetDate.isBefore(today) }
         .minByOrNull { it.targetDate ?: today }
     return GoalsReading(
         goals = goals,
-        saved = goals.sumOf { it.saved.coerceAtLeast(0L) },
-        target = goals.sumOf { it.target.coerceAtLeast(0L) },
+        saved = pots.sumOf { it.saved.coerceAtLeast(0L) },
+        target = pots.sumOf { it.target.coerceAtLeast(0L) },
         reached = goals.count { it.reached },
         nextDate = next?.targetDate,
         nextDateName = next?.name,
+        onTrack = goals.count { it.status == GoalStatus.ON_TRACK },
+        behind = goals.count { it.status == GoalStatus.BEHIND },
+        pots = pots.size,
     )
 }
+
+/** Savings pots alone, read from their contributions. */
+internal fun goalsReading(rows: List<GoalWithSaved>, today: LocalDate): GoalsReading =
+    readGoals(rows.map { goalLine(it, today) }, today)
+
+/** Every goal, of every kind. */
+internal fun goalsReading(rows: List<GoalWithSaved>, inputs: GoalInputs): GoalsReading =
+    readGoals(rows.filter { !it.goal.archived }.map { goalLineOf(it, inputs) }, inputs.today)
 
 /** How a goal is filling: money in a month on average since its first contribution, and when that lands. */
 @Immutable
@@ -541,6 +764,49 @@ internal fun goalPace(contributions: List<ContributionEntity>, saved: Long, targ
     return GoalPace(perMonth, months, reachBy)
 }
 
+/**
+ * A balance goal's pace: how far the balance has moved a month since the goal was set, and when
+ * that lands on the target. Null before a month's worth of reading or with no movement toward it.
+ */
+internal fun balancePace(line: GoalLine, startDate: LocalDate?, today: LocalDate): GoalPace? {
+    if (startDate == null || line.kind != GoalKind.BALANCE) return null
+    val months = monthsUntil(startDate, today)
+    val toward = if (line.target >= line.start) line.saved - line.start else line.start - line.saved
+    if (toward <= 0L) return GoalPace(0L, months, null)
+    val perMonth = toward / months
+    val reachBy = if (line.reached || perMonth <= 0L) null else today.plusMonths((line.left + perMonth - 1) / perMonth)
+    return GoalPace(perMonth, months, reachBy)
+}
+
+/** The words a goal's row carries under its name. */
+internal fun goalRowLine(g: GoalLine, money: MoneyFormatter, today: LocalDate): String = when (g.kind) {
+    GoalKind.SAVINGS -> Copy.goalLine(g.saved, g.target, g.monthsLeft, money) +
+        (g.targetDate?.let { " · by " + Dates.short(it, today) } ?: "")
+    GoalKind.BALANCE -> {
+        val head = when {
+            g.reached -> "Reached"
+            g.monthsLeft == null -> money.formatWhole(g.left) + " to go"
+            g.monthsLeft <= 0 -> money.formatWhole(g.left) + " to go, date passed"
+            else -> money.formatWhole((g.left + g.monthsLeft - 1) / g.monthsLeft) + " a month for " + Copy.plural(g.monthsLeft, "month")
+        }
+        head + " · " + (g.accountName ?: "everything you own") + (g.targetDate?.let { " · by " + Dates.short(it, today) } ?: "")
+    }
+    GoalKind.INVEST, GoalKind.SAVE -> {
+        val verb = if (g.kind == GoalKind.INVEST) "Invested" else "Kept"
+        when {
+            g.percent > 0 && g.income <= 0L -> "Nothing came in yet this month"
+            g.reached -> "$verb " + money.formatWhole(g.saved) + " this month" + (g.achievedPercent?.let { ", $it% of what came in" } ?: "")
+            else -> money.formatWhole(g.left) + " to go this month" + (if (g.percent > 0) " for ${g.percent}% of what came in" else "")
+        } + (if (g.streak > 1) " · ${g.streak} months in a row" else "")
+    }
+}
+
+/** A goal row's reading at its end: "$1,860 of $3,200", "12% of 10%". */
+internal fun goalReading(g: GoalLine, money: MoneyFormatter): String = when {
+    g.monthly && g.percent > 0 -> (g.achievedPercent ?: 0).coerceAtLeast(0).toString() + "% of " + g.percent + "%"
+    else -> money.formatWhole(g.saved) + " of " + money.formatWhole(g.target)
+}
+
 /** The goal editor's working copy. [id] 0 is a new goal. */
 @Immutable
 data class GoalDraft(
@@ -552,6 +818,13 @@ data class GoalDraft(
     val targetDate: LocalDate? = null,
     val color: Int = 0,
     val archived: Boolean = false,
+    val kind: GoalKind = GoalKind.SAVINGS,
+    /** The account a balance or invest goal reads; null for every one. */
+    val accountId: Long? = null,
+    /** A monthly goal's share of income; 0 when it asks a set amount. */
+    val percent: Int = 10,
+    /** True when a monthly goal asks a share of income rather than a set amount. */
+    val byShare: Boolean = true,
 )
 
 @Immutable
@@ -560,6 +833,32 @@ data class GoalProblems(val name: String? = null, val target: String? = null) {
 }
 
 internal fun goalProblems(d: GoalDraft): GoalProblems = GoalProblems(
-    name = if (d.name.isBlank()) "Name what you are saving for" else null,
-    target = if ((d.target ?: 0L) <= 0L) "Enter a target above zero" else null,
+    name = if (d.name.isBlank()) {
+        when (d.kind) {
+            GoalKind.SAVINGS -> "Name what you are saving for"
+            else -> "Name the goal so you can find it later"
+        }
+    } else null,
+    target = when {
+        d.kind == GoalKind.BALANCE && d.target == null -> "Enter the amount to reach"
+        (d.kind == GoalKind.INVEST || d.kind == GoalKind.SAVE) && d.byShare && d.percent !in 1..100 -> "Pick a share from 1 to 100 percent"
+        (d.kind == GoalKind.INVEST || d.kind == GoalKind.SAVE) && d.byShare -> null
+        d.kind != GoalKind.BALANCE && (d.target ?: 0L) <= 0L -> "Enter a target above zero"
+        else -> null
+    },
 )
+
+/** What a goal kind is called, and the one line under it in the editor's choice. */
+internal fun goalKindLabel(kind: GoalKind): String = when (kind) {
+    GoalKind.SAVINGS -> "Savings pot"
+    GoalKind.BALANCE -> "Reach an amount by a date"
+    GoalKind.INVEST -> "Invest every month"
+    GoalKind.SAVE -> "Keep part of every month"
+}
+
+internal fun goalKindHint(kind: GoalKind): String = when (kind) {
+    GoalKind.SAVINGS -> "Set money aside for something, by hand"
+    GoalKind.BALANCE -> "An account, or everything you own, at an amount by a date"
+    GoalKind.INVEST -> "A share of what comes in moved to your investments"
+    GoalKind.SAVE -> "A share of what comes in left over after spending"
+}

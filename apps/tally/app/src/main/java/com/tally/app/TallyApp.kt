@@ -8,6 +8,8 @@ import androidx.work.Configuration
 import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.data.repo.RecurringPoster
 import com.tally.app.di.AppScope
+import com.tally.app.data.prefs.SettingsRepository
+import com.tally.app.work.BackupWorker
 import com.tally.app.work.RecurringWorker
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +24,7 @@ class TallyApp : Application(), Configuration.Provider {
     // Lazy: injection runs on the main thread before the first frame; these are only needed on IO.
     @Inject lateinit var ledger: dagger.Lazy<LedgerRepository>
     @Inject lateinit var poster: dagger.Lazy<RecurringPoster>
+    @Inject lateinit var settings: dagger.Lazy<SettingsRepository>
     @Inject @AppScope lateinit var appScope: CoroutineScope
 
     override val workManagerConfiguration: Configuration
@@ -33,6 +36,8 @@ class TallyApp : Application(), Configuration.Provider {
         appScope.launch(Dispatchers.IO) {
             runCatching { ledger.get().seedCategoriesIfEmpty() }
             runCatching { poster.get().postDue() }
+            // The weekly backup follows its switch in Settings, which is on unless turned off.
+            runCatching { BackupWorker.sync(this@TallyApp, settings.get().currentBackup().auto) }
         }
         RecurringWorker.schedule(this)
     }

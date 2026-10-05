@@ -6,9 +6,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tally.app.data.Clock
 import com.tally.app.data.db.AccountBalance
+import com.tally.app.data.db.BudgetEntity
 import com.tally.app.data.db.BudgetRow
 import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.db.CategoryTotal
+import com.tally.app.data.db.QuickPick
 import com.tally.app.data.db.RecurringEntity
 import com.tally.app.data.db.TransactionEntity
 import com.tally.app.data.prefs.SettingsRepository
@@ -71,6 +73,12 @@ data class EntryState(
     val budget: Long? = null,
     /** Where a repeat would post next. */
     val repeatNext: LocalDate = today,
+    /** What is logged most often for this type, one tap from filled. Empty once there is an amount. */
+    val quickPicks: List<QuickPick> = emptyList(),
+    /** What the month's budget has left once this expense is in; null without a budget, or for income or a transfer. */
+    val leftAfter: Long? = null,
+    /** The keypad's decimals, so a quick pick's amount types as the owner would type it. */
+    val digits: Int = 2,
 ) {
     val isNew: Boolean get() = draft.id == 0L
     val problem: String? get() = validate(draft)
@@ -84,6 +92,12 @@ data class EntryState(
  * the state folds it with the lists and readings. A new entry opens on the default account,
  * today, and the category it was opened for (if any).
  */
+/** How far back the grid's order and the quick picks look. */
+internal const val USE_DAYS = 90L
+
+/** How many quick picks the editor offers. */
+internal const val QUICK_PICKS = 6
+
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class EntryViewModel @Inject constructor(
@@ -159,8 +173,36 @@ class EntryViewModel @Inject constructor(
         Inputs(d, o, c, a, s.defaultAccountId)
     }
 
-    val state: StateFlow<EntryState> = combine(inputs, monthTotals, plan.budgets(), suggestions, ready) { i, m, budgets, suggested, isReady ->
-        buildState(i, m, budgets, suggested, isReady)
+    /** How often each category was used in the last [USE_DAYS] days, for the grid's order, and the quick picks. */
+    private data class Habits(val uses: Map<Long, Int> = emptyMap(), val picks: List<QuickPick> = emptyList(), val periodSpent: Long = 0L)
+
+    private val habits: Flow<Habits> = combine(draft, settings.settings) { d, s -> d.type to s.periodFor(d.date) }
+        .distinctUntilChanged()
+        .flatMapLatest { (type, period) ->
+            if (type == TxType.TRANSFER) {
+                flowOf(Habits())
+            } else {
+                val since = today.minusDays(USE_DAYS)
+                combine(
+                    ledger.byCategory(type, since, today.plusDays(1)),
+                    ledger.quickPicks(type, since, QUICK_PICKS),
+                    ledger.typeTotals(period.start, period.endExclusive),
+                ) { uses, picks, totals ->
+                    Habits(
+                        uses = uses.mapNotNull { u -> u.categoryId?.let { it to u.count } }.toMap(),
+                        picks = picks,
+                        periodSpent = totals.firstOrNull { it.type == TxType.EXPENSE }?.total ?: 0L,
+                    )
+                }
+            }
+        }
+
+    private data class Frame(val inputs: Inputs, val habits: Habits)
+
+    private val frame: Flow<Frame> = combine(inputs, habits) { i, h -> Frame(i, h) }
+
+    val state: StateFlow<EntryState> = combine(frame, monthTotals, plan.budgets(), suggestions, ready) { f, m, budgets, suggested, isReady ->
+        buildState(f.inputs, m, budgets, suggested, isReady, f.habits)
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
@@ -173,8 +215,9 @@ class EntryViewModel @Inject constructor(
         budgets: List<BudgetRow>,
         suggested: List<String>,
         isReady: Boolean,
+        h: Habits,
     ): EntryState {
-        val kindCategories = categoriesFor(i.draft.type, i.categories, i.draft.categoryId)
+        val kindCategories = byUse(categoriesFor(i.draft.type, i.categories, i.draft.categoryId), h.uses)
         val d = resolveDraft(i.draft, kindCategories, i.accounts, i.defaultAccountId)
         val account = i.accounts.firstOrNull { it.id == d.accountId }
         val toAccount = if (d.type == TxType.TRANSFER) i.accounts.firstOrNull { it.id == d.toAccountId } else null
@@ -206,6 +249,13 @@ class EntryViewModel @Inject constructor(
             month = month,
             budget = budget,
             repeatNext = firstRepeatDate(d.date, d.frequency, today),
+            quickPicks = if (d.amount.minor == 0L && d.note.isBlank()) h.picks else emptyList(),
+            leftAfter = if (d.type == TxType.EXPENSE) {
+                budgets.firstOrNull { it.categoryId == BudgetEntity.OVERALL }?.amount?.let { overall ->
+                    leftAfter(overall, h.periodSpent, i.original, d, m.key.period)
+                }
+            } else null,
+            digits = d.amount.fractionDigits,
         )
     }
 
@@ -261,6 +311,16 @@ class EntryViewModel @Inject constructor(
 
     fun setFrequency(frequency: Frequency) = draft.update { it.copy(frequency = frequency) }
 
+    /** One of the most-logged entries: its note, its category and its last amount, all at once. */
+    fun pickQuick(pick: QuickPick) = draft.update {
+        it.copy(
+            note = pick.note,
+            categoryId = pick.categoryId,
+            categoryChosen = true,
+            amount = AmountInput.of(pick.lastAmount, it.amount.fractionDigits),
+        )
+    }
+
     /**
      * A note used before. Unless the person already picked a category, the one last used with this
      * note comes with it, so "Metro" lands on Groceries by itself.
@@ -285,11 +345,20 @@ class EntryViewModel @Inject constructor(
      * Writes the entry. A repeat first makes its bill, starting strictly after this entry's date so
      * the bill never posts the day this entry already covers, then links the entry to it.
      */
-    fun save() {
+    fun save() = write(andNew = false)
+
+    /**
+     * Saves and stays for the next one: the form empties but keeps its type, account and day, so
+     * a stack of receipts is one screen.
+     */
+    fun saveAndNew() = write(andNew = true)
+
+    private fun write(andNew: Boolean) {
         if (busy) return
         val s = state.value
         val d = s.draft
         if (validate(d) != null) return
+        if (andNew && d.id != 0L) return
         busy = true
         val categoryName = s.category?.name
         val stored = original.value
@@ -319,7 +388,21 @@ class EntryViewModel @Inject constructor(
             }
             val row = d.toEntity(stored, recurringId) ?: return@launch
             ledger.save(row)
-            finished.send(Unit)
+            if (andNew) {
+                draft.update { next ->
+                    EntryDraft(
+                        type = next.type,
+                        date = next.date,
+                        accountId = next.accountId,
+                        toAccountId = next.toAccountId,
+                        amount = AmountInput(fractionDigits = next.amount.fractionDigits),
+                    )
+                }
+                notices.show(savedLine(row.type, s.category?.name) + " · ready for the next")
+                busy = false
+            } else {
+                finished.send(Unit)
+            }
         }
     }
 

@@ -18,17 +18,18 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
-import androidx.compose.material.icons.automirrored.rounded.TrendingUp
+import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.CalendarToday
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.EmojiEvents
+import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.Payments
-import androidx.compose.material.icons.rounded.Savings
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -80,6 +81,7 @@ import com.tally.app.ui.common.bounceClick
 import com.tally.app.ui.nav.AppNav
 import com.tally.app.ui.theme.categoryColor
 import com.tally.core.Copy
+import com.tally.core.GoalKind
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -134,7 +136,11 @@ fun GoalScreen(state: GoalState, actions: GoalActions) {
                 }
                 if (state.loaded) {
                     val context = goal?.let { g ->
-                        "Target " + money.formatWhole(g.target) + (g.targetDate?.let { " by " + Dates.short(it, state.today) } ?: "")
+                        when {
+                            g.monthly && g.percent > 0 -> "${g.percent}% of what comes in, every month"
+                            g.monthly -> money.formatWhole(g.target) + " every month"
+                            else -> "Target " + money.formatWhole(g.target) + (g.targetDate?.let { " by " + Dates.short(it, state.today) } ?: "")
+                        }
                     }
                     PageTitle(
                         goal?.name ?: "Goal",
@@ -147,23 +153,36 @@ fun GoalScreen(state: GoalState, actions: GoalActions) {
         if (state.loaded && goal == null) {
             item(key = "gone") {
                 Panel(Modifier.padding(horizontal = GUTTER)) {
-                    EmptyLine(Icons.Rounded.Flag, "This goal was deleted", action = "back", onAction = actions.back)
+                    EmptyLine("This goal was deleted", action = "back", onAction = actions.back)
                 }
             }
         }
         if (goal != null) {
-            item(key = "hero") { GoalHero(state, goal, Modifier.padding(horizontal = GUTTER)) }
-            item(key = "acts") {
-                GoalActs(
-                    canWithdraw = goal.saved > 0L,
-                    onAdd = { sheet = SHEET_ADD },
-                    onWithdraw = { sheet = SHEET_WITHDRAW },
-                    modifier = Modifier.padding(horizontal = GUTTER),
-                )
+            when (goal.kind) {
+                GoalKind.SAVINGS -> {
+                    item(key = "hero") { GoalHero(state, goal, Modifier.padding(horizontal = GUTTER)) }
+                    item(key = "acts") {
+                        GoalActs(
+                            canWithdraw = goal.saved > 0L,
+                            onAdd = { sheet = SHEET_ADD },
+                            onWithdraw = { sheet = SHEET_WITHDRAW },
+                            modifier = Modifier.padding(horizontal = GUTTER),
+                        )
+                    }
+                    item(key = "pace") { PaceTiles(state, goal, Modifier.padding(horizontal = GUTTER)) }
+                    item(key = "flow") { FlowTiles(state, Modifier.padding(horizontal = GUTTER)) }
+                    item(key = "list") { ContributionsPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
+                }
+                GoalKind.BALANCE -> {
+                    item(key = "hero") { BalanceHero(state, goal, Modifier.padding(horizontal = GUTTER)) }
+                    item(key = "pace") { PaceTiles(state, goal, Modifier.padding(horizontal = GUTTER)) }
+                    item(key = "note") { ReadsNote(goal, Modifier.padding(horizontal = GUTTER)) }
+                }
+                GoalKind.INVEST, GoalKind.SAVE -> {
+                    item(key = "hero") { MonthlyHero(state, goal, Modifier.padding(horizontal = GUTTER)) }
+                    item(key = "months") { MonthsPanel(state, goal, Modifier.padding(horizontal = GUTTER)) }
+                }
             }
-            item(key = "pace") { PaceTiles(state, goal, Modifier.padding(horizontal = GUTTER)) }
-            item(key = "flow") { FlowTiles(state, Modifier.padding(horizontal = GUTTER)) }
-            item(key = "list") { ContributionsPanel(state, actions, Modifier.padding(horizontal = GUTTER)) }
         }
     }
     if (goal != null && sheet != SHEET_NONE) {
@@ -208,7 +227,6 @@ private fun GoalHero(state: GoalState, goal: GoalLine, modifier: Modifier = Modi
     val line = Copy.goalLine(goal.saved, goal.target, goal.monthsLeft, money)
     HeroPanel(modifier) {
         HeroLabel(
-            if (goal.reached) Icons.Rounded.EmojiEvents else Icons.Rounded.Savings,
             if (goal.reached) "Reached" else "Saved",
             end = "$percent%",
             tint = hue,
@@ -257,17 +275,19 @@ private fun PaceTiles(state: GoalState, goal: GoalLine, modifier: Modifier = Mod
         modifier,
         first = { m ->
             StatTile(
-                Icons.AutoMirrored.Rounded.TrendingUp,
                 "Your pace",
                 money.formatWhole(pace?.perMonth ?: 0L),
                 m,
-                detail = if (pace == null) "Add money to see your pace"
-                else "A month on average over " + Copy.plural(pace.months, "month"),
+                detail = when {
+                    pace == null && goal.kind == GoalKind.BALANCE -> "Shows once it has moved"
+                    pace == null -> "Add money to see your pace"
+                    goal.kind == GoalKind.BALANCE -> "A month toward it over " + Copy.plural(pace.months, "month")
+                    else -> "A month on average over " + Copy.plural(pace.months, "month")
+                },
             )
         },
         second = { m ->
             StatTile(
-                Icons.Rounded.Flag,
                 "At this pace",
                 when {
                     goal.reached -> "Reached"
@@ -280,6 +300,7 @@ private fun PaceTiles(state: GoalState, goal: GoalLine, modifier: Modifier = Mod
                     reachBy != null && date != null ->
                         if (reachBy.isAfter(date)) "After your date of " + Dates.short(date, state.today) else "On or before your date"
                     reachBy != null -> "When the target is met"
+                    goal.kind == GoalKind.BALANCE -> "Not moving toward it yet"
                     else -> "Needs money coming in"
                 },
             )
@@ -297,38 +318,189 @@ private fun FlowTiles(state: GoalState, modifier: Modifier = Modifier) {
         modifier,
         first = { m ->
             StatTile(
-                Icons.Rounded.ArrowDownward,
                 "Added",
                 money.formatWhole(state.added),
                 m,
                 detail = if (ins == 0) "Nothing added yet" else Copy.plural(ins, "time"),
-                tint = MaterialTheme.colorScheme.tertiary,
             )
         },
         second = { m ->
             StatTile(
-                Icons.Rounded.ArrowUpward,
                 "Withdrawn",
                 money.formatWhole(state.withdrawn),
                 m,
                 detail = if (outs == 0) "Nothing taken out" else Copy.plural(outs, "time"),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
     )
+}
+
+/**
+ * A balance goal under the light: what its account (or everything you own) reads now, the meter
+ * from where it stood when the goal was set to the target, and the even pace to the date as the tick.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BalanceHero(state: GoalState, goal: GoalLine, modifier: Modifier = Modifier) {
+    val money = LocalMoney.current
+    val hue = categoryColor(goal.color)
+    val percent = (goal.fraction * 100f).roundToInt()
+    HeroPanel(modifier) {
+        HeroLabel(
+            if (goal.reached) "Reached" else (goal.accountName ?: "Everything you own"),
+            end = "$percent%",
+            tint = hue,
+        )
+        Spacer(Modifier.height(14.dp))
+        HeroFigure(money.formatWhole(goal.saved))
+        Text(goalRowLine(goal, money, state.today), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(16.dp))
+        PaceMeter(
+            goal.fraction,
+            goal.paceFraction,
+            "Reads ${money.formatWhole(goal.saved)}, from ${money.formatWhole(goal.start)} toward ${money.formatWhole(goal.target)}, " +
+                goalMeterWords(goal.fraction, goal.paceFraction),
+            height = 14.dp,
+            fill = hue,
+        )
+        Spacer(Modifier.height(16.dp))
+        FigureRow(
+            listOf(
+                FigureCell("Started at", money.formatWhole(goal.start)),
+                FigureCell("Target", money.formatWhole(goal.target)),
+                FigureCell("To go", money.formatWhole(goal.left)),
+            )
+        )
+        val date = goal.targetDate
+        val months = goal.monthsLeft
+        Spacer(Modifier.height(16.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val since = state.startDate
+            if (since != null) StatChip(Icons.Rounded.Event, "Set " + Dates.short(since, state.today))
+            if (date != null) StatChip(Icons.Rounded.Flag, "By " + Dates.short(date, state.today))
+            if (date != null && months != null) {
+                StatChip(Icons.Rounded.CalendarToday, if (months <= 0) "Date passed" else Copy.plural(months, "month") + " left")
+            }
+        }
+    }
+}
+
+/** Where a balance goal's number comes from, said once under it. */
+@Composable
+private fun ReadsNote(goal: GoalLine, modifier: Modifier = Modifier) {
+    Panel(modifier) {
+        EmptyLine(
+            if (goal.accountName != null) {
+                "It moves with ${goal.accountName}: every entry in it, and its value when you update one"
+            } else {
+                "It moves with every open account: what you hold less what you owe"
+            },
+        )
+    }
+}
+
+/**
+ * A monthly goal under the light: this month's money moved (or kept), the meter against this
+ * month's ask with the month's even pace as the tick, and the figures that make the ask.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MonthlyHero(state: GoalState, goal: GoalLine, modifier: Modifier = Modifier) {
+    val money = LocalMoney.current
+    val hue = categoryColor(goal.color)
+    val invest = goal.kind == GoalKind.INVEST
+    HeroPanel(modifier) {
+        HeroLabel(
+            if (invest) "Invested this month" else "Kept this month",
+            end = goal.achievedPercent?.let { "$it% OF INCOME" },
+            tint = hue,
+        )
+        Spacer(Modifier.height(14.dp))
+        HeroFigure(money.formatWhole(goal.saved))
+        Text(goalRowLine(goal, money, state.today), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(16.dp))
+        PaceMeter(
+            goal.fraction,
+            goal.paceFraction,
+            "${money.formatWhole(goal.saved)} of ${money.formatWhole(goal.target)} asked this month, " +
+                goalMeterWords(goal.fraction, goal.paceFraction),
+            height = 14.dp,
+            fill = hue,
+        )
+        Spacer(Modifier.height(16.dp))
+        FigureRow(
+            listOf(
+                FigureCell("Asked", money.formatWhole(goal.target)),
+                FigureCell("Came in", money.formatWhole(goal.income), MaterialTheme.colorScheme.tertiary),
+                FigureCell(if (goal.percent > 0) "Share asked" else "To go", if (goal.percent > 0) "${goal.percent}%" else money.formatWhole(goal.left)),
+            )
+        )
+        if (goal.streak > 0 || goal.accountName != null) {
+            Spacer(Modifier.height(16.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (goal.streak > 0) StatChip(Icons.Rounded.EmojiEvents, Copy.plural(goal.streak, "month") + " met in a row")
+                goal.accountName?.let { StatChip(Icons.Rounded.AccountBalance, it) }
+            }
+        }
+    }
+}
+
+/** The months before this one: what each asked, what happened, met or not. */
+@Composable
+private fun MonthsPanel(state: GoalState, goal: GoalLine, modifier: Modifier = Modifier) {
+    val money = LocalMoney.current
+    val months = goal.history.asReversed()
+    Panel(modifier) {
+        PanelHeader(
+            "Earlier months",
+            meta = if (months.isEmpty()) null else "${months.count { it.met }} OF ${months.size} MET",
+        )
+        if (months.isEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            EmptyLine("Your first full month shows here")
+        } else {
+            Spacer(Modifier.height(4.dp))
+            months.forEach { m ->
+                val name = Dates.month(m.start) + (if (m.start.year != state.today.year) " ${m.start.year}" else "")
+                val detail = when {
+                    m.income <= 0L && goal.percent > 0 -> "Nothing came in"
+                    m.met -> "Met · " + money.formatWhole(m.achieved) + " of " + money.formatWhole(m.asked)
+                    else -> money.formatWhole(m.achieved) + " of " + money.formatWhole(m.asked) + " asked"
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .semantics(mergeDescendants = true) { contentDescription = "$name, $detail" }
+                        .heightIn(min = 56.dp)
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    GlyphBadge(
+                        if (m.met) Icons.Rounded.Check else Icons.Rounded.Remove,
+                        tint = if (m.met) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        size = 36.dp,
+                    )
+                    Column(Modifier.weight(1f).clearAndSetSemantics { }) {
+                        Text(name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                        Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
 private fun ContributionsPanel(state: GoalState, actions: GoalActions, modifier: Modifier = Modifier) {
     Panel(modifier) {
         PanelHeader(
-            Icons.AutoMirrored.Rounded.ReceiptLong,
             "Contributions",
             meta = if (state.contributions.isEmpty()) null else state.contributions.size.toString(),
         )
         if (state.contributions.isEmpty()) {
             Spacer(Modifier.height(8.dp))
-            EmptyLine(Icons.Rounded.Savings, "No money set aside yet")
+            EmptyLine("No money set aside yet")
         } else {
             Spacer(Modifier.height(4.dp))
             Text(

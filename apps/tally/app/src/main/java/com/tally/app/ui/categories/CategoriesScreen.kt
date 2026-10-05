@@ -17,14 +17,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.ArrowDownward
-import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.CalendarToday
-import androidx.compose.material.icons.rounded.Category
-import androidx.compose.material.icons.rounded.HourglassEmpty
 import androidx.compose.material.icons.rounded.Inventory2
-import androidx.compose.material.icons.rounded.Leaderboard
-import androidx.compose.material.icons.rounded.NewLabel
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -174,7 +168,6 @@ private fun KindHero(state: CategoriesState, kind: CategoryKind, s: KindSummary,
     else "$periodName by category: " + s.segments.joinToString(", ") { "${it.name} ${it.percent}%" }
     HeroPanel(modifier) {
         HeroHead(
-            if (income) Icons.Rounded.ArrowDownward else Icons.Rounded.ArrowUpward,
             if (income) "Earned by category" else "Spent by category",
             end = periodName.uppercase(),
             tint = if (income) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
@@ -226,7 +219,6 @@ private fun KindTiles(s: KindSummary, modifier: Modifier = Modifier) {
         modifier,
         first = { m ->
             StatTile(
-                Icons.Rounded.Leaderboard,
                 "Most used",
                 (top?.entries ?: 0).toString(),
                 m,
@@ -235,7 +227,6 @@ private fun KindTiles(s: KindSummary, modifier: Modifier = Modifier) {
         },
         second = { m ->
             StatTile(
-                Icons.Rounded.HourglassEmpty,
                 "Unused",
                 s.unused.toString(),
                 m,
@@ -244,7 +235,6 @@ private fun KindTiles(s: KindSummary, modifier: Modifier = Modifier) {
                     s.unused == 0 -> "Every category has entries"
                     else -> "never used, archive to tidy the pickers"
                 },
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         },
     )
@@ -260,14 +250,12 @@ private fun ActivePanel(
 ) {
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.Category,
             "Active",
             meta = if (s.active.isEmpty()) null else Dates.period(state.period, state.today).uppercase(),
         )
         if (s.active.isEmpty()) {
             Spacer(Modifier.height(6.dp))
             EmptyNote(
-                Icons.Rounded.NewLabel,
                 if (kind == CategoryKind.INCOME) "No income categories. Add one to say where money comes from"
                 else "No spending categories. Add one to say where money goes",
             )
@@ -284,7 +272,6 @@ private fun ArchivedPanel(state: CategoriesState, s: KindSummary, actions: Categ
     val periodName = Dates.period(state.period, state.today)
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.Inventory2,
             "Archived",
             meta = Copy.plural(s.archived.size, "category", "categories").uppercase(),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,

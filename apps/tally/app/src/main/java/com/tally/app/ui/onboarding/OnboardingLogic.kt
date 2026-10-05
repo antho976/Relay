@@ -4,17 +4,35 @@ import androidx.compose.runtime.Immutable
 import com.tally.core.AccountType
 import com.tally.core.BudgetPeriod
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import java.time.LocalDate
 
 /*
- * First run asks only what the plan needs: the currency, the first account, the month's budget.
- * The pure rules live here so a plain JVM test holds them.
+ * First run asks only what the plan needs: the currency, the accounts, the month's budget. The
+ * pure rules live here so a plain JVM test holds them.
  */
 
 enum class OnboardingStep(val question: String, val caption: String) {
     CURRENCY("Which currency do you spend in?", "Every amount in the app reads in it. You can change it later."),
-    ACCOUNT("Where does your money sit?", "The account most of your spending comes from. Add the rest later."),
+    ACCOUNT("Where does your money sit?", "Add each account you spend from. More can come later in Accounts."),
     BUDGET("How much can you spend in a month?", "One number for the whole month. Budgets per category can come later."),
+}
+
+/**
+ * One account added on the account step, kept as typed until the end. [name] is the name it will
+ * be saved under; [balance] is read again from [balanceText] whenever the currency changes, so it
+ * is not kept across a process death.
+ */
+@Immutable
+@Serializable
+data class OnboardAccount(
+    val name: String,
+    val type: AccountType,
+    val balanceText: String = "",
+    @Transient val balance: Long = 0L,
+) {
+    /** As it will be stored: what a card owes is negative. */
+    val storedBalance: Long get() = openingBalance(type, balance)
 }
 
 /** The draft the three steps fill in. Nothing is written as an account or budget until the end. */
@@ -27,6 +45,10 @@ data class OnboardingState(
     /** The phone's own currency, offered first. */
     val deviceCurrency: String = "CAD",
     val moreCurrencies: Boolean = false,
+    /** The accounts added so far; the form below them is the next one. */
+    val accounts: List<OnboardAccount> = emptyList(),
+    /** Whether the form for another account is open. It always is while no account is added. */
+    val editing: Boolean = true,
     val accountName: String = defaultAccountName(AccountType.CHEQUING),
     val accountType: AccountType = AccountType.CHEQUING,
     val balanceText: String = "",
@@ -39,7 +61,20 @@ data class OnboardingState(
     val error: String? = null,
     val loaded: Boolean = false,
 ) {
-    val balanceProblem: String? get() = amountProblem(balanceText, balance)
+    val balanceProblem: String? get() = if (formOpen) amountProblem(balanceText, balance) else null
+
+    /** The account form shows: always for the first account, then only when asked for. */
+    val formOpen: Boolean get() = editing || accounts.isEmpty()
+
+    /** The account the form holds, as it would be added. */
+    val draftAccount: OnboardAccount
+        get() = OnboardAccount(accountNameToSave(accountName, accountType), accountType, balanceText, balance ?: 0L)
+
+    /** Every account the finish writes: those added, and the open form's. */
+    val toCreate: List<OnboardAccount> get() = if (formOpen) accounts + draftAccount else accounts
+
+    /** What the accounts to create add up to: held less owed. */
+    val net: Long get() = toCreate.sumOf { it.storedBalance }
     val budgetProblem: String? get() = amountProblem(budgetText, budget)
 
     /** Whether the step's main act can run: an amount field holding something that is not an amount blocks it. */
@@ -54,12 +89,29 @@ data class OnboardingState(
     val storedBalance: Long get() = openingBalance(accountType, balance ?: 0L)
 }
 
+/** The type a new form starts on: the next of the usual set not added yet (a card after the chequing account). */
+internal fun suggestedType(added: List<OnboardAccount>): AccountType =
+    listOf(AccountType.CHEQUING, AccountType.CREDIT, AccountType.SAVINGS, AccountType.CASH, AccountType.INVESTMENT)
+        .firstOrNull { t -> added.none { it.type == t } } ?: AccountType.CHEQUING
+
+/** "Chequing, Credit card and Savings", or "Chequing, Visa and 3 more" past three. */
+internal fun accountNames(accounts: List<OnboardAccount>): String {
+    val names = accounts.map { it.name }
+    return when {
+        names.isEmpty() -> ""
+        names.size == 1 -> names[0]
+        names.size <= 3 -> names.dropLast(1).joinToString(", ") + " and " + names.last()
+        else -> names.take(2).joinToString(", ") + " and ${names.size - 2} more"
+    }
+}
+
 /** Each type's own name, used as the default account name and as the tile's label. */
 internal fun defaultAccountName(type: AccountType): String = when (type) {
     AccountType.CASH -> "Cash"
     AccountType.CHEQUING -> "Chequing"
     AccountType.SAVINGS -> "Savings"
     AccountType.CREDIT -> "Credit card"
+    AccountType.INVESTMENT -> "Investments"
 }
 
 /** Follows the type with the name while the owner has not typed one of their own. */
@@ -84,6 +136,8 @@ internal fun amountProblem(text: String, parsed: Long?): String? =
 internal data class SavedOnboarding(
     val step: OnboardingStep = OnboardingStep.CURRENCY,
     val moreCurrencies: Boolean = false,
+    val accounts: List<OnboardAccount> = emptyList(),
+    val editing: Boolean = true,
     val accountName: String = defaultAccountName(AccountType.CHEQUING),
     val accountType: AccountType = AccountType.CHEQUING,
     val balanceText: String = "",
@@ -93,6 +147,8 @@ internal data class SavedOnboarding(
     fun applyTo(into: OnboardingState, parse: (String) -> Long?): OnboardingState = into.copy(
         step = step,
         moreCurrencies = moreCurrencies,
+        accounts = accounts.map { it.copy(balance = parse(it.balanceText) ?: 0L) },
+        editing = editing,
         accountName = accountName,
         accountType = accountType,
         balanceText = balanceText,
@@ -103,7 +159,7 @@ internal data class SavedOnboarding(
 
     companion object {
         fun of(s: OnboardingState): SavedOnboarding =
-            SavedOnboarding(s.step, s.moreCurrencies, s.accountName, s.accountType, s.balanceText, s.budgetText)
+            SavedOnboarding(s.step, s.moreCurrencies, s.accounts, s.editing, s.accountName, s.accountType, s.balanceText, s.budgetText)
     }
 }
 

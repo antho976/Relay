@@ -4,7 +4,9 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.tally.app.data.Clock
 import com.tally.app.data.db.AccountEntity
+import com.tally.app.data.db.AccountValueEntity
 import com.tally.app.data.prefs.SettingsRepository
 import com.tally.app.data.repo.AccountUse
 import com.tally.app.data.repo.LedgerRepository
@@ -25,6 +27,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 import java.util.Locale
 import javax.inject.Inject
 import kotlin.math.abs
@@ -49,6 +52,11 @@ data class AccountEditState(
     val showErrors: Boolean = false,
     /** What goes with the account, counted afresh, while the delete dialog is open; null when it is closed. */
     val confirmDelete: AccountUse? = null,
+    /** The values recorded for an investment account, newest first. */
+    val values: List<AccountValueEntity> = emptyList(),
+    /** Ready-made accounts not yet taken, for a new account. */
+    val templates: List<AccountTemplate> = emptyList(),
+    val today: LocalDate = LocalDate.now(),
 ) {
     val isNew: Boolean get() = !stored
 
@@ -62,6 +70,7 @@ class AccountEditViewModel @Inject constructor(
     private val ledger: LedgerRepository,
     private val settings: SettingsRepository,
     private val notices: Notices,
+    private val clock: Clock,
 ) : ViewModel() {
 
     private val argId: Long = savedStateHandle.get<Long>(Args.ID) ?: 0L
@@ -79,11 +88,16 @@ class AccountEditViewModel @Inject constructor(
     /** One write per visit. */
     private var busy = false
 
-    val state: StateFlow<AccountEditState> = combine(draft, stored, ledger.balances(), flags) { d, st, balances, f ->
+    val state: StateFlow<AccountEditState> = combine(draft, stored, ledger.balances(), flags, ledger.values(argId)) { d, st, balances, f, values ->
         val row = st?.let { s -> balances.firstOrNull { it.id == s.id } }
         val opening = d.signedOpening ?: st?.openingBalance ?: 0L
-        // The stored balance already holds the stored opening; swap in the draft's.
-        val balance = if (st != null && row != null) row.balance - st.openingBalance + opening else opening
+        // The stored balance already holds the stored opening; swap in the draft's. One that starts
+        // from a recorded value holds no opening at all, so it reads as stored.
+        val balance = when {
+            st != null && row != null && row.valuedOn != null -> row.balance
+            st != null && row != null -> row.balance - st.openingBalance + opening
+            else -> opening
+        }
         AccountEditState(
             id = st?.id ?: 0L,
             draft = d,
@@ -97,6 +111,9 @@ class AccountEditViewModel @Inject constructor(
             problems = accountProblems(d),
             showErrors = f.showErrors,
             confirmDelete = f.confirmDelete,
+            values = values,
+            templates = if (st == null) freeTemplates(balances.map { it.name }) else emptyList(),
+            today = clock.today(),
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AccountEditState())
 
@@ -130,6 +147,27 @@ class AccountEditViewModel @Inject constructor(
     fun setName(name: String) = draft.update { it.copy(name = name) }
 
     fun setType(type: AccountType) = draft.update { it.copy(type = type) }
+
+    /** A ready-made account: its name and type, and a card starts as owed. */
+    fun applyTemplate(t: AccountTemplate) = draft.update { it.copy(name = t.name, type = t.type, owe = t.type == AccountType.CREDIT) }
+
+    /** Records what an investment account is worth today; a second value today replaces the first. */
+    fun recordValue(value: Long) {
+        if (argId == 0L) return
+        viewModelScope.launch {
+            ledger.setValue(argId, clock.today(), value)
+            notices.show("Value recorded")
+        }
+    }
+
+    /** Removes one recorded value at once and offers Undo. */
+    fun deleteValue(id: Long) {
+        val repo = ledger
+        viewModelScope.launch {
+            val row = repo.deleteValue(id) ?: return@launch
+            notices.showUndo("Value removed") { repo.restoreValue(row) }
+        }
+    }
 
     /** [parsed] is [text] read by the screen's money formatter; null when it is not an amount. */
     fun setOpening(text: String, parsed: Long?) = draft.update { it.copy(openingText = text, opening = readOpening(text, parsed)) }

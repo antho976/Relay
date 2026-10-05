@@ -6,11 +6,17 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tally.app.data.Clock
 import com.tally.app.data.db.ContributionEntity
+import com.tally.app.data.prefs.SettingsRepository
 import com.tally.app.data.repo.PlanRepository
 import com.tally.app.ui.common.Notices
 import com.tally.app.ui.nav.Args
+import com.tally.core.GoalKind
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
@@ -28,17 +34,22 @@ data class GoalState(
     /** Newest first. */
     val contributions: List<ContributionEntity> = emptyList(),
     val pace: GoalPace? = null,
+    /** A balance goal's day it was set, where its pace is measured from. */
+    val startDate: LocalDate? = null,
     val added: Long = 0,
     val withdrawn: Long = 0,
     val addedCount: Int = 0,
     val withdrawnCount: Int = 0,
 )
 
-/** One goal: what is saved against the target, its pace, and every contribution. */
+/** One goal: what it holds against its target, its pace, and (a savings pot's) every contribution. */
+@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class GoalViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val plan: PlanRepository,
+    settings: SettingsRepository,
+    goalSource: GoalSource,
     private val notices: Notices,
     clock: Clock,
 ) : ViewModel() {
@@ -46,14 +57,23 @@ class GoalViewModel @Inject constructor(
     private val goalId: Long = savedStateHandle.get<Long>(Args.ID) ?: 0L
     private val today: LocalDate = clock.today()
 
-    val state: StateFlow<GoalState> = combine(plan.goals(), plan.contributions(goalId)) { goals, contributions ->
-        val line = goals.firstOrNull { it.goal.id == goalId }?.let { goalLine(it, today) }
+    private val inputs = settings.settings
+        .map { it.periodFor(today) }
+        .distinctUntilChanged()
+        .flatMapLatest { period -> goalSource.inputs(period, today) }
+
+    val state: StateFlow<GoalState> = combine(plan.goals(), plan.contributions(goalId), inputs) { goals, contributions, i ->
+        val row = goals.firstOrNull { it.goal.id == goalId }
+        val line = row?.let { goalLineOf(it, i) }
         GoalState(
             today = today,
             loaded = true,
             goal = line,
             contributions = contributions,
-            pace = line?.let { goalPace(contributions, it.saved, it.target, today) },
+            pace = line?.let {
+                if (it.kind == GoalKind.BALANCE) balancePace(it, row?.goal?.startDate, today) else goalPace(contributions, it.saved, it.target, today)
+            },
+            startDate = row?.goal?.startDate,
             added = contributions.filter { it.amount > 0L }.sumOf { it.amount },
             withdrawn = contributions.filter { it.amount < 0L }.sumOf { -it.amount },
             addedCount = contributions.count { it.amount > 0L },

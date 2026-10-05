@@ -70,6 +70,13 @@ class PlanScreenshotTest {
         totals = listOf(TypeTotal(TxType.EXPENSE, 225_748), TypeTotal(TxType.INCOME, 430_000)),
         lastTotals = listOf(TypeTotal(TxType.EXPENSE, 271_040)),
         categories = categories,
+        // Three months before this one: rent every month, the hydro bill every other, a show now and then.
+        history = listOf(
+            listOf(CategoryTotal(4, 145_000, 1), CategoryTotal(5, 7_840, 1), CategoryTotal(9, 8_000, 2)),
+            listOf(CategoryTotal(4, 145_000, 1), CategoryTotal(9, 9_500, 3), CategoryTotal(8, 4_000, 1)),
+            listOf(CategoryTotal(4, 145_000, 1), CategoryTotal(5, 7_840, 1)),
+        ),
+        step = 1_000,
     )
 
     private fun bill(

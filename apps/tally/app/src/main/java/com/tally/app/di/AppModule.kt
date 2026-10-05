@@ -5,6 +5,7 @@ import androidx.room.Room
 import com.tally.app.data.Clock
 import com.tally.app.data.SystemClock
 import com.tally.app.data.db.AccountDao
+import com.tally.app.data.db.AccountValueDao
 import com.tally.app.data.db.BudgetDao
 import com.tally.app.data.db.CategoryDao
 import com.tally.app.data.db.GoalDao
@@ -33,8 +34,8 @@ object DatabaseModule {
     @Provides @Singleton
     fun database(@ApplicationContext context: Context): TallyDatabase =
         Room.databaseBuilder(context, TallyDatabase::class.java, TallyDatabase.NAME)
-            // Version 1 has no migrations yet. When v2 lands, add a Migration and a test for it;
-            // never fallbackToDestructiveMigration on a ledger.
+            // Version 2 arrives by Room's auto-migration (TallyDatabase), tested in DaoTest. Never
+            // fallbackToDestructiveMigration on a ledger.
             .build()
 
     @Provides fun transactions(db: TallyDatabase): TransactionDao = db.transactions()
@@ -43,6 +44,7 @@ object DatabaseModule {
     @Provides fun budgets(db: TallyDatabase): BudgetDao = db.budgets()
     @Provides fun recurring(db: TallyDatabase): RecurringDao = db.recurring()
     @Provides fun goals(db: TallyDatabase): GoalDao = db.goals()
+    @Provides fun values(db: TallyDatabase): AccountValueDao = db.values()
 
     @Provides @Singleton @AppScope
     fun appScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)

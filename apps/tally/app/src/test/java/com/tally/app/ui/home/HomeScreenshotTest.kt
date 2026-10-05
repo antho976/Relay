@@ -4,6 +4,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.tally.app.testing.Fixtures
 import com.tally.app.testing.shoot
+import com.tally.app.ui.plan.GoalLine
+import com.tally.core.GoalKind
 import com.tally.core.PaceReading
 import org.junit.Rule
 import org.junit.Test
@@ -43,6 +45,11 @@ class HomeScreenshotTest {
             UpcomingBill(2, "Salary", 215_000, com.tally.core.TxType.INCOME, Fixtures.TODAY.plusDays(2), 2, "work", 0, "Chequing", true),
         ),
         recent = Fixtures.rows.take(5),
+        goals = listOf(
+            GoalLine(1, "Invest a tenth of pay", 3, saved = 30_000, target = 43_000, targetDate = null, monthsLeft = null, paceFraction = null,
+                kind = GoalKind.INVEST, percent = 10, income = 430_000, accountName = "TFSA"),
+            GoalLine(2, "Lisbon in May", 5, saved = 140_000, target = 320_000, targetDate = Fixtures.TODAY.plusMonths(7), monthsLeft = 7, paceFraction = 0.42f),
+        ),
         accounts = Fixtures.accounts,
         hasEntries = true,
         loaded = true,

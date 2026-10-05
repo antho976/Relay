@@ -20,24 +20,34 @@ Unzip, copy to the phone, open it (allow installing from your file manager once)
 (`v*`) also publishes the APK on the Releases page.
 
 To try the app with something in it: on the first screen choose **try it with sample data**, or
-later go to Settings, Backup & data, Load sample data. Sample accounts are named "Sample ..." so
+later go to Settings, Reset, Load sample data. Sample accounts are named "Sample ..." so
 they can never pass for real data; Erase everything removes them.
 
 ## What it does
 
 - **Home**: what is left to spend this month drawn as the budget meter with today's pace tick,
   what each remaining day can take, money in and out, the week against the daily budget, the
-  envelopes furthest over pace, recent entries, upcoming bills, account balances. On a tablet it
-  splits into two panes.
-- **Activity**: every entry by day, month by month, with search across all time and filters.
+  envelopes furthest over pace, goals, recent entries by day, upcoming bills, account balances.
+  **History** (Recent's "view all"): every entry by day, month by month, with search across all
+  time and filters. On a tablet Home splits into two panes.
 - **Add entry** (the + button, from every tab): keypad, category, account, date, note with
-  suggestions, transfers between accounts, optional repeat.
-- **Plan**: the monthly budget and per-category budgets with pace, bills and subscriptions that
-  post themselves on their due date, savings goals with contributions.
+  suggestions, transfers between accounts, optional repeat; quick add from what you log most,
+  save and add another, and what the month has left after it.
+- **Plan**: the monthly budget and per-category budgets with pace, a month-end projection and
+  budgets suggested from your three-month averages; bills and subscriptions that post themselves
+  on their due date; goals by kind: save toward a target, reach a balance by a date, invest a
+  share of income each month, or save an amount each month.
 - **Insights**: the month line (drag to scrub any day against the pace), where the money went,
-  largest expenses, six-month trend, a calendar heat grid.
-- **Settings**: accent colour and pure black, currency, payday budget month, week start,
-  accounts, categories, JSON backup and restore, CSV export and import, sample data, erase.
+  largest expenses, top payees, six-month trend, a calendar heat grid, and Worth: net worth over
+  six months, held against owed, the share of income kept and what went into investments.
+- **Import from your bank**: Desjardins (AccèsD) and Wealthsimple CSV statements, or any bank's
+  CSV. Read on the phone, checked for lines already logged, card payments kept apart, payees
+  filed the way you filed them before. Share a CSV to Tally to open it straight in the import.
+- **Settings**, searchable, in Avex's grouped style: accent colour and pure black, currency,
+  payday budget month, week start, accounts (with Desjardins and Wealthsimple quick starts, and
+  recorded values for investment accounts), categories (over a hundred icons, suggested from
+  the name), Backup (weekly automatic copies, a folder of your choice, restore), Export (CSV and
+  the backup file), sample data, erase.
 
 ## Build
 

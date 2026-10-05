@@ -18,16 +18,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
-import androidx.compose.material.icons.automirrored.rounded.TrendingDown
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.Receipt
-import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -148,7 +143,6 @@ fun TransactionsScreen(state: TransactionsState, query: String, actions: Transac
         if (state.missing) {
             item(key = "missing") {
                 EmptyPanel(
-                    Icons.Rounded.Info,
                     if (state.isAccount) "Its entries were removed with it" else "Its entries are still in Activity",
                     Modifier.padding(horizontal = GUTTER),
                 )
@@ -184,7 +178,6 @@ fun TransactionsScreen(state: TransactionsState, query: String, actions: Transac
                 item(key = "empty") {
                     if (state.searching) {
                         EmptyPanel(
-                            Icons.Rounded.SearchOff,
                             "No entries match \"${state.query}\"",
                             Modifier.padding(horizontal = GUTTER),
                             action = "clear search",
@@ -192,7 +185,6 @@ fun TransactionsScreen(state: TransactionsState, query: String, actions: Transac
                         )
                     } else {
                         EmptyPanel(
-                            Icons.AutoMirrored.Rounded.ReceiptLong,
                             "Nothing logged in ${state.name.orEmpty()} yet",
                             Modifier.padding(horizontal = GUTTER),
                             action = "log one",
@@ -247,9 +239,8 @@ private fun BudgetHero(
     val over = r.status == PaceStatus.OVER_BUDGET
     val tint = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     val reading = Copy.ofBudget(r.spent, r.budget, money)
-    HeroPanel(modifier, tint = tint) {
+    HeroPanel(modifier) {
         HeroLabel(
-            CategoryIcons.of(state.icon),
             periodName,
             meta = if (over) "OVER BUDGET" else Copy.paceLine(r, money).uppercase(),
             iconTint = categoryColor(state.color),
@@ -293,7 +284,7 @@ private fun NoBudgetHero(state: TransactionsState, periodName: String, onSetBudg
     val money = LocalMoney.current
     val elapsed = state.period.elapsedDays(state.today).coerceAtLeast(1)
     HeroPanel(modifier) {
-        HeroLabel(CategoryIcons.of(state.icon), periodName, meta = "NO BUDGET", iconTint = categoryColor(state.color))
+        HeroLabel(periodName, meta = "NO BUDGET", iconTint = categoryColor(state.color))
         Spacer(Modifier.height(14.dp))
         Text(
             money.formatWhole(state.periodTotal),
@@ -326,7 +317,7 @@ private fun NoBudgetHero(state: TransactionsState, periodName: String, onSetBudg
 private fun IncomeHero(state: TransactionsState, periodName: String, modifier: Modifier = Modifier) {
     val money = LocalMoney.current
     HeroPanel(modifier) {
-        HeroLabel(CategoryIcons.of(state.icon), periodName, meta = "CAME IN", iconTint = categoryColor(state.color))
+        HeroLabel(periodName, meta = "CAME IN", iconTint = categoryColor(state.color))
         Spacer(Modifier.height(14.dp))
         Text(
             money.formatWhole(state.periodTotal),
@@ -351,7 +342,6 @@ private fun IncomeHero(state: TransactionsState, periodName: String, modifier: M
 private fun AccountHero(state: TransactionsState, periodName: String, modifier: Modifier = Modifier) {
     val f = state.flows
     FlowHero(
-        icon = CategoryIcons.account(state.accountType),
         label = periodName,
         meta = dayOf(state),
         spent = f.moneyOut,
@@ -376,22 +366,18 @@ private fun CategoryTiles(state: TransactionsState, modifier: Modifier = Modifie
         modifier,
         first = { m ->
             StatTile(
-                Icons.Rounded.History,
                 "Last month",
                 money.formatWhole(state.lastPeriodTotal),
                 m,
                 detail = versusLine(state.periodTotal, state.lastPeriodSameDay, money),
-                tint = tint,
             )
         },
         second = { m ->
             StatTile(
-                Icons.Rounded.Receipt,
                 "Per entry",
                 money.format(s.average),
                 m,
                 detail = if (s.basisCount > 0) "Across " + Copy.plural(s.basisCount, "entry", "entries") else "Nothing logged yet",
-                tint = tint,
             )
         },
     )
@@ -406,7 +392,6 @@ private fun AccountTiles(state: TransactionsState, modifier: Modifier = Modifier
         modifier,
         first = { m ->
             StatTile(
-                Icons.Rounded.Flag,
                 "Opened with",
                 money.format(state.openingBalance),
                 m,
@@ -415,12 +400,10 @@ private fun AccountTiles(state: TransactionsState, modifier: Modifier = Modifier
         },
         second = { m ->
             StatTile(
-                if (change >= 0) Icons.AutoMirrored.Rounded.TrendingUp else Icons.AutoMirrored.Rounded.TrendingDown,
                 "Since opening",
                 money.formatSigned(change),
                 m,
                 detail = "Across " + Copy.plural(state.entryCount, "entry", "entries"),
-                tint = if (up) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
                 valueColor = if (up) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onBackground,
             )
         },

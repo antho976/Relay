@@ -32,10 +32,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import com.tally.app.ui.common.FIGURE_GAP
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.GroupRow
-import com.tally.app.ui.common.PANEL_GAP
 import com.tally.app.ui.common.PageTitle
 import com.tally.app.ui.common.PanelHeader
 import com.tally.app.ui.common.TopBar
@@ -85,12 +85,12 @@ internal fun TilePair(
     second: @Composable (Modifier) -> Unit,
 ) {
     if (LocalDensity.current.fontScale > 1.3f) {
-        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
             first(Modifier.fillMaxWidth())
             second(Modifier.fillMaxWidth())
         }
     } else {
-        Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+        Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
             first(Modifier.weight(1f).fillMaxHeight())
             second(Modifier.weight(1f).fillMaxHeight())
         }
@@ -103,13 +103,12 @@ internal fun TilePair(
  */
 @Composable
 internal fun HeroHead(
-    icon: ImageVector,
     label: String,
     modifier: Modifier = Modifier,
     end: String? = null,
     tint: Color = MaterialTheme.colorScheme.primary,
 ) {
-    PanelHeader(icon, label, modifier, meta = end, tint = tint)
+    PanelHeader(label, modifier, meta = end, tint = tint)
 }
 
 /**

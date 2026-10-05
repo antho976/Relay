@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -22,7 +21,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
@@ -50,12 +48,10 @@ import androidx.compose.ui.unit.dp
 import com.tally.app.ui.common.Aside
 import com.tally.app.ui.common.Dates
 import com.tally.app.ui.common.EndsRow
+import com.tally.app.ui.common.FIGURE_GAP
 import com.tally.app.ui.common.HeroPanel
-import com.tally.app.ui.common.IconBadge
 import com.tally.app.ui.common.LedgerRow
 import com.tally.app.ui.common.LocalMoney
-import com.tally.app.ui.common.PANEL_GAP
-import com.tally.app.ui.common.PANEL_PAD
 import com.tally.app.ui.common.Panel
 import com.tally.app.ui.common.PanelHeader
 import com.tally.app.ui.common.StackedBar
@@ -141,7 +137,7 @@ internal fun SearchField(
  */
 @Composable
 internal fun DayPanel(group: DayGroup, today: LocalDate, onOpen: (Long) -> Unit, modifier: Modifier = Modifier) {
-    Panel(modifier, contentPadding = PaddingValues(start = PANEL_PAD, end = PANEL_PAD, top = 14.dp, bottom = 6.dp)) {
+    Panel(modifier) {
         DayHeader(group, today)
         Spacer(Modifier.height(2.dp))
         group.rows.forEach { row ->
@@ -154,7 +150,6 @@ internal fun DayPanel(group: DayGroup, today: LocalDate, onOpen: (Long) -> Unit,
 private fun DayHeader(group: DayGroup, today: LocalDate) {
     val money = LocalMoney.current
     val label = Dates.day(group.date, today)
-    val isToday = group.date == today
     // What the day did: its spending, or what came in on a day of only income. A day of only
     // transfers moved money between your own accounts and reads as nothing out.
     val total = when {
@@ -171,11 +166,6 @@ private fun DayHeader(group: DayGroup, today: LocalDate) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        IconBadge(
-            Icons.Rounded.CalendarToday,
-            tint = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            size = 28.dp,
-        )
         EndsRow(
             start = {
                 Text(label.uppercase(), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onBackground)
@@ -192,12 +182,11 @@ private fun DayHeader(group: DayGroup, today: LocalDate) {
  */
 @Composable
 internal fun HeroLabel(
-    icon: ImageVector,
     label: String,
     meta: String? = null,
     iconTint: Color = MaterialTheme.colorScheme.primary,
 ) {
-    PanelHeader(icon, label, meta = meta, tint = iconTint)
+    PanelHeader(label, meta = meta, tint = iconTint)
 }
 
 /** A serif figure over its mono label, keyed to its colour in the bar by a dot. */
@@ -219,7 +208,6 @@ private fun KeyedFigure(value: String, label: String, dot: Color, valueColor: Co
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun FlowHero(
-    icon: ImageVector,
     label: String,
     meta: String?,
     spent: Long,
@@ -236,7 +224,7 @@ internal fun FlowHero(
     val out = money.formatWhole(spent)
     val inn = money.formatWhole(income)
     HeroPanel(modifier) {
-        HeroLabel(icon, label, meta)
+        HeroLabel(label, meta)
         Spacer(Modifier.height(14.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             KeyedFigure(out, "Out", dot = outColor, valueColor = MaterialTheme.colorScheme.onBackground)
@@ -270,32 +258,28 @@ internal fun TilePair(
     second: @Composable (Modifier) -> Unit,
 ) {
     if (LocalDensity.current.fontScale > 1.5f) {
-        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
             first(Modifier.fillMaxWidth())
             second(Modifier.fillMaxWidth())
         }
     } else {
-        Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+        Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
             first(Modifier.weight(1f).fillMaxHeight())
             second(Modifier.weight(1f).fillMaxHeight())
         }
     }
 }
 
-/** A list's zero: its glyph and one quiet line, with the one act that changes it when there is one. */
+/** A list's zero: one quiet line, with the one act that changes it when there is one. */
 @Composable
 internal fun EmptyPanel(
-    icon: ImageVector,
     text: String,
     modifier: Modifier = Modifier,
     action: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
     Panel(modifier) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            IconBadge(icon, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            Aside(text, Modifier.weight(1f))
-        }
+        Aside(text)
         if (action != null && onAction != null) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextAction(action, onAction, color = MaterialTheme.colorScheme.primary)

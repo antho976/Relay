@@ -92,7 +92,7 @@ class EditorDraftRestoreTest {
         val typed = GoalDraft(name = "Lisbon in May", targetText = "3200", target = 320_000, targetDate = LocalDate.of(2027, 5, 1), color = 4)
         handle.keepDraft(SavedGoal.serializer(), SavedGoal.of(typed))
 
-        val vm = GoalEditViewModel(handle, db.planRepository(clock), settings, notices, clock)
+        val vm = GoalEditViewModel(handle, db.planRepository(clock), db.ledgerRepository(clock), settings, notices, clock)
         val state = vm.state.awaitState { it.loaded }
 
         assertEquals(typed, state.draft)
@@ -106,7 +106,7 @@ class EditorDraftRestoreTest {
         val typed = AccountDraft(name = "Visa Infinite", type = AccountType.CREDIT, openingText = "512.30", opening = 51_230, owe = true)
         handle.keepDraft(AccountDraft.serializer(), typed)
 
-        val vm = AccountEditViewModel(handle, db.ledgerRepository(clock), settings, notices)
+        val vm = AccountEditViewModel(handle, db.ledgerRepository(clock), settings, notices, clock)
         val state = vm.state.awaitState { it.loaded }
 
         assertEquals(typed, state.draft)
@@ -117,7 +117,7 @@ class EditorDraftRestoreTest {
 
     @Test fun everyChangeIsKeptForTheNextProcess() {
         val handle = SavedStateHandle(mapOf(Args.ID to 0L))
-        val vm = AccountEditViewModel(handle, db.ledgerRepository(clock), settings, notices)
+        val vm = AccountEditViewModel(handle, db.ledgerRepository(clock), settings, notices, clock)
         vm.state.awaitState { it.loaded }
 
         vm.setName("Joint chequing")

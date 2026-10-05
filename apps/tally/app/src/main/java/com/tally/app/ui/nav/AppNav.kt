@@ -9,6 +9,8 @@ import com.tally.core.TxType
 object Routes {
     const val ONBOARDING = "onboarding"
     const val HUB = "hub"
+    /** Every entry by day: Home's Recent "view all", Avex's History. */
+    const val HISTORY = "history"
     const val ENTRY = "entry?id={id}&type={type}&account={account}&category={category}"
     const val TRANSACTIONS = "transactions?category={category}&account={account}"
     const val ACCOUNTS = "accounts"
@@ -22,7 +24,10 @@ object Routes {
     const val SETTINGS = "settings"
     const val APPEARANCE = "settings/appearance"
     const val FORMAT = "settings/format"
-    const val DATA = "settings/data"
+    const val BACKUP = "settings/backup"
+    const val EXPORT = "settings/export"
+    const val IMPORT = "settings/import?source={source}"
+    const val ABOUT = "settings/about"
 }
 
 /** Argument keys, read by ViewModels through SavedStateHandle. */
@@ -32,6 +37,7 @@ object Args {
     const val ACCOUNT = "account"
     const val CATEGORY = "category"
     const val KIND = "kind"
+    const val SOURCE = "source"
 }
 
 /**
@@ -81,10 +87,25 @@ class AppNav(private val controller: NavHostController) {
     fun billEdit(id: Long = 0) = go("bill/edit?id=$id")
     fun goal(id: Long) = go("goal?id=$id")
     fun goalEdit(id: Long = 0) = go("goal/edit?id=$id")
+    fun history() = go(Routes.HISTORY)
     fun settings() = go(Routes.SETTINGS)
     fun appearance() = go(Routes.APPEARANCE)
     fun format() = go(Routes.FORMAT)
-    fun data() = go(Routes.DATA)
+    fun backup() = go(Routes.BACKUP)
+    fun export() = go(Routes.EXPORT)
+    fun about() = go(Routes.ABOUT)
+
+    /** The bank import, opened on [source]'s directions ("desjardins", "wealthsimple", or none). */
+    fun import(source: String = "") = go("settings/import?source=$source")
+
+    /**
+     * A CSV shared into the app from a browser's downloads or a file manager. It arrives while the
+     * Activity is still starting, before any screen is resumed, so it skips [go]'s resumed check;
+     * single-top keeps a second share from stacking a second import.
+     */
+    fun importShared() {
+        controller.navigate("settings/import?source=shared") { launchSingleTop = true }
+    }
 
     fun finishOnboarding() {
         controller.navigate(Routes.HUB) { popUpTo(Routes.ONBOARDING) { inclusive = true } }

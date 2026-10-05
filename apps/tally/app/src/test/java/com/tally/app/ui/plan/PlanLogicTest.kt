@@ -413,4 +413,38 @@ class PlanLogicTest {
         assertEquals(null, padRows(showDecimal = false)[3][0])
         assertEquals(PadKey.Decimal, padRows(showDecimal = true)[3][0])
     }
+
+    // ── Suggested budgets and the month-end projection ───────────────────────
+
+    @Test fun suggestionsAverageTheMonthsWithSpendingAndRoundUp() {
+        val groceries = expense(1, "Groceries")
+        val dining = expense(2, "Dining")
+        val gifts = expense(3, "Gifts")
+        val history = listOf(
+            listOf(CategoryTotal(1, 41_000, 9), CategoryTotal(2, 12_000, 6), CategoryTotal(3, 30_000, 1)),
+            listOf(CategoryTotal(1, 44_500, 10), CategoryTotal(2, 0, 0)),
+            listOf(CategoryTotal(1, 39_000, 8), CategoryTotal(2, 9_100, 4)),
+        )
+        val got = budgetSuggestions(history, budgeted = emptySet(), listOf(groceries, dining, gifts), step = 1_000)
+        // Gifts was spent in one month only: a one-off suggests nothing.
+        assertEquals(listOf(1L, 2L), got.map { it.categoryId })
+        assertEquals(42_000L, got[0].amount)
+        assertEquals(3, got[0].months)
+        // Dining averages the two months it had (10,550), not three.
+        assertEquals(11_000L, got[1].amount)
+        assertEquals(2, got[1].months)
+    }
+
+    @Test fun suggestionsSkipBudgetedArchivedAndIncomeCategories() {
+        val history = List(3) { listOf(CategoryTotal(1, 10_000, 1), CategoryTotal(2, 10_000, 1), CategoryTotal(3, 10_000, 1), CategoryTotal(4, 10_000, 1)) }
+        val categories = listOf(expense(1, "Budgeted"), expense(2, "Archived", archived = true), income(3, "Salary"), expense(4, "Open"))
+        assertEquals(listOf(4L), budgetSuggestions(history, setOf(1L), categories, step = 1_000).map { it.categoryId })
+    }
+
+    @Test fun theProjectionWaitsForAFewDaysAndScalesThePaceSoFar() {
+        assertNull(projectedSpend(spent = 10_000, days = 31, elapsed = 2))
+        assertNull(projectedSpend(spent = 0, days = 31, elapsed = 10))
+        assertEquals(31_000L, projectedSpend(spent = 10_000, days = 31, elapsed = 10))
+        assertEquals(10_000L, projectedSpend(spent = 10_000, days = 31, elapsed = 31))
+    }
 }

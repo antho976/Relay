@@ -88,6 +88,34 @@ class BackupCodecTest {
         assertEquals(null, read.file.weekStartsMonday)
     }
 
+    @Test fun `a version 1 file, without goal kinds or values, still reads`() {
+        val v1 = """{"format":"tally-backup","version":1,"exportedAt":"2026-10-04","currency":"CAD",
+            "accounts":[{"id":1,"name":"Chequing","type":"CHEQUING","openingBalance":0}],
+            "goals":[{"id":1,"name":"Trip","target":100000}]}"""
+        val read = BackupCodec.decode(v1) as BackupReadResult.Ok
+        assertEquals(GoalKind.SAVINGS, read.file.goals.single().kind)
+        assertEquals(emptyList<AccountValueDto>(), read.file.values)
+    }
+
+    @Test fun `goal kinds and account values must point at what is in the file`() {
+        assertEquals(
+            "A goal points at an account that is not in the file.",
+            reason(sample.copy(goals = sample.goals.map { it.copy(kind = GoalKind.BALANCE, accountId = 404) })),
+        )
+        assertEquals(
+            "A goal asks for a share outside 0 to 100 percent.",
+            reason(sample.copy(goals = sample.goals.map { it.copy(kind = GoalKind.INVEST, percent = 150) })),
+        )
+        assertEquals(
+            "An account value points at an account that is not in the file.",
+            reason(sample.copy(values = listOf(AccountValueDto(1, 404, "2026-10-01", 5_00)))),
+        )
+        assertEquals(
+            "An account value has an unreadable date.",
+            reason(sample.copy(values = listOf(AccountValueDto(1, sample.accounts.first().id, "later", 5_00)))),
+        )
+    }
+
     @Test fun `ignores unknown keys from a future minor change`() {
         val text = BackupCodec.encode(sample).replaceFirst("{", "{\"futureField\": true,")
         assertTrue(BackupCodec.decode(text) is BackupReadResult.Ok)

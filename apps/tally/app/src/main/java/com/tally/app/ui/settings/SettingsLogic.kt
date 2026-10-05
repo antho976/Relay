@@ -3,6 +3,7 @@ package com.tally.app.ui.settings
 import androidx.compose.runtime.Immutable
 import com.tally.app.data.prefs.Accent
 import com.tally.core.BackupFile
+import com.tally.core.BankStatements
 import com.tally.core.Copy
 import com.tally.core.MoneyFormatter
 import java.text.NumberFormat
@@ -128,6 +129,104 @@ internal fun countText(n: Int, locale: Locale): String = NumberFormat.getInteger
 internal fun backupFileName(date: LocalDate): String = "tally-backup-$date.json"
 
 internal fun csvFileName(date: LocalDate): String = "tally-entries-$date.csv"
+
+/** A month's entries as their own file: "tally-entries-2026-10.csv". */
+internal fun monthCsvFileName(start: LocalDate): String = "tally-entries-" + start.toString().take(7) + ".csv"
+
+// ── The Settings list, Avex's way ───────────────────────────────────────────
+
+/** Where a Settings row or search hit goes. */
+enum class SettingsDest { APPEARANCE, FORMAT, ACCOUNTS, CATEGORIES, IMPORT, BACKUP, EXPORT, SAMPLE, ERASE, ABOUT }
+
+/** The group a destination sits in on the Settings list, a search hit's "In ..." line. */
+internal fun groupOf(dest: SettingsDest): String = when (dest) {
+    SettingsDest.APPEARANCE, SettingsDest.FORMAT -> "General"
+    SettingsDest.ACCOUNTS, SettingsDest.CATEGORIES, SettingsDest.IMPORT -> "Money"
+    SettingsDest.BACKUP, SettingsDest.EXPORT -> "Data"
+    SettingsDest.SAMPLE, SettingsDest.ERASE -> "Reset"
+    SettingsDest.ABOUT -> "About"
+}
+
+/** One searchable thing: a page, or a setting on one. [tags] are the other words people use for it. */
+@Immutable
+internal data class SettingsEntry(val key: String, val name: String, val dest: SettingsDest, val tags: String = "") {
+    /** Where the hit lives, in the words of the list: a page's group, or the page an item sits on. */
+    val where: String get() = if (key.startsWith("page:")) groupOf(dest) else pageName(dest)
+}
+
+internal fun pageName(dest: SettingsDest): String = when (dest) {
+    SettingsDest.APPEARANCE -> "Appearance"
+    SettingsDest.FORMAT -> "Currency & dates"
+    SettingsDest.ACCOUNTS -> "Accounts"
+    SettingsDest.CATEGORIES -> "Categories"
+    SettingsDest.IMPORT -> "Import from your bank"
+    SettingsDest.BACKUP -> "Backup"
+    SettingsDest.EXPORT -> "Export"
+    SettingsDest.SAMPLE -> "Load sample data"
+    SettingsDest.ERASE -> "Erase everything"
+    SettingsDest.ABOUT -> "About Tally"
+}
+
+/** Every page, and the settings inside them, that the search finds. */
+internal val SETTINGS_ENTRIES: List<SettingsEntry> = listOf(
+    SettingsEntry("page:appearance", "Appearance", SettingsDest.APPEARANCE, "theme look colour color dark"),
+    SettingsEntry("page:format", "Currency & dates", SettingsDest.FORMAT, "money currency format dates"),
+    SettingsEntry("page:accounts", "Accounts", SettingsDest.ACCOUNTS, "bank card cash balance chequing savings investment tfsa rrsp"),
+    SettingsEntry("page:categories", "Categories", SettingsDest.CATEGORIES, "icons colours groceries spending income"),
+    SettingsEntry("page:import", "Import from your bank", SettingsDest.IMPORT, "desjardins wealthsimple accesd statement csv bank download transactions"),
+    SettingsEntry("page:backup", "Backup", SettingsDest.BACKUP, "auto weekly copy restore folder safe"),
+    SettingsEntry("page:export", "Export", SettingsDest.EXPORT, "csv spreadsheet excel sheets file json share"),
+    SettingsEntry("page:sample", "Load sample data", SettingsDest.SAMPLE, "demo try example fake"),
+    SettingsEntry("page:erase", "Erase everything", SettingsDest.ERASE, "delete reset wipe clear start over"),
+    SettingsEntry("page:about", "About Tally", SettingsDest.ABOUT, "version privacy offline licence license"),
+    SettingsEntry("item:accent", "Accent colour", SettingsDest.APPEARANCE, "color ember red gold sage teal sky iris rose"),
+    SettingsEntry("item:black", "Pure black", SettingsDest.APPEARANCE, "amoled oled dark black"),
+    SettingsEntry("item:mono", "Use the accent", SettingsDest.APPEARANCE, "monochrome no colour grey"),
+    SettingsEntry("item:currency", "Currency", SettingsDest.FORMAT, "cad usd eur dollar euro money"),
+    SettingsEntry("item:month", "Month starts on", SettingsDest.FORMAT, "payday budget period cycle 15th"),
+    SettingsEntry("item:week", "Week starts on", SettingsDest.FORMAT, "monday sunday"),
+    SettingsEntry("item:desjardins", "Desjardins statement", SettingsDest.IMPORT, "accesd caisse csv"),
+    SettingsEntry("item:wealthsimple", "Wealthsimple statement", SettingsDest.IMPORT, "chequing cash tfsa csv"),
+    SettingsEntry("item:tally-csv", "Import a Tally CSV", SettingsDest.IMPORT, "spreadsheet csv file"),
+    SettingsEntry("item:auto", "Weekly backup", SettingsDest.BACKUP, "automatic auto schedule"),
+    SettingsEntry("item:folder", "Backup folder", SettingsDest.BACKUP, "uninstall keep drive files"),
+    SettingsEntry("item:restore", "Restore a backup", SettingsDest.BACKUP, "bring back recover undo"),
+    SettingsEntry("item:now", "Back up now", SettingsDest.BACKUP, "save copy"),
+    SettingsEntry("item:csv", "Entries as CSV", SettingsDest.EXPORT, "spreadsheet excel numbers sheets"),
+    SettingsEntry("item:file", "Save a backup file", SettingsDest.EXPORT, "json copy share"),
+    SettingsEntry("item:investment", "Investment accounts", SettingsDest.ACCOUNTS, "tfsa rrsp fhsa celi reer wealthsimple value"),
+)
+
+private fun fold(text: String): String = BankStatements.normalize(text)
+
+/**
+ * The entries [query] finds, ranked: a name that starts with it, then a name holding it, then a
+ * tag. In any case and with or without accents, so "epargne" finds what "épargne" would.
+ */
+internal fun searchSettings(query: String, entries: List<SettingsEntry> = SETTINGS_ENTRIES): List<SettingsEntry> {
+    val q = fold(query)
+    if (q.isEmpty()) return emptyList()
+    return entries.mapNotNull { e ->
+        val name = fold(e.name)
+        val rank = when {
+            name.startsWith(q) -> 0
+            q in name -> 1
+            q in fold(e.tags) -> 2
+            else -> return@mapNotNull null
+        }
+        rank to e
+    }.sortedWith(compareBy({ it.first }, { it.second.name.lowercase() })).map { it.second }
+}
+
+/**
+ * The Backup row's subtitle: whether it runs, and when it last did ("Weekly · last 3 Oct"), or
+ * that it failed. [lastOn] is the last day it wrote, already in words; null before the first.
+ */
+internal fun backupSummary(auto: Boolean, lastOn: String?, failed: Boolean): String = when {
+    failed -> "Last backup failed · back up now"
+    lastOn == null -> (if (auto) "Weekly" else "Off") + " · no backup yet"
+    else -> (if (auto) "Weekly" else "Off") + " · last " + lastOn
+}
 
 /** What a picked backup holds, read before anything is replaced. */
 @Immutable

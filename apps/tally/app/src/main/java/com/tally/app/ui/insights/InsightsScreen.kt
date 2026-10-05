@@ -2,7 +2,9 @@
 
 package com.tally.app.ui.insights
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -20,27 +22,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.ShowChart
 import androidx.compose.material.icons.automirrored.rounded.TrendingDown
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
-import androidx.compose.material.icons.rounded.ArrowDownward
-import androidx.compose.material.icons.rounded.ArrowUpward
-import androidx.compose.material.icons.rounded.BarChart
-import androidx.compose.material.icons.rounded.BeachAccess
-import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CalendarToday
 import androidx.compose.material.icons.rounded.Category
-import androidx.compose.material.icons.rounded.DonutLarge
-import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.Event
 import androidx.compose.material.icons.rounded.Flag
-import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.LocalOffer
 import androidx.compose.material.icons.rounded.MoreHoriz
-import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -59,6 +53,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
@@ -73,14 +68,16 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tally.app.ui.common.Aside
 import com.tally.app.ui.common.Caption
+import com.tally.app.ui.accounts.typeLabel
 import com.tally.app.ui.common.CategoryBadge
+import com.tally.app.ui.common.CategoryIcons
 import com.tally.app.ui.common.ChromeButton
 import com.tally.app.ui.common.Dates
 import com.tally.app.ui.common.EndsRow
+import com.tally.app.ui.common.FIGURE_GAP
 import com.tally.app.ui.common.GUTTER
 import com.tally.app.ui.common.GlyphBadge
 import com.tally.app.ui.common.HeroPanel
-import com.tally.app.ui.common.IconBadge
 import com.tally.app.ui.common.LedgerRow
 import com.tally.app.ui.common.LegendDot
 import com.tally.app.ui.common.LocalMoney
@@ -151,9 +148,10 @@ data class InsightsActions(
 )
 
 /**
- * Insights in three lenses. Month: the spend line against its pace in the lit panel, the readings
- * around it, where the money went, the largest entries and what came in. Trend: six periods side by
- * side and their averages. Calendar: the days as a heat grid, each one opening its entries.
+ * Insights in four lenses. Month: the spend line against its pace in the lit panel, the readings
+ * around it, where the money went, the largest entries, the biggest payees and what came in. Trend:
+ * six periods side by side and their averages. Calendar: the days as a heat grid, each one opening
+ * its entries. Worth: what the accounts add up to, held against owed, and what was kept and invested.
  */
 @Composable
 fun InsightsScreen(state: InsightsState, lens: InsightsLens, actions: InsightsActions) {
@@ -202,6 +200,7 @@ fun InsightsScreen(state: InsightsState, lens: InsightsLens, actions: InsightsAc
                 InsightsLens.MONTH -> monthItems(state, periodName, actions)
                 InsightsLens.TREND -> trendItems(state, actions)
                 InsightsLens.CALENDAR -> calendarItems(state, periodName) { openDay = it.toEpochDay() }
+                InsightsLens.WORTH -> worthItems(state, periodName)
             }
         }
     }
@@ -243,8 +242,8 @@ private fun PeriodStepper(label: String, canGoNext: Boolean, onPrevious: () -> U
 
 /** The lit panel's label row: a glyph tile, the mono name of the reading, a mono reading at the end. */
 @Composable
-private fun LensHeroLabel(icon: ImageVector, label: String, meta: String?, tint: Color = MaterialTheme.colorScheme.primary) {
-    PanelHeader(icon, label, meta = meta, tint = tint)
+private fun LensHeroLabel(label: String, meta: String?, tint: Color = MaterialTheme.colorScheme.primary) {
+    PanelHeader(label, meta = meta, tint = tint)
 }
 
 /**
@@ -269,29 +268,22 @@ private fun TileRow(
     second: @Composable (Modifier) -> Unit,
 ) {
     if (LocalDensity.current.fontScale > 1.5f) {
-        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+        Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
             first(Modifier.fillMaxWidth())
             second(Modifier.fillMaxWidth())
         }
     } else {
-        Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+        Row(modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
             first(Modifier.weight(1f).fillMaxHeight())
             second(Modifier.weight(1f).fillMaxHeight())
         }
     }
 }
 
-/** A section's zero: its glyph and one quiet line. */
+/** A section's zero: one quiet line. */
 @Composable
-private fun EmptyLine(icon: ImageVector, text: String, modifier: Modifier = Modifier) {
-    Row(
-        modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        IconBadge(icon, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Aside(text, Modifier.weight(1f))
-    }
+private fun EmptyLine(text: String, modifier: Modifier = Modifier) {
+    Aside(text, modifier.fillMaxWidth())
 }
 
 @Composable
@@ -341,6 +333,9 @@ private fun LazyListScope.monthItems(state: InsightsState, periodName: String, a
     item(key = "month-tiles") { MonthTiles(state, Modifier.padding(horizontal = GUTTER)) }
     item(key = "month-where") { WherePanel(state, periodName, actions.openCategory, Modifier.padding(horizontal = GUTTER)) }
     item(key = "month-largest") { LargestPanel(state, periodName, actions.openEntry, Modifier.padding(horizontal = GUTTER)) }
+    if (state.payees.isNotEmpty()) {
+        item(key = "month-payees") { PayeesPanel(state, Modifier.padding(horizontal = GUTTER)) }
+    }
     item(key = "month-income") { IncomePanel(state, periodName, actions.openCategory, Modifier.padding(horizontal = GUTTER)) }
 }
 
@@ -407,8 +402,8 @@ private fun MonthHero(state: InsightsState, modifier: Modifier = Modifier) {
         }
     }
 
-    HeroPanel(modifier, tint = tint) {
-        LensHeroLabel(Icons.AutoMirrored.Rounded.TrendingUp, if (state.isCurrentPeriod) "Spent so far" else "Spent", meta, tint)
+    HeroPanel(modifier) {
+        LensHeroLabel(if (state.isCurrentPeriod) "Spent so far" else "Spent", meta, tint)
         Spacer(Modifier.height(14.dp))
         HeroFigure(money.formatWhole(state.spent))
         Text(supporting, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -459,14 +454,13 @@ private fun MonthTiles(state: InsightsState, modifier: Modifier = Modifier) {
         }
     }
     val net = state.net
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
         TileRow(
             first = { m ->
-                StatTile(Icons.Rounded.Speed, "Per day", money.formatWhole(state.perDay), m, detail = perDayDetail)
+                StatTile("Per day", money.formatWhole(state.perDay), m, detail = perDayDetail)
             },
             second = { m ->
                 StatTile(
-                    Icons.Rounded.History,
                     if (state.isCurrentPeriod) "Last month" else "Month before",
                     money.formatWhole(state.lastPeriodSameDay),
                     m,
@@ -477,17 +471,14 @@ private fun MonthTiles(state: InsightsState, modifier: Modifier = Modifier) {
         TileRow(
             first = { m ->
                 StatTile(
-                    Icons.Rounded.Savings,
                     "Net",
                     signedWhole(money, net),
                     m,
                     detail = money.formatWhole(state.income) + " in · " + money.formatWhole(state.spent) + " out",
-                    tint = if (net > 0L) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
                 )
             },
             second = { m ->
                 StatTile(
-                    Icons.Rounded.EditNote,
                     "Expenses",
                     state.expenseCount.toString(),
                     m,
@@ -516,7 +507,6 @@ private fun WherePanel(state: InsightsState, periodName: String, onCategory: (Lo
     val top = slices.firstOrNull()?.total ?: 0L
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.DonutLarge,
             "Where it went",
             meta = if (slices.isEmpty()) null else Copy.plural(state.categoryCount, "category", "categories").uppercase(),
         )
@@ -524,7 +514,7 @@ private fun WherePanel(state: InsightsState, periodName: String, onCategory: (Lo
         StackedBar(segments, description, height = 12.dp)
         if (slices.isEmpty()) {
             Spacer(Modifier.height(14.dp))
-            EmptyLine(Icons.Rounded.DonutLarge, nothingSpentLine(state, periodName))
+            EmptyLine(nothingSpentLine(state, periodName))
         } else {
             Spacer(Modifier.height(4.dp))
             slices.forEach { s ->
@@ -614,20 +604,60 @@ private fun LargestPanel(state: InsightsState, periodName: String, onEntry: (Lon
     val rows = state.largest
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.LocalOffer,
             "Largest",
             meta = if (rows.isEmpty()) null else shareText(state.largestTotal, state.spent) + " OF SPENDING",
         )
         if (rows.isEmpty()) {
             Spacer(Modifier.height(10.dp))
             EmptyLine(
-                Icons.Rounded.LocalOffer,
                 if (state.isCurrentPeriod) "No spending to rank in $periodName yet" else "No spending to rank in $periodName",
             )
         } else {
             Spacer(Modifier.height(4.dp))
             rows.forEach { row ->
                 key(row.id) { LedgerRow(row, Dates.day(row.date, state.today), onClick = { onEntry(row.id) }) }
+            }
+        }
+    }
+}
+
+/** Who the money went to, by the entries' notes: the period's biggest payees and their share. */
+@Composable
+private fun PayeesPanel(state: InsightsState, modifier: Modifier = Modifier) {
+    val money = LocalMoney.current
+    Panel(modifier) {
+        PanelHeader("Payees", meta = "TOP " + state.payees.size)
+        Spacer(Modifier.height(4.dp))
+        state.payees.forEach { p ->
+            key(p.note) {
+                val amount = money.formatWhole(p.total)
+                val meta = Copy.plural(p.count, "entry", "entries") + " · " + shareText(p.total, state.spent) + " of spending"
+                // A ranked comparison: each payee's share of the period's spending as a thin bar.
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .semantics(mergeDescendants = true) { contentDescription = "${p.note}, $amount, $meta" }
+                        .padding(top = 10.dp, bottom = 6.dp),
+                ) {
+                    EndsRow(
+                        start = {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(p.note, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                                Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        },
+                        end = {
+                            Text(amount, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
+                        },
+                        modifier = Modifier.clearAndSetSemantics { },
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    ThinBar(
+                        if (state.spent > 0L) p.total.toFloat() / state.spent else 0f,
+                        MaterialTheme.colorScheme.primary,
+                        description = shareText(p.total, state.spent) + " of spending",
+                    )
+                }
             }
         }
     }
@@ -640,7 +670,6 @@ private fun IncomePanel(state: InsightsState, periodName: String, onCategory: (L
     val inColor = MaterialTheme.colorScheme.tertiary
     Panel(modifier) {
         PanelHeader(
-            Icons.Rounded.ArrowDownward,
             "Income",
             meta = if (sources.isEmpty()) null else signedWhole(money, state.income),
             tint = inColor,
@@ -648,7 +677,6 @@ private fun IncomePanel(state: InsightsState, periodName: String, onCategory: (L
         if (sources.isEmpty()) {
             Spacer(Modifier.height(10.dp))
             EmptyLine(
-                Icons.Rounded.Payments,
                 if (state.isCurrentPeriod) "No income logged in $periodName yet" else "No income logged in $periodName",
             )
         } else {
@@ -725,7 +753,7 @@ private fun TrendHero(state: InsightsState, modifier: Modifier = Modifier) {
         }
     }
     HeroPanel(modifier) {
-        LensHeroLabel(Icons.Rounded.BarChart, "Average month", "LAST $n MONTHS")
+        LensHeroLabel("Average month", "LAST $n MONTHS")
         Spacer(Modifier.height(14.dp))
         HeroFigure(money.formatWhole(t.averageSpent))
         Text(supporting, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -757,7 +785,7 @@ private fun TrendHero(state: InsightsState, modifier: Modifier = Modifier) {
         }
         if (empty) {
             Spacer(Modifier.height(14.dp))
-            EmptyLine(Icons.Rounded.BarChart, "Nothing logged in the last six months")
+            EmptyLine("Nothing logged in the last six months")
         } else {
             Spacer(Modifier.height(16.dp))
             ChipRow(chips)
@@ -772,11 +800,10 @@ private fun TrendTiles(state: InsightsState, modifier: Modifier = Modifier) {
     val points = state.trend
     val high = t.highest?.let { points.getOrNull(it) }
     val low = t.lowest?.let { points.getOrNull(it) }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
         TileRow(
             first = { m ->
                 StatTile(
-                    Icons.Rounded.ArrowUpward,
                     "Highest month",
                     money.formatWhole(high?.spent ?: 0L),
                     m,
@@ -785,7 +812,6 @@ private fun TrendTiles(state: InsightsState, modifier: Modifier = Modifier) {
             },
             second = { m ->
                 StatTile(
-                    Icons.Rounded.ArrowDownward,
                     "Lowest month",
                     money.formatWhole(low?.spent ?: 0L),
                     m,
@@ -796,23 +822,19 @@ private fun TrendTiles(state: InsightsState, modifier: Modifier = Modifier) {
         TileRow(
             first = { m ->
                 StatTile(
-                    Icons.Rounded.Payments,
                     "Average income",
                     money.formatWhole(t.averageIncome),
                     m,
                     detail = if (t.months > 0) "Over " + Copy.plural(t.months, "month") else "Nothing logged yet",
-                    tint = MaterialTheme.colorScheme.tertiary,
                     valueColor = MaterialTheme.colorScheme.tertiary,
                 )
             },
             second = { m ->
                 StatTile(
-                    Icons.Rounded.Savings,
                     "Average net",
                     signedWhole(money, t.averageNet),
                     m,
                     detail = "Income less spending, a month",
-                    tint = if (t.averageNet > 0L) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
                 )
             },
         )
@@ -825,10 +847,10 @@ private fun TrendListPanel(state: InsightsState, onOpen: (Int) -> Unit, modifier
     val money = LocalMoney.current
     val newestFirst = remember(state.trend) { state.trend.asReversed() }
     Panel(modifier) {
-        PanelHeader(Icons.Rounded.CalendarMonth, "Month by month", meta = if (newestFirst.isEmpty()) null else "NEWEST FIRST")
+        PanelHeader("Month by month", meta = if (newestFirst.isEmpty()) null else "NEWEST FIRST")
         if (newestFirst.isEmpty()) {
             Spacer(Modifier.height(10.dp))
-            EmptyLine(Icons.Rounded.CalendarMonth, "Nothing logged in the last six months")
+            EmptyLine("Nothing logged in the last six months")
         } else {
             Spacer(Modifier.height(4.dp))
             newestFirst.forEach { p ->
@@ -846,9 +868,10 @@ private fun TrendListPanel(state: InsightsState, onOpen: (Int) -> Unit, modifier
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
-                        IconBadge(
+                        GlyphBadge(
                             Icons.Rounded.CalendarMonth,
-                            tint = if (p.offset == state.offset) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (p.offset == state.offset) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground,
+                            size = 36.dp,
                         )
                         EndsRow(
                             start = {
@@ -909,7 +932,7 @@ private fun CalendarHero(state: InsightsState, periodName: String, onDay: (Local
         }
     }
     HeroPanel(modifier) {
-        LensHeroLabel(Icons.Rounded.CalendarMonth, "Spending days", meta)
+        LensHeroLabel("Spending days", meta)
         Spacer(Modifier.height(14.dp))
         HeroFigure(c.activeDays.toString())
         Text(supporting, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -944,11 +967,10 @@ private fun CalendarTiles(state: InsightsState, modifier: Modifier = Modifier) {
     val c = state.calendar
     val nothing = if (state.isCurrentPeriod) "Nothing spent yet" else "Nothing spent"
     val topDay = c.topWeekday
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(PANEL_GAP)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
         TileRow(
             first = { m ->
                 StatTile(
-                    Icons.Rounded.Bedtime,
                     "Quiet days",
                     c.quietDays.toString(),
                     m,
@@ -957,7 +979,6 @@ private fun CalendarTiles(state: InsightsState, modifier: Modifier = Modifier) {
             },
             second = { m ->
                 StatTile(
-                    Icons.Rounded.Speed,
                     "Per spending day",
                     money.formatWhole(c.perActiveDay),
                     m,
@@ -968,7 +989,6 @@ private fun CalendarTiles(state: InsightsState, modifier: Modifier = Modifier) {
         TileRow(
             first = { m ->
                 StatTile(
-                    Icons.Rounded.Event,
                     "Busiest weekday",
                     topDay?.let { weekdayName(it) } ?: "None yet",
                     m,
@@ -979,7 +999,6 @@ private fun CalendarTiles(state: InsightsState, modifier: Modifier = Modifier) {
             },
             second = { m ->
                 StatTile(
-                    Icons.Rounded.BeachAccess,
                     "Weekends",
                     shareText(c.weekendTotal, c.total),
                     m,
@@ -1000,10 +1019,10 @@ private fun WeekdayPanel(state: InsightsState, periodName: String, modifier: Mod
     val weekdays = state.calendar.weekdays
     val top = remember(weekdays) { weekdays.maxOfOrNull { it.average } ?: 0L }
     Panel(modifier) {
-        PanelHeader(Icons.Rounded.BarChart, "By weekday", meta = if (top > 0L) "AVERAGE A DAY" else null)
+        PanelHeader("By weekday", meta = if (top > 0L) "AVERAGE A DAY" else null)
         if (top <= 0L) {
             Spacer(Modifier.height(10.dp))
-            EmptyLine(Icons.Rounded.BarChart, nothingSpentLine(state, periodName))
+            EmptyLine(nothingSpentLine(state, periodName))
         } else {
             Spacer(Modifier.height(4.dp))
             weekdays.forEach { w ->
@@ -1063,7 +1082,6 @@ private fun DaySheet(date: LocalDate, state: InsightsState, onEntry: (Long) -> U
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                IconBadge(Icons.Rounded.CalendarToday)
                 // The reading drops under the day before the day's name would break mid-word.
                 EndsRow(
                     start = {
@@ -1082,7 +1100,6 @@ private fun DaySheet(date: LocalDate, state: InsightsState, onEntry: (Long) -> U
             Spacer(Modifier.height(8.dp))
             if (rows.isEmpty()) {
                 EmptyLine(
-                    Icons.Rounded.Bedtime,
                     nothingLoggedLine(date, state.today),
                     Modifier.padding(vertical = 8.dp),
                 )
@@ -1091,6 +1108,259 @@ private fun DaySheet(date: LocalDate, state: InsightsState, onEntry: (Long) -> U
                     items(rows, key = { it.id }) { row ->
                         LedgerRow(row, meta = "", onClick = { onEntry(row.id) })
                     }
+                }
+            }
+        }
+    }
+}
+
+// ── Worth ───────────────────────────────────────────────────────────────────────────────────────
+
+private fun LazyListScope.worthItems(state: InsightsState, periodName: String) {
+    item(key = "worth-hero") { WorthHero(state, periodName, Modifier.padding(horizontal = GUTTER)) }
+    item(key = "worth-tiles") { WorthTiles(state, Modifier.padding(horizontal = GUTTER)) }
+    if (state.worth.accounts.isNotEmpty()) {
+        item(key = "worth-accounts") { AccountsPanel(state, Modifier.padding(horizontal = GUTTER)) }
+        item(key = "worth-months") { WorthListPanel(state, Modifier.padding(horizontal = GUTTER)) }
+    }
+}
+
+/**
+ * What the open accounts add up to at the period's close, how far it moved over the period, and
+ * the close of the six periods ending at it as bars from zero (a debt's bar in the error ink).
+ */
+@Composable
+private fun WorthHero(state: InsightsState, periodName: String, modifier: Modifier = Modifier) {
+    val money = LocalMoney.current
+    val w = state.worth
+    val labels = remember(w.points) { w.points.map { Dates.monthShort(it.period.start) } }
+    val description = remember(w.points, money, state.today) {
+        if (w.points.isEmpty()) "No months to chart"
+        else "Net worth by month: " + w.points.joinToString("; ") { Dates.period(it.period, state.today) + " " + money.formatWhole(it.worth) }
+    }
+    val moved = when {
+        w.change > 0L -> "up " + money.formatWhole(w.change) + " over $periodName"
+        w.change < 0L -> "down " + money.formatWhole(-w.change) + " over $periodName"
+        else -> "no change over $periodName"
+    }
+    val chips = buildList {
+        state.savingsRate?.let { rate ->
+            add(Icons.Rounded.Savings to if (rate >= 0) "Kept $rate% of income" else "Spent ${-rate}% more than came in")
+        }
+        if (w.invested != 0L) add(Icons.AutoMirrored.Rounded.ShowChart to "Invested " + signedWhole(money, w.invested))
+    }
+    HeroPanel(modifier) {
+        LensHeroLabel("Net worth", if (state.isCurrentPeriod) "TODAY" else "AT MONTH END")
+        Spacer(Modifier.height(14.dp))
+        HeroFigure(money.formatWhole(w.worth))
+        Text(
+            if (w.accounts.isEmpty()) "across no accounts yet" else moved,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (w.accounts.isEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            EmptyLine("Add an account to follow what you hold and what you owe")
+            return@HeroPanel
+        }
+        Spacer(Modifier.height(18.dp))
+        WorthBars(w.points, labels, description)
+        if (chips.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            ChipRow(chips)
+        }
+    }
+}
+
+/** Six closes as bars from zero; the period picked lit, the ones before it quieter. */
+@Composable
+private fun WorthBars(points: List<WorthPoint>, labels: List<String>, description: String, modifier: Modifier = Modifier) {
+    val lit = MaterialTheme.colorScheme.primary
+    val quiet = MaterialTheme.colorScheme.secondary.copy(alpha = 0.55f)
+    val owed = MaterialTheme.colorScheme.error
+    val top = points.maxOfOrNull { kotlin.math.abs(it.worth) }?.coerceAtLeast(1L) ?: 1L
+    Row(
+        modifier.fillMaxWidth().height(136.dp).clearAndSetSemantics { contentDescription = description },
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        points.forEachIndexed { i, p ->
+            val fraction = (kotlin.math.abs(p.worth).toFloat() / top).coerceIn(0.03f, 1f)
+            val color = when {
+                p.worth < 0L -> owed
+                i == points.lastIndex -> lit
+                else -> quiet
+            }
+            Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.BottomCenter) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(0.72f)
+                            .fillMaxHeight(fraction)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(color),
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    labels.getOrElse(i) { "" },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (i == points.lastIndex) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** What is held against what is owed, then what the period kept and what it put to work. */
+@Composable
+private fun WorthTiles(state: InsightsState, modifier: Modifier = Modifier) {
+    val money = LocalMoney.current
+    val w = state.worth
+    val held = w.accounts.count { it.balance > 0L }
+    val owing = w.accounts.count { it.balance < 0L }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(FIGURE_GAP)) {
+        TileRow(
+            first = { m ->
+                StatTile(
+                    "Held",
+                    money.formatWhole(w.assets),
+                    m,
+                    detail = if (held == 0) "Nothing in credit" else "In " + Copy.plural(held, "account"),
+                )
+            },
+            second = { m ->
+                StatTile(
+                    "Owed",
+                    money.formatWhole(w.debts),
+                    m,
+                    detail = if (owing == 0) "Nothing owed" else "On " + Copy.plural(owing, "account"),
+                )
+            },
+        )
+        TileRow(
+            first = { m ->
+                val rate = state.savingsRate
+                StatTile(
+                    "Kept",
+                    if (rate == null) "None" else "$rate%",
+                    m,
+                    detail = if (rate == null) "No income logged" else "Of " + money.formatWhole(state.income) + " income",
+                )
+            },
+            second = { m ->
+                StatTile(
+                    "Invested",
+                    signedWhole(money, w.invested),
+                    m,
+                    detail = if (w.investmentAccounts == 0) "No investment account yet"
+                    else "Holding " + money.formatWhole(w.investments),
+                )
+            },
+        )
+    }
+}
+
+/** Every open account at the period's close: the ones in credit by their share of what is held, then the debts. */
+@Composable
+private fun AccountsPanel(state: InsightsState, modifier: Modifier = Modifier) {
+    val money = LocalMoney.current
+    val w = state.worth
+    Panel(modifier) {
+        PanelHeader("Accounts", meta = w.accounts.size.toString())
+        Spacer(Modifier.height(4.dp))
+        w.accounts.forEach { a ->
+            key(a.id) {
+                val owed = a.balance < 0L
+                val whole = if (owed) w.debts else w.assets
+                val share = shareText(kotlin.math.abs(a.balance), whole)
+                val valued = a.valuedOn?.let { " · valued " + Dates.short(it, state.today) }.orEmpty()
+                val meta = typeLabel(a.type) + valued
+                val amount = money.formatWhole(a.balance)
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .semantics(mergeDescendants = true) {
+                            contentDescription = "${a.name}, $amount, $meta, $share of " + if (owed) "what is owed" else "what is held"
+                        }
+                        .heightIn(min = 64.dp)
+                        .padding(top = 10.dp, bottom = 6.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        GlyphBadge(CategoryIcons.account(a.type), size = 36.dp)
+                        EndsRow(
+                            start = {
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(a.name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                                    Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            },
+                            end = {
+                                Text(
+                                    amount,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = if (owed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground,
+                                    textAlign = TextAlign.End,
+                                )
+                            },
+                            modifier = Modifier.weight(1f).clearAndSetSemantics { },
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    ThinBar(
+                        if (whole > 0L) kotlin.math.abs(a.balance).toFloat() / whole else 0f,
+                        if (owed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary,
+                        description = "$share of " + if (owed) "what is owed" else "what is held",
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The six closes as rows, newest first, each with how far it moved from the one before. */
+@Composable
+private fun WorthListPanel(state: InsightsState, modifier: Modifier = Modifier) {
+    val money = LocalMoney.current
+    val points = state.worth.points
+    Panel(modifier) {
+        PanelHeader("Month by month", meta = "NEWEST FIRST")
+        Spacer(Modifier.height(4.dp))
+        points.indices.reversed().forEach { i ->
+            val p = points[i]
+            key(p.offset) {
+                val name = Dates.period(p.period, state.today) + if (state.today in p.period) " so far" else ""
+                val change = points.getOrNull(i - 1)?.let { p.worth - it.worth }
+                val meta = when {
+                    change == null -> "Start of the chart"
+                    change > 0L -> "Up " + money.formatWhole(change)
+                    change < 0L -> "Down " + money.formatWhole(-change)
+                    else -> "No change"
+                }
+                val amount = money.formatWhole(p.worth)
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .semantics(mergeDescendants = true) { contentDescription = "$name, $amount, $meta" }
+                        .heightIn(min = 56.dp)
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    EndsRow(
+                        start = {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
+                                Text(
+                                    meta,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if ((change ?: 0L) < 0L) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        end = {
+                            Text(amount, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground, textAlign = TextAlign.End)
+                        },
+                        modifier = Modifier.weight(1f).clearAndSetSemantics { },
+                    )
                 }
             }
         }

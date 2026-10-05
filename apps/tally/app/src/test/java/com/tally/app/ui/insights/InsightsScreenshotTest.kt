@@ -2,12 +2,18 @@ package com.tally.app.ui.insights
 
 import androidx.compose.ui.test.junit4.createComposeRule
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
+import com.tally.app.data.db.AccountBalance
+import com.tally.app.data.db.AccountValueEntity
 import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.db.CategoryTotal
 import com.tally.app.data.db.DayTotal
+import com.tally.app.data.db.FlowRow
+import com.tally.app.data.db.PayeeTotal
 import com.tally.app.testing.Fixtures
 import com.tally.app.testing.shoot
+import com.tally.core.AccountType
 import com.tally.core.CategoryKind
+import com.tally.core.TxType
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -89,6 +95,29 @@ class InsightsScreenshotTest {
         budget = 290_000,
         lastPeriodSameDay = 141_200,
         trend = trendPoints,
+        payees = listOf(
+            PayeeTotal("Metro", 25_440, 7),
+            PayeeTotal("Pho Lien", 9_240, 4),
+            PayeeTotal("Hydro-Québec", 7_840, 1),
+        ),
+        worth = worthReading(
+            accounts = Fixtures.accounts + AccountBalance(5, "TFSA", AccountType.INVESTMENT, 820_000, false, 4, 0, 6),
+            values = listOf(AccountValueEntity(1, 5, today.minusDays(3), 905_000)),
+            flows = listOf(
+                FlowRow(period.shift(-4).start.plusDays(1), TxType.INCOME, 430_000, 1, null),
+                FlowRow(period.shift(-3).start.plusDays(1), TxType.INCOME, 445_000, 1, null),
+                FlowRow(period.shift(-3).start.plusDays(9), TxType.EXPENSE, 268_500, 2, null),
+                FlowRow(period.shift(-2).start.plusDays(1), TxType.INCOME, 430_000, 1, null),
+                FlowRow(period.shift(-2).start.plusDays(12), TxType.EXPENSE, 312_400, 2, null),
+                FlowRow(period.shift(-1).start.plusDays(2), TxType.TRANSFER, 30_000, 1, 5),
+                FlowRow(period.start.plusDays(1), TxType.INCOME, 215_000, 1, null),
+                FlowRow(period.start.plusDays(4), TxType.EXPENSE, 128_450, 2, null),
+                FlowRow(period.start.plusDays(5), TxType.TRANSFER, 30_000, 1, 5),
+            ),
+            current = period,
+            offset = 0,
+            today = today,
+        ),
     )
 
     private val zero = buildInsights(
@@ -124,5 +153,17 @@ class InsightsScreenshotTest {
 
     @Test fun calendarLens() = compose.shoot("insights-calendar") {
         InsightsScreen(populated, InsightsLens.CALENDAR, InsightsActions())
+    }
+
+    @Test fun worthLens() = compose.shoot("insights-worth") {
+        InsightsScreen(populated, InsightsLens.WORTH, InsightsActions())
+    }
+
+    @Test fun worthLens200() = compose.shoot("insights-worth-200", fontScale = 2f) {
+        InsightsScreen(populated, InsightsLens.WORTH, InsightsActions())
+    }
+
+    @Test fun worthZero() = compose.shoot("insights-worth-zero") {
+        InsightsScreen(zero, InsightsLens.WORTH, InsightsActions())
     }
 }

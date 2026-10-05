@@ -61,6 +61,8 @@ data class AccountBalance(
     val sortOrder: Int,
     val balance: Long,
     val entryCount: Int,
+    /** The day of the newest recorded value, when the balance starts from one. */
+    val valuedOn: LocalDate? = null,
 )
 
 @Immutable
@@ -97,3 +99,31 @@ data class GoalWithSaved(
     /** Where an even saving towards the target date starts: the pace tick's day zero. */
     val firstDate: LocalDate? = null,
 )
+
+/** One transfer, by the accounts at each end. */
+@Immutable
+data class TransferRow(val date: LocalDate, val amount: Long, val accountId: Long, val toAccountId: Long)
+
+/** An entry logged often: its note and category, and the amount it was last logged at. */
+@Immutable
+data class QuickPick(
+    val note: String,
+    val categoryId: Long,
+    val uses: Int,
+    val lastAmount: Long,
+    val categoryName: String,
+    val categoryIcon: String?,
+    val categoryColor: Int?,
+)
+
+/** A note and the category it was filed under. */
+@Immutable
+data class NoteUse(val note: String, val categoryId: Long, val type: TxType)
+
+/** One entry's effect on balances. */
+@Immutable
+data class FlowRow(val date: LocalDate, val type: TxType, val amount: Long, val accountId: Long, val toAccountId: Long?)
+
+/** What one payee (an entry's note) took over a stretch, and how many times. */
+@Immutable
+data class PayeeTotal(val note: String, val total: Long, val count: Int)

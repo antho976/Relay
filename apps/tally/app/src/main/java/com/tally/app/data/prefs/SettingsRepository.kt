@@ -62,6 +62,21 @@ data class Settings(
     }
 }
 
+/**
+ * The automatic backup: on or off, the folder a copy also goes to (a Storage Access Framework
+ * tree the owner picked, so it outlives an uninstall), and how the last run went.
+ */
+@Immutable
+data class BackupPrefs(
+    val auto: Boolean = true,
+    val folderUri: String? = null,
+    /** When the last backup was written, in epoch millis; 0 before the first. */
+    val lastAt: Long = 0L,
+    val lastFailed: Boolean = false,
+    /** The folder copy failed while the copy kept on the phone was written. */
+    val folderFailed: Boolean = false,
+)
+
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
 @Singleton
@@ -79,6 +94,11 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         val onboarded = booleanPreferencesKey("onboarded")
         val defaultAccount = longPreferencesKey("default_account")
         val sampleLoaded = booleanPreferencesKey("sample_loaded")
+        val backupAuto = booleanPreferencesKey("backup_auto")
+        val backupFolder = stringPreferencesKey("backup_folder")
+        val backupLastAt = longPreferencesKey("backup_last_at")
+        val backupFailed = booleanPreferencesKey("backup_failed")
+        val backupFolderFailed = booleanPreferencesKey("backup_folder_failed")
     }
 
     val settings: Flow<Settings> = store.data
@@ -100,6 +120,36 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         .distinctUntilChanged()
 
     suspend fun current(): Settings = settings.first()
+
+    /** Kept apart from [settings], so a backup run never recomposes the theme at the root. */
+    val backup: Flow<BackupPrefs> = store.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { p ->
+            BackupPrefs(
+                auto = p[Keys.backupAuto] ?: true,
+                folderUri = p[Keys.backupFolder],
+                lastAt = p[Keys.backupLastAt] ?: 0L,
+                lastFailed = p[Keys.backupFailed] ?: false,
+                folderFailed = p[Keys.backupFolderFailed] ?: false,
+            )
+        }
+        .distinctUntilChanged()
+
+    suspend fun currentBackup(): BackupPrefs = backup.first()
+
+    suspend fun setBackupAuto(on: Boolean) = store.edit { it[Keys.backupAuto] = on }
+
+    suspend fun setBackupFolder(uri: String?) = store.edit {
+        if (uri == null) it.remove(Keys.backupFolder) else it[Keys.backupFolder] = uri
+        it.remove(Keys.backupFolderFailed)
+    }
+
+    /** How a backup run ended: written at [at] (with or without its folder copy), or failed. */
+    suspend fun recordBackup(at: Long, failed: Boolean, folderFailed: Boolean) = store.edit {
+        if (!failed) it[Keys.backupLastAt] = at
+        it[Keys.backupFailed] = failed
+        it[Keys.backupFolderFailed] = folderFailed
+    }
 
     suspend fun setCurrency(code: String) = store.edit { it[Keys.currency] = code }
     suspend fun setMonthStartDay(day: Int) = store.edit { it[Keys.monthStart] = day.coerceIn(1, BudgetPeriod.MAX_START_DAY) }
