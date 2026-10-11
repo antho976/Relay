@@ -634,12 +634,17 @@ pub struct Portfolio {
     pub empty: bool,
     /// The newest snapshot or price date the reading rests on.
     pub as_of: Option<String>,
+    #[schemars(extend("x-unit" = "minor"))]
     pub value: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub book: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub gain: i64,
     pub gain_bps: Option<i64>,
+    #[schemars(extend("x-unit" = "minor"))]
     pub cash: i64,
     /// Dividends, interest and reinvested distributions over the 365 days ending today.
+    #[schemars(extend("x-unit" = "minor"))]
     pub income_12m: i64,
     /// The same by calendar month, the last twelve, oldest first.
     pub income_by_month: Vec<IncomeMonth>,
@@ -662,6 +667,7 @@ pub struct Portfolio {
 pub struct IncomeMonth {
     /// `YYYY-MM`.
     pub month: String,
+    #[schemars(extend("x-unit" = "minor"))]
     pub amount: i64,
 }
 
@@ -672,10 +678,14 @@ pub struct PortfolioAccount {
     pub name: String,
     pub registration: Option<Registration>,
     pub institution: String,
+    #[schemars(extend("x-unit" = "minor"))]
     pub value: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub book: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub gain: i64,
     pub gain_bps: Option<i64>,
+    #[schemars(extend("x-unit" = "minor"))]
     pub cash: i64,
     /// How many positions it holds.
     pub holdings: usize,
@@ -691,6 +701,7 @@ pub struct PortfolioAccount {
 #[schemars(rename = "MoneyAllocation")]
 pub struct AllocationShare {
     pub registration: Option<Registration>,
+    #[schemars(extend("x-unit" = "minor"))]
     pub value: i64,
     pub share_bps: i64,
 }
@@ -699,6 +710,7 @@ pub struct AllocationShare {
 #[schemars(rename = "MoneyKindShare")]
 pub struct KindShare {
     pub kind: SecurityKind,
+    #[schemars(extend("x-unit" = "minor"))]
     pub value: i64,
     pub share_bps: i64,
 }
@@ -715,11 +727,16 @@ pub struct HoldingView {
     pub kind: SecurityKind,
     /// The security's currency; `price` is in it.
     pub currency: String,
+    #[schemars(extend("x-unit" = "e8"))]
     pub quantity: i64,
+    #[schemars(extend("x-unit" = "e8"))]
     pub price: Option<i64>,
     pub price_date: Option<String>,
+    #[schemars(extend("x-unit" = "minor"))]
     pub value: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub book: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub gain: i64,
     pub gain_bps: Option<i64>,
     pub weight_bps: i64,
@@ -736,6 +753,7 @@ pub struct IncomeView {
     pub account_id: i64,
     pub symbol: Option<String>,
     pub r#type: ActivityType,
+    #[schemars(extend("x-unit" = "minor"))]
     pub amount: i64,
 }
 
@@ -746,15 +764,22 @@ pub struct IncomeView {
 pub struct RoomView {
     pub registration: Registration,
     pub year: i32,
+    #[schemars(extend("x-unit" = "minor"))]
     pub room: Option<i64>,
+    #[schemars(extend("x-unit" = "minor"))]
     pub contributed: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub withdrawn: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub left: Option<i64>,
+    #[schemars(extend("x-unit" = "minor"))]
     pub over: i64,
     /// What is over past the RRSP's $2,000 buffer; all of `over` for the others.
+    #[schemars(extend("x-unit" = "minor"))]
     pub over_taxed: i64,
     /// The last day that counts for the year.
     pub deadline: String,
+    #[schemars(extend("x-unit" = "minor"))]
     pub limit: Option<i64>,
 }
 

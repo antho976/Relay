@@ -16772,11 +16772,13 @@
         },
         "income": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "spent": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "lines": {
           "$ref": "#/$defs/MoneyLines"
@@ -16795,7 +16797,8 @@
         },
         "net_worth": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "bills": {
           "type": "array",
@@ -16865,11 +16868,13 @@
       "properties": {
         "budget": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "spent": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "total_days": {
           "type": "integer",
@@ -16882,16 +16887,19 @@
         "expected": {
           "type": "integer",
           "format": "int64",
-          "description": "What an even spend would have used by the end of today."
+          "description": "What an even spend would have used by the end of today.",
+          "x-unit": "minor"
         },
         "remaining": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "pace_delta": {
           "type": "integer",
           "format": "int64",
-          "description": "Positive when spending runs faster than an even pace."
+          "description": "Positive when spending runs faster than an even pace.",
+          "x-unit": "minor"
         },
         "days_left": {
           "type": "integer",
@@ -16901,7 +16909,8 @@
         "daily_allowance": {
           "type": "integer",
           "format": "int64",
-          "description": "What can go out each remaining day and still land on budget. Zero once the budget is gone."
+          "description": "What can go out each remaining day and still land on budget. Zero once the budget is gone.",
+          "x-unit": "minor"
         },
         "spent_fraction": {
           "type": "number",
@@ -16980,15 +16989,18 @@
         },
         "budget": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "spent": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "pace_delta": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "status": {
           "$ref": "#/$defs/PaceStatus"
@@ -17020,7 +17032,8 @@
         },
         "balance": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "archived": {
           "type": "boolean"
@@ -17086,7 +17099,8 @@
         },
         "amount": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "type": {
           "$ref": "#/$defs/TxType"
@@ -17139,11 +17153,13 @@
         },
         "target": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "saved": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "line": {
           "type": "string"
@@ -17183,7 +17199,8 @@
         },
         "amount": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "date": {
           "type": "string"
@@ -17408,11 +17425,13 @@
         },
         "income": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "spent": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         }
       },
       "required": [
@@ -17592,7 +17611,8 @@
             "type": "integer",
             "format": "int64"
           },
-          "description": "One value per label, minor units."
+          "description": "One value per label, minor units.",
+          "x-unit": "minor"
         },
         "known": {
           "type": [
@@ -17618,7 +17638,8 @@
         },
         "amount": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "date": {
           "type": "string"
@@ -17680,7 +17701,8 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "date": {
           "type": [
@@ -17748,7 +17770,8 @@
         "amount": {
           "type": "integer",
           "format": "int64",
-          "description": "Zero or less removes the budget."
+          "description": "Zero or less removes the budget.",
+          "x-unit": "minor"
         }
       },
       "required": [
@@ -17770,7 +17793,8 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "registration": {
           "anyOf": [
@@ -17851,7 +17875,8 @@
         },
         "value": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         }
       },
       "required": [
@@ -18119,15 +18144,18 @@
         },
         "value": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "book": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "gain": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "gain_bps": {
           "type": [
@@ -18138,12 +18166,14 @@
         },
         "cash": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "income_12m": {
           "type": "integer",
           "format": "int64",
-          "description": "Dividends, interest and reinvested distributions over the 365 days ending today."
+          "description": "Dividends, interest and reinvested distributions over the 365 days ending today.",
+          "x-unit": "minor"
         },
         "income_by_month": {
           "type": "array",
@@ -18229,7 +18259,8 @@
         },
         "amount": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         }
       },
       "required": [
@@ -18262,15 +18293,18 @@
         },
         "value": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "book": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "gain": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "gain_bps": {
           "type": [
@@ -18281,7 +18315,8 @@
         },
         "cash": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "holdings": {
           "type": "integer",
@@ -18341,7 +18376,8 @@
         },
         "value": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "share_bps": {
           "type": "integer",
@@ -18361,7 +18397,8 @@
         },
         "value": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "share_bps": {
           "type": "integer",
@@ -18426,14 +18463,16 @@
         },
         "quantity": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "e8"
         },
         "price": {
           "type": [
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "e8"
         },
         "price_date": {
           "type": [
@@ -18443,15 +18482,18 @@
         },
         "value": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "book": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "gain": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "gain_bps": {
           "type": [
@@ -18511,7 +18553,8 @@
         },
         "amount": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         }
       },
       "required": [
@@ -18558,31 +18601,37 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "contributed": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "withdrawn": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "left": {
           "type": [
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "over": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "over_taxed": {
           "type": "integer",
           "format": "int64",
-          "description": "What is over past the RRSP's $2,000 buffer; all of `over` for the others."
+          "description": "What is over past the RRSP's $2,000 buffer; all of `over` for the others.",
+          "x-unit": "minor"
         },
         "deadline": {
           "type": "string",
@@ -18593,7 +18642,8 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         }
       },
       "required": [
@@ -18704,15 +18754,18 @@
         },
         "quantity": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "e8"
         },
         "amount": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor:currency"
         },
         "fee": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor:currency"
         },
         "currency": {
           "type": "string"
@@ -18722,7 +18775,8 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor:to_currency"
         },
         "to_currency": {
           "type": [
@@ -18788,19 +18842,22 @@
             "null"
           ],
           "format": "int64",
-          "description": "Units at 1e-8: 100000000 is one unit."
+          "description": "Units at 1e-8: 100000000 is one unit.",
+          "x-unit": "e8"
         },
         "amount": {
           "type": "integer",
           "format": "int64",
-          "description": "Minor units of `currency`, never negative: the type says which way the money went."
+          "description": "Minor units of `currency`, never negative: the type says which way the money went.",
+          "x-unit": "minor:currency"
         },
         "fee": {
           "type": [
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor:currency"
         },
         "note": {
           "type": [
@@ -18814,7 +18871,8 @@
             "null"
           ],
           "format": "int64",
-          "description": "`FX` only: what the money became, in `to_currency`."
+          "description": "`FX` only: what the money became, in `to_currency`.",
+          "x-unit": "minor:to_currency"
         },
         "to_currency": {
           "type": [
@@ -19090,7 +19148,8 @@
         "amount": {
           "type": "integer",
           "format": "int64",
-          "description": "The person's figure from CRA My Account (or the Notice of Assessment for an RRSP), minor units. Zero or less removes it."
+          "description": "The person's figure from CRA My Account (or the Notice of Assessment for an RRSP), minor units. Zero or less removes it.",
+          "x-unit": "minor"
         }
       },
       "required": [
@@ -19112,7 +19171,8 @@
         "price": {
           "type": "integer",
           "format": "int64",
-          "description": "At 1e-8 of the security's currency's major unit: 3812000000 is 38.12."
+          "description": "At 1e-8 of the security's currency's major unit: 3812000000 is 38.12.",
+          "x-unit": "e8"
         }
       },
       "required": [
@@ -19137,7 +19197,8 @@
         },
         "rate": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "e8"
         }
       },
       "required": [

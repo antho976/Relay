@@ -2874,6 +2874,7 @@ dependencies = [
  "regex",
  "relay-bus",
  "relay-core",
+ "relay-money",
  "relay-remote",
  "serde",
  "serde_json",

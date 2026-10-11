@@ -42,6 +42,7 @@ pub struct Tx {
     pub id: i64,
     pub uid: String,
     pub r#type: TxType,
+    #[schemars(extend("x-unit" = "minor"))]
     pub amount: i64,
     pub date: String,
     pub account_id: i64,
@@ -61,6 +62,7 @@ pub struct AccountView {
     pub id: i64,
     pub name: String,
     pub r#type: AccountType,
+    #[schemars(extend("x-unit" = "minor"))]
     pub balance: i64,
     pub archived: bool,
     /// An investment account's tax wrapper; `None` on every other account.
@@ -86,8 +88,11 @@ pub struct EnvelopeView {
     pub name: String,
     pub icon: String,
     pub color: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub budget: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub spent: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub pace_delta: i64,
     pub status: PaceStatus,
 }
@@ -97,6 +102,7 @@ pub struct EnvelopeView {
 pub struct BillView {
     pub id: i64,
     pub name: String,
+    #[schemars(extend("x-unit" = "minor"))]
     pub amount: i64,
     pub r#type: TxType,
     pub next_date: String,
@@ -111,7 +117,9 @@ pub struct GoalView {
     pub id: i64,
     pub name: String,
     pub kind: GoalKind,
+    #[schemars(extend("x-unit" = "minor"))]
     pub target: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub saved: i64,
     pub line: String,
 }
@@ -135,11 +143,14 @@ pub struct Summary {
     pub empty: bool,
     pub period: PeriodView,
     pub pace: PaceReading,
+    #[schemars(extend("x-unit" = "minor"))]
     pub income: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub spent: i64,
     pub lines: Lines,
     pub budgets: Vec<EnvelopeView>,
     pub accounts: Vec<AccountView>,
+    #[schemars(extend("x-unit" = "minor"))]
     pub net_worth: i64,
     pub bills: Vec<BillView>,
     pub goals: Vec<GoalView>,
@@ -181,7 +192,9 @@ pub struct TxQuery {
 pub struct TxPage {
     pub period: PeriodView,
     pub transactions: Vec<Tx>,
+    #[schemars(extend("x-unit" = "minor"))]
     pub income: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub spent: i64,
 }
 
@@ -190,6 +203,7 @@ pub struct TxPage {
 #[schemars(rename = "MoneyTxInput")]
 pub struct TxInput {
     pub r#type: TxType,
+    #[schemars(extend("x-unit" = "minor"))]
     pub amount: i64,
     pub date: String,
     pub account_id: i64,
@@ -204,6 +218,7 @@ pub struct TxInput {
 #[schemars(rename = "MoneyTxPatch")]
 pub struct TxPatch {
     pub r#type: Option<TxType>,
+    #[schemars(extend("x-unit" = "minor"))]
     pub amount: Option<i64>,
     pub date: Option<String>,
     pub account_id: Option<i64>,
@@ -237,10 +252,14 @@ pub struct ActivityView {
     pub name: Option<String>,
     pub r#type: ActivityType,
     pub date: String,
+    #[schemars(extend("x-unit" = "e8"))]
     pub quantity: i64,
+    #[schemars(extend("x-unit" = "minor:currency"))]
     pub amount: i64,
+    #[schemars(extend("x-unit" = "minor:currency"))]
     pub fee: i64,
     pub currency: String,
+    #[schemars(extend("x-unit" = "minor:to_currency"))]
     pub to_amount: Option<i64>,
     pub to_currency: Option<String>,
     pub note: String,
@@ -258,10 +277,14 @@ pub struct ActivityInput {
     pub date: String,
     pub symbol: Option<String>,
     pub currency: Option<String>,
+    #[schemars(extend("x-unit" = "e8"))]
     pub quantity: Option<i64>,
+    #[schemars(extend("x-unit" = "minor:currency"))]
     pub amount: i64,
+    #[schemars(extend("x-unit" = "minor:currency"))]
     pub fee: Option<i64>,
     pub note: Option<String>,
+    #[schemars(extend("x-unit" = "minor:to_currency"))]
     pub to_amount: Option<i64>,
     pub to_currency: Option<String>,
 }

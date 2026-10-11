@@ -64,6 +64,7 @@ pub struct SeriesQuery {
 pub struct SeriesLine {
     pub name: String,
     /// One value per label, minor units.
+    #[schemars(extend("x-unit" = "minor"))]
     pub values: Vec<i64>,
     /// By week or day, in the period still running: how many labels it has reached. Later ones
     /// have not happened yet, so a running total stops here instead of going flat.

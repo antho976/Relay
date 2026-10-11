@@ -2038,12 +2038,19 @@ fn entry_card(tx: &Value, op: &str) -> gtk::Box {
 
 fn amount_text(tx: &Value) -> String {
     let fmt = super::formatter();
-    let amount = fmt.format(tx["amount"].as_i64().unwrap_or(0));
+    let amount = fmt.format(minor(&tx["amount"], fmt.fraction_digits).unwrap_or(0));
     match tx["type"].as_str() {
         Some("EXPENSE") => format!("−{amount}"),
         Some("INCOME") => format!("+{amount}"),
         _ => amount,
     }
+}
+
+/// An amount from a tool's answer at `places` decimals: the bus's integer, or the decimal string
+/// the MCP door gives a model instead ("157.99"; relay-cli's units.rs). Threads stored before the
+/// door converted hold the integer.
+fn minor(v: &Value, places: u32) -> Option<i64> {
+    v.as_i64().or_else(|| relay_money::invest::parse_scaled(v.as_str()?, places).map(|s| s.value))
 }
 
 /// An investment activity in words, with its article: "a buy", "a dividend".
@@ -2095,7 +2102,7 @@ fn activity_card(a: &Value) -> gtk::Box {
     words.set_hexpand(true);
     words.set_valign(gtk::Align::Center);
     let account = a["account"].as_str().unwrap_or("");
-    let quantity = a["quantity"].as_i64().unwrap_or(0);
+    let quantity = minor(&a["quantity"], 8).unwrap_or(0);
     let subject = match a["symbol"].as_str().filter(|s| !s.is_empty()) {
         Some(symbol) if quantity > 0 => format!("{} {symbol}", units(quantity)),
         Some(symbol) => symbol.to_string(),
@@ -2114,7 +2121,7 @@ fn activity_card(a: &Value) -> gtk::Box {
     if let Some(date) = a["date"].as_str() {
         detail.push(human_date(date));
     }
-    let fee = a["fee"].as_i64().unwrap_or(0);
+    let fee = minor(&a["fee"], fmt.fraction_digits).unwrap_or(0);
     if fee > 0 {
         detail.push(format!("{} fee", fmt.format(fee)));
     }
@@ -2125,9 +2132,10 @@ fn activity_card(a: &Value) -> gtk::Box {
     about.set_ellipsize(gtk::pango::EllipsizeMode::End);
     words.append(&about);
     card.append(&words);
-    let amount = fmt.format(a["amount"].as_i64().unwrap_or(0));
-    let shown = match (kind, a["to_amount"].as_i64(), a["to_currency"].as_str()) {
-        ("FX", Some(to), Some(to_currency)) => format!("{amount} → {}", MoneyFormatter::new(to_currency, Locale::from_env()).format(to)),
+    let amount = fmt.format(minor(&a["amount"], fmt.fraction_digits).unwrap_or(0));
+    let to_fmt = a["to_currency"].as_str().map(|to_currency| MoneyFormatter::new(to_currency, Locale::from_env()));
+    let shown = match (kind, to_fmt.and_then(|f| Some((minor(&a["to_amount"], f.fraction_digits)?, f)))) {
+        ("FX", Some((to, to_fmt))) => format!("{amount} → {}", to_fmt.format(to)),
         _ => format!("{sign}{amount}"),
     };
     let figure = label(&shown, "money-amount");

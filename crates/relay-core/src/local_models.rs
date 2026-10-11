@@ -249,7 +249,7 @@ pub fn ensure(engine: &Arc<Engine>, model: &'static Model) -> Result<u16, String
         if healthy(port) {
             break;
         }
-        if !lock(&engine.local.server).as_ref().is_some_and(|s| s.serial == serial) {
+        if lock(&engine.local.server).as_ref().is_none_or(|s| s.serial != serial) {
             return Err(format!("{} stopped before it loaded", model.name));
         }
         if Instant::now() >= deadline {

@@ -55,6 +55,8 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.longOrNull
+import java.math.RoundingMode
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -67,6 +69,20 @@ import kotlin.math.roundToLong
 
 /** A number, or a decimal string as Arbiter sends its amounts. */
 internal fun JsonObject.d(key: String): Double? = (this[key] as? JsonPrimitive)?.let { it.doubleOrNull ?: it.content.trim().toDoubleOrNull() }
+
+/**
+ * An amount from a tool's answer at [digits] decimals: the bus's integer, or the decimal string the
+ * PC's MCP door gives a model instead ("157.99"; relay-cli's units.rs). Threads stored before the
+ * door converted hold the integer.
+ */
+internal fun JsonObject.minor(key: String, digits: Int): Long? {
+    val p = this[key] as? JsonPrimitive ?: return null
+    p.longOrNull?.let { return it }
+    if (!p.isString) return null
+    return runCatching {
+        p.content.trim().toBigDecimal().movePointRight(digits).setScale(0, RoundingMode.HALF_EVEN).longValueExact()
+    }.getOrNull()
+}
 
 internal fun JsonObject.objs(key: String): List<JsonObject> = arr(key).mapNotNull { it as? JsonObject }
 
