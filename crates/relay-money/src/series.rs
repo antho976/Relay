@@ -76,11 +76,13 @@ pub struct SeriesLine {
 #[schemars(rename = "MoneySeries")]
 pub struct Series {
     pub currency: String,
+    #[schemars(extend("x-unit" = "omit"))]
     pub fraction_digits: u32,
     pub measure: Measure,
     pub by: By,
     pub labels: Vec<String>,
     /// Each label's category colour (Tally's palette index), when the labels are categories.
+    #[schemars(extend("x-unit" = "omit"))]
     pub label_colors: Vec<Option<i64>>,
     pub series: Vec<SeriesLine>,
 }

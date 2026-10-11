@@ -8,6 +8,12 @@
 //!
 //! `minor` is in the reading's own currency (its top-level `currency`, else the ledger's);
 //! `minor:<field>` in the currency the sibling `<field>` names, else the same.
+//!
+//! The rest of what a model would misread is reshaped too, in results only:
+//! - basis points (`bps`, 1250) become a percent ("12.50") under `_pct`;
+//! - fractions (`fraction`, 0.68) become a percent ("68") under `_pct`;
+//! - Unix seconds (`unix`) become a UTC time ("2025-10-11T00:00:00Z");
+//! - what only an app draws with (`omit`: palette colours, icons, sync ids) is left out.
 
 use relay_money::csv::major_string;
 use serde_json::{Map, Value};
@@ -26,36 +32,80 @@ pub fn has_units(schema: &Value) -> bool {
     }
 }
 
-/// `schema` as a model is shown it: every field with a unit is a decimal string.
+/// `schema` as a model is shown it: every field with a unit is a decimal string or a time,
+/// renamed or left out as [`to_agent`] does to the values.
 pub fn agent_schema(schema: &Value) -> Value {
     match schema {
         Value::Object(map) => {
-            let mut out: Map<String, Value> = map.iter().map(|(k, v)| (k.clone(), agent_schema(v))).collect();
-            if let Some(unit) = out.remove("x-unit").and_then(|u| u.as_str().map(str::to_string)) {
-                if out.get("type").is_some_and(|t| t == "array" || t.as_array().is_some_and(|a| a.iter().any(|t| t == "array"))) {
-                    out.insert("items".into(), decimal_schema(&unit, false, None));
-                } else {
-                    let nullable = out.get("type").and_then(Value::as_array).is_some_and(|a| a.iter().any(|t| t == "null"));
-                    return decimal_schema(&unit, nullable, out.get("description").and_then(Value::as_str));
+            let mut out = Map::new();
+            let mut gone: Vec<(String, Option<String>)> = Vec::new();
+            for (key, value) in map {
+                if key == "properties" {
+                    if let Value::Object(props) = value {
+                        let mut kept = Map::new();
+                        for (name, prop) in props {
+                            let renamed = agent_key(name, prop.get("x-unit").and_then(Value::as_str));
+                            if renamed.as_deref() != Some(name.as_str()) {
+                                gone.push((name.clone(), renamed.clone()));
+                            }
+                            if let Some(renamed) = renamed {
+                                kept.insert(renamed, agent_schema(prop));
+                            }
+                        }
+                        out.insert(key.clone(), Value::Object(kept));
+                        continue;
+                    }
                 }
+                out.insert(key.clone(), agent_schema(value));
             }
-            Value::Object(out)
+            if let Some(Value::Array(required)) = out.get_mut("required") {
+                required.retain_mut(|r| match gone.iter().find(|(old, _)| r == old) {
+                    Some((_, Some(new))) => {
+                        *r = Value::String(new.clone());
+                        true
+                    }
+                    Some((_, None)) => false,
+                    None => true,
+                });
+            }
+            let Some(unit) = out.remove("x-unit").and_then(|u| u.as_str().map(str::to_string)) else {
+                return Value::Object(out);
+            };
+            let types = out.get("type").cloned().unwrap_or(Value::Null);
+            let is = |t: &str| types == t || types.as_array().is_some_and(|a| a.iter().any(|x| x == t));
+            if is("array") {
+                out.insert("items".into(), decimal_schema(&unit, false, None));
+                return Value::Object(out);
+            }
+            decimal_schema(&unit, is("null"), out.get("description").and_then(Value::as_str))
         }
         Value::Array(items) => Value::Array(items.iter().map(agent_schema).collect()),
         other => other.clone(),
     }
 }
 
+/// The name a model sees for `key` with `unit`; `None` when it is left out.
+fn agent_key(key: &str, unit: Option<&str>) -> Option<String> {
+    match unit {
+        Some("omit") => None,
+        Some("bps") => Some(format!("{}_pct", key.strip_suffix("_bps").unwrap_or(key))),
+        Some("fraction") => Some(format!("{}_pct", key.strip_suffix("_fraction").unwrap_or(key))),
+        _ => Some(key.to_string()),
+    }
+}
+
 fn decimal_schema(unit: &str, nullable: bool, about: Option<&str>) -> Value {
     let what = match unit {
         "e8" => "A decimal number as a string, e.g. \"1.5\"".to_string(),
+        "bps" | "fraction" => "A percentage as a decimal string, e.g. \"12.5\" for 12.5%".to_string(),
+        "unix" => "A UTC time, e.g. \"2025-10-11T00:00:00Z\"".to_string(),
         u => match u.strip_prefix("minor:") {
             Some(field) => format!("A decimal amount in `{field}` as a string, e.g. \"42.18\" (not cents)"),
             None => "A decimal amount in the currency as a string, e.g. \"42.18\" (not cents)".to_string(),
         },
     };
     // What the field means stays; how it was counted does not.
-    let about = about.filter(|a| !a.contains("inor units") && !a.contains("1e-8"));
+    let about = about.filter(|a| !a.contains("inor units") && !a.contains("1e-8") && !a.contains("Unix seconds") && !a.contains("fraction"));
     let description = about.map_or(what.clone(), |a| format!("{a} {what}."));
     let kind = if nullable { serde_json::json!(["string", "null"]) } else { serde_json::json!("string") };
     serde_json::json!({"type": kind, "description": description})
@@ -65,9 +115,17 @@ fn decimal_schema(unit: &str, nullable: bool, about: Option<&str>) -> Value {
 /// decimal places, for a reading that does not name its currency.
 pub fn to_agent(value: &mut Value, schema: &Value, ledger: u32) {
     let root = value.get("currency").and_then(Value::as_str).map_or(ledger, digits);
-    walk(value, schema, root, None, &mut |unit, v, places| {
-        if let Some(n) = v.as_i64() {
-            *v = Value::String(if unit == "e8" { trimmed(major_string(n, 8)) } else { major_string(n, places) });
+    walk(value, schema, root, None, true, &mut |unit, v, places| {
+        let shown = match (unit, &*v) {
+            ("e8", Value::Number(n)) => n.as_i64().map(|n| trimmed(major_string(n, 8))),
+            ("bps", Value::Number(n)) => n.as_i64().map(|n| major_string(n, 2)),
+            ("fraction", Value::Number(n)) => n.as_f64().map(|f| trimmed(format!("{:.1}", f * 100.0))),
+            ("unix", Value::Number(n)) => n.as_i64().and_then(|n| jiff::Timestamp::from_second(n).ok()).map(|t| t.strftime("%Y-%m-%dT%H:%M:%SZ").to_string()),
+            (u, Value::Number(n)) if u.starts_with("minor") => n.as_i64().map(|n| major_string(n, places)),
+            _ => None,
+        };
+        if let Some(shown) = shown {
+            *v = Value::String(shown);
         }
         Ok(())
     })
@@ -78,8 +136,13 @@ pub fn to_agent(value: &mut Value, schema: &Value, ledger: u32) {
 /// takes. Refuses one with more decimal places than its unit has.
 pub fn to_engine(value: &mut Value, schema: &Value, ledger: u32) -> Result<(), String> {
     let root = value.get("currency").and_then(Value::as_str).map_or(ledger, digits);
-    walk(value, schema, root, None, &mut |unit, v, places| {
-        let places = if unit == "e8" { 8 } else { places };
+    walk(value, schema, root, None, false, &mut |unit, v, places| {
+        let places = match unit {
+            "e8" => 8,
+            u if u.starts_with("minor") => places,
+            // Nothing a model writes is counted in anything else.
+            _ => return Ok(()),
+        };
         let text = match v {
             Value::String(s) => s.trim().to_string(),
             Value::Number(n) => n.to_string(),
@@ -95,8 +158,9 @@ pub fn to_engine(value: &mut Value, schema: &Value, ledger: u32) -> Result<(), S
 type Apply<'a> = dyn FnMut(&str, &mut Value, u32) -> Result<(), String> + 'a;
 
 /// Visit each value whose schema has a unit, with the decimal places it is counted in.
-/// `siblings` is the object holding `value`, for a `minor:<field>` unit.
-fn walk(value: &mut Value, schema: &Value, root: u32, siblings: Option<&Map<String, Value>>, apply: &mut Apply) -> Result<(), String> {
+/// `siblings` is the object holding `value`, for a `minor:<field>` unit. On the way to a model
+/// (`agent`), fields are renamed and left out as [`agent_key`] says.
+fn walk(value: &mut Value, schema: &Value, root: u32, siblings: Option<&Map<String, Value>>, agent: bool, apply: &mut Apply) -> Result<(), String> {
     if let Some(unit) = schema.get("x-unit").and_then(Value::as_str) {
         let places = unit.strip_prefix("minor:")
             .and_then(|field| siblings?.get(field)?.as_str())
@@ -110,15 +174,24 @@ fn walk(value: &mut Value, schema: &Value, root: u32, siblings: Option<&Map<Stri
     match value {
         Value::Object(map) => {
             let around = map.clone();
+            let mut moves = Vec::new();
             for (key, field) in map.iter_mut() {
-                if let Some(sub) = property(schema, key) {
-                    walk(field, sub, root, Some(&around), apply)?;
+                let Some(sub) = property(schema, key) else { continue };
+                walk(field, sub, root, Some(&around), agent, apply)?;
+                let renamed = agent_key(key, sub.get("x-unit").and_then(Value::as_str));
+                if agent && renamed.as_deref() != Some(key.as_str()) {
+                    moves.push((key.clone(), renamed));
+                }
+            }
+            for (key, renamed) in moves {
+                if let (Some(field), Some(renamed)) = (map.remove(&key), renamed) {
+                    map.insert(renamed, field);
                 }
             }
             Ok(())
         }
         Value::Array(items) => match items_schema(schema) {
-            Some(sub) => items.iter_mut().try_for_each(|item| walk(item, sub, root, None, apply)),
+            Some(sub) => items.iter_mut().try_for_each(|item| walk(item, sub, root, None, agent, apply)),
             None => Ok(()),
         },
         _ => Ok(()),
@@ -210,7 +283,45 @@ mod tests {
         assert_eq!(summary["accounts"][0]["balance"], "1000.05");
         assert_eq!(summary["pace"]["total_days"], 31);
         assert_eq!(summary["period"]["days_left"], 22);
-        assert_eq!(summary["fraction_digits"], 2);
+        // Percent, under a name that says so; the decimals a model no longer needs are gone.
+        assert_eq!(summary["pace"]["spent_pct"], "68");
+        assert!(summary["pace"].get("spent_fraction").is_none());
+        assert!(summary.get("fraction_digits").is_none());
+        assert_eq!(summary["budgets"][0].get("color"), None);
+        assert_eq!(summary["budgets"][0]["category_id"], 7);
+    }
+
+    #[test]
+    fn basis_points_read_as_percent() {
+        let mut portfolio = json!({"currency": "CAD", "value": 100000, "gain_bps": 1250, "accounts": [{"id": 1, "return_bps": -75, "gain_bps": null}], "allocation": [{"value": 100000, "share_bps": 10000}]});
+        to_agent(&mut portfolio, &schema("money.invest.summary")["result"], 2);
+        assert_eq!(portfolio["gain_pct"], "12.50");
+        assert_eq!(portfolio["accounts"][0]["return_pct"], "-0.75");
+        assert_eq!(portfolio["accounts"][0]["gain_pct"], Value::Null);
+        assert_eq!(portfolio["allocation"][0]["share_pct"], "100.00");
+        assert!(portfolio.get("gain_bps").is_none());
+    }
+
+    #[test]
+    fn unix_seconds_read_as_utc_times() {
+        let mut stats = json!({"whole": {"start": 1760140800, "end": 1760227200, "return_pct": 1.5, "trades": 2}, "trades": [{"buy_at": 1760140800, "sell_at": null, "buy_price": 100.5, "pnl": 1.0, "fees": 0.1}]});
+        let result = &schema("arbiter.backtest")["result"];
+        assert!(has_units(result));
+        to_agent(&mut stats, result, 2);
+        assert_eq!(stats["whole"]["start"], "2025-10-11T00:00:00Z");
+        assert_eq!(stats["trades"][0]["buy_at"], "2025-10-11T00:00:00Z");
+        assert_eq!(stats["trades"][0]["sell_at"], Value::Null);
+        assert_eq!(stats["trades"][0]["buy_price"], 100.5);
+        assert_eq!(stats["whole"]["return_pct"], 1.5);
+    }
+
+    #[test]
+    fn an_entry_keeps_what_its_card_draws() {
+        // Threads' entry card reads the icon and colour from the tool's answer.
+        let mut tx = json!({"id": 91, "uid": "d778", "type": "EXPENSE", "amount": 15799, "icon": "bag", "color": 4});
+        to_agent(&mut tx, &schema("money.tx.add")["result"], 2);
+        assert_eq!((tx["icon"].clone(), tx["color"].clone()), (json!("bag"), json!(4)));
+        assert!(tx.get("uid").is_none());
     }
 
     #[test]
@@ -248,7 +359,7 @@ mod tests {
         let mut series = json!({"currency": "CAD", "fraction_digits": 2, "labels": ["Week 1"], "label_colors": [null], "series": [{"name": "Spending", "values": [15799, 0]}]});
         to_agent(&mut series, &schema("money.series")["result"], 2);
         assert_eq!(series["series"][0]["values"], json!(["157.99", "0.00"]));
-        assert_eq!(series["label_colors"], json!([null]));
+        assert!(series.get("label_colors").is_none());
     }
 
     #[test]
@@ -294,6 +405,14 @@ mod tests {
         assert!(!quantity.contains("1e-8"), "{quantity}");
         let shown = agent_schema(&schema("money.series")["result"]);
         assert_eq!(shown["properties"]["series"]["items"]["properties"]["values"]["items"]["type"], "string");
+        assert!(shown["properties"].get("label_colors").is_none());
+        let required: Vec<&str> = shown["required"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(!required.contains(&"label_colors") && !required.contains(&"fraction_digits"), "{required:?}");
+        let shown = agent_schema(&schema("money.invest.summary")["result"]);
+        assert_eq!(shown["properties"]["gain_pct"]["type"], json!(["string", "null"]));
+        assert!(shown["properties"].get("gain_bps").is_none());
+        let shown = agent_schema(&schema("arbiter.backtest")["result"]);
+        assert!(shown.to_string().contains("2025-10-11T00:00:00Z"));
         assert!(!has_units(&shown));
         assert!(!has_units(&schema("gym.summary")["result"]));
     }

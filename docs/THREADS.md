@@ -264,4 +264,17 @@ phone case, stored as `15799`, as $15,799. So models never see them.
 - **Matches Arbiter.** Arbiter already gives its amounts as decimal strings.
 - **Cards accept both forms.** Threads' entry and activity cards read either an integer or a
   decimal string, so threads stored before this change still draw.
+- **Other fields models misread are reshaped too,** in results only:
+
+  | Unit | Becomes | Example |
+  |---|---|---|
+  | `bps` | a percent under `_pct` | `gain_bps: 1250` → `gain_pct: "12.50"` |
+  | `fraction` | a percent under `_pct` | `spent_fraction: 0.68` → `spent_pct: "68"` |
+  | `unix` | a UTC time | `1760140800` → `"2025-10-11T00:00:00Z"`, for Arbiter's bars, trades and backtest ranges |
+  | `omit` | left out | palette colours and icons outside an entry, sync uids, `fraction_digits`, `devices`, a backtest's 400-point `equity` curve |
+
+  An entry keeps its `icon` and `color`, because its card draws them.
+- **Avex goal targets are in the person's unit.** A `lift_target` goal's `target_value` is
+  converted at the source (`relay_gym::views`), like every other weight. Avex stores it in
+  pounds, and a kg user's Avex page showed that pound figure.
 - **Only the MCP door changes.** The socket, the CLI and the phone door still carry the integers.

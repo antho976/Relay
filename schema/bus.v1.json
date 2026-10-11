@@ -16754,7 +16754,8 @@
         "fraction_digits": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-unit": "omit"
         },
         "month_start_day": {
           "type": "integer",
@@ -16915,12 +16916,14 @@
         "spent_fraction": {
           "type": "number",
           "format": "float",
-          "description": "Spent as a fraction of the budget; may exceed 1. Zero without a budget."
+          "description": "Spent as a fraction of the budget; may exceed 1. Zero without a budget.",
+          "x-unit": "fraction"
         },
         "pace_fraction": {
           "type": "number",
           "format": "float",
-          "description": "Where the pace tick sits on the meter, 0..1."
+          "description": "Where the pace tick sits on the meter, 0..1.",
+          "x-unit": "fraction"
         },
         "status": {
           "$ref": "#/$defs/PaceStatus"
@@ -16981,11 +16984,13 @@
           "type": "string"
         },
         "icon": {
-          "type": "string"
+          "type": "string",
+          "x-unit": "omit"
         },
         "color": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "omit"
         },
         "budget": {
           "type": "integer",
@@ -17192,7 +17197,8 @@
           "format": "int64"
         },
         "uid": {
-          "type": "string"
+          "type": "string",
+          "x-unit": "omit"
         },
         "type": {
           "$ref": "#/$defs/TxType"
@@ -17276,7 +17282,8 @@
         "fraction_digits": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-unit": "omit"
         },
         "accounts": {
           "type": "array",
@@ -17295,7 +17302,8 @@
           "items": {
             "$ref": "#/$defs/MoneyDevice"
           },
-          "description": "Phones that sync with this ledger, the latest first."
+          "description": "Phones that sync with this ledger, the latest first.",
+          "x-unit": "omit"
         }
       },
       "required": [
@@ -17320,11 +17328,13 @@
           "$ref": "#/$defs/CategoryKind"
         },
         "icon": {
-          "type": "string"
+          "type": "string",
+          "x-unit": "omit"
         },
         "color": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "omit"
         },
         "archived": {
           "type": "boolean"
@@ -17557,7 +17567,8 @@
         "fraction_digits": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-unit": "omit"
         },
         "measure": {
           "$ref": "#/$defs/MoneySeriesMeasure"
@@ -17580,7 +17591,8 @@
             ],
             "format": "int64"
           },
-          "description": "Each label's category colour (Tally's palette index), when the labels are categories."
+          "description": "Each label's category colour (Tally's palette index), when the labels are categories.",
+          "x-unit": "omit"
         },
         "series": {
           "type": "array",
@@ -18162,7 +18174,8 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "bps"
         },
         "cash": {
           "type": "integer",
@@ -18311,7 +18324,8 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "bps"
         },
         "cash": {
           "type": "integer",
@@ -18337,7 +18351,8 @@
             "null"
           ],
           "format": "int64",
-          "description": "The money-weighted return: yearly when `return_annual`, else over the stretch since `return_since`."
+          "description": "The money-weighted return: yearly when `return_annual`, else over the stretch since `return_since`.",
+          "x-unit": "bps"
         },
         "return_annual": {
           "type": "boolean"
@@ -18381,7 +18396,8 @@
         },
         "share_bps": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "bps"
         }
       },
       "required": [
@@ -18402,7 +18418,8 @@
         },
         "share_bps": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "bps"
         }
       },
       "required": [
@@ -18500,11 +18517,13 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "bps"
         },
         "weight_bps": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "bps"
         },
         "fx_estimated": {
           "type": "boolean",
@@ -18718,7 +18737,8 @@
           "format": "int64"
         },
         "uid": {
-          "type": "string"
+          "type": "string",
+          "x-unit": "omit"
         },
         "account_id": {
           "type": "integer",
@@ -21013,7 +21033,8 @@
             "minItems": 2,
             "maxItems": 2
           },
-          "description": "Profit after fees over time, `[unix seconds, quote currency]`, at most 400 points."
+          "description": "Profit after fees over time, `[unix seconds, quote currency]`, at most 400 points. For the\nchart; a model is not given it.",
+          "x-unit": "omit"
         },
         "break_even_pct": {
           "type": "number",
@@ -21043,11 +21064,13 @@
         "start": {
           "type": "integer",
           "format": "int64",
-          "description": "Unix seconds, the first and last bar."
+          "description": "Unix seconds, the first and last bar.",
+          "x-unit": "unix"
         },
         "end": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "unix"
         },
         "return_pct": {
           "type": "number",
@@ -21109,7 +21132,8 @@
         "buy_at": {
           "type": "integer",
           "format": "int64",
-          "description": "Unix seconds."
+          "description": "Unix seconds.",
+          "x-unit": "unix"
         },
         "buy_price": {
           "type": "number",
@@ -21120,7 +21144,8 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "unix"
         },
         "sell_price": {
           "type": [
@@ -21462,7 +21487,8 @@
       "properties": {
         "start": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "unix"
         },
         "open": {
           "type": "number",
@@ -21500,7 +21526,8 @@
       "properties": {
         "at": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "unix"
         },
         "side": {
           "$ref": "#/$defs/ArbiterSide"
@@ -22429,7 +22456,7 @@
             "null"
           ],
           "format": "double",
-          "description": "As Avex stores it (pounds for a weight)."
+          "description": "A `lift_target`'s weight is in the person's unit like every other weight; any other\nkind's figure is as Avex stores it."
         },
         "created_day": {
           "type": "string"

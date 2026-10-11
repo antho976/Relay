@@ -32,8 +32,10 @@ pub struct Config {
 #[schemars(rename = "ArbiterBacktestTrade")]
 pub struct Trade {
     /// Unix seconds.
+    #[schemars(extend("x-unit" = "unix"))]
     pub buy_at: i64,
     pub buy_price: f64,
+    #[schemars(extend("x-unit" = "unix"))]
     pub sell_at: Option<i64>,
     pub sell_price: Option<f64>,
     /// Why it sold; absent while still held at the end.
@@ -47,7 +49,9 @@ pub struct Trade {
 #[schemars(rename = "ArbiterBacktestStats")]
 pub struct Stats {
     /// Unix seconds, the first and last bar.
+    #[schemars(extend("x-unit" = "unix"))]
     pub start: i64,
+    #[schemars(extend("x-unit" = "unix"))]
     pub end: i64,
     /// Percent, after fees, on the most in the market at once.
     pub return_pct: f64,
@@ -72,7 +76,9 @@ pub struct Report {
     pub judged: Stats,
     pub whole: Stats,
     pub trades: Vec<Trade>,
-    /// Profit after fees over time, `[unix seconds, quote currency]`, at most 400 points.
+    /// Profit after fees over time, `[unix seconds, quote currency]`, at most 400 points. For the
+    /// chart; a model is not given it.
+    #[schemars(extend("x-unit" = "omit"))]
     pub equity: Vec<(i64, f64)>,
     /// What a round trip costs in fees and slippage, percent: the move a trade needs to break
     /// even.

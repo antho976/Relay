@@ -218,7 +218,8 @@ pub struct GoalRow {
     pub kind: String,
     /// What it is about: a lift's id, a measure.
     pub target_key: String,
-    /// As Avex stores it (pounds for a weight).
+    /// A `lift_target`'s weight is in the person's unit like every other weight; any other
+    /// kind's figure is as Avex stores it.
     pub target_value: Option<f64>,
     pub created_day: String,
     pub completed_day: Option<String>,
@@ -444,11 +445,12 @@ fn record(h: &History, s: &Session, e: &Exercise, best: &Set, clock: &Clock) -> 
     }
 }
 
-fn goal_row(g: &crate::model::Goal, clock: &Clock) -> GoalRow {
+fn goal_row(g: &crate::model::Goal, kg: bool, clock: &Clock) -> GoalRow {
     GoalRow {
         kind: g.kind.clone(),
         target_key: g.target_key.clone(),
-        target_value: g.target_value,
+        // Avex keeps a lift's target in pounds, as it keeps every set.
+        target_value: g.target_value.map(|v| if g.kind == "lift_target" { weight(v, kg) } else { v }),
         created_day: date_of(g.created_at, &clock.tz).to_string(),
         completed_day: g.completed_at.map(|c| date_of(c, &clock.tz).to_string()),
         source: g.source.clone(),
@@ -567,7 +569,7 @@ pub fn summary(h: &History, clock: &Clock, imported: bool) -> Summary {
         recent: h.sessions.iter().rev().take(5).map(|s| row(h, s, clock)).collect(),
         records,
         lifts,
-        goals: h.goals.iter().filter(|g| g.completed_at.is_none() && g.archived_at.is_none()).map(|g| goal_row(g, clock)).collect(),
+        goals: h.goals.iter().filter(|g| g.completed_at.is_none() && g.archived_at.is_none()).map(|g| goal_row(g, h.meta.use_kg, clock)).collect(),
     }
 }
 
@@ -970,6 +972,21 @@ mod tests {
         assert_eq!(e1rm_lb(&set(225.0, 5)).map(round1), Some(262.5));
         assert_eq!(e1rm_lb(&set(100.0, 13)), None);
         assert_eq!(e1rm_lb(&Set { reps: 5, ..Set::default() }), None);
+    }
+
+    #[test]
+    fn a_lift_target_is_in_the_persons_unit() {
+        let goal = |kind: &str, value: f64| crate::model::Goal {
+            kind: kind.into(), target_key: "bench".into(), target_value: Some(value), priority: 1,
+            created_at: 1_759_000_000_000, completed_at: None, archived_at: None, source: String::new(), note: String::new(),
+        };
+        let mut h = history(true);
+        h.goals = vec![goal("lift_target", 245.0), goal("sessions_per_week", 4.0)];
+        let s = summary(&h, &clock(), true);
+        assert_eq!(s.goals[0].target_value, Some(111.1));
+        assert_eq!(s.goals[1].target_value, Some(4.0));
+        h.meta.use_kg = false;
+        assert_eq!(summary(&h, &clock(), true).goals[0].target_value, Some(245.0));
     }
 
     #[test]

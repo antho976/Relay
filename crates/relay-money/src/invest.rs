@@ -640,6 +640,7 @@ pub struct Portfolio {
     pub book: i64,
     #[schemars(extend("x-unit" = "minor"))]
     pub gain: i64,
+    #[schemars(extend("x-unit" = "bps"))]
     pub gain_bps: Option<i64>,
     #[schemars(extend("x-unit" = "minor"))]
     pub cash: i64,
@@ -684,6 +685,7 @@ pub struct PortfolioAccount {
     pub book: i64,
     #[schemars(extend("x-unit" = "minor"))]
     pub gain: i64,
+    #[schemars(extend("x-unit" = "bps"))]
     pub gain_bps: Option<i64>,
     #[schemars(extend("x-unit" = "minor"))]
     pub cash: i64,
@@ -692,6 +694,7 @@ pub struct PortfolioAccount {
     /// The newest snapshot or price date its value rests on.
     pub valued_on: Option<String>,
     /// The money-weighted return: yearly when `return_annual`, else over the stretch since `return_since`.
+    #[schemars(extend("x-unit" = "bps"))]
     pub return_bps: Option<i64>,
     pub return_annual: bool,
     pub return_since: Option<String>,
@@ -703,6 +706,7 @@ pub struct AllocationShare {
     pub registration: Option<Registration>,
     #[schemars(extend("x-unit" = "minor"))]
     pub value: i64,
+    #[schemars(extend("x-unit" = "bps"))]
     pub share_bps: i64,
 }
 
@@ -712,6 +716,7 @@ pub struct KindShare {
     pub kind: SecurityKind,
     #[schemars(extend("x-unit" = "minor"))]
     pub value: i64,
+    #[schemars(extend("x-unit" = "bps"))]
     pub share_bps: i64,
 }
 
@@ -738,7 +743,9 @@ pub struct HoldingView {
     pub book: i64,
     #[schemars(extend("x-unit" = "minor"))]
     pub gain: i64,
+    #[schemars(extend("x-unit" = "bps"))]
     pub gain_bps: Option<i64>,
+    #[schemars(extend("x-unit" = "bps"))]
     pub weight_bps: i64,
     /// Some of its value or book was converted without a rate.
     pub fx_estimated: bool,

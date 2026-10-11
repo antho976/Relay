@@ -38,8 +38,10 @@ pub struct PaceReading {
     #[schemars(extend("x-unit" = "minor"))]
     pub daily_allowance: i64,
     /// Spent as a fraction of the budget; may exceed 1. Zero without a budget.
+    #[schemars(extend("x-unit" = "fraction"))]
     pub spent_fraction: f32,
     /// Where the pace tick sits on the meter, 0..1.
+    #[schemars(extend("x-unit" = "fraction"))]
     pub pace_fraction: f32,
     pub status: PaceStatus,
 }

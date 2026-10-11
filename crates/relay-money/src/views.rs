@@ -40,6 +40,7 @@ impl PeriodView {
 #[schemars(rename = "MoneyTx")]
 pub struct Tx {
     pub id: i64,
+    #[schemars(extend("x-unit" = "omit"))]
     pub uid: String,
     pub r#type: TxType,
     #[schemars(extend("x-unit" = "minor"))]
@@ -76,7 +77,9 @@ pub struct CategoryView {
     pub id: i64,
     pub name: String,
     pub kind: CategoryKind,
+    #[schemars(extend("x-unit" = "omit"))]
     pub icon: String,
+    #[schemars(extend("x-unit" = "omit"))]
     pub color: i64,
     pub archived: bool,
 }
@@ -86,7 +89,9 @@ pub struct CategoryView {
 pub struct EnvelopeView {
     pub category_id: i64,
     pub name: String,
+    #[schemars(extend("x-unit" = "omit"))]
     pub icon: String,
+    #[schemars(extend("x-unit" = "omit"))]
     pub color: i64,
     #[schemars(extend("x-unit" = "minor"))]
     pub budget: i64,
@@ -137,6 +142,7 @@ pub struct Lines {
 #[schemars(rename = "MoneySummary")]
 pub struct Summary {
     pub currency: String,
+    #[schemars(extend("x-unit" = "omit"))]
     pub fraction_digits: u32,
     pub month_start_day: i64,
     /// No accounts and no entries: draw the honest empty state.
@@ -161,10 +167,12 @@ pub struct Summary {
 #[schemars(rename = "MoneyLists")]
 pub struct Lists {
     pub currency: String,
+    #[schemars(extend("x-unit" = "omit"))]
     pub fraction_digits: u32,
     pub accounts: Vec<AccountView>,
     pub categories: Vec<CategoryView>,
     /// Phones that sync with this ledger, the latest first.
+    #[schemars(extend("x-unit" = "omit"))]
     pub devices: Vec<DeviceView>,
 }
 
@@ -244,6 +252,7 @@ pub struct AccountPatch {
 #[schemars(rename = "MoneyActivity")]
 pub struct ActivityView {
     pub id: i64,
+    #[schemars(extend("x-unit" = "omit"))]
     pub uid: String,
     pub account_id: i64,
     pub account: String,

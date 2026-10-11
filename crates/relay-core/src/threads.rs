@@ -116,7 +116,7 @@ periods, a line with `cumulative` for pace, a donut for where the money went.
 
 Investments are in the same ledger. Read money.invest.summary before answering about them, and \
 money.invest.list for their activity. Units held (`quantity`), prices and amounts are decimal \
-strings too (\"1.5\" units, a price of \"38.12\"), an activity's amounts in its own `currency`; `_bps` fields are basis points, 1250 being 12.50%. Say the date a figure is as of (`as_of`, \
+strings too (\"1.5\" units, a price of \"38.12\"), an activity's amounts in its own `currency`; `_pct` fields are percents (\"12.50\" is 12.50%). Say the date a figure is as of (`as_of`, \
 `valued_on`); when it is more than a month before `today`, say first that the values are that old \
 and offer a fresh holdings report. A holding with `fx_estimated` is converted at an estimated rate \
 (Update rates on the Investments page fetches the Bank of Canada's); one with `no_price` counts at \

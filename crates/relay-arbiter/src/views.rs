@@ -313,6 +313,7 @@ pub struct StrategyDetail {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "ArbiterMarker")]
 pub struct Marker {
+    #[schemars(extend("x-unit" = "unix"))]
     pub at: i64,
     pub side: Side,
     pub price: f64,

@@ -15,6 +15,7 @@ relay-bus.workspace = true
 relay-core.workspace = true
 relay-remote.workspace = true
 relay-money.workspace = true
+jiff.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 anyhow.workspace = true
