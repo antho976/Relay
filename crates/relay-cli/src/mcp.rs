@@ -1,6 +1,7 @@
 //! MCP stdio door (BUS.md §6.4). This is transport and argument shaping only: every tool
 //! call is still a normal request through the socket door and the engine pipeline.
 
+use crate::units;
 use anyhow::{Context, Result};
 use relay_bus::registry::{OpEntry, OpKind, Registry};
 use relay_bus::{Actor, MailHint, Request};
@@ -490,16 +491,43 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
             None,
         ));
     }
+    let mut arguments = arguments;
     let mut client = connect(instance).await?;
+    // Money goes to a model as decimals and comes back from it as decimals (`units`): the
+    // bus's own integers stay between the engine and people's apps.
+    let schema = relay_bus::schema::render_op(name).unwrap_or(Value::Null);
+    let (in_units, out_units) = (units::has_units(&schema["payload"]), units::has_units(&schema["result"]));
+    let ledger = if in_units || out_units { ledger_digits(&mut client, actor, token).await } else { 2 };
+    if in_units {
+        if let Err(why) = units::to_engine(&mut arguments, &schema["payload"], ledger) {
+            return Ok(tool_error(json!({"kind":"invalid","code":"bus.schema","message":why}), None));
+        }
+    }
     let mut request = Request::new(actor.clone(), name, arguments);
     if let Some(token) = token { request = request.with_token(token); }
     let response = client.call(&request, |_| {}).await?;
     let mail = response.mail.clone();
     if response.ok {
-        let value = response.result.unwrap_or_else(|| json!({}));
+        let mut value = response.result.unwrap_or_else(|| json!({}));
+        if out_units {
+            units::to_agent(&mut value, &schema["result"], ledger);
+        }
+        if name == "bus.schema" {
+            value = units::agent_schema(&value);
+        }
         Ok(tool_success(value, mail.as_ref())?)
     } else {
         Ok(tool_error(serde_json::to_value(response.error)?, mail.as_ref()))
+    }
+}
+
+/// The ledger currency's decimal places, for a reading that does not name its currency.
+async fn ledger_digits(client: &mut Client, actor: &Actor, token: Option<&str>) -> u32 {
+    let mut request = Request::new(actor.clone(), "money.lists", json!({}));
+    if let Some(token) = token { request = request.with_token(token); }
+    match client.call(&request, |_| {}).await.ok().and_then(|r| r.result) {
+        Some(lists) => lists["currency"].as_str().map_or(2, units::digits),
+        None => 2,
     }
 }
 
@@ -516,7 +544,7 @@ fn op_tool(entry: &OpEntry) -> Value {
         "name":entry.name,
         "title":entry.name,
         "description":entry.meta.summary,
-        "inputSchema":schema["payload"],
+        "inputSchema":units::agent_schema(&schema["payload"]),
         "annotations":{
             "readOnlyHint":entry.meta.kind == OpKind::Query,
             "destructiveHint":entry.meta.kind == OpKind::Mutation,

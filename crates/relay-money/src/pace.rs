@@ -18,22 +18,30 @@ pub enum PaceStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct PaceReading {
+    #[schemars(extend("x-unit" = "minor"))]
     pub budget: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub spent: i64,
     pub total_days: i64,
     pub elapsed_days: i64,
     /// What an even spend would have used by the end of today.
+    #[schemars(extend("x-unit" = "minor"))]
     pub expected: i64,
+    #[schemars(extend("x-unit" = "minor"))]
     pub remaining: i64,
     /// Positive when spending runs faster than an even pace.
+    #[schemars(extend("x-unit" = "minor", "x-agent-name" = "over_pace_by"))]
     pub pace_delta: i64,
     /// Days still to spend in, today included.
     pub days_left: i64,
     /// What can go out each remaining day and still land on budget. Zero once the budget is gone.
+    #[schemars(extend("x-unit" = "minor"))]
     pub daily_allowance: i64,
     /// Spent as a fraction of the budget; may exceed 1. Zero without a budget.
+    #[schemars(extend("x-unit" = "fraction"))]
     pub spent_fraction: f32,
     /// Where the pace tick sits on the meter, 0..1.
+    #[schemars(extend("x-unit" = "fraction"))]
     pub pace_fraction: f32,
     pub status: PaceStatus,
 }

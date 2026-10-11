@@ -14,7 +14,7 @@ use crate::copy;
 use crate::csv::kt_is_blank;
 use crate::model::{AccountType, ActivityType, CategoryKind, GoalKind, Registration, SecurityKind, TxType, DEFAULT_CATEGORIES};
 use crate::money::{fraction_digits, Locale, MoneyFormatter};
-use crate::pace::PaceReading;
+use crate::pace::{PaceReading, PaceStatus};
 use crate::period::{days_between, BudgetPeriod};
 use crate::recurrence::{Frequency, Recurrence};
 use crate::text_match;
@@ -411,10 +411,13 @@ impl Ledger {
 
     pub fn lists(&self) -> Result<Lists> {
         let s = self.settings()?;
+        let accounts = self.accounts()?;
         Ok(Lists {
             fraction_digits: fraction_digits(&s.currency).unwrap_or(2),
             currency: s.currency,
-            accounts: self.accounts()?,
+            // As money.summary counts it: every account still in use.
+            net_worth: accounts.iter().filter(|a| !a.archived).map(|a| a.balance).sum(),
+            accounts,
             categories: self.categories()?,
             devices: self.synced_devices()?.into_iter().map(|(name, last_sync)| DeviceView { name, last_sync }).collect(),
         })
@@ -727,7 +730,16 @@ impl Ledger {
                 }).optional()?;
                 if let Some((id, name, icon, color, used)) = row {
                     let r = PaceReading::new(*amount, used, period.days(), elapsed);
-                    envelopes.push(EnvelopeView { category_id: id, name, icon, color, budget: *amount, spent: used, pace_delta: r.pace_delta, status: r.status });
+                    // In words, to the cent: a model read the sign of `pace_delta` wrong, and quotes
+                    // what it is given, so Home's whole dollars would come back as "$8 over".
+                    let left = fmt.format(r.remaining);
+                    let line = match r.status {
+                        PaceStatus::OverBudget => format!("{} over budget", fmt.format(-r.remaining)),
+                        PaceStatus::OverPace => format!("{} over pace, {left} left", fmt.format(r.pace_delta)),
+                        PaceStatus::UnderPace => format!("{} under pace, {left} left", fmt.format(-r.pace_delta)),
+                        PaceStatus::OnPace | PaceStatus::NoBudget => format!("On pace, {left} left"),
+                    };
+                    envelopes.push(EnvelopeView { category_id: id, name, icon, color, budget: *amount, spent: used, left: *amount - used, pace_delta: r.pace_delta, status: r.status, line });
                 }
             }
         }
@@ -1159,7 +1171,6 @@ fn months_until(today: Date, date: Date) -> i64 {
 #[allow(clippy::inconsistent_digit_grouping)]
 mod tests {
     use super::*;
-    use crate::pace::PaceStatus;
     use jiff::civil::date;
 
     fn en() -> Locale {
@@ -1203,6 +1214,7 @@ mod tests {
         assert_eq!(s.lines.pace, "$50 over pace");
         assert_eq!(s.accounts[0].balance, 850_00);
         assert_eq!(s.budgets[0].status, PaceStatus::OverBudget);
+        assert_eq!(s.budgets[0].line, "$50.00 over budget");
         assert_eq!(s.recent.len(), 1);
         assert_eq!(s.recent[0].category.as_deref(), Some("Groceries"));
     }
@@ -1216,6 +1228,20 @@ mod tests {
         assert_eq!(s.spent, 0);
         assert_eq!(s.net_worth, 1_000_00);
         assert_eq!(s.accounts.iter().find(|a| a.id == savings).unwrap().balance, 200_00);
+    }
+
+    #[test]
+    fn the_lists_total_is_the_summarys_net_worth() {
+        let (mut l, acct) = with_account();
+        let card = l.account_add("Visa", AccountType::Credit, 0, None, "").unwrap().id;
+        let old = l.account_add("Old", AccountType::Savings, 50_00, None, "").unwrap().id;
+        l.account_update(old, &AccountPatch { archived: Some(true), ..Default::default() }).unwrap();
+        l.tx_add(&TxInput { r#type: TxType::Expense, amount: 40_00, date: "2026-10-02".into(), account_id: card, to_account_id: None, category_id: None, note: None }).unwrap();
+        let s = l.summary(date(2026, 10, 3), &en()).unwrap();
+        let lists = l.lists().unwrap();
+        assert_eq!(lists.net_worth, s.net_worth);
+        assert_eq!(lists.net_worth, 1_000_00 - 40_00);
+        assert!(lists.accounts.iter().any(|a| a.id == acct));
     }
 
     #[test]

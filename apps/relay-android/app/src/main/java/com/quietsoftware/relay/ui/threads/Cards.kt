@@ -98,7 +98,7 @@ private fun UndoKey(id: Long, ops: Pair<String, String>, undone: Boolean, onUndo
 }
 
 internal fun txAmount(tx: JsonObject, money: Money): String {
-    val amount = money.format(tx.l("amount") ?: 0L)
+    val amount = money.format(tx.minor("amount", money.digits) ?: 0L)
     return when (tx.s("type")) {
         "EXPENSE" -> "−$amount"
         "INCOME" -> "+$amount"
@@ -183,7 +183,7 @@ internal fun ActivityCard(a: JsonObject) {
         else -> ""
     }
     val account = a.str("account")
-    val quantity = a.l("quantity") ?: 0L
+    val quantity = a.minor("quantity", 8) ?: 0L
     val symbol = a.s("symbol")?.takeIf { it.isNotBlank() }
     val subject = when {
         symbol != null && quantity > 0 -> "${units(quantity)} $symbol"
@@ -194,13 +194,15 @@ internal fun ActivityCard(a: JsonObject) {
     val detail = listOfNotNull(
         account.takeIf { it.isNotEmpty() && symbol != null },
         a.s("date")?.let(::humanDate),
-        (a.l("fee") ?: 0L).takeIf { it > 0 }?.let { "${money.format(it)} fee" },
+        (a.minor("fee", money.digits) ?: 0L).takeIf { it > 0 }?.let { "${money.format(it)} fee" },
         a.s("note")?.trim()?.takeIf { it.isNotEmpty() },
     ).joinToString(" · ")
-    val amount = money.format(a.l("amount") ?: 0L)
-    val shown = if (kind == "FX" && a.l("to_amount") != null && a.s("to_currency") != null) {
-        val to = a.str("to_currency")
-        "$amount → ${Money(to, Money.digitsOf(to)).format(a.l("to_amount")!!)}"
+    val amount = money.format(a.minor("amount", money.digits) ?: 0L)
+    val toCurrency = a.s("to_currency")
+    val toMoney = toCurrency?.let { Money(it, Money.digitsOf(it)) }
+    val toAmount = toMoney?.let { a.minor("to_amount", it.digits) }
+    val shown = if (kind == "FX" && toMoney != null && toAmount != null) {
+        "$amount → ${toMoney.format(toAmount)}"
     } else "$sign$amount"
     CardFrame {
         Row(Modifier.weight(1f).alpha(if (undone) .6f else 1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

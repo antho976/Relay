@@ -147,6 +147,7 @@ impl Granularity {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "ArbiterCandle")]
 pub struct Candle {
+    #[schemars(extend("x-unit" = "unix"))]
     pub start: i64,
     pub open: f64,
     pub high: f64,
@@ -475,6 +476,7 @@ pub struct Quote {
     pub bid: f64,
     pub ask: f64,
     /// Unix seconds.
+    #[schemars(extend("x-unit" = "unix"))]
     pub at: i64,
 }
 

@@ -39,7 +39,7 @@ op!(TxList, "money.tx.list", TxListIn => TxPage, OpMeta::query(Scope::Global, 12
 op!(SeriesOp, "money.series", SeriesQuery => Series,
     OpMeta::query(Scope::Global, 12, "A chart's numbers: spending, income or net by category, week, day or budget period, over one or more periods"));
 payload!(#[schemars(rename = "MoneyTxAddIn")] TxAddIn {
-    pub r#type: TxType, pub amount: i64, pub date: String, pub account_id: i64,
+    pub r#type: TxType, #[schemars(extend("x-unit" = "minor"))] pub amount: i64, pub date: String, pub account_id: i64,
     /// Transfers only: the account the money goes to.
     pub to_account_id: Option<i64>,
     /// Expenses and income only.
@@ -48,7 +48,7 @@ payload!(#[schemars(rename = "MoneyTxAddIn")] TxAddIn {
 });
 op!(TxAdd, "money.tx.add", TxAddIn => Tx, OpMeta::mutation(Scope::Global, 12, "Add an expense, income or transfer").emits(&["money.changed"]));
 payload!(#[schemars(rename = "MoneyTxUpdateIn")] TxUpdateIn {
-    pub id: i64, pub r#type: Option<TxType>, pub amount: Option<i64>, pub date: Option<String>,
+    pub id: i64, pub r#type: Option<TxType>, #[schemars(extend("x-unit" = "minor"))] pub amount: Option<i64>, pub date: Option<String>,
     pub account_id: Option<i64>, pub to_account_id: Option<i64>, pub category_id: Option<i64>, pub note: Option<String>,
 });
 op!(TxUpdate, "money.tx.update", TxUpdateIn => Tx, OpMeta::mutation(Scope::Global, 12, "Change an entry; absent fields keep their value").emits(&["money.changed"]));
@@ -59,11 +59,12 @@ payload!(#[schemars(rename = "MoneyBudgetSetIn")] BudgetSetIn {
     /// Absent: the overall monthly budget.
     pub category_id: Option<i64>,
     /// Zero or less removes the budget.
+    #[schemars(extend("x-unit" = "minor"))]
     pub amount: i64,
 });
 op!(BudgetSet, "money.budget.set", BudgetSetIn => Empty, OpMeta::mutation(Scope::Global, 12, "Set or remove a monthly budget").emits(&["money.changed"]));
 payload!(#[schemars(rename = "MoneyAccountAddIn")] AccountAddIn {
-    pub name: String, pub r#type: AccountType, pub opening_balance: Option<i64>,
+    pub name: String, pub r#type: AccountType, #[schemars(extend("x-unit" = "minor"))] pub opening_balance: Option<i64>,
     /// Investment accounts only: TFSA, RRSP, FHSA…
     pub registration: Option<Registration>,
     /// Where the account is held, e.g. Wealthsimple.
@@ -79,7 +80,7 @@ payload!(#[schemars(rename = "MoneyAccountUpdateIn")] AccountUpdateIn {
 });
 op!(AccountUpdate, "money.account.update", AccountUpdateIn => AccountView,
     OpMeta::mutation(Scope::Global, 12, "Rename an account, set its registration or institution, or archive it; absent fields keep their value").emits(&["money.changed"]));
-payload!(#[schemars(rename = "MoneyValueSetIn")] ValueSetIn { pub account_id: i64, pub date: String, pub value: i64 });
+payload!(#[schemars(rename = "MoneyValueSetIn")] ValueSetIn { pub account_id: i64, pub date: String, #[schemars(extend("x-unit" = "minor"))] pub value: i64 });
 op!(ValueSet, "money.value.set", ValueSetIn => AccountView,
     OpMeta::mutation(Scope::Global, 12, "Record what an investment account was worth on a day; a second value the same day replaces the first").emits(&["money.changed"]));
 payload!(#[schemars(rename = "MoneySettingsSetIn")] SettingsSetIn {
@@ -148,10 +149,15 @@ payload!(#[schemars(rename = "MoneyInvestAddIn")] InvestAddIn {
     /// The ledger's when absent.
     pub currency: Option<String>,
     /// Units at 1e-8: 100000000 is one unit.
+    #[schemars(extend("x-unit" = "e8"))]
     pub quantity: Option<i64>,
     /// Minor units of `currency`, never negative: the type says which way the money went.
-    pub amount: i64, pub fee: Option<i64>, pub note: Option<String>,
+    #[schemars(extend("x-unit" = "minor:currency"))]
+    pub amount: i64,
+    #[schemars(extend("x-unit" = "minor:currency"))]
+    pub fee: Option<i64>, pub note: Option<String>,
     /// `FX` only: what the money became, in `to_currency`.
+    #[schemars(extend("x-unit" = "minor:to_currency"))]
     pub to_amount: Option<i64>, pub to_currency: Option<String>,
 });
 op!(InvestAdd, "money.invest.add", InvestAddIn => ActivityView,
@@ -184,6 +190,7 @@ payload!(#[schemars(rename = "MoneyInvestRoomIn")] InvestRoomIn {
     pub registration: Registration,
     pub year: i32,
     /// The person's figure from CRA My Account (or the Notice of Assessment for an RRSP), minor units. Zero or less removes it.
+    #[schemars(extend("x-unit" = "minor"))]
     pub amount: i64,
 });
 op!(InvestRoom, "money.invest.room", InvestRoomIn => Empty,
@@ -191,13 +198,14 @@ op!(InvestRoom, "money.invest.room", InvestRoomIn => Empty,
 payload!(#[schemars(rename = "MoneyInvestPriceIn")] InvestPriceIn {
     pub symbol: String, pub date: String,
     /// At 1e-8 of the security's currency's major unit: 3812000000 is 38.12.
+    #[schemars(extend("x-unit" = "e8"))]
     pub price: i64,
 });
 op!(InvestPrice, "money.invest.price", InvestPriceIn => Empty,
     OpMeta::mutation(Scope::Global, 12, "Record a security's price on a day").emits(&["money.changed"]));
 payload!(#[schemars(rename = "MoneyFxSetIn")] FxSetIn {
     /// ISO 4217 codes: `rate` is units of `quote` for one `base`, at 1e-8.
-    pub base: String, pub quote: String, pub date: String, pub rate: i64,
+    pub base: String, pub quote: String, pub date: String, #[schemars(extend("x-unit" = "e8"))] pub rate: i64,
 });
 op!(FxSet, "money.fx.set", FxSetIn => Empty,
     OpMeta::mutation(Scope::Global, 12, "Record an exchange rate on a day").emits(&["money.changed"]));

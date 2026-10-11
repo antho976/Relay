@@ -16754,7 +16754,8 @@
         "fraction_digits": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-unit": "omit"
         },
         "month_start_day": {
           "type": "integer",
@@ -16772,11 +16773,13 @@
         },
         "income": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "spent": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "lines": {
           "$ref": "#/$defs/MoneyLines"
@@ -16795,7 +16798,8 @@
         },
         "net_worth": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "bills": {
           "type": "array",
@@ -16813,7 +16817,9 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/MoneyTx"
-          }
+          },
+          "description": "The latest few entries, for Home. Left out for a model, which answered \"the biggest expense\"\nfrom these few instead of the period's entries.",
+          "x-unit": "omit"
         }
       },
       "required": [
@@ -16865,11 +16871,13 @@
       "properties": {
         "budget": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "spent": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "total_days": {
           "type": "integer",
@@ -16882,16 +16890,20 @@
         "expected": {
           "type": "integer",
           "format": "int64",
-          "description": "What an even spend would have used by the end of today."
+          "description": "What an even spend would have used by the end of today.",
+          "x-unit": "minor"
         },
         "remaining": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "pace_delta": {
           "type": "integer",
           "format": "int64",
-          "description": "Positive when spending runs faster than an even pace."
+          "description": "Positive when spending runs faster than an even pace.",
+          "x-unit": "minor",
+          "x-agent-name": "over_pace_by"
         },
         "days_left": {
           "type": "integer",
@@ -16901,17 +16913,20 @@
         "daily_allowance": {
           "type": "integer",
           "format": "int64",
-          "description": "What can go out each remaining day and still land on budget. Zero once the budget is gone."
+          "description": "What can go out each remaining day and still land on budget. Zero once the budget is gone.",
+          "x-unit": "minor"
         },
         "spent_fraction": {
           "type": "number",
           "format": "float",
-          "description": "Spent as a fraction of the budget; may exceed 1. Zero without a budget."
+          "description": "Spent as a fraction of the budget; may exceed 1. Zero without a budget.",
+          "x-unit": "fraction"
         },
         "pace_fraction": {
           "type": "number",
           "format": "float",
-          "description": "Where the pace tick sits on the meter, 0..1."
+          "description": "Where the pace tick sits on the meter, 0..1.",
+          "x-unit": "fraction"
         },
         "status": {
           "$ref": "#/$defs/PaceStatus"
@@ -16972,26 +16987,43 @@
           "type": "string"
         },
         "icon": {
-          "type": "string"
+          "type": "string",
+          "x-unit": "omit"
         },
         "color": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "omit"
         },
         "budget": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "spent": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
+        },
+        "left": {
+          "type": "integer",
+          "format": "int64",
+          "description": "What is still to spend: `budget` less `spent`, below zero once it is over budget.",
+          "x-unit": "minor"
         },
         "pace_delta": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "description": "Above zero when spending runs ahead of an even pace through the period.",
+          "x-unit": "minor",
+          "x-agent-name": "over_pace_by"
         },
         "status": {
           "$ref": "#/$defs/PaceStatus"
+        },
+        "line": {
+          "type": "string",
+          "description": "Where it stands in words, to the cent: \"$87.60 over pace, $118.85 left\", \"$7.99 over budget\"."
         }
       },
       "required": [
@@ -17001,8 +17033,10 @@
         "color",
         "budget",
         "spent",
+        "left",
         "pace_delta",
-        "status"
+        "status",
+        "line"
       ]
     },
     "MoneyAccount": {
@@ -17020,7 +17054,8 @@
         },
         "balance": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "archived": {
           "type": "boolean"
@@ -17086,7 +17121,8 @@
         },
         "amount": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "type": {
           "$ref": "#/$defs/TxType"
@@ -17139,11 +17175,13 @@
         },
         "target": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "saved": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "line": {
           "type": "string"
@@ -17176,14 +17214,16 @@
           "format": "int64"
         },
         "uid": {
-          "type": "string"
+          "type": "string",
+          "x-unit": "omit"
         },
         "type": {
           "$ref": "#/$defs/TxType"
         },
         "amount": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "date": {
           "type": "string"
@@ -17259,7 +17299,14 @@
         "fraction_digits": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-unit": "omit"
+        },
+        "net_worth": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Every unarchived account's balance added up, as money.summary's `net_worth`.",
+          "x-unit": "minor"
         },
         "accounts": {
           "type": "array",
@@ -17278,12 +17325,14 @@
           "items": {
             "$ref": "#/$defs/MoneyDevice"
           },
-          "description": "Phones that sync with this ledger, the latest first."
+          "description": "Phones that sync with this ledger, the latest first.",
+          "x-unit": "omit"
         }
       },
       "required": [
         "currency",
         "fraction_digits",
+        "net_worth",
         "accounts",
         "categories",
         "devices"
@@ -17303,11 +17352,13 @@
           "$ref": "#/$defs/CategoryKind"
         },
         "icon": {
-          "type": "string"
+          "type": "string",
+          "x-unit": "omit"
         },
         "color": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "omit"
         },
         "archived": {
           "type": "boolean"
@@ -17408,11 +17459,13 @@
         },
         "income": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "spent": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         }
       },
       "required": [
@@ -17538,7 +17591,8 @@
         "fraction_digits": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-unit": "omit"
         },
         "measure": {
           "$ref": "#/$defs/MoneySeriesMeasure"
@@ -17561,7 +17615,8 @@
             ],
             "format": "int64"
           },
-          "description": "Each label's category colour (Tally's palette index), when the labels are categories."
+          "description": "Each label's category colour (Tally's palette index), when the labels are categories.",
+          "x-unit": "omit"
         },
         "series": {
           "type": "array",
@@ -17592,7 +17647,8 @@
             "type": "integer",
             "format": "int64"
           },
-          "description": "One value per label, minor units."
+          "description": "One value per label, minor units.",
+          "x-unit": "minor"
         },
         "known": {
           "type": [
@@ -17618,7 +17674,8 @@
         },
         "amount": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "date": {
           "type": "string"
@@ -17680,7 +17737,8 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "date": {
           "type": [
@@ -17748,7 +17806,8 @@
         "amount": {
           "type": "integer",
           "format": "int64",
-          "description": "Zero or less removes the budget."
+          "description": "Zero or less removes the budget.",
+          "x-unit": "minor"
         }
       },
       "required": [
@@ -17770,7 +17829,8 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "registration": {
           "anyOf": [
@@ -17851,7 +17911,8 @@
         },
         "value": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         }
       },
       "required": [
@@ -18119,31 +18180,37 @@
         },
         "value": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "book": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "gain": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "gain_bps": {
           "type": [
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "bps"
         },
         "cash": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "income_12m": {
           "type": "integer",
           "format": "int64",
-          "description": "Dividends, interest and reinvested distributions over the 365 days ending today."
+          "description": "Dividends, interest and reinvested distributions over the 365 days ending today.",
+          "x-unit": "minor"
         },
         "income_by_month": {
           "type": "array",
@@ -18229,7 +18296,8 @@
         },
         "amount": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         }
       },
       "required": [
@@ -18262,26 +18330,31 @@
         },
         "value": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "book": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "gain": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "gain_bps": {
           "type": [
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "bps"
         },
         "cash": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "holdings": {
           "type": "integer",
@@ -18302,7 +18375,8 @@
             "null"
           ],
           "format": "int64",
-          "description": "The money-weighted return: yearly when `return_annual`, else over the stretch since `return_since`."
+          "description": "The money-weighted return: yearly when `return_annual`, else over the stretch since `return_since`.",
+          "x-unit": "bps"
         },
         "return_annual": {
           "type": "boolean"
@@ -18341,11 +18415,13 @@
         },
         "value": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "share_bps": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "bps"
         }
       },
       "required": [
@@ -18361,11 +18437,13 @@
         },
         "value": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "share_bps": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "bps"
         }
       },
       "required": [
@@ -18426,14 +18504,16 @@
         },
         "quantity": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "e8"
         },
         "price": {
           "type": [
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "e8"
         },
         "price_date": {
           "type": [
@@ -18443,26 +18523,31 @@
         },
         "value": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "book": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "gain": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "gain_bps": {
           "type": [
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "bps"
         },
         "weight_bps": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "bps"
         },
         "fx_estimated": {
           "type": "boolean",
@@ -18511,7 +18596,8 @@
         },
         "amount": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         }
       },
       "required": [
@@ -18558,31 +18644,37 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "contributed": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "withdrawn": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "left": {
           "type": [
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "over": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         },
         "over_taxed": {
           "type": "integer",
           "format": "int64",
-          "description": "What is over past the RRSP's $2,000 buffer; all of `over` for the others."
+          "description": "What is over past the RRSP's $2,000 buffer; all of `over` for the others.",
+          "x-unit": "minor"
         },
         "deadline": {
           "type": "string",
@@ -18593,7 +18685,8 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor"
         }
       },
       "required": [
@@ -18668,7 +18761,8 @@
           "format": "int64"
         },
         "uid": {
-          "type": "string"
+          "type": "string",
+          "x-unit": "omit"
         },
         "account_id": {
           "type": "integer",
@@ -18704,15 +18798,18 @@
         },
         "quantity": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "e8"
         },
         "amount": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor:currency"
         },
         "fee": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor:currency"
         },
         "currency": {
           "type": "string"
@@ -18722,7 +18819,8 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor:to_currency"
         },
         "to_currency": {
           "type": [
@@ -18788,19 +18886,22 @@
             "null"
           ],
           "format": "int64",
-          "description": "Units at 1e-8: 100000000 is one unit."
+          "description": "Units at 1e-8: 100000000 is one unit.",
+          "x-unit": "e8"
         },
         "amount": {
           "type": "integer",
           "format": "int64",
-          "description": "Minor units of `currency`, never negative: the type says which way the money went."
+          "description": "Minor units of `currency`, never negative: the type says which way the money went.",
+          "x-unit": "minor:currency"
         },
         "fee": {
           "type": [
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "minor:currency"
         },
         "note": {
           "type": [
@@ -18814,7 +18915,8 @@
             "null"
           ],
           "format": "int64",
-          "description": "`FX` only: what the money became, in `to_currency`."
+          "description": "`FX` only: what the money became, in `to_currency`.",
+          "x-unit": "minor:to_currency"
         },
         "to_currency": {
           "type": [
@@ -19090,7 +19192,8 @@
         "amount": {
           "type": "integer",
           "format": "int64",
-          "description": "The person's figure from CRA My Account (or the Notice of Assessment for an RRSP), minor units. Zero or less removes it."
+          "description": "The person's figure from CRA My Account (or the Notice of Assessment for an RRSP), minor units. Zero or less removes it.",
+          "x-unit": "minor"
         }
       },
       "required": [
@@ -19112,7 +19215,8 @@
         "price": {
           "type": "integer",
           "format": "int64",
-          "description": "At 1e-8 of the security's currency's major unit: 3812000000 is 38.12."
+          "description": "At 1e-8 of the security's currency's major unit: 3812000000 is 38.12.",
+          "x-unit": "e8"
         }
       },
       "required": [
@@ -19137,7 +19241,8 @@
         },
         "rate": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "e8"
         }
       },
       "required": [
@@ -20952,7 +21057,8 @@
             "minItems": 2,
             "maxItems": 2
           },
-          "description": "Profit after fees over time, `[unix seconds, quote currency]`, at most 400 points."
+          "description": "Profit after fees over time, `[unix seconds, quote currency]`, at most 400 points. For the\nchart; a model is not given it.",
+          "x-unit": "omit"
         },
         "break_even_pct": {
           "type": "number",
@@ -20982,11 +21088,13 @@
         "start": {
           "type": "integer",
           "format": "int64",
-          "description": "Unix seconds, the first and last bar."
+          "description": "Unix seconds, the first and last bar.",
+          "x-unit": "unix"
         },
         "end": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "unix"
         },
         "return_pct": {
           "type": "number",
@@ -21048,7 +21156,8 @@
         "buy_at": {
           "type": "integer",
           "format": "int64",
-          "description": "Unix seconds."
+          "description": "Unix seconds.",
+          "x-unit": "unix"
         },
         "buy_price": {
           "type": "number",
@@ -21059,7 +21168,8 @@
             "integer",
             "null"
           ],
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "unix"
         },
         "sell_price": {
           "type": [
@@ -21401,7 +21511,8 @@
       "properties": {
         "start": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "unix"
         },
         "open": {
           "type": "number",
@@ -21439,7 +21550,8 @@
       "properties": {
         "at": {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-unit": "unix"
         },
         "side": {
           "$ref": "#/$defs/ArbiterSide"
@@ -22368,7 +22480,7 @@
             "null"
           ],
           "format": "double",
-          "description": "As Avex stores it (pounds for a weight)."
+          "description": "A `lift_target`'s weight is in the person's unit like every other weight; any other\nkind's figure is as Avex stores it."
         },
         "created_day": {
           "type": "string"
