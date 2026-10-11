@@ -95,6 +95,16 @@ android {
             applicationIdSuffix = ".debug"
             isDebuggable = true
         }
+        // Antho's own build: the release, plus src/personal — the INTERNET permission and the
+        // uploader that sends the training history to his Relay server (src/personal/RELAY.md).
+        // Nothing in main or release refers to it, so `assembleRelease`, the Play build, compiles
+        // exactly the sources it did and still cannot upload anything. Build it with
+        // `./gradlew -p forge-android :app:assemblePersonal`.
+        create("personal") {
+            initWith(getByName("release"))
+            // :shared and :wear have no `personal` build type; they build as release here.
+            matchingFallbacks += listOf("release")
+        }
     }
 
     compileOptions {
@@ -328,6 +338,10 @@ dependencies {
     // profileinstaller is a no-op until the profile is generated on a device.
     implementation(libs.androidx.profileinstaller)
     baselineProfile(project(":baselineprofile"))
+
+    // WebSocket client for the personal build's uploader only (src/personal/RELAY.md). Never on
+    // the release classpath.
+    "personalImplementation"("com.squareup.okhttp3:okhttp:4.12.0")
 
     // Test
     testImplementation(libs.junit)
