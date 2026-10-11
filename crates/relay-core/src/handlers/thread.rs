@@ -5,7 +5,7 @@
 //! and handing it a message happen after the handler returns.
 
 use crate::engine::Engine;
-use crate::threads;
+use crate::{local_models, threads};
 use relay_bus::ops::thread::*;
 use relay_bus::Empty;
 use serde_json::json;
@@ -55,6 +55,29 @@ pub fn register(e: &mut Engine) {
         let thread = threads::rename(ctx.engine(), p.id, &p.title)?;
         ctx.emit("thread.changed", json!({"thread": thread}));
         Ok(thread)
+    });
+    // Reads a setting or two and looks for three files: no transaction needed.
+    e.register_unlocked::<Models>(|ctx, _: Empty| {
+        let engine = ctx.engine();
+        let dir = local_models::dir(engine);
+        let models = local_models::MODELS.iter().map(|m| LocalModel {
+            id: m.id.into(), name: m.name.into(), file: m.file.into(), present: dir.join(m.file).is_file(),
+        }).collect();
+        let status = local_models::status(engine);
+        let server = local_models::server_bin(engine);
+        Ok(ModelsOut {
+            models,
+            running: status.map(|(m, _)| m.id.to_string()),
+            ready: status.is_some_and(|(_, ready)| ready),
+            idle_minutes: local_models::idle_minutes(engine),
+            server: server.as_ref().ok().map(|p| p.display().to_string()),
+            server_error: server.err(),
+        })
+    });
+    e.register::<Pick>(|ctx, p| {
+        let model = p.model.filter(|m| !m.trim().is_empty());
+        ctx.after_commit(move |engine| local_models::pick(&engine, model.as_deref()));
+        Ok(Empty {})
     });
     e.register::<Delete>(|ctx, p| {
         threads::delete(ctx.engine(), p.id)?;

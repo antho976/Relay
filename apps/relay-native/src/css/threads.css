@@ -156,3 +156,5 @@ menubutton.threads-picker > button:hover { background: @wash; color: @ink; }
 menubutton.threads-picker image { color: @faint; }
 .threads-menu button.nav { min-height: 30px; font-size: 13px; }
 .threads-menu button.nav image { color: @ink; }
+.threads-menu-heading { margin: 8px 8px 2px; color: @faint; font-size: 11px; font-weight: 600; }
+.threads-menu-idle { margin: 6px 8px 2px; color: @secondary; font-size: 12px; }

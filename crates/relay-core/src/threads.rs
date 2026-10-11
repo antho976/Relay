@@ -15,6 +15,9 @@
 //! A thread whose agent is not running resumes by the conversation id Claude reported
 //! (`agent_ref`), so the history is sent to the model once and stays warm after. An agent left
 //! idle for [`IDLE`] is closed, and at most [`MAX_LIVE`] run at once.
+//!
+//! A thread on a local model (`local_models`) runs the same agent against a server on this PC;
+//! its first message waits for the model to load, on a thread of its own.
 
 use crate::engine::Engine;
 use relay_bus::ops::thread::{MessageView, ThreadView};
@@ -406,6 +409,8 @@ struct Agent {
     /// Which spawn this is, so the reader of an agent that was replaced cannot remove the new one.
     serial: u64,
     last_used: Instant,
+    /// It talks to the local model server (`local_models`), and stops with it.
+    local: bool,
 }
 
 #[derive(Default)]
@@ -569,6 +574,29 @@ pub fn stop(engine: &Engine, id: Id) -> bool {
     true
 }
 
+/// Stop every agent talking to the local model server, which is stopping: their turns end
+/// with it, without an error of their own.
+pub fn stop_local(engine: &Engine) {
+    let stopped: Vec<(Id, Agent)> = {
+        let mut live = lock(&engine.threads.live);
+        let ids: Vec<Id> = live.agents.iter().filter(|(_, a)| a.local).map(|(t, _)| *t).collect();
+        ids.into_iter().filter_map(|t| {
+            live.working.remove(&t);
+            live.agents.remove(&t).map(|a| (t, a))
+        }).collect()
+    };
+    for (id, agent) in stopped {
+        kill(agent.pid);
+        emit_changed(engine, id);
+    }
+}
+
+/// Whether an agent on the local model server is writing a reply.
+pub fn local_busy(engine: &Engine) -> bool {
+    let live = lock(&engine.threads.live);
+    live.agents.iter().any(|(t, a)| a.local && live.working.contains(t))
+}
+
 pub fn delete(engine: &Engine, id: Id) -> Result<(), BusError> {
     stop(engine, id);
     if !with_db(engine, |db| db.delete(id))? {
@@ -620,7 +648,11 @@ pub fn deliver(engine: &Arc<Engine>, id: Id, text: &str) {
         if let Some(agent) = live.agents.get_mut(&id) {
             agent.last_used = Instant::now();
             if agent.stdin.write_all(line.as_bytes()).and_then(|()| agent.stdin.flush()).is_ok() {
+                let local = agent.local;
                 drop(live);
+                if local {
+                    crate::local_models::touch(engine);
+                }
                 emit_changed(engine, id);
                 return;
             }
@@ -630,7 +662,35 @@ pub fn deliver(engine: &Arc<Engine>, id: Id, text: &str) {
             }
         }
     }
-    if let Err(why) = spawn(engine, id, &line) {
+    let local = with_db(engine, |db| db.get(id)).ok().flatten().and_then(|t| t.model).and_then(|m| crate::local_models::find(&m));
+    let Some(model) = local else {
+        start(engine, id, &line, None);
+        return;
+    };
+    let waiting = engine.clone();
+    let started = std::thread::Builder::new().name(format!("thread-{id}-local")).spawn(move || start(&waiting, id, &line, Some(model)));
+    if let Err(e) = started {
+        fail(engine, id, &format!("Could not start the agent: {e}"));
+    }
+}
+
+/// Start an agent for the thread's turn and hand it `line`, the model's server loaded first
+/// when it is a local one.
+fn start(engine: &Arc<Engine>, id: Id, line: &str, local: Option<&'static crate::local_models::Model>) {
+    let port = match local.map(|model| crate::local_models::ensure(engine, model)).transpose() {
+        Ok(port) => port,
+        Err(why) => {
+            // Stopped while the model loaded: the turn went with the stop, and there is nothing to say.
+            if lock(&engine.threads.live).working.contains(&id) {
+                fail(engine, id, &why);
+            }
+            return;
+        }
+    };
+    if local.is_some() && !lock(&engine.threads.live).working.contains(&id) {
+        return;
+    }
+    if let Err(why) = spawn(engine, id, line, local.zip(port)) {
         fail(engine, id, &why);
         return;
     }
@@ -671,7 +731,7 @@ pub fn agent_args(mcp: &str, model: Option<&str>, effort: Option<&str>, agent_re
     args
 }
 
-fn spawn(engine: &Arc<Engine>, id: Id, first_line: &str) -> Result<(), String> {
+fn spawn(engine: &Arc<Engine>, id: Id, first_line: &str, local: Option<(&'static crate::local_models::Model, u16)>) -> Result<(), String> {
     let thread = with_db(engine, |db| db.get(id)).map_err(|e| e.message)?.ok_or_else(|| format!("No thread {id}"))?;
     let claude = {
         let conn = engine.store.lock();
@@ -682,7 +742,9 @@ fn spawn(engine: &Arc<Engine>, id: Id, first_line: &str) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
 
     let mut cmd = Command::new(&claude);
-    cmd.args(agent_args(&mcp_config(engine), thread.model.as_deref(), thread.effort.as_deref(), thread.agent_ref.as_deref()))
+    // A local model has no efforts: Claude Code would ask it for thinking the server turns off.
+    let effort = if local.is_some() { None } else { thread.effort.as_deref() };
+    cmd.args(agent_args(&mcp_config(engine), thread.model.as_deref(), effort, thread.agent_ref.as_deref()))
         .current_dir(&dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -692,6 +754,10 @@ fn spawn(engine: &Arc<Engine>, id: Id, first_line: &str) -> Result<(), String> {
         cmd.env_remove(var);
     }
     cmd.env("RELAY_MCP_OPS", AGENT_OPS.join(","));
+    if let Some((model, port)) = local {
+        cmd.env_remove("ANTHROPIC_API_KEY");
+        cmd.envs(crate::local_models::agent_env(port, model));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -723,7 +789,7 @@ fn spawn(engine: &Arc<Engine>, id: Id, first_line: &str) -> Result<(), String> {
                 }
             }
         }
-        live.agents.insert(id, Agent { stdin, pid: child.id(), serial, last_used: Instant::now() });
+        live.agents.insert(id, Agent { stdin, pid: child.id(), serial, last_used: Instant::now(), local: local.is_some() });
         serial
     };
 

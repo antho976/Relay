@@ -522,6 +522,8 @@ pub struct Engine {
     pub(crate) money: std::sync::Mutex<Option<relay_money::ledger::Ledger>>,
     /// Threads (`threads.db` beside the store, opened on first use) and their running agents.
     pub(crate) threads: crate::threads::Hub,
+    /// The local model server Threads may run on (`local_models`), when one runs.
+    pub(crate) local: crate::local_models::Local,
     /// Arbiter's desk: its book (`arbiter.db`, opened on first use), the exchange and the lock
     /// orders are placed under.
     pub(crate) arbiter: crate::arbiter::Desk,
@@ -568,6 +570,7 @@ impl Engine {
                 skill_refresh: Default::default(),
                 money: Default::default(),
                 threads: Default::default(),
+                local: Default::default(),
                 arbiter: Default::default(),
                 gym: Default::default(),
             };
@@ -747,6 +750,7 @@ impl Engine {
     /// resume flow takes over) and mark their sessions restorable. Idempotent.
     pub fn shutdown(&self) {
         crate::handlers::integration::shutdown(self);
+        crate::local_models::stop(self);
         for (_, mirror) in self.mirrors.lock().unwrap().drain() {
             mirror.stop();
         }

@@ -42,6 +42,9 @@ const MODELS: [(&str, &str); 5] = [
     ("claude-fable-5-1", "Fable 5.1"),
 ];
 
+/// How long a local model may sit unused before its server stops: (minutes, caption); 0 never.
+const IDLE_CHOICES: [(u64, &str); 5] = [(5, "5 min"), (15, "15 min"), (30, "30 min"), (60, "1 hour"), (0, "Never")];
+
 /// How hard the agent thinks: (value, caption), as `claude --effort` takes them.
 const EFFORTS: [(&str, &str); 6] = [
     ("", "Default effort"),
@@ -76,7 +79,11 @@ const CONNECT: &str = "Help me connect my Wealthsimple accounts";
 struct Picker {
     key: gtk::MenuButton,
     shown: gtk::Label,
-    marks: Vec<(&'static str, gtk::Image)>,
+    marks: RefCell<Vec<(String, gtk::Image)>>,
+    popover: gtk::Popover,
+    pick: fn(&str),
+    /// The model picker's own section: the models on this PC ([`load_local`]).
+    local: gtk::Box,
 }
 
 struct View {
@@ -217,6 +224,12 @@ struct State {
     ui: RefCell<std::rc::Weak<Ui>>,
     /// The model and effort a new thread starts with: the last ones chosen.
     choice: RefCell<(String, String)>,
+    /// The model the picker shows now.
+    shown_model: RefCell<String>,
+    /// The models on this PC (`thread.models`): (id, name). Only those whose file is there.
+    local_models: RefCell<Vec<(String, String)>>,
+    /// The local model server's last word (`thread.local`): (model, state).
+    local_state: RefCell<(String, String)>,
 }
 
 thread_local! {
@@ -863,48 +876,144 @@ fn picker(name: &str, about: &str, options: &'static [(&'static str, &'static st
     let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
     list.add_css_class("threads-menu");
     let popover = gtk::Popover::new();
-    let mut marks = Vec::new();
-    for (value, caption) in options {
-        let item = button("", "nav");
-        item.set_widget_name(&format!("{name}-{}", if value.is_empty() { "default" } else { value }));
-        let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let mark = crate::icons::image("check", 13);
-        mark.set_opacity(0.0);
-        line.append(&mark);
-        line.append(&label(caption, ""));
-        item.set_child(Some(&line));
-        let popover = popover.downgrade();
-        item.connect_clicked(move |_| {
-            if let Some(p) = popover.upgrade() {
-                p.popdown();
-            }
-            pick(value);
-        });
+    let marks = options.iter().map(|(value, caption)| {
+        let (item, mark) = option(name, value, caption, &popover, pick);
         list.append(&item);
-        marks.push((*value, mark));
-    }
+        (value.to_string(), mark)
+    }).collect();
+    let local = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    local.set_visible(false);
+    list.append(&local);
     popover.set_child(Some(&list));
     key.set_popover(Some(&popover));
-    Picker { key, shown, marks }
+    Picker { key, shown, marks: RefCell::new(marks), popover, pick, local }
+}
+
+/// One choice in a picker's list, and its check.
+fn option(name: &str, value: &str, caption: &str, popover: &gtk::Popover, pick: fn(&str)) -> (gtk::Button, gtk::Image) {
+    let item = button("", "nav");
+    item.set_widget_name(&format!("{name}-{}", if value.is_empty() { "default" } else { value }));
+    let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let mark = crate::icons::image("check", 13);
+    mark.set_opacity(0.0);
+    line.append(&mark);
+    line.append(&label(caption, ""));
+    item.set_child(Some(&line));
+    let popover = popover.downgrade();
+    let value = value.to_string();
+    item.connect_clicked(move |_| {
+        if let Some(p) = popover.upgrade() {
+            p.popdown();
+        }
+        pick(&value);
+    });
+    (item, mark)
+}
+
+/// The models on this PC (`thread.models`), offered under the provider's in the model picker
+/// with how long one may sit unused. Absent until one's file is in the models folder.
+fn load_local(ui: &Rc<Ui>) {
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        let Ok(found) = ui.call("thread.models", json!({})).await else { return };
+        let models: Vec<(String, String)> = found["models"].as_array().into_iter().flatten()
+            .filter(|m| m["present"] == true)
+            .filter_map(|m| Some((m["id"].as_str()?.to_string(), m["name"].as_str()?.to_string())))
+            .collect();
+        if let Some(running) = found["running"].as_str() {
+            let state = if found["ready"] == true { "ready" } else { "loading" };
+            STATE.with(|s| *s.local_state.borrow_mut() = (running.to_string(), state.to_string()));
+        }
+        let unchanged = STATE.with(|s| *s.local_models.borrow() == models);
+        STATE.with(|s| *s.local_models.borrow_mut() = models.clone());
+        let Some(v) = view() else { return };
+        if !unchanged || v.model.local.first_child().is_none() {
+            fill_local(&v, &models, found["idle_minutes"].as_u64().unwrap_or(15));
+        }
+        reshow_model(&v);
+    });
+}
+
+fn fill_local(v: &View, models: &[(String, String)], idle_minutes: u64) {
+    let picker = &v.model;
+    while let Some(child) = picker.local.first_child() {
+        picker.local.remove(&child);
+    }
+    picker.marks.borrow_mut().retain(|(value, _)| MODELS.iter().any(|(m, _)| m == value));
+    picker.local.set_visible(!models.is_empty());
+    if models.is_empty() {
+        return;
+    }
+    let heading = label("On this PC", "threads-menu-heading");
+    heading.set_xalign(0.0);
+    picker.local.append(&heading);
+    for (id, name) in models {
+        let (item, mark) = option("threads-model", id, name, &picker.popover, picker.pick);
+        item.set_tooltip_text(Some("Runs on your graphics card: it loads when picked, and stops when you pick another model or leave it unused"));
+        picker.local.append(&item);
+        picker.marks.borrow_mut().push((id.clone(), mark));
+    }
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    row.add_css_class("threads-menu-idle");
+    let caption = label("Turn off after", "");
+    caption.set_hexpand(true);
+    caption.set_xalign(0.0);
+    row.append(&caption);
+    let captions: Vec<&str> = IDLE_CHOICES.iter().map(|(_, c)| *c).collect();
+    let idle = gtk::DropDown::from_strings(&captions);
+    idle.set_widget_name("threads-model-idle");
+    idle.set_tooltip_text(Some("How long a local model may sit unused before it stops and frees the graphics card"));
+    let at = IDLE_CHOICES.iter().position(|(m, _)| *m == idle_minutes).unwrap_or(1);
+    idle.set_selected(at as u32);
+    idle.connect_selected_notify(|dd| {
+        let Some((minutes, _)) = IDLE_CHOICES.get(dd.selected() as usize) else { return };
+        let Some(ui) = the_ui() else { return };
+        let minutes = *minutes;
+        glib::spawn_future_local(async move {
+            if let Err(e) = ui.call("settings.set", json!({"path": "threads.local.idle_minutes", "value": minutes})).await {
+                ui.show_error(&e.to_string());
+            }
+        });
+    });
+    row.append(&idle);
+    picker.local.append(&row);
+}
+
+fn is_local(model: &str) -> bool {
+    !model.is_empty() && STATE.with(|s| s.local_models.borrow().iter().any(|(id, _)| id == model))
 }
 
 fn caption_of(options: &[(&str, &'static str)], value: &str) -> String {
-    options.iter().find(|(v, _)| *v == value).map_or_else(|| value.to_string(), |(_, c)| c.to_string())
+    if let Some((_, c)) = options.iter().find(|(v, _)| *v == value) {
+        return c.to_string();
+    }
+    let Some(name) = STATE.with(|s| s.local_models.borrow().iter().find(|(id, _)| id == value).map(|(_, n)| n.clone())) else {
+        return value.to_string();
+    };
+    // A local model says when it is not ready to answer yet.
+    let state = STATE.with(|s| s.local_state.borrow().clone());
+    match state.1.as_str() {
+        "loading" if state.0 == value => format!("{name} · loading"),
+        _ => name,
+    }
 }
 
 /// Show `model` and `effort` on the pickers, each checked in its list.
 fn show_choice(v: &View, model: &str, effort: &str) {
+    STATE.with(|s| *s.shown_model.borrow_mut() = model.to_string());
     for (picker, options, value) in [(&v.model, &MODELS[..], model), (&v.effort, &EFFORTS[..], effort)] {
         picker.shown.set_text(&caption_of(options, value));
-        for (choice, mark) in &picker.marks {
-            mark.set_opacity(if *choice == value { 1.0 } else { 0.0 });
+        for (choice, mark) in picker.marks.borrow().iter() {
+            mark.set_opacity(if choice == value { 1.0 } else { 0.0 });
         }
     }
+    effort_sensitive(v);
 }
 
 /// A model or an effort picked: the thread showing takes it (`thread.set`), and new threads start
 /// with it.
 fn choose(model: Option<&str>, effort: Option<&str>) {
+    let picked = model;
     let (model, effort) = STATE.with(|s| {
         let mut choice = s.choice.borrow_mut();
         if let Some(m) = model {
@@ -918,6 +1027,16 @@ fn choose(model: Option<&str>, effort: Option<&str>) {
     if let Some(v) = view() {
         show_choice(&v, &model, &effort);
     }
+    if picked.is_some() {
+        if let Some(ui) = the_ui() {
+            let model = model.clone();
+            glib::spawn_future_local(async move {
+                if let Err(e) = ui.call("thread.pick", json!({"model": model})).await {
+                    ui.show_error(&e.to_string());
+                }
+            });
+        }
+    }
     let (Some(ui), Some(id)) = (the_ui(), current()) else { return };
     glib::spawn_future_local(async move {
         match ui.call("thread.set", json!({"id": id, "model": model, "effort": effort})).await {
@@ -929,6 +1048,23 @@ fn choose(model: Option<&str>, effort: Option<&str>) {
             Err(e) => ui.show_error(&e.to_string()),
         }
     });
+}
+
+/// Draw the model picker again for what it shows: the local models or their state moved.
+fn reshow_model(v: &View) {
+    let model = STATE.with(|s| s.shown_model.borrow().clone());
+    v.model.shown.set_text(&caption_of(&MODELS, &model));
+    for (choice, mark) in v.model.marks.borrow().iter() {
+        mark.set_opacity(if *choice == model { 1.0 } else { 0.0 });
+    }
+    effort_sensitive(v);
+}
+
+/// The effort picker waits for a reply like the model picker, and a local model has no efforts.
+fn effort_sensitive(v: &View) {
+    let local = is_local(&STATE.with(|s| s.shown_model.borrow().clone()));
+    v.effort.key.set_sensitive(!STATE.with(|s| s.working.get()) && !local);
+    v.effort.key.set_tooltip_text(Some(if local { "A model on this PC has no effort setting" } else { "How hard the agent thinks before answering" }));
 }
 
 fn show_empty(v: &View) {
@@ -972,6 +1108,7 @@ pub fn new_thread(ui: &Rc<Ui>) {
     }
     refresh_list(ui);
     check_claude(ui);
+    load_local(ui);
     let ui = ui.clone();
     glib::spawn_future_local(async move { greet(&ui).await });
 }
@@ -1240,7 +1377,7 @@ fn set_working(v: &View, working: bool) {
     v.send.update_property(&[gtk::accessible::Property::Label(name)]);
     // `thread.set` closes a running agent: the choice waits for the reply to end.
     v.model.key.set_sensitive(!working);
-    v.effort.key.set_sensitive(!working);
+    effort_sensitive(v);
     if working {
         if !was {
             // A stop that raced the end of the last reply does not mark this one.
@@ -2280,6 +2417,14 @@ pub fn event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
             draw_message(&v, &payload["message"]);
             stick_to_bottom(&v, false);
         }
+        "thread.local" => {
+            let (model, state) = (payload["model"].as_str().unwrap_or(""), payload["state"].as_str().unwrap_or(""));
+            STATE.with(|s| *s.local_state.borrow_mut() = (model.to_string(), state.to_string()));
+            reshow_model(&v);
+            if state == "failed" {
+                ui.show_error(payload["error"].as_str().unwrap_or("The local model stopped"));
+            }
+        }
         "thread.changed" => {
             note_finished(payload);
             if let Some(id) = thread {
@@ -2455,6 +2600,7 @@ pub async fn refresh(ui: &Rc<Ui>) {
     }
     refresh_list(ui);
     check_claude(ui);
+    load_local(ui);
     match current() {
         Some(id) => {
             let after = STATE.with(|s| s.last.get());

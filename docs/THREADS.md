@@ -214,3 +214,34 @@ Avex, the gym app, is the panel's third source, beside Tally and Arbiter: a chip
 a switch above the panel (Overview, Workouts, Lifts), a sidebar key and its own pages. It has no
 internet, so Relay reads the training history it exports and keeps it read only; an agent reads
 `gym.*` and charts with a `gym` question instead of `query`. `docs/GYM.md` is the contract.
+
+## Local models (2026-10-10)
+
+A thread can run on a model on this PC instead of one of Anthropic's (`crates/relay-core/src/local_models.rs`).
+The agent is still Claude Code, given the same tools and prompt. It talks to a llama.cpp server
+(`llama-server`) through the server's Anthropic Messages endpoint (`/v1/messages`). Every model
+Claude Code would use, its background one included, is pointed there (`ANTHROPIC_BASE_URL`,
+`ANTHROPIC_*_MODEL`).
+
+- **The models** are Qwen3.5 9B (`qwen35-9b`, Q5_K_M) and Qwen3.5 4B (`qwen35-4b`, Q8_0), in
+  `local_models::MODELS`. Each appears in the model picker, under "On this PC", once its GGUF
+  file is in the models folder: `threads.local.dir`, or `~/models` when that is unset.
+  `thread.models` lists them, with the one running.
+- **Picking one loads it** (`thread.pick`). Relay starts `llama-server` on a free local port with
+  that model, a 32k context, one slot and thinking off. It lets the server fit the layers to the
+  card's free memory. Picking any other model, or Default, stops the server. A thread on a local
+  model whose server is not running starts it on its next message, and that turn waits for the
+  model to load.
+- **Only one model runs at a time.** Starting one stops the other, and stopping the server also
+  stops the agents talking to it.
+- **It turns off when unused.** The server stops after `threads.local.idle_minutes` (default 15;
+  0 = never) with no message to a local thread. A reply in progress counts as use. The picker
+  sets the minutes ("Turn off after"). The server runs in its own process group with the
+  parent-death signal set, so it also stops with Relay.
+- **Locating the server:** Relay finds `llama-server` from `threads.local.server`, else on PATH,
+  else in `~/.local/bin`. Its log is `local-model.log` beside the store.
+- **Effort does not apply:** a local model takes no `--effort`, and the effort picker is disabled
+  while one is shown.
+- **Status events:** `thread.local {model, name, state, error}` reports `loading`, `ready`,
+  `stopped` and `failed`. The picker shows "· loading" until the model answers, and a failure
+  shows its reason.
