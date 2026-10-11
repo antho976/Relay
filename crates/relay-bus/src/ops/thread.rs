@@ -93,4 +93,37 @@ op!(Rename, "thread.rename", RenameIn => ThreadView,
 op!(Delete, "thread.delete", IdIn => Empty,
     OpMeta::mutation(Scope::Global, 5, "Delete a thread and its messages, stopping its agent").actors(Actors::UserOnly).emits(&["thread.changed"]));
 
-entries!(List, Get, Create, Send, Stop, Set, Rename, Delete);
+result!(#[schemars(rename = "ThreadLocalModel")] LocalModel {
+    /// The model id a thread stores and the picker sends.
+    pub id: String,
+    pub name: String,
+    /// Its GGUF file.
+    pub file: String,
+    /// The file is in the models folder, so the model can run.
+    pub present: bool,
+});
+result!(#[schemars(rename = "ThreadModelsOut")] ModelsOut {
+    /// The models a thread may run on this PC, besides the provider's.
+    pub models: Vec<LocalModel>,
+    /// The local model the server runs now, if any.
+    pub running: Option<String>,
+    /// It has loaded and answers.
+    pub ready: bool,
+    /// Minutes unused before the server stops; 0 never (`threads.local.idle_minutes`).
+    pub idle_minutes: u64,
+    /// The `llama-server` that runs them; absent when it cannot be found, with `server_error`.
+    pub server: Option<String>,
+    pub server_error: Option<String>,
+});
+op!(Models, "thread.models", Empty => ModelsOut, OpMeta::query(Scope::Global, 5, "The local models a thread may run on, and the one running now"));
+
+payload!(#[schemars(rename = "ThreadPickIn")] PickIn {
+    /// The model picked: a local one starts loading, anything else (or none) stops the local
+    /// model server.
+    pub model: Option<String>,
+});
+op!(Pick, "thread.pick", PickIn => Empty,
+    OpMeta::mutation(Scope::Global, 5, "A model was picked in the Threads picker: load a local one now, or stop the local one")
+        .actors(Actors::UserOnly).emits(&["thread.local"]));
+
+entries!(List, Get, Create, Send, Stop, Set, Rename, Delete, Models, Pick);

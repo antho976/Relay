@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 302,
+  "op_count": 304,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -5242,6 +5242,44 @@
       "phase": 5,
       "payload": {
         "$ref": "#/$defs/ThreadIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "thread.models": {
+      "summary": "The local models a thread may run on, and the one running now",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/ThreadModelsOut"
+      }
+    },
+    "thread.pick": {
+      "summary": "A model was picked in the Threads picker: load a local one now, or stop the local one",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "thread.local"
+      ],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/ThreadPickIn"
       },
       "result": {
         "$ref": "#/$defs/Empty"
@@ -19363,6 +19401,92 @@
         "id",
         "title"
       ]
+    },
+    "ThreadModelsOut": {
+      "type": "object",
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ThreadLocalModel"
+          },
+          "description": "The models a thread may run on this PC, besides the provider's."
+        },
+        "running": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The local model the server runs now, if any."
+        },
+        "ready": {
+          "type": "boolean",
+          "description": "It has loaded and answers."
+        },
+        "idle_minutes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Minutes unused before the server stops; 0 never (`threads.local.idle_minutes`)."
+        },
+        "server": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The `llama-server` that runs them; absent when it cannot be found, with `server_error`."
+        },
+        "server_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "models",
+        "ready",
+        "idle_minutes"
+      ]
+    },
+    "ThreadLocalModel": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The model id a thread stores and the picker sends."
+        },
+        "name": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string",
+          "description": "Its GGUF file."
+        },
+        "present": {
+          "type": "boolean",
+          "description": "The file is in the models folder, so the model can run."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "file",
+        "present"
+      ]
+    },
+    "ThreadPickIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The model picked: a local one starts loading, anything else (or none) stops the local\nmodel server."
+        }
+      }
     },
     "ArbiterSummary": {
       "type": "object",

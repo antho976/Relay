@@ -45,6 +45,9 @@ pub fn defaults() -> &'static Value {
                 },
                 "projects": {},
             },
+            // Threads' local models (local_models.rs): where their files are, llama-server
+            // when it is not on PATH, and the minutes unused before it stops (0 = never).
+            "threads": { "local": { "dir": null, "server": null, "idle_minutes": 15 } },
             "undo": { "grace_days": 7 },
             "audit": { "retention_days": 180 },
             // `layout.current.<project>` is the shell's last arrangement (ui.rs).
