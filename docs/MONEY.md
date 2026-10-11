@@ -69,7 +69,9 @@ The first sync makes the PC's ledger the phone's; after that both sides merge.
    Tailscale; no cloud) and exchanges changes since the last sync. Newest edit wins per row; for one
    person, conflicts are rare. Totals are never synced: balances and pace are recomputed from the
    entries, so equal entries always mean equal numbers. Tally gains the INTERNET permission for
-   this, and its promise becomes "nothing leaves your own devices".
+   this, and its promise becomes "nothing leaves your own devices". (2026-10-11: a device may
+   also be a cloud copy of Relay on a server Antho runs, which Tally syncs with while the PC is
+   off; docs/CLOUD.md.)
 6. **Warnings.** Over pace, a bill due soon, a low balance, an unusual expense: Android
    notifications on the phone (WorkManager is already there), Relay's notification center on the
    PC.

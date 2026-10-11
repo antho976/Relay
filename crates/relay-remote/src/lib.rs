@@ -19,6 +19,7 @@
 //! CLI does not have, and gets less of it.
 
 pub mod bridge;
+pub mod cloud;
 pub mod direct;
 pub mod pairlink;
 pub mod registry;

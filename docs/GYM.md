@@ -12,6 +12,9 @@ Decided with Antho on 2026-10-09:
   break that promise, so Relay reads the file Avex already writes instead. Avex is not changed.
 - **The PC's copy is read only.** Workouts are logged at the gym, on the phone. Relay reads and
   charts them; nothing goes back, and an agent cannot change them.
+- **Antho's own build may upload** (2026-10-11). A `personal` build type of Avex sends the same
+  export to a cloud copy of Relay after each workout, and the PC takes it home from there
+  (`gym.upload`, `gym.raw`; docs/CLOUD.md). The public build is unchanged and holds no INTERNET.
 - **Each import replaces the copy whole.** The export is the phone's whole history, so the newest
   file is the truth; there is nothing to merge.
 

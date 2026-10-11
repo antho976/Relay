@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 relay-bus.workspace = true
 relay-core.workspace = true
+# `Change` and `SyncOut`, the shape of `money.sync`, for the PC's cloud link (cloud.rs).
+relay-money = { workspace = true, features = ["ledger"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

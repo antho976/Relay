@@ -1,0 +1,52 @@
+name: Relay server image
+
+# The headless `relay` binary as a container image, for an always-on server: the rendezvous and
+# the cloud engine Tally and Avex sync with while the PC is off (docs/CLOUD.md). Built here, on a
+# runner with room, so the small server that runs it never compiles Rust; the bot's image copies
+# the binary out of it (`COPY --from=ghcr.io/<owner>/relay-server:<tag>`).
+#
+# A `relay-server-v*` tag publishes that version and `latest`; running it by hand publishes the
+# commit's short sha.
+
+on:
+  push:
+    tags: ["relay-server-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # Plain docker rather than more pinned actions: the runner ships it.
+      - name: Build
+        run: docker build -f deploy/rendezvous.Dockerfile -t relay-server .
+
+      - name: Publish
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+          REF: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          image="ghcr.io/${OWNER,,}/relay-server"
+          echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          if [[ "$REF" == relay-server-v* ]]; then
+            tags=("${REF#relay-server-v}" latest)
+          else
+            tags=("${SHA::12}")
+          fi
+          for tag in "${tags[@]}"; do
+            docker tag relay-server "$image:$tag"
+            docker push "$image:$tag"
+          done
+          echo "Published ${tags[*]} of $image. A new package is private: make it public, or give Render a registry credential (docs/CLOUD.md)."

@@ -19,6 +19,7 @@ mod unreal_process;
 mod blender;
 mod blender_sandbox;
 mod remote;
+mod cloud;
 mod write_targets;
 
 #[derive(Parser)]
@@ -71,6 +72,10 @@ enum Command {
         /// Address the phone door listens on, with --remote
         #[arg(long, default_value_t = format!("0.0.0.0:{}", relay_remote::DEFAULT_PORT))]
         remote_bind: String,
+        /// Which ops a paired device may call, with --remote: `phone` (the PC's own door) or
+        /// `cloud` (an always-on copy of the ledger and training history on a server, docs/CLOUD.md)
+        #[arg(long, default_value = "phone")]
+        remote_ops: String,
     },
     /// Serve callable bus ops as MCP tools over stdio
     Mcp,
@@ -82,6 +87,11 @@ enum Command {
     Remote {
         #[command(subcommand)]
         remote: remote::RemoteCommand,
+    },
+    /// This PC's link to a cloud engine that Tally and Avex sync with while the PC is off (docs/CLOUD.md)
+    Cloud {
+        #[command(subcommand)]
+        cloud: cloud::CloudCommand,
     },
     /// Internal provider hook adapters. Enforcement fails closed; lifecycle reports are best-effort.
     #[command(hide = true)]
@@ -230,7 +240,9 @@ async fn connect(instance: Instance) -> Result<Client> {
 async fn run(cli: Cli) -> Result<u8> {
     let instance = Instance::parse(&cli.instance).ok_or_else(|| invalid(format!("bad --instance {:?}", cli.instance)))?;
     match cli.cmd {
-        Command::Serve { store, remote, remote_bind } => {
+        Command::Serve { store, remote, remote_bind, remote_ops } => {
+            let profile = relay_remote::wire::OpProfile::parse(&remote_ops)
+                .ok_or_else(|| invalid(format!("bad --remote-ops {remote_ops:?}: phone or cloud")))?;
             // The engine outlives launcher worktrees. Git libraries and remote helpers
             // still consult process CWD even when given absolute repository paths.
             let store = store.map(std::path::absolute).transpose()?;
@@ -240,7 +252,7 @@ async fn run(cli: Cli) -> Result<u8> {
                 .with_env_filter(tracing_subscriber::EnvFilter::try_from_env("RELAY_LOG").unwrap_or_else(|_| "info".into()))
                 .init();
             let served = if remote {
-                remote::serve_with_door(instance, store, &remote_bind).await
+                remote::serve_with_door(instance, store, &remote_bind, profile).await
             } else {
                 relay_core::serve::serve(instance, store).await
             };
@@ -266,6 +278,7 @@ async fn run(cli: Cli) -> Result<u8> {
             blender::serve()
         }
         Command::Remote { remote } => remote::run(instance, remote).await,
+        Command::Cloud { cloud } => cloud::run(instance, cloud).await,
         Command::Schema { op } => {
             match op {
                 None => print!("{}", relay_bus::schema::render_pretty()),

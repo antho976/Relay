@@ -26,6 +26,8 @@ pub struct Ctx {
     /// answering (`relay remote serve --start-engine`). `None` for a door that lives inside its
     /// engine (`relay serve --remote`), or one that only fronts an engine someone else runs.
     pub start_engine: Option<PathBuf>,
+    /// Which ops a paired device may call through this door (`wire::OpProfile`).
+    pub ops: wire::OpProfile,
 }
 
 impl Ctx {
@@ -36,6 +38,7 @@ impl Ctx {
             socket_path: instance.socket_path(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             start_engine: None,
+            ops: wire::OpProfile::Phone,
         }
     }
 }
@@ -381,7 +384,7 @@ pub async fn run(
     // A transport that aborts this conversation must not leave the engine connection open.
     let pump_guard = AbortOnDrop(pump.abort_handle());
 
-    let instance = ctx.instance;
+    let (instance, profile) = (ctx.instance, ctx.ops);
     let mut recheck = tokio::time::interval(RECHECK_EVERY);
     recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut seen = stamp(&ctx.registry_path);
@@ -417,7 +420,7 @@ pub async fn run(
                 if line.trim().is_empty() {
                     continue;
                 }
-                match wire::gate(line, instance) {
+                match wire::gate_for(line, instance, profile) {
                     Gate::Forward => {
                         writer.write_all(line.as_bytes()).await?;
                         writer.write_all(b"\n").await?;
@@ -453,6 +456,7 @@ mod tests {
             socket_path: dir.path().join("none.sock"),
             version: "test".into(),
             start_engine: None,
+            ops: wire::OpProfile::Phone,
         }
     }
 

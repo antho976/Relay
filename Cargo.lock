@@ -2996,6 +2996,7 @@ dependencies = [
  "rand 0.9.5",
  "relay-bus",
  "relay-core",
+ "relay-money",
  "rustls",
  "serde",
  "serde_json",

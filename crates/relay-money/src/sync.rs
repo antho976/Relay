@@ -111,7 +111,9 @@ fn spec(table: &str) -> Option<&'static [Col]> {
     TABLES.iter().find(|(t, _)| *t == table).map(|(_, c)| *c)
 }
 
-fn order(table: &str) -> usize {
+/// Where `table`'s changes go in a batch: what a row refers to comes first. A device that splits
+/// its changes over several requests keeps this order across them.
+pub fn order(table: &str) -> usize {
     if table == "settings" {
         return 0;
     }

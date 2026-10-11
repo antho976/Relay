@@ -45,6 +45,10 @@ pub enum RemoteCommand {
         /// Let the first phone with the code pair without asking (for a terminal you cannot answer in)
         #[arg(long)]
         no_confirm: bool,
+        /// Leave this machine's own addresses out of the link: only the rendezvous reaches it. For
+        /// an engine in a container, whose addresses no phone can reach (docs/CLOUD.md)
+        #[arg(long)]
+        via_only: bool,
     },
     /// List paired phones
     Devices,
@@ -53,11 +57,21 @@ pub enum RemoteCommand {
     /// Rename this machine as phones see it
     Name { name: String },
     /// Set (or with `off`, clear) the rendezvous server this engine dials out to
-    Via { url: String },
+    Via {
+        url: String,
+        /// Where phones reach that server, when it is not `url`: for an engine that dials its
+        /// rendezvous on loopback behind a public proxy (docs/CLOUD.md)
+        #[arg(long)]
+        public: Option<String>,
+    },
     /// Run a rendezvous server: what `via` points at. Host it anywhere you trust, behind TLS.
     Rendezvous {
         #[arg(long, default_value_t = format!("0.0.0.0:{DEFAULT_RENDEZVOUS_PORT}"))]
         bind: String,
+        /// Bytes queued toward every phone together, in MiB (512 by default). Lower it on a small
+        /// server that hosts other things too; never below what one lane may queue (30 MiB)
+        #[arg(long)]
+        queue_mib: Option<usize>,
     },
 }
 
@@ -163,6 +177,7 @@ pub async fn serve_with_door(
     instance: Instance,
     store: Option<std::path::PathBuf>,
     bind: &str,
+    profile: relay_remote::wire::OpProfile,
 ) -> std::result::Result<(), relay_core::socket::BindError> {
     let addr: SocketAddr = bind
         .parse()
@@ -177,6 +192,7 @@ pub async fn serve_with_door(
         version: env!("CARGO_PKG_VERSION").to_string(),
         // The door lives inside this engine and ends with it.
         start_engine: None,
+        ops: profile,
     });
     // The door is a convenience on top of the engine, never a reason for the engine not to
     // start: a port already taken by another instance's door is logged and skipped, and so is a
@@ -212,6 +228,19 @@ pub async fn serve_with_door(
         println!("relay serve: phone door on {} ({}); `relay remote pair` adds a phone", door.local_addr,
             match &rendezvous { Some(r) => format!("dialing {}", r.url), None => "no rendezvous".to_string() });
     }
+    // A PC linked to a cloud engine merges with it while it runs (docs/CLOUD.md).
+    let cloud_path = relay_remote::cloud::Link::path_for(instance);
+    let cloud = match relay_remote::cloud::Link::load(&cloud_path) {
+        Ok(Some(link)) => {
+            println!("relay serve: merging with the cloud copy at {} every minute", link.host);
+            Some(relay_remote::cloud::spawn(ctx.socket_path.clone(), cloud_path, crate::cloud::pc_name(instance)))
+        }
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("relay serve: {} is unreadable ({e:#}); not merging with the cloud copy", cloud_path.display());
+            None
+        }
+    };
     let quit = served.engine.clone();
     tokio::select! {
         _ = quit.wait_quit() => tracing::info!("app.quit received"),
@@ -220,6 +249,9 @@ pub async fn serve_with_door(
     }
     if let Some(t) = tunnel {
         t.abort();
+    }
+    if let Some(c) = cloud {
+        c.abort();
     }
     drop(door);
     // Quitting first and the socket door closed before the sessions go (RA-333).
@@ -329,15 +361,20 @@ pub async fn run(requested: Instance, cmd: RemoteCommand) -> Result<u8> {
             drop(door);
             Ok(0)
         }
-        RemoteCommand::Pair { no_confirm } => {
+        RemoteCommand::Pair { no_confirm, via_only } => {
             let confirm = confirm_wanted(no_confirm)?;
             let (registry, code) = Registry::update(&ctx.registry_path, |r| {
                 let code = r.begin_pair(confirm).code;
                 Ok::<_, anyhow::Error>((r.clone(), code))
             })?;
             let port = registry.direct_port.unwrap_or(DEFAULT_PORT);
-            let link = PairLink::build(&registry, instance.as_str(), &code, port, &lan_addresses());
-            if registry.direct_port.is_none() {
+            if via_only && registry.rendezvous.is_none() {
+                abandon_pairing(&ctx.registry_path, &code);
+                return Err(anyhow!("--via-only needs a rendezvous: set one with `relay remote via wss://…` first"));
+            }
+            let lan = if via_only { Vec::new() } else { lan_addresses() };
+            let link = PairLink::build(&registry, instance.as_str(), &code, port, &lan);
+            if registry.direct_port.is_none() && !via_only {
                 println!("note: the {instance} engine has no phone door open: `relay remote serve` has not run for it, or `relay serve --remote` could not open its port (another instance's door may hold it). The link assumes port {DEFAULT_PORT}, which may be another instance's door; `relay remote serve --bind 0.0.0.0:<port>` opens one on a free port.");
             }
             print_pair_link(&link, confirm);
@@ -387,7 +424,7 @@ pub async fn run(requested: Instance, cmd: RemoteCommand) -> Result<u8> {
             println!("phones will see this machine as {host_name:?}");
             Ok(0)
         }
-        RemoteCommand::Via { url } => {
+        RemoteCommand::Via { url, public } => {
             if url.eq_ignore_ascii_case("off") {
                 Registry::update(&ctx.registry_path, |r| {
                     r.rendezvous = None;
@@ -399,18 +436,35 @@ pub async fn run(requested: Instance, cmd: RemoteCommand) -> Result<u8> {
             if !(url.starts_with("ws://") || url.starts_with("wss://")) {
                 return Err(anyhow!("the rendezvous URL must start with ws:// or wss:// (wss:// is what you want on the internet)"));
             }
-            if url.starts_with("ws://") {
+            // Behind a public `wss://` the plain hop is loopback, where it reaches no network.
+            if url.starts_with("ws://") && public.is_none() {
                 eprintln!("warning: ws:// is unencrypted; a pairing through it exposes the phone's token to the network in between. Put TLS in front (see docs/MOBILE.md).");
             }
-            let r = Registry::update(&ctx.registry_path, |r| Ok::<_, anyhow::Error>(r.set_rendezvous(&url).clone()))?;
+            if let Some(public) = &public {
+                if !public.starts_with("wss://") {
+                    return Err(anyhow!("--public must start with wss://: phones pair through it, and their token must not cross the internet in the clear"));
+                }
+            }
+            let public = public.map(|p| p.trim().trim_end_matches('/').to_string());
+            let r = Registry::update(&ctx.registry_path, |r| {
+                let mut set = r.set_rendezvous(&url).clone();
+                set.public = public.clone();
+                r.rendezvous = Some(set.clone());
+                Ok::<_, anyhow::Error>(set)
+            })?;
             println!("rendezvous: {}\nroom:       {}\nphones join at {}", r.url, r.room, relay_remote::tunnel::join_url(&r));
             println!("restart `relay remote serve` to dial it");
             Ok(0)
         }
-        RemoteCommand::Rendezvous { bind } => {
+        RemoteCommand::Rendezvous { bind, queue_mib } => {
             init_logging();
             let addr: SocketAddr = bind.parse().with_context(|| format!("bad --bind {bind:?}"))?;
-            let server = RendezvousServer::bind(addr).await?;
+            let mut limits = relay_remote::rendezvous::Limits::default();
+            if let Some(mib) = queue_mib {
+                // One lane's budget must still fit, or its largest line could never be queued.
+                limits.queued_total = (mib << 20).max(limits.lane_budget);
+            }
+            let server = RendezvousServer::bind_with(addr, limits).await?;
             println!("relay rendezvous: listening on {} (health: GET /health)", server.local_addr);
             tokio::signal::ctrl_c().await?;
             drop(server);

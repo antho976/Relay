@@ -71,7 +71,27 @@ result!(#[schemars(rename = "GymImportOut")] ImportOut {
 });
 op!(Import, "gym.import", PathIn => ImportOut,
     OpMeta::mutation(Scope::Global, 12, "Read Avex's training history export (avex_export.json: in Avex, Settings, Export, Training history). It replaces the PC's whole copy").actors(Actors::UserOnly).emits(&["gym.changed"]));
+payload!(#[schemars(rename = "GymUploadIn")] UploadIn {
+    /// The whole `avex_export.json`, as Avex wrote it.
+    pub json: String,
+    /// The file's name, recorded with the copy; `avex_export.json` when absent.
+    pub name: Option<String>,
+});
+op!(Upload, "gym.upload", UploadIn => ImportOut,
+    OpMeta::mutation(Scope::Global, 12, "Take Avex's training history export as text, sent by Avex itself or by the PC's cloud link (docs/CLOUD.md). It replaces the whole copy, as gym.import does").actors(Actors::UserOnly).emits(&["gym.changed"]));
+payload!(#[schemars(rename = "GymRawIn")] RawIn {
+    /// The digest the caller already holds: when it is still the copy's, `json` is left out.
+    pub have: Option<String>,
+});
+result!(#[schemars(rename = "GymRawOut")] RawOut {
+    /// sha256 of the export text, lowercase hex; absent when nothing was uploaded.
+    pub digest: Option<String>,
+    /// The export text, unless the caller already holds it or nothing was uploaded.
+    pub json: Option<String>,
+});
+op!(Raw, "gym.raw", RawIn => RawOut,
+    OpMeta::query(Scope::Global, 12, "The last export uploaded with gym.upload, as text, for the PC's cloud link to import (docs/CLOUD.md)").actors(Actors::UserOnly));
 op!(Reset, "gym.reset", Empty => Empty,
     OpMeta::mutation(Scope::Global, 12, "Forget the imported Avex history on this PC; Avex itself is untouched").actors(Actors::UserOnly).emits(&["gym.changed"]));
 
-entries!(SummaryOp, Sessions, SessionGet, Lifts, LiftGet, Cardio, SeriesOp, Import, Reset);
+entries!(SummaryOp, Sessions, SessionGet, Lifts, LiftGet, Cardio, SeriesOp, Import, Upload, Raw, Reset);
