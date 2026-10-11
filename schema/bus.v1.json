@@ -16817,7 +16817,9 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/MoneyTx"
-          }
+          },
+          "description": "The latest few entries, for Home. Left out for a model, which answered \"the biggest expense\"\nfrom these few instead of the period's entries.",
+          "x-unit": "omit"
         }
       },
       "required": [
@@ -17018,6 +17020,10 @@
         },
         "status": {
           "$ref": "#/$defs/PaceStatus"
+        },
+        "line": {
+          "type": "string",
+          "description": "Where it stands in words: \"$88 over pace, $119 left\", \"$8 over budget, 21 days left\"."
         }
       },
       "required": [
@@ -17029,7 +17035,8 @@
         "spent",
         "left",
         "pace_delta",
-        "status"
+        "status",
+        "line"
       ]
     },
     "MoneyAccount": {

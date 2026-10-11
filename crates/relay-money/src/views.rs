@@ -104,6 +104,8 @@ pub struct EnvelopeView {
     #[schemars(extend("x-unit" = "minor", "x-agent-name" = "over_pace_by"))]
     pub pace_delta: i64,
     pub status: PaceStatus,
+    /// Where it stands in words, to the cent: "$87.60 over pace, $118.85 left", "$7.99 over budget".
+    pub line: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -164,6 +166,9 @@ pub struct Summary {
     pub net_worth: i64,
     pub bills: Vec<BillView>,
     pub goals: Vec<GoalView>,
+    /// The latest few entries, for Home. Left out for a model, which answered "the biggest expense"
+    /// from these few instead of the period's entries.
+    #[schemars(extend("x-unit" = "omit"))]
     pub recent: Vec<Tx>,
 }
 
