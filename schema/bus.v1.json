@@ -17023,7 +17023,7 @@
         },
         "line": {
           "type": "string",
-          "description": "Where it stands in words: \"$88 over pace, $119 left\", \"$8 over budget, 21 days left\"."
+          "description": "Where it stands in words, to the cent: \"$87.60 over pace, $118.85 left\", \"$7.99 over budget\"."
         }
       },
       "required": [
