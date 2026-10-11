@@ -173,6 +173,9 @@ pub struct Lists {
     pub currency: String,
     #[schemars(extend("x-unit" = "omit"))]
     pub fraction_digits: u32,
+    /// Every unarchived account's balance added up, as money.summary's `net_worth`.
+    #[schemars(extend("x-unit" = "minor"))]
+    pub net_worth: i64,
     pub accounts: Vec<AccountView>,
     pub categories: Vec<CategoryView>,
     /// Phones that sync with this ledger, the latest first.

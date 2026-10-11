@@ -17295,6 +17295,12 @@
           "minimum": 0,
           "x-unit": "omit"
         },
+        "net_worth": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Every unarchived account's balance added up, as money.summary's `net_worth`.",
+          "x-unit": "minor"
+        },
         "accounts": {
           "type": "array",
           "items": {
@@ -17319,6 +17325,7 @@
       "required": [
         "currency",
         "fraction_digits",
+        "net_worth",
         "accounts",
         "categories",
         "devices"

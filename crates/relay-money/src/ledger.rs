@@ -411,10 +411,13 @@ impl Ledger {
 
     pub fn lists(&self) -> Result<Lists> {
         let s = self.settings()?;
+        let accounts = self.accounts()?;
         Ok(Lists {
             fraction_digits: fraction_digits(&s.currency).unwrap_or(2),
             currency: s.currency,
-            accounts: self.accounts()?,
+            // As money.summary counts it: every account still in use.
+            net_worth: accounts.iter().filter(|a| !a.archived).map(|a| a.balance).sum(),
+            accounts,
             categories: self.categories()?,
             devices: self.synced_devices()?.into_iter().map(|(name, last_sync)| DeviceView { name, last_sync }).collect(),
         })
@@ -1216,6 +1219,20 @@ mod tests {
         assert_eq!(s.spent, 0);
         assert_eq!(s.net_worth, 1_000_00);
         assert_eq!(s.accounts.iter().find(|a| a.id == savings).unwrap().balance, 200_00);
+    }
+
+    #[test]
+    fn the_lists_total_is_the_summarys_net_worth() {
+        let (mut l, acct) = with_account();
+        let card = l.account_add("Visa", AccountType::Credit, 0, None, "").unwrap().id;
+        let old = l.account_add("Old", AccountType::Savings, 50_00, None, "").unwrap().id;
+        l.account_update(old, &AccountPatch { archived: Some(true), ..Default::default() }).unwrap();
+        l.tx_add(&TxInput { r#type: TxType::Expense, amount: 40_00, date: "2026-10-02".into(), account_id: card, to_account_id: None, category_id: None, note: None }).unwrap();
+        let s = l.summary(date(2026, 10, 3), &en()).unwrap();
+        let lists = l.lists().unwrap();
+        assert_eq!(lists.net_worth, s.net_worth);
+        assert_eq!(lists.net_worth, 1_000_00 - 40_00);
+        assert!(lists.accounts.iter().any(|a| a.id == acct));
     }
 
     #[test]
