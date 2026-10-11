@@ -14,6 +14,7 @@ use relay_gym::export::{self, ReadError};
 use relay_gym::model::History;
 use relay_gym::views::{self, Clock};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -39,6 +40,28 @@ fn file(path: &str) -> Result<(String, String), BusError> {
     let text = std::fs::read_to_string(p).map_err(|e| BusError::invalid("gym.path", format!("{}: {e}", p.display())))?;
     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     Ok((text, name))
+}
+
+/// An export's history, or the refusal that says which file to send instead.
+fn parse(text: &str, name: &str) -> Result<History, BusError> {
+    export::read(text, name, &crate::time::now()).map_err(|e| match e {
+        ReadError::TooNew(_) => BusError::refused("gym.too_new", e.to_string()),
+        _ => BusError::invalid("gym.import", e.to_string()),
+    })
+}
+
+fn counts(h: &History) -> ImportOut {
+    ImportOut {
+        sessions: h.sessions.len() as u32,
+        sets: h.sessions.iter().flat_map(|s| &s.exercises).map(|e| e.sets.len() as u32).sum(),
+        cardio: h.cardio.len() as u32,
+        goals: h.goals.len() as u32,
+        exported_at: h.meta.exported_at.clone(),
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 pub fn register(e: &mut Engine) {
@@ -67,17 +90,8 @@ pub fn register(e: &mut Engine) {
     e.register_staged::<Import, _>(
         |ctx, p| {
             let (text, name) = file(&p.path)?;
-            let h = export::read(&text, &name, &crate::time::now()).map_err(|e| match e {
-                ReadError::TooNew(_) => BusError::refused("gym.too_new", e.to_string()),
-                _ => BusError::invalid("gym.import", e.to_string()),
-            })?;
-            let out = ImportOut {
-                sessions: h.sessions.len() as u32,
-                sets: h.sessions.iter().flat_map(|s| &s.exercises).map(|e| e.sets.len() as u32).sum(),
-                cardio: h.cardio.len() as u32,
-                goals: h.goals.len() as u32,
-                exported_at: h.meta.exported_at.clone(),
-            };
+            let h = parse(&text, &name)?;
+            let out = counts(&h);
             gym::replace(ctx.engine(), h)?;
             Ok(out)
         },
@@ -86,6 +100,30 @@ pub fn register(e: &mut Engine) {
             Ok(out)
         },
     );
+    e.register_staged::<Upload, _>(
+        |ctx, p| {
+            if p.json.len() as u64 > export::MAX_BYTES {
+                return Err(BusError::invalid("gym.import", "That is too big to be an Avex export"));
+            }
+            let name = p.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).unwrap_or("avex_export.json");
+            let h = parse(&p.json, name)?;
+            let out = counts(&h);
+            gym::replace_uploaded(ctx.engine(), h, &p.json)?;
+            Ok(out)
+        },
+        |ctx: &mut Ctx, _, out: ImportOut| {
+            ctx.emit("gym.changed", json!({"imported": out.sessions}));
+            Ok(out)
+        },
+    );
+    e.register_unlocked::<Raw>(|ctx, p| {
+        let Some(text) = gym::uploaded(ctx.engine())? else {
+            return Ok(RawOut { digest: None, json: None });
+        };
+        let digest = hex(&Sha256::digest(text.as_bytes()));
+        let json = (p.have.as_deref() != Some(digest.as_str())).then_some(text);
+        Ok(RawOut { digest: Some(digest), json })
+    });
     e.register_staged::<Reset, _>(
         |ctx, _| gym::clear(ctx.engine()),
         |ctx: &mut Ctx, _, ()| {

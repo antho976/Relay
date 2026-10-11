@@ -162,13 +162,58 @@ pub const PHONE_OPS: &[&str] = &[
     "worktree.list",
 ];
 
+/// What a device paired with a *cloud* engine may call (`relay serve --remote --remote-ops cloud`,
+/// docs/CLOUD.md): an always-on copy of the ledger and the training history on a server, which
+/// Tally and Avex sync with while the PC is off, and which the PC's cloud link merges into its own.
+/// It holds no projects, terminals or agents, and a credential that reaches it over the internet
+/// is offered nothing but that data. Sorted: `gate_for` binary-searches it.
+pub const CLOUD_OPS: &[&str] = &[
+    "bus.ping", "bus.subscribe", "bus.unsubscribe",
+    "gym.cardio", "gym.lift.get", "gym.lifts", "gym.raw", "gym.series", "gym.session.get",
+    "gym.sessions", "gym.summary", "gym.upload",
+    "money.invest.list", "money.invest.summary", "money.lists", "money.series", "money.summary",
+    "money.sync", "money.tx.list",
+];
+
+/// Which list a door gates with.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OpProfile {
+    /// The PC's own door: `PHONE_OPS`.
+    #[default]
+    Phone,
+    /// A cloud engine's door: `CLOUD_OPS`.
+    Cloud,
+}
+
+impl OpProfile {
+    pub fn ops(self) -> &'static [&'static str] {
+        match self {
+            OpProfile::Phone => PHONE_OPS,
+            OpProfile::Cloud => CLOUD_OPS,
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<OpProfile> {
+        match s {
+            "phone" => Some(OpProfile::Phone),
+            "cloud" => Some(OpProfile::Cloud),
+            _ => None,
+        }
+    }
+}
+
+/// `gate_for` with the phone's list: the PC's own door.
+pub fn gate(line: &str, instance: Instance) -> Gate {
+    gate_for(line, instance, OpProfile::Phone)
+}
+
 /// A phone is the user at the keyboard, and only that: `agent:*` and `system` are refused here
 /// before they can reach the socket door with a guessed token, `test` is accepted only on an
 /// instance that accepts it (BUS.md §4.1), and only `PHONE_OPS` pass. `line` is one line: the
 /// engine reads its door line by line, so a frame holding several is gated piece by piece
 /// (`bridge.rs`). A line that is not JSON is forwarded untouched so the engine produces its own
-/// typed `bus.parse` refusal; it cannot act on what it cannot parse.
-pub fn gate(line: &str, instance: Instance) -> Gate {
+/// typed `bus.parse` refusal; it cannot act on what it cannot parse. `profile` says which list.
+pub fn gate_for(line: &str, instance: Instance, profile: OpProfile) -> Gate {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         return Gate::Forward;
     };
@@ -179,8 +224,11 @@ pub fn gate(line: &str, instance: Instance) -> Gate {
             "bus.actor",
             format!("a remote device acts as `user`; actor {actor:?} is not accepted on this door"),
         )
-    } else if PHONE_OPS.binary_search(&op).is_err() {
-        BusError::refused("remote.op", format!("{op} is not open to a paired phone; run it on the PC"))
+    } else if profile.ops().binary_search(&op).is_err() {
+        BusError::refused("remote.op", match profile {
+            OpProfile::Phone => format!("{op} is not open to a paired phone; run it on the PC"),
+            OpProfile::Cloud => format!("{op} is not open on a cloud copy, which holds only the ledger and the training history"),
+        })
     } else {
         return Gate::Forward;
     };
@@ -244,6 +292,27 @@ mod tests {
         assert!(PHONE_OPS.windows(2).all(|w| w[0] < w[1]), "PHONE_OPS is not sorted");
         let registry = relay_bus::registry::Registry::global();
         for op in PHONE_OPS {
+            assert!(registry.get(op).is_some(), "{op} is not a bus op");
+        }
+    }
+
+    #[test]
+    fn a_cloud_door_opens_only_the_data() {
+        let line = |op: &str| format!(r#"{{"v":1,"id":"7f2b5d2e-2f1a-4b7c-9a6c-1c9d1e6a0005","actor":"user","op":"{op}","payload":{{}}}}"#);
+        for op in ["money.sync", "gym.upload", "gym.raw", "gym.summary", "bus.ping"] {
+            assert!(matches!(gate_for(&line(op), Instance::Stable, OpProfile::Cloud), Gate::Forward), "{op}");
+        }
+        for op in ["session.spawn", "session.input", "file.write", "git.push", "thread.send", "money.reset", "gym.import"] {
+            match gate_for(&line(op), Instance::Stable, OpProfile::Cloud) {
+                Gate::Reject(resp) => assert_eq!(resp.error.unwrap().code, "remote.op"),
+                Gate::Forward => panic!("{op} forwarded on a cloud door"),
+            }
+        }
+        // The PC's own door does not take an upload: the cloud link imports it there itself.
+        assert!(matches!(gate(&line("gym.upload"), Instance::Stable), Gate::Reject(_)));
+        assert!(CLOUD_OPS.windows(2).all(|w| w[0] < w[1]), "CLOUD_OPS is not sorted");
+        let registry = relay_bus::registry::Registry::global();
+        for op in CLOUD_OPS {
             assert!(registry.get(op).is_some(), "{op} is not a bus op");
         }
     }

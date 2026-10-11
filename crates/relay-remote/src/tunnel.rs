@@ -23,9 +23,9 @@ pub fn host_url(r: &Rendezvous) -> String {
     format!("{}/host/{}", r.url, r.room)
 }
 
-/// The URL a phone uses to reach this room.
+/// The URL a phone uses to reach this room: through the public address when one is set.
 pub fn join_url(r: &Rendezvous) -> String {
-    format!("{}/join/{}", r.url, r.room)
+    format!("{}/join/{}", r.public.as_deref().unwrap_or(&r.url), r.room)
 }
 
 /// Keep the tunnel up until the task is dropped. Reconnects with backoff; every attempt and

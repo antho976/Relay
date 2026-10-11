@@ -92,6 +92,19 @@ mod tests {
     }
 
     #[test]
+    fn an_engine_behind_its_rendezvous_hands_out_the_public_address() {
+        let mut reg = Registry::fresh();
+        reg.set_rendezvous("ws://127.0.0.1:7430");
+        reg.rendezvous.as_mut().unwrap().public = Some("wss://bot.example.org/relay".into());
+        let url = PairLink::build(&reg, "stable", "X", 7420, &[]).to_url();
+        let room = &reg.rendezvous.as_ref().unwrap().room;
+        assert!(url.contains(&format!("&via=wss%3A%2F%2Fbot.example.org%2Frelay%2Fjoin%2F{room}")), "{url}");
+        assert!(!url.contains("127.0.0.1"));
+        // The engine itself still dials the loopback address.
+        assert!(crate::tunnel::host_url(reg.rendezvous.as_ref().unwrap()).starts_with("ws://127.0.0.1:7430/host/"));
+    }
+
+    #[test]
     fn a_link_without_a_rendezvous_has_no_via() {
         let reg = Registry::fresh();
         let link = PairLink::build(&reg, "stable", "X", 7420, &[]);

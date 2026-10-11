@@ -29,6 +29,10 @@ struct Harness {
 }
 
 async fn harness() -> Harness {
+    harness_with(relay_remote::wire::OpProfile::Phone).await
+}
+
+async fn harness_with(ops: relay_remote::wire::OpProfile) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("store.db"), false).unwrap();
     let engine = Engine::new(Instance::Test, store);
@@ -41,6 +45,7 @@ async fn harness() -> Harness {
         socket_path: socket.path.clone(),
         version: "test".into(),
         start_engine: None,
+        ops,
     });
     Harness { _dir: dir, engine, _socket: socket, ctx }
 }
@@ -791,6 +796,7 @@ async fn a_phone_is_let_go_when_the_engine_goes() {
         socket_path,
         version: "test".into(),
         start_engine: None,
+        ops: relay_remote::wire::OpProfile::Phone,
     });
     let door = DirectServer::bind(ctx.clone(), "127.0.0.1:0".parse::<SocketAddr>().unwrap())
         .await
@@ -850,6 +856,7 @@ while True:
         socket_path: socket_path.clone(),
         version: "test".into(),
         start_engine: Some(relay),
+        ops: relay_remote::wire::OpProfile::Phone,
     });
     let door = DirectServer::bind(ctx.clone(), "127.0.0.1:0".parse::<SocketAddr>().unwrap())
         .await
@@ -927,4 +934,74 @@ async fn tally_syncs_its_ledger_through_the_door() {
         let refused = call(&mut ws, op, json!({})).await;
         assert_eq!(refused["error"]["code"], "remote.op", "{op}: {refused}");
     }
+}
+
+/// docs/CLOUD.md end to end: a cloud engine behind a rendezvous takes Tally's ledger and Avex's
+/// export while the PC is away, offers nothing else, and the PC's link brings both home and
+/// sends the PC's own entries back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cloud_copy_takes_the_phones_data_and_the_pc_link_brings_it_home() {
+    let pc = harness().await;
+    let cloud = harness_with(relay_remote::wire::OpProfile::Cloud).await;
+    let server = RendezvousServer::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap()).await.unwrap();
+    let rendezvous = Registry::update(&cloud.ctx.registry_path, |r| {
+        Ok::<_, anyhow::Error>(r.set_rendezvous(&format!("ws://{}", server.local_addr)).clone())
+    })
+    .unwrap();
+    let join = relay_remote::tunnel::join_url(&rendezvous);
+    let tunnel = relay_remote::tunnel::spawn(cloud.ctx.clone(), rendezvous.clone());
+    await_hosts(server.local_addr, 1).await;
+
+    // Tally pairs with the cloud copy and sends its ledger; Avex sends its export.
+    let (device, token, _) = pair(&join, &pair_code(&cloud.ctx)).await;
+    let mut phone = admit(&join, &device, &token).await;
+    let first = call(&mut phone, "money.sync", json!({"device": "Pixel", "replace": true, "since": 0, "changes": [
+        {"table": "accounts", "uid": "a1", "updated_at": 100, "deleted": false, "row": {"name": "Chequing", "type": "CHEQUING",
+            "openingBalance": 100_000, "archived": false, "sortOrder": 0}},
+        {"table": "transactions", "uid": "t1", "updated_at": 100, "deleted": false, "row": {"type": "EXPENSE", "amount": 4_250,
+            "date": "2026-10-05", "account": "a1", "toAccount": null, "category": null, "note": "Metro", "recurring": null, "createdAt": 100}},
+    ]})).await;
+    assert_eq!(first["ok"], true, "{first}");
+    let cursor = first["result"]["cursor"].clone();
+    let export = include_str!("../../relay-gym/tests/avex_export.json");
+    let uploaded = call(&mut phone, "gym.upload", json!({"json": export})).await;
+    assert_eq!(uploaded["ok"], true, "{uploaded}");
+
+    // The cloud copy holds data and nothing else: no terminals, no files, no wiping.
+    for op in ["session.spawn", "session.input", "file.write", "money.reset", "gym.import", "thread.send"] {
+        let refused = call(&mut phone, op, json!({})).await;
+        assert_eq!(refused["error"]["code"], "remote.op", "{op}: {refused}");
+    }
+
+    // The PC pairs with the cloud through the link the server printed, and merges.
+    let code = pair_code(&cloud.ctx);
+    let registry = Registry::load(&cloud.ctx.registry_path).unwrap();
+    let link_url = relay_remote::pairlink::PairLink::build(&registry, "test", &code, 7420, &[]).to_url();
+    let link_path = pc.ctx.registry_path.with_file_name("cloud.json");
+    let link = relay_remote::cloud::pair(&link_path, &link_url, "PC (test)").await.unwrap();
+    assert_eq!(link.url, join);
+
+    let report = relay_remote::cloud::round(&pc.ctx.socket_path, &link_path, "PC (test)").await.unwrap();
+    assert!(report.gym, "{report:?}");
+    let home = at_the_pc(&pc, "money.summary", json!({"today": "2026-10-07"}));
+    assert_eq!(home["spent"].as_i64(), Some(4_250), "Tally's entry reached the PC: {home}");
+    let gym = at_the_pc(&pc, "gym.summary", json!({}));
+    assert_eq!(gym["imported"]["exported_at"], "2026-10-08 21:14", "{gym}");
+
+    // An entry made on the PC reaches the phone through the cloud copy.
+    at_the_pc(&pc, "money.tx.add", json!({"type": "INCOME", "amount": 210_000, "date": "2026-10-06", "account_id": home["accounts"][0]["id"]}));
+    let report = relay_remote::cloud::round(&pc.ctx.socket_path, &link_path, "PC (test)").await.unwrap();
+    assert_eq!((report.to_cloud, report.gym), (1, false), "{report:?}");
+    let next = call(&mut phone, "money.sync", json!({"device": "Pixel", "since": cursor, "changes": []})).await;
+    let changes = next["result"]["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 1, "{next}");
+    assert_eq!(changes[0]["row"]["amount"].as_i64(), Some(210_000));
+
+    // Nothing new: a quiet round.
+    let quiet = relay_remote::cloud::round(&pc.ctx.socket_path, &link_path, "PC (test)").await.unwrap();
+    assert_eq!((quiet.to_pc, quiet.to_cloud, quiet.gym), (0, 0, false), "{quiet:?}");
+    let saved = relay_remote::cloud::Link::load(&link_path).unwrap().unwrap();
+    assert!(saved.last_ok.is_some() && saved.last_error.is_none());
+
+    tunnel.abort();
 }

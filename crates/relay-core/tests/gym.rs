@@ -79,11 +79,44 @@ fn a_wrong_file_says_which_one_to_send() {
 }
 
 #[test]
+fn an_upload_comes_in_as_text_and_goes_out_for_the_pc() {
+    let engine = engine();
+    assert_eq!(ok(&engine, "gym.raw", json!({})), json!({"digest": null, "json": null}), "nothing uploaded yet");
+
+    let imported = ok(&engine, "gym.upload", json!({"json": EXPORT}));
+    assert_eq!(imported["exported_at"], "2026-10-08 21:14");
+    let summary = ok(&engine, "gym.summary", json!({}));
+    assert_eq!(summary["imported"]["file"], "avex_export.json");
+
+    // The PC's link takes the text as it came, once.
+    let raw = ok(&engine, "gym.raw", json!({}));
+    assert_eq!(raw["json"], EXPORT);
+    let digest = raw["digest"].as_str().unwrap().to_string();
+    assert_eq!(digest.len(), 64);
+    let again = ok(&engine, "gym.raw", json!({"have": digest}));
+    assert!(again["json"].is_null(), "the caller already holds it");
+    assert_eq!(again["digest"], digest.as_str());
+
+    // A wrong file is refused as an import of it would be, and changes nothing.
+    assert_eq!(code(call_as(&engine, Actor::User, "gym.upload", json!({"json": "{}"}))), "gym.import");
+    assert_eq!(ok(&engine, "gym.raw", json!({"have": digest}))["digest"], digest.as_str());
+
+    // Forgetting the copy forgets the upload too.
+    ok(&engine, "gym.reset", json!({}));
+    assert!(ok(&engine, "gym.raw", json!({}))["digest"].is_null());
+}
+
+#[test]
 fn an_agent_reads_but_never_imports_or_forgets() {
     let engine = engine();
     let agent = Actor::agent("brisk-otter");
     assert!(call_as(&engine, agent.clone(), "gym.summary", json!({})).error.is_none());
-    for (op, payload) in [("gym.import", json!({"path": "/tmp/avex_export.json"})), ("gym.reset", json!({}))] {
+    for (op, payload) in [
+        ("gym.import", json!({"path": "/tmp/avex_export.json"})),
+        ("gym.upload", json!({"json": EXPORT})),
+        ("gym.raw", json!({})),
+        ("gym.reset", json!({})),
+    ] {
         assert!(call_as(&engine, agent.clone(), op, payload).error.is_some(), "{op} must refuse an agent");
     }
 }

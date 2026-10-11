@@ -160,6 +160,9 @@ drops off a mobile link without closing fills that and is cut off (it reconnects
 silent for 90 s is closed, so it cannot stall the other phones in the room. A room carries at
 most 32 phones at once.
 
+For Tally and Avex to sync while the PC is **off**, the same server can also run a cloud copy
+of Relay that keeps their data and that the PC merges with: docs/CLOUD.md.
+
 ## 5. On the phone
 
 The app looks like the desktop: the Dev | Threads switch, the sidebar as a drawer, the status bar

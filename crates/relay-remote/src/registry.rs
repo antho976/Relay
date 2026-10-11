@@ -83,6 +83,10 @@ pub struct Rendezvous {
     pub room: String,
     /// What the host proves to the server. Never leaves this machine except to that server.
     pub secret: String,
+    /// Where phones reach the server, when that is not `url`: an engine beside its rendezvous
+    /// dials it on loopback, while phones come in through the public proxy (docs/CLOUD.md).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -417,6 +421,7 @@ impl Registry {
                     url,
                     room: room_for(&secret),
                     secret,
+                    public: None,
                 });
             }
         }

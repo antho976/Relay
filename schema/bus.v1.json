@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 304,
+  "op_count": 306,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -5871,6 +5871,44 @@
       },
       "result": {
         "$ref": "#/$defs/GymImportOut"
+      }
+    },
+    "gym.upload": {
+      "summary": "Take Avex's training history export as text, sent by Avex itself or by the PC's cloud link (docs/CLOUD.md). It replaces the whole copy, as gym.import does",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "gym.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/GymUploadIn"
+      },
+      "result": {
+        "$ref": "#/$defs/GymImportOut"
+      }
+    },
+    "gym.raw": {
+      "summary": "The last export uploaded with gym.upload, as text, for the PC's cloud link to import (docs/CLOUD.md)",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/GymRawIn"
+      },
+      "result": {
+        "$ref": "#/$defs/GymRawOut"
       }
     },
     "gym.reset": {
@@ -22972,6 +23010,58 @@
         "goals",
         "exported_at"
       ]
+    },
+    "GymUploadIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "json": {
+          "type": "string",
+          "description": "The whole `avex_export.json`, as Avex wrote it."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The file's name, recorded with the copy; `avex_export.json` when absent."
+        }
+      },
+      "required": [
+        "json"
+      ]
+    },
+    "GymRawIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "have": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The digest the caller already holds: when it is still the copy's, `json` is left out."
+        }
+      }
+    },
+    "GymRawOut": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "sha256 of the export text, lowercase hex; absent when nothing was uploaded."
+        },
+        "json": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The export text, unless the caller already holds it or nothing was uploaded."
+        }
+      }
     }
   }
 }
