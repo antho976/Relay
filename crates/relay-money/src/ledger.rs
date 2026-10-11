@@ -727,7 +727,7 @@ impl Ledger {
                 }).optional()?;
                 if let Some((id, name, icon, color, used)) = row {
                     let r = PaceReading::new(*amount, used, period.days(), elapsed);
-                    envelopes.push(EnvelopeView { category_id: id, name, icon, color, budget: *amount, spent: used, pace_delta: r.pace_delta, status: r.status });
+                    envelopes.push(EnvelopeView { category_id: id, name, icon, color, budget: *amount, spent: used, left: *amount - used, pace_delta: r.pace_delta, status: r.status });
                 }
             }
         }

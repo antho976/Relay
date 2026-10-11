@@ -44,7 +44,7 @@ pub fn agent_schema(schema: &Value) -> Value {
                     if let Value::Object(props) = value {
                         let mut kept = Map::new();
                         for (name, prop) in props {
-                            let renamed = agent_key(name, prop.get("x-unit").and_then(Value::as_str));
+                            let renamed = agent_key(name, prop);
                             if renamed.as_deref() != Some(name.as_str()) {
                                 gone.push((name.clone(), renamed.clone()));
                             }
@@ -68,6 +68,7 @@ pub fn agent_schema(schema: &Value) -> Value {
                     None => true,
                 });
             }
+            out.remove("x-agent-name");
             let Some(unit) = out.remove("x-unit").and_then(|u| u.as_str().map(str::to_string)) else {
                 return Value::Object(out);
             };
@@ -84,8 +85,14 @@ pub fn agent_schema(schema: &Value) -> Value {
     }
 }
 
-/// The name a model sees for `key` with `unit`; `None` when it is left out.
-fn agent_key(key: &str, unit: Option<&str>) -> Option<String> {
+/// The name a model sees for `key`, given its schema; `None` when it is left out. A field's own
+/// `x-agent-name` says it plainly where the bus's name would be misread (`pace_delta` read as
+/// "under pace").
+fn agent_key(key: &str, schema: &Value) -> Option<String> {
+    let unit = schema.get("x-unit").and_then(Value::as_str);
+    if let Some(name) = schema.get("x-agent-name").and_then(Value::as_str).filter(|_| unit != Some("omit")) {
+        return Some(name.to_string());
+    }
     match unit {
         Some("omit") => None,
         Some("bps") => Some(format!("{}_pct", key.strip_suffix("_bps").unwrap_or(key))),
@@ -178,7 +185,7 @@ fn walk(value: &mut Value, schema: &Value, root: u32, siblings: Option<&Map<Stri
             for (key, field) in map.iter_mut() {
                 let Some(sub) = property(schema, key) else { continue };
                 walk(field, sub, root, Some(&around), agent, apply)?;
-                let renamed = agent_key(key, sub.get("x-unit").and_then(Value::as_str));
+                let renamed = agent_key(key, sub);
                 if agent && renamed.as_deref() != Some(key.as_str()) {
                     moves.push((key.clone(), renamed));
                 }
@@ -271,13 +278,15 @@ mod tests {
             "period": {"days": 31, "days_left": 22},
             "pace": {"budget": 290000, "spent": 196300, "daily_allowance": 4300, "total_days": 31, "spent_fraction": 0.68},
             "income": 0, "spent": 196300, "net_worth": -1234,
-            "budgets": [{"category_id": 7, "budget": 15000, "spent": 15799, "pace_delta": 799, "color": 4}],
+            "budgets": [{"category_id": 7, "budget": 15000, "spent": 15799, "left": -799, "pace_delta": 799, "color": 4}],
             "accounts": [{"id": 2, "balance": 100005}],
         });
         to_agent(&mut summary, &schema("money.summary")["result"], 2);
         assert_eq!(summary["budgets"][0]["budget"], "150.00");
         assert_eq!(summary["budgets"][0]["spent"], "157.99");
-        assert_eq!(summary["budgets"][0]["pace_delta"], "7.99");
+        assert_eq!(summary["budgets"][0]["left"], "-7.99");
+        assert_eq!(summary["budgets"][0]["over_pace_by"], "7.99");
+        assert!(summary["budgets"][0].get("pace_delta").is_none());
         assert_eq!(summary["pace"]["daily_allowance"], "43.00");
         assert_eq!(summary["net_worth"], "-12.34");
         assert_eq!(summary["accounts"][0]["balance"], "1000.05");
@@ -411,6 +420,10 @@ mod tests {
         let shown = agent_schema(&schema("money.invest.summary")["result"]);
         assert_eq!(shown["properties"]["gain_pct"]["type"], json!(["string", "null"]));
         assert!(shown["properties"].get("gain_bps").is_none());
+        let shown = agent_schema(&schema("money.summary")["result"]);
+        let budget = &shown["properties"]["budgets"]["items"]["properties"];
+        assert_eq!(budget["over_pace_by"]["type"], "string");
+        assert!(budget.get("pace_delta").is_none() && !shown.to_string().contains("x-agent-name"));
         let shown = agent_schema(&schema("arbiter.backtest")["result"]);
         assert!(shown.to_string().contains("2025-10-11T00:00:00Z"));
         assert!(!has_units(&shown));

@@ -16900,7 +16900,8 @@
           "type": "integer",
           "format": "int64",
           "description": "Positive when spending runs faster than an even pace.",
-          "x-unit": "minor"
+          "x-unit": "minor",
+          "x-agent-name": "over_pace_by"
         },
         "days_left": {
           "type": "integer",
@@ -17002,10 +17003,18 @@
           "format": "int64",
           "x-unit": "minor"
         },
+        "left": {
+          "type": "integer",
+          "format": "int64",
+          "description": "What is still to spend: `budget` less `spent`, below zero once it is over budget.",
+          "x-unit": "minor"
+        },
         "pace_delta": {
           "type": "integer",
           "format": "int64",
-          "x-unit": "minor"
+          "description": "Above zero when spending runs ahead of an even pace through the period.",
+          "x-unit": "minor",
+          "x-agent-name": "over_pace_by"
         },
         "status": {
           "$ref": "#/$defs/PaceStatus"
@@ -17018,6 +17027,7 @@
         "color",
         "budget",
         "spent",
+        "left",
         "pace_delta",
         "status"
       ]

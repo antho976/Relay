@@ -30,7 +30,7 @@ pub struct PaceReading {
     #[schemars(extend("x-unit" = "minor"))]
     pub remaining: i64,
     /// Positive when spending runs faster than an even pace.
-    #[schemars(extend("x-unit" = "minor"))]
+    #[schemars(extend("x-unit" = "minor", "x-agent-name" = "over_pace_by"))]
     pub pace_delta: i64,
     /// Days still to spend in, today included.
     pub days_left: i64,

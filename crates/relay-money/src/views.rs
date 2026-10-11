@@ -97,7 +97,11 @@ pub struct EnvelopeView {
     pub budget: i64,
     #[schemars(extend("x-unit" = "minor"))]
     pub spent: i64,
+    /// What is still to spend: `budget` less `spent`, below zero once it is over budget.
     #[schemars(extend("x-unit" = "minor"))]
+    pub left: i64,
+    /// Above zero when spending runs ahead of an even pace through the period.
+    #[schemars(extend("x-unit" = "minor", "x-agent-name" = "over_pace_by"))]
     pub pace_delta: i64,
     pub status: PaceStatus,
 }
