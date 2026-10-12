@@ -23,11 +23,11 @@ class CloudTest {
     private fun base() = server.url("/").toString()
 
     @Test fun anAddressIsReadHoweverItIsTyped() {
-        assertEquals("https://anthos-bot.onrender.com", CloudApi.normalize("anthos-bot.onrender.com"))
-        assertEquals("https://anthos-bot.onrender.com", CloudApi.normalize(" https://anthos-bot.onrender.com/ "))
-        assertEquals("https://anthos-bot.onrender.com", CloudApi.normalize("wss://anthos-bot.onrender.com/relay"))
+        assertEquals("https://antho-s-bot-8dve.onrender.com", CloudApi.normalize("antho-s-bot-8dve.onrender.com"))
+        assertEquals("https://antho-s-bot-8dve.onrender.com", CloudApi.normalize(" https://antho-s-bot-8dve.onrender.com/ "))
+        assertEquals("https://antho-s-bot-8dve.onrender.com", CloudApi.normalize("wss://antho-s-bot-8dve.onrender.com/relay"))
         assertEquals("http://10.0.2.2:3000", CloudApi.normalize("http://10.0.2.2:3000/api/tally"))
-        assertEquals("https://anthos-bot.onrender.com/api/tally", CloudApi.api("anthos-bot.onrender.com"))
+        assertEquals("https://antho-s-bot-8dve.onrender.com/api/tally", CloudApi.api("antho-s-bot-8dve.onrender.com"))
     }
 
     @Test fun theCodeIsTheChallengesFirstFourCharactersAsTheBotShowsThem() {

@@ -149,8 +149,8 @@ class ScreensTest {
     @Test fun syncWaitingOnDiscord() {
         val state = SettingsState(
             today = Fixtures.TODAY,
-            connect = Connect.Waiting("7F3A", notified = true, expiresAt = Long.MAX_VALUE, server = "https://anthos-bot.onrender.com"),
-            server = "https://anthos-bot.onrender.com",
+            connect = Connect.Waiting("7F3A", notified = true, expiresAt = Long.MAX_VALUE, server = "https://antho-s-bot-8dve.onrender.com"),
+            server = "https://antho-s-bot-8dve.onrender.com",
             loaded = true,
         )
         compose.shoot("sync-waiting") { SyncScreen(state, {}, {}, {}, {}, {}, {}, {}, {}) }
@@ -158,13 +158,13 @@ class ScreensTest {
     }
 
     @Test fun syncConnected() {
-        val pc = PairedPc("vm", "h1", "stable", listOf("wss://anthos-bot.onrender.com/relay/join/r"), "d1", "t1", 1L)
+        val pc = PairedPc("vm", "h1", "stable", listOf("wss://antho-s-bot-8dve.onrender.com/relay/join/r"), "d1", "t1", 1L)
         val now = System.currentTimeMillis()
         val state = SettingsState(
             today = Fixtures.TODAY,
             pc = SyncPrefs(pc = pc, replaced = true, lastAttemptAt = now - 60_000, lastSuccessAt = now - 60_000, lastSent = 3, lastReceived = 12),
             connect = Connect.Connected,
-            server = "https://anthos-bot.onrender.com",
+            server = "https://antho-s-bot-8dve.onrender.com",
             loaded = true,
         )
         compose.shoot("sync-connected") { SyncScreen(state, {}, {}, {}, {}, {}, {}, {}, {}) }
