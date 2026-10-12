@@ -50,7 +50,7 @@ class RelayStore(context: Context) {
 
     /** One line for the screen: where it goes and how the last send went. */
     fun status(): String {
-        val p = paired ?: return "Not paired. Paste the link the server printed."
+        val p = paired ?: return "Not connected yet. Connect, then tap Allow on the Discord message your server sends."
         val ok = prefs.getLong(LAST_OK, 0L)
         val last = if (ok == 0L) "Nothing sent yet." else
             "Last sent ${DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(ok))}" +
@@ -86,10 +86,10 @@ object RelayUploader {
 
     private fun deviceName(): String = "Avex on ${Build.MODEL}"
 
-    /** Presents the link's code; Relay's server asks before it pairs. */
+    /** Presents the code of the link the server handed over (RelayConnect). */
     suspend fun pair(store: RelayStore, linkText: String) {
         val link = PairLink.parse(linkText)
-            ?: throw RelayFailure("That is not a pairing link from the server. Copy the whole relay://pair… line.")
+            ?: throw RelayFailure("Your server's pairing link did not read. Ask again.")
         val (session, welcome) = RelaySession.open(link.via, RelaySession.PAIR_WELCOME_TIMEOUT_MS) {
             RelayWire.pairHello(link.code, deviceName())
         }
