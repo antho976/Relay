@@ -88,6 +88,16 @@ internal fun balancesAt(
     return held
 }
 
+/**
+ * A Worth row's line under the account's name: its type and the day of its value. The type is left
+ * out when the name already says it, so a "Chequing" never reads "Chequing · Chequing"; [valuedOn]
+ * is that day already in words.
+ */
+internal fun worthAccountMeta(name: String, type: String, valuedOn: String?): String = listOfNotNull(
+    type.takeUnless { name.trim().equals(it, ignoreCase = true) },
+    valuedOn?.let { "valued $it" },
+).joinToString(" · ")
+
 /** The day a period's reading closes on: its last day, or [today] while it runs. */
 internal fun closeOf(period: BudgetPeriod, today: LocalDate): LocalDate =
     if (today in period) today else period.lastDay

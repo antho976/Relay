@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Tally talks to one server, the owner's, over HTTPS and WSS only: the pairing reply carries the
+    phone's token, so it never crosses the network in the clear.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

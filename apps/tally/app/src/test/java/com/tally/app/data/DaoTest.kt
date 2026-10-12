@@ -1,5 +1,6 @@
 package com.tally.app.data
 
+import androidx.test.core.app.ApplicationProvider
 import com.tally.app.data.db.AccountValueEntity
 import com.tally.app.data.db.BudgetEntity
 import com.tally.app.data.db.ContributionEntity
@@ -7,11 +8,16 @@ import com.tally.app.data.db.GoalEntity
 import com.tally.app.data.db.TallyDatabase
 import com.tally.app.data.db.RecurringEntity
 import com.tally.app.data.db.TransactionEntity
+import com.tally.app.data.prefs.SettingsRepository
+import com.tally.app.data.repo.ImportRefused
 import com.tally.core.AccountType
 import com.tally.core.CategoryKind
 import com.tally.core.Frequency
+import com.tally.core.Invest
+import com.tally.core.Registration
 import com.tally.core.TextMatch
 import com.tally.core.TxType
+import com.tally.core.WsKind
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -471,5 +477,97 @@ class DaoTest {
         assertEquals("accented capitals too", listOf("Épicerie du coin"), db.transactions().noteSuggestions(TextMatch.prefixPattern("épi")))
         assertEquals("The most recent use wins", food, db.transactions().lastCategoryForNote("Metro"))
         assertNull(db.transactions().lastCategoryForNote("Never typed"))
+    }
+
+    // ── Investments (docs/INVESTMENTS.md) ────────────────────────────────────
+
+    /** Wealthsimple's files are read in Canadian dollars only; settings outlive a test, so it puts them back. */
+    private fun withCad(block: suspend (SettingsRepository) -> Unit) = runTest {
+        val settings = SettingsRepository(ApplicationProvider.getApplicationContext())
+        val was = settings.current().currency
+        settings.setCurrency("CAD")
+        try {
+            block(settings)
+        } finally {
+            settings.setCurrency(was)
+        }
+    }
+
+    /**
+     * An import's lines go in under uids derived from the file, so the same file twice adds them
+     * once, and a line deleted since is not brought back by the next one.
+     */
+    @Test fun anImportTwiceAddsOnce() = withCad { settings ->
+        val invest = db.investRepository(FixedClock(day), settings)
+
+        val preview = invest.preview(WsFiles.HOLDINGS_REPORT)
+        assertEquals(WsKind.HOLDINGS, preview.kind)
+        assertEquals(LocalDate.of(2026, 5, 8), preview.asOf)
+        assertEquals(listOf(3, 3, 0), listOf(preview.holdings, preview.new, preview.duplicates))
+        assertNull("No account holds its number yet", preview.accounts.single().accountId)
+        assertEquals(3, preview.accounts.single().rows)
+
+        val first = invest.import(WsFiles.HOLDINGS_REPORT, emptyMap(), null)
+        assertEquals(listOf(1, 3, 3, 0, 3, 1), listOf(first.accountsCreated, first.securities, first.holdings, first.duplicates, first.prices, first.values))
+        val account = db.accounts().all().single()
+        assertEquals("ws:DEMO0001CAD", account.uid)
+        assertEquals(listOf(AccountType.INVESTMENT, Registration.TFSA, "Wealthsimple", "DEMO0001CAD"), listOf(account.type, account.registration, account.institution, account.externalRef))
+        val seen = invest.preview(WsFiles.HOLDINGS_REPORT)
+        assertEquals("The account holds the number now", account.id, seen.accounts.single().accountId)
+        assertEquals(listOf(0, 3), listOf(seen.new, seen.duplicates))
+
+        val again = invest.import(WsFiles.HOLDINGS_REPORT, emptyMap(), null)
+        assertEquals(listOf(0, 0, 0, 3, 0, 0), listOf(again.accountsCreated, again.securities, again.holdings, again.duplicates, again.prices, again.values))
+        assertEquals(3, db.invest().holdings().size)
+        assertEquals(3, db.invest().prices().size)
+        assertEquals(1, db.values().all().size)
+
+        // The activities export names another account; its lines go in once, and a deleted one stays out.
+        val lines = invest.import(WsFiles.ACTIVITIES_EXPORT, emptyMap(), null).activities
+        assertTrue(lines > 0)
+        assertEquals(2, db.accounts().count())
+        val twice = invest.import(WsFiles.ACTIVITIES_EXPORT, emptyMap(), null)
+        assertEquals(listOf(0, lines), listOf(twice.activities, twice.duplicates))
+        db.invest().deleteActivity(db.invest().activities().first().id)
+        val after = invest.import(WsFiles.ACTIVITIES_EXPORT, emptyMap(), null)
+        assertEquals(listOf(0, lines), listOf(after.activities, after.duplicates))
+        assertEquals(lines - 1, db.invest().activities().size)
+    }
+
+    /** The report's numbers come back out of the portfolio, and its value is the account's balance on Home. */
+    @Test fun anImportedHoldingsReportReadsAsTheReportSays() = withCad { settings ->
+        val invest = db.investRepository(FixedClock(day), settings)
+        invest.import(WsFiles.HOLDINGS_REPORT, emptyMap(), null)
+
+        val p = invest.portfolio().first()
+        assertEquals("2026-05-08", p.asOf)
+        assertEquals("AAPL's 1,000 USD at its own book ratio, XEQT, ARKK", 1_633_33L, p.value)
+        assertEquals(listOf("AAPL" to 10 * Invest.QTY_SCALE, "XEQT" to 10 * Invest.QTY_SCALE, "ARKK" to Invest.QTY_SCALE), p.holdings.map { it.symbol to it.quantity })
+        assertEquals(1_633_33L, db.accounts().observeBalances().first().single().balance)
+
+        // Room is the CRA figure by kind and year; zero takes it away.
+        invest.setRoom(Registration.TFSA, 2026, 7_000_00)
+        assertEquals(7_000_00L, invest.portfolio().first().room.single { it.registration == Registration.TFSA }.room)
+        invest.setRoom(Registration.TFSA, 2026, 0)
+        assertNull(invest.portfolio().first().room.single { it.registration == Registration.TFSA }.room)
+        assertTrue(db.invest().roomFacts().isEmpty())
+    }
+
+    /** A file mapped to an account by hand goes there, and the account keeps the number for the next one. */
+    @Test fun aFileGoesIntoTheAccountItIsMappedTo() = withCad { settings ->
+        val invest = db.investRepository(FixedClock(day), settings)
+        val mine = db.addAccount("My TFSA", AccountType.INVESTMENT)
+        val chequing = db.addAccount("Chequing")
+
+        val done = invest.import(WsFiles.ACTIVITIES_EXPORT, mapOf("HQ7XFMC41CAD" to mine), null)
+        assertEquals(0, done.accountsCreated)
+        assertTrue(db.invest().activities().all { it.accountId == mine })
+        val kept = db.accounts().get(mine)!!
+        assertEquals(listOf("HQ7XFMC41CAD", "Wealthsimple"), listOf(kept.externalRef, kept.institution))
+        assertEquals("It takes the file's registration when it had none", Registration.TFSA, kept.registration)
+
+        val refused = runCatching { invest.import(WsFiles.ACTIVITIES_EXPORT, mapOf("HQ7XFMC41CAD" to chequing), null) }.exceptionOrNull()
+        assertEquals("Pick an investment account", refused?.message)
+        assertTrue(runCatching { invest.preview("Date,Amount\n2026-01-01,4\n") }.exceptionOrNull() is ImportRefused)
     }
 }

@@ -9,6 +9,7 @@ import com.tally.app.data.db.AccountEntity
 import com.tally.app.data.db.AccountValueEntity
 import com.tally.app.data.prefs.SettingsRepository
 import com.tally.app.data.repo.AccountUse
+import com.tally.app.data.repo.InvestRepository
 import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.ui.common.Notices
 import com.tally.app.ui.common.keepDraft
@@ -16,6 +17,7 @@ import com.tally.app.ui.common.savedDraft
 import com.tally.app.ui.nav.Args
 import com.tally.core.AccountType
 import com.tally.core.MoneyFormatter
+import com.tally.core.Registration
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -68,6 +70,7 @@ data class AccountEditState(
 class AccountEditViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val ledger: LedgerRepository,
+    private val invest: InvestRepository,
     private val settings: SettingsRepository,
     private val notices: Notices,
     private val clock: Clock,
@@ -133,6 +136,7 @@ class AccountEditViewModel @Inject constructor(
                     owe = account.openingBalance < 0,
                     isDefault = s.defaultAccountId == account.id,
                     archived = account.archived,
+                    registration = account.registration,
                 )
                 stored.value = account
             } else {
@@ -148,8 +152,13 @@ class AccountEditViewModel @Inject constructor(
 
     fun setType(type: AccountType) = draft.update { it.copy(type = type) }
 
-    /** A ready-made account: its name and type, and a card starts as owed. */
-    fun applyTemplate(t: AccountTemplate) = draft.update { it.copy(name = t.name, type = t.type, owe = t.type == AccountType.CREDIT) }
+    /** An investment account's kind; the room on Investments counts the TFSA, RRSP and FHSA ones. */
+    fun setRegistration(registration: Registration?) = draft.update { it.copy(registration = registration) }
+
+    /** A ready-made account: its name, type and kind, and a card starts as owed. */
+    fun applyTemplate(t: AccountTemplate) = draft.update {
+        it.copy(name = t.name, type = t.type, owe = t.type == AccountType.CREDIT, registration = t.registration)
+    }
 
     /** Records what an investment account is worth today; a second value today replaces the first. */
     fun recordValue(value: Long) {
@@ -201,6 +210,13 @@ class AccountEditViewModel @Inject constructor(
                     sortOrder = original?.sortOrder ?: 0,
                 )
             )
+            // The kind and the institution are the investment ledger's to set; a save keeps the stored ones.
+            if (d.type == AccountType.INVESTMENT) {
+                val institution = institutionFor(d.name, original?.institution.orEmpty())
+                if (d.registration != original?.registration || institution != original?.institution) {
+                    invest.setRegistration(id, d.registration, institution)
+                }
+            }
             val currentDefault = settings.current().defaultAccountId
             if (d.effectiveDefault) {
                 if (currentDefault != id) settings.setDefaultAccount(id)

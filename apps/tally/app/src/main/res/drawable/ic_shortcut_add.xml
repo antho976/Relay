@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A launcher shortcut: Relay's plus in ink on its ground. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp"
+    android:viewportWidth="48" android:viewportHeight="48">
+    <path android:fillColor="@color/ground" android:pathData="M24,0a24,24 0 1,0 0.01,0z" />
+    <path android:strokeColor="@color/ink" android:strokeWidth="3" android:strokeLineCap="round"
+        android:pathData="M24,15 L24,33 M15,24 L33,24" />
+</vector>

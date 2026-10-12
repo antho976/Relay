@@ -5,8 +5,10 @@ import com.tally.app.data.db.AccountBalance
 import com.tally.app.data.repo.AccountUse
 import com.tally.app.data.repo.OtherAccountChange
 import com.tally.core.AccountType
+import com.tally.core.BankStatements
 import com.tally.core.Copy
 import com.tally.core.MoneyFormatter
+import com.tally.core.Registration
 import kotlinx.serialization.Serializable
 
 /*
@@ -29,12 +31,12 @@ internal fun typeHint(type: AccountType): String = when (type) {
     AccountType.CHEQUING -> "The everyday bank account"
     AccountType.SAVINGS -> "Money set aside, earning or waiting"
     AccountType.CREDIT -> "A card you pay off later"
-    AccountType.INVESTMENT -> "A TFSA, an RRSP or a brokerage account, its value updated by hand"
+    AccountType.INVESTMENT -> "A TFSA, an RRSP or a brokerage account, valued by its Wealthsimple files or by hand"
 }
 
-/** A ready-made account for the banks the owner uses: one tap fills the name and the type. */
+/** A ready-made account for the banks the owner uses: one tap fills the name, the type and, for an investment account, its kind. */
 @Immutable
-data class AccountTemplate(val name: String, val type: AccountType)
+data class AccountTemplate(val name: String, val type: AccountType, val registration: Registration? = null)
 
 /** Desjardins and Wealthsimple first, as the owner banks there; cash last. */
 internal val ACCOUNT_TEMPLATES: List<AccountTemplate> = listOf(
@@ -42,9 +44,9 @@ internal val ACCOUNT_TEMPLATES: List<AccountTemplate> = listOf(
     AccountTemplate("Desjardins savings", AccountType.SAVINGS),
     AccountTemplate("Desjardins Visa", AccountType.CREDIT),
     AccountTemplate("Wealthsimple Chequing", AccountType.CHEQUING),
-    AccountTemplate("Wealthsimple TFSA", AccountType.INVESTMENT),
-    AccountTemplate("Wealthsimple RRSP", AccountType.INVESTMENT),
-    AccountTemplate("Wealthsimple FHSA", AccountType.INVESTMENT),
+    AccountTemplate("Wealthsimple TFSA", AccountType.INVESTMENT, Registration.TFSA),
+    AccountTemplate("Wealthsimple RRSP", AccountType.INVESTMENT, Registration.RRSP),
+    AccountTemplate("Wealthsimple FHSA", AccountType.INVESTMENT, Registration.FHSA),
     AccountTemplate("Wealthsimple credit card", AccountType.CREDIT),
     AccountTemplate("Cash", AccountType.CASH),
 )
@@ -148,6 +150,8 @@ data class AccountDraft(
     val owe: Boolean = false,
     val isDefault: Boolean = false,
     val archived: Boolean = false,
+    /** An investment account's kind (TFSA, RRSP...); null for none, and on every other type. */
+    val registration: Registration? = null,
 ) {
     /** The owe switch shows for a card, and for any account that opens below zero, so its sign can be undone. */
     val showsOwe: Boolean get() = type == AccountType.CREDIT || owe
@@ -168,6 +172,16 @@ internal fun accountProblems(d: AccountDraft): AccountProblems = AccountProblems
     name = if (d.name.isBlank()) "Give the account a name" else null,
     opening = if (d.opening == null) "Enter an amount, like 250 or 1,250.50" else null,
 )
+
+/**
+ * The institution an investment account is kept under: the stored one, else Wealthsimple when the
+ * name says so ("Wealthsimple TFSA"), else none.
+ */
+internal fun institutionFor(name: String, stored: String): String = when {
+    stored.isNotBlank() -> stored
+    "wealthsimple" in BankStatements.normalize(name).split(" ") -> "Wealthsimple"
+    else -> ""
+}
 
 /** A typed opening balance: blank reads as zero, anything else must parse. */
 internal fun readOpening(text: String, parsed: Long?): Long? = if (text.isBlank()) 0L else parsed

@@ -5,7 +5,7 @@
 #  2. The MINIFIED release APK launches and stays up. "R8 finished" is not "R8 produced an app".
 set -euo pipefail
 
-APP_ID=com.quietsoftware.tally
+APP_ID=com.quietsoftware.tally2
 LOGCAT=smoke-logcat.txt
 
 wait_for_framework() {
@@ -46,6 +46,10 @@ echo "::endgroup::"
 echo "::group::Install the minified release APK"
 apk=$(find app/build/outputs/apk/release -name '*.apk' -not -name '*unsigned*' -print -quit)
 if [ -z "$apk" ]; then echo "::error::No signed release APK."; exit 1; fi
+# Whatever Tally the emulator still holds (the test run's, or one in the cached snapshot) may be
+# signed with another key, and Android refuses to update across signatures
+# (INSTALL_FAILED_UPDATE_INCOMPATIBLE). The smoke launch wants a clean install anyway.
+adb uninstall "$APP_ID" > /dev/null 2>&1 || true
 adb install -r -d "$apk"
 echo "::endgroup::"
 

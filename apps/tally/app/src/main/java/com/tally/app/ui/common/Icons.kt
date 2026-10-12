@@ -1,6 +1,5 @@
 package com.tally.app.ui.common
 
-import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
@@ -118,13 +117,7 @@ import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.WineBar
 import androidx.compose.material.icons.rounded.Work
 import androidx.compose.material.icons.rounded.Yard
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
-import com.tally.app.ui.theme.categoryColor
 import com.tally.core.AccountType
 
 /**
@@ -290,25 +283,4 @@ object CategoryIcons {
         AccountType.CREDIT -> Icons.Rounded.CreditCard
         AccountType.INVESTMENT -> Icons.AutoMirrored.Rounded.ShowChart
     }
-}
-
-/**
- * A category's badge: its glyph in its own hue on a 15% wash of that hue. The colour is a data
- * series (which category), so it is spent here and in charts, never on text.
- */
-@Composable
-fun CategoryBadge(icon: String?, color: Int?, modifier: Modifier = Modifier, size: Dp = 44.dp) {
-    val hue = categoryColor(color)
-    GlyphBadge(CategoryIcons.of(icon), modifier, tint = hue, fill = hue.copy(alpha = 0.15f), size = size)
-}
-
-/** A transfer has no category; it gets the neutral swap glyph. */
-@Composable
-fun TransferBadge(modifier: Modifier = Modifier, size: Dp = 44.dp) {
-    GlyphBadge(CategoryIcons.transfer, modifier, tint = MaterialTheme.colorScheme.onSurfaceVariant, size = size)
-}
-
-@Composable
-fun AccountBadge(type: AccountType, modifier: Modifier = Modifier, size: Dp = 44.dp) {
-    GlyphBadge(CategoryIcons.account(type), modifier.size(size), tint = MaterialTheme.colorScheme.onBackground, size = size)
 }

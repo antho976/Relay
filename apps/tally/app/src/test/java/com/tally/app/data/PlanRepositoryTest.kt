@@ -246,7 +246,8 @@ class PlanRepositoryTest {
         assertNull("and are unlinked", db.transactions().get(posted)?.recurringId)
 
         plan.restoreRecurring(deleted!!)
-        assertEquals(original, plan.recurringItem(id))
+        // Exactly, but for its change time: an undo is news for the paired PC.
+        assertEquals(original, plan.recurringItem(id)!!.copy(updatedAt = original.updatedAt))
         assertNull(plan.deleteRecurring(404))
     }
 
@@ -283,8 +284,9 @@ class PlanRepositoryTest {
         assertTrue("Contributions go with their goal", db.goals().allContributions().isEmpty())
 
         plan.restoreGoal(deleted)
-        assertEquals(before, plan.goals().first().single())
-        assertEquals(contributionsBefore, plan.contributions(goal).first())
+        val after = plan.goals().first().single()
+        assertEquals(before, after.copy(goal = after.goal.copy(updatedAt = before.goal.updatedAt)))
+        assertEquals(contributionsBefore.map { it.copy(updatedAt = 0) }, plan.contributions(goal).first().map { it.copy(updatedAt = 0) })
         assertNull(plan.deleteGoal(404))
     }
 
@@ -301,7 +303,7 @@ class PlanRepositoryTest {
         assertEquals(0L, plan.goals().first().single().saved)
 
         plan.restoreContribution(deleted!!)
-        assertEquals(listOf(row), plan.contributions(goal).first())
+        assertEquals(listOf(row.copy(updatedAt = 0)), plan.contributions(goal).first().map { it.copy(updatedAt = 0) })
         assertEquals(250_00L, plan.goals().first().single().saved)
     }
 

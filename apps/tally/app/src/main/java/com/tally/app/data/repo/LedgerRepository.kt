@@ -22,6 +22,7 @@ import com.tally.app.data.db.TransactionEntity
 import com.tally.app.data.db.TransactionRow
 import com.tally.app.data.db.TransferRow
 import com.tally.app.data.db.TypeTotal
+import com.tally.core.AccountType
 import com.tally.core.BudgetPeriod
 import com.tally.core.CategoryKind
 import com.tally.core.Defaults
@@ -238,7 +239,19 @@ class LedgerRepository @Inject constructor(
 
     suspend fun saveAccount(account: AccountEntity): Long =
         if (account.id == 0L) accounts.insert(account.copy(name = account.name.trim(), sortOrder = accounts.nextSortOrder()))
-        else { accounts.update(account.copy(name = account.name.trim())); account.id }
+        else { accounts.update(keepingInvestment(account).copy(name = account.name.trim())); account.id }
+
+    /**
+     * An editor that knows nothing of investments rebuilds an account without its registration,
+     * institution and number; the stored ones stay (InvestRepository.setRegistration is what
+     * changes them). An account that is no longer an investment account has no registration.
+     */
+    private suspend fun keepingInvestment(account: AccountEntity): AccountEntity {
+        val stored = accounts.get(account.id) ?: return account
+        val bare = account.registration == null && account.institution.isEmpty() && account.externalRef.isEmpty()
+        val kept = if (bare) account.copy(registration = stored.registration, institution = stored.institution, externalRef = stored.externalRef) else account
+        return if (kept.type == AccountType.INVESTMENT) kept else kept.copy(registration = null)
+    }
 
     /**
      * Removes the account and, through the foreign keys, every entry that touches it (transfers

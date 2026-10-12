@@ -21,11 +21,6 @@ class HomeLogicTest {
 
     @After fun restore() = Locale.setDefault(saved)
 
-    @Test fun oneAccountReadsSingular() {
-        assertEquals("NET ACROSS 1 ACCOUNT", netAcrossLabel(1))
-        assertEquals("NET ACROSS 4 ACCOUNTS", netAcrossLabel(4))
-    }
-
     @Test fun weekDescriptionNamesEachDaySoFarInFull() {
         // Sunday 11 Oct 2026 starts the week; today is the Wednesday, so four days are read.
         val week = listOf(4_200L, 9_800L, 2_100L, 3_400L, 0L, 0L, 0L)

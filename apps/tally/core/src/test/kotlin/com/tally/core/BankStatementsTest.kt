@@ -71,6 +71,15 @@ class BankStatementsTest {
         assertEquals(85L, s.rows[1].amount)
     }
 
+    @Test fun `a wealthsimple investment statement goes to the investment import`() {
+        val text = "date,transaction,description,amount,balance,currency\n" +
+            "2026-01-02,CONT,Contribution,500.00,500.00,CAD\n" +
+            "2026-01-05,BUY,\"XEQT - iShares Core Equity ETF Portfolio: Bought 10.0000 shares at \$38.12 per share\",-381.20,118.80,CAD\n"
+        assertEquals(StatementRead.Investments, BankStatements.read(text, 2))
+        val cash = "date,transaction,description,amount,balance,currency\n2026-09-01,SPEND,Metro,-42.10,500.00,CAD\n"
+        assertEquals("a cash statement is still the bank import's", StatementFormat.WEALTHSIMPLE, ok(cash).format)
+    }
+
     // ── Other banks ──────────────────────────────────────────────────────────
 
     @Test fun `debit and credit columns with month first dates`() {

@@ -20,6 +20,34 @@ enum class CategoryKind { EXPENSE, INCOME }
  */
 enum class GoalKind { SAVINGS, BALANCE, INVEST, SAVE }
 
+/**
+ * The tax wrapper an [AccountType.INVESTMENT] account sits in. Stored by NAME; null on every other
+ * account. [label] is how an account an import creates is named when the file names none.
+ */
+enum class Registration(val label: String) {
+    NON_REGISTERED("Non-registered"),
+    TFSA("TFSA"),
+    RRSP("RRSP"),
+    FHSA("FHSA"),
+    RESP("RESP"),
+    LIRA("LIRA"),
+    RRIF("RRIF"),
+    OTHER("Other"),
+}
+
+/** What a security is. A [CASH] security is always worth one unit of its currency. Stored by NAME. */
+enum class SecurityKind { STOCK, ETF, MUTUAL_FUND, BOND, CRYPTO, CASH, OTHER }
+
+/**
+ * What an investment activity does. Stored by NAME. The order is normative: activities on the same
+ * day apply in this order, then by uid, so a buy and a sell on one day never oversell. Moving or
+ * inserting a constant changes how a day's activities apply, on both sides.
+ */
+enum class ActivityType {
+    DEPOSIT, TRANSFER_IN, BUY, REINVEST, SPLIT, DIVIDEND, INTEREST, CREDIT, NOTIONAL_DISTRIBUTION,
+    RETURN_OF_CAPITAL, SELL, TRANSFER_OUT, FEE, TAX, FX, WITHDRAWAL,
+}
+
 /** A category the app seeds on first run. [icon] is a key the UI maps to a drawn glyph. */
 @Serializable
 data class CategorySeed(val name: String, val kind: CategoryKind, val color: Int, val icon: String)

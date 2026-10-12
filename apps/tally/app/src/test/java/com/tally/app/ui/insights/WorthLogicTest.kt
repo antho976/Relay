@@ -85,4 +85,11 @@ class WorthLogicTest {
         assertEquals(-50, keptShare(100_000, 150_000))
         assertNull(keptShare(0, 10_000))
     }
+
+    @Test fun aRowNeverSaysItsTypeTwice() {
+        assertEquals("", worthAccountMeta("Chequing", "Chequing", null))
+        assertEquals("valued 9 Oct", worthAccountMeta(" chequing ", "Chequing", "9 Oct"))
+        assertEquals("Investment · valued 9 Oct", worthAccountMeta("Wealthsimple TFSA", "Investment", "9 Oct"))
+        assertEquals("Credit card", worthAccountMeta("Visa", "Credit card", null))
+    }
 }

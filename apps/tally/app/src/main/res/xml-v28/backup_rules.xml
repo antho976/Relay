@@ -3,9 +3,10 @@
     Android 9 to 11. Every include requires the device-to-device flag, so the ledger moves to a new
     phone the owner sets up and never goes to a cloud backup: with includes present, anything not
     included is left out, and a cloud backup satisfies none of them. Android 12 and up read
-    data_extraction_rules.xml instead.
+    data_extraction_rules.xml instead. The pairing with a PC (relay_sync) stays on this phone.
 -->
 <full-backup-content>
     <include domain="database" path="." requireFlags="deviceToDeviceTransfer" />
     <include domain="file" path="datastore/" requireFlags="deviceToDeviceTransfer" />
+    <exclude domain="file" path="datastore/relay_sync.preferences_pb" />
 </full-backup-content>

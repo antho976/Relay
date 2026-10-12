@@ -14,6 +14,13 @@ import com.tally.app.data.repo.DataRepository
 import com.tally.app.data.repo.DataResult
 import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.data.repo.PlanRepository
+import com.tally.app.data.sync.CloudConnect
+import com.tally.app.data.sync.Connect
+import com.tally.app.data.sync.RelaySync
+import com.tally.app.data.sync.SyncOutcome
+import com.tally.app.data.sync.SyncScheduler
+import com.tally.app.data.sync.SyncPrefs
+import com.tally.app.data.sync.SyncStore
 import com.tally.app.ui.common.Notices
 import com.tally.core.BudgetPeriod
 import com.tally.core.CategoryKind
@@ -47,6 +54,13 @@ data class SettingsState(
     val bills: Int = 0,
     val goals: Int = 0,
     val backup: BackupPrefs = BackupPrefs(),
+    /** The server and where sync with it stands; empty until this phone is connected. */
+    val pc: SyncPrefs = SyncPrefs(),
+    val syncing: Boolean = false,
+    /** Where connecting to the server stands. */
+    val connect: Connect = Connect.Idle,
+    /** The address this phone talks to. */
+    val server: String = "",
     val loaded: Boolean = false,
 ) {
     /** The sample loads only into an app with nothing the owner made (the seeded categories aside). */
@@ -58,6 +72,11 @@ class SettingsViewModel @Inject constructor(
     settings: SettingsRepository,
     ledger: LedgerRepository,
     plan: PlanRepository,
+    private val store: SyncStore,
+    private val sync: RelaySync,
+    private val cloud: CloudConnect,
+    private val scheduler: SyncScheduler,
+    private val notices: Notices,
     clock: Clock,
 ) : ViewModel() {
 
@@ -86,7 +105,11 @@ class SettingsViewModel @Inject constructor(
         )
     }
 
-    val state: StateFlow<SettingsState> = combine(settings.settings, ledgerCounts, planCounts, settings.backup) { s, l, p, b ->
+    private data class Link(val prefs: SyncPrefs, val busy: Boolean, val connect: Connect)
+
+    private val pc = combine(store.prefs, sync.busy, cloud.state) { prefs, busy, connect -> Link(prefs, busy, connect) }
+
+    val state: StateFlow<SettingsState> = combine(settings.settings, ledgerCounts, planCounts, settings.backup, pc) { s, l, p, b, link ->
         SettingsState(
             today = today,
             settings = s,
@@ -101,9 +124,60 @@ class SettingsViewModel @Inject constructor(
             bills = p.bills,
             goals = p.goals,
             backup = b,
+            pc = link.prefs,
+            syncing = link.busy,
+            connect = link.connect,
+            server = cloud.serverOf(link.prefs),
             loaded = true,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsState(today = today))
+
+    /** Sync now, or connect if this phone is not yet. Quiet either way: the status says how it went. */
+    fun syncNow() = scheduler.syncNow()
+
+    /** Ask the server again after a Deny, a request that ran out, or trouble. */
+    fun connectAgain() = cloud.retry()
+
+    fun setPhoneOnly(on: Boolean) {
+        viewModelScope.launch { cloud.setPhoneOnly(on) }
+    }
+
+    /** A different server address (blank goes back to this build's own). */
+    fun setServer(url: String) {
+        viewModelScope.launch { cloud.setServer(url.ifBlank { null }) }
+    }
+
+    /** The next sync makes the server's copy this phone's; it runs at once. */
+    fun sendThisPhones() {
+        viewModelScope.launch {
+            store.requestReplace()
+            scheduler.syncNow()
+            notices.show("Sending this phone's ledger to your server")
+        }
+    }
+
+    /** This phone takes the server's ledger whole. */
+    fun takeServers() {
+        viewModelScope.launch {
+            when (val outcome = sync.takeServers()) {
+                is SyncOutcome.Failed -> notices.show(outcome.reason)
+                is SyncOutcome.Done -> notices.show("This phone now holds your server's ledger")
+                else -> Unit
+            }
+        }
+    }
+
+    /** Stop syncing; the server keeps its copy. Undo pairs back as it was. */
+    fun disconnect() {
+        viewModelScope.launch {
+            val was = sync.forget()
+            cloud.setPhoneOnly(true)
+            notices.showUndo("Disconnected. This phone keeps its ledger.") {
+                cloud.setPhoneOnly(false)
+                sync.restore(was)
+            }
+        }
+    }
 }
 
 // ── Appearance ───────────────────────────────────────────────────────────────
@@ -113,6 +187,8 @@ data class AppearanceState(
     val accent: Accent = Accent.DEFAULT,
     val accentEnabled: Boolean = true,
     val amoled: Boolean = false,
+    /** Relay's ground: matte, dark or oled. */
+    val palette: String = "matte",
     val loaded: Boolean = false,
 )
 
@@ -123,7 +199,7 @@ class AppearanceViewModel @Inject constructor(
 ) : ViewModel() {
 
     val state: StateFlow<AppearanceState> = settings.settings
-        .map { AppearanceState(accent = it.accent, accentEnabled = it.accentEnabled, amoled = it.amoled, loaded = true) }
+        .map { AppearanceState(accent = it.accent, accentEnabled = it.accentEnabled, amoled = it.amoled, palette = it.palette, loaded = true) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AppearanceState())
 
     fun setAmoled(on: Boolean) {
@@ -136,6 +212,10 @@ class AppearanceViewModel @Inject constructor(
 
     fun setAccent(accent: Accent) {
         viewModelScope.launch { settings.setAccent(accent) }
+    }
+
+    fun setPalette(name: String) {
+        viewModelScope.launch { settings.setPalette(name) }
     }
 }
 

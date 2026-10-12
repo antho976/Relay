@@ -11,17 +11,30 @@ import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.prefs.SettingsRepository
 import com.tally.app.data.repo.DataRepository
 import com.tally.app.data.repo.DataResult
+import com.tally.app.data.repo.ImportPreviewData
 import com.tally.app.data.repo.ImportRepository
 import com.tally.app.data.repo.ImportTarget
+import com.tally.app.data.repo.InvestRepository
 import com.tally.app.data.repo.LedgerRepository
 import com.tally.app.ui.common.Notices
+import com.tally.app.ui.invest.FileAccount
+import com.tally.app.ui.invest.INVEST_SOURCE
+import com.tally.app.ui.invest.InvestImport
+import com.tally.app.ui.invest.InvestPreview
+import com.tally.app.ui.invest.KIND_ACTIVITIES
+import com.tally.app.ui.invest.KIND_HOLDINGS
+import com.tally.app.ui.invest.KIND_STATEMENT
+import com.tally.app.ui.invest.guessMapping
+import com.tally.app.ui.invest.investImportedLine
 import com.tally.app.ui.nav.Args
 import com.tally.core.AccountType
 import com.tally.core.BankStatements
 import com.tally.core.MoneyFormatter
 import com.tally.core.Statement
 import com.tally.core.StatementRead
+import com.tally.core.WsKind
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -61,6 +74,10 @@ data class ImportState(
     val problem: String? = null,
     /** What the last import did, said on the done stage. */
     val done: String? = null,
+    /** A Wealthsimple investment file under way: its preview and where its accounts go, instead of [statement]. */
+    val invest: InvestImport? = null,
+    /** Opened for investments: Wealthsimple's investment files lead the page. */
+    val investFirst: Boolean = false,
 ) {
     val target: AccountBalance? get() = targetId?.let { id -> accounts.firstOrNull { it.id == id } }
     val targetName: String get() = target?.name ?: newName.trim().ifEmpty { "a new account" }
@@ -70,12 +87,18 @@ data class ImportState(
  * The bank import: read a statement on the phone, plan every line against the account it goes
  * into (what is already there, what the owner's own entries say each payee is), and write the
  * lines the owner confirms, in one go. Nothing is kept of the file once the import is done.
+ *
+ * A Wealthsimple investment file (a holdings report, an activities export, a TFSA's or an RRSP's
+ * monthly statement) never goes through that plan: buys, sells and dividends are not spending and
+ * income. The investment import previews it, the owner says where each of its accounts goes, and
+ * it writes holdings and activities instead.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class ImportViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val imports: ImportRepository,
+    private val invest: InvestRepository,
     private val data: DataRepository,
     private val ledger: LedgerRepository,
     private val settings: SettingsRepository,
@@ -86,6 +109,7 @@ class ImportViewModel @Inject constructor(
 
     private val today: LocalDate = clock.today()
     private val source: BankSource? = BankSource.of(savedStateHandle.get<String>(Args.SOURCE))
+    private val investFirst: Boolean = savedStateHandle.get<String>(Args.SOURCE) == INVEST_SOURCE
 
     private data class Picks(
         val choices: ImportChoices = ImportChoices(),
@@ -99,12 +123,16 @@ class ImportViewModel @Inject constructor(
         val problem: String? = null,
         val done: String? = null,
         val source: BankSource? = null,
+        val invest: InvestImport? = null,
     )
 
     private val statement = MutableStateFlow<Statement?>(null)
     private val picks = MutableStateFlow(Picks(newName = source?.accountName ?: BankSource.OTHER.accountName))
     private val ui = MutableStateFlow(Ui(source = source))
     private val learnedFlow = flow { emit(imports.learnedNotes()) }
+
+    /** The investment file's text, held only until it is written or let go. */
+    private var investText: String? = null
 
     /** What the target account already holds over the statement's days: the duplicate check's other side. */
     private val existing = combine(statement, picks) { s, p -> Triple(s?.first, s?.last, p.targetId) }
@@ -134,8 +162,10 @@ class ImportViewModel @Inject constructor(
             newType = p.newType,
             problem = u.problem,
             done = u.done,
+            invest = u.invest,
+            investFirst = investFirst,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ImportState(today = today, source = source))
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ImportState(today = today, source = source, investFirst = investFirst))
 
     init {
         // A statement shared to Tally opens this page holding the file.
@@ -148,10 +178,14 @@ class ImportViewModel @Inject constructor(
         if (bank != null) picks.update { it.copy(newName = bank.accountName, newType = bank.accountType) }
     }
 
-    /** Reads [uri]: a bank statement goes to the preview, Tally's own CSV is imported as it always was. */
+    /**
+     * Reads [uri]: a bank statement goes to the preview, a Wealthsimple investment file to the
+     * investment preview, and Tally's own CSV is imported as it always was.
+     */
     fun read(uri: Uri) {
         if (ui.value.stage == ImportStage.READING || ui.value.stage == ImportStage.WRITING) return
-        ui.update { it.copy(stage = ImportStage.READING, problem = null, done = null) }
+        investText = null
+        ui.update { it.copy(stage = ImportStage.READING, problem = null, done = null, invest = null) }
         viewModelScope.launch {
             val text = imports.readText(uri)
             if (text == null) {
@@ -174,6 +208,7 @@ class ImportViewModel @Inject constructor(
                     if (result is DataResult.Done) notices.show(result.message)
                 }
                 is StatementRead.Ok -> open(read.statement)
+                StatementRead.Investments -> openInvestments(text)
             }
         }
     }
@@ -197,6 +232,45 @@ class ImportViewModel @Inject constructor(
         }
         ui.update { it.copy(stage = ImportStage.PREVIEW) }
     }
+
+    /**
+     * A Wealthsimple investment file, read by the investment import. Each account it names goes
+     * where its number already lives, or to the investment account named for its kind, or to a
+     * new one; a statement, which names none, goes to the one investment account when there is one.
+     */
+    private suspend fun openInvestments(text: String) {
+        val found = try {
+            invest.preview(text)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The investment import words its refusals to be shown as they are.
+            ui.update { it.copy(stage = ImportStage.CHOOSE, problem = e.message ?: "That file could not be read.") }
+            return
+        }
+        val preview = investPreview(found)
+        val held = ledger.balances().first().filter { !it.archived && it.type == AccountType.INVESTMENT }
+        investText = text
+        statement.value = null
+        ui.update {
+            it.copy(
+                stage = ImportStage.PREVIEW,
+                invest = InvestImport(
+                    preview = preview,
+                    mapping = guessMapping(preview.accounts, held),
+                    statementAccountId = if (preview.kind == KIND_STATEMENT) held.singleOrNull()?.id else null,
+                ),
+            )
+        }
+    }
+
+    /** Where the file's account [number] goes: an investment account's id, or null for a new one. */
+    fun mapAccount(number: String, id: Long?) = ui.update { u ->
+        u.copy(invest = u.invest?.let { it.copy(mapping = it.mapping + (number to id)) })
+    }
+
+    /** The investment account a monthly statement belongs to. */
+    fun setStatementAccount(id: Long) = ui.update { u -> u.copy(invest = u.invest?.copy(statementAccountId = id)) }
 
     fun setTarget(id: Long?) = picks.update { p ->
         val type = id?.let { i -> state.value.accounts.firstOrNull { it.id == i }?.type } ?: p.newType
@@ -231,11 +305,16 @@ class ImportViewModel @Inject constructor(
     /** Back to the bank list, the file let go. */
     fun again() {
         statement.value = null
-        ui.update { it.copy(stage = ImportStage.CHOOSE, problem = null, done = null) }
+        investText = null
+        ui.update { it.copy(stage = ImportStage.CHOOSE, problem = null, done = null, invest = null) }
     }
 
     /** Writes the planned lines. One transaction: a failure adds nothing. */
     fun confirm() {
+        ui.value.invest?.let { pending ->
+            confirmInvest(pending)
+            return
+        }
         val st = state.value
         if (st.stage != ImportStage.PREVIEW || st.plan.count == 0) return
         val p = picks.value
@@ -266,4 +345,41 @@ class ImportViewModel @Inject constructor(
             }
         }
     }
+
+    /** Writes the investment file as previewed, its accounts where the owner put them. */
+    private fun confirmInvest(pending: InvestImport) {
+        val text = investText ?: return
+        if (ui.value.stage != ImportStage.PREVIEW || !pending.ready || pending.preview.count == 0) return
+        ui.update { it.copy(stage = ImportStage.WRITING, problem = null) }
+        viewModelScope.launch {
+            val counts = try {
+                invest.import(text, pending.mapping, pending.statementAccountId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ui.update { it.copy(stage = ImportStage.PREVIEW, problem = e.message ?: "The import did not finish.") }
+                return@launch
+            }
+            val line = investImportedLine(counts.holdings, counts.activities, counts.accountsCreated, counts.duplicates)
+            investText = null
+            ui.update { it.copy(stage = ImportStage.DONE, done = line) }
+            notices.show(line)
+        }
+    }
 }
+
+/** The data layer's preview in the screen's own terms, so the screen and its tests need no database. */
+private fun investPreview(p: ImportPreviewData): InvestPreview = InvestPreview(
+    kind = when (p.kind) {
+        WsKind.HOLDINGS -> KIND_HOLDINGS
+        WsKind.ACTIVITIES -> KIND_ACTIVITIES
+        WsKind.STATEMENT -> KIND_STATEMENT
+    },
+    asOf = p.asOf,
+    accounts = p.accounts.map { a -> FileAccount(a.number, a.name, a.registration, a.accountId, a.rows) },
+    holdings = p.holdings,
+    activities = p.activities,
+    new = p.new,
+    duplicates = p.duplicates,
+    skipped = p.skipped,
+)

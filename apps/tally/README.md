@@ -1,76 +1,86 @@
 # Tally
 
-An offline spending and budget tracker for Android. You log what you spend in two seconds, and the
-app answers one question at all times: how much room is left this month, and is the month on pace.
+The budget and spending tracker for Android, in Relay's look, synced with nothing to set up.
+You log what you spend in two seconds, and the app answers one question at all times: how much
+room is left this month, and is the month on pace.
 
-Kotlin, Jetpack Compose and Material 3, Room over SQLite, Hilt. No account, no servers, no
-internet permission. Visual language inherited from Avex.
+Kotlin, Jetpack Compose, Room over SQLite, Hilt. This is the second Tally: the first lives in
+antho976/RelayV4 (`apps/tally`) and is retired once its ledger has moved over (see "Moving from
+the first Tally").
 
-## Install a test build
+## Sync, with nothing to do
 
-Every CI run on this branch uploads an artifact called **tally-apks** (Actions tab, open the run,
-scroll to Artifacts). It holds:
+Tally keeps its ledger on the phone and syncs it with **Relay's cloud copy on the owner's
+server**: the same Render service as the Discord bot (antho976/antho-s-bot, `deploy/relay/`).
+The PC's Relay syncs with that copy too, so the phone, the server and the PC hold one ledger,
+whether the phone is on the home Wi-Fi or not.
 
-- `app-release.apk`: the minified build, signed with a throwaway debug key. Use this one to judge
-  speed and feel.
-- `app-debug.apk`: installs beside it as "Tally" with the `.debug` id, with LeakCanary watching
-  for leaks.
+1. On first launch Tally asks the server to let it in (`POST /api/tally/enroll`), sending only
+   the sha256 of a secret it keeps.
+2. The bot DMs the server's owner on Discord: "Tally on Pixel 8 wants to sync with your server",
+   with a four-character code the phone shows too, and **Allow** / **Deny**. That tap is the only
+   step, once per phone. (DMs closed to the bot: the dashboard's **Tally sync** page has the same
+   buttons.)
+3. Tally collects a Relay pairing link (`POST /api/tally/claim`, proving the secret), pairs with
+   the cloud engine through its rendezvous (`wss://<server>/relay`), and runs its first sync.
 
-Unzip, copy to the phone, open it (allow installing from your file manager once). A tagged release
-(`v*`) also publishes the APK on the Releases page.
+The first sync **merges**: a new phone takes the server's ledger, and a phone with entries keeps
+them. After that it syncs at launch, when the app comes back to the front, three seconds after an
+edit, the moment a network comes back, and every fifteen minutes in the background. Entries made
+offline wait and go. Settings, Sync shows where it stands and holds the rare manual acts (send this
+phone's ledger, take the server's, disconnect, another server address).
 
-To try the app with something in it: on the first screen choose **try it with sample data**, or
-later go to Settings, Reset, Load sample data. Sample accounts are named "Sample ..." so
-they can never pass for real data; Erase everything removes them.
+The server address is built in (`https://anthos-bot.onrender.com`; `-PtallyServer=…` or
+`TALLY_SERVER` builds for another).
 
 ## What it does
 
-- **Home**: what is left to spend this month drawn as the budget meter with today's pace tick,
-  what each remaining day can take, money in and out, the week against the daily budget, the
-  envelopes furthest over pace, goals, recent entries by day, upcoming bills, account balances.
-  **History** (Recent's "view all"): every entry by day, month by month, with search across all
-  time and filters. On a tablet Home splits into two panes.
-- **Add entry** (the + button, from every tab): keypad, category, account, date, note with
-  suggestions, transfers between accounts, optional repeat; quick add from what you log most,
-  save and add another, and what the month has left after it.
-- **Plan**: the monthly budget and per-category budgets with pace, a month-end projection and
-  budgets suggested from your three-month averages; bills and subscriptions that post themselves
-  on their due date; goals by kind: save toward a target, reach a balance by a date, invest a
-  share of income each month, or save an amount each month.
-- **Insights**: the month line (drag to scrub any day against the pace), where the money went,
-  largest expenses, top payees, six-month trend, a calendar heat grid, and Worth: net worth over
-  six months, held against owed, the share of income kept and what went into investments.
-- **Import from your bank**: Desjardins (AccèsD) and Wealthsimple CSV statements, or any bank's
-  CSV. Read on the phone, checked for lines already logged, card payments kept apart, payees
-  filed the way you filed them before. Share a CSV to Tally to open it straight in the import.
-- **Settings**, searchable, in Avex's grouped style: accent colour and pure black, currency,
-  payday budget month, week start, accounts (with Desjardins and Wealthsimple quick starts, and
-  recorded values for investment accounts), categories (over a hundred icons, suggested from
-  the name), Backup (weekly automatic copies, a folder of your choice, restore), Export (CSV and
-  the backup file), sample data, erase.
+- **Spend** (the top bar's switch): **Overview** (what is left with its pace, what each day can
+  take, money in and out, net worth, the week, budgets furthest over pace, bills coming up, goals,
+  recent entries, accounts), **Entries** by day month by month, **Insights** (the month's line
+  against the pace with scrubbing, where it went, payees, largest, six-month trend, a calendar of
+  days, net worth).
+- **Plan**: **Budgets** (the monthly budget with a projection, envelopes, what was spent without a
+  budget, budgets suggested from three months of averages), **Bills** that post themselves,
+  **Goals** (pots, a balance by a date, a share of income invested or kept), **Accounts**,
+  **Investments** (Wealthsimple files, holdings, room).
+- **Add** from every page (and from the launcher icon's long-press): keypad, the usual entries one
+  tap away, categories most used first, account, day, note with suggestions, repeat.
+- **Search** every entry ever, from the top bar or the launcher.
+- **Import** Desjardins, Wealthsimple or any bank's CSV; **Backup** weekly and to a folder;
+  **Export** CSV; categories with over a hundred icons; three grounds (Relay's matte, dark,
+  pure black).
+
+## Moving from the first Tally
+
+The two install side by side (this one is `com.quietsoftware.tally2`). If the first Tally already
+synced with the PC or the server, there is nothing to move: this one takes the ledger on its first
+sync. Otherwise, in the first Tally: Settings, Backup, Save a file; then in this one: Settings,
+Backup, Restore from a file (or "Restore a Tally backup" on the first screen). Uninstall the first
+one after.
 
 ## Build
 
 ```
-./gradlew :core:test                 # the money arithmetic, plain JVM, seconds
-./gradlew :app:testDebugUnitTest     # Room, repositories, doctrine, screenshots (Robolectric)
-./gradlew :app:verifyRoborazziDebug  # the same, comparing screenshot goldens
+./gradlew :core:test :link:test      # money rules and the link to the server, plain JVM
+./gradlew :app:testDebugUnitTest     # Room, repositories, sync against a fake door, screens (Robolectric)
 ./gradlew :app:assembleDebug
 ```
 
-Needs JDK 21 and the Android SDK with `platforms;android-37.0`.
+Needs JDK 21 and the Android SDK with `platforms;android-37.0`. `:link` has a live test that runs
+the whole way in against a real server: `TALLY_E2E_SERVER=http://127.0.0.1:3000 ./gradlew :link:test`
+(see `CloudLiveTest`).
 
 ## CI
 
-`.github/workflows/ci.yml`, on every push:
+`.github/workflows/ci.yml`, on every push: Guard (wrapper, no keystores, network code only in the
+link), Core (`:core` and `:link`), Verify (unit and screen tests, Lint, debug and minified release
+APKs, uploaded as **tally-apks**), Instrumented (device SQLite and a cold launch of the minified
+APK on an emulator). `record-screenshots.yml` records the screen goldens; `release.yml` turns a
+`v*` tag into a GitHub Release.
 
-| Job | What it proves |
-|---|---|
-| Guard | wrapper checksum, no keystores or build output committed, no INTERNET permission |
-| Core | money formatting, budget periods, pace, recurrence, CSV and backup codecs, sample data, voice rules |
-| Verify | Room DAO and repository tests on SQLite, recurring posting, backup round trip, design doctrine, theme contrast, screenshot goldens at 100% and 200% font, Android Lint, R8 release, merged manifest has no INTERNET, APK size budget |
-| Instrumented | the real UI flow on an emulator with LeakCanary failing any test that leaks, device SQLite, and a cold launch of the minified APK |
+## Money rules
 
-`record-screenshots.yml` re-records the goldens and the Room schema on demand; `release.yml`
-turns a `v*` tag into a GitHub Release (signed with the real key when the `TALLY_*` secrets are
-set, otherwise a debug-signed pre-release).
+`core/` is the first Tally's money rules, unchanged, with their tests; antho976/RelayV4's
+`crates/relay-money` is its Rust port, and the two are held to the same tests. A money rule changed
+here is changed there in the same change.

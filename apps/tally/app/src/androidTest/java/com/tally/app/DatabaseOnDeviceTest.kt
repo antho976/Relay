@@ -7,6 +7,7 @@ import com.tally.app.data.db.AccountEntity
 import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.db.TallyDatabase
 import com.tally.app.data.db.TransactionEntity
+import com.tally.app.data.db.tally
 import com.tally.core.AccountType
 import com.tally.core.CategoryKind
 import com.tally.core.TxType
@@ -25,7 +26,7 @@ import java.time.LocalDate
 @RunWith(AndroidJUnit4::class)
 class DatabaseOnDeviceTest {
 
-    private val db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), TallyDatabase::class.java).build()
+    private val db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), TallyDatabase::class.java).tally().build()
 
     @After fun close() = db.close()
 

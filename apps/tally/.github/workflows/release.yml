@@ -28,12 +28,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           distribution: temurin
           java-version: "21"
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
         with:
           cache-read-only: true
       - name: Install the Android platform
@@ -63,7 +63,7 @@ jobs:
             echo "::warning::No signing secrets: publishing a debug-signed pre-release."
           fi
       # One name for the tag and the APK, worked out once. A manual run from a branch such as
-      # claude/xyz gets build-N, and any slash left in a name is replaced, since the APK is a file
+      # claude/xyz gets tally-build-N, and any slash left in a name is replaced, since the APK is a file
       # name and "tally-claude/xyz.apk" would point into a directory that does not exist. The ref
       # comes in through env, never pasted into the script, so a branch name cannot run as shell.
       - name: Name the release
@@ -73,9 +73,9 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           RUN_NUMBER: ${{ github.run_number }}
         run: |
-          if [ "$REF_TYPE" = "tag" ]; then tag="$REF_NAME"; else tag="build-$RUN_NUMBER"; fi
+          if [ "$REF_TYPE" = "tag" ]; then tag="$REF_NAME"; else tag="tally-build-$RUN_NUMBER"; fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "apk=tally-${tag//\//-}.apk" >> "$GITHUB_OUTPUT"
+          echo "apk=${tag//\//-}.apk" >> "$GITHUB_OUTPUT"
       - name: Build the release APK
         env:
           SIGNED: ${{ steps.keys.outputs.signed }}
