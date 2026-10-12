@@ -104,6 +104,10 @@ data class GoalWithSaved(
 @Immutable
 data class TransferRow(val date: LocalDate, val amount: Long, val accountId: Long, val toAccountId: Long)
 
+/** A transfer as one investment account sees it: [amount] above zero came in, below zero went out. */
+@Immutable
+data class AccountTransfer(val accountId: Long, val date: LocalDate, val amount: Long)
+
 /** An entry logged often: its note and category, and the amount it was last logged at. */
 @Immutable
 data class QuickPick(

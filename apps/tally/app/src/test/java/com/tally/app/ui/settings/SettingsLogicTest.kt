@@ -137,4 +137,28 @@ class SettingsLogicTest {
         assertEquals("Off · last 3 Oct", backupSummary(auto = false, lastOn = "3 Oct", failed = false))
         assertEquals("Last backup failed · back up now", backupSummary(auto = true, lastOn = "3 Oct", failed = true))
     }
+
+    @Test fun thePcsSyncReadsInPlainWords() {
+        assertEquals(SyncLine("Not paired", "This ledger is on this phone only"), syncLine(false, null, null, 0, 0))
+        assertEquals(SyncLine("Not synced yet", "The first sync runs as soon as the PC can be reached"), syncLine(true, null, null, 0, 0))
+        assertEquals(SyncLine("Synced", "Today, 14:20 · 3 sent, 2 received"), syncLine(true, "Today, 14:20", null, 3, 2))
+        assertEquals("Today, 14:20 · Nothing new either way", syncLine(true, "Today, 14:20", null, 0, 0).detail)
+        val failed = syncLine(true, "Today, 14:20", "The PC could not be reached", 3, 2)
+        assertTrue(failed.failed)
+        assertEquals("The PC could not be reached", failed.detail)
+
+        assertEquals("Keep this ledger on your computer too", pcSummary(false, null, null))
+        assertEquals("Synced · Today, 14:20", pcSummary(true, "Today, 14:20", null))
+        assertEquals("Last sync failed · open for why", pcSummary(true, "Today, 14:20", "x"))
+        assertEquals("Paired · not synced yet", pcSummary(true, null, null))
+        assertTrue("The first sync is said before it runs", "replaced" in FIRST_SYNC_NOTE)
+    }
+
+    @Test fun thePcIsFoundByTheWordsPeopleUse() {
+        assertEquals(SettingsDest.PC, searchSettings("relay").first().dest)
+        assertEquals(SettingsDest.PC, searchSettings("computer").first().dest)
+        assertEquals("Relay on your PC", searchSettings("pair").first().where)
+        assertEquals("Settings", searchSettings("Relay on").first().where)
+        assertEquals(SettingsDest.PC, searchSettings("unpair").first().dest)
+    }
 }

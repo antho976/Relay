@@ -9,6 +9,7 @@ import com.tally.app.data.FixedClock
 import com.tally.app.data.RoomTestDb
 import com.tally.app.data.addAccount
 import com.tally.app.data.db.TallyDatabase
+import com.tally.app.data.investRepository
 import com.tally.app.data.ledgerRepository
 import com.tally.app.data.planRepository
 import com.tally.app.data.prefs.SettingsRepository
@@ -106,7 +107,7 @@ class EditorDraftRestoreTest {
         val typed = AccountDraft(name = "Visa Infinite", type = AccountType.CREDIT, openingText = "512.30", opening = 51_230, owe = true)
         handle.keepDraft(AccountDraft.serializer(), typed)
 
-        val vm = AccountEditViewModel(handle, db.ledgerRepository(clock), settings, notices, clock)
+        val vm = AccountEditViewModel(handle, db.ledgerRepository(clock), db.investRepository(clock, settings), settings, notices, clock)
         val state = vm.state.awaitState { it.loaded }
 
         assertEquals(typed, state.draft)
@@ -117,7 +118,7 @@ class EditorDraftRestoreTest {
 
     @Test fun everyChangeIsKeptForTheNextProcess() {
         val handle = SavedStateHandle(mapOf(Args.ID to 0L))
-        val vm = AccountEditViewModel(handle, db.ledgerRepository(clock), settings, notices, clock)
+        val vm = AccountEditViewModel(handle, db.ledgerRepository(clock), db.investRepository(clock, settings), settings, notices, clock)
         vm.state.awaitState { it.loaded }
 
         vm.setName("Joint chequing")

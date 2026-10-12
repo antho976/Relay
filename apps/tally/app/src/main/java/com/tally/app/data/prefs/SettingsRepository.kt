@@ -3,6 +3,7 @@ package com.tally.app.data.prefs
 import android.content.Context
 import androidx.compose.runtime.Immutable
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -12,6 +13,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.tally.core.BudgetPeriod
+import com.tally.core.MoneyFormatter
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -52,6 +54,8 @@ data class Settings(
     val onboarded: Boolean = false,
     val defaultAccountId: Long = 0,
     val sampleLoaded: Boolean = false,
+    /** Relay's ground: "matte" (the default), "dark" or "oled" (ui/theme/Theme.kt). */
+    val palette: String = "matte",
 ) {
     fun periodFor(date: java.time.LocalDate): BudgetPeriod = BudgetPeriod.containing(date, monthStartDay)
 
@@ -77,6 +81,19 @@ data class BackupPrefs(
     val folderFailed: Boolean = false,
 )
 
+/** One setting the PC sync carries, as the PC stores it: a string [value] and when it changed. */
+@Immutable
+data class SyncedSetting(val key: String, val value: String, val updatedAt: Long) {
+    companion object {
+        const val CURRENCY = "currency"
+        const val MONTH_START_DAY = "month_start_day"
+        const val WEEK_STARTS_MONDAY = "week_starts_monday"
+    }
+}
+
+@Immutable
+data class SyncedSettings(val all: List<SyncedSetting>)
+
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
 @Singleton
@@ -94,11 +111,16 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         val onboarded = booleanPreferencesKey("onboarded")
         val defaultAccount = longPreferencesKey("default_account")
         val sampleLoaded = booleanPreferencesKey("sample_loaded")
+        val palette = stringPreferencesKey("palette")
         val backupAuto = booleanPreferencesKey("backup_auto")
         val backupFolder = stringPreferencesKey("backup_folder")
         val backupLastAt = longPreferencesKey("backup_last_at")
         val backupFailed = booleanPreferencesKey("backup_failed")
         val backupFolderFailed = booleanPreferencesKey("backup_folder_failed")
+        // When each synced setting last changed, for the PC sync's newest-wins (epoch millis).
+        val currencyAt = longPreferencesKey("currency_at")
+        val monthStartAt = longPreferencesKey("month_start_day_at")
+        val weekMondayAt = longPreferencesKey("week_starts_monday_at")
     }
 
     val settings: Flow<Settings> = store.data
@@ -115,6 +137,7 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
                 onboarded = p[Keys.onboarded] ?: false,
                 defaultAccountId = p[Keys.defaultAccount] ?: 0,
                 sampleLoaded = p[Keys.sampleLoaded] ?: false,
+                palette = p[Keys.palette] ?: if (p[Keys.amoled] == true) "oled" else "matte",
             )
         }
         .distinctUntilChanged()
@@ -151,12 +174,30 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         it[Keys.backupFolderFailed] = folderFailed
     }
 
-    suspend fun setCurrency(code: String) = store.edit { it[Keys.currency] = code }
-    suspend fun setMonthStartDay(day: Int) = store.edit { it[Keys.monthStart] = day.coerceIn(1, BudgetPeriod.MAX_START_DAY) }
-    suspend fun setWeekStartsMonday(monday: Boolean) = store.edit { it[Keys.weekMonday] = monday }
+    suspend fun setCurrency(code: String) = store.edit {
+        it[Keys.currency] = code
+        it.stamp(Keys.currencyAt)
+    }
+    suspend fun setMonthStartDay(day: Int) = store.edit {
+        it[Keys.monthStart] = day.coerceIn(1, BudgetPeriod.MAX_START_DAY)
+        it.stamp(Keys.monthStartAt)
+    }
+    suspend fun setWeekStartsMonday(monday: Boolean) = store.edit {
+        it[Keys.weekMonday] = monday
+        it.stamp(Keys.weekMondayAt)
+    }
+
+    /**
+     * A change here is newer than the one it replaces even when this phone's clock runs behind
+     * the PC's that stamped it: `max(now, previous + 1)`, as every ledger row is stamped.
+     */
+    private fun MutablePreferences.stamp(key: Preferences.Key<Long>) {
+        this[key] = maxOf(System.currentTimeMillis(), (this[key] ?: 0L) + 1)
+    }
     suspend fun setAccent(accent: Accent) = store.edit { it[Keys.accent] = accent.key }
     suspend fun setAccentEnabled(enabled: Boolean) = store.edit { it[Keys.accentEnabled] = enabled }
     suspend fun setAmoled(amoled: Boolean) = store.edit { it[Keys.amoled] = amoled }
+    suspend fun setPalette(name: String) = store.edit { it[Keys.palette] = name }
     suspend fun setOnboarded(done: Boolean) = store.edit { it[Keys.onboarded] = done }
     suspend fun setDefaultAccount(id: Long) = store.edit { it[Keys.defaultAccount] = id }
     suspend fun setSampleLoaded(loaded: Boolean) = store.edit { it[Keys.sampleLoaded] = loaded }
@@ -167,5 +208,68 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         it.remove(Keys.defaultAccount)
         it.remove(Keys.sampleLoaded)
         it.remove(Keys.monthStart)
+        // Back to the 1st is a change too, so the paired PC hears about it.
+        it.stamp(Keys.monthStartAt)
+    }
+
+    /** The settings the PC sync carries, each with when it last changed (0: never set here). */
+    suspend fun synced(): SyncedSettings {
+        val p = store.data.catch { if (it is IOException) emit(emptyPreferences()) else throw it }.first()
+        val s = current()
+        return SyncedSettings(
+            listOf(
+                SyncedSetting(SyncedSetting.CURRENCY, s.currency, p[Keys.currencyAt] ?: 0L),
+                SyncedSetting(SyncedSetting.MONTH_START_DAY, s.monthStartDay.toString(), p[Keys.monthStartAt] ?: 0L),
+                SyncedSetting(SyncedSetting.WEEK_STARTS_MONDAY, if (s.weekStartsMonday) "1" else "0", p[Keys.weekMondayAt] ?: 0L),
+            )
+        )
+    }
+
+    /**
+     * Takes a setting from the PC when its change is newer than this phone's, keeping the PC's
+     * change time; [force] takes it whatever the stamps, with the PC's whole ledger. True when it
+     * was taken. Values that do not read are refused, not guessed.
+     *
+     * A currency is only ever relabelled here, never converted. The PC changes it only between
+     * currencies with the same decimals, so one with other decimals is refused and the phone's
+     * stands, unless the PC's whole ledger comes with it (its amounts are already in it).
+     */
+    suspend fun applySynced(key: String, value: String, at: Long, force: Boolean = false): Boolean {
+        var taken = false
+        store.edit { p ->
+            fun newer(stamp: Preferences.Key<Long>) = force || (p[stamp] ?: 0L) < at
+            when (key) {
+                SyncedSetting.CURRENCY -> {
+                    val incoming = runCatching { MoneyFormatter(value, Locale.ROOT).fractionDigits }.getOrNull()
+                    val mine = MoneyFormatter(p[Keys.currency] ?: Settings.defaultCurrency(), Locale.ROOT).fractionDigits
+                    if (newer(Keys.currencyAt) && incoming != null && (force || incoming == mine)) {
+                        p[Keys.currency] = value
+                        p[Keys.currencyAt] = at
+                        taken = true
+                    }
+                }
+                SyncedSetting.MONTH_START_DAY -> {
+                    val day = value.trim().toIntOrNull()?.takeIf { it in 1..BudgetPeriod.MAX_START_DAY }
+                    if (newer(Keys.monthStartAt) && day != null) {
+                        p[Keys.monthStart] = day
+                        p[Keys.monthStartAt] = at
+                        taken = true
+                    }
+                }
+                SyncedSetting.WEEK_STARTS_MONDAY -> {
+                    val monday = when (value.trim().lowercase()) {
+                        "1", "true" -> true
+                        "0", "false" -> false
+                        else -> null
+                    }
+                    if (newer(Keys.weekMondayAt) && monday != null) {
+                        p[Keys.weekMonday] = monday
+                        p[Keys.weekMondayAt] = at
+                        taken = true
+                    }
+                }
+            }
+        }
+        return taken
     }
 }

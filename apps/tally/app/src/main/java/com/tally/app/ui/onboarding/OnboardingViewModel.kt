@@ -170,6 +170,19 @@ class OnboardingViewModel @Inject constructor(
         }
     }
 
+    /**
+     * The phone took a ledger from the owner's server on its first sync: nothing to ask, the
+     * accounts and categories are already here.
+     */
+    fun finishFromServer() {
+        if (draft.value.busy) return
+        draft.update { it.copy(busy = true) }
+        viewModelScope.launch {
+            settings.setOnboarded(true)
+            finished.send(Unit)
+        }
+    }
+
     /** Fills the empty ledger with the labelled sample, in the picked currency, and goes straight to Home. */
     fun trySample() {
         val d = draft.value

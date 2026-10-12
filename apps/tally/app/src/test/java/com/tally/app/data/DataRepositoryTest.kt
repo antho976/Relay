@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import com.tally.app.data.db.ContributionEntity
+import com.tally.app.data.db.FxRateEntity
 import com.tally.app.data.db.GoalEntity
 import com.tally.app.data.db.RecurringEntity
 import com.tally.app.data.db.TallyDatabase
@@ -21,9 +22,13 @@ import com.tally.core.BackupReadResult
 import com.tally.core.CategoryKind
 import com.tally.core.Defaults
 import com.tally.core.Frequency
+import com.tally.core.Registration
 import com.tally.core.SampleData
+import com.tally.core.SecurityDto
+import com.tally.core.SecurityKind
 import com.tally.core.TransactionDto
 import com.tally.core.TxType
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -90,13 +95,30 @@ class DataRepositoryTest {
         goals = goals.sortedBy { it.id },
         contributions = contributions.sortedBy { it.id },
         values = values.sortedBy { it.id },
+        securities = securities.sortedBy { it.id },
+        holdings = holdings.sortedBy { it.id },
+        activities = activities.sortedBy { it.id },
+        prices = prices.sortedBy { it.id },
+        fxRates = fxRates.sortedBy { it.id },
+        roomFacts = roomFacts.sortedBy { it.id },
     )
 
     /**
-     * [byId] without the month and week start: a snapshot always writes the phone's own, while
-     * the sample file leaves them out, so a ledger comparison must not count them.
+     * [byId] without the month and week start, nor the uids: a snapshot always writes the phone's
+     * own, while the sample file leaves them out (a restore makes the uids), so a ledger comparison
+     * must not count them.
      */
-    private fun BackupFile.ledgerOnly(): BackupFile = byId().copy(monthStartDay = null, weekStartsMonday = null)
+    private fun BackupFile.ledgerOnly(): BackupFile = byId().copy(
+        monthStartDay = null,
+        weekStartsMonday = null,
+        accounts = accounts.sortedBy { it.id }.map { it.copy(uid = null) },
+        securities = securities.sortedBy { it.id }.map { it.copy(uid = null) },
+        holdings = holdings.sortedBy { it.id }.map { it.copy(uid = null) },
+        activities = activities.sortedBy { it.id }.map { it.copy(uid = null) },
+        prices = prices.sortedBy { it.id }.map { it.copy(uid = null) },
+        fxRates = fxRates.sortedBy { it.id }.map { it.copy(uid = null) },
+        roomFacts = roomFacts.sortedBy { it.id }.map { it.copy(uid = null) },
+    )
 
     /** A small ledger the owner made by hand, to prove a failed move leaves it alone. */
     private suspend fun ownLedger() {
@@ -447,5 +469,87 @@ class DataRepositoryTest {
 
         assertEquals(before, amounts())
         assertEquals("JPY", settings.current().currency)
+    }
+
+    // ── Investments (docs/INVESTMENTS.md) ────────────────────────────────────
+
+    @Test fun investmentsAndRegistrationsRideThroughABackup() = runTest {
+        val invest = db.investRepository(clock, settings)
+        invest.import(WsFiles.HOLDINGS_REPORT, emptyMap(), null)
+        invest.import(WsFiles.ACTIVITIES_EXPORT, emptyMap(), null)
+        invest.setRoom(Registration.TFSA, 2026, 7_000_00)
+        db.invest().insertFxRates(listOf(FxRateEntity(base = "USD", quote = "CAD", date = LocalDate.of(2026, 5, 1), rate = 137_125_000, source = "MANUAL")))
+        val portfolio = invest.portfolio().first()
+
+        val file = data.snapshot()
+        assertEquals(listOf(3, 3, 3, 1, 1), listOf(file.securities.size, file.holdings.size, file.prices.size, file.fxRates.size, file.roomFacts.size))
+        assertTrue(file.activities.isNotEmpty())
+        val demo = file.accounts.single { it.externalRef == "DEMO0001CAD" }
+        assertEquals(listOf(Registration.TFSA, "Wealthsimple"), listOf(demo.registration, demo.institution))
+
+        val read = BackupCodec.decode(BackupCodec.encode(file))
+        assertTrue("$read", read is BackupReadResult.Ok)
+        assertTrue(data.restore((read as BackupReadResult.Ok).file) is DataResult.Done)
+        assertEquals(file.byId(), data.snapshot().byId())
+        assertEquals("The same rows read the same", portfolio, invest.portfolio().first())
+    }
+
+    /**
+     * docs/INVESTMENTS.md, shared with relay-money: a backup keeps the uids an import derived (the
+     * `ws:` account, its `imp:` lines), so the same file imported after a restore adds nothing. No
+     * tombstone is what stops it: the restore takes back the ones its erase left for those uids.
+     */
+    @Test fun `a restore keeps investment uids so a re-import adds nothing`() = runTest {
+        val invest = db.investRepository(clock, settings)
+        val first = invest.import(WsFiles.ACTIVITIES_EXPORT, emptyMap(), null)
+        assertEquals(1, first.accountsCreated)
+        assertTrue(first.activities > 0)
+        val uids = db.invest().activities().map { it.uid }.toSet()
+
+        val file = BackupCodec.decode(BackupCodec.encode(data.snapshot())) as BackupReadResult.Ok
+        assertEquals("ws:HQ7XFMC41CAD", file.file.accounts.single().uid)
+        assertEquals(uids, file.file.activities.map { it.uid }.toSet())
+        assertTrue(data.restore(file.file) is DataResult.Done)
+        assertEquals(uids, db.invest().activities().map { it.uid }.toSet())
+        assertTrue(db.sync().tombstones().none { it.tableName == "activities" || it.tableName == "accounts" })
+
+        val again = invest.import(WsFiles.ACTIVITIES_EXPORT, emptyMap(), null)
+        assertEquals(listOf(0, 0, first.activities), listOf(again.accountsCreated, again.activities, again.duplicates))
+        assertEquals(uids, db.invest().activities().map { it.uid }.toSet())
+    }
+
+    @Test fun aRestoreGivesAFreshUidToABlankOrRepeatedOne() = runTest {
+        val sample = SampleData.build(today, 2, "CAD")
+        val repeated = sample.copy(
+            accounts = sample.accounts.mapIndexed { i, a -> a.copy(uid = if (i == 0) " " else "same") },
+            securities = listOf(SecurityDto(1, "XEQT", currency = "CAD", kind = SecurityKind.ETF, uid = "sec:XEQT")),
+        )
+
+        assertTrue(data.restore(repeated) is DataResult.Done)
+
+        val accounts = db.accounts().all().sortedBy { it.id }.map { it.uid }
+        assertEquals("same", accounts[1])
+        assertEquals("Every account has its own uid", accounts.size, accounts.toSet().size)
+        assertTrue(accounts.none { it.isBlank() })
+        assertEquals("sec:XEQT", db.invest().securities().single().uid)
+    }
+
+    @Test fun aCurrencySwitchRescalesTheBookAndTheRoomButNotWhatIsInASecuritysOwnCurrency() = runTest {
+        val invest = db.investRepository(clock, settings)
+        invest.import(WsFiles.HOLDINGS_REPORT, emptyMap(), null)
+        invest.import(WsFiles.ACTIVITIES_EXPORT, emptyMap(), null)
+        invest.setRoom(Registration.TFSA, 2026, 7_000_50)
+        val activities = db.invest().activities()
+        val prices = db.invest().prices()
+
+        assertEquals("The report's value (1,633.33) and the room's 50 cents round", 2, data.planCurrencyChange("JPY")?.rounded)
+        assertTrue(data.changeCurrency("JPY") is DataResult.Done)
+
+        val held = db.invest().holdings()
+        assertEquals("The ledger's book rescales", listOf(1_000L, 250L, 50L), held.map { it.book })
+        assertEquals("The market's book is the security's own", listOf(750_00L, 250_00L, 50_00L), held.map { it.bookMarket })
+        assertEquals(7_000L, db.invest().roomFacts().single().amount)
+        assertEquals(activities.map { it.amount }, db.invest().activities().map { it.amount })
+        assertEquals(prices.map { it.price }, db.invest().prices().map { it.price })
     }
 }

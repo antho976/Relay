@@ -136,13 +136,14 @@ internal fun monthCsvFileName(start: LocalDate): String = "tally-entries-" + sta
 // ── The Settings list, Avex's way ───────────────────────────────────────────
 
 /** Where a Settings row or search hit goes. */
-enum class SettingsDest { APPEARANCE, FORMAT, ACCOUNTS, CATEGORIES, IMPORT, BACKUP, EXPORT, SAMPLE, ERASE, ABOUT }
+enum class SettingsDest { APPEARANCE, FORMAT, ACCOUNTS, CATEGORIES, IMPORT, BACKUP, EXPORT, PC, SAMPLE, ERASE, ABOUT, INVESTMENTS }
 
 /** The group a destination sits in on the Settings list, a search hit's "In ..." line. */
 internal fun groupOf(dest: SettingsDest): String = when (dest) {
     SettingsDest.APPEARANCE, SettingsDest.FORMAT -> "General"
-    SettingsDest.ACCOUNTS, SettingsDest.CATEGORIES, SettingsDest.IMPORT -> "Money"
+    SettingsDest.ACCOUNTS, SettingsDest.CATEGORIES, SettingsDest.IMPORT, SettingsDest.INVESTMENTS -> "Money"
     SettingsDest.BACKUP, SettingsDest.EXPORT -> "Data"
+    SettingsDest.PC -> PC_GROUP
     SettingsDest.SAMPLE, SettingsDest.ERASE -> "Reset"
     SettingsDest.ABOUT -> "About"
 }
@@ -151,7 +152,12 @@ internal fun groupOf(dest: SettingsDest): String = when (dest) {
 @Immutable
 internal data class SettingsEntry(val key: String, val name: String, val dest: SettingsDest, val tags: String = "") {
     /** Where the hit lives, in the words of the list: a page's group, or the page an item sits on. */
-    val where: String get() = if (key.startsWith("page:")) groupOf(dest) else pageName(dest)
+    val where: String get() = when {
+        // The PC's page is the one row of its own group: the list it sits on says more.
+        key == "page:pc" -> "Settings"
+        key.startsWith("page:") -> groupOf(dest)
+        else -> pageName(dest)
+    }
 }
 
 internal fun pageName(dest: SettingsDest): String = when (dest) {
@@ -162,9 +168,11 @@ internal fun pageName(dest: SettingsDest): String = when (dest) {
     SettingsDest.IMPORT -> "Import from your bank"
     SettingsDest.BACKUP -> "Backup"
     SettingsDest.EXPORT -> "Export"
+    SettingsDest.PC -> PC_GROUP
     SettingsDest.SAMPLE -> "Load sample data"
     SettingsDest.ERASE -> "Erase everything"
     SettingsDest.ABOUT -> "About Tally"
+    SettingsDest.INVESTMENTS -> "Investments"
 }
 
 /** Every page, and the settings inside them, that the search finds. */
@@ -176,6 +184,7 @@ internal val SETTINGS_ENTRIES: List<SettingsEntry> = listOf(
     SettingsEntry("page:import", "Import from your bank", SettingsDest.IMPORT, "desjardins wealthsimple accesd statement csv bank download transactions"),
     SettingsEntry("page:backup", "Backup", SettingsDest.BACKUP, "auto weekly copy restore folder safe"),
     SettingsEntry("page:export", "Export", SettingsDest.EXPORT, "csv spreadsheet excel sheets file json share"),
+    SettingsEntry("page:pc", "Relay on your PC", SettingsDest.PC, "sync computer desktop laptop relay pair link wifi tailscale both devices"),
     SettingsEntry("page:sample", "Load sample data", SettingsDest.SAMPLE, "demo try example fake"),
     SettingsEntry("page:erase", "Erase everything", SettingsDest.ERASE, "delete reset wipe clear start over"),
     SettingsEntry("page:about", "About Tally", SettingsDest.ABOUT, "version privacy offline licence license"),
@@ -194,7 +203,19 @@ internal val SETTINGS_ENTRIES: List<SettingsEntry> = listOf(
     SettingsEntry("item:now", "Back up now", SettingsDest.BACKUP, "save copy"),
     SettingsEntry("item:csv", "Entries as CSV", SettingsDest.EXPORT, "spreadsheet excel numbers sheets"),
     SettingsEntry("item:file", "Save a backup file", SettingsDest.EXPORT, "json copy share"),
+    SettingsEntry("item:pair", "Pair with your PC", SettingsDest.PC, "relay pairing link code qr address connect"),
+    SettingsEntry("item:sync", "Sync now", SettingsDest.PC, "update refresh send pc computer"),
+    SettingsEntry("item:forget", "Forget this PC", SettingsDest.PC, "unpair disconnect remove stop syncing"),
     SettingsEntry("item:investment", "Investment accounts", SettingsDest.ACCOUNTS, "tfsa rrsp fhsa celi reer wealthsimple value"),
+    // Investments is a page of its own, not a setting; the search finds it by the words people use for it.
+    SettingsEntry(
+        "page:investments",
+        "Investments",
+        SettingsDest.INVESTMENTS,
+        "portfolio holdings stocks etf dividends tfsa celi rrsp reer fhsa celiapp resp reee wealthsimple",
+    ),
+    SettingsEntry("item:room", "Contribution room", SettingsDest.INVESTMENTS, "tfsa rrsp fhsa celi reer celiapp droits cotisation cra limit"),
+    SettingsEntry("item:ws-holdings", "Wealthsimple holdings report", SettingsDest.IMPORT, "investments activities export csv tfsa celi rrsp reer"),
 )
 
 private fun fold(text: String): String = BankStatements.normalize(text)
@@ -247,3 +268,43 @@ internal fun restorePreview(file: BackupFile): RestorePreview = RestorePreview(
 internal fun restorePrompt(entries: Int, savedOn: String?): String =
     "Replace everything with this backup? It holds " + Copy.plural(entries, "entry", "entries") +
         (if (savedOn != null) ", saved $savedOn." else ".")
+
+// ── Relay on your PC ────────────────────────────────────────────────────────
+
+/** The Settings group, and the page it opens. */
+internal const val PC_GROUP = "Relay on your PC"
+
+/** Where sync stands, in words: a short [title], the [detail] under it, and whether it [failed]. */
+@Immutable
+internal data class SyncLine(val title: String, val detail: String, val failed: Boolean = false)
+
+/** "3 sent, 2 received", "Nothing new either way". */
+internal fun syncCounts(sent: Int, received: Int): String =
+    if (sent == 0 && received == 0) "Nothing new either way" else "$sent sent, $received received"
+
+/**
+ * The last sync as the page and the Settings row read it. [lastOn] is when it last worked, already
+ * in words ("Today, 14:20"); null before the first.
+ */
+internal fun syncLine(paired: Boolean, lastOn: String?, error: String?, sent: Int, received: Int): SyncLine = when {
+    !paired -> SyncLine("Not paired", "This ledger is on this phone only")
+    error != null -> SyncLine("Last sync failed", error, failed = true)
+    lastOn == null -> SyncLine("Not synced yet", "The first sync runs as soon as the PC can be reached")
+    else -> SyncLine("Synced", lastOn + " · " + syncCounts(sent, received))
+}
+
+/**
+ * The Settings row's subtitle for the paired PC: "Synced · Today, 14:20", or why it is not, or
+ * the [note] a sync left (the phone took the PC's ledger).
+ */
+internal fun pcSummary(paired: Boolean, lastOn: String?, error: String?, note: String? = null): String = when {
+    !paired -> "Keep this ledger on your computer too"
+    error != null -> "Last sync failed · open for why"
+    note != null -> note
+    lastOn == null -> "Paired · not synced yet"
+    else -> "Synced · $lastOn"
+}
+
+/** What the first sync does, said before it runs. */
+internal const val FIRST_SYNC_NOTE =
+    "The first sync makes the PC's ledger a copy of this phone's: anything only on the PC is replaced. After that, a change on either side reaches the other."

@@ -51,6 +51,13 @@ sealed interface StatementRead {
     /** A file in Tally's own export layout: it names its accounts and types, so the plain CSV import reads it. */
     data object TallyCsv : StatementRead
 
+    /**
+     * One of Wealthsimple's investment files (a holdings report, an activities export, or a monthly
+     * statement with buys, sells or dividends): money put to work is not income or spending, so the
+     * investment import ([Wealthsimple.read]) reads it.
+     */
+    data object Investments : StatementRead
+
     /** [reason] is shown as-is, so it names the problem and not the parser. */
     data class Invalid(val reason: String) : StatementRead
 }
@@ -58,8 +65,9 @@ sealed interface StatementRead {
 /**
  * Bank statements as their banks export them, read on the phone. No bank offers an open API to an
  * offline app, so the CSV the owner downloads is the bridge: Desjardins AccèsD (with French or
- * English headers, or its header-less positional layout), Wealthsimple's monthly statements, and
- * any other bank that writes a date and an amount (or money out and money in) per line.
+ * English headers, or its header-less positional layout), Wealthsimple's cash statements, and any
+ * other bank that writes a date and an amount (or money out and money in) per line. Wealthsimple's
+ * investment files are handed to [Wealthsimple] instead.
  */
 object BankStatements {
 
@@ -70,6 +78,7 @@ object BankStatements {
     fun read(text: String, fractionDigits: Int, dayFirst: Boolean = true): StatementRead {
         val body = text.removePrefix(CsvCodec.BOM)
         if (body.isBlank()) return StatementRead.Invalid("The file is empty.")
+        if (Wealthsimple.read(body) is WsRead.Ok) return StatementRead.Investments
         val records = CsvCodec.parseRecords(body, delimiterOf(body)).map { r -> r.map { it.trim() } }
         if (records.isEmpty()) return StatementRead.Invalid("The file is empty.")
 

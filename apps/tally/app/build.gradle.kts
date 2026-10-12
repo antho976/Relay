@@ -28,13 +28,22 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.quietsoftware.tally"
+        // Not the first Tally's id (com.quietsoftware.tally): the two install side by side while the
+        // ledger moves over through the server, and the first one is uninstalled after.
+        applicationId = "com.quietsoftware.tally2"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
+        // The owner's server: antho-s-bot on Render, which carries Relay's cloud copy. Tally connects
+        // to it by itself; -PtallyServer=… (or TALLY_SERVER) builds for another, and Settings can
+        // change it on the phone.
+        val server = providers.gradleProperty("tallyServer")
+            .orElse(providers.environmentVariable("TALLY_SERVER"))
+            .getOrElse("https://anthos-bot.onrender.com")
+        buildConfigField("String", "TALLY_SERVER", "\"$server\"")
     }
 
     signingConfigs {
@@ -156,6 +165,8 @@ tasks.register<JacocoReport>("coverageReport") {
 dependencies {
     // The money arithmetic, codecs and enums live in the pure-JVM :core module.
     implementation(project(":core"))
+    // Relay's door and the request that connects this phone to the owner's server: pure JVM.
+    implementation(project(":link"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)
@@ -169,6 +180,7 @@ dependencies {
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
+    // Category icons only (ui/kit/CategoryIcons.kt): the stored names the ledger syncs map to these.
     implementation(libs.compose.material.icons)
     debugImplementation(libs.compose.ui.tooling)
 
@@ -189,6 +201,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.profileinstaller)
+    // The one network library, for :link: the owner's server and nothing else.
+    implementation(libs.okhttp)
 
     // Debug only: LeakCanary watches every destroyed Activity, ViewModel and View for retention.
     debugImplementation(libs.leakcanary.android)
@@ -203,6 +217,7 @@ dependencies {
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.room.testing)
     testImplementation(libs.work.testing)
+    testImplementation(libs.okhttp.mockwebserver)
 
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.test.runner)

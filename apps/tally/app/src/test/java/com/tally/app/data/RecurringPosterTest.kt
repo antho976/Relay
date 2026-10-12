@@ -270,4 +270,47 @@ class RecurringPosterTest {
         assertEquals(listOf(LocalDate.of(2025, 11, 30), LocalDate.of(2026, 2, 28)), postedDates())
         assertEquals(LocalDate.of(2026, 5, 30), db.recurring().get(quarterly)?.nextDate)
     }
+
+    /**
+     * A posted entry's uid is derived from the bill and the date (docs/MONEY.md), so rent the PC
+     * posted first and synced here is not posted a second time, and the two devices agree on it.
+     */
+    @Test fun postedBillsCarryTheBillAndDateAsTheirUidAndMergeWithThePcs() = runTest {
+        world()
+        val rent = bill(anchor = LocalDate.of(2026, 4, 1))
+        val uid = db.recurring().get(rent)!!.uid
+        // The PC posted April already, and the sync brought it here.
+        db.transactions().insert(
+            com.tally.app.data.db.TransactionEntity(
+                type = TxType.EXPENSE, amount = 1_350_00, date = LocalDate.of(2026, 4, 1), accountId = chequing,
+                categoryId = housing, note = "Rent", recurringId = rent, uid = "bill:$uid:2026-04-01",
+            )
+        )
+
+        val posted = poster.postDue()
+
+        assertEquals("Only May was new", 1, posted)
+        val uids = db.transactions().all().map { it.uid }
+        assertEquals(listOf("bill:$uid:2026-04-01", "bill:$uid:2026-05-01"), uids)
+        assertEquals("bill:$uid:2026-05-01", RecurringPoster.billUid(uid, LocalDate.of(2026, 5, 1)))
+    }
+
+    /**
+     * A posted bill you deleted is not posted again, even when the bill's next date falls behind
+     * it (an older copy of the bill from the PC), and its tombstone outlives the pruning a sync does.
+     */
+    @Test fun aDeletedPostedBillIsNotPostedAgain() = runTest {
+        world()
+        val rent = bill(anchor = LocalDate.of(2026, 5, 1))
+        assertEquals(1, poster.postDue())
+        val posted = db.transactions().all().single()
+        db.ledgerRepository(clock).delete(posted.id)
+        db.sync().pruneTombstones(Long.MAX_VALUE)
+
+        val stored = db.recurring().get(rent)!!
+        db.recurring().update(stored.copy(nextDate = LocalDate.of(2026, 5, 1)))
+
+        assertEquals(0, poster.postDue())
+        assertTrue(db.transactions().all().isEmpty())
+    }
 }

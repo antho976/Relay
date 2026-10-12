@@ -28,3 +28,5 @@ include(":app")
 // Pure Kotlin/JVM: money, periods, pace, recurrence, CSV and backup codecs. No Android types, so it
 // tests in milliseconds and the app layer cannot leak into the arithmetic.
 include(":core")
+// Pure Kotlin/JVM: Relay's door and the request that connects this phone to the owner's server.
+include(":link")

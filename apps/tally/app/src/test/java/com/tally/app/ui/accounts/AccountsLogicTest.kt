@@ -6,6 +6,7 @@ import com.tally.app.data.repo.OtherAccountChange
 import com.tally.core.AccountType
 import com.tally.core.Copy
 import com.tally.core.MoneyFormatter
+import com.tally.core.Registration
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -168,6 +169,14 @@ class AccountsLogicTest {
         assertEquals("Visa deleted with its 24 entries and 5 bills", accountDeletedLine("Visa", AccountUse(entries = 24, bills = 5)))
         assertEquals("Visa deleted with its 1 bill", accountDeletedLine("Visa", AccountUse(bills = 1)))
         assertEquals("Visa deleted", accountDeletedLine("Visa", AccountUse()))
+    }
+
+    @Test fun anInvestmentAccountKeepsItsInstitutionOrTakesItFromItsName() {
+        assertEquals("Wealthsimple", institutionFor("Wealthsimple TFSA", ""))
+        assertEquals("Questrade", institutionFor("Wealthsimple TFSA", "Questrade"))
+        assertEquals("", institutionFor("Desjardins REER", " "))
+        val tfsa = freeTemplates(emptyList()).first { it.name == "Wealthsimple TFSA" }
+        assertEquals(Registration.TFSA, tfsa.registration)
     }
 
     @Test fun everyLineKeepsTheVoice() {

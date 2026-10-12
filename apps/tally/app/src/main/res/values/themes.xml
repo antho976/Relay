@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- The window paints the app's ground before Compose draws, so a cold start never flashes white. -->
+    <!-- Compose draws everything; this only paints the window before it does, in Relay's ground. -->
     <style name="Theme.Tally" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/ground</item>
         <item name="android:statusBarColor">@android:color/transparent</item>

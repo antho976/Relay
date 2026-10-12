@@ -1,5 +1,7 @@
 package com.tally.core
 
+import kotlin.math.abs
+
 /**
  * Every generated sentence the app shows about money. One place, so the voice stays one voice and
  * a test can hold it to the rules: dry, specific, no exclamation marks, no em dashes, no praise the
@@ -27,6 +29,21 @@ object Copy {
         PaceStatus.OVER_PACE -> "${fmt.formatWhole(r.paceDelta)} over pace"
         PaceStatus.UNDER_PACE -> "${fmt.formatWhole(-r.paceDelta)} under pace"
         PaceStatus.OVER_BUDGET -> "Over budget"
+    }
+
+    /**
+     * The pace verdict in days: how many days of an even spend the month runs ahead of, or has in
+     * hand. Never zero days: a reading off pace is at least one day off it.
+     */
+    fun daysLine(r: PaceReading): String {
+        fun days() = Invest.mulDivHalfEven(abs(r.paceDelta), r.totalDays.toLong(), r.budget).coerceAtLeast(1).toInt()
+        return when (r.status) {
+            PaceStatus.NO_BUDGET -> ""
+            PaceStatus.OVER_BUDGET -> "Over budget"
+            PaceStatus.ON_PACE -> "On pace"
+            PaceStatus.OVER_PACE -> "${plural(days(), "day")} ahead of your money"
+            PaceStatus.UNDER_PACE -> "${plural(days(), "day")} of room in hand"
+        }
     }
 
     /** One envelope's reading, for a budget row: "$212 of $300". */

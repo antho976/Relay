@@ -3,7 +3,9 @@
     Android 12 and up. Nothing leaves the phone unasked, so the ledger is never uploaded to a
     cloud backup: every domain is excluded there (an empty section would back up everything).
     A device-to-device transfer, which the owner starts when setting up a new phone, still
-    carries the database (with its -wal file, which holds the latest writes) and the settings.
+    carries the database (with its -wal file, which holds the latest writes) and the settings, but
+    not the pairing with a PC (relay_sync): that key belongs to this phone, and the new one pairs
+    for itself.
 -->
 <data-extraction-rules>
     <cloud-backup>
@@ -16,5 +18,6 @@
     <device-transfer>
         <include domain="database" path="." />
         <include domain="file" path="datastore/" />
+        <exclude domain="file" path="datastore/relay_sync.preferences_pb" />
     </device-transfer>
 </data-extraction-rules>

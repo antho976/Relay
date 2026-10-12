@@ -116,6 +116,83 @@ class BackupCodecTest {
         )
     }
 
+    @Test fun `a version 2 file without investments still reads`() {
+        val v2 = """{"format":"tally-backup","version":2,"exportedAt":"2026-10-04","currency":"CAD",
+            "accounts":[{"id":1,"name":"TFSA","type":"INVESTMENT","openingBalance":0,"archived":false,"sortOrder":0}],
+            "values":[{"id":1,"accountId":1,"date":"2026-10-01","value":500000}]}"""
+        val read = BackupCodec.decode(v2) as BackupReadResult.Ok
+        assertEquals(null, read.file.accounts.single().registration)
+        assertEquals("", read.file.accounts.single().externalRef)
+        assertEquals("A file from before uids were kept has none; the restore makes them", null, read.file.accounts.single().uid)
+        assertEquals(emptyList<SecurityDto>(), read.file.securities)
+        assertEquals(emptyList<ActivityDto>(), read.file.activities)
+        assertEquals(emptyList<RoomFactDto>(), read.file.roomFacts)
+        assertEquals(1, read.file.values.size)
+    }
+
+    private val invested = sample.copy(
+        accounts = sample.accounts.map {
+            if (it.type == AccountType.INVESTMENT) {
+                it.copy(registration = Registration.TFSA, institution = "Wealthsimple", externalRef = "HQ7XFMC41CAD", uid = "ws:HQ7XFMC41CAD")
+            } else {
+                it
+            }
+        },
+        securities = listOf(SecurityDto(1, "XEQT", "iShares Core Equity ETF Portfolio", "CAD", SecurityKind.ETF, "TSX", uid = "sec:XEQT")),
+        holdings = listOf(HoldingDto(1, 5, 1, "2026-10-01", 1_000_000_000, 38_120, 38_120, uid = "hold:ws:HQ7XFMC41CAD:sec:XEQT:2026-10-01")),
+        activities = listOf(
+            ActivityDto(1, 5, 1, ActivityType.BUY, "2026-10-02", 100_000_000, 3_900, 0, "CAD", source = "WEALTHSIMPLE", uid = "imp:86fe65d31110bce166befa06e9747e9a"),
+            ActivityDto(2, 5, null, ActivityType.FX, "2026-10-03", amount = 10_000, currency = "CAD", toAmount = 7_300, toCurrency = "USD"),
+        ),
+        prices = listOf(PriceDto(1, 1, "2026-10-01", 3_812_000_000, "IMPORT", uid = "px:sec:XEQT:2026-10-01")),
+        fxRates = listOf(FxRateDto(1, "USD", "CAD", "2026-10-01", 137_125_000, "BANK_OF_CANADA", uid = "fx:USD:CAD:2026-10-01")),
+        roomFacts = listOf(RoomFactDto(1, Registration.TFSA, 2026, 700_000, uid = "room:TFSA:2026")),
+    )
+
+    @Test fun `investments round trip`() {
+        assertEquals(5L, sample.accounts.single { it.type == AccountType.INVESTMENT }.id)
+        val text = BackupCodec.encode(invested)
+        val back = BackupCodec.decode(text) as BackupReadResult.Ok
+        assertEquals("Uids ride along, a missing one as null", invested, back.file)
+        assertTrue(text, text.contains("\"externalRef\": \"HQ7XFMC41CAD\",\n            \"uid\": \"ws:HQ7XFMC41CAD\"\n"))
+    }
+
+    @Test fun `investments must point at what is in the file`() {
+        assertEquals(null, reason(invested))
+        assertEquals(
+            "A holding points at an account that is not in the file.",
+            reason(invested.copy(holdings = invested.holdings.map { it.copy(accountId = 404) })),
+        )
+        assertEquals(
+            "A holding points at a security that is not in the file.",
+            reason(invested.copy(holdings = invested.holdings.map { it.copy(securityId = 404) })),
+        )
+        assertEquals("A holding has an unreadable date.", reason(invested.copy(holdings = invested.holdings.map { it.copy(date = "May") })))
+        assertEquals(
+            "An activity has a negative amount.",
+            reason(invested.copy(activities = invested.activities.map { it.copy(fee = -1) })),
+        )
+        assertEquals(
+            "An activity points at an account that is not in the file.",
+            reason(invested.copy(activities = invested.activities.map { it.copy(accountId = 404) })),
+        )
+        assertEquals(
+            "An activity points at a security that is not in the file.",
+            reason(invested.copy(activities = invested.activities.map { it.copy(securityId = 404) })),
+        )
+        assertEquals("An activity has an unreadable date.", reason(invested.copy(activities = invested.activities.map { it.copy(date = "") })))
+        assertEquals(
+            "A price points at a security that is not in the file.",
+            reason(invested.copy(prices = invested.prices.map { it.copy(securityId = 404) })),
+        )
+        assertEquals("A price has an unreadable date.", reason(invested.copy(prices = invested.prices.map { it.copy(date = "2026-02-30") })))
+        assertEquals("An exchange rate is zero or less.", reason(invested.copy(fxRates = invested.fxRates.map { it.copy(rate = 0) })))
+        assertEquals(
+            "An exchange rate has an unreadable date.",
+            reason(invested.copy(fxRates = invested.fxRates.map { it.copy(date = "today") })),
+        )
+    }
+
     @Test fun `ignores unknown keys from a future minor change`() {
         val text = BackupCodec.encode(sample).replaceFirst("{", "{\"futureField\": true,")
         assertTrue(BackupCodec.decode(text) is BackupReadResult.Ok)

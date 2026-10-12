@@ -10,6 +10,7 @@ import com.tally.core.Recurrence
 import com.tally.core.TxType
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.time.LocalDate
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -55,7 +56,12 @@ class RecurringPoster @Inject constructor(
                 val last = fresh.endDate?.takeIf { it.isBefore(today) } ?: today
                 val dates = rule.between(fresh.nextDate, last, limit = CATCH_UP_LIMIT)
                 dates.forEach { date ->
-                    transactions.insert(
+                    // A posted bill's uid is the bill and the date, on the PC too (docs/MONEY.md).
+                    // A date already here is skipped, and so is one you deleted: its tombstone
+                    // stays until the PC has heard, and the date is not posted again under it.
+                    val uid = billUid(fresh.uid, date)
+                    if (db.sync().tombstone("transactions", uid) != null) return@forEach
+                    val id = transactions.insertOrIgnore(
                         TransactionEntity(
                             type = fresh.type,
                             amount = fresh.amount,
@@ -66,10 +72,11 @@ class RecurringPoster @Inject constructor(
                             note = fresh.name,
                             recurringId = fresh.id,
                             createdAt = clock.nowMillis(),
+                            uid = uid,
                         )
                     )
+                    if (id != -1L) posted++
                 }
-                posted += dates.size
                 val next = rule.after(dates.lastOrNull() ?: today)
                 val ended = fresh.endDate != null && next.isAfter(fresh.endDate)
                 recurring.update(fresh.copy(nextDate = next, active = fresh.active && !ended))
@@ -81,5 +88,8 @@ class RecurringPoster @Inject constructor(
     companion object {
         /** A weekly bill a year overdue; anything beyond that is a data problem, not a backlog. */
         const val CATCH_UP_LIMIT = 60
+
+        /** A posted bill's uid on both devices (docs/MONEY.md): `bill:<recurring uid>:<ISO date>`. */
+        fun billUid(recurringUid: String, date: LocalDate): String = "bill:$recurringUid:$date"
     }
 }

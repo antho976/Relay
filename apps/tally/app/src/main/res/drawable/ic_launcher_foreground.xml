@@ -1,23 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Four tally marks crossed by the fifth: the count Tally keeps. The cream strokes lean a hair off
-  true like a hand made them; the ember slash is cut out of them by an edge in the ground colour so it
-  reads in front. Everything sits inside the 66dp safe circle.
+  Tally's mark in Relay's hand: four ink tally strokes crossed by the fifth in Relay's signal green,
+  on the warm near-black of Relay's chrome. Everything sits inside the 66dp safe circle.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <path android:strokeColor="#FFF2EFEA" android:strokeWidth="6" android:strokeLineCap="round"
-        android:pathData="M39.5,36 L38.5,72" />
-    <path android:strokeColor="#FFF2EFEA" android:strokeWidth="6" android:strokeLineCap="round"
-        android:pathData="M49,34 L49,73" />
-    <path android:strokeColor="#FFF2EFEA" android:strokeWidth="6" android:strokeLineCap="round"
-        android:pathData="M58.5,35 L59.5,72" />
-    <path android:strokeColor="#FFF2EFEA" android:strokeWidth="6" android:strokeLineCap="round"
-        android:pathData="M69,34 L68.5,73" />
+    <path android:strokeColor="@color/ink" android:strokeWidth="6" android:strokeLineCap="round"
+        android:pathData="M39.5,36 L39.5,72" />
+    <path android:strokeColor="@color/ink" android:strokeWidth="6" android:strokeLineCap="round"
+        android:pathData="M49,36 L49,72" />
+    <path android:strokeColor="@color/ink" android:strokeWidth="6" android:strokeLineCap="round"
+        android:pathData="M58.5,36 L58.5,72" />
+    <path android:strokeColor="@color/dimmed" android:strokeWidth="6" android:strokeLineCap="round"
+        android:pathData="M68,36 L68,72" />
     <!-- The slash's cut, then the slash. -->
-    <path android:strokeColor="#FF1E1610" android:strokeWidth="12" android:strokeLineCap="round"
-        android:pathData="M30,65 L78,43" />
-    <path android:strokeColor="#FFD4761F" android:strokeWidth="6.5" android:strokeLineCap="round"
-        android:pathData="M30,65 L78,43" />
+    <path android:strokeColor="@color/ground" android:strokeWidth="12" android:strokeLineCap="round"
+        android:pathData="M31,64 L77,44" />
+    <path android:strokeColor="@color/signal" android:strokeWidth="6.5" android:strokeLineCap="round"
+        android:pathData="M31,64 L77,44" />
 </vector>
