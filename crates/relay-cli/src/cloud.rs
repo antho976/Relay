@@ -1,15 +1,25 @@
 //! `relay cloud …` — this PC's link to a cloud engine (crates/relay-remote/src/cloud.rs,
-//! docs/CLOUD.md). `pair` makes it, `sync` runs one round now, `status` says how the last went,
-//! `off` forgets it. While `relay serve --remote` runs, the engine merges every minute by itself.
+//! docs/CLOUD.md). `connect` makes it through the owner's server with one tap on Discord (and lets
+//! the Relay app pair with this PC through that server, connect.rs); `pair` makes it from a link
+//! printed on the server; `sync` runs one round now, `status` says how the last went, `off`
+//! forgets it. While `relay serve --remote` runs, the engine merges every minute by itself.
 
 use anyhow::{anyhow, Result};
 use clap::Subcommand;
 use relay_core::Instance;
 use relay_remote::cloud::{self, Link};
+use relay_remote::connect::{Claim, Server};
 use relay_remote::Registry;
+use std::time::Duration;
 
 #[derive(Subcommand)]
 pub enum CloudCommand {
+    /// Connect this PC through your server: you allow it with one tap on Discord. It then syncs
+    /// with the cloud copy there, and the Relay app can pair with this PC through the same server
+    Connect {
+        /// The server's address, e.g. my-bot.onrender.com
+        server: String,
+    },
     /// Pair this PC with a cloud engine: the link `relay remote pair --via-only` printed on the server
     Pair { link: String },
     /// Merge with the cloud copy now (the engine does it every minute while `relay serve --remote` runs)
@@ -26,9 +36,76 @@ pub fn pc_name(instance: Instance) -> String {
     format!("PC ({host})")
 }
 
+/// Runs a blocking call to the server off the async runtime.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    Ok(tokio::task::spawn_blocking(f).await?)
+}
+
+/// Asks the server to let this PC in, waits for the owner's tap, and returns the link and token.
+async fn ask_and_wait(api: &Server, name: &str) -> Result<(String, Option<String>)> {
+    let (a, n) = (api.clone(), name.to_string());
+    let asked = blocking(move || a.ask("pc", &n)).await??;
+    if asked.notified {
+        println!("Your bot sent you a Discord message. Tap Allow if it shows the code {}.", asked.code);
+    } else {
+        println!("Your bot could not message you: allow the request on its dashboard, Devices (code {}).", asked.code);
+    }
+    println!("Waiting… (the request lasts 15 minutes; Ctrl+C stops waiting)");
+    let mut troubles = 0;
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let (a, q) = (api.clone(), asked.clone());
+        match blocking(move || a.claim(&q)).await? {
+            Claim::Waiting | Claim::WaitingPc => {}
+            Claim::Ready { link, host_token } => return Ok((link, host_token)),
+            Claim::Denied => return Err(anyhow!("the request was denied")),
+            Claim::Expired => return Err(anyhow!("the request expired: run `relay cloud connect` again")),
+            Claim::Spent => return Err(anyhow!("the request was used up: run `relay cloud connect` again")),
+            Claim::Trouble(reason) => {
+                troubles += 1;
+                if troubles >= 10 {
+                    return Err(anyhow!("the server keeps failing: {reason}"));
+                }
+            }
+        }
+    }
+}
+
 pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
     let path = Link::path_for(instance);
     match cmd {
+        CloudCommand::Connect { server } => {
+            let api = Server::new(&server);
+            let a = api.clone();
+            let hello = blocking(move || a.hello()).await??;
+            if !hello.cloud {
+                return Err(anyhow!("{} takes requests, but its cloud copy is not running (RELAY_PUBLIC_URL is off there)", api.base()));
+            }
+            let existing = Link::load(&path)?;
+            if let Some(old) = &existing {
+                if old.server.as_deref() == Some(api.base()) && old.server_token.is_some() {
+                    println!("This PC is already connected through {}.", api.base());
+                    return Ok(0);
+                }
+            }
+            let name = Registry::load(&Registry::path_for(instance)).map(|r| r.host_name).unwrap_or_else(|_| "this PC".into());
+            println!("Asking {} to let {name} in…", api.base());
+            let (pair_link, token) = ask_and_wait(&api, &name).await?;
+            let mut link = match existing {
+                // Linked with the cloud copy already (`relay cloud pair`): this only adds the server.
+                Some(link) => link,
+                None => {
+                    println!("Allowed. Pairing with the cloud copy…");
+                    cloud::pair(&path, &pair_link, &pc_name(instance)).await?
+                }
+            };
+            link.server = Some(api.base().to_string());
+            link.server_token = token;
+            link.save(&path)?;
+            println!("Connected to {} ({}) as device {}.", link.host, api.base(), link.device);
+            println!("Restart `relay serve --remote` (or Relay) to start merging with the cloud copy and taking the Relay app's requests to pair; `relay cloud sync` merges now.");
+            Ok(0)
+        }
         CloudCommand::Pair { link } => {
             if let Some(old) = Link::load(&path)? {
                 return Err(anyhow!("this PC is already linked to {} ({}); `relay cloud off` first", old.host, old.url));
@@ -53,7 +130,7 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
         }
         CloudCommand::Status => {
             let Some(link) = Link::load(&path)? else {
-                println!("no cloud link (`relay cloud pair '<relay://pair link>'` makes one)");
+                println!("no cloud link (`relay cloud connect <your server>` makes one)");
                 return Ok(0);
             };
             println!("cloud:     {} ({})", link.host, link.url);
@@ -63,6 +140,10 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
                 println!("last error: {error}");
             }
             println!("avex:      {}", if link.gym_digest.is_some() { "an export came home" } else { "nothing yet" });
+            match (&link.server, &link.server_token) {
+                (Some(server), Some(_)) => println!("server:    {server} (the Relay app can pair through it)"),
+                _ => println!("server:    none (`relay cloud connect <server>` lets the Relay app pair through it)"),
+            }
             Ok(0)
         }
         CloudCommand::Off => {

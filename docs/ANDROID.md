@@ -129,5 +129,18 @@ Run it against a throwaway engine (another instance, or `XDG_DATA_HOME` / a shor
 The application id is `com.quietsoftware.relay.android` (`.debug` for debug builds); the retired
 Expo app was `com.quietsoftware.relay`, so a phone that still has it keeps both until it is
 uninstalled. CI (`.github/workflows/relay-android.yml`)
-runs the core tests, the app's unit tests, Lint and both APK builds, and uploads the debug APK as
+runs the core tests, the app's unit tests, Lint and the APK builds, and uploads the debug APK as
 `relay-android-apk`. Pair from the app's first screen with `relay remote pair` on the PC.
+
+### The personal build
+
+`./gradlew :app:assemblePersonal` builds Antho's own copy: the release, plus `app/src/personal`,
+which pairs through his server instead of a QR code (docs/CLOUD.md, "Connecting through your
+server"). The first screen has one key, Connect through my server: the server DMs him Allow on
+Discord, his PC opens a pairing window and asks on its own screen, and the phone pairs. No scanning,
+no typing, on the WiFi or away from it. The PC needs `relay cloud connect <server>` once.
+
+Only that source set knows the server's address, and nothing in `main`, `debug` or `release`
+refers to it: `src/standard` holds the QR pairing those builds use (`PairEntry`), and CI fails if
+the debug or release APK carries the address. The personal build keeps the release application id
+and signs with the release key when `keystore.properties` is complete, else with the debug key.

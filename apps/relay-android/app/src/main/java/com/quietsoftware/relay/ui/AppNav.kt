@@ -15,7 +15,7 @@ import com.quietsoftware.relay.ui.dev.AgentsScreen
 import com.quietsoftware.relay.ui.dev.LaunchScreen
 import com.quietsoftware.relay.ui.dev.SessionScreen
 import com.quietsoftware.relay.ui.dev.TerminalScreen
-import com.quietsoftware.relay.ui.pair.PairScreen
+import com.quietsoftware.relay.ui.pair.PairEntry
 import com.quietsoftware.relay.ui.pair.PcScreen
 import com.quietsoftware.relay.ui.pages.GuardrailsScreen
 import com.quietsoftware.relay.ui.pages.InboxScreen
@@ -93,7 +93,7 @@ fun AppNav(nav: Nav, startRoute: String) {
         composable("tally") { TallyScreen(nav) }
         composable("arbiter") { ArbiterScreen(nav) }
         composable("avex") { AvexScreen(nav) }
-        composable("pair?link={link}", listOf(opt("link"))) { PairScreen(it.str("link"), nav) }
+        composable("pair?link={link}", listOf(opt("link"))) { PairEntry(it.str("link"), nav) }
         composable("pc") { PcScreen(nav) }
         composable("settings") { SettingsScreen(nav) }
         composable("project-settings/{project}") { ProjectSettingsScreen(it.long("project") ?: 0, nav) }
