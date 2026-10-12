@@ -42,7 +42,7 @@ android {
         // change it on the phone.
         val server = providers.gradleProperty("tallyServer")
             .orElse(providers.environmentVariable("TALLY_SERVER"))
-            .getOrElse("https://anthos-bot.onrender.com")
+            .getOrElse("https://antho-s-bot-8dve.onrender.com")
         buildConfigField("String", "TALLY_SERVER", "\"$server\"")
     }
 

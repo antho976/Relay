@@ -30,7 +30,7 @@ edit, the moment a network comes back, and every fifteen minutes in the backgrou
 offline wait and go. Settings, Sync shows where it stands and holds the rare manual acts (send this
 phone's ledger, take the server's, disconnect, another server address).
 
-The server address is built in (`https://anthos-bot.onrender.com`; `-PtallyServer=…` or
+The server address is built in (`https://antho-s-bot-8dve.onrender.com`; `-PtallyServer=…` or
 `TALLY_SERVER` builds for another).
 
 ## What it does
