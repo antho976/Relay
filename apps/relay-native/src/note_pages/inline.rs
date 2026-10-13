@@ -20,25 +20,98 @@ const CHECK: i32 = 16;
 /// Space around a picture in the room kept below its line, beyond its own height.
 const ROOM: i32 = 18;
 
-/// A decoded image and the modification time of the file it was read from.
-type Decoded = (Option<std::time::SystemTime>, Option<gtk::gdk::Texture>);
+/// A decoded image, the modification time of the file it was read from, and when that was
+/// last compared with the disk.
+struct Decoded {
+    modified: Option<std::time::SystemTime>,
+    texture: Option<gtk::gdk::Texture>,
+    /// None until the first read lands.
+    checked: Option<std::time::Instant>,
+    /// A read is on a worker thread; these notes redraw when it lands.
+    waiting: Option<Vec<std::rc::Weak<Doc>>>,
+}
 
 thread_local! {
     static TEXTURES: RefCell<HashMap<PathBuf, Decoded>> = RefCell::new(HashMap::new());
+    /// Image files being written for a paste or drop, so a second one in the same second is
+    /// not given the same name.
+    static RESERVED: RefCell<std::collections::HashSet<PathBuf>> = RefCell::default();
 }
 
-fn texture(path: &Path) -> Option<gtk::gdk::Texture> {
-    let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
-    TEXTURES.with(|cache| {
-        if let Some((when, texture)) = cache.borrow().get(path) {
-            if *when == modified {
-                return texture.clone();
+/// How long a picture is drawn from memory before its file's modification time is looked at
+/// again. The overlays are redrawn on every keystroke; the disk is not read on any of them.
+const RECHECK: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The picture `path` holds, as last read. One never read, or not compared with its file for
+/// `RECHECK`, is read on a worker thread, and `doc` redraws when that changes what it shows.
+fn texture(doc: &Rc<Doc>, path: &Path) -> Option<gtk::gdk::Texture> {
+    let (texture, read) = TEXTURES.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let entry = cache.entry(path.to_path_buf()).or_insert_with(|| Decoded {
+            modified: None,
+            texture: None,
+            checked: None,
+            waiting: None,
+        });
+        let read = match &mut entry.waiting {
+            Some(waiting) => {
+                if !waiting.iter().any(|w| std::ptr::eq(w.as_ptr(), Rc::as_ptr(doc))) {
+                    waiting.push(Rc::downgrade(doc));
+                }
+                None
             }
-        }
-        let texture = modified.and_then(|_| gtk::gdk::Texture::from_filename(path).ok());
-        cache.borrow_mut().insert(path.to_path_buf(), (modified, texture.clone()));
-        texture
-    })
+            None if entry.checked.is_none_or(|checked| checked.elapsed() >= RECHECK) => {
+                entry.waiting = Some(vec![Rc::downgrade(doc)]);
+                Some(entry.modified.filter(|_| entry.texture.is_some()))
+            }
+            None => None,
+        };
+        (entry.texture.clone(), read)
+    });
+    if let Some(known) = read {
+        let path = path.to_path_buf();
+        glib::spawn_future_local(async move {
+            let file = path.clone();
+            let read = gio::spawn_blocking(move || {
+                let modified = std::fs::metadata(&file).and_then(|m| m.modified()).ok();
+                if modified.is_some() && modified == known {
+                    return (modified, None);
+                }
+                (modified, Some(modified.and_then(|_| gtk::gdk::Texture::from_filename(&file).ok())))
+            })
+            .await
+            .unwrap_or((None, Some(None)));
+            let (modified, decoded) = read;
+            let waiting = TEXTURES.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                let entry = cache.get_mut(&path)?;
+                entry.checked = Some(std::time::Instant::now());
+                let waiting = entry.waiting.take();
+                entry.modified = modified;
+                let decoded = decoded?;
+                // Only a picture that changed (or came or went) redraws the notes showing it.
+                let same = match (&entry.texture, &decoded) {
+                    (Some(a), Some(b)) => a == b,
+                    (None, None) => true,
+                    _ => false,
+                };
+                entry.texture = decoded;
+                (!same).then_some(waiting).flatten()
+            });
+            for doc in waiting.into_iter().flatten().filter_map(|doc| doc.upgrade()) {
+                schedule(&doc);
+            }
+        });
+    }
+    texture
+}
+
+/// The picture `path` holds now, read here if it is not in memory: Copy puts it on the
+/// clipboard.
+fn texture_now(path: &Path) -> Option<gtk::gdk::Texture> {
+    TEXTURES
+        .with(|cache| cache.borrow().get(path).and_then(|d| d.texture.clone()))
+        .or_else(|| gtk::gdk::Texture::from_filename(path).ok())
 }
 
 /// The size a picture is drawn at: its own, scaled down to fit `MAX_W` × `MAX_H`.
@@ -231,7 +304,7 @@ fn refresh(doc: &Rc<Doc>) {
             }
             if let Some((_, path, from, to)) = tx::image_ref(line) {
                 let path = PathBuf::from(&path);
-                let Some(picture) = texture(&path) else { continue };
+                let Some(picture) = texture(doc, &path) else { continue };
                 let (w, h) = fitted(&picture);
                 let shown = picture_slot(doc, pictures);
                 shown.picture.set_paintable(Some(&picture));
@@ -511,7 +584,7 @@ pub fn copy_images(clipboard: &gtk::gdk::Clipboard, text: Option<&str>, paths: &
     let fallback = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>().join("\n");
     let mut providers = Vec::new();
     if let [only] = paths {
-        if let Some(picture) = texture(only) {
+        if let Some(picture) = texture_now(only) {
             providers.push(gtk::gdk::ContentProvider::for_value(&picture.to_value()));
         }
     }
@@ -556,11 +629,21 @@ fn fresh_name(dir: &Path, id: i64, extension: &str) -> PathBuf {
     loop {
         let suffix = if n == 0 { String::new() } else { format!("-{n}") };
         let path = dir.join(format!("note-{id}-{stamp}{suffix}.{extension}"));
-        if !path.exists() {
+        if !path.exists() && RESERVED.with(|reserved| reserved.borrow_mut().insert(path.clone())) {
             return path;
         }
         n += 1;
     }
+}
+
+/// The names `fresh_name` handed out, written now (or failed): free to be checked on disk.
+fn release(paths: &[PathBuf]) {
+    RESERVED.with(|reserved| {
+        let mut reserved = reserved.borrow_mut();
+        for path in paths {
+            reserved.remove(path);
+        }
+    });
 }
 
 /// Insert references to `paths` at the cursor, each on a line of its own.
@@ -586,48 +669,76 @@ fn insert_refs(doc: &Doc, paths: &[PathBuf]) {
     doc.view.scroll_mark_onscreen(&buffer.get_insert());
 }
 
+/// Keep a pasted or dropped picture as a PNG beside the note and reference it. Encoding a
+/// 4K screenshot takes a few hundred milliseconds: it is written on a worker thread, and the
+/// reference goes in at the cursor when it is on disk.
 fn store_texture(ui: &Rc<Ui>, doc: &Rc<Doc>, picture: &gtk::gdk::Texture) {
     let dir = images_dir(ui, doc.project);
     let path = fresh_name(&dir, doc.id, "png");
-    let saved = std::fs::create_dir_all(&dir)
-        .map_err(|e| e.to_string())
-        .and_then(|_| picture.save_to_png(&path).map_err(|e| e.to_string()));
-    match saved {
-        Ok(()) => insert_refs(doc, &[path]),
-        Err(error) => doc.show_notice(ui, &format!("Could not keep the image: {error}"), Vec::new()),
-    }
+    let (ui, doc, picture, target) = (ui.clone(), doc.clone(), picture.clone(), path.clone());
+    glib::spawn_future_local(async move {
+        let saved = gio::spawn_blocking(move || {
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| e.to_string())
+                .and_then(|_| picture.save_to_png(&target).map_err(|e| e.to_string()))
+        })
+        .await
+        .unwrap_or_else(|_| Err("the image could not be written".into()));
+        release(std::slice::from_ref(&path));
+        match saved {
+            Ok(()) => insert_refs(&doc, &[path]),
+            Err(error) => doc.show_notice(&ui, &format!("Could not keep the image: {error}"), Vec::new()),
+        }
+    });
 }
 
 /// Copy image files into the note's folder and reference the copies; other files are
-/// referenced where they are, as links.
+/// referenced where they are, as links. The copies are made on a worker thread.
 fn store_files(ui: &Rc<Ui>, doc: &Rc<Doc>, files: &[PathBuf]) {
     let dir = images_dir(ui, doc.project);
-    let mut kept = Vec::new();
-    for file in files {
-        let extension = file.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-        if !is_image(&extension) {
-            continue;
-        }
-        let copy = fresh_name(&dir, doc.id, &extension);
-        match std::fs::create_dir_all(&dir).and_then(|_| std::fs::copy(file, &copy)) {
-            Ok(_) => kept.push(copy),
-            Err(error) => {
-                doc.show_notice(ui, &format!("Could not keep {}: {error}", file.display()), Vec::new());
-                return;
-            }
-        }
-    }
-    if !kept.is_empty() {
-        insert_refs(doc, &kept);
-    }
+    let copies: Vec<(PathBuf, PathBuf)> = files
+        .iter()
+        .filter(|file| is_image(&file.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()))
+        .map(|file| {
+            let extension = file.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+            (file.clone(), fresh_name(&dir, doc.id, &extension))
+        })
+        .collect();
     let others: Vec<String> = files
         .iter()
         .filter(|f| !is_image(&f.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()))
         .map(|f| f.to_string_lossy().into_owned())
         .collect();
-    if !others.is_empty() {
-        doc.insert_text(&others.join("\n"));
-    }
+    let (ui, doc) = (ui.clone(), doc.clone());
+    glib::spawn_future_local(async move {
+        let names: Vec<PathBuf> = copies.iter().map(|(_, copy)| copy.clone()).collect();
+        let made = gio::spawn_blocking(move || {
+            let mut kept = Vec::new();
+            for (file, copy) in copies {
+                match std::fs::create_dir_all(&dir).and_then(|_| std::fs::copy(&file, &copy)) {
+                    Ok(_) => kept.push(copy),
+                    Err(error) => return Err(format!("Could not keep {}: {error}", file.display())),
+                }
+            }
+            Ok(kept)
+        })
+        .await
+        .unwrap_or_else(|_| Err("Could not keep the images".into()));
+        release(&names);
+        let kept = match made {
+            Ok(kept) => kept,
+            Err(error) => {
+                doc.show_notice(&ui, &error, Vec::new());
+                return;
+            }
+        };
+        if !kept.is_empty() {
+            insert_refs(&doc, &kept);
+        }
+        if !others.is_empty() {
+            doc.insert_text(&others.join("\n"));
+        }
+    });
 }
 
 fn is_image(extension: &str) -> bool {

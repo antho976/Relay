@@ -327,8 +327,8 @@ fn avatar(name: &str) -> gtk::Label {
 type Icon = fn(&str) -> Option<gtk::Widget>;
 /// Each pill's value and key, so a pick can light it and put out the rest.
 type PillKeys = Rc<RefCell<Vec<(String, glib::WeakRef<gtk::Button>)>>>;
-/// Files waiting to go up with a new task: name, MIME type and bytes.
-type Queued = Rc<RefCell<Vec<(String, String, Vec<u8>)>>>;
+/// Files waiting to go up with a new task: name, MIME type, bytes, and an image's picture.
+type Queued = Rc<RefCell<Vec<(String, String, Vec<u8>, Option<gtk::gdk::Texture>)>>>;
 fn column_icon(c: &str) -> Option<gtk::Widget> {
     Some(status_icon(c, 12).upcast())
 }
@@ -468,10 +468,11 @@ fn project_name(ui: &Ui, project: i64) -> String {
 
 // ── Attachments: dropped or pasted, never typed ───────────────────────────────────────────
 
-/// A file or image arriving by drop or paste.
+/// A file or image arriving by drop or paste. An image stays a texture until it is sent:
+/// encoding a 4K screenshot as PNG takes a few hundred milliseconds, done off the main thread.
 enum Incoming {
     Path(String),
-    Image { name: String, bytes: Vec<u8> },
+    Image { name: String, texture: gtk::gdk::Texture },
 }
 fn mime_of(name: &str) -> &'static str {
     match name.rsplit('.').next().map(str::to_lowercase).as_deref() {
@@ -486,8 +487,19 @@ fn mime_of(name: &str) -> &'static str {
         _ => "application/octet-stream",
     }
 }
-fn texture_png(texture: &gtk::gdk::Texture) -> Vec<u8> {
-    texture.save_to_png_bytes().to_vec()
+/// The image as PNG bytes, encoded on a worker thread.
+async fn texture_png(texture: gtk::gdk::Texture) -> Vec<u8> {
+    gtk::gio::spawn_blocking(move || texture.save_to_png_bytes().to_vec()).await.unwrap_or_default()
+}
+/// A dropped file's bytes and, for an image, its picture, read on a worker thread.
+async fn read_attachment(path: String, image: bool) -> std::io::Result<(Vec<u8>, Option<gtk::gdk::Texture>)> {
+    gtk::gio::spawn_blocking(move || {
+        let bytes = std::fs::read(&path)?;
+        let texture = image.then(|| gtk::gdk::Texture::from_bytes(&glib::Bytes::from(&bytes)).ok()).flatten();
+        Ok((bytes, texture))
+    })
+    .await
+    .unwrap_or_else(|_| Err(std::io::Error::other("reading the file failed")))
 }
 /// Files and images dropped on `widget`, or pasted with Ctrl+V while it shows, go to `take`.
 /// A paste of plain text is left to the text field it lands in.
@@ -555,7 +567,10 @@ async fn upload(ui: &Ui, task: i64, incoming: Vec<Incoming>) -> Option<String> {
                 let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "attachment".into());
                 json!({"task_id":task,"path":path,"name":name,"mime":mime_of(&name)})
             }
-            Incoming::Image { name, bytes } => json!({"task_id":task,"name":name,"mime":"image/png","bytes_b64":base64::engine::general_purpose::STANDARD.encode(bytes)}),
+            Incoming::Image { name, texture } => {
+                let bytes = texture_png(texture).await;
+                json!({"task_id":task,"name":name,"mime":"image/png","bytes_b64":base64::engine::general_purpose::STANDARD.encode(bytes)})
+            }
         };
         if let Err(e) = ui.call("task.attach", payload).await {
             failed = Some(e.to_string());
@@ -595,7 +610,7 @@ fn accept_drops(widget: &impl IsA<gtk::Widget>, take: Rc<dyn Fn(Vec<Incoming>)>)
             }
         }
         if let Ok(texture) = value.get::<gdk::Texture>() {
-            sink(vec![Incoming::Image { name: "dropped.png".into(), bytes: texture_png(&texture) }]);
+            sink(vec![Incoming::Image { name: "dropped.png".into(), texture }]);
             return true;
         }
         false
@@ -630,7 +645,7 @@ fn paste_attachments(widget: &gtk::Widget, sink: Rc<dyn Fn(Vec<Incoming>)>) -> g
         }
         if image {
             if let Ok(Some(texture)) = clipboard.read_texture_future().await {
-                sink(vec![Incoming::Image { name: "pasted.png".into(), bytes: texture_png(&texture) }]);
+                sink(vec![Incoming::Image { name: "pasted.png".into(), texture }]);
                 return;
             }
         }
@@ -650,7 +665,9 @@ fn attachment_tile(name: &str, mime: &str, image: Option<gtk::gdk::Texture>, pat
     // width and would stretch the page to it.
     let face: gtk::Widget = match (mime.starts_with("image/"), image, path) {
         (true, Some(texture), _) => gtk::Image::from_paintable(Some(&texture)).upcast(),
-        (true, None, Some(path)) => gtk::Image::from_file(path).upcast(),
+        // GTK draws these itself (animation, vectors); they are rare enough to read here.
+        (true, None, Some(path)) if matches!(mime, "image/gif" | "image/svg+xml") => gtk::Image::from_file(path).upcast(),
+        (true, None, Some(path)) => tile_picture(path).upcast(),
         _ => {
             let chip = gtk::Box::new(gtk::Orientation::Vertical, 4);
             chip.set_valign(gtk::Align::Center);
@@ -676,6 +693,63 @@ fn attachment_tile(name: &str, mime: &str, image: Option<gtk::gdk::Texture>, pat
     close.connect_clicked(move |_| remove());
     tile.add_overlay(&close);
     tile
+}
+
+thread_local! {
+    /// Attachment thumbnails by file, with the modification time they were read at: a page
+    /// redrawn after an edit shows them at once instead of decoding every image again.
+    static TILE_TEXTURES: RefCell<std::collections::HashMap<String, (std::time::SystemTime, gtk::gdk::Texture)>> = RefCell::default();
+}
+/// Attachment pictures kept for redraws; past this many the least recently changed file's goes.
+const TILE_TEXTURES_MAX: usize = 48;
+
+/// An attachment's picture, decoded on a worker thread: the cached one at once, then the file
+/// itself if it changed since. Unreadable, it shows GTK's missing-image icon, as a load from
+/// the file would.
+fn tile_picture(path: &str) -> gtk::Image {
+    let image = gtk::Image::new();
+    let known = TILE_TEXTURES.with(|cache| cache.borrow().get(path).cloned());
+    if let Some((_, texture)) = &known {
+        image.set_paintable(Some(texture));
+    }
+    let (weak, path, seen) = (image.downgrade(), path.to_owned(), known.map(|(at, _)| at));
+    glib::spawn_future_local(async move {
+        let file = path.clone();
+        let read = gtk::gio::spawn_blocking(move || {
+            let modified = std::fs::metadata(&file).and_then(|m| m.modified()).ok();
+            if modified.is_some() && modified == seen {
+                return Ok(None);
+            }
+            gtk::gdk::Texture::from_filename(&file).map(|texture| Some((modified, texture)))
+        })
+        .await;
+        match read {
+            Ok(Ok(None)) => {}
+            Ok(Ok(Some((modified, texture)))) => {
+                if let Some(modified) = modified {
+                    TILE_TEXTURES.with(|cache| {
+                        let mut cache = cache.borrow_mut();
+                        if cache.len() >= TILE_TEXTURES_MAX && !cache.contains_key(&path) {
+                            let oldest = cache.iter().min_by_key(|(_, (at, _))| *at).map(|(path, _)| path.clone());
+                            if let Some(oldest) = oldest {
+                                cache.remove(&oldest);
+                            }
+                        }
+                        cache.insert(path, (modified, texture.clone()));
+                    });
+                }
+                if let Some(image) = weak.upgrade() {
+                    image.set_paintable(Some(&texture));
+                }
+            }
+            _ => {
+                if let Some(image) = weak.upgrade() {
+                    image.set_icon_name(Some("image-missing"));
+                }
+            }
+        }
+    });
+    image
 }
 
 // ── New task ──────────────────────────────────────────────────────────────────────────────
@@ -768,10 +842,9 @@ pub fn compose(ui: &Rc<Ui>, project: i64, column: &str, module: Option<i64>) {
         Rc::new(move || {
             let Some(tray) = tray.upgrade() else { return };
             clear(&tray);
-            for (index, (name, mime, bytes)) in queued.borrow().iter().enumerate() {
-                let image = mime.starts_with("image/").then(|| gtk::gdk::Texture::from_bytes(&glib::Bytes::from(bytes)).ok()).flatten();
+            for (index, (name, mime, _, image)) in queued.borrow().iter().enumerate() {
                 let (queued, tray_weak) = (queued.clone(), tray.downgrade());
-                let tile = attachment_tile(name, mime, image, None, move || {
+                let tile = attachment_tile(name, mime, image.clone(), None, move || {
                     if index < queued.borrow().len() {
                         queued.borrow_mut().remove(index);
                     }
@@ -794,26 +867,36 @@ pub fn compose(ui: &Rc<Ui>, project: i64, column: &str, module: Option<i64>) {
     });
     group.add_action(&redraw);
     page.insert_action_group("compose", Some(&group));
-    let (into, again, note) = (queued.clone(), refill.clone(), status.downgrade());
+    // Files are read, and images encoded, off the main thread; Create waits for them.
+    let reading = Rc::new(Cell::new(0_usize));
+    let (into, again, note, busy_reading) = (queued.clone(), refill.clone(), status.downgrade(), reading.clone());
     accept_attachments(&page, move |incoming| {
-        for item in incoming {
-            match item {
-                Incoming::Path(path) => match std::fs::read(&path) {
-                    Ok(bytes) => {
+        let (into, again, note, reading) = (into.clone(), again.clone(), note.clone(), busy_reading.clone());
+        reading.set(reading.get() + 1);
+        glib::spawn_future_local(async move {
+            for item in incoming {
+                match item {
+                    Incoming::Path(path) => {
                         let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "attachment".into());
                         let mime = mime_of(&name).to_string();
-                        into.borrow_mut().push((name, mime, bytes));
-                    }
-                    Err(e) => {
-                        if let Some(note) = note.upgrade() {
-                            note.set_text(&format!("Could not read {path}: {e}"));
+                        match read_attachment(path.clone(), mime.starts_with("image/")).await {
+                            Ok((bytes, image)) => into.borrow_mut().push((name, mime, bytes, image)),
+                            Err(e) => {
+                                if let Some(note) = note.upgrade() {
+                                    note.set_text(&format!("Could not read {path}: {e}"));
+                                }
+                            }
                         }
                     }
-                },
-                Incoming::Image { name, bytes } => into.borrow_mut().push((name, "image/png".into(), bytes)),
+                    Incoming::Image { name, texture } => {
+                        let bytes = texture_png(texture.clone()).await;
+                        into.borrow_mut().push((name, "image/png".into(), bytes, Some(texture)));
+                    }
+                }
             }
-        }
-        again();
+            reading.set(reading.get() - 1);
+            again();
+        });
     });
 
     let weak = Rc::downgrade(ui);
@@ -871,13 +954,17 @@ pub fn compose(ui: &Rc<Ui>, project: i64, column: &str, module: Option<i64>) {
             title_key.grab_focus();
             return;
         }
+        if reading.get() > 0 {
+            status.set_text("Still reading the attachments…");
+            return;
+        }
         if busy.replace(true) {
             return;
         }
         let picked = picks.borrow().clone();
         let pick = |key: &str| picked.get(key).cloned().unwrap_or_default();
         use base64::Engine;
-        let attachments: Vec<Value> = queued.borrow().iter().map(|(name, mime, bytes)| json!({"name":name,"mime":mime,"bytes_b64":base64::engine::general_purpose::STANDARD.encode(bytes)})).collect();
+        let attachments: Vec<Value> = queued.borrow().iter().map(|(name, mime, bytes, _)| json!({"name":name,"mime":mime,"bytes_b64":base64::engine::general_purpose::STANDARD.encode(bytes)})).collect();
         let payload = json!({"project_id": project, "title": name, "body": buffer_text(&body.buffer()), "type": pick("type"), "priority": pick("priority"), "size": if pick("size").is_empty() {Value::Null} else {json!(pick("size"))}, "column": pick("column"), "module_id": pick("module_id").parse::<i64>().ok(), "labels": labels.text().split(',').map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>(), "attachments": attachments});
         page.set_sensitive(false);
         status.set_text("Creating…");
@@ -1133,6 +1220,10 @@ fn open_detail(id: i64) -> Option<Rc<Detail>> {
     })
 }
 
+/// Open inline editors, by the part of the page they are in, each saying whether it holds
+/// text that differs from the task.
+type Editing = Vec<(&'static str, Box<dyn Fn() -> bool>)>;
+
 /// Everything a task page draws, fetched together.
 struct Loaded {
     task: Value,
@@ -1209,8 +1300,14 @@ pub struct Detail {
     recipient: gtk::ComboBoxText,
     task: RefCell<Value>,
     busy: Cell<bool>,
-    /// An inline title or description editor holding text that differs from the task.
-    editing: RefCell<Vec<Box<dyn Fn() -> bool>>>,
+    /// An inline title or description editor holding text that differs from the task, by
+    /// the part of the page it is in ("title", "body").
+    editing: RefCell<Editing>,
+    /// The project's tasks and modules the page was drawn with; a field edit reuses them.
+    tasks: RefCell<Result<Vec<Value>, String>>,
+    modules: RefCell<Vec<Value>>,
+    /// What each part of the page was drawn from, so a redraw rebuilds only what changed.
+    drawn: RefCell<Drawn>,
     /// Older history and messages fetched with "Load older", kept across redraws.
     history: RefCell<Vec<Value>>,
     messages: RefCell<Vec<Value>>,
@@ -1274,6 +1371,9 @@ impl Detail {
             task: RefCell::new(Value::Null),
             busy: Cell::new(false),
             editing: RefCell::new(Vec::new()),
+            tasks: RefCell::new(Ok(Vec::new())),
+            modules: RefCell::new(Vec::new()),
+            drawn: RefCell::default(),
             history: RefCell::new(Vec::new()),
             messages: RefCell::new(Vec::new()),
             comments: RefCell::new(Vec::new()),
@@ -1295,7 +1395,7 @@ impl Detail {
                 d.say("Post or clear your comment before leaving.");
                 return false;
             }
-            if d.editing.borrow().iter().any(|changed| changed()) {
+            if d.editing.borrow().iter().any(|(_, changed)| changed()) {
                 d.say("Save or cancel your edit before leaving.");
                 return false;
             }
@@ -1350,6 +1450,41 @@ impl Detail {
         });
     }
 
+    /// After one of this page's own ops: the task as the op left it (most answer with it), and
+    /// its timeline. The project's tasks are asked for again only when the task names one the
+    /// page does not know (a sub-task just made); its modules not at all. Only the parts that
+    /// changed are redrawn.
+    async fn refresh(self: &Rc<Self>, ui: &Rc<Ui>, answer: Value) {
+        let id = self.id;
+        let activity = json!({"task_id":id,"limit":100});
+        let whole = answer["id"].as_i64() == Some(id)
+            && answer.get("children").is_some()
+            && answer.get("attachments").is_some()
+            && answer.get("sessions").is_some();
+        let (task, activity) = if whole {
+            (Ok(answer), ui.call("task.activity", activity).await)
+        } else {
+            tokio::join!(ui.call("task.get", json!({"task_id":id})), ui.call("task.activity", activity))
+        };
+        let task = match task {
+            Ok(task) => task,
+            Err(e) => return self.say(&e.to_string()),
+        };
+        let unknown = {
+            let tasks = self.tasks.borrow();
+            let known = |other: i64| tasks.as_ref().is_ok_and(|tasks| tasks.iter().any(|t| t["id"].as_i64() == Some(other)));
+            rows(&task, "children").iter().filter_map(Value::as_i64).chain(task["parent_id"].as_i64()).any(|other| !known(other))
+        };
+        if unknown {
+            let project = task["project_id"].as_i64().unwrap_or(self.project.get());
+            let tasks = ui.call("task.list", json!({"project_id":project,"summary":true})).await;
+            *self.tasks.borrow_mut() = tasks.map(|t| rows(&t, "tasks")).map_err(|e| e.to_string());
+        }
+        if self.panel.body.root().is_some() {
+            self.apply(task, activity.map_err(|e| e.to_string()));
+        }
+    }
+
     /// Runs one task op from this page, then redraws it from the engine's state.
     fn act(self: &Rc<Self>, op: &'static str, payload: Value) {
         self.act_then(op, payload, |_| {});
@@ -1364,22 +1499,27 @@ impl Detail {
         glib::spawn_future_local(async move {
             let result = ui.call(op, payload).await;
             detail.busy.set(false);
-            match result {
-                Ok(_) => {
+            let answer = match result {
+                Ok(answer) => {
                     detail.say("");
                     after(&detail);
                     ui.refresh_page();
+                    answer
                 }
                 Err(crate::client::Error::Bus(e)) if e.code.ends_with(".edit_conflict") => {
                     detail.say("This task changed elsewhere, so the page reloaded with the latest version. Make the change again.");
+                    if detail.panel.body.root().is_some() {
+                        detail.reload();
+                    }
+                    return;
                 }
                 Err(e) => {
                     detail.say(&e.to_string());
                     return;
                 }
-            }
+            };
             if detail.panel.body.root().is_some() {
-                detail.reload();
+                detail.refresh(&ui, answer).await;
             }
         });
     }
@@ -1396,8 +1536,17 @@ impl Detail {
 
     fn render(self: &Rc<Self>, loaded: Loaded) {
         let Loaded { task, tasks, modules, activity } = loaded;
-        *self.task.borrow_mut() = task.clone();
-        self.editing.borrow_mut().clear();
+        if let Err(e) = &tasks {
+            self.say(&format!("Could not load the project's tasks: {e}. Sub-task titles are unavailable."));
+        }
+        *self.tasks.borrow_mut() = tasks;
+        *self.modules.borrow_mut() = modules;
+        self.apply(task, activity);
+    }
+
+    /// Take the task and its timeline, and redraw what they changed.
+    fn apply(self: &Rc<Self>, task: Value, activity: Result<Value, String>) {
+        *self.task.borrow_mut() = task;
         match &activity {
             Ok(data) => {
                 *self.history.borrow_mut() = rows(data, "history");
@@ -1407,25 +1556,109 @@ impl Detail {
             }
             Err(e) => self.say(&format!("Could not load the timeline: {e}")),
         }
-        let (tasks, tasks_error) = match tasks {
-            Ok(tasks) => (tasks, None),
-            Err(e) => (Vec::new(), Some(e)),
-        };
-        if let Some(e) = &tasks_error {
-            self.say(&format!("Could not load the project's tasks: {e}. Sub-task titles are unavailable."));
-        }
-        self.render_header(&task, &tasks);
-        clear(&self.main);
-        self.main.append(&self.description(&task));
-        if let Some(children) = self.subtasks(&task, &tasks) {
-            self.main.append(&children);
-        }
-        self.main.append(&self.timeline());
-        self.render_actions(&task);
-        self.render_side(&task, &modules);
+        self.draw();
     }
 
-    fn render_header(self: &Rc<Self>, task: &Value, tasks: &[Value]) {
+    /// Rebuild each part of the page whose inputs changed since it was drawn; the rest, with
+    /// any edit open in it, stays. The scroll position is kept either way.
+    fn draw(self: &Rc<Self>) {
+        let task = self.task.borrow().clone();
+        let tasks_held = self.tasks.borrow();
+        let tasks: &[Value] = tasks_held.as_deref().unwrap_or(&[]);
+        let modules = self.modules.borrow().clone();
+        let scroll = self
+            .panel
+            .body
+            .ancestor(gtk::ScrolledWindow::static_type())
+            .and_downcast::<gtk::ScrolledWindow>()
+            .map(|s| s.vadjustment())
+            .map(|a| (a.value(), a));
+        let title_of = |id: Option<i64>| id.and_then(|id| tasks.iter().find(|t| t["id"].as_i64() == Some(id))).map(|t| (text(t, "title").to_string(), text(t, "column").to_string()));
+        let live: Vec<String> = self
+            .ui
+            .upgrade()
+            .map(|ui| {
+                ui.sessions
+                    .borrow()
+                    .iter()
+                    .filter(|s| s["project_id"] == self.project.get() && text(s, "state") != "closed")
+                    .map(|s| text(s, "name").to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let field = |name: &str| task[name].to_string();
+        let header = key(&[field("title"), field("column"), field("state"), field("parent_id"), field("created_at"), format!("{:?}", title_of(task["parent_id"].as_i64()))]);
+        let creator = self.history.borrow().iter().find(|row| text(row, "op") == "task.create").map(|row| actor_name(text(row, "actor")));
+        let description = key(&[field("body"), field("attachments"), field("created_at"), format!("{creator:?}")]);
+        let children: Vec<i64> = rows(&task, "children").iter().filter_map(Value::as_i64).collect();
+        let subtasks = key(&[field("children"), field("depth"), field("project_id"), format!("{:?}", children.iter().map(|c| title_of(Some(*c))).collect::<Vec<_>>())]);
+        let timeline = self.timeline_key();
+        let actions = key(&[field("column"), format!("{live:?}")]);
+        let side = key(&[
+            field("column"), field("priority"), field("size"), field("type"), field("module_id"), field("labels"),
+            field("note_id"), field("sessions"), Value::Array(modules.clone()).to_string(), format!("{live:?}"),
+        ]);
+        let mut drawn = std::mem::take(&mut *self.drawn.borrow_mut());
+        let mut changed = false;
+        if drawn.header != Some(header) {
+            self.editing.borrow_mut().retain(|(part, _)| *part != "title");
+            drawn.opened = Some(self.render_header(&task, tasks));
+            drawn.header = Some(header);
+            changed = true;
+        }
+        // "updated …" moves with every edit, and the clock: set in place, not a rebuild.
+        if let Some(opened) = &drawn.opened {
+            opened.set_text(&format!("opened {} · updated {}", since(text(&task, "created_at")), since(text(&task, "updated_at"))));
+        }
+        if drawn.description != Some(description) {
+            self.editing.borrow_mut().retain(|(part, _)| *part != "body");
+            let card: gtk::Widget = self.description(&task).upcast();
+            replace_in(&self.main, drawn.parts[0].take(), Some(&card), None);
+            drawn.parts[0] = Some(card);
+            drawn.description = Some(description);
+            changed = true;
+        }
+        if drawn.subtasks != Some(subtasks) {
+            let card = self.subtasks(&task, tasks).map(|c| c.upcast::<gtk::Widget>());
+            replace_in(&self.main, drawn.parts[1].take(), card.as_ref(), drawn.parts[0].as_ref());
+            drawn.parts[1] = card;
+            drawn.subtasks = Some(subtasks);
+            changed = true;
+        }
+        if drawn.timeline != Some(timeline) {
+            let rail: gtk::Widget = self.timeline().upcast();
+            let after = drawn.parts[1].clone().or_else(|| drawn.parts[0].clone());
+            replace_in(&self.main, drawn.parts[2].take(), Some(&rail), after.as_ref());
+            drawn.parts[2] = Some(rail);
+            drawn.timeline = Some(timeline);
+            changed = true;
+        }
+        if drawn.actions != Some(actions) {
+            self.render_actions(&task);
+            drawn.actions = Some(actions);
+        }
+        if drawn.side != Some(side) {
+            self.render_side(&task, &modules);
+            drawn.side = Some(side);
+            changed = true;
+        }
+        *self.drawn.borrow_mut() = drawn;
+        drop(tasks_held);
+        if let Some((value, adjustment)) = scroll.filter(|_| changed) {
+            adjustment.set_value(value);
+            glib::idle_add_local_once(move || adjustment.set_value(value));
+        }
+    }
+
+    /// What the timeline is drawn from.
+    fn timeline_key(&self) -> u64 {
+        let all = |rows: &RefCell<Vec<Value>>| Value::Array(rows.borrow().clone()).to_string();
+        key(&[all(&self.history), all(&self.messages), all(&self.comments), format!("{:?}", self.cursors.get())])
+    }
+
+    /// The title line and its editor, and the status line; returns the "opened … · updated …"
+    /// label, which `draw` keeps current.
+    fn render_header(self: &Rc<Self>, task: &Value, tasks: &[Value]) -> gtk::Label {
         clear(&self.header);
         let id = self.id;
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);
@@ -1488,7 +1721,7 @@ impl Detail {
             }
         });
         let field = entry.downgrade();
-        self.editing.borrow_mut().push(Box::new(move || field.upgrade().is_some_and(|e| e.text().trim() != original)));
+        self.editing.borrow_mut().push(("title", Box::new(move || field.upgrade().is_some_and(|e| e.text().trim() != original))));
 
         let meta = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         meta.add_css_class("issue-meta");
@@ -1521,6 +1754,7 @@ impl Detail {
         opened.set_tooltip_text(Some(text(task, "created_at")));
         meta.append(&opened);
         self.header.append(&meta);
+        opened
     }
 
     /// The first comment of the thread: the description, with its own Edit.
@@ -1615,7 +1849,7 @@ impl Detail {
             }
         });
         let view = field.view.downgrade();
-        self.editing.borrow_mut().push(Box::new(move || view.upgrade().is_some_and(|v| buffer_text(&v.buffer()) != body)));
+        self.editing.borrow_mut().push(("body", Box::new(move || view.upgrade().is_some_and(|v| buffer_text(&v.buffer()) != body))));
         card
     }
 
@@ -1827,10 +2061,12 @@ impl Detail {
                         messages.and(data["next_message"].as_i64()),
                     ));
                     // Only the timeline changes: the rest of the page, and any edit in it, stays.
-                    if let Some(old) = detail.main.last_child() {
-                        detail.main.remove(&old);
-                    }
-                    detail.main.append(&detail.timeline());
+                    let rail: gtk::Widget = detail.timeline().upcast();
+                    let mut drawn = detail.drawn.borrow_mut();
+                    let after = drawn.parts[1].clone().or_else(|| drawn.parts[0].clone());
+                    replace_in(&detail.main, drawn.parts[2].take(), Some(&rail), after.as_ref());
+                    drawn.parts[2] = Some(rail);
+                    drawn.timeline = Some(detail.timeline_key());
                 }
                 Err(e) => detail.say(&e.to_string()),
             }
@@ -2117,6 +2353,42 @@ impl Detail {
         });
         danger.append(&delete);
         self.side.append(&danger);
+    }
+}
+
+/// What one part of a task page was drawn from, and the parts of its main column.
+#[derive(Default)]
+struct Drawn {
+    header: Option<u64>,
+    description: Option<u64>,
+    subtasks: Option<u64>,
+    timeline: Option<u64>,
+    actions: Option<u64>,
+    side: Option<u64>,
+    /// The header's "opened … · updated …" label.
+    opened: Option<gtk::Label>,
+    /// The description, the sub-tasks (when shown) and the timeline, in `main`'s order.
+    parts: [Option<gtk::Widget>; 3],
+}
+
+fn key(parts: &[String]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    parts.hash(&mut hash);
+    hash.finish()
+}
+
+/// Put `new` where `old` was in `parent`, or after `after` (the start when none) when there
+/// was no `old`; with no `new`, `old` just goes.
+fn replace_in(parent: &gtk::Box, old: Option<gtk::Widget>, new: Option<&gtk::Widget>, after: Option<&gtk::Widget>) {
+    match (old, new) {
+        (Some(old), Some(new)) => {
+            parent.insert_child_after(new, Some(&old));
+            parent.remove(&old);
+        }
+        (Some(old), None) => parent.remove(&old),
+        (None, Some(new)) => parent.insert_child_after(new, after),
+        (None, None) => {}
     }
 }
 

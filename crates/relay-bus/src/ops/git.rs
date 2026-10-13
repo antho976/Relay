@@ -139,7 +139,7 @@ payload!(#[schemars(rename = "GitPrListIn")] PrListIn {
     /// dropped by `git.push` and `git.pr.open`). For an explicit refresh, not for every redraw.
     pub refresh: Option<bool>,
 });
-op!(PrList, "git.pr.list", PrListIn => PrListOut, OpMeta::query(Scope::Project, 8, "All pull request states for the project, across every page; cached for a minute unless refresh"));
+op!(PrList, "git.pr.list", PrListIn => PrListOut, OpMeta::query(Scope::Project, 8, "Open pull requests for the project, and the 100 most recently updated closed or merged ones; cached for a minute unless refresh, failures too"));
 payload!(#[schemars(rename = "GitPrOpenIn")] PrOpenIn { pub project_id: Id, pub worktree: Option<String>, pub title: Option<String>, pub body: Option<String> });
 result!(#[schemars(rename = "GitPrOpenOut")] PrOpenOut { pub url: String });
 op!(PrOpen, "git.pr.open", PrOpenIn => PrOpenOut, OpMeta::mutation(Scope::Project, 8, "Open a PR for the branch"));

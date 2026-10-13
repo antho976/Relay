@@ -79,28 +79,42 @@ pub fn list_with_owners(
     worktrees_owned_by(&owners, repo, include_dirty)
 }
 
-/// How long the paginated GitHub lookup may take before Relay stops waiting on the network.
+/// How long the GitHub lookup may take before Relay stops waiting on the network.
 const PR_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// How long one listing answers `git.pr.list` for a repository. The Source Control panel asks
-/// on every refresh, which while agents work is about once a second; every page of every PR
-/// the repository ever had, each time, spends the user's GitHub REST quota (D130).
+/// on every refresh, which while agents work is about once a second; asking GitHub each time
+/// spends the user's GitHub REST quota (D130).
 const PR_LIST_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+/// A failed lookup answers for this long too: offline, `gh` waits out its whole timeout, and
+/// signed out it still costs a process and a round trip, on every refresh. `refresh` (the
+/// panel's Refresh key) asks again at once.
+const PR_LIST_FAILURE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+/// The closed and merged PRs listed beside every open one: the most recently updated, one
+/// page. Older ones are what a branch long merged or abandoned had; `branch_cleanup` asks
+/// GitHub about those branch by branch.
+const PR_LIST_RECENT: u32 = 100;
 /// `gh pr create` makes several GitHub round trips. Under the desktop client's 30 s request
 /// timeout, so the engine reports a timeout before the client gives up on its own.
 const PR_OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 
-type PrCache = std::collections::HashMap<PathBuf, (std::time::Instant, PrListOut)>;
+type PrListed = Result<PrListOut, BusError>;
+type PrCache = std::collections::HashMap<PathBuf, (std::time::Instant, PrListed)>;
 static PR_LISTS: std::sync::Mutex<Option<PrCache>> = std::sync::Mutex::new(None);
 
-fn cached_prs(repo: &Path) -> Option<PrListOut> {
-    let cache = PR_LISTS.lock().unwrap_or_else(|p| p.into_inner());
-    cache.as_ref()?.get(repo).filter(|(at, _)| at.elapsed() < PR_LIST_TTL).map(|(_, listed)| listed.clone())
+fn pr_ttl(listed: &PrListed) -> std::time::Duration {
+    if listed.is_ok() { PR_LIST_TTL } else { PR_LIST_FAILURE_TTL }
 }
 
-fn remember_prs(repo: &Path, listed: &PrListOut) {
+/// The listing, or the failure, this repository's last lookup answered within its TTL.
+fn cached_prs(repo: &Path) -> Option<PrListed> {
+    let cache = PR_LISTS.lock().unwrap_or_else(|p| p.into_inner());
+    cache.as_ref()?.get(repo).filter(|(at, listed)| at.elapsed() < pr_ttl(listed)).map(|(_, listed)| listed.clone())
+}
+
+fn remember_prs(repo: &Path, listed: &PrListed) {
     let mut cache = PR_LISTS.lock().unwrap_or_else(|p| p.into_inner());
     let cache = cache.get_or_insert_with(Default::default);
-    cache.retain(|_, (at, _)| at.elapsed() < PR_LIST_TTL);
+    cache.retain(|_, (at, listed)| at.elapsed() < pr_ttl(listed));
     cache.insert(repo.to_path_buf(), (std::time::Instant::now(), listed.clone()));
 }
 
@@ -737,12 +751,13 @@ pub fn register(e: &mut Engine) {
         let repo = Path::new(&project.path);
         if !p.refresh.unwrap_or(false) {
             if let Some(listed) = cached_prs(repo) {
-                return Ok(listed);
+                return listed;
             }
         }
         let gh = crate::github::gh_path()?;
-        let listed = list_pull_requests(&gh, repo)?;
+        let listed = list_pull_requests(&gh, repo);
         remember_prs(repo, &listed);
+        let listed = listed?;
         // A PR merged for a branch a closed session left behind: clean that branch up now
         // rather than at the next sweep (branch_cleanup).
         let merged: Vec<String> = listed.pull_requests.iter()
@@ -1731,14 +1746,28 @@ struct GhRepo {
     full_name: String,
 }
 
+/// Every open PR (each page), and one page of the most recently updated closed and merged
+/// ones: the two asked of GitHub at once, so the lookup costs one round trip. Every PR the
+/// repository ever had, page by page, grew with its history and made a slow network slower.
 fn list_pull_requests(gh: &Path, root: &Path) -> Result<PrListOut, BusError> {
+    let recent = format!("repos/{{owner}}/{{repo}}/pulls?state=closed&per_page={PR_LIST_RECENT}&sort=updated&direction=desc");
+    let (open, closed) = std::thread::scope(|scope| {
+        let closed = scope.spawn(|| gh_api(gh, root, &[recent.as_str()]));
+        let open = gh_api(gh, root, &["--paginate", "--slurp", "repos/{owner}/{repo}/pulls?state=open&per_page=100"]);
+        (open, closed.join().unwrap_or_else(|_| Err(BusError::internal("gh lookup thread panicked"))))
+    });
+    let mut pull_requests = decode_pull_requests(&open?)?;
+    // Without the closed page the open list still stands; `complete` says what is missing.
+    let closed = closed.and_then(|bytes| decode_page(&bytes));
+    let complete = closed.is_ok();
+    pull_requests.extend(closed.unwrap_or_default());
+    Ok(PrListOut { pull_requests, complete })
+}
+
+/// One `gh api` call's output, bounded by [`PR_LIST_TIMEOUT`].
+fn gh_api(gh: &Path, root: &Path, args: &[&str]) -> Result<Vec<u8>, BusError> {
     let mut command = std::process::Command::new(gh);
-    command.current_dir(root).env("GH_PROMPT_DISABLED", "1").args([
-        "api",
-        "--paginate",
-        "--slurp",
-        "repos/{owner}/{repo}/pulls?state=all&per_page=100&sort=updated&direction=desc",
-    ]);
+    command.current_dir(root).env("GH_PROMPT_DISABLED", "1").arg("api").args(args);
     // `gh` talks to github.com. An unbounded wait on a flaky network used to be an unbounded
     // wait for every other bus op behind it; the lock is gone now, but the caller still gets
     // an answer either way (D144).
@@ -1756,40 +1785,42 @@ fn list_pull_requests(gh: &Path, root: &Path) -> Result<PrListOut, BusError> {
             String::from_utf8_lossy(&out.stderr).trim().to_string(),
         ));
     }
-    Ok(PrListOut {
-        pull_requests: decode_pull_requests(&out.stdout)?,
-        complete: true,
-    })
+    Ok(out.stdout)
+}
+
+/// One page of `gh api`'s pull requests, as GitHub returns it without `--slurp`.
+fn decode_page(bytes: &[u8]) -> Result<Vec<PullRequest>, BusError> {
+    let page: Vec<GhPullRequest> = serde_json::from_slice(bytes)
+        .map_err(|error| BusError::internal(format!("decoding GitHub pull requests: {error}")))?;
+    Ok(page.into_iter().map(pull_request).collect())
 }
 
 fn decode_pull_requests(bytes: &[u8]) -> Result<Vec<PullRequest>, BusError> {
     let pages: Vec<Vec<GhPullRequest>> = serde_json::from_slice(bytes)
         .map_err(|error| BusError::internal(format!("decoding GitHub pull requests: {error}")))?;
-    Ok(pages
-        .into_iter()
-        .flatten()
-        .map(|row| {
-            let same_repository = row
-                .head
-                .repo
-                .as_ref()
-                .zip(row.base.repo.as_ref())
-                .is_some_and(|(head, base)| head.full_name == base.full_name);
-            PullRequest {
-                number: row.number,
-                branch: row.head.branch,
-                draft: row.draft,
-                url: row.html_url,
-                title: row.title,
-                state: if row.merged_at.is_some() {
-                    "merged".into()
-                } else {
-                    row.state
-                },
-                same_repository,
-            }
-        })
-        .collect())
+    Ok(pages.into_iter().flatten().map(pull_request).collect())
+}
+
+fn pull_request(row: GhPullRequest) -> PullRequest {
+    let same_repository = row
+        .head
+        .repo
+        .as_ref()
+        .zip(row.base.repo.as_ref())
+        .is_some_and(|(head, base)| head.full_name == base.full_name);
+    PullRequest {
+        number: row.number,
+        branch: row.head.branch,
+        draft: row.draft,
+        url: row.html_url,
+        title: row.title,
+        state: if row.merged_at.is_some() {
+            "merged".into()
+        } else {
+            row.state
+        },
+        same_repository,
+    }
 }
 
 fn commit_diff_files(
@@ -2268,15 +2299,37 @@ mod tests {
     }
 
     #[test]
-    fn github_cli_paginates_and_failure_is_not_an_empty_list() {
+    fn github_cli_lists_every_open_pr_and_one_page_of_closed_ones() {
         let dir = tempfile::tempdir().unwrap();
+        let pr = |number: u64, state: &str, merged: bool| {
+            format!(
+                r#"{{"number":{number},"head":{{"ref":"b{number}","repo":{{"full_name":"o/r"}}}},"base":{{"ref":"main","repo":{{"full_name":"o/r"}}}},"html_url":"u","title":"t","state":"{state}","merged_at":{}}}"#,
+                if merged { "\"2026-09-05T00:00:00Z\"" } else { "null" }
+            )
+        };
         let gh = dir.path().join("gh");
-        write_script(&gh, "#!/usr/bin/env python3\nimport sys\nassert sys.argv[1:4] == ['api','--paginate','--slurp']\nassert 'state=all' in sys.argv[4]\nprint('[[], []]')\n");
+        write_script(&gh, &format!(
+            "#!/usr/bin/env python3\nimport sys\nargs = sys.argv[1:]\nif args == ['--probe']: sys.exit(0)\nassert args[0] == 'api' and 'state=all' not in args[-1]\nif '--paginate' in args:\n    assert args[1:3] == ['--paginate','--slurp'] and 'state=open' in args[3]\n    print('[[{}], []]')\nelse:\n    assert len(args) == 2 and 'state=closed' in args[1] and 'per_page=100' in args[1] and 'sort=updated' in args[1]\n    print('[{}, {}]')\n",
+            pr(1, "open", false), pr(2, "closed", true), pr(3, "closed", false)
+        ));
         let result = list_pull_requests(&gh, dir.path()).unwrap();
-        assert!(result.complete && result.pull_requests.is_empty());
+        assert!(result.complete);
+        assert_eq!(
+            result.pull_requests.iter().map(|pr| (pr.number, pr.state.as_str())).collect::<Vec<_>>(),
+            [(1, "open"), (2, "merged"), (3, "closed")]
+        );
         let failing = dir.path().join("gh-failing");
         write_script(&failing, "#!/usr/bin/env python3\nimport sys\nprint('[[]]')\nsys.exit(1)\n");
-        assert!(list_pull_requests(&failing, dir.path()).is_err());
+        assert!(list_pull_requests(&failing, dir.path()).is_err(), "a failure is not an empty list");
+        // The open PRs stand without the closed page; the listing says it is not complete.
+        let partial = dir.path().join("gh-partial");
+        write_script(&partial, &format!(
+            "#!/usr/bin/env python3\nimport sys\nif '--paginate' in sys.argv: print('[[{}]]')\nelse: sys.exit(1)\n",
+            pr(1, "open", false)
+        ));
+        let result = list_pull_requests(&partial, dir.path()).unwrap();
+        assert!(!result.complete);
+        assert_eq!(result.pull_requests.len(), 1);
     }
 
     /// Writes an executable script and waits until it can be run. A test thread that forks while
@@ -2310,10 +2363,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path();
         assert!(cached_prs(repo).is_none());
-        let listed = PrListOut { pull_requests: Vec::new(), complete: true };
+        let listed = Ok(PrListOut { pull_requests: Vec::new(), complete: true });
         remember_prs(repo, &listed);
         assert_eq!(cached_prs(repo), Some(listed));
         assert!(cached_prs(&repo.join("other")).is_none(), "a listing answers only its own repository");
+        forget_prs(repo);
+        assert!(cached_prs(repo).is_none());
+        // Offline, gh waits out its timeout: the failure answers the next refreshes too, rather
+        // than every one of them waiting again.
+        let failed = Err(BusError::unavailable("git.pr_list_timeout", "gh did not answer within 10s"));
+        remember_prs(repo, &failed);
+        assert_eq!(cached_prs(repo), Some(failed));
         forget_prs(repo);
         assert!(cached_prs(repo).is_none());
     }

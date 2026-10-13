@@ -2904,7 +2904,7 @@
       }
     },
     "git.pr.list": {
-      "summary": "All pull request states for the project, across every page; cached for a minute unless refresh",
+      "summary": "Open pull requests for the project, and the 100 most recently updated closed or merged ones; cached for a minute unless refresh, failures too",
       "kind": "query",
       "audit": "never",
       "undo": "none",

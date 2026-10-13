@@ -35,6 +35,9 @@ pub struct Editor {
     git_scope: RefCell<(i64, String)>,
     git_refresh_pending: Cell<bool>,
     git_refresh_dirty: Cell<bool>,
+    /// The project's last `git.pr.list` answer, the Remote section's pull request row it
+    /// fills, and whether a lookup is in flight (`code_git`).
+    prs: RefCell<code_git::PrState>,
     /// The next refresh asks GitHub for pull requests again instead of taking the engine's
     /// minute-old listing: set by the Refresh button, never by a file event (D130).
     pr_refresh: Cell<bool>,
@@ -95,6 +98,15 @@ pub struct Editor {
     tree_signature: Cell<u64>,
     /// Entries drawn per folder beyond the first `TREE_PAGE`, raised by "Show more".
     tree_limits: RefCell<std::collections::BTreeMap<String, usize>>,
+    /// The explorer's rows by path: a refresh updates them in place instead of rebuilding
+    /// the tree, so expansion, focus, hover and scroll stay.
+    tree_rows: RefCell<std::collections::HashMap<String, Rc<TreeRow>>>,
+    /// Each changed file's status letter from the Git panel's `git.status`, which tints the
+    /// explorer: `file.tree` is asked without badges, which cost it a `git status` per folder.
+    tree_badges: RefCell<TreeBadges>,
+    /// `git.status` requests begun or promised (a refresh queued behind one in flight): a tree
+    /// load that saw none start while it ran asks for one itself (`refresh_badges`).
+    pub(super) status_requests: Cell<u64>,
     /// Where the next `read_file` puts the caret: 1-based line, 1-based byte column, and the
     /// length in characters to select (a search hit).
     goto: Cell<Option<(u32, u32, usize)>>,
@@ -386,6 +398,7 @@ impl Editor {
             invalidate_pending: Cell::new(false),
             git_refresh_pending: Cell::new(false),
             git_refresh_dirty: Cell::new(false),
+            prs: RefCell::default(),
             pr_refresh: Cell::new(false),
             search_pending: Cell::new(false),
             search_dirty: Cell::new(false),
@@ -429,6 +442,9 @@ impl Editor {
             tree_revision: Cell::new(0),
             tree_signature: Cell::new(0),
             tree_limits: RefCell::default(),
+            tree_rows: RefCell::default(),
+            tree_badges: RefCell::default(),
+            status_requests: Cell::new(0),
             goto: Cell::new(None),
             conflict_bar,
             conflict_label,
@@ -612,6 +628,7 @@ impl Editor {
         self.disk_text.borrow_mut().take();
         self.conflict_bar.set_visible(false);
         clear(&self.tree);
+        self.tree_rows.borrow_mut().clear();
         self.tree_signature.set(0);
         self.caption.set_text("Open a file");
     }
@@ -806,6 +823,7 @@ impl Editor {
         let worktree = self.worktree.borrow().clone();
         self.tree_revision.set(self.tree_revision.get() + 1);
         let revision = self.tree_revision.get();
+        let statuses = self.status_requests.get();
         let e = self.clone();
         let ui = ui.clone();
         glib::spawn_future_local(async move {
@@ -813,7 +831,7 @@ impl Editor {
             let result = ui
                 .call(
                     "file.tree",
-                    json!({"project_id":project,"worktree":optional_scope(&worktree),"path":"","depth":1,"git_badges":true}),
+                    json!({"project_id":project,"worktree":optional_scope(&worktree),"path":"","depth":1,"git_badges":false}),
                 )
                 .await;
             if !e.matches(&ui, project, &worktree) || e.tree_revision.get() != revision {
@@ -831,7 +849,7 @@ impl Editor {
                 let listing = ui
                     .call(
                         "file.tree",
-                        json!({"project_id":project,"worktree":optional_scope(&worktree),"path":folder,"depth":1,"git_badges":true}),
+                        json!({"project_id":project,"worktree":optional_scope(&worktree),"path":folder,"depth":1,"git_badges":false}),
                     )
                     .await;
                 if !e.matches(&ui, project, &worktree) || e.tree_revision.get() != revision {
@@ -841,6 +859,11 @@ impl Editor {
                 if let Ok(listing) = listing {
                     prefetched.insert(folder, rows(&listing, "entries"));
                 }
+            }
+            // The badges are the Git panel's status. A file event refreshes both; a load of
+            // the tree on its own (a file action, Refresh) asks for the status here, once.
+            if e.status_requests.get() == statuses {
+                e.refresh_badges(&ui);
             }
             let signature = {
                 use std::hash::{Hash, Hasher};
@@ -868,8 +891,8 @@ impl Editor {
                 .and_downcast::<gtk::ScrolledWindow>()
                 .map(|s| s.vadjustment())
                 .map(|a| (a.value(), a));
-            clear(&e.tree);
-            e.render_tree(&ui, &e.tree, "", rows(&v, "entries"), revision, &mut prefetched);
+            e.fill_tree(&ui, &e.tree, "", rows(&v, "entries"), &mut prefetched);
+            e.prune_tree_rows();
             e.tree_signature.set(signature);
             if let Some((value, adjustment)) = scroll {
                 adjustment.set_value(value);
@@ -1114,6 +1137,101 @@ fn with_newlines(text: &str, crlf: bool) -> String {
     if crlf { lf.replace('\n', "\r\n") } else { lf }
 }
 
+/// One explorer row, kept across refreshes (`fill_tree`).
+struct TreeRow {
+    /// What sits in the parent folder's box: a file's row, or a folder's row and children.
+    widget: gtk::Widget,
+    row: gtk::Button,
+    name: gtk::Label,
+    content: gtk::Box,
+    directory: bool,
+    /// A file's size and modification time, which its image preview is keyed by: a file
+    /// whose stamp changed gets a new row.
+    stamp: String,
+    /// The status letter and folder tint drawn now.
+    painted: Cell<Option<(Option<&'static str>, Option<&'static str>)>>,
+    folder: Option<TreeFolder>,
+}
+
+struct TreeFolder {
+    children: gtk::Box,
+    /// The children box holds this folder's listing (or one is on its way).
+    loaded: Rc<Cell<bool>>,
+    /// Open or close the folder, listing it when it opens unloaded.
+    toggle: Rc<dyn Fn(bool)>,
+}
+
+/// The explorer's status letters, from `git.status`.
+#[derive(Default)]
+pub(super) struct TreeBadges {
+    files: std::collections::HashMap<String, String>,
+    /// Folders holding nothing tracked, which `git.status` lists whole as `dir/`: every file
+    /// under one is untracked.
+    untracked: Vec<String>,
+}
+
+impl TreeBadges {
+    fn from_status(files: &[Value]) -> Self {
+        let mut badges = Self::default();
+        for file in files {
+            // The worktree's code when there is one, else the index's: as file.tree badges.
+            let code = match text(file, "worktree").trim() {
+                "" => text(file, "index").trim(),
+                code => code,
+            };
+            if code.is_empty() {
+                continue;
+            }
+            let path = text(file, "path");
+            if path.ends_with('/') {
+                if code == "?" {
+                    badges.untracked.push(path.to_owned());
+                }
+                continue;
+            }
+            badges.files.insert(path.to_owned(), code.to_owned());
+        }
+        badges
+    }
+    /// A path's status code, or "" for none. Only files inside an untracked folder are
+    /// untracked themselves; the folders under it are tinted by `folder_status`.
+    fn badge(&self, path: &str, directory: bool) -> &str {
+        if let Some(code) = self.files.get(path) {
+            return code;
+        }
+        if !directory && self.untracked.iter().any(|folder| path.starts_with(folder.as_str())) {
+            return "?";
+        }
+        ""
+    }
+}
+
+const STATUS_CLASSES: [&str; 7] = [
+    "git-modified", "git-added", "git-untracked", "git-deleted", "git-renamed", "git-conflict", "git-ignored",
+];
+
+/// Make `target`'s children exactly `wanted`, in order, moving only what is out of place.
+fn sync_children(target: &gtk::Box, wanted: &[gtk::Widget]) {
+    let keep: std::collections::HashSet<usize> = wanted.iter().map(|w| w.as_ptr() as usize).collect();
+    let mut child = target.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        if !keep.contains(&(widget.as_ptr() as usize)) {
+            target.remove(&widget);
+        }
+    }
+    let parent: &gtk::Widget = target.upcast_ref();
+    let mut previous: Option<gtk::Widget> = None;
+    for widget in wanted {
+        if widget.parent().as_ref() != Some(parent) {
+            target.insert_child_after(widget, previous.as_ref());
+        } else if widget.prev_sibling() != previous {
+            target.reorder_child_after(widget, previous.as_ref());
+        }
+        previous = Some(widget.clone());
+    }
+}
+
 fn optional_scope(worktree: &str) -> Option<&str> {
     if worktree.is_empty() {
         None
@@ -1123,17 +1241,21 @@ fn optional_scope(worktree: &str) -> Option<&str> {
 }
 
 impl Editor {
-    fn render_tree(
+    /// Show `entries` in `target`, reusing the rows already there by path: a refresh that
+    /// changed one entry touches one row, and the rest keep their state and stay where they are.
+    /// An expanded folder's listing in `prefetched` fills it the same way; one without is left
+    /// as it is.
+    fn fill_tree(
         self: &Rc<Self>,
         ui: &Rc<Ui>,
         target: &gtk::Box,
         directory: &str,
         entries: Vec<Value>,
-        revision: u64,
         prefetched: &mut std::collections::BTreeMap<String, Vec<Value>>,
     ) {
+        let mut wanted: Vec<gtk::Widget> = Vec::new();
         if entries.is_empty() {
-            target.append(&label("Empty folder", "tree-empty"));
+            wanted.push(label("Empty folder", "tree-empty").upcast());
         }
         // Each row is a dozen widgets and controllers: a folder of thousands is drawn a page
         // at a time (RA-210).
@@ -1141,171 +1263,45 @@ impl Editor {
         let hidden = entries.len().saturating_sub(limit);
         for entry in entries.into_iter().take(limit) {
             let path = text(&entry, "path").to_string();
-            let directory = match text(&entry, "kind") {
+            let is_folder = match text(&entry, "kind") {
                 "dir" => true,
                 "symlink" => self.links_to_folder(ui, &path),
                 _ => false,
             };
-            let depth = path.matches('/').count();
-            let badge = text(&entry, "badge");
-            let status = project_files::status_letter(badge);
-            // VS Code explorer anatomy: guides, chevron, type icon, name, status letter.
-            let row = button("", "tree-row");
-            row.add_css_class(if directory { "code-folder" } else { "code-file" });
-            row.set_tooltip_text(Some(&match status {
-                Some((_, _, word)) => format!("{path} · {word}"),
-                None => path.clone(),
-            }));
-            let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            if depth > 0 {
-                content.append(&project_files::indent_guides(depth));
-            }
-            let chevron = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            chevron.add_css_class("tree-chevron");
-            chevron.set_size_request(project_files::INDENT + 4, -1);
-            // The arrow inside expands to centre itself; stop that reaching the row, or the
-            // chevron shares the spare width with the name and the folder drifts right.
-            chevron.set_hexpand(false);
-            content.append(&chevron);
-            let glyph = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            glyph.add_css_class("tree-glyph");
-            content.append(&glyph);
-            let name = label(text(&entry, "name"), "tree-name");
-            name.set_hexpand(true);
-            name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            if let Some((_, class, _)) = status {
-                name.add_css_class(class);
-            } else if let Some(class) = directory.then(|| project_files::folder_status(&path)).flatten() {
-                name.add_css_class(class);
-            }
-            content.append(&name);
-            if let Some((letter, class, _)) = status {
-                let mark = label(letter, "tree-badge");
-                mark.add_css_class(class);
-                content.append(&mark);
-            }
-            row.set_child(Some(&content));
+            let stamp = if is_folder { String::new() } else { format!("{}:{}", entry["size"], entry["modified_at"]) };
+            let kept = self.tree_rows.borrow().get(&path).cloned().filter(|row| {
+                row.directory == is_folder
+                    && row.stamp == stamp
+                    && row.widget.parent().as_ref() == Some(target.upcast_ref::<gtk::Widget>())
+            });
+            let row = match kept {
+                Some(row) => row,
+                None => {
+                    let row = self.tree_row(ui, &entry, &path, is_folder, stamp);
+                    self.tree_rows.borrow_mut().insert(path.clone(), row.clone());
+                    row
+                }
+            };
+            self.paint_row(&row, &path);
             if path == *self.path.borrow() || path == *self.selected_path.borrow() {
-                project_files::mark_selected(&row);
+                project_files::mark_selected(&row.row);
+            } else {
+                row.row.remove_css_class("selected");
             }
-            self.bind_tree_row(ui, &row, &path, directory);
-            if directory {
-                let children = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                children.set_visible(false);
-                // A drop on any row inside this folder lands in this folder, not the root.
-                self.bind_folder_drop(ui, &children, &path);
-                let node = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                node.append(&row);
-                node.append(&children);
-                target.append(&node);
-                let paint = {
-                    let chevron = chevron.clone();
-                    let glyph = glyph.clone();
-                    move |open: bool| {
-                        clear(&chevron);
-                        clear(&glyph);
-                        let arrow = crate::icons::image(if open { "chevron-down" } else { "chevron-right" }, 12);
-                        arrow.set_halign(gtk::Align::Center);
-                        arrow.set_hexpand(true);
-                        chevron.append(&arrow);
-                        let folder = crate::icons::image(if open { "folder-open" } else { "folder" }, 14);
-                        folder.add_css_class("file-icon");
-                        folder.add_css_class("ft-folder");
-                        glyph.append(&folder);
-                    }
-                };
-                paint(false);
-                let loaded = Rc::new(Cell::new(false));
-                let drawn = (children.clone(), loaded.clone());
-                let e = self.clone();
-                let weak = Rc::downgrade(ui);
-                let child_path = path.clone();
-                let toggle = Rc::new(move |open: bool| {
-                    children.set_visible(open);
-                    paint(open);
-                    if !open {
-                        e.expanded.borrow_mut().remove(&child_path);
-                        // Listed afresh when reopened: a refresh with the same listing
-                        // keeps these rows, so what they held could be stale by then.
-                        loaded.set(false);
-                        clear(&children);
-                        return;
-                    }
-                    e.expanded.borrow_mut().insert(child_path.clone());
-                    if loaded.replace(true) {
-                        return;
-                    }
-                    let Some(ui) = weak.upgrade() else {
-                        return;
-                    };
-                    let project = ui.project.get();
-                    let worktree = e.worktree.borrow().clone();
-                    let payload =
-                        e.payload(&ui, json!({"path":child_path,"depth":1,"git_badges":true}));
-                    let e = e.clone();
-                    let target = children.clone();
-                    let loaded = loaded.clone();
-                    let folder = child_path.clone();
-                    glib::spawn_future_local(async move {
-                        let result = ui.call("file.tree", payload).await;
-                        if !e.matches(&ui, project, &worktree)
-                            || e.tree_revision.get() != revision
-                            || !loaded.get()
-                        {
-                            return;
-                        }
-                        // A close and reopen while this ran asked again; the last answer wins.
-                        clear(&target);
-                        match result {
-                            Ok(v) => e.render_tree(
-                                &ui,
-                                &target,
-                                &folder,
-                                rows(&v, "entries"),
-                                revision,
-                                &mut Default::default(),
-                            ),
-                            Err(err) => {
-                                loaded.set(false);
-                                ui.show_error(&err.to_string());
-                            }
-                        }
-                    });
-                });
-                let click = toggle.clone();
-                let select = path.clone();
-                let e = self.clone();
-                row.connect_clicked(move |row| {
-                    project_files::mark_selected(row);
-                    *e.selected_path.borrow_mut() = select.clone();
-                    e.selected_directory.set(true);
-                    let open = !e.expanded.borrow().contains(&select);
-                    click(open);
-                });
+            if let Some(folder) = &row.folder {
                 if self.expanded.borrow().contains(&path) {
                     if let Some(entries) = prefetched.remove(&path) {
-                        let (children, loaded) = drawn;
-                        loaded.set(true);
-                        self.render_tree(ui, &children, &path, entries, revision, prefetched);
+                        folder.loaded.set(true);
+                        self.fill_tree(ui, &folder.children, &path, entries, prefetched);
                     }
-                    toggle(true);
+                    if !folder.children.is_visible() {
+                        (folder.toggle)(true);
+                    }
+                } else if folder.children.is_visible() || folder.loaded.get() {
+                    (folder.toggle)(false);
                 }
-            } else {
-                glyph.append(&project_files::file_image(&path, 14));
-                let stamp = format!("{}:{}", entry["size"], entry["modified_at"]);
-                self.bind_image_hover(ui, &row, &path, stamp, entry["size"].as_u64());
-                let e = self.clone();
-                let weak = Rc::downgrade(ui);
-                row.connect_clicked(move |row| {
-                    if let Some(ui) = weak.upgrade() {
-                        project_files::mark_selected(row);
-                        *e.selected_path.borrow_mut() = path.clone();
-                        e.selected_directory.set(false);
-                        e.open_path(&ui, path.clone());
-                    }
-                });
-                target.append(&row);
             }
+            wanted.push(row.widget.clone());
         }
         if hidden > 0 {
             let more = button("", "tree-row");
@@ -1331,8 +1327,216 @@ impl Editor {
                     e.load_tree(&ui);
                 }
             });
-            target.append(&more);
+            wanted.push(more.upcast());
         }
+        sync_children(target, &wanted);
+    }
+
+    /// One explorer row, VS Code's anatomy: guides, chevron, type icon, name, status letter.
+    /// A folder's row comes with the box its children are drawn in, filled when it opens.
+    fn tree_row(self: &Rc<Self>, ui: &Rc<Ui>, entry: &Value, path: &str, directory: bool, stamp: String) -> Rc<TreeRow> {
+        let path = path.to_owned();
+        let depth = path.matches('/').count();
+        let row = button("", "tree-row");
+        row.add_css_class(if directory { "code-folder" } else { "code-file" });
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        if depth > 0 {
+            content.append(&project_files::indent_guides(depth));
+        }
+        let chevron = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        chevron.add_css_class("tree-chevron");
+        chevron.set_size_request(project_files::INDENT + 4, -1);
+        // The arrow inside expands to centre itself; stop that reaching the row, or the
+        // chevron shares the spare width with the name and the folder drifts right.
+        chevron.set_hexpand(false);
+        content.append(&chevron);
+        let glyph = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        glyph.add_css_class("tree-glyph");
+        content.append(&glyph);
+        let name = label(text(entry, "name"), "tree-name");
+        name.set_hexpand(true);
+        name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        content.append(&name);
+        row.set_child(Some(&content));
+        self.bind_tree_row(ui, &row, &path, directory);
+        if !directory {
+            glyph.append(&project_files::file_image(&path, 14));
+            self.bind_image_hover(ui, &row, &path, stamp.clone(), entry["size"].as_u64());
+            let e = self.clone();
+            let weak = Rc::downgrade(ui);
+            let open = path.clone();
+            row.connect_clicked(move |row| {
+                if let Some(ui) = weak.upgrade() {
+                    project_files::mark_selected(row);
+                    *e.selected_path.borrow_mut() = open.clone();
+                    e.selected_directory.set(false);
+                    e.open_path(&ui, open.clone());
+                }
+            });
+            return Rc::new(TreeRow {
+                widget: row.clone().upcast(),
+                row,
+                name,
+                content,
+                directory,
+                stamp,
+                painted: Cell::new(None),
+                folder: None,
+            });
+        }
+        let children = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        children.set_visible(false);
+        // A drop on any row inside this folder lands in this folder, not the root.
+        self.bind_folder_drop(ui, &children, &path);
+        let node = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        node.append(&row);
+        node.append(&children);
+        let paint = move |open: bool| {
+            clear(&chevron);
+            clear(&glyph);
+            let arrow = crate::icons::image(if open { "chevron-down" } else { "chevron-right" }, 12);
+            arrow.set_halign(gtk::Align::Center);
+            arrow.set_hexpand(true);
+            chevron.append(&arrow);
+            let folder = crate::icons::image(if open { "folder-open" } else { "folder" }, 14);
+            folder.add_css_class("file-icon");
+            folder.add_css_class("ft-folder");
+            glyph.append(&folder);
+        };
+        paint(false);
+        let loaded = Rc::new(Cell::new(false));
+        let e = Rc::downgrade(self);
+        let weak = Rc::downgrade(ui);
+        let (shown, done, folder) = (children.downgrade(), loaded.clone(), path.clone());
+        let toggle: Rc<dyn Fn(bool)> = Rc::new(move |open: bool| {
+            let (Some(e), Some(children)) = (e.upgrade(), shown.upgrade()) else { return };
+            children.set_visible(open);
+            paint(open);
+            if !open {
+                e.expanded.borrow_mut().remove(&folder);
+                // Listed afresh when reopened: a refresh with the same listing
+                // keeps these rows, so what they held could be stale by then.
+                done.set(false);
+                clear(&children);
+                return;
+            }
+            e.expanded.borrow_mut().insert(folder.clone());
+            if done.replace(true) {
+                return;
+            }
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let project = ui.project.get();
+            let worktree = e.worktree.borrow().clone();
+            let payload = e.payload(&ui, json!({"path":folder,"depth":1,"git_badges":false}));
+            let (loaded, folder) = (done.clone(), folder.clone());
+            glib::spawn_future_local(async move {
+                let result = ui.call("file.tree", payload).await;
+                if !e.matches(&ui, project, &worktree) || !loaded.get() {
+                    return;
+                }
+                // A close and reopen while this ran asked again; the last answer wins.
+                match result {
+                    Ok(v) => {
+                        e.fill_tree(&ui, &children, &folder, rows(&v, "entries"), &mut Default::default());
+                    }
+                    Err(err) => {
+                        clear(&children);
+                        loaded.set(false);
+                        ui.show_error(&err.to_string());
+                    }
+                }
+            });
+        });
+        let click = toggle.clone();
+        let select = path.clone();
+        let e = Rc::downgrade(self);
+        row.connect_clicked(move |row| {
+            let Some(e) = e.upgrade() else { return };
+            project_files::mark_selected(row);
+            *e.selected_path.borrow_mut() = select.clone();
+            e.selected_directory.set(true);
+            let open = !e.expanded.borrow().contains(&select);
+            click(open);
+        });
+        Rc::new(TreeRow {
+            widget: node.upcast(),
+            row,
+            name,
+            content,
+            directory,
+            stamp,
+            painted: Cell::new(None),
+            folder: Some(TreeFolder { children, loaded, toggle }),
+        })
+    }
+
+    /// Tint a row and letter it with its status from the last `git.status`: a changed file by
+    /// its own code, a folder by the strongest change under it.
+    fn paint_row(&self, row: &TreeRow, path: &str) {
+        let status = project_files::status_letter(self.tree_badges.borrow().badge(path, row.directory));
+        let folder = if status.is_none() && row.directory { project_files::folder_status(path) } else { None };
+        let painted = (status.map(|(letter, ..)| letter), folder);
+        // A folder's tint is also redrawn by `note_changes`, behind this cache's back.
+        if !row.directory && row.painted.get() == Some(painted) {
+            return;
+        }
+        row.painted.set(Some(painted));
+        for class in STATUS_CLASSES {
+            row.name.remove_css_class(class);
+        }
+        if let Some(class) = status.map(|(_, class, _)| class).or(folder) {
+            row.name.add_css_class(class);
+        }
+        if let Some(mark) = row.content.last_child().filter(|mark| mark.has_css_class("tree-badge")) {
+            row.content.remove(&mark);
+        }
+        if let Some((letter, class, _)) = status {
+            let mark = label(letter, "tree-badge");
+            mark.add_css_class(class);
+            row.content.append(&mark);
+        }
+        row.row.set_tooltip_text(Some(&match status {
+            Some((_, _, word)) => format!("{path} · {word}"),
+            None => path.to_owned(),
+        }));
+    }
+
+    /// Take the Git panel's latest `git.status` as the explorer's badges, and repaint the rows
+    /// on screen whose status changed. Called after `note_changes`, whose folder tints it reads.
+    pub(super) fn note_badges(&self, files: &[Value]) {
+        *self.tree_badges.borrow_mut() = TreeBadges::from_status(files);
+        let rows: Vec<(String, Rc<TreeRow>)> =
+            self.tree_rows.borrow().iter().map(|(path, row)| (path.clone(), row.clone())).collect();
+        for (path, row) in rows {
+            if row.widget.parent().is_some() {
+                self.paint_row(&row, &path);
+            }
+        }
+    }
+
+    /// Fetch `git.status` for the explorer's tints alone, as the hidden Git panel does.
+    fn refresh_badges(self: &Rc<Self>, ui: &Rc<Ui>) {
+        self.status_requests.set(self.status_requests.get() + 1);
+        let project = ui.project.get();
+        let worktree = self.worktree.borrow().clone();
+        let payload = self.payload(ui, json!({}));
+        let (e, ui) = (self.clone(), ui.clone());
+        glib::spawn_future_local(async move {
+            let Ok(status) = ui.call("git.status", payload).await else { return };
+            if e.matches(&ui, project, &worktree) {
+                let files = rows(&status, "files");
+                e.note_changes(&files);
+                e.note_badges(&files);
+            }
+        });
+    }
+
+    /// Forget rows a refresh or a collapse took out of the explorer.
+    fn prune_tree_rows(&self) {
+        let tree: &gtk::Widget = self.tree.upcast_ref();
+        self.tree_rows.borrow_mut().retain(|_, row| row.widget.is_ancestor(tree));
     }
     /// A symlink to a folder inside this checkout, which file.tree lists and file.read
     /// refuses: file.tree reports a link without what it points at (RA-459).
@@ -2083,7 +2287,33 @@ pub fn replace_all(search: &sourceview5::SearchContext, replace: &str) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::{crlf_dominant, snippet, with_newlines, SNIPPET_CHARS};
+    use super::{crlf_dominant, snippet, with_newlines, TreeBadges, SNIPPET_CHARS};
+    use serde_json::json;
+
+    /// The explorer's letters come from the Git panel's `git.status` (untracked folders
+    /// whole), and must read as `file.tree`'s own badges did (every untracked file listed).
+    #[test]
+    fn explorer_badges_from_the_panels_status_match_file_tree_badges() {
+        let badges = TreeBadges::from_status(&[
+            json!({"path":"src/lib.rs","index":"","worktree":"M"}),
+            json!({"path":"staged.rs","index":"A","worktree":""}),
+            json!({"path":"both.rs","index":"M","worktree":"D"}),
+            json!({"path":"renamed.rs","index":"R","worktree":"","renamed_from":"old.rs"}),
+            json!({"path":"vendor/","index":"","worktree":"?"}),
+            json!({"path":"conflict.rs","index":"U","worktree":"U"}),
+        ]);
+        assert_eq!(badges.badge("src/lib.rs", false), "M");
+        assert_eq!(badges.badge("staged.rs", false), "A");
+        assert_eq!(badges.badge("both.rs", false), "D", "the worktree's code wins, as in file.tree");
+        assert_eq!(badges.badge("renamed.rs", false), "R");
+        assert_eq!(badges.badge("old.rs", false), "");
+        assert_eq!(badges.badge("conflict.rs", false), "U");
+        assert_eq!(badges.badge("vendor/pkg/a.js", false), "?", "a file in an untracked folder is untracked");
+        assert_eq!(badges.badge("vendor/pkg", true), "", "folders are tinted, not lettered");
+        assert_eq!(badges.badge("vendor", true), "");
+        assert_eq!(badges.badge("vendored.txt", false), "", "a sibling sharing the prefix is not inside");
+        assert_eq!(badges.badge("src/main.rs", false), "");
+    }
 
     #[test]
     fn a_save_keeps_the_files_own_line_endings() {

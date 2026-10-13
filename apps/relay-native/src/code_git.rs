@@ -149,7 +149,7 @@ fn git_signature(ui: &Ui, e: &Editor, status: &Value, results: &GitResults) -> u
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     status.to_string().hash(&mut hash);
-    for result in [&results.0, &results.1, &results.2, &results.3] {
+    for result in [&results.0, &results.1, &results.2] {
         match result {
             Ok(value) => value.to_string().hash(&mut hash),
             Err(error) => error.to_string().hash(&mut hash),
@@ -164,12 +164,104 @@ fn git_signature(ui: &Ui, e: &Editor, status: &Value, results: &GitResults) -> u
     hash.finish()
 }
 
-type GitResults = (
-    Result<Value, Error>,
-    Result<Value, Error>,
-    Result<Value, Error>,
-    Result<Value, Error>,
-);
+type GitResults = (Result<Value, Error>, Result<Value, Error>, Result<Value, Error>);
+
+/// The pull request lookup, apart from the rest of the panel: `gh` answers in a fraction of a
+/// second signed out and only at its timeout offline, and the panel does not wait for it.
+#[derive(Default)]
+pub(super) struct PrState {
+    /// The project the last answer is for, and the answer: the listing, or that it failed.
+    answer: Option<(i64, Result<Value, ()>)>,
+    /// A lookup is in flight for this project.
+    pending: Option<i64>,
+    /// Refresh was pressed while one was in flight: ask GitHub afresh when it answers.
+    again: bool,
+    /// The row drawn last, filled in place when the answer arrives.
+    row: Option<Rc<PrRow>>,
+}
+
+/// The Remote section's pull request row and what describes the branch it is for.
+pub(super) struct PrRow {
+    project: i64,
+    row: gtk::Box,
+    copy: gtk::Box,
+    title: gtk::Label,
+    hint: gtk::Label,
+    key: gtk::Button,
+    branch: String,
+    upstream: bool,
+    ahead: Option<i64>,
+    behind: Option<i64>,
+    /// Whether the branch is merged, as `git.branches` reports it; None when it is not listed.
+    merged: Option<bool>,
+    /// The pull request the key opens; none opens a new one.
+    url: Rc<RefCell<Option<String>>>,
+}
+
+impl PrRow {
+    /// Describe the branch's pull request from a `git.pr.list` answer.
+    fn fill(&self, answer: &Result<Value, ()>) {
+        let pull_request = answer.as_ref().ok().and_then(|value| {
+            let matches: Vec<_> = rows(value, "pull_requests")
+                .into_iter()
+                .filter(|pr| pr["same_repository"] == true && text(pr, "branch") == self.branch)
+                .collect();
+            matches
+                .iter()
+                .find(|pr| text(pr, "state") == "open")
+                .or_else(|| matches.first())
+                .cloned()
+        });
+        let complete = answer.as_ref().ok().is_some_and(|value| value["complete"] == true);
+        let ready = complete
+            && self.upstream
+            && self.ahead == Some(0)
+            && self.behind == Some(0)
+            && self.merged == Some(false);
+        if let Some(old) = self.copy.next_sibling().filter(|w| w.has_css_class("scm-tag")) {
+            self.row.remove(&old);
+        }
+        let hint = if let Some(pr) = &pull_request {
+            let state = if text(pr, "state") == "open" && pr["draft"] == true {
+                "draft"
+            } else {
+                text(pr, "state")
+            };
+            let badge = label(state, "scm-tag");
+            badge.add_css_class(&format!("pr-{state}"));
+            badge.set_valign(gtk::Align::Center);
+            self.row.insert_child_after(&badge, Some(&self.copy));
+            let title = text(pr, "title");
+            self.title.set_text(&if title.is_empty() {
+                format!("Pull request #{}", pr["number"])
+            } else {
+                format!("#{} {title}", pr["number"])
+            });
+            format!("Pull request · {state}")
+        } else {
+            self.title.set_text("Pull request");
+            if answer.is_err() {
+                String::from("GitHub unavailable · status unknown")
+            } else if !complete {
+                String::from("Lookup incomplete")
+            } else if ready {
+                String::from("Pushed and ready for review")
+            } else {
+                String::from("Push the branch first")
+            }
+        };
+        self.hint.set_text(&hint);
+        self.hint.set_tooltip_text(Some(&hint));
+        self.key.set_sensitive(pull_request.is_some() || ready);
+        self.key.set_label(if pull_request.is_some() { "Open" } else { "Open PR" });
+        if ready && pull_request.is_none() {
+            self.key.add_css_class("primary");
+        } else {
+            self.key.remove_css_class("primary");
+        }
+        *self.url.borrow_mut() = pull_request.as_ref().and_then(|pr| pr["url"].as_str()).map(str::to_owned);
+    }
+}
 
 /// Every scroller's position under `root`, in tree order.
 fn scroll_positions(root: &gtk::Widget) -> Vec<f64> {
@@ -231,7 +323,10 @@ impl Editor {
             clear(&self.git);
             self.git_revision.set(self.git_revision.get() + 1);
             *self.git_scope.borrow_mut() = scope;
+            *self.tree_badges.borrow_mut() = Default::default();
         }
+        // A status is on its way either way: this one, or the rerun queued behind one.
+        self.status_requests.set(self.status_requests.get() + 1);
         if self.git_refresh_pending.replace(true) {
             self.git_refresh_dirty.set(true);
             return;
@@ -241,7 +336,6 @@ impl Editor {
         let project = ui.project.get();
         let worktree = self.worktree.borrow().clone();
         let payload = self.payload(ui, json!({}));
-        let prs = json!({"project_id":project,"refresh":self.pr_refresh.replace(false)});
         let e = self.clone();
         let ui = ui.clone();
         glib::spawn_future_local(async move {
@@ -259,17 +353,19 @@ impl Editor {
             };
             let files = rows(&status, "files");
             e.note_changes(&files);
+            e.note_badges(&files);
             // Hidden, the panel needs only the status that tints the explorer; it is rebuilt
             // when it is next shown.
             if !e.git.is_mapped() {
                 e.git_stale.set(true);
                 return;
             }
+            // Pull requests come on their own: the panel draws without waiting for GitHub.
+            e.request_prs(&ui, project);
             let results = tokio::join!(
                 ui.call("git.branches", payload.clone()),
                 ui.call("git.log", e.payload(&ui, json!({"limit":30}))),
-                ui.call("integration.list", json!({"project_id":project})),
-                ui.call("git.pr.list", prs)
+                ui.call("integration.list", json!({"project_id":project}))
             );
             if !e.matches(&ui, project, &worktree) || revision != e.git_revision.get() {
                 return;
@@ -750,78 +846,38 @@ impl Editor {
                 }
             });
 
-            let branch_record = results.0.as_ref().ok().and_then(|value| {
+            let merged = results.0.as_ref().ok().and_then(|value| {
                 rows(value, "branches")
                     .into_iter()
                     .find(|branch| text(branch, "name") == branch_name)
+                    .map(|branch| branch["merged"] == true)
             });
-            let pull_request = results.3.as_ref().ok().and_then(|value| {
-                let matches: Vec<_> = rows(value, "pull_requests")
-                    .into_iter()
-                    .filter(|pr| {
-                        pr["same_repository"] == true && text(pr, "branch") == branch_name
-                    })
-                    .collect();
-                matches
-                    .iter()
-                    .find(|pr| text(pr, "state") == "open")
-                    .or_else(|| matches.first())
-                    .cloned()
+            let url: Rc<RefCell<Option<String>>> = Rc::default();
+            let target = Rc::new(PrRow {
+                project,
+                row: pr_row.0.clone(),
+                copy: pr_row.1.clone(),
+                title: pr_row.2.clone(),
+                hint: pr_row.3.clone(),
+                key: pr.clone(),
+                branch: branch_name.clone(),
+                upstream: upstream.is_some(),
+                ahead,
+                behind,
+                merged,
+                url: url.clone(),
             });
-            let complete = results
-                .3
-                .as_ref()
-                .ok()
-                .is_some_and(|value| value["complete"] == true);
-            let ready = complete
-                && upstream.is_some()
-                && ahead == Some(0)
-                && behind == Some(0)
-                && branch_record
-                    .as_ref()
-                    .is_some_and(|branch| branch["merged"] != true);
-            let hint = if let Some(pr) = &pull_request {
-                let state = if text(pr, "state") == "open" && pr["draft"] == true {
-                    "draft"
-                } else {
-                    text(pr, "state")
-                };
-                let badge = label(state, "scm-tag");
-                badge.add_css_class(&format!("pr-{state}"));
-                badge.set_valign(gtk::Align::Center);
-                pr_row.0.insert_child_after(&badge, Some(&pr_row.1));
-                let title = text(pr, "title");
-                pr_row.2.set_text(&if title.is_empty() {
-                    format!("Pull request #{}", pr["number"])
-                } else {
-                    format!("#{} {title}", pr["number"])
-                });
-                format!("Pull request · {state}")
-            } else if results.3.is_err() {
-                String::from("GitHub unavailable · status unknown")
-            } else if !complete {
-                String::from("Lookup incomplete")
-            } else if ready {
-                String::from("Pushed and ready for review")
-            } else {
-                String::from("Push the branch first")
-            };
-            pr_row.3.set_text(&hint);
-            pr_row.3.set_tooltip_text(Some(&hint));
-            pr.set_sensitive(pull_request.is_some() || ready);
-            pr.set_label(if pull_request.is_some() {
-                "Open"
-            } else {
-                "Open PR"
-            });
-            if ready && pull_request.is_none() {
-                pr.add_css_class("primary");
+            // The last answer for this project fills the row now; a lookup in flight
+            // refills it when GitHub answers.
+            if let Some((_, answer)) = e.prs.borrow().answer.as_ref().filter(|(p, _)| *p == project) {
+                target.fill(answer);
             }
+            e.prs.borrow_mut().row = Some(target);
             let ed = e.clone();
             let weak = Rc::downgrade(&ui);
             pr.connect_clicked(move |_| {
                 if let Some(ui) = weak.upgrade() {
-                    if let Some(url) = pull_request.as_ref().and_then(|pr| pr["url"].as_str()) {
+                    if let Some(url) = url.borrow().as_deref() {
                         let uri = gtk::UriLauncher::new(url);
                         uri.launch(Some(&ui.window), gtk::gio::Cancellable::NONE, |_| {});
                     } else {
@@ -1072,6 +1128,48 @@ impl Editor {
     }
 
     /// One VS Code Source Control row: type icon, name, dim folder, stage key, status letter.
+    /// Ask for the project's pull requests, unless a lookup is already in flight, and fill the
+    /// panel's row with the answer when it comes. The engine keeps a listing (or a failure) for
+    /// a minute; Refresh asks GitHub again.
+    fn request_prs(self: &Rc<Self>, ui: &Rc<Ui>, project: i64) {
+        let refresh = self.pr_refresh.replace(false);
+        {
+            let mut prs = self.prs.borrow_mut();
+            if prs.pending == Some(project) {
+                prs.again |= refresh;
+                return;
+            }
+            prs.pending = Some(project);
+        }
+        let e = self.clone();
+        let ui = ui.clone();
+        glib::spawn_future_local(async move {
+            let answer = ui
+                .call("git.pr.list", json!({"project_id":project,"refresh":refresh}))
+                .await
+                .map_err(|_| ());
+            let row = {
+                let mut prs = e.prs.borrow_mut();
+                if prs.pending == Some(project) {
+                    prs.pending = None;
+                }
+                // An answer for a project left behind must not stand in for the current one's.
+                if ui.project.get() == project {
+                    prs.answer = Some((project, answer.clone()));
+                }
+                prs.row.clone()
+            };
+            if let Some(row) = row.filter(|row| row.project == project && row.row.is_ancestor(&e.git)) {
+                row.fill(&answer);
+            }
+            let again = std::mem::take(&mut e.prs.borrow_mut().again);
+            if again && ui.project.get() == project {
+                e.pr_refresh.set(true);
+                e.request_prs(&ui, project);
+            }
+        });
+    }
+
     fn change_row(self: &Rc<Self>, ui: &Rc<Ui>, file: &Value, staged: bool) -> gtk::Box {
         let path = text(file, "path").to_string();
         let code = if is_conflict(file) {
