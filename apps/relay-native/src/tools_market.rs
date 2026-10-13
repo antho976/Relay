@@ -190,7 +190,7 @@ fn build(ui: &Rc<Ui>, spec: &'static Spec) -> Rc<Market> {
     let scope = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     scope.add_css_class("ext-scope");
     scope.set_valign(gtk::Align::Center);
-    scope.append(&label("PROJECT", "ext-scope-label"));
+    scope.append(&label("Project", "ext-scope-label"));
     let picker = gtk::DropDown::from_strings(&[]);
     picker.set_enable_search(true);
     // Search filters on this expression; without one it matches every project.
@@ -199,6 +199,7 @@ fn build(ui: &Rc<Ui>, spec: &'static Spec) -> Rc<Market> {
         None::<gtk::Expression>,
         "string",
     )));
+    picker.add_css_class("settings-select");
     picker.set_tooltip_text(Some("The project every switch on this page applies to"));
     let factory = gtk::SignalListItemFactory::new();
     factory.connect_setup(|_, item| {
@@ -615,7 +616,7 @@ impl Market {
                         .filter(|v| group_of(v) == group && enabled(v, scope))
                         .count();
                     let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-                    let name = label(&group.to_uppercase(), "ext-group-name");
+                    let name = label(&group, "ext-group-name");
                     name.set_hexpand(true);
                     name.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
                     head.append(&name);
@@ -737,6 +738,7 @@ pub(crate) fn toggle(
     let spec = market.spec;
     let switch = gtk::Switch::new();
     switch.add_css_class("ext-switch");
+    switch.add_css_class("settings-switch");
     switch.set_valign(gtk::Align::Center);
     switch.set_widget_name(&name);
     switch.set_active(enabled(item, project));
@@ -858,7 +860,7 @@ pub(crate) fn project_switches(
     name: &dyn Fn(i64) -> String,
     suggested: Option<fn(&Value, i64) -> bool>,
 ) -> gtk::Box {
-    let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 22);
     list.add_css_class("ext-projects");
     let projects = ui.projects.borrow().clone();
     let workspaces = ui.workspaces.borrow().clone();
@@ -887,10 +889,12 @@ pub(crate) fn project_switches(
         groups.push(("Other projects".to_string(), others));
     }
     let scope = market.scope.get();
+    // One section per workspace: its name over a rounded card of project rows, as in Settings.
     for (caption, members) in groups {
+        let group = gtk::Box::new(gtk::Orientation::Vertical, 10);
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         head.add_css_class("ext-projects-head");
-        let title = label(&caption.to_uppercase(), "ext-projects-name");
+        let title = label(&caption, "ext-projects-name");
         title.set_hexpand(true);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         head.append(&title);
@@ -899,7 +903,11 @@ pub(crate) fn project_switches(
             .filter(|p| p["id"].as_i64().is_some_and(|id| enabled(item, id)))
             .count();
         head.append(&label(&format!("{on} of {} on", members.len()), "ext-group-count"));
-        list.append(&head);
+        group.append(&head);
+        let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        card.add_css_class("ext-card-list");
+        group.append(&card);
+        list.append(&group);
         for project in members {
             let id = project["id"].as_i64().unwrap_or(0);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
@@ -927,13 +935,13 @@ pub(crate) fn project_switches(
                 row.append(&hint);
             }
             row.append(&toggle(ui, market, item, id, name(id)));
-            list.append(&row);
+            card.append(&row);
         }
     }
     list
 }
 
-/// A segmented tab bar over a stack. The open tab is remembered across items.
+/// A pill-segmented tab bar over a stack. The open tab is remembered across items.
 pub(crate) fn tabs(
     market: &Rc<Market>,
     pages: Vec<(&'static str, &str, Option<usize>, gtk::Widget)>,
@@ -941,6 +949,8 @@ pub(crate) fn tabs(
     let root = gtk::Box::new(gtk::Orientation::Vertical, 16);
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     bar.add_css_class("ext-tabs");
+    // Pill-segmented, as in the usage card: only as wide as its keys.
+    bar.set_halign(gtk::Align::Start);
     let stack = gtk::Stack::new();
     stack.set_vhomogeneous(false);
     stack.set_hhomogeneous(false);
@@ -1065,7 +1075,7 @@ pub(crate) fn state_box(
 pub(crate) fn section(title: &str) -> gtk::Box {
     let block = gtk::Box::new(gtk::Orientation::Vertical, 8);
     block.add_css_class("ext-section");
-    block.append(&label(&title.to_uppercase(), "ext-section-title"));
+    block.append(&label(title, "ext-section-title"));
     block
 }
 
@@ -1096,6 +1106,8 @@ pub(crate) fn markdown(ui: &Ui, body: &str) -> sourceview5::View {
     buffer.set_text(body.trim_end());
     let view = sourceview5::View::with_buffer(&buffer);
     view.add_css_class("ext-source");
+    // Rounded like the cards around it; the corners clip the text view's own ground.
+    view.set_overflow(gtk::Overflow::Hidden);
     view.set_editable(false);
     view.set_cursor_visible(false);
     view.set_monospace(true);
@@ -1116,7 +1128,7 @@ pub(crate) fn facts(rows: &[(&str, String, bool)]) -> gtk::Grid {
         .build();
     grid.add_css_class("ext-facts");
     for (line, (key, value, mono)) in rows.iter().enumerate() {
-        let key = label(&key.to_uppercase(), "ext-fact-key");
+        let key = label(key, "ext-fact-key");
         key.set_valign(gtk::Align::Start);
         grid.attach(&key, 0, line as i32, 1, 1);
         let value = label(value, if *mono { "ext-fact-mono" } else { "ext-fact" });
@@ -1129,7 +1141,7 @@ pub(crate) fn facts(rows: &[(&str, String, bool)]) -> gtk::Grid {
     grid
 }
 
-/// A square monogram plate for items without their own artwork.
+/// A rounded monogram plate for items without their own artwork.
 pub(crate) fn monogram(name: &str, large: bool) -> gtk::Label {
     let letters: String = name
         .split(|c: char| c.is_whitespace() || c == '-' || c == '_')

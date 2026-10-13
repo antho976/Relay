@@ -902,6 +902,16 @@ pub fn install(ui: &Rc<Ui>) {
                 navigate.show_launch(None);
                 return;
             }
+            // The agents bar's Agent skills and Plugins sheets, over the agents page.
+            if matches!(page.as_str(), "project-skills" | "project-plugins") {
+                navigate.navigate("agents");
+                if page == "project-skills" {
+                    navigate.project_skills();
+                } else {
+                    navigate.project_plugins();
+                }
+                return;
+            }
             // The start screen and the entry sheet, over Money's Home.
             if matches!(page.as_str(), "start" | "money-entry") {
                 navigate.navigate("money-home");
