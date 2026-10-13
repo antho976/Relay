@@ -336,3 +336,41 @@ esac
     let apple = &ok(&engine, "money.invest.summary", json!({"today": "2026-10-09"}))["holdings"][0];
     assert_eq!((apple["symbol"].as_str(), apple["value"].as_i64(), apple["fx_estimated"].as_bool()), (Some("AAPL"), Some(137_250), Some(false)));
 }
+
+/// `money.import` and `money.export` touch the file before the store's transaction opens, and only
+/// a regular one: a FIFO blocked the read (or the write) for good with every request queued
+/// behind it, and `/dev/zero`, which says it is empty, read until memory ran out.
+#[test]
+fn a_backup_is_only_ever_a_regular_file() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("pipe.json");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let answering = engine.clone();
+    let pipe = fifo.clone();
+    let dir_path = dir.path().to_path_buf();
+    std::thread::spawn(move || {
+        let calls = [
+            ("money.import", json!({"path": pipe})),
+            ("money.import", json!({"path": "/dev/zero"})),
+            ("money.import", json!({"path": dir_path})),
+            ("money.export", json!({"path": pipe})),
+            ("money.export", json!({"path": dir_path})),
+        ];
+        let codes: Vec<String> = calls.into_iter().map(|(op, payload)| code(call_as(&answering, Actor::User, op, payload))).collect();
+        let _ = tx.send(codes);
+    });
+    let codes = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("a pipe or a device held the request open");
+    assert_eq!(codes, ["money.path"; 5]);
+    use std::os::unix::fs::FileTypeExt;
+    assert!(std::fs::metadata(&fifo).unwrap().file_type().is_fifo(), "the pipe was left as it was");
+    // The bus is still answering, and a real backup still round-trips.
+    let out = dir.path().join("backup.json");
+    ok(&engine, "money.sample", json!({}));
+    ok(&engine, "money.export", json!({"path": out}));
+    let not_text = dir.path().join("latin1.json");
+    std::fs::write(&not_text, b"{\"format\": \"caf\xe9\"}").unwrap();
+    assert_eq!(code(call_as(&engine, Actor::User, "money.import", json!({"path": not_text}))), "money.import");
+    assert_eq!(ok(&engine, "money.import", json!({"path": out}))["kind"], "backup");
+}

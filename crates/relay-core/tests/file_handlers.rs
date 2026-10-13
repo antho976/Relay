@@ -122,3 +122,22 @@ fn a_tree_lists_an_unreadable_folder_and_a_missing_file_is_not_found() {
     assert_eq!(err(&missing).kind, ErrorKind::NotFound);
     assert_eq!(err(&missing).code, "file.not_found");
 }
+
+/// `file.write` reads the file it replaces under the store lock, so it reads only a regular file:
+/// `fs::read_to_string` on a FIFO there never returned, and every request queued behind it.
+#[test]
+fn a_write_over_a_pipe_answers_instead_of_blocking_the_bus() {
+    let (e, _ws, repo) = project();
+    assert!(Command::new("mkfifo").arg(repo.join("pipe.txt")).status().unwrap().success());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let answering = e.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(call(&answering, "file.write", json!({
+            "project_id": 1, "path": "pipe.txt", "text": "draft\n",
+            "expected_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        })));
+    });
+    let answered = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("file.write blocked on the pipe");
+    assert_eq!(err(&answered).code, "file.edit_conflict");
+    assert_eq!(ok(&e, "file.read", json!({"project_id": 1, "path": "README.md"}))["text"], "# Relay\n");
+}

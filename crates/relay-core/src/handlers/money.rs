@@ -5,13 +5,14 @@
 //! its own schema versions and is what the phone will sync with. Its work is local and short, so
 //! queries run unlocked and mutations inside the store's transaction like any other op; a money
 //! write is committed in `money.db` whether or not the store transaction around it commits. A
-//! Wealthsimple file is read before the transaction opens, and the Bank of Canada's rates are
-//! fetched on a thread of their own after it closes: nothing slow runs under either lock.
+//! Wealthsimple file or a Tally backup is read, and a backup written, before the transaction
+//! opens, and the Bank of Canada's rates are fetched on a thread of their own after it closes:
+//! nothing slow runs under the store's lock, and no file is touched under the ledger's.
 
 use crate::engine::{Ctx, Engine, IntoBus};
 use relay_bus::ops::money::*;
 use relay_bus::{BusError, Empty};
-use relay_money::backup::{self, BackupReadResult};
+use relay_money::backup::{self, BackupFile, BackupReadResult};
 use relay_money::bank_statements::decode_text;
 use relay_money::invest::{parse_scaled, RATE_SCALE, SOURCE_BANK_OF_CANADA, SOURCE_MANUAL};
 use relay_money::ledger::{parse_date, Ledger, LedgerError, TxInput, TxPatch, TxQuery};
@@ -94,27 +95,57 @@ fn absolute(path: &str) -> Result<&Path, BusError> {
     }
 }
 
-/// A Wealthsimple file the person chose, read whole and decoded as the phone decodes it (UTF-8,
-/// UTF-16 by its mark, else Windows-1252), so both read the same text. Run before any lock is
-/// taken. Only a regular file is read, and never more than [`MAX_EXPORT_BYTES`] of it: a pipe or a
-/// device would otherwise hold the request open forever.
-fn read_export(path: &str) -> Result<String, BusError> {
+/// A file the person chose, read whole. Run before any lock is taken. Only a regular file is read,
+/// and never more than `max` bytes of it: a pipe or a device (`/dev/zero` says it is empty) would
+/// otherwise hold the request open forever, or fill memory.
+fn read_bounded(path: &str, max: u64, too_big: &str) -> Result<Vec<u8>, BusError> {
     let path = absolute(path)?;
     let unreadable = |e: std::io::Error| BusError::invalid("money.path", format!("{}: {e}", path.display()));
-    let too_big = || BusError::invalid("money.import", "That file is too big to be a Wealthsimple export");
+    let too_big = || BusError::invalid("money.import", too_big);
     let meta = std::fs::metadata(path).map_err(unreadable)?;
     if !meta.is_file() {
         return Err(BusError::invalid("money.path", format!("{}: not a file", path.display())));
     }
-    if meta.len() > MAX_EXPORT_BYTES {
+    if meta.len() > max {
         return Err(too_big());
     }
     let mut bytes = Vec::new();
-    std::fs::File::open(path).and_then(|f| f.take(MAX_EXPORT_BYTES + 1).read_to_end(&mut bytes)).map_err(unreadable)?;
-    if bytes.len() as u64 > MAX_EXPORT_BYTES {
+    std::fs::File::open(path).and_then(|f| f.take(max + 1).read_to_end(&mut bytes)).map_err(unreadable)?;
+    if bytes.len() as u64 > max {
         return Err(too_big());
     }
-    Ok(decode_text(&bytes))
+    Ok(bytes)
+}
+
+/// A Wealthsimple file, decoded as the phone decodes it (UTF-8, UTF-16 by its mark, else
+/// Windows-1252), so both read the same text.
+fn read_export(path: &str) -> Result<String, BusError> {
+    read_bounded(path, MAX_EXPORT_BYTES, "That file is too big to be a Wealthsimple export").map(|b| decode_text(&b))
+}
+
+/// A Tally backup, read and decoded before any lock is taken.
+fn read_backup(path: &str) -> Result<BackupFile, BusError> {
+    let bytes = read_bounded(path, MAX_BACKUP_BYTES, "That file is too big to be a Tally backup")?;
+    let text = String::from_utf8(bytes).map_err(|_| BusError::invalid("money.import", "This file is not a Tally backup."))?;
+    match backup::decode(&text) {
+        BackupReadResult::Ok(file) => Ok(file),
+        BackupReadResult::Invalid(why) => Err(BusError::invalid("money.import", why)),
+    }
+}
+
+/// Writes the ledger as a Tally backup at `path`, with no lock held but the ledger's own for the
+/// read. A path that is there already must be a regular file: writing into a pipe blocks until
+/// something reads it.
+fn write_backup(engine: &Engine, path: &str) -> Result<ExportOut, BusError> {
+    let path = absolute(path)?;
+    if let Ok(meta) = std::fs::metadata(path) {
+        if !meta.is_file() {
+            return Err(BusError::invalid("money.path", format!("{}: not a file", path.display())));
+        }
+    }
+    let file = ledger(engine, |l| l.export_backup(&crate::time::now()))?;
+    std::fs::write(path, backup::encode(&file)).bus()?;
+    Ok(ExportOut { path: path.display().to_string(), transactions: file.transactions.len() })
 }
 
 /// The rates in a Valet answer for `FXUSDCAD` (`{"observations": [{"d": "2026-10-08", "FXUSDCAD":
@@ -237,28 +268,18 @@ pub fn register(e: &mut Engine) {
         ctx.emit("money.changed", json!({}));
         Ok(settings)
     });
-    e.register::<Import>(|ctx, p| {
-        let path = absolute(&p.path)?;
-        let size = std::fs::metadata(path).map_err(|e| BusError::invalid("money.path", format!("{}: {e}", path.display())))?.len();
-        if size > MAX_BACKUP_BYTES {
-            return Err(BusError::invalid("money.import", "That file is too big to be a Tally backup"));
-        }
-        let text = std::fs::read_to_string(path).bus()?;
-        let file = match backup::decode(&text) {
-            BackupReadResult::Ok(file) => file,
-            BackupReadResult::Invalid(why) => return Err(BusError::invalid("money.import", why)),
-        };
-        let accounts = file.accounts.len();
-        let transactions = ledger(ctx.engine(), |l| l.import_backup(&file))?;
-        ctx.emit("money.changed", json!({"imported": transactions}));
-        Ok(ImportOut { kind: "backup".into(), transactions, accounts })
-    });
-    e.register::<Export>(|ctx, p| {
-        let path = absolute(&p.path)?;
-        let file = ledger(ctx.engine(), |l| l.export_backup(&crate::time::now()))?;
-        std::fs::write(path, backup::encode(&file)).bus()?;
-        Ok(ExportOut { path: path.display().to_string(), transactions: file.transactions.len() })
-    });
+    // The file is read and decoded before the transaction opens; the restore is one ledger call.
+    e.register_staged::<Import, _>(
+        |_, p| read_backup(&p.path),
+        |ctx: &mut Ctx, _, file: BackupFile| {
+            let accounts = file.accounts.len();
+            let transactions = ledger(ctx.engine(), |l| l.import_backup(&file))?;
+            ctx.emit("money.changed", json!({"imported": transactions}));
+            Ok(ImportOut { kind: "backup".into(), transactions, accounts })
+        },
+    );
+    // The file is written before the transaction opens, which then only records that it was.
+    e.register_staged::<Export, _>(|ctx, p| write_backup(ctx.engine(), &p.path), |_: &mut Ctx, _, out: ExportOut| Ok(out));
     e.register::<Sample>(|ctx, _: Empty| {
         let day = today(None)?;
         let transactions = ledger(ctx.engine(), |l| {

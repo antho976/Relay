@@ -79,7 +79,7 @@ pub fn register(e: &mut Engine) {
         } else {
             (path, None)
         };
-        let old = fs::read_to_string(&path);
+        let old = read_current(&path);
         if let Some(expected) = &p.expected_sha256 {
             let matches = old.as_ref().is_ok_and(|text| {
                 Sha256::digest(text.as_bytes())
@@ -1046,6 +1046,32 @@ fn changed(ctx: &mut Ctx, project_id: Id, root: &Path, path: &str) {
         json!({"project_id": project_id, "worktree": root, "path": path}),
     );
 }
+
+/// The text `file.write` is replacing, read under the store lock: a regular file only, and never
+/// more than [`OLD_TEXT_MAX`] of it. `fs::read_to_string` on a FIFO there blocked every request
+/// for good, and on a huge file filled memory. Anything else reads as an error, as a missing file
+/// does: it matches no `expected_sha256`, and counts as empty for the line counts.
+fn read_current(path: &Path) -> std::io::Result<String> {
+    use std::io::Read as _;
+    let md = fs::metadata(path)?;
+    if !md.is_file() {
+        return Err(std::io::Error::other("not a regular file"));
+    }
+    let too_big = || std::io::Error::other("too large to compare");
+    if md.len() > OLD_TEXT_MAX {
+        return Err(too_big());
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(path)?.take(OLD_TEXT_MAX + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > OLD_TEXT_MAX {
+        return Err(too_big());
+    }
+    String::from_utf8(bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// The guardrail's comparison cap: past it, the destructive-write rule does not read the old file
+/// either. `file.read` returns at most half of this, so no draft is of a file this big.
+const OLD_TEXT_MAX: u64 = 64 * 1024 * 1024;
 
 /// How long `file.write` may spend diffing for its line counts. It runs under the store lock,
 /// and Myers is quadratic in the worst case: a rewrite of a large generated file took seconds
