@@ -1660,13 +1660,17 @@ fn close_keeps_a_checkout_its_agent_wrote_into_after_the_dirty_check() {
     let error = common::refused(call(&f.engine, "session.close", json!({"session":name})));
     assert_eq!(error.code, "worktree.dirty", "{}", error.message);
     assert!(error.message.contains("stopped"), "{}", error.message);
+    // Nothing is left to "keep the agent" for: the refusal says it was stopped.
+    assert_eq!(error.details.as_ref().unwrap()["stopped"], true, "{:?}", error.details);
     assert!(wt.join("late.txt").is_file(), "the late file was deleted with the checkout");
     assert!(wt.join("README.md").is_file());
     let state = || ok(&f.engine, "session.list", json!({"include_closed":true}))["sessions"].as_array().unwrap()
         .iter().find(|s| s["name"] == name.as_str()).map(|s| s["state"].clone()).unwrap();
     wait_until("the session to read exited", || state() == "exited");
-    // Asked again, it is refused again until the work is dealt with.
-    assert_eq!(code(call(&f.engine, "session.close", json!({"session":name}))), "worktree.dirty");
+    // Asked again, it is refused again until the work is dealt with — before any stop now.
+    let again = common::refused(call(&f.engine, "session.close", json!({"session":name})));
+    assert_eq!(again.code, "worktree.dirty");
+    assert!(again.details.as_ref().unwrap().get("stopped").is_none(), "{:?}", again.details);
     ok(&f.engine, "session.close", json!({"session":name, "discard_changes": true}));
     assert!(!wt.exists());
 }
@@ -1725,4 +1729,67 @@ fn worktree_remove_refuses_a_directory_inside_a_pooled_checkout() {
         assert!(inner.join("keep.txt").is_file() && inner.join("build/out.bin").is_file());
     }
     assert!(pooled.join("README.md").is_file());
+}
+
+/// A pooled checkout half deleted — its `.git` file gone — is not judged by the primary's
+/// status, which git would walk up to: the primary's edits never refuse its removal, and only
+/// what is left in the folder itself is named.
+#[test]
+fn worktree_remove_judges_a_half_deleted_checkout_by_its_own_leftovers() {
+    let f = fixture();
+    let e = &f.engine;
+    std::fs::write(f.repo.join("README.md"), "edited in the primary\n").unwrap();
+    std::fs::write(f.repo.join("a.txt"), "x").unwrap();
+    std::fs::write(f.repo.join("b.txt"), "x").unwrap();
+    let leftover = |branch: &str| {
+        let w = ok(e, "worktree.create", json!({"project_id": 1, "branch": branch}));
+        let path = PathBuf::from(w["path"].as_str().unwrap());
+        for entry in std::fs::read_dir(&path).unwrap().flatten() {
+            if entry.file_type().unwrap().is_dir() {
+                std::fs::remove_dir_all(entry.path()).unwrap();
+            } else {
+                std::fs::remove_file(entry.path()).unwrap();
+            }
+        }
+        std::fs::create_dir_all(path.join("build")).unwrap();
+        std::fs::write(path.join("build/out.bin"), "x").unwrap();
+        path
+    };
+
+    // Build output alone: nothing to keep, whatever the primary holds.
+    let path = leftover("relay/half-a");
+    ok(e, "worktree.remove", json!({"project_id": 1, "path": path}));
+    assert!(!path.exists());
+
+    // A file of its own is named, and only it.
+    let path = leftover("relay/half-b");
+    std::fs::write(path.join("notes.txt"), "mine").unwrap();
+    let error = common::refused(call(e, "worktree.remove", json!({"project_id": 1, "path": path})));
+    assert_eq!(error.code, "worktree.dirty", "{}", error.message);
+    assert_eq!(error.details.as_ref().unwrap()["worktrees"][0]["changed"], 1, "{}", error.message);
+    assert!(path.join("notes.txt").is_file());
+    ok(e, "worktree.remove", json!({"project_id": 1, "path": path, "discard_changes": true}));
+    assert!(!path.exists());
+    assert_eq!(std::fs::read_to_string(f.repo.join("README.md")).unwrap(), "edited in the primary\n");
+}
+
+/// A pooled checkout that lost its `.git` is a plain folder in the primary: launching into it
+/// would install the session's hooks on the primary and set the agent to work on its branch.
+/// The launch is refused and the primary's config is left alone.
+#[test]
+fn launch_refuses_a_pooled_checkout_without_its_own_git() {
+    let f = fixture();
+    let provider = fake_provider(&f.root, false);
+    ok(&f.engine, "settings.set", json!({"path":"providers.claude.path","value":provider}));
+    let session = ok(&f.engine, "session.create", json!({"project_id":1,"provider":"claude"}));
+    let name = session["name"].as_str().unwrap().to_string();
+    let wt = PathBuf::from(session["worktree"].as_str().unwrap());
+    let hooks_path = || git_command(&f.repo).args(["config", "--get", "core.hooksPath"]).output().unwrap().stdout;
+    let before = hooks_path();
+    std::fs::remove_file(wt.join(".git")).unwrap();
+    let error = common::refused(call(&f.engine, "session.spawn", json!({"session":name})));
+    assert_eq!(error.code, "session.worktree_missing", "{}", error.message);
+    assert!(error.message.contains(".git"), "{}", error.message);
+    assert_eq!(hooks_path(), before, "the primary's hooks were rewired");
+    assert_eq!(f.engine.live_pty_count(), 0);
 }

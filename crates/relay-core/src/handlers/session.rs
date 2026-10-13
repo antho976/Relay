@@ -539,8 +539,9 @@ pub(crate) type Checkout = (PathBuf, Vec<String>);
 pub(crate) struct Dirt {
     /// Entries `git status` lists; `None` when a scan failed, size unknown.
     changed: Option<usize>,
-    /// Git-ignored files that are neither build output nor Relay's own: an `.env`, a keystore,
-    /// `local.properties`, a local database. No status without `--ignored` shows them.
+    /// Git-ignored secrets and local state nothing rebuilds: an `.env`, a keystore,
+    /// `local.properties`, a local database ([`crate::branch_cleanup::ignored_keepers`]). No
+    /// status without `--ignored` shows them.
     ignored: Vec<String>,
 }
 
@@ -558,9 +559,9 @@ pub(crate) fn dirty_checkouts(checkouts: &[Checkout]) -> Vec<(&Checkout, Dirt)> 
     let live: Vec<&Checkout> = checkouts.iter().filter(|(wt, _)| wt.exists()).collect();
     if live.is_empty() { return Vec::new(); }
     let scan = |wt: &Path| {
-        let Ok(files) = worktree::status_files_with(wt, worktree::Untracked::Directories) else { return Dirt::unknown() };
         // Without a `.git` of its own (half deleted) git would answer for the primary checkout
-        // that holds it, and the primary's ignored files are not this checkout's to lose.
+        // that holds it: the primary's changes and ignored files are not this checkout's to lose.
+        let Ok(files) = worktree::checkout_changes(wt, worktree::Untracked::Directories) else { return Dirt::unknown() };
         let ignored = if wt.join(".git").exists() { crate::branch_cleanup::ignored_keepers(wt) } else { Ok(Vec::new()) };
         match ignored {
             Ok(ignored) => Dirt { changed: Some(files.len()), ignored },
@@ -784,6 +785,21 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
             "session.worktree_missing",
             format!("worktree {} is gone", cwd.display()),
         ));
+    }
+    // A pooled checkout that lost its `.git` (a removal or a crash half done) is a plain folder
+    // inside the primary: git there answers for the primary, so the hooks would be installed
+    // on it and the agent would work on its branch. Only a checkout git calls its own is used.
+    if cwd.starts_with(worktree::pool_dir(&project_path)) {
+        let toplevel = cwd.join(".git").exists()
+            .then(|| worktree::git_mutate(&cwd, &["rev-parse", "--show-toplevel"]).ok())
+            .flatten()
+            .and_then(|top| std::fs::canonicalize(top.trim()).ok());
+        if toplevel.is_none() || toplevel != std::fs::canonicalize(&cwd).ok() {
+            return Err(BusError::conflict(
+                "session.worktree_missing",
+                format!("worktree {} is no longer a git checkout (its .git is gone); git there would act on the primary checkout instead", cwd.display()),
+            ).with_hint("discard the session (session.discard_restorable) and start a new one; move out anything in the folder worth keeping first"));
+        }
     }
     // Concurrent launches (two sessions of one repository, or a double-clicked Start) would
     // otherwise race on `.git/config` and the provider adapters' temp files.
@@ -2069,6 +2085,11 @@ pub fn register(e: &mut Engine) {
             if let Err(mut error) = refuse_dirty(&[(wt.to_path_buf(), vec![s.name.clone()])]) {
                 mark_exited_detached(ctx.engine(), s.id, s.project_id);
                 error.message = format!("{}. The agent wrote it after the close began: it was stopped, the session is now exited, and the worktree was kept", error.message);
+                // There is no agent left to keep: a dialog offering "Keep the agent" reads
+                // this and offers keeping the worktree instead.
+                if let Some(details) = error.details.as_mut().and_then(Value::as_object_mut) {
+                    details.insert("stopped".into(), Value::Bool(true));
+                }
                 return Err(error);
             }
         }

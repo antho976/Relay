@@ -414,7 +414,7 @@ pub fn register(e: &mut Engine) {
             vec!["branch", name.as_str()]
         };
         if let Some(revision) = start {
-            args.push(revision);
+            args.extend(["--end-of-options", revision]);
         }
         worktree::git_mutate(&root, &args).map_err(git_mutation("git.branch_create_failed"))?;
         // The new branch's tip: `git branch` leaves HEAD where it was (RA-371).
@@ -472,7 +472,7 @@ pub fn register(e: &mut Engine) {
                 ));
             }
             let args: Vec<&str> = match &target.remote {
-                Some(remote) => vec!["switch", "--no-overwrite-ignore", "--track", "-c", &target.local, remote],
+                Some(remote) => vec!["switch", "--no-overwrite-ignore", "--track", "-c", &target.local, "--end-of-options", remote],
                 None => vec!["switch", "--no-overwrite-ignore", "--", &target.local],
             };
             run_switch(&root, &args, &target.local)?;
@@ -705,10 +705,21 @@ pub fn register(e: &mut Engine) {
                 .flatten()
                 .map(|n| n.shorten().to_string())
                 .ok_or_else(|| BusError::conflict("git.detached", "cannot push a detached HEAD"))?;
+            // Anyone who can run git in the checkout names its branch, `--mirror` or `+main`
+            // included, and `git push origin <that>` would read it as an option or a forced
+            // push: refused, and pushed only ever as an explicit refspec after the options.
+            if branch.starts_with(['-', '+']) {
+                return Err(BusError::invalid(
+                    "git.branch_name",
+                    format!("refusing to push branch {branch:?}: git push would read a name starting with '-' or '+' as an option or a forced push. Rename the branch first."),
+                ));
+            }
+            let branch = validate_branch_name(&root, &branch)?;
             let has_upstream = upstream_metrics(&repo, &branch).0.is_some();
             let set_upstream = p.set_upstream.unwrap_or(!has_upstream);
+            let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
             let args = if set_upstream {
-                vec!["push", "-u", "origin", branch.as_str()]
+                vec!["push", "-u", "origin", "--end-of-options", refspec.as_str()]
             } else {
                 vec!["push"]
             };
@@ -972,7 +983,14 @@ fn stage_commit(root: &Path, message: &str) -> Result<(StagedCommit, String), Bu
     let kind = match (&parent, &pending.merge) {
         (None, _) => "commit (initial)",
         (Some(_), Some(merged)) => {
-            parents.extend(merged.split_whitespace().map(str::to_owned));
+            // `git merge v1` of an annotated tag writes the tag's own id; `git commit` peels it
+            // to the commit, and so must this, or commit-tree refuses a tag as a parent and
+            // `--independent` drops it for its commit, losing the merge.
+            for head in merged.split_whitespace() {
+                let peeled = worktree::git_mutate(root, &["rev-parse", "--verify", "--end-of-options", &format!("{head}^{{commit}}")])
+                    .map_err(git_mutation("git.commit_failed"))?;
+                parents.push(peeled.trim().to_string());
+            }
             let mode = std::fs::read_to_string(git_dir.join("MERGE_MODE")).unwrap_or_default();
             if mode.trim() != "no-ff" && parents.len() > 1 {
                 parents = independent(root, parents)?;

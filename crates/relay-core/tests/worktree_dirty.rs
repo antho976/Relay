@@ -194,8 +194,8 @@ fn workspace_remove_refuses_a_dirty_checkout_it_would_delete() {
     wait_gone(&wt);
 }
 
-/// A git-ignored file that is not build output — an `.env`, a keystore, `local.properties` — is
-/// work a removal would delete too, though no plain `git status` lists it.
+/// A git-ignored secret or piece of local state — an `.env`, a keystore, `local.properties` —
+/// is work a removal would delete too, though no plain `git status` lists it.
 #[test]
 fn close_refuses_a_checkout_holding_git_ignored_keepers() {
     let f = fixture();
@@ -220,7 +220,7 @@ fn close_refuses_a_checkout_holding_git_ignored_keepers() {
     assert!(error.message.contains(".env"), "{}", error.message);
     assert!(wt.join(".env").is_file());
     assert_eq!(state(&f, &name), "created");
-    // Build output alone is no reason to keep a checkout.
+    // Build output and caches alone are no reason to keep a checkout.
     std::fs::remove_file(wt.join(".env")).unwrap();
     ok(&f.engine, "session.close", json!({"session": name}));
     assert!(!wt.exists());
@@ -254,4 +254,46 @@ fn project_remove_keeps_a_checkout_its_agent_wrote_into_after_the_dirty_check() 
     wait_gone(&clean_wt);
     assert!(writer_wt.join("late.txt").is_file(), "the late file was deleted with the checkout");
     assert!(writer_wt.join("README.md").is_file());
+}
+
+/// Only secrets and local state nothing rebuilds hold a close back: tool and IDE state, logs and
+/// review notes git ignores do not, wherever they are, while an `.env` or a keystore — loose or
+/// inside an ignored directory — still does. An `.env.example` is a template, not a secret.
+#[test]
+fn close_counts_only_ignored_secrets_and_local_state() {
+    let f = fixture();
+    let (name, wt) = session(&f);
+    std::fs::write(wt.join(".gitignore"), ".env*\n*.log\n.idea/\n.kotlin/\n.impeccable/\n.eslintcache\n*.tsbuildinfo\nsigning/\n*.keystore\n").unwrap();
+    git(&wt, &["add", ".gitignore"]);
+    git(&wt, &["commit", "-q", "--no-verify", "-m", "ignore"]);
+    for (file, text) in [
+        ("apps/phone/.kotlin/sessions/s.salive", "x"), ("apps/phone/.kotlin/errors/e.log", "x"),
+        (".idea/workspace.xml", "<x/>"), (".impeccable/review/notes.md", "notes"), ("debug.log", "x"),
+        (".eslintcache", "{}"), ("tsconfig.tsbuildinfo", "{}"), (".env.example", "TOKEN=\n"),
+    ] {
+        std::fs::create_dir_all(wt.join(file).parent().unwrap()).unwrap();
+        std::fs::write(wt.join(file), text).unwrap();
+    }
+    ok(&f.engine, "session.close", json!({"session": name}));
+    assert!(!wt.exists(), "nothing there is work a close would lose");
+
+    let (name, wt) = session(&f);
+    std::fs::write(wt.join(".gitignore"), ".env*\n*.log\nsigning/\n*.keystore\n").unwrap();
+    git(&wt, &["add", ".gitignore"]);
+    git(&wt, &["commit", "-q", "--no-verify", "-m", "ignore"]);
+    std::fs::write(wt.join("debug.log"), "x").unwrap();
+    std::fs::write(wt.join(".env"), "TOKEN=1\n").unwrap();
+    std::fs::create_dir_all(wt.join("signing/android")).unwrap();
+    std::fs::write(wt.join("signing/android/release.keystore"), "key").unwrap();
+    let error = refused(&f.engine, "session.close", json!({"session": name}));
+    assert_dirty(&error, &wt, 0);
+    let mut ignored: Vec<String> = serde_json::from_value(error.details.as_ref().unwrap()["worktrees"][0]["ignored"].clone()).unwrap();
+    ignored.sort();
+    assert_eq!(ignored, [".env", "signing/android/release.keystore"]);
+    assert_eq!(state(&f, &name), "created");
+    std::fs::remove_file(wt.join(".env")).unwrap();
+    let error = refused(&f.engine, "session.close", json!({"session": name}));
+    assert_eq!(error.details.as_ref().unwrap()["worktrees"][0]["ignored"], json!(["signing/android/release.keystore"]));
+    ok(&f.engine, "session.close", json!({"session": name, "discard_changes": true}));
+    assert!(!wt.exists());
 }

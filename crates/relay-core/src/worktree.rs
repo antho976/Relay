@@ -174,6 +174,26 @@ pub fn status_files_with(root: &Path, untracked: Untracked) -> Result<Vec<FileSt
     parse_status(&output.stdout)
 }
 
+/// [`status_files_with`] for a checkout about to be removed. One that lost its own `.git` (a
+/// removal or a crash half done) is not a checkout any more: `git status` there would walk up
+/// and answer for the primary that holds it. What is left in it is untracked, so its entries
+/// are listed as such, a directory as one, build output apart — never the primary's changes.
+pub fn checkout_changes(root: &Path, untracked: Untracked) -> Result<Vec<FileStatus>> {
+    if root.join(".git").exists() {
+        return status_files_with(root, untracked);
+    }
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if crate::watch::generated_name(&name) { continue; }
+        let dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+        files.push(FileStatus { path: if dir { format!("{name}/") } else { name }, index: String::new(), worktree: "?".into(), renamed_from: None });
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+
 fn parse_status(output: &[u8]) -> Result<Vec<FileStatus>> {
     let mut records = output.split(|byte| *byte == 0).filter(|record| !record.is_empty());
     let mut files = Vec::new();

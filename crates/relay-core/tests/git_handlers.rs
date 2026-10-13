@@ -690,3 +690,76 @@ fn a_squash_autostash_comes_back_after_the_commit() {
     assert!(!root.join(".git/SQUASH_MSG").exists());
     assert_eq!(git(root, &["log", "-1", "--format=%p"]).split(' ').count(), 1, "a squash is not a merge");
 }
+
+/// Merging an annotated tag leaves the tag's own id in MERGE_HEAD; concluding it through the
+/// bus peels it as `git commit` does, merge or `--no-ff` alike, rather than dropping the merged
+/// commit or refusing a tag as a parent.
+#[test]
+fn concluding_a_merge_of_an_annotated_tag_peels_it() {
+    for no_ff in [false, true] {
+        let e = engine();
+        let (_ws, repo) = project(&e);
+        let root = Path::new(&repo);
+        git(root, &["switch", "-q", "-c", "side"]);
+        std::fs::write(root.join("README.md"), "# Side\n").unwrap();
+        git(root, &["commit", "-q", "-am", "Side"]);
+        git(root, &["tag", "-a", "v1", "-m", "release v1"]);
+        let tagged = git(root, &["rev-parse", "v1^{commit}"]);
+        git(root, &["switch", "-q", "main"]);
+        std::fs::write(root.join("README.md"), "# Main\n").unwrap();
+        git(root, &["commit", "-q", "-am", "Main"]);
+        let head = git(root, &["rev-parse", "HEAD"]);
+        let mut merge = vec!["merge", "-q"];
+        if no_ff {
+            merge.push("--no-ff");
+        }
+        merge.push("v1");
+        assert!(!git_command(root).args(&merge).output().unwrap().status.success(), "the fixture must conflict");
+        let merge_head = std::fs::read_to_string(root.join(".git/MERGE_HEAD")).unwrap();
+        assert_eq!(git(root, &["cat-file", "-t", merge_head.trim()]), "tag", "MERGE_HEAD holds the tag");
+        std::fs::write(root.join("README.md"), "# Both\n").unwrap();
+        ok(&e, "git.stage", json!({"project_id":1,"paths":["README.md"]}));
+        ok(&e, "git.commit", json!({"project_id":1,"message":"Merge v1"}));
+        assert_eq!(git(root, &["log", "-1", "--format=%P"]), format!("{head} {tagged}"), "no_ff={no_ff}");
+        assert_eq!(git(root, &["reflog", "-1", "--format=%gs"]), "commit (merge): Merge v1");
+        assert!(!root.join(".git/MERGE_HEAD").exists());
+    }
+}
+
+/// A branch an agent named `--mirror` or `+main` is never handed to `git push` where it would
+/// read as an option — mirroring the checkout over the remote, deleting its other branches —
+/// or as a forced push: the push is refused and the remote is as it was.
+#[test]
+fn push_refuses_a_branch_named_like_an_option_or_a_forced_refspec() {
+    let e = engine();
+    let (ws, repo) = project(&e);
+    let root = Path::new(&repo);
+    let remote = ws.path().join("remote.git");
+    git(ws.path(), &["init", "-q", "--bare", "-b", "main", remote.to_str().unwrap()]);
+    git(root, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    git(root, &["push", "-q", "origin", "main", "main:keep"]);
+    let before = git(&remote, &["for-each-ref", "--format=%(refname) %(objectname)"]);
+    // Behind the remote's main, so a forced push of it would rewind main.
+    git(root, &["commit", "-q", "--allow-empty", "-m", "Ahead"]);
+    git(root, &["push", "-q", "origin", "main"]);
+    let before_main = git(&remote, &["rev-parse", "main"]);
+    git(root, &["reset", "-q", "--hard", "HEAD~1"]);
+    for name in ["--mirror", "+main"] {
+        git(root, &["update-ref", &format!("refs/heads/{name}"), "HEAD"]);
+        git(root, &["symbolic-ref", "HEAD", &format!("refs/heads/{name}")]);
+        for set_upstream in [true, false] {
+            let refused = call(&e, "git.push", json!({"project_id":1,"set_upstream":set_upstream}));
+            assert_eq!(err(&refused).code, "git.branch_name", "{name}: {:?}", err(&refused));
+        }
+        git(root, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    }
+    assert_eq!(git(&remote, &["rev-parse", "main"]), before_main, "main was rewound");
+    let after = git(&remote, &["for-each-ref", "--format=%(refname) %(objectname)"]);
+    assert!(after.contains("refs/heads/keep"), "{before}\n=>\n{after}");
+    assert!(!after.contains("--mirror") && !after.contains("+main"), "{after}");
+    // A plain branch still goes, tracking its own name.
+    git(root, &["switch", "-q", "-c", "relay/plain"]);
+    ok(&e, "git.push", json!({"project_id":1}));
+    assert_eq!(git(&remote, &["rev-parse", "relay/plain"]), git(root, &["rev-parse", "HEAD"]));
+    assert_eq!(git(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/relay/plain");
+}
