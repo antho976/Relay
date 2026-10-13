@@ -299,13 +299,13 @@ MUTUAL_FUND, `BOND`/`FIXED_INCOME` BOND, `CRYPTOCURRENCY`/`CRYPTO` CRYPTO, `CASH
 | `Trade` (`BUY`, `DRIP`, or units > 0) | `BUY` | `|net| − F` |
 | `Trade` (`SELL`, or units < 0) | `SELL` | `|net| + F` |
 | `Dividend` | `DIVIDEND` (net < 0: skipped, "a reversed dividend") | `|net|` |
-| `Interest` | `INTEREST` | `|net|` |
+| `Interest` | `INTEREST` (net < 0, a charge: `FEE`) | `|net|` |
 | `MoneyMovement` | `DEPOSIT` when net ≥ 0, else `WITHDRAWAL` | `|net|` |
 | `FxExchange` | `FX`, pairing the out leg (net < 0) with the in leg on the same day and account; an unpaired leg is skipped | out / in |
-| `NonResidentTax` | `TAX` | `|net|` |
+| `NonResidentTax` | `TAX` (net > 0, withholding given back: `CREDIT`) | `|net|` |
 | `Fee` | `FEE` (net > 0: `CREDIT`) | `|net|` |
 | `Refund`, `BonusPayment`, `AdministrativePayment` | `CREDIT` (net < 0: `FEE`) | `|net|` |
-| `ReturnOfCapital` | `RETURN_OF_CAPITAL` | `|net|` |
+| `ReturnOfCapital` | `RETURN_OF_CAPITAL` (net < 0: skipped, "a reversed return of capital") | `|net|` |
 | `NonCashDistribution` | `NOTIONAL_DISTRIBUTION` | `|net|` |
 | `SecurityTransfer`, `InternalSecurityTransfer` | `TRANSFER_IN` when units > 0, else `TRANSFER_OUT` | `|net|` |
 | `CorporateAction` with units > 0 | `SPLIT` | 0 |
@@ -313,8 +313,9 @@ MUTUAL_FUND, `BOND`/`FIXED_INCOME` BOND, `CRYPTOCURRENCY`/`CRYPTO` CRYPTO, `CASH
 
 **Statement codes**: `BUY`/`SELL` (symbol, units and price from the description, e.g.
 `XEQT - iShares Core Equity ETF Portfolio: Bought 10.0000 shares at $38.12 per share`), `DIV` →
-DIVIDEND (symbol before ` - `), `CONT` → DEPOSIT, `NRT` → TAX, `FPLINT`/`INT` → INTEREST, `FEE` →
-FEE, `WD`/`WDL` → WITHDRAWAL; `LOAN`/`RECALL` (securities lending) and anything else are skipped.
+DIVIDEND (symbol before ` - `), `CONT` → DEPOSIT, `NRT` → TAX (amount > 0: CREDIT), `FPLINT`/`INT`
+→ INTEREST (amount < 0: FEE), `FEE` → FEE (amount > 0: CREDIT), `WD`/`WDL` → WITHDRAWAL;
+`LOAN`/`RECALL` (securities lending) and anything else are skipped. The amount written is `|amount|`.
 
 ### The import plan
 

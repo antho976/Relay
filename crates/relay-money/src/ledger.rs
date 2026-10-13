@@ -814,33 +814,41 @@ impl Ledger {
                 r.get::<_, Option<String>>(4)?, r.get::<_, Option<i64>>(5)?, r.get::<_, i64>(6)?, r.get::<_, i64>(7)?, r.get::<_, i64>(8)?,
             ))
         })?;
-        // Money moved into investment accounts this period, for INVEST goals.
-        let invested: i64 = self.conn.prepare_cached(
-            "SELECT COALESCE(SUM(t.amount), 0) FROM transactions t JOIN accounts a ON a.id = t.to_account_id
-             WHERE t.deleted = 0 AND t.type = 'TRANSFER' AND a.type = 'INVESTMENT' AND t.date >= ?1 AND t.date < ?2",
-        )?.query_row([period.start.to_string(), period.end_exclusive.to_string()], |r| r.get(0))?;
+        // This period's transfers, for INVEST goals: each reads what moved into its own accounts.
+        let transfers: Vec<(i64, i64, i64)> = self.conn.prepare_cached(
+            "SELECT t.account_id, t.to_account_id, t.amount FROM transactions t
+             WHERE t.deleted = 0 AND t.type = 'TRANSFER' AND t.to_account_id IS NOT NULL AND t.date >= ?1 AND t.date < ?2",
+        )?.query_map([period.start.to_string(), period.end_exclusive.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let investments: Vec<i64> = accounts.iter().filter(|a| a.r#type == AccountType::Investment).map(|a| a.id).collect();
         let mut out = Vec::new();
         for row in rows {
             let (id, name, kind, target, target_date, account, percent, start_amount, contributed) = row?;
             let kind = parse_name(&kind).unwrap_or(GoalKind::Savings);
-            let (saved, target, months_left) = match kind {
-                GoalKind::Savings | GoalKind::Balance => {
-                    let saved = if kind == GoalKind::Savings {
-                        start_amount + contributed
-                    } else {
-                        account.and_then(|a| accounts.iter().find(|x| x.id == a)).map_or(net_worth, |a| a.balance)
-                    };
-                    let months_left = target_date.as_deref().and_then(parse_date).map(|d| months_until(today, d));
-                    (saved, target, months_left)
+            let months_left = || target_date.as_deref().and_then(parse_date).map(|d| months_until(today, d));
+            let (saved, target, line) = match kind {
+                GoalKind::Savings => {
+                    let saved = start_amount + contributed;
+                    (saved, target, copy::goal_line(saved, target, months_left(), fmt))
+                }
+                GoalKind::Balance => {
+                    let saved = account.and_then(|a| accounts.iter().find(|x| x.id == a)).map_or(net_worth, |a| a.balance);
+                    (saved, target, copy::balance_goal_line(saved, target, start_amount, months_left(), fmt))
                 }
                 // Monthly goals read this period: a share of what came in, or a set amount.
                 GoalKind::Invest | GoalKind::Save => {
-                    let saved = if kind == GoalKind::Invest { invested } else { (income - spent).max(0) };
+                    let saved = if kind == GoalKind::Invest {
+                        // Its own account, or every investment account when it names none.
+                        let into = account.map_or_else(|| investments.clone(), |a| vec![a]);
+                        moved_into(&into, &transfers)
+                    } else {
+                        (income - spent).max(0)
+                    };
                     let target = if percent > 0 { income * percent / 100 } else { target };
-                    (saved, target, None)
+                    (saved, target, copy::goal_line(saved, target, None, fmt))
                 }
             };
-            out.push(GoalView { id, name, kind, target, saved, line: copy::goal_line(saved, target, months_left, fmt) });
+            out.push(GoalView { id, name, kind, target, saved, line });
         }
         Ok(out)
     }
@@ -1157,14 +1165,33 @@ impl Ledger {
     }
 }
 
-/// Whole months from `today` to `date`, counting the month `date` falls in: a goal due later
-/// this month has one month left. Zero once the date has passed.
+/// Whole months from `today` to `date`, rounded up: at least 1 until the date passes, then 0.
+/// Port of `monthsUntil` (PlanLogic.kt): Java's `ChronoUnit.MONTHS.between`, plus one when `today`
+/// that many months on still falls short of `date`.
 fn months_until(today: Date, date: Date) -> i64 {
     if date < today {
         return 0;
     }
-    let months = (i64::from(date.year()) - i64::from(today.year())) * 12 + i64::from(date.month()) - i64::from(today.month());
-    months + 1
+    let mut months = (i64::from(date.year()) - i64::from(today.year())) * 12 + i64::from(date.month()) - i64::from(today.month());
+    if months > 0 && date.day() < today.day() {
+        months -= 1;
+    }
+    // `checked_add` clamps the day to the month's last, as `plusMonths` does.
+    if today.checked_add(months.months()).is_ok_and(|d| d < date) {
+        months += 1;
+    }
+    months.max(1)
+}
+
+/// What the period's `transfers` (from, to, amount) moved into `into` from the other accounts, less
+/// what they moved back out. A move between two of `into` (TFSA to RRSP) is neither. Port of
+/// `movedInto` (PlanLogic.kt).
+fn moved_into(into: &[i64], transfers: &[(i64, i64, i64)]) -> i64 {
+    transfers.iter().map(|&(from, to, amount)| match (into.contains(&from), into.contains(&to)) {
+        (false, true) => amount,
+        (true, false) => -amount,
+        _ => 0,
+    }).sum()
 }
 
 #[cfg(test)]
@@ -1228,6 +1255,72 @@ mod tests {
         assert_eq!(s.spent, 0);
         assert_eq!(s.net_worth, 1_000_00);
         assert_eq!(s.accounts.iter().find(|a| a.id == savings).unwrap().balance, 200_00);
+    }
+
+    fn goal(l: &Ledger, name: &str, kind: GoalKind, target: i64, target_date: Option<&str>, account: Option<i64>, start_amount: i64) {
+        l.conn.execute(
+            "INSERT INTO goals (uid, name, target, target_date, kind, account_id, start_amount, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,0)",
+            params![new_uid(), name, target, target_date, name_of(&kind), account, start_amount],
+        ).unwrap();
+    }
+
+    fn transfer(l: &mut Ledger, from: i64, to: i64, amount: i64, day: &str) {
+        l.tx_add(&TxInput { r#type: TxType::Transfer, amount, date: day.into(), account_id: from, to_account_id: Some(to), category_id: None, note: None }).unwrap();
+    }
+
+    fn goal_line(s: &Summary, name: &str) -> String {
+        s.goals.iter().find(|g| g.name == name).unwrap().line.clone()
+    }
+
+    #[test]
+    fn months_until_rounds_whole_months_up_as_tally_does() {
+        let today = date(2026, 10, 13);
+        assert_eq!(2, months_until(today, date(2026, 12, 13)));
+        assert_eq!(3, months_until(today, date(2026, 12, 14)));
+        assert_eq!(2, months_until(today, date(2026, 12, 12)));
+        assert_eq!(1, months_until(today, today), "at least one until the date passes");
+        assert_eq!(1, months_until(today, date(2026, 10, 31)));
+        assert_eq!(0, months_until(today, date(2026, 10, 12)));
+        // A month on from the 31st is the last of a shorter month, as `plusMonths` has it.
+        assert_eq!(1, months_until(date(2026, 1, 31), date(2026, 2, 28)));
+        assert_eq!(2, months_until(date(2026, 1, 31), date(2026, 3, 1)));
+    }
+
+    #[test]
+    fn a_savings_goal_divides_what_is_left_over_whole_months_rounded_up() {
+        let (l, _) = with_account();
+        goal(&l, "Trip", GoalKind::Savings, 1_200_00, Some("2026-12-13"), None, 0);
+        let s = l.summary(date(2026, 10, 13), &en()).unwrap();
+        assert_eq!("$600 a month for 2 months", goal_line(&s, "Trip"));
+    }
+
+    #[test]
+    fn an_invest_goal_reads_what_moved_into_its_own_accounts_less_what_moved_out() {
+        let (mut l, cheq) = with_account();
+        let tfsa = l.account_add("TFSA", AccountType::Investment, 0, Some(Registration::Tfsa), "").unwrap().id;
+        let rrsp = l.account_add("RRSP", AccountType::Investment, 0, Some(Registration::Rrsp), "").unwrap().id;
+        transfer(&mut l, cheq, tfsa, 500_00, "2026-10-02");
+        transfer(&mut l, tfsa, rrsp, 200_00, "2026-10-03");
+        transfer(&mut l, rrsp, cheq, 50_00, "2026-10-04");
+        goal(&l, "Into the TFSA", GoalKind::Invest, 300_00, None, Some(tfsa), 0);
+        goal(&l, "Invest", GoalKind::Invest, 1_000_00, None, None, 0);
+        let s = l.summary(date(2026, 10, 13), &en()).unwrap();
+        let saved = |name: &str| s.goals.iter().find(|g| g.name == name).unwrap().saved;
+        // The TFSA: 500 in, 200 out to the RRSP.
+        assert_eq!(300_00, saved("Into the TFSA"));
+        assert_eq!("Reached", goal_line(&s, "Into the TFSA"));
+        // Every investment account: 500 in, the TFSA to RRSP move is neither, 50 back out.
+        assert_eq!(450_00, saved("Invest"));
+        assert_eq!("$550 to go", goal_line(&s, "Invest"));
+    }
+
+    #[test]
+    fn a_balance_goal_heading_down_is_not_reached_from_day_one() {
+        let (l, cheq) = with_account();
+        // The chequing account reads 1,000 and is to come down to 200.
+        goal(&l, "Spend down", GoalKind::Balance, 200_00, Some("2026-12-13"), Some(cheq), 1_000_00);
+        let s = l.summary(date(2026, 10, 13), &en()).unwrap();
+        assert_eq!("$400 a month for 2 months", goal_line(&s, "Spend down"));
     }
 
     #[test]

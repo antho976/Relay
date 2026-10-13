@@ -302,6 +302,8 @@ fn activities(header: &[String], body: &[Vec<String>]) -> Result<WsFile, String>
             "optionexercise" => Err(OPTIONS.to_string()),
             "dividend" if net < 0 => Err("A reversed dividend".to_string()),
             "dividend" => Ok(ActivityType::Dividend),
+            // A negative interest line is a charge, not income.
+            "interest" if net < 0 => Ok(ActivityType::Fee),
             "interest" => Ok(ActivityType::Interest),
             "moneymovement" if net >= 0 => Ok(ActivityType::Deposit),
             "moneymovement" => Ok(ActivityType::Withdrawal),
@@ -310,11 +312,14 @@ fn activities(header: &[String], body: &[Vec<String>]) -> Result<WsFile, String>
                 note_account(&mut file.accounts, number, "", registration);
                 continue;
             }
+            // A positive one is withholding given back: money in.
+            "nonresidenttax" if net > 0 => Ok(ActivityType::Credit),
             "nonresidenttax" => Ok(ActivityType::Tax),
             "fee" if net > 0 => Ok(ActivityType::Credit),
             "fee" => Ok(ActivityType::Fee),
             "refund" | "bonuspayment" | "administrativepayment" if net < 0 => Ok(ActivityType::Fee),
             "refund" | "bonuspayment" | "administrativepayment" => Ok(ActivityType::Credit),
+            "returnofcapital" if net < 0 => Err("A reversed return of capital".to_string()),
             "returnofcapital" => Ok(ActivityType::ReturnOfCapital),
             "noncashdistribution" => Ok(ActivityType::NotionalDistribution),
             "securitytransfer" | "internalsecuritytransfer" if units > 0 => Ok(ActivityType::TransferIn),
@@ -416,10 +421,11 @@ fn statement(header: &[String], body: &[Vec<String>]) -> Result<WsFile, String> 
         };
         let code = code_of(row);
         let currency = currency_or_cad(at("currency"));
-        let Some(amount) = parse_scaled(at("amount"), digits(&currency)).map(|s| s.value.abs()) else {
+        let Some(signed) = parse_scaled(at("amount"), digits(&currency)).map(|s| s.value) else {
             skip(&mut file.skipped, line, format!("The amount \"{}\" could not be read", at("amount")));
             continue;
         };
+        let amount = signed.abs();
         let description = at("description");
         let before_dash = description.split_once(" - ").map(|(s, _)| kt_trim(s).to_uppercase()).filter(|s| !s.is_empty());
         let mut activity = WsActivity {
@@ -459,9 +465,11 @@ fn statement(header: &[String], body: &[Vec<String>]) -> Result<WsFile, String> 
                 activity.symbol = before_dash;
             }
             "CONT" => activity.r#type = ActivityType::Deposit,
-            "NRT" => activity.r#type = ActivityType::Tax,
-            "FPLINT" | "INT" => activity.r#type = ActivityType::Interest,
-            "FEE" => activity.r#type = ActivityType::Fee,
+            // These three take their direction from the amount's sign: withholding given back is
+            // money in, negative interest a charge, a positive fee line a rebate.
+            "NRT" => activity.r#type = if signed > 0 { ActivityType::Credit } else { ActivityType::Tax },
+            "FPLINT" | "INT" => activity.r#type = if signed < 0 { ActivityType::Fee } else { ActivityType::Interest },
+            "FEE" => activity.r#type = if signed > 0 { ActivityType::Credit } else { ActivityType::Fee },
             "WD" | "WDL" => activity.r#type = ActivityType::Withdrawal,
             "LOAN" | "RECALL" => {
                 skip(&mut file.skipped, line, "Securities lending isn't tracked");
@@ -859,6 +867,57 @@ pub(crate) mod tests {
         assert_eq!(Some("XEQT"), f.activities[2].symbol.as_deref());
         assert_eq!(vec![5], f.skipped.iter().map(|s| s.line).collect::<Vec<_>>(), "securities lending");
         assert_eq!(Err(NOT_INVESTMENT.to_string()), read(CASH_STATEMENT));
+    }
+
+    #[test]
+    fn interest_withholding_and_return_of_capital_take_their_direction_from_the_sign() {
+        let text = "transaction_date,account_id,account_type,activity_type,symbol,currency,net_cash_amount
+2026-08-01,A1,TFSA,Interest,,CAD,1.50
+2026-08-02,A1,TFSA,Interest,,CAD,-12.34
+2026-08-03,A1,TFSA,NonResidentTax,VFV,CAD,-0.63
+2026-08-04,A1,TFSA,NonResidentTax,VFV,CAD,0.63
+2026-08-05,A1,TFSA,ReturnOfCapital,VFV,CAD,2.00
+2026-08-06,A1,TFSA,ReturnOfCapital,VFV,CAD,-2.00
+";
+        let f = read(text).unwrap();
+        let got: Vec<(usize, ActivityType, i64)> = f.activities.iter().map(|a| (a.line, a.r#type, a.amount)).collect();
+        assert_eq!(
+            vec![
+                (2, ActivityType::Interest, 1_50),
+                (3, ActivityType::Fee, 12_34),
+                (4, ActivityType::Tax, 63),
+                (5, ActivityType::Credit, 63),
+                (6, ActivityType::ReturnOfCapital, 2_00),
+            ],
+            got
+        );
+        assert_eq!(vec![Skipped { line: 7, reason: "A reversed return of capital".into() }], f.skipped);
+    }
+
+    #[test]
+    fn a_statements_withholding_interest_and_fee_lines_take_their_direction_from_the_sign() {
+        let text = "date,transaction,description,amount,balance,currency
+2026-02-01,NRT,Non-resident tax,-0.63,0,CAD
+2026-02-02,NRT,Non-resident tax refund,0.63,0,CAD
+2026-02-03,INT,Interest,0.85,0,CAD
+2026-02-04,FPLINT,Interest charge,-12.34,0,CAD
+2026-02-05,FEE,Fee,-5.00,0,CAD
+2026-02-06,FEE,Fee rebate,5.00,0,CAD
+";
+        let f = read(text).unwrap();
+        let got: Vec<(ActivityType, i64)> = f.activities.iter().map(|a| (a.r#type, a.amount)).collect();
+        assert_eq!(
+            vec![
+                (ActivityType::Tax, 63),
+                (ActivityType::Credit, 63),
+                (ActivityType::Interest, 85),
+                (ActivityType::Fee, 12_34),
+                (ActivityType::Fee, 5_00),
+                (ActivityType::Credit, 5_00),
+            ],
+            got
+        );
+        assert!(f.skipped.is_empty(), "{:?}", f.skipped);
     }
 
     #[test]

@@ -135,6 +135,55 @@ class WealthsimpleTest {
         assertEquals(WsRead.Invalid(Wealthsimple.NOT_INVESTMENT), Wealthsimple.read(cashStatement))
     }
 
+    @Test fun `interest, withholding and return of capital take their direction from the sign`() {
+        val text = """
+            transaction_date,account_id,account_type,activity_type,symbol,currency,net_cash_amount
+            2026-08-01,A1,TFSA,Interest,,CAD,1.50
+            2026-08-02,A1,TFSA,Interest,,CAD,-12.34
+            2026-08-03,A1,TFSA,NonResidentTax,VFV,CAD,-0.63
+            2026-08-04,A1,TFSA,NonResidentTax,VFV,CAD,0.63
+            2026-08-05,A1,TFSA,ReturnOfCapital,VFV,CAD,2.00
+            2026-08-06,A1,TFSA,ReturnOfCapital,VFV,CAD,-2.00
+        """.trimIndent() + "\n"
+        val f = ok(text)
+        assertEquals(
+            listOf(
+                Triple(2, ActivityType.INTEREST, 1_50L),
+                Triple(3, ActivityType.FEE, 12_34L),
+                Triple(4, ActivityType.TAX, 63L),
+                Triple(5, ActivityType.CREDIT, 63L),
+                Triple(6, ActivityType.RETURN_OF_CAPITAL, 2_00L),
+            ),
+            f.activities.map { Triple(it.line, it.type, it.amount) },
+        )
+        assertEquals(listOf(WsSkipped(7, "A reversed return of capital")), f.skipped)
+    }
+
+    @Test fun `a statement's withholding, interest and fee lines take their direction from the sign`() {
+        val text = """
+            date,transaction,description,amount,balance,currency
+            2026-02-01,NRT,Non-resident tax,-0.63,0,CAD
+            2026-02-02,NRT,Non-resident tax refund,0.63,0,CAD
+            2026-02-03,INT,Interest,0.85,0,CAD
+            2026-02-04,FPLINT,Interest charge,-12.34,0,CAD
+            2026-02-05,FEE,Fee,-5.00,0,CAD
+            2026-02-06,FEE,Fee rebate,5.00,0,CAD
+        """.trimIndent() + "\n"
+        val f = ok(text)
+        assertEquals(
+            listOf(
+                ActivityType.TAX to 63L,
+                ActivityType.CREDIT to 63L,
+                ActivityType.INTEREST to 85L,
+                ActivityType.FEE to 12_34L,
+                ActivityType.FEE to 5_00L,
+                ActivityType.CREDIT to 5_00L,
+            ),
+            f.activities.map { it.type to it.amount },
+        )
+        assertTrue(f.skipped.toString(), f.skipped.isEmpty())
+    }
+
     @Test fun `registrations read in English and French`() {
         assertEquals(Registration.FHSA, Wealthsimple.registrationOf("CELIAPP"))
         assertEquals(Registration.TFSA, Wealthsimple.registrationOf("CELI"))
