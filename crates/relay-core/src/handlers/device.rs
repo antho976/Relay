@@ -185,6 +185,11 @@ pub fn register(e: &mut Engine) {
         let holder = super::device_lease::worktree_holder(ctx.tx(), project.id, &requested_root)?;
         // Again under the lock: the device may have been taken while adb was answering.
         super::device_lease::check(ctx, &p.device, &holder)?;
+        refuse_while_syncing(ctx.engine(), &root)?;
+        // A run or build already live in this checkout is reading it: fast-forwarding under it
+        // would build (or ship) a mix of two commits. This run uses the checkout as it is.
+        let live = live_runs_in(ctx.tx(), &root)?;
+        let sync_primary = sync_primary && live.is_empty();
         ctx.tx().execute(
             "INSERT INTO device_runs(project_id,device,worktree,state,started_at) VALUES (?1,?2,?3,'building',?4)",
             params![project.id,p.device,root.display().to_string(),ctx.now],
@@ -192,6 +197,11 @@ pub fn register(e: &mut Engine) {
         let id = ctx.tx().last_insert_rowid();
         let run = get_run(ctx.tx(), id)?;
         let runtime = RunRuntime::new(id);
+        if sync_primary {
+            runtime.set_syncing(Some(root.clone()));
+        } else if let Some(other) = live.first() {
+            runtime.push(format!("primary sync: skipped; run {other} is live in this checkout, so it is used as it is"));
+        }
         let action = format!("device.run {} from {source}", p.variant.as_deref().unwrap_or("debug"));
         // From here the run exists in memory as well as in this transaction: the guard takes it
         // back out (runtime and lease) unless the transaction commits.
@@ -224,6 +234,8 @@ pub fn register(e: &mut Engine) {
     e.register::<Build>(|ctx: &mut Ctx, p| {
         let project = get_project(ctx.tx(), p.project_id)?;
         let root = resolve_run_root(ctx.tx(), project.id, &project.path, p.worktree.as_deref(), p.integration_id)?;
+        // A release ships exactly what is checked out, so not while a run is moving it.
+        refuse_while_syncing(ctx.engine(), &root)?;
         let variant = p.variant.unwrap_or_else(|| "release".to_string());
         let format = artifact_format(p.format.as_deref());
         let publish = p.publish.unwrap_or(false);
@@ -287,8 +299,19 @@ pub fn register(e: &mut Engine) {
         if let Some(runtime) = ctx.engine().device_runs.lock().unwrap().remove(&p.run_id) {
             runtime.stop();
         }
-        for lease in ctx.engine().device_leases.release_run(p.run_id) {
+        // While it builds, the stop does not reach Gradle's daemon, which may still be running
+        // `adb install`: the device stays the holder's a little longer. A running app is long
+        // installed, and its device is free at once.
+        let (released, grace) = if run.state == "building" {
+            ctx.engine().device_leases.stop_run(p.run_id, crate::device_lease::SHELL_GRACE)
+        } else {
+            (ctx.engine().device_leases.release_run(p.run_id), None)
+        };
+        for lease in released {
             ctx.emit(super::device_lease::RELEASED, lease.event());
+        }
+        if let Some(lease) = grace {
+            ctx.emit(super::device_lease::ACQUIRED, lease.event());
         }
         if matches!(run.state.as_str(), "building" | "running") {
             ctx.tx()
@@ -949,6 +972,105 @@ fn device_present(runtime: &MirrorRuntime) -> bool {
         .is_ok_and(|state| state.trim() == "device")
 }
 
+/// Where this engine lists the adb forwards its mirrors hold open, one `serial port scid` per
+/// line, so a forward an engine that died (or quit faster than adb) left behind is removed by
+/// the next one — and only such a forward: scrcpy itself names its sockets the same way.
+fn forwards_file(engine: &Engine) -> Option<PathBuf> {
+    engine.store.path().parent().map(|dir| dir.join("mirror-forwards"))
+}
+
+/// Edits of the forwards file, one at a time across this engine's mirrors.
+static FORWARDS_FILE: Mutex<()> = Mutex::new(());
+
+fn record_forward(engine: &Engine, serial: &str, port: u16, scid: u32) {
+    let Some(path) = forwards_file(engine) else { return };
+    let _guard = FORWARDS_FILE.lock().unwrap_or_else(|poison| poison.into_inner());
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).mode(0o600).open(&path) {
+        let _ = writeln!(file, "{serial} {port} {scid}");
+    }
+}
+
+fn unrecord_forward(engine: &Engine, serial: &str, port: u16) {
+    let Some(path) = forwards_file(engine) else { return };
+    let _guard = FORWARDS_FILE.lock().unwrap_or_else(|poison| poison.into_inner());
+    let Ok(text) = fs::read_to_string(&path) else { return };
+    let kept: String = text
+        .lines()
+        .filter(|line| parse_forward_line(line).is_some_and(|(s, p, _)| !(s == serial && p == port)))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let _ = if kept.is_empty() { fs::remove_file(&path) } else { fs::write(&path, kept) };
+}
+
+fn parse_forward_line(line: &str) -> Option<(&str, u16, u32)> {
+    let mut words = line.split_whitespace();
+    let (serial, port, scid) = (words.next()?, words.next()?.parse().ok()?, words.next()?.parse().ok()?);
+    words.next().is_none().then_some((serial, port, scid))
+}
+
+/// Remove the mirror's forward if nobody has yet, under `timeout`. Exactly once, whoever gets
+/// there first: the worker, or the engine's shutdown.
+fn remove_forward(engine: &Engine, runtime: &MirrorRuntime, timeout: Duration) {
+    let Some(port) = runtime.take_forward() else { return };
+    if mirror_adb(runtime, mirror::forward_remove_args(&runtime.device, port), timeout).is_ok() {
+        unrecord_forward(engine, &runtime.device, port);
+    }
+}
+
+/// How long the engine's shutdown waits for adb to drop the open mirrors' forwards.
+const SHUTDOWN_FORWARD_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The engine is quitting with mirrors open: remove their forwards now, all at once and under
+/// a short deadline, rather than leave them to workers the process exit will not wait for.
+/// `mirrors` is taken before `Engine::shutdown` empties the map.
+pub fn remove_mirror_forwards(engine: &Engine, mirrors: &[Arc<MirrorRuntime>]) {
+    std::thread::scope(|scope| {
+        for runtime in mirrors {
+            scope.spawn(move || remove_forward(engine, runtime, SHUTDOWN_FORWARD_TIMEOUT));
+        }
+    });
+}
+
+/// At start, before any mirror of this engine exists: remove the forwards a previous run of it
+/// recorded and never removed (it crashed, or quit faster than adb). Each must still be in
+/// `adb forward --list` exactly as recorded — serial, port and Relay's scrcpy socket — or it is
+/// left alone: a port adb has since handed to someone else is theirs. On its own thread.
+pub fn clear_stale_forwards(engine: &Arc<Engine>) {
+    let Some(path) = forwards_file(engine) else { return };
+    let recorded = {
+        let _guard = FORWARDS_FILE.lock().unwrap_or_else(|poison| poison.into_inner());
+        let text = fs::read_to_string(&path).unwrap_or_default();
+        let _ = fs::remove_file(&path);
+        text
+    };
+    let stale: Vec<(String, u16, u32)> = recorded
+        .lines()
+        .filter_map(parse_forward_line)
+        .map(|(serial, port, scid)| (serial.to_string(), port, scid))
+        .collect();
+    if stale.is_empty() {
+        return;
+    }
+    let engine = engine.clone();
+    let _ = std::thread::Builder::new().name("mirror-forwards".into()).spawn(move || {
+        let Ok(adb) = adb_path(&engine.store.lock()) else { return };
+        let mut list = Command::new(&adb);
+        list.args(["forward", "--list"]);
+        let Ok(Some(output)) = crate::proc::output_with_timeout(&mut list, MIRROR_FORWARD_TIMEOUT) else { return };
+        let listed = String::from_utf8_lossy(&output.stdout).into_owned();
+        for (serial, port, scid) in stale {
+            // `forward_args` ends with the device socket a mirror with this scid listens on.
+            let socket = mirror::forward_args(&serial, scid).pop().unwrap_or_default();
+            let line = format!("{serial} tcp:{port} {socket}");
+            if listed.lines().any(|listed| listed.trim() == line) {
+                let mut remove = Command::new(&adb);
+                remove.args(mirror::forward_remove_args(&serial, port));
+                let _ = crate::proc::output_with_timeout(&mut remove, MIRROR_FORWARD_TIMEOUT);
+            }
+        }
+    });
+}
+
 /// The transport half of a mirror: push, forward, boot the server, pump the stream, and on the
 /// way out report how it ended. Public so the integration tests can drive it against a fake
 /// adb and a fake server; the engine itself only ever starts it from `device.mirror.start`.
@@ -980,8 +1102,10 @@ pub fn mirror_worker(engine: Arc<Engine>, runtime: Arc<MirrorRuntime>) {
             return;
         }
     };
+    runtime.set_forward(port);
+    record_forward(&engine, &runtime.device, port, runtime.scid);
     if runtime.stopped() {
-        let _ = mirror_adb(&runtime, mirror::forward_remove_args(&runtime.device, port), MIRROR_FORWARD_TIMEOUT);
+        remove_forward(&engine, &runtime, MIRROR_FORWARD_TIMEOUT);
         engine.mirrors.lock().unwrap().remove(&runtime.id);
         return;
     }
@@ -995,7 +1119,7 @@ pub fn mirror_worker(engine: Arc<Engine>, runtime: Arc<MirrorRuntime>) {
     let mut server = match command.spawn() {
         Ok(server) => server,
         Err(error) => {
-            let _ = mirror_adb(&runtime, mirror::forward_remove_args(&runtime.device, port), MIRROR_FORWARD_TIMEOUT);
+            remove_forward(&engine, &runtime, MIRROR_FORWARD_TIMEOUT);
             fail("device.mirror_spawn_failed", error.to_string());
             return;
         }
@@ -1087,8 +1211,19 @@ pub fn mirror_worker(engine: Arc<Engine>, runtime: Arc<MirrorRuntime>) {
     if let Some(mut child) = runtime.take_child() {
         let _ = child.wait();
     }
-    let _ = mirror_adb(&runtime, mirror::forward_remove_args(&runtime.device, port), MIRROR_FORWARD_TIMEOUT);
+    remove_forward(&engine, &runtime, MIRROR_FORWARD_TIMEOUT);
     match result {
+        // The video went because input could not reach the device: say that, not "stream ended".
+        Err(error) if !requested_stop && runtime.control_lost().is_some() => {
+            let lost = runtime.control_lost().unwrap_or(error);
+            mirror_failure(
+                &engine,
+                &runtime,
+                MirrorState::Failed,
+                "device.mirror_control_lost",
+                format!("input could no longer reach {} ({lost}); the mirror was ended", runtime.device),
+            );
+        }
         Err(error) if !requested_stop => {
             if device_present(&runtime) {
                 let tail = logs.lock().unwrap().iter().rev().take(5).cloned().collect::<Vec<_>>();
@@ -1130,6 +1265,9 @@ fn event_fields(event: &Value, kind: &str, fields: &[&str]) -> Result<(), BusErr
         None => Ok(()),
     }
 }
+
+/// The most a `text` input event may carry (see `send_input`).
+const TEXT_INPUT_MAX: usize = 64 * 1024;
 
 /// Encode and write one `device.mirror.input` event. Pure memory and one socket write — no
 /// store access — which is what lets the engine answer it on the fast path. `tap`/`swipe`
@@ -1173,7 +1311,20 @@ pub fn send_input(runtime: &MirrorRuntime, event: &Value) -> Result<(), BusError
                     return Err(BusError::invalid("device.input", format!(
                         "clipboard text is {} bytes; one setclipboard carries at most {}",
                         text.len(), mirror::SET_CLIPBOARD_MAX_LENGTH,
-                    )).with_hint("send it as type \"text\", which is split into as many messages as it needs"));
+                    )).with_hint("split it, and send each part as its own setclipboard with paste on"));
+                }
+            }
+            // Typed text goes as one inject message per 300 bytes, all written under the control
+            // lock: a 64 MiB line was some 220,000 of them, with every other input queued behind.
+            if let mirror::InputMsg::Text { text } = &input {
+                if text.len() > TEXT_INPUT_MAX {
+                    return Err(BusError::invalid("device.input", format!(
+                        "text is {} bytes; type \"text\" takes at most {TEXT_INPUT_MAX}",
+                        text.len(),
+                    )).with_hint(format!(
+                        "send it as {{\"type\":\"setclipboard\",\"text\":…,\"paste\":true}}: one message, up to {} bytes",
+                        mirror::SET_CLIPBOARD_MAX_LENGTH,
+                    )));
                 }
             }
             mirror::encode_input(&input)
@@ -1195,6 +1346,25 @@ struct RunPrepared {
     default_gradle_command: bool,
     sync_primary: bool,
     source: String,
+}
+
+/// The live runs and builds recorded in the checkout `root`.
+fn live_runs_in(conn: &rusqlite::Connection, root: &Path) -> Result<Vec<Id>, BusError> {
+    conn.prepare_cached("SELECT id FROM device_runs WHERE worktree=?1 AND state IN ('building','running') ORDER BY id").bus()?
+        .query_map([root.display().to_string()], |row| row.get(0)).bus()?
+        .collect::<rusqlite::Result<Vec<Id>>>().bus()
+}
+
+/// Refuse to start in `root` while a run is fetching and fast-forwarding it.
+fn refuse_while_syncing(engine: &Engine, root: &Path) -> Result<(), BusError> {
+    let syncing = engine.device_runs.lock().unwrap().values().find(|run| run.syncing(root)).map(|run| run.id);
+    match syncing {
+        Some(id) => Err(BusError::conflict(
+            "device.checkout_syncing",
+            format!("run {id} is updating {} to its upstream", root.display()),
+        ).with_hint("try again once its log shows the primary sync line (seconds, or as long as the fetch takes)")),
+        None => Ok(()),
+    }
 }
 
 /// A run registered in memory — its live runtime and, for a device run, its lease — by a
@@ -2085,9 +2255,12 @@ fn run_worker(engine: Arc<Engine>, runtime: Arc<RunRuntime>, parent: uuid::Uuid,
     if sync_primary {
         // A stop that landed before the worker started must not fetch or fast-forward anything.
         if runtime.stopped() {
+            runtime.set_syncing(None);
             return end_run(&engine, &runtime);
         }
-        match sync_primary_checkout(&root, &|| runtime.stopped()) {
+        let synced = sync_primary_checkout(&root, &|| runtime.stopped());
+        runtime.set_syncing(None);
+        match synced {
             Ok(message) => runtime.push(message),
             Err(_) if runtime.stopped() => return end_run(&engine, &runtime),
             Err(error) => {
@@ -2117,11 +2290,12 @@ fn run_worker(engine: Arc<Engine>, runtime: Arc<RunRuntime>, parent: uuid::Uuid,
     }
     let _ = adb_output(&adb, &["-s", &device, "logcat", "-c"], ADB_SHELL_TIMEOUT);
     let launched = if launch_after_build {
-        match launch_installed_app(&adb, &device, &root, &variant) {
+        match launch_installed_app(&adb, &device, &root, &variant, &|| runtime.stopped()) {
             Ok(app) => {
                 runtime.push(format!("app launched: {}", app.component));
                 Some(app)
             }
+            Err(_) if runtime.stopped() => return end_run(&engine, &runtime),
             Err(message) => {
                 runtime.push(message);
                 fail_run(
@@ -2619,7 +2793,9 @@ struct LaunchedApp {
     package: String,
 }
 
-fn launch_installed_app(adb: &str, device: &str, root: &Path, variant: &str) -> Result<LaunchedApp, String> {
+/// `stopped` is asked right before `am start`: resolving the launcher takes up to
+/// [`ADB_SHELL_TIMEOUT`], and a run stopped meanwhile must not open the app.
+fn launch_installed_app(adb: &str, device: &str, root: &Path, variant: &str, stopped: &dyn Fn() -> bool) -> Result<LaunchedApp, String> {
     let packages = variant_application_ids(root, variant);
     if packages.is_empty() {
         return Err(format!(
@@ -2659,6 +2835,9 @@ fn launch_installed_app(adb: &str, device: &str, root: &Path, variant: &str) -> 
             resolution_errors.push(if detail.is_empty() { package } else { format!("{package}: {detail}") });
             continue;
         };
+        if stopped() {
+            return Err("the run was stopped before the app was opened".into());
+        }
         let launched = adb_output(adb, &["-s", device, "shell", "am", "start", "-W", "-n", &component], ADB_LAUNCH_TIMEOUT)
             .map_err(|error| format!("could not launch {component}: {error}"))?;
         let stdout = String::from_utf8_lossy(&launched.stdout);
@@ -2894,6 +3073,23 @@ mod tests {
         git(seed, &["push"]);
     }
 
+    /// A huge `text` would be hundreds of thousands of inject messages under the control lock;
+    /// it is refused, pointing at the one-message clipboard paste. Clipboard text over its own
+    /// limit points at splitting, not back at `text`.
+    #[test]
+    fn oversized_text_input_is_refused_with_the_way_that_works() {
+        let runtime = MirrorRuntime::new(MirrorRuntimeConfig {
+            id: 1, device: "S".into(), width: 1080, height: 2400,
+            max_size: 1600, bitrate: 8_000_000, scid: 1, adb: "adb".into(),
+        });
+        assert!(send_input(&runtime, &json!({"type": "text", "text": "a".repeat(TEXT_INPUT_MAX)})).is_ok());
+        let refused = send_input(&runtime, &json!({"type": "text", "text": "a".repeat(TEXT_INPUT_MAX + 1)})).unwrap_err();
+        assert_eq!(refused.code, "device.input");
+        assert!(refused.hint.unwrap().contains("setclipboard"));
+        let refused = send_input(&runtime, &json!({"type": "setclipboard", "text": "a".repeat(mirror::SET_CLIPBOARD_MAX_LENGTH + 1), "paste": true})).unwrap_err();
+        assert!(!refused.hint.unwrap().contains("\"text\""));
+    }
+
     #[test]
     fn sizes_preserve_aspect_and_round_like_the_server() {
         // scrcpy rounds the short side to a multiple of 8, not 2 (486 was never what it sent).
@@ -3114,6 +3310,36 @@ E/AndroidRuntime( 1234): \tat com.example.app.MainActivity.onCreate(MainActivity
         while let Ok(event) = events.try_recv() { if event.ev == super::super::device_lease::RELEASED { announced.push(event.payload); } }
         assert_eq!(announced.len(), 1, "{announced:?}");
         assert_eq!(announced[0]["device"], "phone-b");
+    }
+
+    /// A run that will fast-forward a checkout holds builds in it off until it has, and a run
+    /// or build live in a checkout is what a new run's sync looks for before moving it.
+    #[test]
+    fn a_checkout_being_synced_is_not_built_from_and_a_busy_one_is_not_synced() {
+        let (engine, workspace, project_id) = run_engine();
+        let root = std::fs::canonicalize(workspace.path()).unwrap().join("repo");
+        let run = RunRuntime::new(41);
+        run.set_syncing(Some(root.clone()));
+        engine.device_runs.lock().unwrap().insert(41, run.clone());
+        let refused = refuse_while_syncing(&engine, &root).unwrap_err();
+        assert_eq!(refused.code, "device.checkout_syncing");
+        assert!(refused.message.contains("run 41"), "{}", refused.message);
+        assert!(refuse_while_syncing(&engine, &root.join("elsewhere")).is_ok());
+        run.set_syncing(None);
+        assert!(refuse_while_syncing(&engine, &root).is_ok(), "a finished sync holds nothing");
+
+        let conn = engine.store.lock();
+        assert!(live_runs_in(&conn, &root).unwrap().is_empty());
+        conn.execute(
+            "INSERT INTO device_runs(project_id,kind,device,worktree,state,variant,format,publish,started_at) VALUES (?1,'build','',?2,'building','release','apk',0,'now')",
+            params![project_id, root.display().to_string()],
+        ).unwrap();
+        let build = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO device_runs(project_id,device,worktree,state,started_at) VALUES (?1,'x',?2,'finished','now')",
+            params![project_id, root.display().to_string()],
+        ).unwrap();
+        assert_eq!(live_runs_in(&conn, &root).unwrap(), vec![build], "only a live row counts");
     }
 
     #[test]

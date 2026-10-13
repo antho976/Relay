@@ -552,7 +552,15 @@ impl MirrorView {
                 glib::spawn_future_local(async move {
                     if let Ok(Some(text)) = clipboard.read_text_future().await {
                         if let Some(view) = weak.upgrade() {
-                            view.send(input::paste(text.as_str()));
+                            // relay_core::mirror::SET_CLIPBOARD_MAX_LENGTH: the engine refuses a
+                            // longer one, and input is sent unanswered, so the paste would
+                            // otherwise just not happen.
+                            const PASTE_MAX: usize = (1 << 18) - 14;
+                            if text.len() > PASTE_MAX {
+                                view.flash(&format!("Too long to paste: {} KB, the most is 255 KB.", text.len() / 1024));
+                            } else {
+                                view.send(input::paste(text.as_str()));
+                            }
                         }
                     }
                 });

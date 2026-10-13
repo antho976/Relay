@@ -249,6 +249,11 @@ pub fn gate_for(line: &str, instance: Instance, profile: OpProfile) -> Gate {
             OpProfile::Phone => format!("{op} is not open to a paired phone; run it on the PC"),
             OpProfile::Cloud => format!("{op} is not open on a cloud copy, which holds only the ledger and the training history"),
         })
+    } else if profile == OpProfile::Phone && op == "device.build" && value.pointer("/payload/publish") == Some(&serde_json::Value::Bool(true)) {
+        // An upload to Google Play cannot be taken back, and a phone token can be lost with the
+        // phone: a phone builds a release, the desktop publishes it.
+        BusError::refused("remote.publish", "publishing to Google Play is only from the desktop; a phone can build a release, not publish it")
+            .with_hint("build it with publish off, then publish it from Relay on the PC")
     } else {
         return Gate::Forward;
     };
@@ -315,6 +320,22 @@ mod tests {
         let registry = relay_bus::registry::Registry::global();
         for op in PHONE_OPS {
             assert!(registry.get(op).is_some(), "{op} is not a bus op");
+        }
+    }
+
+    #[test]
+    fn a_phone_builds_a_release_but_never_publishes_one() {
+        let line = |payload: &str| format!(r#"{{"v":1,"id":"7f2b5d2e-2f1a-4b7c-9a6c-1c9d1e6a0006","actor":"user","op":"device.build","payload":{payload}}}"#);
+        for payload in [r#"{"project_id":1}"#, r#"{"project_id":1,"publish":false}"#, r#"{"project_id":1,"publish":null}"#] {
+            assert!(matches!(gate(&line(payload), Instance::Stable), Gate::Forward), "{payload}");
+        }
+        match gate(&line(r#"{"project_id":1,"publish":true,"format":"bundle"}"#), Instance::Stable) {
+            Gate::Reject(resp) => {
+                let error = resp.error.unwrap();
+                assert_eq!(error.code, "remote.publish");
+                assert!(error.message.contains("only from the desktop"), "{}", error.message);
+            }
+            Gate::Forward => panic!("a phone's publish was forwarded"),
         }
     }
 

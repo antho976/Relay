@@ -114,6 +114,21 @@ fn the_exec_gate_refuses_an_agent_switching_the_commit_hook_off() {
     ok(&f.engine, "guardrail.gate", json!({"session": f.name, "kind": "exec", "command": "git commit -n -m wip"}));
 }
 
+/// An agent never uploads to Google Play, whatever denied-command list the user stored; a
+/// release build that does not publish, and the user's own publish, pass.
+#[test]
+fn the_exec_gate_refuses_an_agent_publishing_to_play() {
+    let f = Fixture::new();
+    ok(&f.engine, "guardrail.config.set", json!({"patch": {"denied_commands": ["rm -rf"]}}));
+    for command in ["./gradlew publishReleaseBundle", "./gradlew bundleRelease :app:promoteReleaseArtifact", "cd android && ./gradlew pRB"] {
+        let refused = call_as(&f.engine, f.agent(), "guardrail.gate", json!({"session": f.name, "kind": "exec", "command": command}))
+            .error.unwrap_or_else(|| panic!("{command:?} must be refused"));
+        assert_eq!(refused.code, "guardrail.play_publish", "{command:?}");
+    }
+    ok_as(&f.engine, f.agent(), "guardrail.gate", json!({"session": f.name, "kind": "exec", "command": "./gradlew bundleRelease"}));
+    ok(&f.engine, "guardrail.gate", json!({"session": f.name, "kind": "exec", "command": "./gradlew publishReleaseBundle"}));
+}
+
 #[test]
 fn done_judges_every_commit_against_the_protected_paths() {
     let f = Fixture::new();

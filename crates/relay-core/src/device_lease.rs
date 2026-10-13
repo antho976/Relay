@@ -354,6 +354,35 @@ impl Leases {
         self.release_where(|lease| lease.kind == Kind::Run(run_id))
     }
 
+    /// A run stopped while it may still be installing: Gradle's daemon outlives the stop and can
+    /// go on with `adb install` for a while. Its lease becomes a shell lease of the same holder
+    /// for `grace` — the holder's own shell lease on the device, lengthened, when it has one —
+    /// rather than leaving the device open for someone else's install to collide with that one.
+    /// Returns the run's lease that went, and the grace lease when it is the one others now see
+    /// (for `device.lease.released` and `device.lease.acquired`).
+    pub fn stop_run(&self, run_id: Id, grace: Duration) -> (Vec<Lease>, Option<Lease>) {
+        let mut map = self.map();
+        let mut gone = expire(&mut map);
+        let now = Instant::now();
+        let mut shown = None;
+        for stack in map.values_mut() {
+            let Some(at) = stack.iter().position(|held| held.kind == Kind::Run(run_id)) else { continue };
+            let run = stack.remove(at);
+            let until = now + grace;
+            if let Some(shell) = stack.iter_mut().find(|held| held.kind == Kind::Shell) {
+                shell.expires = Some(shell.expires.map_or(until, |at| at.max(until)));
+            } else {
+                let mut lease = Lease::new(&run.device, run.holder.clone(), Kind::Shell, &format!("{} (stopping)", run.action), Some(grace));
+                lease.commands = 0;
+                stack.push(lease);
+            }
+            shown = visible(stack, now).filter(|lease| lease.kind == Kind::Shell).cloned();
+            gone.push(run);
+        }
+        self.shared.changed.notify_all();
+        (gone, shown)
+    }
+
     /// A session that exits or closes gives back its shell leases and claims. A run it asked
     /// for stays with the run: the run, not the session, is what is using the device.
     pub fn release_session(&self, session_id: Id) -> Vec<Lease> {
@@ -536,13 +565,21 @@ const SHELL_WRITES: &[&str] = &["am", "pm", "cmd", "input", "monkey", "reboot", 
 const PM_READS: &[&str] = &["list", "path", "dump", "resolve-activity", "query-activities", "get-max-users", "has-feature", "help"];
 /// `am` / `cmd activity` verbs that only read.
 const AM_READS: &[&str] = &["get-config", "get-current-user", "stack", "task", "monitor", "dumpheap", "profile", "help"];
+/// Verbs of any other `cmd <service>` that only read (`cmd overlay list`, `cmd wifi status`,
+/// `cmd settings get …`). Every other service command is taken for a write.
+const CMD_READS: &[&str] = &["list", "status", "get", "help", "dump", "query"];
+/// Programs the device's shell runs another program under: `toybox rm`, `nohup am start`.
+const SHELL_WRAPPERS: &[&str] = &["env", "exec", "nohup", "nice", "toybox", "busybox", "command", "time"];
 /// `wm` verbs that print the current value when given none, and set it when given one.
 const WM_QUERIES: &[&str] = &["size", "density", "user-rotation", "fixed-to-user-rotation", "scaling"];
 
 /// Does one command run by `adb shell` change the device? `words` is the command and its
 /// arguments.
 fn shell_writes(words: &[&str]) -> bool {
-    let command = words.first().copied().unwrap_or("");
+    // `FOO=1 nohup /system/bin/am start …` is `am start …`.
+    let start = words.iter().position(|word| !is_assignment(word) && !SHELL_WRAPPERS.contains(&crate::shell::program(word)));
+    let words = &words[start.unwrap_or(words.len())..];
+    let command = words.first().map_or("", |word| crate::shell::program(word));
     let sub = words.get(1).copied().unwrap_or("");
     let third = words.get(2).copied().unwrap_or("");
     match command {
@@ -550,7 +587,9 @@ fn shell_writes(words: &[&str]) -> bool {
         "cmd" => match sub {
             "package" => !PM_READS.contains(&third),
             "activity" => !AM_READS.contains(&third),
-            _ => false,
+            // `cmd` alone and `cmd -l` list the services.
+            "" | "-l" => false,
+            _ => !CMD_READS.iter().any(|read| third == *read || third.starts_with(&format!("{read}-"))),
         },
         "am" => !AM_READS.contains(&sub),
         "settings" => !matches!(sub, "" | "get" | "list" | "help"),
@@ -588,10 +627,27 @@ fn adb_command(args: &[String], serial: Option<&str>) -> Option<DeviceCommand> {
         "install" | "install-multiple" | "install-multi-package" | "uninstall" | "push" | "sync" | "reboot" | "root"
         | "unroot" | "remount" | "sideload" | "disable-verity" | "enable-verity" | "restore" | "emu" => true,
         "shell" | "exec-out" => {
-            // `adb shell "am start …; input tap 1 1"` arrives as one quoted word: look inside
-            // it, and at each command the device's shell will run, not just the first.
-            let line = rest.iter().map(String::as_str).skip_while(|word| word.starts_with('-')).collect::<Vec<_>>().join(" ");
-            line.split([';', '&', '|', '\n']).any(|command| shell_writes(&command.split_whitespace().collect::<Vec<_>>()))
+            // adb joins its arguments into one line for the device's shell, which reads it again:
+            // `adb shell "am start …; input tap 1 1"` and `adb shell "sh -c 'am start …'"` are
+            // read the way that shell will, every command of it, nested `sh -c` included.
+            let mut words = Vec::new();
+            let mut args = rest.iter().map(String::as_str).skip_while(|word| word.starts_with('-'));
+            while let Some(word) = args.next() {
+                // The local shell's redirections (`> shot.png`, `< steps.sh`) are not adb's.
+                if is_redirection(word) {
+                    if word.trim_start_matches(|c: char| c.is_ascii_digit() || matches!(c, '<' | '>' | '&')).is_empty() {
+                        args.next();
+                    }
+                } else {
+                    words.push(word);
+                }
+            }
+            // No command at all — an interactive shell, or commands fed on stdin (`adb shell <
+            // steps.sh`, `echo "am start …" | adb shell`) — can do anything: a write.
+            words.is_empty() || crate::shell::commands(&words.join(" ")).iter().any(|command| {
+                let words: Vec<&str> = command.iter().map(|word| word.text.as_str()).collect();
+                shell_writes(&words)
+            })
         }
         _ => false,
     };
@@ -602,6 +658,11 @@ fn adb_command(args: &[String], serial: Option<&str>) -> Option<DeviceCommand> {
         .chain(rest.iter().map(String::as_str).take(3).map(|word| word.rsplit('/').next().unwrap_or(word)))
         .collect::<Vec<_>>().join(" ");
     Some(DeviceCommand { device: serial.unwrap_or_else(|| ANY_DEVICE.into()), action: summary })
+}
+
+/// A redirection word as the shell reader leaves it: `<`, `>`, `2>&1`, `<steps.sh`, `&>log`.
+fn is_redirection(word: &str) -> bool {
+    word.trim_start_matches(|c: char| c.is_ascii_digit()).starts_with(['<', '>']) || word.starts_with("&>")
 }
 
 fn gradle_command(program: &str, args: &[String], serial: Option<&str>) -> Option<DeviceCommand> {
@@ -693,6 +754,23 @@ mod tests {
         assert!(device("adb shell 'wm size; input keyevent 3'").is_some());
         assert!(device("timeout 600 npx expo run:android --device R5CT").unwrap().0 == "R5CT");
         assert!(device("adb uninstall com.example").is_some());
+        // Any service's command writes unless it is a known read; a program named by its path
+        // is that program; `sh -c` on the device is read inside; no command at all is a shell
+        // fed on stdin (or a person's), which can do anything.
+        assert!(device("adb shell cmd statusbar expand-notifications").is_some());
+        assert!(device("adb shell cmd connectivity airplane-mode enable").is_some());
+        assert!(device("adb shell cmd settings put global animator_duration_scale 0").is_some());
+        assert!(device("adb shell /system/bin/am start -n com.example/.Main").is_some());
+        assert!(device("adb shell /system/bin/cmd overlay enable com.x").is_some());
+        assert!(device("adb shell \"sh -c 'am start -n com.example/.Main'\"").is_some());
+        assert!(device("adb shell 'toybox rm -r /sdcard/x'").is_some());
+        assert!(device("adb shell 'FOO=1 nohup input tap 1 1'").is_some());
+        assert!(device("adb shell").is_some());
+        assert!(device("adb -s R5 shell -t").is_some());
+        assert!(device("adb shell < steps.sh").is_some());
+        assert!(device("adb shell <steps.sh").is_some());
+        assert!(device("echo 'am start -n com.example/.Main' | adb shell").is_some());
+        assert!(device("adb shell 2>&1").is_some());
         // Reads are free.
         assert!(device("adb devices -l").is_none());
         assert!(device("adb logcat -d | grep FATAL").is_none());
@@ -705,6 +783,13 @@ mod tests {
         assert!(device("adb shell cmd package list packages -3").is_none());
         assert!(device("adb shell 'cmd activity get-current-user'").is_none());
         assert!(device("adb exec-out screencap -p > shot.png").is_none());
+        assert!(device("adb shell cmd overlay list").is_none());
+        assert!(device("adb shell cmd wifi status").is_none());
+        assert!(device("adb shell cmd settings get global adb_enabled").is_none());
+        assert!(device("adb shell cmd -l").is_none());
+        assert!(device("adb shell /system/bin/getprop ro.product.model").is_none());
+        assert!(device("adb shell \"sh -c 'dumpsys battery'\"").is_none());
+        assert!(device("adb shell getprop 2>&1 | head").is_none());
         assert!(device("./gradlew assembleDebug test lint").is_none());
         assert!(device("./gradlew install").is_none());
         assert!(device("cargo test && git commit -m 'adb install fix'").is_none());
@@ -790,6 +875,33 @@ mod tests {
         assert_eq!(gone.len(), 1);
         assert_eq!(leases.holder_of("R5").unwrap().kind, Kind::Claim);
         assert_eq!(leases.check("R5", &b).unwrap_err().code, "device.busy");
+    }
+
+    /// A stopped run's install may still be under way in Gradle's daemon: the device stays its
+    /// holder's for the grace period, then lapses; a claim the holder had is left as it was.
+    #[test]
+    fn a_stopped_run_keeps_the_device_for_a_grace_period() {
+        let leases = Leases::default();
+        let a = Holder::Session { id: 1, name: "a".into() };
+        let b = Holder::Session { id: 2, name: "b".into() };
+        let mut pruned = Vec::new();
+        leases.acquire(Lease::new("R5", a.clone(), Kind::Run(4), "device.run debug", None), &mut pruned).unwrap();
+        let (gone, shown) = leases.stop_run(4, SHELL_GRACE);
+        assert_eq!(gone.len(), 1);
+        assert_eq!(gone[0].kind, Kind::Run(4));
+        let grace = shown.expect("the grace lease is what others see");
+        assert_eq!((grace.kind, grace.holder.clone()), (Kind::Shell, a.clone()));
+        assert!(grace.view().expires_in_s.unwrap() <= SHELL_GRACE.as_secs());
+        assert_eq!(leases.check("R5", &b).unwrap_err().code, "device.busy");
+        assert!(leases.check("R5", &a).is_ok(), "the holder itself may run again");
+        assert!(leases.release_run(4).is_empty(), "the worker's own release no longer drops it");
+        let (_, shown) = leases.stop_run(5, SHELL_GRACE);
+        assert!(shown.is_none(), "no run 5, nothing changes");
+        leases.acquire(Lease::new("R6", a.clone(), Kind::Claim, "testing", Some(Duration::from_secs(600))), &mut pruned).unwrap();
+        leases.acquire(Lease::new("R6", a.clone(), Kind::Run(6), "device.run debug", None), &mut pruned).unwrap();
+        let (_, shown) = leases.stop_run(6, Duration::ZERO);
+        assert!(shown.is_none(), "the claim outranks the grace lease");
+        assert_eq!(leases.holder_of("R6").unwrap().kind, Kind::Claim);
     }
 
     #[test]

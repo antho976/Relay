@@ -1512,6 +1512,21 @@ fn evaluate_exec(cfg: &GuardrailConfig, request: &GateRequest<'_>) -> Result<Dec
                 ),
             ));
         }
+        // Nor this one: an upload to Google Play cannot be taken back, and it is the user's.
+        if let Some(DeniedMatch { words, .. }) = play_publish(&commands) {
+            let argv: Vec<&str> = words.iter().map(|word| word.text.as_str()).collect();
+            return Ok(Decision::Refuse(
+                BusError::refused(
+                    "guardrail.play_publish",
+                    format!("{} would publish to Google Play; only the user publishes a release", argv.join(" ")),
+                )
+                .with_details(json!({"command": command, "argv": argv}))
+                .with_hint(
+                    "Build the release without publishing (`./gradlew bundleRelease`, or assemble/bundle tasks), \
+                     and say in your report that it is ready: the user publishes it from Relay's Build panel.",
+                ),
+            ));
+        }
     }
     if request.skip_policy == Some("denied_command") {
         return Ok(Decision::Allow);
@@ -2258,7 +2273,7 @@ struct DeniedPattern {
 impl DeniedPattern {
     fn parse(pattern: &str) -> Option<Self> {
         let mut words = pattern.split_whitespace();
-        let program = shell::program(words.next()?).to_ascii_lowercase();
+        let program = canonical_program(words.next()?);
         let mut parsed = Self { program, subcommands: Vec::new(), flags: Vec::new(), operands: Vec::new() };
         for word in words {
             if word.starts_with('-') && word.len() > 1 {
@@ -2282,7 +2297,7 @@ impl DeniedPattern {
         let word = &command[at];
         // A quoted program still runs (`"rm" -rf`), but only as the command's own first word;
         // elsewhere a quoted word is an argument, which is data.
-        if word.quoted && at != 0 || shell::program(&word.text).to_ascii_lowercase() != self.program {
+        if word.quoted && at != 0 || canonical_program(&word.text) != self.program {
             return false;
         }
         // Quoted text with a space in it is a string, never a flag or a subcommand (D103).
@@ -2291,6 +2306,9 @@ impl DeniedPattern {
             .filter(|word| !(word.quoted && word.text.contains(char::is_whitespace)))
             .map(|word| word.text.as_str())
             .collect();
+        if self.program == "gradle" {
+            return self.runs_gradle(&rest);
+        }
         let mut next = 0;
         for wanted in &self.subcommands {
             while let Some(word) = rest.get(next).filter(|word| word.starts_with('-')) {
@@ -2323,6 +2341,95 @@ impl DeniedPattern {
         self.flags.iter().all(|flag| flags.contains(flag) || flag == "-f" && destroys_remote)
             && self.operands.iter().all(|operand| operands.contains(operand))
     }
+
+    /// Gradle reads every word that is not an option as a task, in any order and any number:
+    /// `gradle publish*` is any invocation that runs a task the glob names, whatever else it
+    /// runs beside it (`./gradlew assembleRelease :app:publishReleaseBundle`).
+    fn runs_gradle(&self, rest: &[&str]) -> bool {
+        let mut tasks = Vec::new();
+        let mut flags = Vec::new();
+        let mut words = rest.iter();
+        while let Some(word) = words.next() {
+            if word.starts_with('-') && word.len() > 1 {
+                flags.extend(expand_flags(&self.program, word));
+                // `-x publishBundle` excludes the task; `-p app` is a directory.
+                if gradle_takes_value(word) {
+                    words.next();
+                }
+            } else {
+                tasks.push(*word);
+            }
+        }
+        self.subcommands.iter().all(|glob| tasks.iter().any(|task| gradle_task_matches(glob, task)))
+            && self.flags.iter().all(|flag| flags.contains(flag))
+    }
+}
+
+/// A program word as a denied pattern names it: the basename, lower case, with the Gradle
+/// wrapper and Gradle itself one program (`./gradlew`, `gradlew.bat`, `/opt/gradle/bin/gradle`).
+fn canonical_program(word: &str) -> String {
+    let name = shell::program(word).to_ascii_lowercase();
+    match name.as_str() {
+        "gradlew" | "gradlew.bat" | "gradle.bat" => "gradle".into(),
+        _ => name,
+    }
+}
+
+/// Gradle options whose value is the next word, so it is not taken for a task.
+fn gradle_takes_value(word: &str) -> bool {
+    matches!(
+        word,
+        "-x" | "--exclude-task" | "-p" | "--project-dir" | "-b" | "--build-file" | "-c" | "--settings-file"
+            | "-I" | "--init-script" | "-g" | "--gradle-user-home" | "--project-cache-dir" | "-D" | "--system-prop"
+            | "-P" | "--project-prop" | "--console" | "--warning-mode" | "--include-build"
+    )
+}
+
+/// Does the task word `task` (`publishReleaseBundle`, `:app:publishReleaseBundle`) run a task
+/// `glob` names? Gradle matches a name without regard to case, and takes an abbreviation for
+/// the task it is short for (`pRB`, `pub-rel-bun`, `pub`): for a `prefix*` glob, a word whose
+/// first segment begins `prefix` counts too. Any task it could be short for is enough.
+fn gradle_task_matches(glob: &str, task: &str) -> bool {
+    let name = task.rsplit(':').next().unwrap_or(task);
+    if name.is_empty() || name.contains('=') {
+        return false;
+    }
+    if wildcard_matches(glob, &name.to_ascii_lowercase()) {
+        return true;
+    }
+    let Some(prefix) = glob.strip_suffix('*').filter(|prefix| !prefix.is_empty() && !prefix.contains('*')) else {
+        return false;
+    };
+    let mut chars = name.chars();
+    let first: String = chars.next().into_iter().chain(chars.take_while(char::is_ascii_lowercase)).collect();
+    prefix.starts_with(&first.to_ascii_lowercase())
+}
+
+/// `*` matches any run of characters, nothing else is special.
+fn wildcard_matches(glob: &str, text: &str) -> bool {
+    let mut parts = glob.split('*');
+    let Some(mut rest) = text.strip_prefix(parts.next().unwrap_or("")) else { return false };
+    let parts: Vec<&str> = parts.collect();
+    let Some((last, middle)) = parts.split_last() else { return rest.is_empty() };
+    for part in middle {
+        match rest.find(part) {
+            Some(at) => rest = &rest[at + part.len()..],
+            None => return false,
+        }
+    }
+    rest.len() >= last.len() && rest.ends_with(last)
+}
+
+/// Gradle Play Publisher's upload tasks (`publishReleaseBundle`, `publishListing`,
+/// `promoteReleaseArtifact`, …) and the `uploadToPlay` kind a build script adds. An agent never
+/// runs these: a release reaches Google Play only when the user asks for it (`device.build`
+/// with `publish`). Built in, not a default denied command, because a stored
+/// `denied_commands` list replaces the defaults whole and would leave it out.
+const PLAY_PUBLISH: &[&str] = &["gradle publish*", "gradle promote*", "gradle *toplay*"];
+
+fn play_publish(commands: &[Vec<Word>]) -> Option<DeniedMatch> {
+    let patterns: Vec<String> = PLAY_PUBLISH.iter().map(|pattern| pattern.to_string()).collect();
+    denied_matches_in(&patterns, commands).into_iter().next()
 }
 
 /// A flag word as the individual flags it sets, each spelled one way: `-rf` is `-r` and `-f`;
@@ -3100,6 +3207,32 @@ mod denied_tests {
         }
         // A dry run is exempt, and only the dry run.
         assert!(denied("relay q guardrail.check && rm -rf /tmp/x"));
+    }
+
+    /// An agent's Gradle invocation that would upload to Google Play, in every spelling Gradle
+    /// accepts: any position among several tasks, a project path, other case, an abbreviation.
+    #[test]
+    fn a_play_publish_is_seen_in_every_gradle_spelling() {
+        let publishes = |line: &str| super::play_publish(&shell_commands(line)).is_some();
+        for line in [
+            "./gradlew publishReleaseBundle", "./gradlew :app:publishReleaseBundle", "gradle publishBundle",
+            "./gradlew promoteReleaseArtifact", "./gradlew publishListing", "./gradlew publishApk --track internal",
+            "./gradlew assembleRelease publishReleaseBundle", "./gradlew --offline -q :app:bundleRelease :app:publishBundle",
+            "cd android && ./gradlew clean publishReleaseBundle", "sh ./gradlew publishReleaseBundle",
+            "/opt/gradle/bin/gradle publishBundle", "gradlew.bat publishBundle", "./gradlew PUBLISHRELEASEBUNDLE",
+            "./gradlew pRB", "./gradlew pub-rel-bun", "./gradlew :app:pRA", "./gradlew uploadToPlay",
+            "./gradlew -p app publishBundle", "bash -c './gradlew publishReleaseBundle'", "timeout 600 ./gradlew publishBundle",
+        ] {
+            assert!(publishes(line), "{line:?} publishes to Google Play");
+        }
+        for line in [
+            "./gradlew bundleRelease", "./gradlew assembleRelease test lint", "./gradlew :app:installDebug",
+            "./gradlew -x publishReleaseBundle build", "./gradlew -p publish assembleDebug", "./gradlew preBuild processDebugResources",
+            "./gradlew projects properties", "echo ./gradlew publishReleaseBundle", "rg publishReleaseBundle app/build.gradle.kts",
+            "git commit -m './gradlew publishBundle is not run here'", "./gradlew -Pplay.publish=true assembleRelease",
+        ] {
+            assert!(!publishes(line), "{line:?} does not publish");
+        }
     }
 
     #[test]

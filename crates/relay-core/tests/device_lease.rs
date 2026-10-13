@@ -203,3 +203,25 @@ fn a_claim_outlives_the_run_its_holder_starts_under_it() {
     assert_eq!(leases["leases"][0]["session"], a.as_str());
     assert_eq!(refusal(gate(e, &b, "adb install other.apk")).code, "device.busy");
 }
+
+/// Gradle's daemon outlives a stop, and its `adb install` with it: a run stopped while it builds
+/// leaves the device its holder's for a grace period, not open for another install to collide.
+#[test]
+fn a_run_stopped_while_building_keeps_the_device_for_a_grace_period() {
+    let f = fixture();
+    let e = &f.engine;
+    let (a, worktree_a) = session(e);
+    let (b, _) = session(e);
+    let run = ok(e, Actor::User, "device.run", json!({"project_id": 1, "worktree": worktree_a, "device": "relay-phone"}));
+    let run_id = run["id"].as_i64().unwrap();
+    let mut events = e.subscribe();
+    ok(e, Actor::User, "device.run.stop", json!({"run_id": run_id}));
+    let gone = released(&mut events);
+    assert!(gone.iter().any(|lease| lease["run_id"] == run_id), "the run's own lease is gone: {gone:?}");
+    let leases = ok(e, Actor::User, "device.leases", json!({}));
+    let lease = &leases["leases"][0];
+    assert_eq!((lease["kind"].as_str(), lease["session"].as_str()), (Some("shell"), Some(a.as_str())), "{leases}");
+    assert!(lease["expires_in_s"].as_u64().unwrap() <= 90, "{leases}");
+    assert_eq!(refusal(gate(e, &b, "adb install other.apk")).code, "device.busy");
+    ok(e, Actor::agent(&a), "guardrail.gate", json!({"session": a, "kind": "exec", "command": "adb -s relay-phone install x.apk"}));
+}
