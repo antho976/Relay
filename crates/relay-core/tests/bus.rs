@@ -553,14 +553,16 @@ esac
     assert_eq!(enabled["enabled"], true);
 
     // A bundle asks for a different Gradle task, and this wrapper only answers assembleRelease.
+    // The pickers name it by its extension, `aab`: it is a bundle all the same.
     let bundle = call(
         &e,
         Actor::User,
         "device.build",
-        json!({"project_id":project_id,"format":"bundle"}),
+        json!({"project_id":project_id,"format":"aab"}),
     )
     .into_result()
     .unwrap();
+    assert_eq!(bundle["format"], "bundle");
     let bundle_id = bundle["id"].as_i64().unwrap();
     wait_until("the bundle build to fail", || {
         let result = call(
@@ -574,6 +576,7 @@ esac
         result["runs"][0]["id"].as_i64() == Some(bundle_id)
             && result["runs"][0]["state"] == "failed"
     });
+    assert!(std::fs::read_to_string(root.join("tasks.log")).unwrap().lines().any(|line| line.starts_with("bundleRelease|")));
 
     // The Play half: the same run row, a different Gradle task, an .aab artifact. Gradle Play
     // Publisher does the upload, so this is the whole of Relay's part in publishing.

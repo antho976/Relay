@@ -1254,7 +1254,8 @@ async fn stream(
         return End::Broken(String::new());
     }
 
-    let (frames, pictures) = async_channel::bounded::<decode::Pixels>(2);
+    // One slot: a picture waiting for the paint is replaced by a newer one, never queued behind.
+    let (frames, pictures) = async_channel::bounded::<decode::Pixels>(1);
     let (control, controls) = async_channel::unbounded::<Control>();
     let worker = rt.spawn(decode::run(notices, frames, pictures.clone(), control));
     struct AbortOnDrop(tokio::task::AbortHandle);
@@ -1311,11 +1312,12 @@ async fn stream(
                 },
                 Ok(()) = resyncs.recv() => vec![input::reset_video()],
             };
+            // Written in order without waiting for each answer: the engine answers a connection's
+            // input in the order it arrives, so a move no longer waits out the previous one's
+            // round trip — and the GTK loop that resumes this future — before it leaves.
             for event in batch {
-                match client.request(rt, "device.mirror.input", json!({"mirror_id":mirror_id,"event":event})).await {
-                    Err(Error::Disconnected) => return,
-                    Err(error) => tracing::debug!(%error, "mirror input refused"),
-                    Ok(_) => {}
+                if client.send_unanswered("device.mirror.input", json!({"mirror_id":mirror_id,"event":event})).await.is_err() {
+                    return;
                 }
             }
         }

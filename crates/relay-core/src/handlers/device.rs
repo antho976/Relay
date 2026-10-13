@@ -225,7 +225,7 @@ pub fn register(e: &mut Engine) {
         let project = get_project(ctx.tx(), p.project_id)?;
         let root = resolve_run_root(ctx.tx(), project.id, &project.path, p.worktree.as_deref(), p.integration_id)?;
         let variant = p.variant.unwrap_or_else(|| "release".to_string());
-        let format = p.format.unwrap_or_else(|| "apk".to_string());
+        let format = artifact_format(p.format.as_deref());
         let publish = p.publish.unwrap_or(false);
         let signing_profile = build_signing_profile(ctx.engine(), &project.path)?;
         let signing_init = signing_profile.as_ref().map(|_| signing_init_script()).transpose()?;
@@ -1357,6 +1357,17 @@ fn gradle_variant(variant: &str) -> Result<String, BusError> {
     Ok(format!("{}{}", chars.next().unwrap().to_ascii_uppercase(), chars.as_str()))
 }
 
+/// The format a build is recorded and run with: `apk` when none is asked for, and `bundle` for
+/// `aab`, the file extension, which is what the desktop and phone pickers send. Anything else is
+/// passed through for [`build_command`] to refuse.
+fn artifact_format(requested: Option<&str>) -> String {
+    match requested.map(str::trim) {
+        None | Some("") => "apk".into(),
+        Some(format) if format.eq_ignore_ascii_case("aab") => "bundle".into(),
+        Some(format) => format.to_string(),
+    }
+}
+
 /// The Gradle task a release build runs. `publish` hands the artifact to Gradle Play
 /// Publisher, which owns the Play credentials. An optional Relay signing init script changes
 /// only this invocation and never writes into the selected Android checkout (D152, D157).
@@ -1929,7 +1940,9 @@ fn short_oid(oid: &str) -> &str {
     oid.get(..oid.len().min(8)).unwrap_or(oid)
 }
 
-fn sync_primary_checkout(root: &Path) -> Result<String, PrimarySyncError> {
+/// `stopped` is asked once more after the fetch, which can take minutes: a run stopped by then
+/// leaves the checkout as it was rather than fast-forwarding it for a build that will not run.
+fn sync_primary_checkout(root: &Path, stopped: &dyn Fn() -> bool) -> Result<String, PrimarySyncError> {
     let Some(branch) = git_optional(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])
         .filter(|branch| !branch.is_empty())
     else {
@@ -1984,6 +1997,9 @@ fn sync_primary_checkout(root: &Path) -> Result<String, PrimarySyncError> {
         ));
     }
 
+    if stopped() {
+        return Err(PrimarySyncError::new("device.run_stopped", "the run was stopped before the primary checkout was updated"));
+    }
     let removed = git_capture(root, &["diff", "--diff-filter=DR", "--name-only", "HEAD..@{upstream}"])?;
     let safety_ref = if removed.is_empty() {
         None
@@ -2071,8 +2087,9 @@ fn run_worker(engine: Arc<Engine>, runtime: Arc<RunRuntime>, parent: uuid::Uuid,
         if runtime.stopped() {
             return end_run(&engine, &runtime);
         }
-        match sync_primary_checkout(&root) {
+        match sync_primary_checkout(&root, &|| runtime.stopped()) {
             Ok(message) => runtime.push(message),
+            Err(_) if runtime.stopped() => return end_run(&engine, &runtime),
             Err(error) => {
                 fail_run(&engine, &runtime, parent, error.code, &error.message);
                 return;
@@ -2510,8 +2527,10 @@ fn latest_build_tool(sdk_root: &Path, name: &str) -> Option<PathBuf> {
 }
 
 /// The artifact a finished build left behind: the newest `.apk` / `.aab` under any module's
-/// `build/outputs/{apk,bundle}`. Flavoured variants nest one directory deeper than the
-/// variant name, so a missing variant directory falls back to the whole outputs tree.
+/// `build/outputs/{apk,bundle}/<variant>`. A flavoured project has no such directory — its APKs
+/// sit in `apk/free/release`, its bundles in `bundle/freeRelease` — so the outputs tree is
+/// searched instead, but only the directories of this variant: an up-to-date release task
+/// rewrites nothing, and the debug APK a run installed since is newer than it.
 fn variant_artifact(root: &Path, variant: &str, format: &str) -> Option<PathBuf> {
     let (outputs, extension) = if format == "bundle" {
         ("outputs/bundle", "aab")
@@ -2523,11 +2542,37 @@ fn variant_artifact(root: &Path, variant: &str, format: &str) -> Option<PathBuf>
         let outputs = build.join(outputs);
         let scoped = outputs.join(variant);
         let wanted = |path: &Path| path.extension().is_some_and(|found| found == extension);
-        collect_under(if scoped.is_dir() { &scoped } else { &outputs }, 0, 3, &wanted, &mut found);
+        if scoped.is_dir() {
+            collect_under(&scoped, 0, 3, &wanted, &mut found);
+        } else {
+            let of_variant = |path: &Path| {
+                wanted(path) && path.parent().and_then(|dir| dir.strip_prefix(&outputs).ok()).is_some_and(|dir| variant_directory(dir, variant))
+            };
+            collect_under(&outputs, 0, 3, &of_variant, &mut found);
+        }
     });
     found
         .into_iter()
         .max_by_key(|path| std::fs::metadata(path).and_then(|data| data.modified()).ok())
+}
+
+/// Whether `dir`, relative to an outputs directory, holds `variant`'s artifacts: its parts
+/// spelled as one variant name (`free/release` → `freeRelease`) are the variant, or end with
+/// it as a whole word — `release` is every flavour's release, never `freePrerelease`.
+fn variant_directory(dir: &Path, variant: &str) -> bool {
+    let mut name = String::new();
+    for part in dir.iter().map(|part| part.to_string_lossy()) {
+        let mut chars = part.chars();
+        if name.is_empty() {
+            name.push_str(&part);
+        } else if let Some(first) = chars.next() {
+            name.push(first.to_ascii_uppercase());
+            name.push_str(chars.as_str());
+        }
+    }
+    let (name, variant) = (name.as_bytes(), variant.as_bytes());
+    let Some(start) = name.len().checked_sub(variant.len()) else { return false };
+    name[start..].eq_ignore_ascii_case(variant) && (start == 0 || name[start].is_ascii_uppercase())
 }
 
 /// Every `build` directory under `dir`, at most five levels down, skipping trees that never
@@ -2861,7 +2906,7 @@ mod tests {
         let (_fixture, seed, checkout) = upstream_fixture();
         push_file(&seed, "new.txt", "remote\n", "remote update");
 
-        let message = sync_primary_checkout(&checkout).unwrap();
+        let message = sync_primary_checkout(&checkout, &|| false).unwrap();
 
         assert!(message.contains("fast-forwarded main"), "{message}");
         assert_eq!(std::fs::read_to_string(checkout.join("new.txt")).unwrap(), "remote\n");
@@ -2872,7 +2917,7 @@ mod tests {
     fn primary_sync_refuses_dirty_or_diverged_checkouts() {
         let (_fixture, seed, checkout) = upstream_fixture();
         std::fs::write(checkout.join("keep.txt"), "local dirty\n").unwrap();
-        let dirty = sync_primary_checkout(&checkout).unwrap_err();
+        let dirty = sync_primary_checkout(&checkout, &|| false).unwrap_err();
         assert_eq!(dirty.code, "device.sync_dirty");
         assert_eq!(std::fs::read_to_string(checkout.join("keep.txt")).unwrap(), "local dirty\n");
 
@@ -2880,7 +2925,7 @@ mod tests {
         std::fs::write(checkout.join("local.txt"), "local\n").unwrap();
         commit(&checkout, "local update");
         push_file(&seed, "remote.txt", "remote\n", "remote update");
-        let diverged = sync_primary_checkout(&checkout).unwrap_err();
+        let diverged = sync_primary_checkout(&checkout, &|| false).unwrap_err();
         assert_eq!(diverged.code, "device.sync_diverged");
         assert!(checkout.join("local.txt").is_file());
         assert!(!checkout.join("remote.txt").exists());
@@ -2894,7 +2939,7 @@ mod tests {
         commit(&seed, "remove tracked file");
         git(&seed, &["push"]);
 
-        let message = sync_primary_checkout(&checkout).unwrap();
+        let message = sync_primary_checkout(&checkout, &|| false).unwrap();
 
         assert!(message.contains("preserved 1 removed or renamed path"), "{message}");
         assert!(!checkout.join("keep.txt").exists());
@@ -2904,12 +2949,25 @@ mod tests {
     }
 
     #[test]
+    fn primary_sync_never_fast_forwards_for_a_stopped_run() {
+        let (_fixture, seed, checkout) = upstream_fixture();
+        let head = git(&checkout, &["rev-parse", "HEAD"]);
+        push_file(&seed, "new.txt", "remote\n", "remote update");
+
+        let error = sync_primary_checkout(&checkout, &|| true).unwrap_err();
+
+        assert_eq!(error.code, "device.run_stopped");
+        assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), head);
+        assert!(!checkout.join("new.txt").exists());
+    }
+
+    #[test]
     fn primary_sync_reports_fetch_failures_without_changing_head() {
         let (_fixture, _seed, checkout) = upstream_fixture();
         let head = git(&checkout, &["rev-parse", "HEAD"]);
         git(&checkout, &["remote", "set-url", "origin", "/definitely/missing/relay.git"]);
 
-        let error = sync_primary_checkout(&checkout).unwrap_err();
+        let error = sync_primary_checkout(&checkout, &|| false).unwrap_err();
 
         assert_eq!(error.code, "device.sync_fetch_failed");
         assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), head);
@@ -3095,6 +3153,45 @@ E/AndroidRuntime( 1234): \tat com.example.app.MainActivity.onCreate(MainActivity
         assert_eq!(gradle_wrapper(root.path()), None, "two nested wrappers: neither is guessed");
         std::fs::write(root.path().join("gradlew"), "").unwrap();
         assert_eq!(gradle_wrapper(root.path()).as_deref(), Some("./gradlew"));
+    }
+
+    #[test]
+    fn a_flavoured_release_never_records_another_variants_artifact() {
+        let root = tempfile::tempdir().unwrap();
+        let outputs = root.path().join("app/build/outputs");
+        let artifact = |path: &str, age: u64| {
+            let path = outputs.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "").unwrap();
+            let modified = std::time::SystemTime::now() - Duration::from_secs(age);
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(modified).unwrap();
+            path
+        };
+        // An up-to-date release from an hour ago; the debug APKs a run installed just now.
+        let release = artifact("apk/free/release/app-free-release.apk", 3600);
+        artifact("apk/free/debug/app-free-debug.apk", 10);
+        artifact("apk/paid/prerelease/app-paid-prerelease.apk", 5);
+        let bundle = artifact("bundle/freeRelease/app-free-release.aab", 3600);
+        artifact("bundle/freeDebug/app-free-debug.aab", 10);
+        assert_eq!(variant_artifact(root.path(), "release", "apk"), Some(release.clone()));
+        assert_eq!(variant_artifact(root.path(), "freeRelease", "apk"), Some(release));
+        assert_eq!(variant_artifact(root.path(), "release", "bundle"), Some(bundle));
+        assert_eq!(variant_artifact(root.path(), "staging", "apk"), None);
+        // Unflavoured: the variant's own directory, as before.
+        let plain = artifact("apk/release/app-release.apk", 3600);
+        assert_eq!(variant_artifact(root.path(), "release", "apk"), Some(plain));
+    }
+
+    #[test]
+    fn an_aab_is_built_as_a_bundle() {
+        assert_eq!(artifact_format(None), "apk");
+        assert_eq!(artifact_format(Some("aab")), "bundle");
+        assert_eq!(artifact_format(Some("bundle")), "bundle");
+        assert_eq!(artifact_format(Some("apk")), "apk");
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("gradlew"), "").unwrap();
+        assert_eq!(build_command(root.path(), "release", &artifact_format(Some("aab")), false, None).unwrap(), "./gradlew bundleRelease");
+        assert_eq!(build_command(root.path(), "release", &artifact_format(Some("ipa")), false, None).unwrap_err().code, "device.format");
     }
 
     #[test]

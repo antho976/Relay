@@ -2967,6 +2967,7 @@ dependencies = [
  "base64",
  "glib",
  "gtk4",
+ "libc",
  "pango",
  "relay-board",
  "relay-bus",

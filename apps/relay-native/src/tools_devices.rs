@@ -98,7 +98,14 @@ pub async fn refresh(ui: &Rc<Ui>, project: i64) {
             ));
             signing_form(ui, &row, project);
         }
-        Some(Err(_)) => {}
+        // A profile that cannot be loaded refuses every release build, and its refusal says to
+        // switch Relay signing off: that is this key (the profile is set aside, its key kept).
+        Some(Err(error)) => {
+            clear(&signing_box);
+            let row = section(&signing_box, "Release signing");
+            row.append(&paragraph(&error.to_string()));
+            signing_toggle(ui, &row, project, true);
+        }
     }
     clear(&history);
     match runs {
@@ -599,11 +606,11 @@ fn build_form(ui: &Rc<Ui>, page: &gtk::Box, project: i64, worktrees: &[Value], l
     field("Gradle variant", &variant, &form);
     let format = gtk::ComboBoxText::new();
     format.append(Some("apk"), "APK");
-    format.append(Some("aab"), "Android App Bundle");
+    format.append(Some("bundle"), "Android App Bundle");
     format.set_active(Some(0));
     field("Artifact format", &format, &form);
-    let publish =
-        gtk::CheckButton::with_label("Publish artifact to the configured GitHub repository");
+    // Gradle Play Publisher's upload (D152): a published release cannot be recalled.
+    let publish = gtk::CheckButton::with_label("Publish to Google Play (Gradle Play Publisher)");
     form.append(&publish);
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     form.append(&controls);
@@ -628,14 +635,21 @@ fn build_form(ui: &Rc<Ui>, page: &gtk::Box, project: i64, worktrees: &[Value], l
         let variant = variant.clone();
         let format = format.clone();
         let publish = publish.clone();
-        key.connect_clicked(move |_|{
+        let armed = publish.clone();
+        let fire = move |_: &gtk::Button|{
             let Some(ui)=weak.upgrade()else{return;};let selected=tree.active_id().map(|v|v.to_string()).unwrap_or_default();let variant=variant.text().trim().to_string();
             if variant.is_empty(){ui.show_error("Enter the Gradle variant to build.");return;}
             let mut payload=json!({"project_id":project,"worktree":if selected.is_empty(){None}else{Some(selected)},"variant":variant});
             if op=="device.run"{let Some(device)=target.active_id()else{return;};payload["device"]=json!(device.as_str());}
             else{payload["format"]=json!(format.active_id().map(|v|v.to_string()).unwrap_or_else(||"apk".into()));payload["publish"]=json!(publish.is_active());}
             run_window(&ui,op,payload,title);
-        });
+        };
+        // A build that uploads to Play asks for a second click first.
+        if op == "device.build" {
+            crate::app::confirm_inline_if(&key, "Publish to Google Play?", move || armed.is_active(), fire);
+        } else {
+            key.connect_clicked(fire);
+        }
     }
     tree
 }
@@ -1087,6 +1101,12 @@ impl Live {
         if let Some(Ok(value)) = runs {
             self.draw_runs(ui, &value);
         }
+        if let (Some(Err(error)), Some(form)) = (&signing, &self.signing) {
+            // Broken: the way out its refusals name is switching Relay signing off.
+            clear(form);
+            form.append(&paragraph(&error.to_string()));
+            signing_toggle(ui, form, project, true);
+        }
         if let (Some(Ok(signing)), Some(form)) = (signing, &self.signing) {
             clear(form);
             if signing["configured"] == true {
@@ -1244,7 +1264,7 @@ pub fn open(ui: &Rc<Ui>) {
                 form.append(target);
             }
             let format = gtk::ComboBoxText::new();
-            format.append(Some("aab"), "Android App Bundle (.aab) · Google Play");
+            format.append(Some("bundle"), "Android App Bundle (.aab) · Google Play");
             format.append(Some("apk"), "Android package (.apk)");
             format.set_active(Some(0));
             if is_release {
@@ -1281,14 +1301,20 @@ pub fn open(ui: &Rc<Ui>) {
                 let tree = tree.clone();
                 let target = target.clone();
                 let format = format.clone();
-                key.connect_clicked(move |_| {
+                let fire = move |_: &gtk::Button| {
                     let Some(ui) = weak.upgrade() else { return; };
                     let path=tree.active_id().map(|s|s.to_string()).filter(|s|!s.is_empty());
                     let mut payload=json!({"project_id":project,"worktree":path,"variant":if is_release {"release"} else {"debug"}});
                     if is_release { payload["format"]=json!(format.active_id().map(|s|s.to_string())); payload["publish"]=json!(publish); }
                     else { let Some(serial)=target.active_id() else {return;}; payload["device"]=json!(serial.as_str()); }
                     run_window(&ui, if is_release {"device.build"} else {"device.run"}, payload, if is_release {"Release build"} else {"Run debug"});
-                });
+                };
+                // The Play upload is armed before it fires: a published release cannot be recalled (D152).
+                if publish {
+                    crate::app::confirm_inline(&key, "Publish to Google Play?", fire);
+                } else {
+                    key.connect_clicked(fire);
+                }
             }
         }
         run.append(&live.run_states);
