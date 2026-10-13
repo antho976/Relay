@@ -165,9 +165,14 @@ Change = { table, uid, updated_at, deleted, row }
 - `since` is the PC's `cursor` from the phone's last sync with this PC (0 the first time). The PC
   answers with every row it changed after `since`, and the new `cursor`.
 - `changes` are the phone's rows changed since it last synced (by the phone's `updatedAt`), and
-  its tombstones.
+  its tombstones. "Since" is a watermark the phone takes when a sync starts, and no edit after it
+  is stamped under it: the phone stamps `max(now, watermark)` (a floor kept in `sync_state` for
+  the ledger, in DataStore for settings), so a phone that synced with its clock fast and was set
+  back still sends what it edits next.
 - **First sync: `replace: true`.** The PC's ledger becomes the phone's: everything on the PC is
   erased and the phone's rows are applied, and the PC answers with no changes, just the cursor.
+  The phone sends its tombstones of derived uids (`bill:`, `imp:`, `px:`…) with them, so a line
+  deleted before pairing is not posted or imported again on the PC.
   The phone is where the ledger lives; the PC is a second view of it. After that, both sides
   merge. Tally says so on its pairing page before the first sync runs.
 - A large first sync may come in batches: the first carries `replace: true`, the rest

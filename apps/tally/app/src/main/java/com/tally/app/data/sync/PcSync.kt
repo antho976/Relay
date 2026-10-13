@@ -128,16 +128,24 @@ class PcSync @Inject constructor(
 
     /**
      * One exchange on an admitted connection: send, receive, merge, remember where it stands.
-     * The watermark is taken before anything is read, so an edit made while the sync runs is
-     * sent next time rather than lost. The first sync after an update that reads new tables asks
-     * from cursor 0: the PC numbered their rows before this phone could take them, and it is the
-     * merge, newest stamp winning, that leaves every other row as it is.
+     * The watermark is taken before anything is read, and no edit made after it is stamped under
+     * it (LedgerSync.mark, SettingsRepository.raiseSyncFloor), so an edit made while the sync
+     * runs, or after it with the clock set back, is sent next time rather than lost. The first
+     * sync after an update that reads new tables asks from cursor 0: the PC numbered their rows
+     * before this phone could take them, and it is the merge, newest stamp winning, that leaves
+     * every other row as it is.
      */
     private suspend fun exchange(session: RelaySession, prefs: SyncPrefs): SyncOutcome {
         val started = System.currentTimeMillis()
         return try {
             val replace = !prefs.replaced
-            val since = if (replace) null else prefs.watermark
+            // A watermark ahead of the clock, left by a build that did not hold stamps at it: the
+            // last sync ran with the clock fast, and what was edited once it was set back sits
+            // under the watermark. Everything goes, once; the PC keeps whichever side is newer.
+            val behind = !replace && !ledger.marked() && prefs.watermark > started
+            val watermark = ledger.mark(started)
+            settings.raiseSyncFloor(watermark)
+            val since = if (replace) null else if (behind) 0L else prefs.watermark
             val local = settingsChanges(since) + ledger.collect(since)
             var cursor = if (replace || prefs.catchingUp) 0L else prefs.cursor
             // The first sync makes a new generation on the PC; every later one names the last.
@@ -151,7 +159,7 @@ class PcSync @Inject constructor(
                     session.request("money.sync", payload(replace && i == 0, cursor, generation, batch))
                 } catch (e: RelayFailure) {
                     // The PC's ledger was restored, erased or replaced since: take it whole.
-                    if (e.code == STALE) return takeWhole(session)
+                    if (e.code == STALE) return takeWhole(session, watermark)
                     throw e
                 }
                 cursor = result.cursor()
@@ -161,9 +169,10 @@ class PcSync @Inject constructor(
             val (rows, settingRows) = received.partition { it.table != SyncTables.SETTINGS }
             val applied = ledger.apply(rows)
             val taken = applySettings(settingRows, whole = false)
-            // The PC has every tombstone from before this sync began.
-            ledger.pruneTombstones(started)
-            store.recordSuccess(System.currentTimeMillis(), cursor, generation, started, local.size, applied.applied + taken)
+            // The PC has every tombstone from before this sync began: one made since is stamped
+            // at the watermark or after.
+            ledger.pruneTombstones(watermark)
+            store.recordSuccess(System.currentTimeMillis(), cursor, generation, watermark, local.size, applied.applied + taken)
             SyncOutcome.Done(sent = local.size, received = applied.applied + taken)
         } catch (e: CancellationException) {
             throw e
@@ -181,9 +190,11 @@ class PcSync @Inject constructor(
      * The PC refused to merge (`money.sync_stale`): its ledger was restored, erased or replaced,
      * or its file was lost. The latest wholesale act wins, so this phone takes the PC's ledger
      * whole, keeping the PC's stamps, and merges from there. What changed here since the last
-     * sync is not sent: the ledger it was made in is gone on the PC.
+     * sync is not sent: the ledger it was made in is gone on the PC. Merging goes on from the
+     * [watermark] the exchange took: an edit made once the PC's ledger is in place is stamped at
+     * or after it, and a row of the PC's stamped there too goes back once, which is harmless.
      */
-    private suspend fun takeWhole(session: RelaySession): SyncOutcome {
+    private suspend fun takeWhole(session: RelaySession, watermark: Long): SyncOutcome {
         val result = session.request("money.sync", payload(replace = false, since = 0L, generation = null, changes = emptyList()))
         val cursor = result.cursor()
         val generation = result.generation()
@@ -192,7 +203,7 @@ class PcSync @Inject constructor(
         val applied = ledger.replaceWith(rows)
         val taken = applySettings(settingRows, whole = true)
         val now = System.currentTimeMillis()
-        store.recordSuccess(now, cursor, generation, now, 0, applied.applied + taken, note = TOOK_PC_LEDGER)
+        store.recordSuccess(now, cursor, generation, watermark, 0, applied.applied + taken, note = TOOK_PC_LEDGER)
         return SyncOutcome.Done(sent = 0, received = applied.applied + taken)
     }
 

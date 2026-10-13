@@ -132,8 +132,10 @@ class LedgerSync @Inject constructor(private val db: TallyDatabase) {
 
     /**
      * Every row stamped at or after [since], and every tombstone, in the order the PC applies
-     * them. [since] null is everything there is (a first sync), with no tombstones: the PC is
-     * replaced by what is here.
+     * them. [since] null is everything there is (a first sync), with the tombstones of derived
+     * uids only: the PC is replaced by what is here, so a random uid's tombstone would name a row
+     * it no longer has, but a derived one keeps the PC from posting that bill or importing that
+     * line again (SyncTables.DERIVED).
      */
     suspend fun collect(since: Long?): List<Change> = db.withTransaction {
         val from = since ?: Long.MIN_VALUE
@@ -157,9 +159,26 @@ class LedgerSync @Inject constructor(private val db: TallyDatabase) {
         dao.pricesSince(from).forEach { p -> p.change(securities)?.let { out += it } }
         dao.fxRatesSince(from).forEach { out += it.change() }
         dao.roomFactsSince(from).forEach { out += it.change() }
-        if (since != null) dao.tombstonesSince(since).forEach { out += it.change() }
+        val buried = if (since != null) dao.tombstonesSince(since) else dao.tombstones().filter { SyncTables.isDerived(it.uid) }
+        buried.forEach { out += it.change() }
         out.sortedBy { SyncTables.order(it.table) }
     }
+
+    /**
+     * Takes the watermark of a sync starting at [now], before anything is read: the floor every
+     * local stamp is held at from here on (SyncSchema) is raised to [now], and never comes down.
+     * Returns the watermark, which is the floor: above [now] when an earlier sync ran with the
+     * clock ahead. An edit made after this is stamped at or after it whatever the clock says, so
+     * the next sync, reading from it, sends that edit.
+     */
+    suspend fun mark(now: Long): Long = db.withTransaction {
+        val floor = maxOf(now, dao.floor() ?: Long.MIN_VALUE)
+        dao.setFloor(floor)
+        floor
+    }
+
+    /** A watermark was taken here before ([mark]); false on a ledger last synced by a build without one. */
+    suspend fun marked(): Boolean = dao.floor() != null
 
     /** Merges the PC's [changes] in one transaction. Settings are the caller's (they live in DataStore). */
     suspend fun apply(changes: List<Change>): Applied = db.withTransaction {

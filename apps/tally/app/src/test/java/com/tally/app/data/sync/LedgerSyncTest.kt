@@ -142,7 +142,7 @@ class LedgerSyncTest {
         val changes = sync.collect(since = null)
 
         assertEquals(listOf("accounts", "categories", "transactions", "budgets"), changes.map { it.table })
-        assertTrue("A first sync replaces the PC: no tombstones", changes.none { it.deleted })
+        assertTrue("A first sync replaces the PC: no tombstone for a uid it will never see again", changes.none { it.deleted })
         val tx = changes.single { it.table == "transactions" }
         assertEquals(JsonPrimitive(db.accounts().get(account)!!.uid), tx.row["account"])
         assertEquals(JsonPrimitive(db.categories().get(food)!!.uid), tx.row["category"])
@@ -165,6 +165,54 @@ class LedgerSyncTest {
         assertEquals(2, changes.size)
         assertEquals(db.transactions().get(coffee)!!.uid, changes.first { !it.deleted }.uid)
         assertTrue(changes.any { it.deleted && it.table == "transactions" })
+    }
+
+    /**
+     * The last sync ran with the clock a day fast, and the clock has been set back since: what is
+     * added, edited or deleted now is still stamped at the watermark or after, so it goes.
+     */
+    @Test fun anEditAfterTheClockIsSetBackStillGoesNextSync() = runTest {
+        val account = db.addAccount("Chequing")
+        val doomed = db.addExpense(9_00, day, account)
+        val watermark = sync.mark(System.currentTimeMillis() + 86_400_000L)
+        val coffee = db.addExpense(4_00, day, account, note = "Coffee")
+        db.ledgerRepository(clock).delete(doomed)
+        db.accounts().update(db.accounts().get(account)!!.copy(name = "Everyday"))
+
+        val changes = sync.collect(since = watermark)
+
+        assertEquals(listOf("accounts", "transactions", "transactions"), changes.map { it.table })
+        assertTrue("Nothing is stamped under the watermark", changes.all { it.updatedAt >= watermark })
+        assertEquals(JsonPrimitive("Everyday"), changes.first().row["name"])
+        assertEquals(db.transactions().get(coffee)!!.uid, changes.single { it.table == "transactions" && !it.deleted }.uid)
+        assertTrue("The delete goes too", changes.any { it.table == "transactions" && it.deleted })
+    }
+
+    @Test fun theWatermarkNeverComesDownAndThePcsStampsAreKept() = runTest {
+        assertFalse("A ledger never synced has none", sync.marked())
+        val ahead = System.currentTimeMillis() + 86_400_000L
+        assertEquals(ahead, sync.mark(ahead))
+        assertTrue(sync.marked())
+        assertEquals("A sync with the clock set back keeps it where it was", ahead, sync.mark(ahead - 86_400_000L))
+        assertEquals(ahead + 5, sync.mark(ahead + 5))
+
+        sync.apply(listOf(Change("accounts", "a1", 100, row = accountRow("Theirs"))))
+        assertEquals("The PC's rows are not held at it", 100L, db.accounts().all().single().updatedAt)
+    }
+
+    /**
+     * A first sync replaces the PC's ledger, so a deleted line an import wrote goes with it, or the
+     * PC's next import of the same file would bring it back; any other row's tombstone does not.
+     */
+    @Test fun aFirstSyncSendsTheTombstonesOfDerivedUids() = runTest {
+        sync.apply(investmentRows)
+        db.invest().deleteActivity(db.invest().activity("imp:1")!!.id)
+        db.invest().deleteActivity(db.invest().activity("fx-1")!!.id)
+
+        val deleted = sync.collect(since = null).filter { it.deleted }
+
+        assertEquals(listOf("activities" to "imp:1"), deleted.map { it.table to it.uid })
+        assertTrue(deleted.single().updatedAt > future)
     }
 
     // ── What comes back from the PC ──────────────────────────────────────────

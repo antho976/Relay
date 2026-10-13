@@ -265,6 +265,47 @@ class PcSyncTest {
         assertEquals("Once", 9L, door.syncs.last()["since"]!!.jsonPrimitive.long)
     }
 
+    /**
+     * An earlier build synced with the clock a day fast and held no stamps at its watermark, so
+     * what was edited once the clock was set back sits under it: the next sync sends everything,
+     * once, and merges from a watermark the stamps are held at from then on.
+     */
+    @Test fun aWatermarkAheadOfTheClockFromAnEarlierBuildSendsEverythingOnce() = runBlocking<Unit> {
+        val account = db.addAccount("Chequing")
+        door.connection()
+        sync.pair(PairLink.manual(door.address, "ABCD-EFGH")!!)
+        Thread.sleep(5)
+        db.addExpense(4_00, day, account, note = "Coffee")
+        // As that build left it.
+        db.openHelper.writableDatabase.execSQL("DELETE FROM sync_state WHERE `key` = 'floor'")
+        store.restore(store.current().copy(watermark = System.currentTimeMillis() + 86_400_000L))
+        door.connection()
+
+        sync.syncNow()
+
+        val tables = door.syncs.last()["changes"]!!.jsonArray.map { it.jsonObject["table"]!!.jsonPrimitive.content }
+        assertTrue("The account, from before, goes again: $tables", "accounts" in tables)
+        assertTrue("and the entry made under the watermark", "transactions" in tables)
+        assertTrue("Merging goes on from the clock", store.current().watermark <= System.currentTimeMillis())
+
+        door.connection()
+        sync.syncNow()
+        val again = door.syncs.last()["changes"]!!.jsonArray.map { it.jsonObject["table"]!!.jsonPrimitive.content }
+        assertTrue("Once: $again", again.none { it == "accounts" || it == "transactions" })
+    }
+
+    @Test fun aSettingChangedAfterTheClockIsSetBackIsStampedAtTheWatermark() = runBlocking<Unit> {
+        // Just ahead, so the floor is in the past again before any other test stamps a setting.
+        val watermark = System.currentTimeMillis() + 300
+        settings.raiseSyncFloor(watermark)
+        settings.raiseSyncFloor(watermark - 1_000)
+        settings.setWeekStartsMonday(true)
+
+        val stamped = settings.synced().all.single { it.key == "week_starts_monday" }.updatedAt
+        assertTrue("A change made under the last sync's watermark is stamped at it", stamped >= watermark)
+        Thread.sleep(maxOf(0L, watermark - System.currentTimeMillis() + 1))
+    }
+
     @Test fun settingStampsNeverGoBackAndACurrencyWithOtherDecimalsStaysOnThePhone() = runBlocking<Unit> {
         settings.setCurrency("CAD")
         val future = System.currentTimeMillis() + 3_600_000L
