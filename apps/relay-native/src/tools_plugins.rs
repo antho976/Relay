@@ -119,6 +119,7 @@ pub(crate) fn switch(
     feedback: Option<gtk::Label>,
 ) -> gtk::Switch {
     let toggle = gtk::Switch::new();
+    toggle.add_css_class("settings-switch");
     toggle.set_valign(gtk::Align::Center);
     toggle.set_active(enabled(plugin, project));
     toggle.set_widget_name(&format!("plugin-{}-{project}", text(plugin, "id")));
@@ -320,6 +321,8 @@ fn overview(plugin: &Value) -> gtk::Box {
 fn skill_list(ui: &Rc<Ui>, market: &Rc<Market>, plugin: &str, skills: &[Value]) -> gtk::Box {
     let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
     list.add_css_class("ext-entries");
+    // The rounded card clips the rows' hover ground at its corners.
+    list.set_overflow(gtk::Overflow::Hidden);
     if skills.is_empty() {
         list.append(&label("This plugin ships no skills.", "dim"));
     }
@@ -342,17 +345,40 @@ fn skill_list(ui: &Rc<Ui>, market: &Rc<Market>, plugin: &str, skills: &[Value]) 
         about.set_lines(3);
         about.set_ellipsize(gtk::pango::EllipsizeMode::End);
         head.append(&about);
+        // A toggle row over a body it shows, not a GtkExpander: an expander measures a wrapped
+        // label in its title at the wrong width, so its rows come out short and overlap.
+        let chevron = crate::icons::image("chevron-right", 12);
+        chevron.add_css_class("ext-entry-chevron");
+        chevron.set_valign(gtk::Align::Start);
+        chevron.set_margin_top(3);
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        line.append(&chevron);
+        head.set_hexpand(true);
+        line.append(&head);
+        let key = gtk::ToggleButton::new();
+        key.add_css_class("ext-entry-key");
+        key.set_child(Some(&line));
+        key.update_property(&[gtk::accessible::Property::Label(&name)]);
         let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
         body.add_css_class("ext-entry-body");
-        let expander = gtk::Expander::new(None);
-        expander.add_css_class("ext-entry");
-        expander.set_label_widget(Some(&head));
-        expander.set_child(Some(&body));
+        body.set_visible(false);
+        let entry = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        entry.add_css_class("ext-entry");
+        entry.append(&key);
+        entry.append(&body);
         let weak = Rc::downgrade(ui);
         let market = Rc::downgrade(market);
         let plugin = plugin.to_string();
-        expander.connect_expanded_notify(move |expander| {
-            if !expander.is_expanded() || body.first_child().is_some() {
+        key.connect_toggled(move |key| {
+            let open = key.is_active();
+            body.set_visible(open);
+            line.remove(&line.first_child().unwrap());
+            let chevron = crate::icons::image(if open { "chevron-down" } else { "chevron-right" }, 12);
+            chevron.add_css_class("ext-entry-chevron");
+            chevron.set_valign(gtk::Align::Start);
+            chevron.set_margin_top(3);
+            line.prepend(&chevron);
+            if !open || body.first_child().is_some() {
                 return;
             }
             let (Some(ui), Some(market)) = (weak.upgrade(), market.upgrade()) else {
@@ -368,7 +394,7 @@ fn skill_list(ui: &Rc<Ui>, market: &Rc<Market>, plugin: &str, skills: &[Value]) 
                 |ui, body, found| body.append(&market::markdown(ui, text(&found["skill"], "body"))),
             );
         });
-        list.append(&expander);
+        list.append(&entry);
     }
     list
 }

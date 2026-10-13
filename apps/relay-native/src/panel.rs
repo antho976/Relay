@@ -189,10 +189,12 @@ impl Panel {
         self.scroll.set_propagate_natural_height(true);
     }
 
-    /// A floor for panels whose content arrives after they open.
-    pub fn min_height(&self, height: i32) {
-        self.scroll
-            .set_min_content_height(height.min((self.host.height() - 16).max(200)));
+    /// Lifts a `top` panel off the window's edge into a rounded floating sheet, like the usage
+    /// card's panel: inset from the top as well, with corners that clip what scrolls under them.
+    pub fn float(&self) {
+        self.frame.add_css_class("floating-panel");
+        self.frame.set_overflow(gtk::Overflow::Hidden);
+        self.frame.set_margin_top(8);
     }
 
     /// Grow to the content once it has arrived. A scrolled window asks its child for a height

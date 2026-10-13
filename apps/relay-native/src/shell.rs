@@ -856,9 +856,11 @@ impl Ui {
             }
         });
     }
-    /// The frame the Agent skills and Plugins sheets share, presented: the project's name, an
-    /// intro, a list showing `loading` until it is filled, a hidden feedback line, and a footer
-    /// whose key closes the sheet and opens `page`. Returns the name, the list and the line.
+    /// The frame the Agent skills and Plugins sheets share, presented as a rounded floating
+    /// sheet in Settings' vocabulary: the project it applies to over an intro, a section whose
+    /// heading carries `noun` and a count, a rounded card of rows showing `loading` until it is
+    /// filled, a hidden feedback line, and a footer key that closes the sheet and opens `page`.
+    /// Returns the project's name, the card, the count beside the heading and the line.
     fn switch_sheet(
         self: &Rc<Self>,
         panel: &Rc<crate::panel::Panel>,
@@ -866,9 +868,10 @@ impl Ui {
         project: i64,
         intro: &str,
         loading: &str,
-        (scope, manage, page): (&str, &str, &'static str),
-    ) -> (String, gtk::Box, gtk::Label) {
+        (noun, manage, page): (&str, &str, &'static str),
+    ) -> (String, gtk::Box, gtk::Label, gtk::Label) {
         panel.add_css_class("agent-skills-popover");
+        panel.float();
         let name = self
             .projects
             .borrow()
@@ -877,28 +880,48 @@ impl Ui {
             .map(|p| text(p, "name").to_owned())
             .unwrap_or_else(|| "No project".into());
         body.set_spacing(0);
-        body.append(&label(&name.to_uppercase(), "section-label"));
+        let head = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        head.add_css_class("agent-sheet-head");
+        let scope = label(&name, "agent-sheet-project");
+        scope.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        scope.set_tooltip_text(Some(&name));
+        head.append(&scope);
         let intro = label(intro, "agent-skills-intro");
         intro.set_wrap(true);
-        body.append(&intro);
+        intro.set_xalign(0.);
+        head.append(&intro);
+        body.append(&head);
+        let section = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        section.add_css_class("agent-sheet-section");
+        let title = label(noun, "agent-sheet-section-title");
+        title.set_hexpand(true);
+        section.append(&title);
+        let count = label("", "agent-sheet-count");
+        section.append(&count);
+        body.append(&section);
         let list = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        list.append(&label(loading, "dim"));
+        list.add_css_class("agent-sheet-card");
+        list.append(&label(loading, "agent-sheet-empty"));
         body.append(&list);
-        let feedback = label("", "dim");
+        let feedback = label("", "agent-sheet-feedback");
         feedback.set_wrap(true);
+        feedback.set_xalign(0.);
         feedback.set_visible(false);
         body.append(&feedback);
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         footer.add_css_class("agent-skills-footer");
-        let scope = label(scope, "section-label");
-        scope.set_hexpand(true);
-        footer.append(&scope);
-        let manage = button(manage, "quiet");
-        footer.append(&manage);
+        let key = button("", "settings-link");
+        let caption = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        caption.append(&label(manage, ""));
+        caption.append(&crate::icons::image("chevron-right", 12));
+        key.set_child(Some(&caption));
+        key.set_hexpand(true);
+        key.set_halign(gtk::Align::End);
+        footer.append(&key);
         body.append(&footer);
         let weak = Rc::downgrade(self);
         let panel_weak = Rc::downgrade(panel);
-        manage.connect_clicked(move |_| {
+        key.connect_clicked(move |_| {
             if let Some(panel) = panel_weak.upgrade() {
                 panel.close();
             }
@@ -907,21 +930,47 @@ impl Ui {
             }
         });
         panel.present();
-        (name, list, feedback)
+        (name, list, count, feedback)
     }
-    pub(super) fn project_skills(self: &Rc<Self>) {
+    /// One row of a switch sheet: a title over a quieter line, and the switch.
+    fn sheet_row(title: &str, detail: &str, wrap: bool, toggle: &gtk::Switch) -> gtk::Box {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+        row.add_css_class("agent-skill-row");
+        let words = gtk::Box::new(gtk::Orientation::Vertical, 3);
+        words.set_hexpand(true);
+        words.set_valign(gtk::Align::Center);
+        let name = label(title, "skill-title");
+        name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        words.append(&name);
+        let line = label(detail, "skill-source");
+        if wrap {
+            line.set_wrap(true);
+            line.set_xalign(0.);
+        } else {
+            line.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            line.set_tooltip_text(Some(detail));
+        }
+        line.set_visible(!detail.is_empty());
+        words.append(&line);
+        row.append(&words);
+        toggle.add_css_class("settings-switch");
+        toggle.set_valign(gtk::Align::Center);
+        row.append(toggle);
+        row
+    }
+    pub(crate) fn project_skills(self: &Rc<Self>) {
         let project = self.project.get();
-        let Some((panel, body)) = self.sheet("Agent skills", 390) else {
+        let Some((panel, body)) = self.sheet("Agent skills", 400) else {
             return;
         };
         panel.top(560);
-        let (name, list, feedback) = self.switch_sheet(
+        let (name, list, count, feedback) = self.switch_sheet(
             &panel,
             &body,
             project,
-            "Change the project instructions used when agents start or resume. Running agents keep the context already loaded.",
+            "Switch the skills agents here read when they start or resume. Running agents keep the context already loaded.",
             "Loading skills…",
-            ("PROJECT-WIDE", "Open skill library", "skills"),
+            ("Skills", "Open skill library", "skills"),
         );
         let ui = self.clone();
         let panel = Rc::downgrade(&panel);
@@ -930,30 +979,19 @@ impl Ui {
                 Ok(result) => {
                     clear(&list);
                     let skills = rows(&result, "skills");
+                    count.set_text(&format!("{} installed", skills.len()));
                     if skills.is_empty() {
-                        list.append(&label("No skills installed.", "dim"));
+                        list.append(&label("No skills installed yet.", "agent-sheet-empty"));
                     }
                     for skill in skills {
-                        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-                        row.add_css_class("agent-skill-row");
-                        let words = gtk::Box::new(gtk::Orientation::Vertical, 2);
-                        words.set_hexpand(true);
-                        let title = label(text(&skill, "name"), "skill-title");
-                        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                        words.append(&title);
                         let source = skill["source_path"].as_str().unwrap_or(
                             if skill["source_url"].is_string() {
                                 "Installed from GitHub"
                             } else {
-                                "Local instruction"
+                                "Written in Relay"
                             },
                         );
-                        let source = label(source, "skill-source");
-                        source.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                        words.append(&source);
-                        row.append(&words);
                         let toggle = gtk::Switch::new();
-                        toggle.set_valign(gtk::Align::Center);
                         let enabled = skill["enabled_in"]
                             .as_array()
                             .is_some_and(|ids| ids.iter().any(|id| id.as_i64() == Some(project)));
@@ -963,8 +1001,7 @@ impl Ui {
                             "Enable {} for {name}",
                             text(&skill, "name")
                         )));
-                        row.append(&toggle);
-                        list.append(&row);
+                        list.append(&Self::sheet_row(text(&skill, "name"), source, false, &toggle));
                         let feedback = feedback.clone();
                         crate::tools::enable_switch(&ui, &toggle, "skill.enable", "skill_id", skill["id"].clone(), project, move |_, result| {
                             match result {
@@ -976,6 +1013,7 @@ impl Ui {
                 }
                 Err(error) => {
                     clear(&list);
+                    list.set_visible(false);
                     feedback.set_text(&error.to_string());
                     feedback.set_visible(true);
                 }
@@ -986,41 +1024,36 @@ impl Ui {
         });
     }
     /// The plugin switches of the project in view, from the agents toolbar's Plugins key.
-    pub(super) fn project_plugins(self: &Rc<Self>) {
+    pub(crate) fn project_plugins(self: &Rc<Self>) {
         let project = self.project.get();
         let Some((panel, body)) = self.sheet("Plugins", 440) else {
             return;
         };
         panel.top(640);
-        // Filled asynchronously; without a floor the panel keeps its "Loading" height.
-        panel.min_height(460);
-        let (_, list, feedback) = self.switch_sheet(
+        let (_, list, count, feedback) = self.switch_sheet(
             &panel,
             &body,
             project,
             "A plugin that is on gives every agent here its skills, standing rules and MCP tools. Skills reach running agents now; rules and tools apply when an agent starts or resumes.",
             "Loading plugins…",
-            ("THIS PROJECT", "All plugins", "plugins"),
+            ("Plugins", "All plugins", "plugins"),
         );
         let ui = self.clone();
+        let panel = Rc::downgrade(&panel);
         glib::spawn_future_local(async move {
             match ui.call("plugin.list", json!({"project_id":project})).await {
                 Ok(result) => {
                     clear(&list);
                     let plugins = rows(&result, "plugins");
+                    // A total, not "n on": the switches below change that without a reload.
+                    count.set_text(&format!("{} available", plugins.len()));
                     if plugins.is_empty() {
-                        let stale = label(crate::tools::plugins::STALE_ENGINE, "dim");
+                        let stale = label(crate::tools::plugins::STALE_ENGINE, "agent-sheet-empty");
                         stale.set_wrap(true);
+                        stale.set_xalign(0.);
                         list.append(&stale);
                     }
                     for plugin in plugins {
-                        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-                        row.add_css_class("agent-skill-row");
-                        let words = gtk::Box::new(gtk::Orientation::Vertical, 2);
-                        words.set_hexpand(true);
-                        let title = label(text(&plugin, "name"), "skill-title");
-                        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                        words.append(&title);
                         let suggested = plugin["suggested_for"]
                             .as_array()
                             .is_some_and(|ids| ids.iter().any(|id| id.as_i64() == Some(project)));
@@ -1029,11 +1062,6 @@ impl Ui {
                         } else {
                             text(&plugin, "summary").to_string()
                         };
-                        let detail = label(&detail, "skill-source");
-                        detail.set_wrap(true);
-                        detail.set_xalign(0.);
-                        words.append(&detail);
-                        row.append(&words);
                         let toggle = crate::tools::plugins::switch(
                             &ui,
                             &plugin,
@@ -1041,15 +1069,19 @@ impl Ui {
                             Some(feedback.clone()),
                         );
                         toggle.set_sensitive(project > 0);
-                        row.append(&toggle);
-                        list.append(&row);
+                        list.append(&Self::sheet_row(text(&plugin, "name"), &detail, true, &toggle));
                     }
                 }
                 Err(error) => {
                     clear(&list);
+                    list.set_visible(false);
                     feedback.set_text(&crate::tools::plugins::explain_error("plugin.list", &error));
                     feedback.set_visible(true);
                 }
+            }
+            // Filled asynchronously: grow to the rows rather than keep the "Loading" height.
+            if let Some(panel) = panel.upgrade() {
+                panel.fit();
             }
         });
     }

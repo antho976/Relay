@@ -2,157 +2,199 @@
 
 /* ── Plugins and Skills (tools_market.rs) ─────────────────────────────────────
    One stylesheet provider serves the whole app, so every rule is scoped under
-   .ext-page. Square plates, hairline edges, colour only for state. */
+   .ext-page. Settings' vocabulary (settings.css): a catalog column like its category
+   list, a reading column of quiet headings over rounded cards, Settings' switches and
+   rounded keys, pill-segmented choices. Colour only for state. */
 
 .page.ext-page { padding: 0; }
 .ext-page .ext-root { background: @wall; }
 
 /* Header */
-.ext-page .ext-head { padding: 16px 20px; background: @console; border-bottom: 1px solid @edge; }
-.ext-page .ext-tile { min-width: 40px; min-height: 40px; background: @slab; border: 1px solid @strong; border-radius: 2px; color: @ink; }
-.ext-page .ext-title { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; color: @ink; }
-.ext-page .ext-subtitle { font-size: 12px; color: @secondary; }
+.ext-page .ext-head { padding: 26px 32px 22px; background: transparent; border-bottom: 1px solid @edge; }
+.ext-page .ext-tile { min-width: 44px; min-height: 44px; background: @raised; border: 1px solid @strong; border-radius: 12px; color: @ink; }
+.ext-page .ext-title { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; color: @ink; }
+.ext-page .ext-subtitle { font-size: 13.5px; line-height: 1.35; color: @secondary; }
 .ext-page .ext-scope { margin-left: 8px; }
-.ext-page .ext-scope-label { font-family: 'Geist', sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: @faint; }
-.ext-page .ext-scope dropdown > button { min-height: 30px; min-width: 150px; padding: 0 8px 0 10px; background: @slab; border-color: @strong; }
-.ext-page .ext-scope dropdown > button:hover { background: @wash; border-color: @faint; }
+.ext-page .ext-scope-label { font-size: 13px; color: @faint; }
+.ext-page .ext-scope dropdown > button { min-width: 160px; }
 .ext-page .ext-actions { margin-left: 4px; }
-.ext-page .ext-actions button { min-height: 30px; padding: 0 12px; }
-.ext-page button.ext-install:checked { background: @wash; border-color: @faint; color: @ink; }
+.ext-page .ext-actions button { min-height: 34px; padding: 0 14px; border-radius: 9px; }
+.ext-page .ext-actions button:not(.primary) { background: @raised; }
+.ext-page .ext-actions button:not(.primary):hover { background: @wash; border-color: @line_emphasis; }
+.ext-page button.ext-install:checked { background: @wash; border-color: @line_emphasis; color: @ink; }
 .ext-page button.ext-install:checked label { color: @ink; }
 
-/* Banner (the skill installer) */
-.ext-page .ext-banner { padding: 16px 20px 18px; background: @slab; border-bottom: 1px solid @edge; }
-.ext-page .ext-banner-title { font-size: 14px; font-weight: 600; color: @ink; }
-.ext-page .ext-banner .skills-installer { margin: 0; padding: 0; background: transparent; border: 0; }
-.ext-page .ext-banner entry { min-height: 30px; }
-.ext-page .ext-banner button { min-height: 30px; }
+/* Banner (the skill installer): a rounded card under the header. */
+.ext-page .ext-banner { margin: 16px 32px 0; padding: 18px 20px 20px; background: @slab; border: 1px solid @edge; border-radius: 14px; }
+.ext-page .ext-banner-title { font-size: 14px; font-weight: 500; color: @ink; }
+.ext-page .ext-banner .skills-installer { margin: 4px 0 0; padding: 0; background: transparent; border: 0; }
+.ext-page .ext-banner entry { min-height: 34px; border-radius: 9px; }
+.ext-page .ext-banner button { min-height: 34px; padding: 0 14px; border-radius: 9px; }
 
 /* Inline notice */
-.ext-page .ext-notice { padding: 8px 12px 8px 20px; background: @slab; border-bottom: 1px solid @held; }
-.ext-page .ext-notice-text { color: @ink; font-size: 12px; }
+.ext-page .ext-notice { margin: 14px 32px 0; padding: 8px 8px 8px 16px; background: alpha(@held, 0.06); border: 1px solid alpha(@held, 0.35); border-radius: 12px; }
+.ext-page .ext-notice-text { color: @ink; font-size: 13px; }
+.ext-page .ext-notice button.icon-key { min-width: 26px; min-height: 26px; border-radius: 8px; color: @faint; }
+.ext-page .ext-notice button.icon-key:hover { background: alpha(@ink, 0.06); color: @ink; }
 
-/* Catalog column */
-.ext-page .ext-split > separator { min-width: 1px; background: @edge; }
+/* Catalog column, like Settings' category list */
+/* A hairline with a grab margin either side, like the sidebar's split. */
+.ext-page paned.ext-split > separator { min-width: 1px; margin: 0 -3px; border-left: 3px solid transparent; border-right: 3px solid transparent; background-clip: content-box; background-color: @edge; background-image: none; }
+.ext-page paned.ext-split > separator:hover { background-color: @line_focus; }
 .ext-page .ext-catalog { background: @console; }
-.ext-page .ext-catalog scrolledwindow, .ext-page .ext-catalog viewport { background: @console; }
-.ext-page .ext-tools { padding: 14px 14px 10px; border-bottom: 1px solid @edge; }
-.ext-page .ext-search { min-height: 30px; background: @screen; border: 1px solid @edge; border-radius: 2px; }
-.ext-page .ext-search:focus-within { border-color: @secondary; }
-.ext-page .ext-filters { padding: 2px; background: @screen; border: 1px solid @edge; border-radius: 2px; }
-.ext-page button.ext-filter { min-height: 24px; padding: 0 6px; background: transparent; border: 1px solid transparent; border-radius: 2px; color: @secondary; font-size: 12px; font-weight: 500; }
-.ext-page button.ext-filter label { color: @secondary; }
-.ext-page button.ext-filter:hover { background: @slab; }
+.ext-page .ext-catalog scrolledwindow, .ext-page .ext-catalog viewport { background: transparent; }
+.ext-page .ext-tools { padding: 18px 14px 10px; }
+.ext-page entry.ext-search { min-height: 34px; background: @raised; border: 1px solid @strong; border-radius: 10px; }
+.ext-page entry.ext-search:focus-within { border-color: alpha(@ink, 0.42); }
+.ext-page .ext-filters { padding: 3px; background: @raised; border: 1px solid @edge; border-radius: 10px; }
+.ext-page button.ext-filter { min-height: 26px; padding: 0 6px; background: transparent; border: 0; border-radius: 7px; color: @faint; font-size: 12.5px; font-weight: 500; }
+.ext-page button.ext-filter label { color: @faint; }
+.ext-page button.ext-filter:hover { background: transparent; }
 .ext-page button.ext-filter:hover label { color: @ink; }
-.ext-page button.ext-filter:checked { background: @wash; border-color: @strong; }
+.ext-page button.ext-filter:checked { background: @track; }
 .ext-page button.ext-filter:checked .ext-filter-name { color: @ink; }
-.ext-page .ext-count { font-family: 'Geist Mono', monospace; font-size: 10.5px; color: @faint; font-feature-settings: "tnum"; }
+.ext-page .ext-count { font-size: 11.5px; color: @faint; font-feature-settings: "tnum"; }
 .ext-page button.ext-filter .ext-count { color: @faint; }
 .ext-page button.ext-filter:checked .ext-count { color: @secondary; }
-.ext-page .ext-hint { font-size: 11px; color: @faint; }
+.ext-page .ext-hint { padding: 2px 4px 0; font-size: 12px; color: @faint; }
 
-/* Catalog list */
-.ext-page list.ext-list { background: transparent; padding: 0; }
-.ext-page list.ext-list > row { padding: 0; margin: 0; border-radius: 0; background: transparent; box-shadow: none; outline: none; }
-.ext-page list.ext-list > row.ext-row { border-bottom: 1px solid @edge; }
-.ext-page list.ext-list > row.ext-row:hover { background: alpha(@ink, 0.03); }
-.ext-page list.ext-list > row.ext-row:selected { background: @wash; box-shadow: inset 2px 0 @ink; }
+/* Catalog list: rounded rows that light like Settings' categories, no rules between. */
+.ext-page list.ext-list { background: transparent; padding: 0 10px 16px; }
+.ext-page list.ext-list > row { padding: 0; margin: 0; border-radius: 10px; background: transparent; box-shadow: none; outline: none; }
+.ext-page list.ext-list > row.ext-row { margin-bottom: 2px; transition: background 120ms ease-out; }
+.ext-page list.ext-list > row.ext-row:hover { background: alpha(@ink, 0.035); }
+.ext-page list.ext-list > row.ext-row:selected { background: @wash; }
 .ext-page list.ext-list > row.ext-row:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: -2px; }
-.ext-page list.ext-list > row.ext-group { padding: 16px 14px 7px; border-bottom: 1px solid @edge; }
-.ext-page .ext-group-name { font-family: 'Geist', sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: @faint; }
-.ext-page .ext-group-count { font-family: 'Geist Mono', monospace; font-size: 10.5px; color: @faint; font-feature-settings: "tnum"; }
+.ext-page list.ext-list > row.ext-group { padding: 16px 8px 6px; border-radius: 0; }
+.ext-page list.ext-list > row.ext-group:first-child { padding-top: 6px; }
+.ext-page .ext-group-name { font-size: 13px; font-weight: 600; color: @secondary; }
+.ext-page .ext-group-count { font-size: 12px; color: @faint; font-feature-settings: "tnum"; }
 
 /* Cards */
-.ext-page .ext-card { padding: 13px 14px 13px 16px; }
-.ext-page .ext-name { font-size: 13px; font-weight: 600; color: @ink; }
-.ext-page .ext-version { font-family: 'Geist Mono', monospace; font-size: 10.5px; color: @faint; }
-.ext-page .ext-meta { font-size: 11.5px; color: @secondary; }
-.ext-page .ext-summary { font-size: 12px; color: @secondary; }
-.ext-page .ext-path { font-family: 'Geist Mono', monospace; font-size: 10.5px; color: @faint; }
-.ext-page list.ext-list > row:selected .ext-name { color: @ink; }
-.ext-page list.ext-list > row:selected .ext-summary { color: @secondary; }
-.ext-page list.ext-list > row:selected .ext-meta { color: @secondary; }
-.ext-page .ext-mark { min-width: 34px; min-height: 34px; background: @slab; border: 1px solid @strong; border-radius: 2px; color: @ink; font-family: 'Geist', sans-serif; font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
-.ext-page .ext-mark.large { min-width: 52px; min-height: 52px; font-size: 18px; }
-.ext-page list.ext-list > row:selected .ext-mark { background: @console; border-color: @faint; }
+.ext-page .ext-card { padding: 12px 12px 12px 14px; }
+.ext-page .ext-name { font-size: 14px; font-weight: 500; line-height: 1.15; color: @ink; }
+.ext-page .ext-version { font-family: 'Geist Mono', monospace; font-size: 11px; color: @faint; }
+.ext-page .ext-meta { font-size: 12.5px; color: mix(@faint, @secondary, 0.3); }
+.ext-page .ext-summary { font-size: 12.5px; line-height: 1.3; color: mix(@faint, @secondary, 0.3); }
+.ext-page .ext-path { font-family: 'Geist Mono', monospace; font-size: 11px; color: @faint; }
+.ext-page list.ext-list > row:selected .ext-summary, .ext-page list.ext-list > row:selected .ext-meta { color: @secondary; }
+.ext-page .ext-mark { min-width: 36px; min-height: 36px; background: @raised; border: 1px solid @strong; border-radius: 10px; color: @ink; font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
+.ext-page .ext-mark.large { min-width: 56px; min-height: 56px; border-radius: 14px; font-size: 19px; }
+.ext-page list.ext-list > row:selected .ext-mark { border-color: @line_emphasis; }
 
-/* Chips */
+/* Chips: small pills */
 .ext-page flowbox.ext-chips { padding: 0; background: transparent; }
 .ext-page flowbox.ext-chips > flowboxchild { padding: 0; margin: 0; min-height: 0; min-width: 0; background: transparent; border: 0; outline: none; }
-.ext-page .ext-chip { padding: 1px 6px; background: @slab; border: 1px solid @edge; border-radius: 2px; color: @secondary; font-size: 10.5px; font-weight: 500; }
-.ext-page list.ext-list > row:selected .ext-chip { background: @console; border-color: @strong; }
-.ext-page .ext-chip.hint { color: @waiting; background: alpha(@waiting, 0.07); border-color: alpha(@waiting, 0.42); }
-.ext-page .ext-chip.code { padding: 2px 7px; background: @screen; border-color: @edge; color: @ink; font-family: 'Geist Mono', monospace; font-size: 11px; font-weight: 400; }
+.ext-page .ext-chip { padding: 1px 8px; background: alpha(@ink, 0.04); border: 1px solid @edge; border-radius: 999px; color: @secondary; font-size: 11px; font-weight: 500; }
+.ext-page list.ext-list > row:selected .ext-chip { border-color: @strong; }
+.ext-page .ext-chip.hint { color: @waiting; background: alpha(@waiting, 0.07); border-color: alpha(@waiting, 0.38); }
+.ext-page .ext-chip.code { padding: 2px 8px; background: @raised; border-color: @strong; border-radius: 7px; color: @ink; font-family: 'Geist Mono', monospace; font-size: 11.5px; font-weight: 400; }
 
-/* Detail pane */
-.ext-page .ext-detail-scroll, .ext-page .ext-detail-scroll > viewport { background: @wall; }
-.ext-page .ext-detail { padding: 26px 30px 36px; }
-.ext-page .ext-detail-title { font-size: 20px; font-weight: 600; letter-spacing: -0.015em; color: @ink; }
-.ext-page .ext-prose { font-size: 13px; color: @secondary; }
-.ext-page .ext-prose.ext-lede { font-size: 14px; color: @ink; }
+/* Detail pane: a reading column like one Settings category */
+.ext-page .ext-detail-scroll, .ext-page .ext-detail-scroll > viewport { background: transparent; }
+.ext-page .ext-detail { padding: 34px 44px 56px; }
+.ext-page .ext-detail-title { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; color: @ink; }
+.ext-page .ext-prose { font-size: 13.5px; line-height: 1.4; color: @secondary; }
+.ext-page .ext-prose.ext-lede { font-size: 14px; color: @secondary; }
 
-/* "On in X" panel */
-.ext-page .ext-enable { padding: 14px 16px; background: @slab; border: 1px solid @edge; }
-.ext-page .ext-enable.on { border-color: alpha(@live, 0.42); background: alpha(@live, 0.035); }
-.ext-page .ext-enable-title { font-size: 14px; font-weight: 600; color: @ink; }
-.ext-page .ext-enable-text { font-size: 12px; color: @secondary; }
-.ext-page .ext-lamp { min-width: 8px; min-height: 8px; border: 1px solid @faint; border-radius: 50%; background: transparent; }
-.ext-page .ext-lamp.small { min-width: 6px; min-height: 6px; }
-.ext-page .ext-lamp.on { background: @live; border-color: @live; }
+/* "On in X": a rounded card, its lamp and Settings' switch */
+.ext-page .ext-enable { padding: 16px 20px; background: @slab; border: 1px solid @edge; border-radius: 14px; }
+.ext-page .ext-enable.on { border-color: alpha(@live, 0.3); }
+.ext-page .ext-enable-title { font-size: 14px; font-weight: 500; color: @ink; }
+.ext-page .ext-enable-text { font-size: 12.5px; line-height: 1.3; color: mix(@faint, @secondary, 0.3); }
+.ext-page .ext-lamp { min-width: 8px; min-height: 8px; border: 0; border-radius: 999px; background: @track; }
+.ext-page .ext-lamp.small { min-width: 7px; min-height: 7px; }
+.ext-page .ext-lamp.on { background: @live; }
 
 /* Actions */
-.ext-page .ext-action-bar button { min-height: 30px; padding: 0 12px; }
+.ext-page .ext-action-bar button { min-height: 32px; padding: 0 14px; border-radius: 9px; }
+.ext-page .ext-action-bar button:not(.quiet) { background: @raised; }
+.ext-page .ext-action-bar button:not(.quiet):hover { background: @wash; border-color: @line_emphasis; }
 /* Armed, it is the shared inline confirm (sessions.css `.confirm-armed`); these are its resting tints. */
 .ext-page button.ext-danger:not(.confirm-armed) label { color: @secondary; }
 .ext-page button.ext-danger:not(.confirm-armed):hover { background: alpha(@held, 0.1); }
 .ext-page button.ext-danger:not(.confirm-armed):hover label { color: @held; }
 
-/* Facts */
-.ext-page .ext-facts { padding: 14px 0; border-top: 1px solid @edge; border-bottom: 1px solid @edge; }
-.ext-page .ext-fact-key { min-width: 76px; font-family: 'Geist', sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: @faint; }
-.ext-page .ext-fact { font-size: 12px; color: @ink; }
-.ext-page .ext-fact-mono { font-family: 'Geist Mono', monospace; font-size: 11.5px; color: @ink; }
+/* Facts: key and value rows in a rounded card */
+.ext-page .ext-facts { padding: 16px 20px; background: @slab; border: 1px solid @edge; border-radius: 14px; }
+.ext-page .ext-fact-key { min-width: 84px; font-size: 13px; color: @faint; }
+.ext-page .ext-fact { font-size: 13px; color: @ink; }
+.ext-page .ext-fact-mono { font-family: 'Geist Mono', monospace; font-size: 12px; color: @ink; }
 
-/* Tabs */
-.ext-page .ext-tabs { border-bottom: 1px solid @edge; }
-.ext-page button.ext-tab { min-height: 34px; padding: 0 14px; margin: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none; }
-.ext-page button.ext-tab .ext-tab-name { color: @secondary; font-size: 12.5px; font-weight: 500; }
-.ext-page button.ext-tab:hover { background: alpha(@ink, 0.04); }
-.ext-page button.ext-tab:hover .ext-tab-name { color: @ink; }
-.ext-page button.ext-tab:checked { box-shadow: inset 0 -2px @ink; }
-.ext-page button.ext-tab:checked .ext-tab-name { color: @ink; font-weight: 600; }
+/* Tabs: pill-segmented, as in the usage card */
+.ext-page .ext-tabs { margin-top: 6px; padding: 3px; border: 1px solid alpha(@ink, 0.07); border-radius: 10px; background: alpha(@ink, 0.03); }
+.ext-page button.ext-tab { min-height: 28px; padding: 0 12px; margin: 0; background: transparent; border: 0; border-radius: 7px; box-shadow: none; }
+.ext-page button.ext-tab .ext-tab-name { color: @faint; font-size: 13px; font-weight: 500; }
+.ext-page button.ext-tab:hover { background: transparent; }
+.ext-page button.ext-tab:hover .ext-tab-name { color: @secondary; }
+.ext-page button.ext-tab:checked { background: alpha(@ink, 0.09); }
+.ext-page button.ext-tab:checked .ext-tab-name { color: @ink; }
 .ext-page button.ext-tab:checked .ext-count { color: @secondary; }
 
 /* Sections and Markdown */
-.ext-page .ext-section-title { font-family: 'Geist', sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: @faint; }
-.ext-page textview.ext-source { padding: 0; border: 1px solid @edge; font-family: 'Geist Mono', monospace; font-size: 12px; }
+.ext-page .ext-section-title { padding: 0 2px; font-size: 13px; font-weight: 600; color: @secondary; }
+.ext-page textview.ext-source { padding: 0; border: 1px solid @edge; border-radius: 14px; font-family: 'Geist Mono', monospace; font-size: 12px; }
 
-/* Plugin skills (expanders) */
-.ext-page .ext-entries { border-top: 1px solid @edge; }
-.ext-page expander-widget.ext-entry { border-bottom: 1px solid @edge; }
-.ext-page expander-widget.ext-entry > box > title { padding: 11px 6px 11px 2px; }
-.ext-page expander-widget.ext-entry > box > title:hover { background: alpha(@ink, 0.03); }
-.ext-page expander-widget.ext-entry > box > title > expander { color: @faint; }
-.ext-page .ext-entry-name { font-family: 'Geist Mono', monospace; font-size: 12px; font-weight: 500; color: @ink; }
-.ext-page .ext-entry-text { font-size: 12px; color: @secondary; }
-.ext-page .ext-entry-body { padding: 2px 0 16px 20px; }
+/* Plugin skills: rows in one rounded card, each a toggle over the SKILL.md it opens */
+.ext-page .ext-entries { background: @slab; border: 1px solid @edge; border-radius: 14px; }
+.ext-page .ext-entry + .ext-entry { border-top: 1px solid @edge; }
+.ext-page button.ext-entry-key { min-height: 0; padding: 14px 18px 14px 14px; background: transparent; border: 0; border-radius: 0; box-shadow: none; }
+.ext-page button.ext-entry-key:hover { background: alpha(@ink, 0.025); }
+.ext-page button.ext-entry-key:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: -2px; }
+.ext-page .ext-entry-chevron { color: @faint; }
+.ext-page button.ext-entry-key:hover .ext-entry-chevron, .ext-page button.ext-entry-key:checked .ext-entry-chevron { color: @ink; }
+.ext-page .ext-entry-name { font-family: 'Geist Mono', monospace; font-size: 12.5px; font-weight: 500; color: @ink; }
+.ext-page .ext-entry-text { font-size: 12.5px; font-weight: 400; line-height: 1.3; color: mix(@faint, @secondary, 0.3); }
+.ext-page .ext-entry-body { padding: 0 18px 18px 36px; }
+.ext-page .ext-entries > label.dim { padding: 16px 20px; }
 
 /* MCP servers */
-.ext-page .ext-server { padding: 14px 16px 16px; background: @slab; border: 1px solid @edge; }
+.ext-page .ext-server { padding: 16px 20px 18px; background: @slab; border: 1px solid @edge; border-radius: 14px; }
 .ext-page .ext-server-name { font-family: 'Geist Mono', monospace; font-size: 13px; font-weight: 600; color: @ink; }
 
-/* Per-project switches */
-.ext-page .ext-projects-head { padding: 16px 4px 7px; border-bottom: 1px solid @edge; }
-.ext-page .ext-projects-head:first-child { padding-top: 2px; }
-.ext-page .ext-projects-name { font-family: 'Geist', sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: @faint; }
-.ext-page .ext-project { min-height: 32px; padding: 4px 4px 4px 8px; border-bottom: 1px solid alpha(@edge, 0.7); }
-.ext-page .ext-project.scoped { background: alpha(@ink, 0.04); }
-.ext-page .ext-project-name { font-size: 13px; color: @ink; }
+/* Per-project switches: a heading per workspace over a rounded card of rows */
+.ext-page .ext-projects-head { padding: 0 2px; }
+.ext-page .ext-projects-name { font-size: 13px; font-weight: 600; color: @secondary; }
+.ext-page .ext-card-list { background: @slab; border: 1px solid @edge; border-radius: 14px; }
+.ext-page .ext-project { min-height: 32px; padding: 10px 16px 10px 18px; }
+.ext-page .ext-project + .ext-project { border-top: 1px solid @edge; }
+.ext-page .ext-project.scoped { background: alpha(@ink, 0.035); }
+.ext-page .ext-project.scoped:first-child { border-radius: 13px 13px 0 0; }
+.ext-page .ext-project.scoped:last-child { border-radius: 0 0 13px 13px; }
+.ext-page .ext-project.scoped:only-child { border-radius: 13px; }
+.ext-page .ext-project-name { font-size: 14px; color: @ink; }
 
 /* Loading, empty, no-match and error states */
-.ext-page .ext-state { padding: 40px 28px; }
+.ext-page .ext-state { padding: 48px 28px; }
 .ext-page .ext-state .ext-tile { color: @secondary; }
-.ext-page .ext-state-title { font-size: 15px; font-weight: 600; color: @ink; }
+.ext-page .ext-state-title { font-size: 16px; font-weight: 600; color: @ink; }
+.ext-page .ext-state button { min-height: 34px; padding: 0 16px; border-radius: 9px; }
+
+/* ── The agents bar's Agent skills and Plugins sheets (shell.rs switch_sheet) ──
+   The usage panel's floating sheet: rounded, lifted off the edge, one rounded card of rows. */
+.agent-skills-popover.floating-panel { border: 1px solid alpha(@ink, 0.09); border-radius: 16px; background: @backbox_chrome; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45); }
+.agent-skills-popover .panel-heading { min-height: 46px; padding: 0 10px 0 18px; border-bottom: 0; }
+.agent-skills-popover .panel-heading .section-title { color: @ink; font-size: 14px; font-weight: 600; letter-spacing: -0.005em; }
+.agent-skills-popover .panel-heading button.icon-key { min-width: 28px; min-height: 28px; border-radius: 8px; color: @faint; }
+.agent-skills-popover .panel-heading button.icon-key:hover { background: alpha(@ink, 0.06); color: @ink; }
+.agent-skills-popover .panel-body { padding: 0 12px 10px; }
+.agent-sheet-head { padding: 0 6px 14px; }
+.agent-sheet-project { color: @ink; font-size: 13px; font-weight: 500; }
+.agent-skills-intro { padding: 0; color: mix(@faint, @secondary, 0.3); font-size: 12.5px; line-height: 1.3; }
+.agent-sheet-section { padding: 0 6px 8px; }
+.agent-sheet-section-title { color: @secondary; font-size: 13px; font-weight: 600; }
+.agent-sheet-count { color: @faint; font-size: 12px; font-feature-settings: "tnum"; }
+.agent-sheet-card { border: 1px solid alpha(@ink, 0.08); border-radius: 12px; background: alpha(@ink, 0.03); }
+.agent-sheet-empty { padding: 14px 16px; color: @faint; font-size: 13px; }
+.agent-sheet-feedback { padding: 10px 6px 0; color: @held_text; font-size: 12.5px; }
+.agent-skill-row { min-height: 34px; padding: 10px 12px 10px 16px; border-bottom: 0; }
+.agent-skill-row + .agent-skill-row { border-top: 1px solid alpha(@ink, 0.07); }
+.agent-skill-row .skill-title { color: @ink; font-size: 13px; font-weight: 500; }
+.agent-skill-row .skill-source { padding: 0; background: transparent; color: @faint; font-family: 'Geist', sans-serif; font-size: 12px; }
+.agent-skills-footer { min-height: 0; padding: 8px 0 0; border-top: 0; }
+.agent-skills-footer button.settings-link { min-height: 28px; }
+.agent-skills-footer button.settings-link image { color: @faint; }
+.agent-skills-footer button.settings-link:hover image { color: @ink; }
 
 /* ── Devices (tools_devices.rs) ───────────────────────────────────────────────
    Phones and virtual devices share one list: lamp, name over facts, actions. */
