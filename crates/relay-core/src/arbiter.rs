@@ -88,7 +88,10 @@ pub fn with_book<T>(engine: &Engine, f: impl FnOnce(&mut Book) -> book::Result<T
     let mut slot = lock(&engine.arbiter.book);
     if slot.is_none() {
         let store = engine.store.path();
-        let opened = if store == Path::new(":memory:") { Book::open_in_memory() } else { Book::open(&store.with_file_name("arbiter.db")) };
+        let opened = if store == Path::new(":memory:") { Book::open_in_memory() } else {
+            let path = store.with_file_name("arbiter.db");
+            Book::open(&path).inspect(|_| crate::private::private_db(&path))
+        };
         *slot = Some(opened.map_err(bus)?);
     }
     f(slot.as_mut().expect("opened above")).map_err(bus)

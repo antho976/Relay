@@ -326,6 +326,7 @@ impl ThreadStore {
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        crate::private::private_db(path);
         Self::migrate(conn)
     }
 

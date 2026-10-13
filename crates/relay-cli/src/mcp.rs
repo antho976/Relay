@@ -208,7 +208,7 @@ pub(crate) fn tool_result(mut value: Value, is_error: bool) -> Value {
     if !images.is_empty() {
         value["images"] = json!({"shown": shown, "requested": images.len(), "limit": MAX_IMAGES});
     }
-    if let Some(dir) = cleanup.as_ref().and_then(Value::as_str) {
+    if let Some(dir) = cleanup.as_ref().and_then(Value::as_str).filter(|dir| relay_scratch(Path::new(dir))) {
         let _ = std::fs::remove_dir_all(dir);
     }
     let text = serde_json::to_string_pretty(&value).unwrap_or_default();
@@ -218,6 +218,22 @@ pub(crate) fn tool_result(mut value: Value, is_error: bool) -> Value {
         result["structuredContent"] = value;
     }
     result
+}
+
+/// Whether `dir` is a folder a plugin made for one call's images, so `_cleanup` may delete it: a
+/// Blender render folder directly in the temp dir, or an Unreal capture folder
+/// (`Saved/Relay/Captures/<uuid>`), named as Relay names them and not a symlink. Anything else
+/// is left alone, whatever a result says: a folder named there by mistake, or by a script, is
+/// not deleted outside every sandbox.
+fn relay_scratch(dir: &Path) -> bool {
+    use std::path::Component;
+    let plain = dir.is_absolute() && dir.components().all(|c| matches!(c, Component::RootDir | Component::Normal(_)));
+    let real_dir = std::fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_dir());
+    let (Some(name), Some(parent)) = (dir.file_name().and_then(|n| n.to_str()), dir.parent()) else { return false };
+    let named = |prefix: &str| name.strip_prefix(prefix).is_some_and(|id| uuid::Uuid::parse_str(id).is_ok());
+    let render = named(crate::blender::RENDER_PREFIX) && parent == std::env::temp_dir();
+    let capture = named("") && parent.ends_with("Saved/Relay/Captures");
+    plain && real_dir && (render || capture)
 }
 
 fn stdin_lines() -> mpsc::UnboundedReceiver<std::io::Result<String>> {

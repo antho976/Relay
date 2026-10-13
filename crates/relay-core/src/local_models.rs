@@ -14,6 +14,7 @@
 use crate::engine::Engine;
 use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -91,6 +92,18 @@ pub struct Local {
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// The API key of the server on each port, minted when it starts. The server listens on
+/// 127.0.0.1, which every local account and every page a browser here opens can reach: without
+/// a key any of them could use the model and read its conversation (`/slots`).
+fn keys() -> &'static Mutex<HashMap<u16, String>> {
+    static KEYS: OnceLock<Mutex<HashMap<u16, String>>> = OnceLock::new();
+    KEYS.get_or_init(Mutex::default)
+}
+
+fn key_for(port: u16) -> Option<String> {
+    lock(keys()).get(&port).cloned()
 }
 
 fn setting(engine: &Engine, path: &str) -> Option<Value> {
@@ -202,6 +215,8 @@ pub fn ensure(engine: &Arc<Engine>, model: &'static Model) -> Result<u16, String
     let_go(engine);
     let serial = engine.local.next_serial.fetch_add(1, Ordering::Relaxed) + 1;
     emit(engine, model, "loading", None);
+    let key = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
+    lock(keys()).insert(port, key.clone());
 
     let mut cmd = Command::new(&bin);
     cmd.arg("-m").arg(&file)
@@ -210,6 +225,10 @@ pub fn ensure(engine: &Arc<Engine>, model: &'static Model) -> Result<u16, String
         // model's wait. The layers on the card are fitted to its free memory.
         .args(["-c", &CONTEXT.to_string(), "-np", "1", "--jinja", "--reasoning", "off", "--no-webui"])
         .arg("--chat-template-file").arg(&template)
+        // The key in the environment, not the command line any local user can read; and no
+        // `/slots`, which would hand out the prompt being worked on.
+        .env("LLAMA_API_KEY", &key)
+        .arg("--no-slots")
         .stdin(Stdio::null());
     match std::fs::File::create(&log).and_then(|f| Ok((f.try_clone()?, f))) {
         Ok((out, err)) => cmd.stdout(out).stderr(err),
@@ -237,6 +256,7 @@ pub fn ensure(engine: &Arc<Engine>, model: &'static Model) -> Result<u16, String
         let mut child = match cmd.spawn() {
             Ok(child) => child,
             Err(e) => {
+                lock(keys()).remove(&port);
                 let _ = tx.send(Err(format!("Could not start llama-server: {e}")));
                 return;
             }
@@ -244,6 +264,12 @@ pub fn ensure(engine: &Arc<Engine>, model: &'static Model) -> Result<u16, String
         let process = Arc::new(Process { pid: child.id(), gone: Mutex::new(false), ended: Condvar::new() });
         let _ = tx.send(Ok(process.clone()));
         let _ = child.wait();
+        {
+            let mut keys = lock(keys());
+            if keys.get(&port) == Some(&key) {
+                keys.remove(&port);
+            }
+        }
         *lock(&process.gone) = true;
         process.ended.notify_all();
         if let Some(engine) = weak.upgrade() {
@@ -265,7 +291,7 @@ pub fn ensure(engine: &Arc<Engine>, model: &'static Model) -> Result<u16, String
 
     let deadline = Instant::now() + LOAD_WITHIN;
     loop {
-        if healthy(port) {
+        if healthy(port, key_for(port).as_deref()) {
             break;
         }
         if lock(&engine.local.server).as_ref().is_none_or(|s| s.serial != serial) {
@@ -288,12 +314,15 @@ pub fn ensure(engine: &Arc<Engine>, model: &'static Model) -> Result<u16, String
     Ok(port)
 }
 
-/// The environment that points a thread's Claude Code at the server on `port`. Every model
-/// Claude Code would reach for, its background one included, is the local one.
+/// The environment that points a thread's Claude Code at the server on `port`, with that
+/// server's key. Every model Claude Code would reach for, its background one included, is the
+/// local one.
 pub fn agent_env(port: u16, model: &Model) -> Vec<(&'static str, String)> {
+    // A port no server of Relay's holds gets a key nothing accepts, never a shared one.
+    let key = key_for(port).unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
     let mut env = vec![
         ("ANTHROPIC_BASE_URL", format!("http://127.0.0.1:{port}")),
-        ("ANTHROPIC_AUTH_TOKEN", "relay-local".to_string()),
+        ("ANTHROPIC_AUTH_TOKEN", key),
         ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1".to_string()),
     ];
     for var in ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"] {
@@ -330,12 +359,14 @@ fn exited(engine: &Engine, serial: u64) {
     emit(engine, server.model, "failed", Some(&why));
 }
 
-/// GET /health answers 200 once the model has loaded, 503 while it loads.
-fn healthy(port: u16) -> bool {
+/// GET /health answers 200 once the model has loaded, 503 while it loads. llama-server lets it
+/// through without the key; it is sent anyway, for a server that asks for it.
+fn healthy(port: u16, key: Option<&str>) -> bool {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(500)) else { return false };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-    if stream.write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").is_err() {
+    let auth = key.map(|key| format!("Authorization: Bearer {key}\r\n")).unwrap_or_default();
+    if stream.write_all(format!("GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n{auth}Connection: close\r\n\r\n").as_bytes()).is_err() {
         return false;
     }
     let mut head = [0u8; 12];
@@ -414,7 +445,15 @@ mod tests {
         assert_eq!(get("ANTHROPIC_BASE_URL"), Some("http://127.0.0.1:4321"));
         assert_eq!(get("ANTHROPIC_SMALL_FAST_MODEL"), Some(MODELS[0].id));
         assert_eq!(get("ANTHROPIC_DEFAULT_HAIKU_MODEL"), Some(MODELS[0].id));
-        assert!(get("ANTHROPIC_AUTH_TOKEN").is_some());
+        // The server's own key, minted per start; a port with no server of Relay's gets one
+        // that matches nothing, never a fixed token.
+        let unknown = get("ANTHROPIC_AUTH_TOKEN").unwrap().to_string();
+        assert_ne!(unknown, "relay-local");
+        assert_ne!(agent_env(4321, &MODELS[0]).iter().find(|(var, _)| *var == "ANTHROPIC_AUTH_TOKEN").unwrap().1, unknown);
+        lock(keys()).insert(4322, "k".repeat(64));
+        let env = agent_env(4322, &MODELS[0]);
+        assert_eq!(env.iter().find(|(var, _)| *var == "ANTHROPIC_AUTH_TOKEN").map(|(_, v)| v.as_str()), Some("k".repeat(64).as_str()));
+        lock(keys()).remove(&4322);
     }
 
     #[test]
@@ -426,6 +465,6 @@ mod tests {
     #[test]
     fn nothing_answering_is_not_healthy() {
         let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap().local_addr().unwrap().port();
-        assert!(!healthy(port));
+        assert!(!healthy(port, Some("key")));
     }
 }

@@ -21,6 +21,7 @@ pub mod mirror;
 pub mod paths;
 pub mod peer;
 pub mod plugins;
+pub mod private;
 pub mod proc;
 pub mod providers;
 mod provider_updates;

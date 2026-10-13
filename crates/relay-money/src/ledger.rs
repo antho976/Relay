@@ -292,10 +292,27 @@ pub struct Ledger {
     pub(crate) conn: Connection,
 }
 
+/// 0600 on the ledger and its `-wal` and `-shm` files: every account, balance and payee, which
+/// other local users must not read where the folder lets them in. Run once the ledger is in WAL
+/// mode; later side files take the ledger's mode. A file someone else owns stays as it is.
+#[cfg(unix)]
+fn private(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    for side in ["", "-wal", "-shm"] {
+        let mut name = path.as_os_str().to_owned();
+        name.push(side);
+        let _ = std::fs::set_permissions(Path::new(&name), std::fs::Permissions::from_mode(0o600));
+    }
+}
+
+#[cfg(not(unix))]
+fn private(_path: &Path) {}
+
 impl Ledger {
     pub fn open(path: &Path) -> Result<Ledger> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        private(path);
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         Ledger::init(conn)
     }
@@ -1698,8 +1715,14 @@ mod tests {
             let c = category(&l, "Dining");
             spend(&mut l, a, c, 4_00, "2026-10-02");
         }
+        // Only the user reads it, nor its side files, whatever mode an older install left.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         let l = Ledger::open(&path).unwrap();
         assert_eq!(l.tx_list(&TxQuery::default(), date(2026, 10, 3)).unwrap().spent, 4_00);
+        for file in ["money.db", "money.db-wal", "money.db-shm"] {
+            assert_eq!(std::fs::metadata(dir.join(file)).unwrap().permissions().mode() & 0o777, 0o600, "{file}");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

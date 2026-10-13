@@ -66,6 +66,12 @@ fn a_tally_backup_restores_and_exports_the_same_ledger() {
         v
     };
     assert_eq!(strip(&out), strip(&again));
+    // An export over an old one is renamed in whole, and only the user reads it.
+    std::fs::set_permissions(&out, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+    ok(&engine, "money.export", json!({"path": out}));
+    assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&out).unwrap().permissions()) & 0o777, 0o600);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "a temporary file was left beside the export");
+    assert_eq!(strip(&out), strip(&again));
 }
 
 #[test]

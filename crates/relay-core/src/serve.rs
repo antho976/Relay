@@ -41,6 +41,12 @@ pub async fn start(instance: Instance, store_path: Option<PathBuf>) -> Result<Se
     if !subreaper {
         tracing::warn!(error = %std::io::Error::last_os_error(), "could not become a child subreaper; a session's orphans can claim the user actor");
     }
+    // The instance's folder holds the store and the databases beside it (threads, money,
+    // arbiter, gym); older installs made it 0755. A store path chosen by the caller keeps its
+    // folder as it is.
+    if store_path.is_none() {
+        crate::private::private_data_dir(&instance.data_dir());
+    }
     let path = store_path.unwrap_or_else(|| instance.store_path());
     let store = Store::open(&path, true).map_err(BindError::Other)?;
     let engine = Engine::new(instance, store);

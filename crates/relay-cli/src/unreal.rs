@@ -2445,7 +2445,8 @@ mod tests {
     #[test]
     fn captured_images_become_image_content_and_the_folder_is_removed() {
         let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("cap");
+        // Where capture_dir puts it: mcp::tool_result deletes no other folder.
+        let dir = root.path().join("Saved/Relay/Captures").join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("shot_front.png"), b"\x89PNG fake").unwrap();
         let value = with_images(Ok(json!({"files":[

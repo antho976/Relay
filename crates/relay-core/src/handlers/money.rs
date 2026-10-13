@@ -135,7 +135,8 @@ fn read_backup(path: &str) -> Result<BackupFile, BusError> {
 
 /// Writes the ledger as a Tally backup at `path`, with no lock held but the ledger's own for the
 /// read. A path that is there already must be a regular file: writing into a pipe blocks until
-/// something reads it.
+/// something reads it. The new backup is renamed in over the old one, so a crash or a full disk
+/// mid-write leaves last week's whole, and only the user can read it (it is the whole ledger).
 fn write_backup(engine: &Engine, path: &str) -> Result<ExportOut, BusError> {
     let path = absolute(path)?;
     if let Ok(meta) = std::fs::metadata(path) {
@@ -144,7 +145,7 @@ fn write_backup(engine: &Engine, path: &str) -> Result<ExportOut, BusError> {
         }
     }
     let file = ledger(engine, |l| l.export_backup(&crate::time::now()))?;
-    std::fs::write(path, backup::encode(&file)).bus()?;
+    crate::private::write_private_replace(path, backup::encode(&file).as_bytes()).bus()?;
     Ok(ExportOut { path: path.display().to_string(), transactions: file.transactions.len() })
 }
 

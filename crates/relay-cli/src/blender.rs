@@ -192,15 +192,16 @@ fn call(name: &str, args: &Value) -> Result<Value> {
         }
         "blender_render" => {
             let file = resolve(&root, required(args, "file")?)?;
-            let dir = std::env::temp_dir().join(format!("relay-blender-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&dir)?;
+            let dir = scratch_dir(RENDER_PREFIX)?;
             let mut a = args.clone();
             a["out_dir"] = json!(dir);
             let result = run(PY_RENDER, &a, Some(&file), secs(args, 600));
             match result {
                 Ok(mut value) => {
+                    // Only the renders in this call's own folder are read back into the reply.
                     let files = value["files"].as_array().cloned().unwrap_or_default();
-                    value["_images"] = json!(files.iter().map(|f| json!({"label": f["view"], "path": f["file"]})).collect::<Vec<_>>());
+                    let files = files.iter().filter(|f| f["file"].as_str().is_some_and(|p| Path::new(p).starts_with(&dir)));
+                    value["_images"] = json!(files.map(|f| json!({"label": f["view"], "path": f["file"]})).collect::<Vec<_>>());
                     value["_cleanup"] = json!(dir);
                     value.as_object_mut().unwrap().remove("files");
                     Ok(value)
@@ -302,6 +303,19 @@ fn list_files(root: &Path) -> Value {
     value
 }
 
+/// The name a render's folder in the temp dir starts with; `mcp::tool_result` deletes a
+/// `_cleanup` folder only when it is one of these (or an Unreal capture folder).
+pub(crate) const RENDER_PREFIX: &str = "relay-blender-";
+
+/// A new folder in the temp dir for one call, readable only by the user (the script, its
+/// arguments and the renders), under a name no one can guess or claim first.
+fn scratch_dir(prefix: &str) -> Result<PathBuf> {
+    use std::os::unix::fs::DirBuilderExt;
+    let dir = std::env::temp_dir().join(format!("{prefix}{}", uuid::Uuid::new_v4()));
+    std::fs::DirBuilder::new().mode(0o700).create(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    Ok(dir)
+}
+
 fn find_blender() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("BLENDER_BIN").map(PathBuf::from) {
         anyhow::ensure!(path.is_file(), "BLENDER_BIN={} is not a file", path.display());
@@ -335,8 +349,7 @@ fn find_blender() -> Result<PathBuf> {
 /// traceback.
 fn run(body: &str, args: &Value, file: Option<&Path>, timeout: Duration) -> Result<Value> {
     let blender = find_blender()?;
-    let dir = std::env::temp_dir().join(format!("relay-blender-job-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir)?;
+    let dir = scratch_dir("relay-blender-job-")?;
     let script = dir.join("job.py");
     let args_file = dir.join("args.json");
     std::fs::write(&script, format!("{PY_COMMON}\n{body}"))?;
@@ -375,6 +388,7 @@ fn run(body: &str, args: &Value, file: Option<&Path>, timeout: Duration) -> Resu
     };
     // Fields are added below; indexing anything but an object would panic (RA-301).
     anyhow::ensure!(value.is_object(), "the script's result is not a JSON object: {}", tail(&value.to_string(), 5));
+    strip_reserved(&mut value);
     if body == PY_RUN {
         // The agent's own script: its printed output is the result.
         value["output"] = json!(tail(&printed.join("\n"), 300));
@@ -382,6 +396,16 @@ fn run(body: &str, args: &Value, file: Option<&Path>, timeout: Duration) -> Resu
     }
     value["sandbox"] = json!(sandbox.describe());
     Ok(value)
+}
+
+/// Keys starting with `_` are the MCP layer's instructions (`_images` are read into the reply,
+/// `_cleanup` is deleted), set only here in Rust. A script's result never carries them: agent
+/// code can `emit()` or print any `RELAY_JSON:` line, and `{"_cleanup": "/home/me"}` would
+/// otherwise delete a tree outside the sandbox.
+fn strip_reserved(value: &mut Value) {
+    if let Some(object) = value.as_object_mut() {
+        object.retain(|key, _| !key.starts_with('_'));
+    }
 }
 
 /// What the agent's script printed: run.py puts it between markers, so Blender's own start-up
@@ -596,6 +620,26 @@ mod tests {
     }
 
     #[test]
+    fn a_script_result_cannot_name_files_to_read_or_delete() {
+        let mut value = json!({"_cleanup": "/home", "_images": [{"label": "x", "path": "/etc/shadow"}], "_opened": 1, "value": 3, "nested": {"_cleanup": "kept"}});
+        strip_reserved(&mut value);
+        assert_eq!(value, json!({"value": 3, "nested": {"_cleanup": "kept"}}));
+        // Even one that got through is not deleted: tool_result removes only Relay's own folders.
+        let victim = tempfile::tempdir().unwrap();
+        std::fs::write(victim.path().join("work.txt"), "keep").unwrap();
+        crate::mcp::tool_result(json!({"_cleanup": victim.path()}), false);
+        assert!(victim.path().join("work.txt").is_file());
+        // A call's own folder is private and is.
+        let dir = scratch_dir(RENDER_PREFIX).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        std::fs::write(dir.join("f0001_front.png"), b"\x89PNG").unwrap();
+        let result = crate::mcp::tool_result(json!({"_images": [{"label": "front", "path": dir.join("f0001_front.png")}], "_cleanup": dir}), false);
+        assert_eq!(result["structuredContent"]["images"]["shown"], json!(["front"]));
+        assert!(!dir.exists());
+    }
+
+    #[test]
     fn paths_stay_inside_the_checkout() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("hero.blend"), "").unwrap();
@@ -710,6 +754,11 @@ mod tests {
         // No network either.
         let net = run(PY_RUN, &json!({"code": "import socket\ntry:\n    socket.create_connection(('1.1.1.1', 80), timeout=2)\n    print('online')\nexcept OSError:\n    print('offline')"}), None, t).unwrap();
         assert_eq!(net["output"].as_str().unwrap().trim(), "offline");
+        // Nor the user's sockets: the session bus and the service manager would run anything
+        // outside the sandbox. The environment does not name them, the folder holding them is
+        // empty, and the session is the sandbox's own (one led from outside its pids reads 0).
+        let sockets = run(PY_RUN, &json!({"code": "import os\nrun = '/run/user/%d' % os.getuid()\nprint(sorted(k for k in os.environ if 'DBUS' in k or 'SOCK' in k or k.startswith('RELAY') or k == 'XDG_RUNTIME_DIR'), os.listdir(run) if os.path.isdir(run) else [], os.getsid(0) != 0)"}), None, t).unwrap();
+        assert_eq!(sockets["output"].as_str().unwrap().trim(), "[] [] True", "{sockets}");
     }
 
     /// Runs every Blender script against a fixture built by `blender_py/tests/make_fixture.py`,
