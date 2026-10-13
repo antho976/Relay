@@ -68,5 +68,6 @@ else is answered by the door (`bus.actor` for a wrong actor, `refused` / `remote
 op outside the list). A line that passes is written to the Unix socket unchanged; every line
 back is forwarded as-is, `pty` frames included. The door adds pairing and a per-connection
 proof of the device token; it adds no ops. The PC dials the rendezvous with the room secret
-in an `Authorization: Bearer` header, retrying once with `?secret=` for an older server. See
+in an `Authorization: Bearer` header, retrying once with `?secret=` only when an older server
+refuses it in its own words. See
 `docs/MOBILE.md`.

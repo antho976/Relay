@@ -269,7 +269,8 @@ pub fn spawn_host(ctx: Arc<Ctx>, server: String, token: String) -> tokio::task::
 /// the server, then the question once the phone presents the code.
 async fn open_for_phone(ctx: Arc<Ctx>, api: Server, token: String, phone: WaitingPhone) -> Result<()> {
     let (registry, code) = Registry::update(&ctx.registry_path, |r| {
-        let code = r.begin_pair(true).code;
+        // Beside any window already open: another phone may be mid-pairing on one.
+        let code = r.add_pair(true).code;
         Ok::<_, anyhow::Error>((r.clone(), code))
     })?;
     let port = registry.direct_port.unwrap_or(DEFAULT_PORT);
@@ -298,8 +299,11 @@ async fn confirm(ctx: &Ctx, code: &str, phone: &WaitingPhone) -> Result<()> {
     let until = Instant::now() + WINDOW;
     while Instant::now() < until {
         let registry = Registry::load(&ctx.registry_path)?;
-        // Gone: answered with `relay remote approve`, replaced by a newer window, or expired.
-        let Some(pending) = registry.pending.iter().find(|p| normalize_code(&p.code) == wanted) else { return Ok(()) };
+        // Gone: answered with `relay remote approve`, closed by `relay remote pair`, or expired.
+        let Some(pending) = registry.pending.iter().find(|p| normalize_code(&p.code) == wanted) else {
+            tracing::info!(device = %phone.device, "the pairing window for a phone allowed on Discord closed before this PC asked about it: answered with `relay remote approve`, closed by `relay remote pair`, or expired");
+            return Ok(());
+        };
         if let Some(request) = &pending.request {
             if request.approved.is_some() {
                 return Ok(());

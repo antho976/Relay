@@ -304,6 +304,14 @@ impl Registry {
     /// open, so a code shown earlier — on a screen share, in scrollback — stops working.
     /// `confirm` makes the PC approve the device that presents it (`Presented::Waiting`).
     pub fn begin_pair(&mut self, confirm: bool) -> Pending {
+        self.pending.clear();
+        self.add_pair(confirm)
+    }
+
+    /// Open a pairing window beside any already open. For windows nobody sees but the device
+    /// they are handed to (`connect.rs` opens one per phone allowed on Discord): closing the
+    /// others would decline a phone that is mid-pairing, or a code the owner just printed.
+    pub fn add_pair(&mut self, confirm: bool) -> Pending {
         let created = now();
         let pending = Pending {
             code: pair_code(),
@@ -312,7 +320,6 @@ impl Registry {
             confirm,
             request: None,
         };
-        self.pending.clear();
         self.pending.push(pending.clone());
         pending
     }
@@ -487,6 +494,26 @@ mod tests {
         let new = reg.begin_pair(false).code;
         assert_eq!(reg.present(&old, "late", "test"), Presented::Invalid);
         assert!(matches!(reg.present(&new, "phone", "test"), Presented::Paired(_)));
+    }
+
+    #[test]
+    fn an_added_window_leaves_the_others_open() {
+        let mut reg = Registry::fresh();
+        let printed = reg.begin_pair(true).code;
+        let a = reg.add_pair(true).code;
+        assert_eq!(reg.present(&a, "Phone A", "rendezvous"), Presented::Waiting);
+        let b = reg.add_pair(true).code;
+        assert_eq!(reg.pending.len(), 3, "a window for phone B closes neither A's nor the printed one");
+        assert_eq!(reg.outcome(&a), Outcome::Waiting, "phone A is still waiting, not declined");
+        assert!(reg.decide(&a, true));
+        assert!(matches!(reg.outcome(&a), Outcome::Approved(_)));
+        assert_eq!(reg.present(&b, "Phone B", "rendezvous"), Presented::Waiting);
+        assert_eq!(reg.present(&printed, "Owner's phone", "direct 192.0.2.7"), Presented::Waiting);
+        // `relay remote pair` still closes every window open before it.
+        let fresh = reg.begin_pair(false).code;
+        assert_eq!(reg.outcome(&b), Outcome::Declined);
+        assert_eq!(reg.pending.len(), 1);
+        assert!(matches!(reg.present(&fresh, "phone", "test"), Presented::Paired(_)));
     }
 
     #[test]

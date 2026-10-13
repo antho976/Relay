@@ -141,8 +141,9 @@ relay remote pair
 
 `via` mints a room secret and stores it. The PC presents it to the server as
 `Authorization: Bearer <secret>`, so it stays out of URLs and proxy access logs; a server
-that predates the header refuses that, and the PC dials it once more with `?secret=` in the
-URL (and logs a warning to update the server). The process that carries the phone door
+that predates the header refuses that with its own "room secret does not open this room", and
+only then does the PC dial it once more with `?secret=` in the URL (and log a warning to update
+the server). Any other 403, from a proxy or a firewall, gets no retry. The process that carries the phone door
 dials the server only when it starts, so restart it: for the `./run.sh` engine (`relay serve --remote`),
 quit it and run `./run.sh` again. `force` stops live agents, whose sessions come back as
 restorable; without it the quit is refused while any is live. (`via` says to restart `relay
