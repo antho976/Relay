@@ -1,5 +1,5 @@
-//! The sidebar's usage card, above you at the foot: one provider at a time, its plan, the
-//! 5-hour and weekly meters as bars, and when the 5-hour window resets.
+//! The sidebar's usage card, above you at the foot: one provider at a time, its plan, and the
+//! 5-hour and weekly meters as bars, each with when it resets under it.
 //!
 //! It reads the rows and preferences `UsageState` keeps; which provider it shows and whether
 //! it is folded live under `usage.card` in settings. Its sliders key opens the usage panel
@@ -96,7 +96,7 @@ fn caption(item: Option<&Value>) -> String {
 
 fn card_row(meter: Meter, window: &Window, now: u64) -> gtk::Box {
     let stale = window.stale(now);
-    let row = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
     row.add_css_class("usage-card-row");
     let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let name = label(title(meter), "usage-card-title");
@@ -112,6 +112,14 @@ fn card_row(meter: Meter, window: &Window, now: u64) -> gtk::Box {
     top.append(&pct);
     row.append(&top);
     row.append(&bar(window.pct, stale, "usage-card-bar"));
+    // Under its own bar, so the 5-hour reset never reads as the weekly one.
+    let reset = label(&reset_line(window, now), "usage-card-reset");
+    reset.set_xalign(0.0);
+    reset.set_tooltip_text(Some(&reset_text(window, now)));
+    if stale {
+        reset.add_css_class("stale");
+    }
+    row.append(&reset);
     row
 }
 
@@ -207,7 +215,7 @@ impl Ui {
         }
         card.body.append(&caption);
         let found = item.as_ref().map(windows).unwrap_or_default();
-        let mut reset: Option<&Window> = None;
+        let mut shown_any = false;
         for &meter in meters(provider) {
             if !enabled(&prefs, provider, meter.key()) {
                 continue;
@@ -216,25 +224,12 @@ impl Ui {
                 continue;
             };
             card.body.append(&card_row(meter, window, now));
-            // The 5-hour window is the one a person waits on; a provider without it shows the
-            // first meter it has.
-            if reset.is_none() || meter == Meter::FiveHour {
-                reset = Some(window);
-            }
+            shown_any = true;
         }
-        match reset {
-            Some(window) => {
-                let line = label(&reset_line(window, now), "usage-card-reset");
-                line.set_xalign(0.0);
-                line.set_tooltip_text(Some(&reset_text(window, now)));
-                card.body.append(&line);
-            }
-            None if item.is_some() => {
-                let note = label("No shown meter reported", "usage-card-caption");
-                note.set_xalign(0.0);
-                card.body.append(&note);
-            }
-            None => {}
+        if !shown_any && item.is_some() {
+            let note = label("No shown meter reported", "usage-card-caption");
+            note.set_xalign(0.0);
+            card.body.append(&note);
         }
     }
 }
