@@ -310,7 +310,7 @@ async fn features(ui: &Rc<Ui>, project: i64, owner: &Rc<crate::pages::NotesWindo
     buffer.place_cursor(&buffer.iter_at_line(1).ok_or("Line 2")?);
     owner.window.activate_action("notes.toggle-check", None).map_err(|_| "toggle-check action missing")?;
     require(text().contains("- [ ] milk"), "Toggle check did not untick the line")?;
-    // Names beside the toolbar's icons, and a hidden key.
+    // Names under the toolbar's icons (formatting keys keep to theirs), and a hidden key.
     let mut prefs = crate::pages::notes_prefs();
     prefs.toolbar_labels = true;
     prefs.toolbar_hidden = 0b111 << 4;
@@ -320,21 +320,25 @@ async fn features(ui: &Rc<Ui>, project: i64, owner: &Rc<crate::pages::NotesWindo
         let name = name.to_string();
         find(&root, &move |w| w.downcast_ref::<gtk::Label>().is_some_and(|l| l.has_css_class("notes-tool-caption") && l.text() == name))
     };
-    require(caption("Bold").is_some_and(|l| l.is_mapped()), "Toolbar labels did not show")?;
+    require(caption("Undo").is_some_and(|l| l.is_mapped()), "Toolbar labels did not show")?;
+    require(caption("Bold").is_some_and(|l| !l.is_mapped()), "A formatting key shows its name")?;
     require(caption("Paste").is_some_and(|l| !l.is_mapped()), "Hidden Paste key still shows")?;
     if owner.rail_collapsed.get() {
         owner.window.activate_action("notes.sidebar", None).map_err(|_| "sidebar action missing")?;
     }
     glib::timeout_future(Duration::from_millis(250)).await;
-    if let Ok(path) = std::env::var("RELAY_NATIVE_SCREENSHOT") {
-        let path = path.replace(".png", "-features.png");
+    let capture = |suffix: &str| -> Result<(), String> {
+        let Ok(path) = std::env::var("RELAY_NATIVE_SCREENSHOT") else { return Ok(()) };
+        let path = path.replace(".png", &format!("-{suffix}.png"));
         let paintable = gtk::WidgetPaintable::new(Some(&owner.window));
         let snapshot = gtk::Snapshot::new();
         paintable.snapshot(&snapshot, owner.window.width() as f64, owner.window.height() as f64);
         let node = snapshot.to_node().ok_or("Notes snapshot")?;
         owner.window.renderer().ok_or("Notes renderer")?.render_texture(&node, None).save_to_png(&path).map_err(|e| e.to_string())?;
-        println!("NOTES_FEATURES_SCREENSHOT={path}");
-    }
+        println!("NOTES_{}_SCREENSHOT={path}", suffix.to_uppercase());
+        Ok(())
+    };
+    capture("features")?;
     // Right-clicking the toolbar (or View > Customize toolbar) opens its settings.
     owner.window.activate_action("notes.customize-toolbar", None).map_err(|_| "customize action missing")?;
     let customize = find(&root, &|w| w.has_css_class("notes-customize")).ok_or("Toolbar settings missing")?;
@@ -353,11 +357,17 @@ async fn features(ui: &Rc<Ui>, project: i64, owner: &Rc<crate::pages::NotesWindo
     }
     let task = created.unwrap();
     require(task["body"].as_str().is_some_and(|b| b.contains("- [ ] milk") && b.contains("From the note")), "Task body is not the note")?;
+    require(task["note_id"].as_i64() == Some(id), "The task does not remember its note")?;
+    // The note lists the task it became, under its title.
+    let chip = || find(&root, &|w| w.has_css_class("notes-task-chip"));
+    wait_for(|| chip().is_some_and(|c| c.is_mapped()), "The note lists its task").await?;
+    glib::timeout_future(Duration::from_millis(150)).await;
+    capture("task")?;
     ui.call("task.delete", json!({"task_id":task["id"]})).await.map_err(|e| e.to_string())?;
     crate::pages::discard_note(ui, id);
     ui.call("notes.delete", json!({"note_id":id})).await.map_err(|e| e.to_string())?;
     std::fs::remove_dir_all(&folder).ok();
-    println!("NOTES_FEATURES_OK: checklist boxes, tick from box and Ctrl+Enter, picture overlay, toolbar labels and hidden keys, note to task");
+    println!("NOTES_FEATURES_OK: checklist boxes, tick from box and Ctrl+Enter, picture overlay, toolbar labels and hidden keys, note to task and back");
     Ok(())
 }
 

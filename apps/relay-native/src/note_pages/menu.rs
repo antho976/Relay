@@ -160,7 +160,7 @@ fn model() -> gio::Menu {
             ]),
             section(&[
                 item("Rename…", "rename", Some("F2")),
-                item("Pin to agents", "pin", None),
+                item("Pin to top", "pin", None),
                 item("Duplicate", "duplicate", None),
                 item("Copy note text", "copy-note", None),
                 item("Create task from note", "to-task", Some("<Control><Shift>t")),
@@ -425,7 +425,7 @@ pub fn row_menu(id: i64, pinned: bool) -> gio::Menu {
             targeted("Rename…", "row-rename", target.clone()),
         ]),
         section(&[
-            targeted(if pinned { "Unpin from agents" } else { "Pin to agents" }, "row-pin", target.clone()),
+            targeted(if pinned { "Unpin" } else { "Pin to top" }, "row-pin", target.clone()),
             targeted("Duplicate", "row-duplicate", target.clone()),
             targeted("Copy note text", "row-copy", target.clone()),
             targeted("Create task from note", "row-task", target.clone()),

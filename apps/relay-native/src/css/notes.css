@@ -1,8 +1,9 @@
 /* notes area styles: loaded after theme.css, so rules here override it. */
 /* Notes is a desktop text editor in the KWrite mould: menu bar, toolbar, library,
    tabbed documents on one paper surface, a find bar and a status bar. */
-/* NOTES_SCHEME (note_pages.rs) writes the same paper into the text view; change both. The
-   paper is deliberately the same in every appearance mode, so it is not a palette token. */
+/* The paper is deliberately the same in every appearance mode, so it is not a palette token;
+   NOTES_PAPER (note_pages.rs) holds the same value. shell.rs redefines it at panel opacity, so
+   the wallpaper shows through it as through every other panel. */
 @define-color notes_paper #0c0c0e;
 
 /* ---- titlebar: menu bar · document name · window keys ---- */
@@ -53,15 +54,16 @@
 /* ---- toolbar ---- */
 .notes-toolbar { min-height: 38px; padding: 0 6px; background: @console; border-bottom: 1px solid @edge; }
 button.notes-tool,
-.notes-tool-menu > button { min-width: 30px; min-height: 28px; margin: 5px 0; padding: 0 7px; border: 0; border-radius: 6px; background: transparent; color: @secondary; box-shadow: none; transition: background 80ms ease-out, color 80ms ease-out; }
+.notes-tool-menu > button { min-width: 30px; min-height: 28px; margin: 5px 0; padding: 0 5px; border: 0; border-radius: 6px; background: transparent; color: @secondary; box-shadow: none; transition: background 80ms ease-out, color 80ms ease-out; }
+/* Labelled keys stack the name under the icon, KWrite-style, at one width per key. */
 button.notes-tool.labelled,
-.notes-tool-menu.labelled > button { padding: 0 9px 0 7px; }
+.notes-tool-menu.labelled > button { min-width: 44px; min-height: 42px; margin: 3px 0; padding: 3px 3px 2px; }
 button.notes-tool:hover,
 .notes-tool-menu > button:hover,
 .notes-tool-menu > button:checked { background: alpha(@ink, 0.08); color: @ink; }
 button.notes-tool:active { background: alpha(@ink, 0.13); }
 button.notes-tool:disabled { opacity: 0.32; }
-.notes-tool-caption { font-size: 12px; font-weight: 500; }
+.notes-tool-caption { font-size: 11px; font-weight: 500; }
 .notes-tool-mark { min-width: 16px; font-family: 'Geist', sans-serif; font-size: 14px; font-weight: 600; }
 .notes-tool-mark-bold { font-weight: 800; }
 .notes-tool-mark-italic { font-family: serif; font-style: italic; font-size: 15.5px; font-weight: 500; }
@@ -86,7 +88,7 @@ button.notes-customize-reset { min-height: 26px; padding: 0 10px; border-radius:
 /* ---- library ---- */
 .notes-split > separator { min-width: 1px; background: @edge; }
 .notes-library { background: @console; }
-.notes-library scrolledwindow, .notes-library viewport { background: @console; }
+.notes-library scrolledwindow, .notes-library viewport { background: transparent; }
 .notes-picker { padding: 8px 8px 4px; }
 .notes-picker .workspace-picker > button { min-height: 32px; padding: 0 10px; border: 1px solid @edge; border-radius: 7px; background: alpha(@ink, 0.03); }
 .notes-picker .workspace-picker > button:hover,
@@ -101,7 +103,7 @@ button.notes-library-key:hover,
 .notes-library-key > button:hover,
 .notes-library-key > button:checked { background: alpha(@ink, 0.08); color: @ink; }
 entry.search.notes-library-search { margin: 0 2px 0 0; background: @wall_solid; }
-list.notes-list { background: @console; padding: 0 6px 8px; }
+list.notes-list { background: transparent; padding: 0 6px 8px; }
 list.notes-list > row.notes-row { margin: 1px 0; padding: 8px 10px 9px 10px; border-radius: 6px; background: transparent; }
 list.notes-list > row.notes-row:hover { background: alpha(@ink, 0.04); }
 list.notes-list > row.notes-row:selected { background: alpha(@ink, 0.09); box-shadow: inset 2px 0 @ink; }
@@ -119,7 +121,8 @@ notebook.notes-tabs > header > tabs > tab { min-height: 32px; padding: 0 4px 0 1
 notebook.notes-tabs > header > tabs > tab:hover { background: alpha(@ink, 0.03); color: @ink; }
 notebook.notes-tabs > header > tabs > tab:checked { background: @notes_paper; color: @ink; box-shadow: inset 0 2px @ink; }
 notebook.notes-tabs > header > tabs > arrow { min-width: 24px; color: @secondary; }
-notebook.notes-tabs > stack { background: @notes_paper; }
+/* The paper is painted once, by the document's head and text below, never by a container. */
+notebook.notes-tabs > stack { background: transparent; }
 .notes-tab-label { font-size: 12px; }
 tab:checked .notes-tab-label { font-weight: 500; }
 button.notes-tab-close { min-width: 20px; min-height: 20px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: @faint; opacity: 0.65; }
@@ -128,7 +131,7 @@ button.notes-tab-close:hover { background: @wash; color: @ink; }
 .notes-dirty-dot { min-width: 7px; min-height: 7px; border-radius: 99px; background: @waiting; }
 
 /* ---- document ---- */
-.notes-page-body, .notes-doc { background: @notes_paper; }
+.notes-page-body, .notes-doc { background: transparent; }
 .notes-doc-head { min-height: 52px; padding: 6px 12px 2px 16px; background: @notes_paper; }
 entry.notes-title { min-height: 36px; padding: 0 2px; border: 0; border-radius: 0; background: transparent; box-shadow: none; color: @ink; font-size: 19px; font-weight: 600; }
 entry.notes-title:focus-within { box-shadow: inset 0 -1px alpha(@ink, 0.25); }
@@ -136,10 +139,10 @@ entry.notes-title:focus-within { box-shadow: inset 0 -1px alpha(@ink, 0.25); }
 button.notes-pin { min-width: 28px; min-height: 28px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: @faint; }
 button.notes-pin:hover { background: @wash; color: @ink; }
 button.notes-pin:checked { color: @waiting; background: alpha(@waiting, 0.10); }
-.notes-scroll { background: @notes_paper; }
-textview.notes-source { padding: 0; background: @notes_paper; }
-textview.notes-source > text { background: @notes_paper; }
-textview.notes-source > border.left gutter { background: @notes_paper; }
+.notes-window .notes-page scrolledwindow.notes-scroll { background: @notes_paper; }
+textview.notes-source { padding: 0; background: transparent; }
+textview.notes-source > text { background: transparent; }
+textview.notes-source > border.left gutter { background: transparent; }
 
 /* ---- notices (conflicts, deletions, errors) ---- */
 .notes-notice { min-height: 34px; padding: 4px 8px 4px 16px; background: alpha(@waiting, 0.09); border-top: 1px solid alpha(@waiting, 0.28); border-bottom: 1px solid alpha(@waiting, 0.28); }
@@ -192,9 +195,25 @@ button.notes-status-item.on { color: @live; }
 .notes-goto entry.error { border-color: alpha(@held, 0.7); }
 
 /* ---- empty state ---- */
-.notes-host { background: @notes_paper; }
+.notes-host.empty { background: @notes_paper; }
 .notes-welcome { padding: 32px; }
 .notes-welcome-mark { color: @faint; margin-bottom: 4px; }
 .notes-welcome-title { color: @ink; font-size: 16px; font-weight: 600; }
 .notes-welcome-text { color: @secondary; font-size: 12px; margin-bottom: 6px; }
 .notes-welcome-keys { margin-top: 8px; color: @faint; font-size: 11px; }
+
+/* ---- the tasks a note became (note_pages/doc.rs load_tasks) ---- */
+.notes-tasks { padding: 0 12px 8px 18px; background: @notes_paper; }
+.notes-tasks-caption { margin-right: 4px; color: @faint; font-family: 'Geist', sans-serif; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; }
+flowbox.notes-task-chips, flowbox.notes-task-chips > flowboxchild { padding: 0; background: transparent; }
+button.notes-task-chip { min-height: 24px; padding: 0 9px 0 8px; border: 1px solid @edge; border-radius: 6px; background: alpha(@ink, 0.04); color: @ink; font-size: 12px; font-weight: 400; }
+button.notes-task-chip:hover { border-color: @strong; background: alpha(@ink, 0.09); }
+.notes-task-number { color: @faint; font-feature-settings: "tnum"; }
+.notes-task-title { color: @ink; }
+button.notes-task-chip.done .notes-task-title { color: @secondary; text-decoration-line: line-through; }
+.notes-task-column { color: @faint; font-size: 11px; }
+.notes-task-lamp { min-width: 7px; min-height: 7px; border-radius: 99px; border: 1px solid @faint; }
+.notes-task-lamp.ready { border-color: @secondary; }
+.notes-task-lamp.active { border-color: @waiting; background: @waiting; }
+.notes-task-lamp.in_review { border-color: @waiting; }
+.notes-task-lamp.done { border-color: @live; background: @live; }

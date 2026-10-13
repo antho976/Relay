@@ -1279,6 +1279,8 @@ impl Ui {
                 // panel opacity never shows the desktop through them.
                 css += &format!("\n@define-color {name}_solid {color};");
             }
+            // The Notes paper, translucent like the panels around it (css/notes.css).
+            css += &format!("\n@define-color notes_paper alpha({},{alpha});", crate::pages::NOTES_PAPER);
             // Terminal plates sit on one @wall layer; @plate tops that up to slightly
             // denser than the chrome. Matte's opaque default keeps the opaque screen.
             let wall = (alpha + 0.02).min(1.);

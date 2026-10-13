@@ -349,6 +349,25 @@ pub fn image_ref(line: &str) -> Option<(String, String, usize, usize)> {
     Some((alt.to_string(), path.to_string(), from, to))
 }
 
+/// Whether `text` holds nothing but image references (one per line) and blank space: only
+/// then does a copy put the pictures on the clipboard. With words around them, another app
+/// would take the picture and drop the words, so the copy stays text.
+pub fn only_images(text: &str) -> bool {
+    let mut any = false;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Some((_, _, from, to)) = image_ref(line) else { return false };
+        let mut outside = line.chars().take(from).chain(line.chars().skip(to));
+        if !outside.all(char::is_whitespace) {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
 /// A Markdown image reference to `path`, bracketed when the path would end it early.
 pub fn image_markdown(alt: &str, path: &str) -> String {
     if path.contains([' ', '(', ')', '<', '>']) {
@@ -491,6 +510,10 @@ mod tests {
         );
         assert_eq!(image_ref("![x]()"), None);
         assert_eq!(image_ref("[link](url)"), None);
+        assert!(only_images("![Image 1](/a.png)\n\n  ![Image 2](/b.png) "));
+        assert!(!only_images("Notes on it\n![Image 1](/a.png)"));
+        assert!(!only_images("see ![Image 1](/a.png) here"));
+        assert!(!only_images("  \n"));
         assert_eq!(image_markdown("Image 1", "/a b.png"), "![Image 1](</a b.png>)");
         assert_eq!(image_markdown("Image 1", "/a.png"), "![Image 1](/a.png)");
         let markdown = image_markdown("Image 3", "/a (b).png");

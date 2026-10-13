@@ -14,7 +14,7 @@ mod text;
 use super::task_pages::{buffer_text, Draft};
 use super::*;
 use doc::Doc;
-use glyphs::{glyph, glyph_stroke};
+use glyphs::{glyph, tool_glyph};
 use std::cell::{Cell, OnceCell};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -120,7 +120,10 @@ pub(super) const TOOLS: [Tool; 21] = [
     t("to-task", "task", "To task", "Create a task from this note, or from the selected text", 5),
 ];
 
-/// A toolbar key and the name shown beside its icon when labels are on.
+/// The toolbar group of formatting keys (bold to link), which never show names.
+const FORMAT_GROUP: u8 = 4;
+
+/// A toolbar key and the name shown under its icon when labels are on.
 struct ToolKey {
     key: gtk::Widget,
     caption: gtk::Label,
@@ -177,22 +180,25 @@ thread_local! {
     static RESTORED: RefCell<BTreeSet<i64>> = const { RefCell::new(BTreeSet::new()) };
     static LAST_QUERY: RefCell<String> = const { RefCell::new(String::new()) };
     static FONT: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
+    static TASKS_TIMER: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
     static SCHEME: OnceCell<Option<sourceview5::StyleScheme>> = const { OnceCell::new() };
 }
 
-/// The Notes paper: the text view's background here, `@notes_paper` in css/notes.css. It is
-/// deliberately the same in every appearance mode; change both together.
-pub(super) const NOTES_PAPER: &str = "#0c0c0e";
+/// The Notes paper, `@notes_paper` in css/notes.css, which paints it behind the text view at
+/// panel opacity. It is deliberately the same in every appearance mode; change both together.
+pub(crate) const NOTES_PAPER: &str = "#0c0c0e";
 
 const NOTES_SCHEME: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
 <!-- Relay Notes: the Code editor's matte palette, with quieter Markdown. -->
 <style-scheme id="relay-notes" name="Relay Notes" version="1.0" parent-scheme="Adwaita-dark">
-  <style name="text" foreground="#dcdcda" background="NOTES_PAPER"/>
+  <!-- The text view is clear: css/notes.css paints the paper under it, translucent over the
+       wallpaper, so the scheme's own backgrounds are transparent and the current line a tint. -->
+  <style name="text" foreground="#dcdcda" background="#00000000"/>
   <style name="selection" background="#3a3a3f"/>
   <style name="cursor" foreground="#ececea"/>
-  <style name="current-line" background="#131316"/>
-  <style name="line-numbers" foreground="#47474c" background="NOTES_PAPER"/>
-  <style name="current-line-number" foreground="#a5a5a3" background="NOTES_PAPER"/>
+  <style name="current-line" background="#ffffff08"/>
+  <style name="line-numbers" foreground="#47474c" background="#00000000"/>
+  <style name="current-line-number" foreground="#a5a5a3" background="#00000000"/>
   <style name="search-match" foreground="NOTES_PAPER" background="#e0b04a"/>
   <style name="def:heading" foreground="#f4f4f2" bold="true"/>
   <style name="def:emphasis" italic="true"/>
@@ -495,7 +501,7 @@ fn current_project(ui: &Rc<Ui>) -> i64 {
 /// A small icon key outside the toolbar (the library's New note key).
 fn tool(icon: &str, tip: &str, action: &str) -> gtk::Button {
     let key = gtk::Button::new();
-    key.set_child(Some(&glyph_stroke(icon, 16, 1.25)));
+    key.set_child(Some(&tool_glyph(icon, 16)));
     key.add_css_class("notes-tool");
     key.set_focus_on_click(false);
     key.set_tooltip_text(Some(tip));
@@ -505,7 +511,8 @@ fn tool(icon: &str, tip: &str, action: &str) -> gtk::Button {
 }
 
 fn tool_key(tool: &Tool) -> ToolKey {
-    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    // The name sits under the icon when labels are on.
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
     content.set_halign(gtk::Align::Center);
     match tool.icon.strip_prefix('#') {
         Some(mark) => {
@@ -513,7 +520,7 @@ fn tool_key(tool: &Tool) -> ToolKey {
             mark.add_css_class(&format!("notes-tool-mark-{}", tool.id));
             content.append(&mark);
         }
-        None => content.append(&glyph_stroke(tool.icon, 16, 1.25)),
+        None => content.append(&tool_glyph(tool.icon, 16)),
     }
     let caption = label(tool.caption, "notes-tool-caption");
     caption.set_visible(false);
@@ -552,8 +559,11 @@ fn apply_toolbar(shell: &Shell, prefs: &Prefs) {
         let visible = prefs.toolbar_hidden & (1 << i) == 0;
         groups[usize::from(tool.group)] |= visible;
         key.key.set_visible(visible);
-        key.caption.set_visible(prefs.toolbar_labels);
-        if prefs.toolbar_labels {
+        // Formatting keys keep to their icons, as in a word processor: named, the bar would
+        // outgrow the window.
+        let named = prefs.toolbar_labels && tool.group != FORMAT_GROUP;
+        key.caption.set_visible(named);
+        if named {
             key.key.add_css_class("labelled");
         } else {
             key.key.remove_css_class("labelled");
@@ -572,7 +582,7 @@ fn apply_toolbar(shell: &Shell, prefs: &Prefs) {
     }
 }
 
-/// The toolbar's own settings: names beside icons, and which keys it shows.
+/// The toolbar's own settings: names under icons, and which keys it shows.
 fn customize_popover(ui: &Rc<Ui>, toolbar: &gtk::Box) -> (gtk::Popover, Vec<gtk::CheckButton>, gtk::Switch) {
     let popover = gtk::Popover::new();
     popover.add_css_class("notes-customize");
@@ -589,7 +599,7 @@ fn customize_popover(ui: &Rc<Ui>, toolbar: &gtk::Box) -> (gtk::Popover, Vec<gtk:
     body.append(&label("Toolbar", "notes-customize-title"));
     let labels_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     labels_row.add_css_class("notes-customize-row");
-    let caption = label("Show names beside icons", "notes-customize-caption");
+    let caption = label("Show names under icons", "notes-customize-caption");
     caption.set_hexpand(true);
     labels_row.append(&caption);
     let labels = gtk::Switch::new();
@@ -616,7 +626,7 @@ fn customize_popover(ui: &Rc<Ui>, toolbar: &gtk::Box) -> (gtk::Popover, Vec<gtk:
                 mark.set_width_chars(2);
                 content.append(&mark);
             }
-            None => content.append(&glyph_stroke(tool.icon, 16, 1.25)),
+            None => content.append(&tool_glyph(tool.icon, 16)),
         }
         content.append(&label(tool.caption, "notes-customize-caption"));
         check.set_child(Some(&content));
@@ -697,7 +707,7 @@ fn shell(ui: &Rc<Ui>) -> Rc<Shell> {
     let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 1);
     toolbar.add_css_class("notes-toolbar");
     let collapse = gtk::Button::new();
-    collapse.set_child(Some(&glyph_stroke("sidebar", 16, 1.25)));
+    collapse.set_child(Some(&tool_glyph("sidebar", 16)));
     collapse.add_css_class("notes-tool");
     collapse.set_focus_on_click(false);
     collapse.set_widget_name("notes-library-toggle");
@@ -727,7 +737,20 @@ fn shell(ui: &Rc<Ui>) -> Rc<Shell> {
         }
     });
     toolbar.add_controller(right);
-    root.append(&toolbar);
+    // Named keys can outgrow a narrow window: the bar scrolls sideways (wheel or touchpad)
+    // instead of setting the window's minimum width.
+    let toolbar_scroll = gtk::ScrolledWindow::new();
+    toolbar_scroll.set_policy(gtk::PolicyType::External, gtk::PolicyType::Never);
+    toolbar_scroll.add_css_class("notes-toolbar-scroll");
+    toolbar_scroll.set_child(Some(&toolbar));
+    let wheel = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    let along = toolbar_scroll.hadjustment();
+    wheel.connect_scroll(move |_, _, dy| {
+        along.set_value(along.value() + dy * 40.0);
+        glib::Propagation::Stop
+    });
+    toolbar_scroll.add_controller(wheel);
+    root.append(&toolbar_scroll);
 
     let split = gtk::Paned::new(gtk::Orientation::Horizontal);
     split.set_widget_name("notes-library-split");
@@ -753,7 +776,7 @@ fn shell(ui: &Rc<Ui>) -> Rc<Shell> {
     search.set_hexpand(true);
     head.append(&search);
     let sort = gtk::MenuButton::new();
-    sort.set_child(Some(&glyph_stroke("sort", 16, 1.25)));
+    sort.set_child(Some(&tool_glyph("sort", 16)));
     sort.add_css_class("notes-library-key");
     sort.set_tooltip_text(Some("Sort notes"));
     sort.set_menu_model(Some(&menu::sort_menu()));
@@ -777,6 +800,7 @@ fn shell(ui: &Rc<Ui>) -> Rc<Shell> {
 
     let host = gtk::Box::new(gtk::Orientation::Vertical, 0);
     host.add_css_class("notes-host");
+    host.add_css_class("empty");
     host.set_vexpand(true);
     host.set_hexpand(true);
     let banner = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -1112,7 +1136,7 @@ fn build_row(note: &Value) -> Row {
     if note["pinned"] == true {
         let pin = glyph("pin", 12);
         pin.add_css_class("notes-row-pin");
-        pin.set_tooltip_text(Some("Pinned: shared with agents"));
+        pin.set_tooltip_text(Some("Pinned to the top of the library"));
         top.append(&pin);
     }
     content.append(&top);
@@ -1228,6 +1252,14 @@ fn update_welcome(ui: &Rc<Ui>) {
     });
     ui.note_tabs.set_visible(open);
     shell.welcome.set_visible(!open);
+    // With no document the host is the paper; with one, the document paints its own.
+    if let Some(host) = shell.welcome.parent() {
+        if open {
+            host.remove_css_class("empty");
+        } else {
+            host.add_css_class("empty");
+        }
+    }
 }
 
 /// Tabs of other projects are hidden, so unsaved ones among them are named in a bar above
@@ -1418,7 +1450,28 @@ pub(super) fn open_doc(ui: &Rc<Ui>, note: Value, position: Option<u32>) -> Rc<Do
     DOCS.with(|docs| docs.borrow_mut().insert(id, doc.clone()));
     tabs.set_current_page(Some(page));
     tabs_changed(ui);
+    doc::load_tasks(ui, &doc);
     doc
+}
+
+/// A task changed somewhere: every open note lists its tasks again, once the burst settles.
+pub fn tasks_changed(ui: &Rc<Ui>) {
+    if !owner(ui).is_some_and(|o| o.window.is_visible()) || docs().is_empty() {
+        return;
+    }
+    if let Some(timer) = TASKS_TIMER.with(|t| t.borrow_mut().take()) {
+        timer.remove();
+    }
+    let weak = Rc::downgrade(ui);
+    let timer = glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
+        TASKS_TIMER.with(|t| t.borrow_mut().take());
+        if let Some(ui) = weak.upgrade() {
+            for doc in docs() {
+                doc::load_tasks(&ui, &doc);
+            }
+        }
+    });
+    TASKS_TIMER.with(|t| *t.borrow_mut() = Some(timer));
 }
 
 pub fn edit(ui: &Rc<Ui>, note: Value) {
@@ -1591,7 +1644,7 @@ pub(super) fn confirm_delete(ui: &Rc<Ui>, id: i64, name: String) {
     glib::spawn_future_local(async move {
         let dialog = gtk::AlertDialog::builder()
             .message(format!("Delete “{name}”?"))
-            .detail("It leaves this project's library, and agents stop reading it.")
+            .detail("It leaves this project's library. Tasks made from it keep their text.")
             .buttons(["Cancel", "Delete"])
             .cancel_button(0)
             .default_button(0)

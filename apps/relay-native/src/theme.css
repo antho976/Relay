@@ -267,8 +267,11 @@ button.task-choice:hover { background: @slab; }
 
 
 /* Separate Notes workspace and compact task detail. */
-/* Notes has no wallpaper behind it: panel opacity must not show the desktop through it. */
-window.notes-window, window.notes-window > box { padding: 0; margin: 0; border: 0; box-shadow: none; background: @wall_solid; }
+/* Notes draws the main window's wallpaper (notes_window.rs) over an opaque window, so panel
+   opacity shows the wallpaper, never the desktop. Its containers stay clear; css/notes.css
+   paints each surface once, so translucent layers never stack. */
+window.notes-window { padding: 0; margin: 0; border: 0; box-shadow: none; background: @wall_solid; }
+.notes-window .notes-page, .notes-window .notes-page stack, .notes-window .notes-page scrolledwindow, .notes-window .notes-page viewport { background: transparent; }
 .notes-window-loading { padding: 24px; color: @secondary; }
 .notes-window .notes-page { padding: 0; }
 .task-detail-tabs { margin-bottom: 8px; }

@@ -1063,3 +1063,12 @@ The *why* behind anything surprising. Append; never rewrite history. Reference a
   then opens a terminal) is below the engine, so `relay` typed there is refused as the user.
   This is a seatbelt against an agent's own tree, not a boundary against a same-uid process that
   gets itself started elsewhere (`systemd-run --user`, cron, editing the store).
+- **D166 Agents are not handed notes; a task remembers the note it came from.** Notes are the
+  thinking before a task, and the standing note was injected into every brief (D27, D101), so an
+  agent started on one card read the project's whole scratchpad first and took it as
+  instruction. The brief now carries state, peers, adjacent work, comms, skills and plugins, and
+  no notes: an agent works from its task and reads a note (`notes.get`, `notes.standing`) only
+  when it asks. What a note decided reaches the agent through the task made from it, which
+  records that note as `note_id` (`task.create {note_id}`, store v26; `task.list {note_id}`
+  lists them). The link is refused across projects and to a deleted note, and purging the note
+  clears it rather than the task.

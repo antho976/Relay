@@ -1897,6 +1897,44 @@ impl Detail {
         tags.append(&entry);
         self.side.append(&tags);
 
+        // The note it was made from: the thinking before the work, one click away.
+        if let Some(note_id) = task["note_id"].as_i64() {
+            let origin = side_section("From note");
+            let key = button("", "issue-side-key");
+            let row = icon_row("notes", "Open the note");
+            key.set_child(Some(&row));
+            key.set_halign(gtk::Align::Start);
+            let caption = row.last_child().and_downcast::<gtk::Label>();
+            if let Some(caption) = &caption {
+                caption.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                caption.set_max_width_chars(30);
+            }
+            let weak = Rc::downgrade(&ui);
+            let named = caption.map(|c| c.downgrade());
+            glib::spawn_future_local(async move {
+                let Some(ui) = weak.upgrade() else { return };
+                let title = match ui.call("notes.get", json!({"note_id":note_id})).await {
+                    Ok(note) => text(&note, "title").trim().to_string(),
+                    Err(_) => return,
+                };
+                if let Some(caption) = named.and_then(|c| c.upgrade()) {
+                    caption.set_text(if title.is_empty() { "Untitled" } else { &title });
+                }
+            });
+            let weak = Rc::downgrade(&ui);
+            key.connect_clicked(move |_| {
+                let Some(ui) = weak.upgrade() else { return };
+                glib::spawn_future_local(async move {
+                    match ui.call("notes.get", json!({"note_id":note_id})).await {
+                        Ok(note) => crate::pages::open_note(&ui, note),
+                        Err(error) => ui.show_error(&format!("Could not open the note: {error}")),
+                    }
+                });
+            });
+            origin.append(&key);
+            self.side.append(&origin);
+        }
+
         // Assignees: the agents it went to, and sending it to a live one.
         let people = side_section("Assignees");
         let agents: Vec<String> = rows(task, "sessions").iter().filter_map(|v| v.as_str().map(str::to_string)).collect();

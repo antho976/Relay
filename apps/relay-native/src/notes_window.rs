@@ -81,7 +81,24 @@ impl NotesWindow {
         content.set_vexpand(true);
         content.append(&label("Opening Notes…", "notes-window-loading"));
         root.append(content);
-        window.set_child(Some(&root));
+        // The main window's wallpaper and dim layer, mirrored: panel opacity shows the same
+        // picture here, never the desktop (the window itself paints @wall_solid underneath).
+        let wallpaper = gtk::Picture::new();
+        wallpaper.set_can_shrink(true);
+        wallpaper.set_content_fit(gtk::ContentFit::Cover);
+        ui.wallpaper.bind_property("paintable", &wallpaper, "paintable").sync_create().build();
+        let dim = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        dim.add_css_class("wallpaper-dim");
+        dim.set_can_target(false);
+        ui.wallpaper_dim.bind_property("opacity", &dim, "opacity").sync_create().build();
+        let backdrop = gtk::Overlay::new();
+        backdrop.add_css_class("notes-backdrop");
+        backdrop.set_child(Some(&wallpaper));
+        backdrop.add_overlay(&dim);
+        backdrop.add_overlay(&root);
+        root.set_hexpand(true);
+        root.set_vexpand(true);
+        window.set_child(Some(&backdrop));
         let owned = Rc::new(Self {
             window,
             project: Cell::new(0),

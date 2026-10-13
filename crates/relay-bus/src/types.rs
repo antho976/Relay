@@ -452,6 +452,10 @@ pub struct Task {
     pub blocks: Vec<Id>,
     /// The task this duplicates, if any.
     pub duplicate_of: Option<Id>,
+    /// The note this task was made from, if any (`task.create` with `note_id`). Cleared when
+    /// that note is purged; absent from an older engine.
+    #[serde(default)]
+    pub note_id: Option<Id>,
     /// Every session ever dispatched to it, in order; a PAIR adds two.
     pub sessions: Vec<String>,
     pub commits: Vec<TaskCommit>,

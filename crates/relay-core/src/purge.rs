@@ -91,6 +91,7 @@ pub fn run(tx: &Transaction, store_dir: &Path) -> rusqlite::Result<Purged> {
         }
         note(modules.len(), "deleted module(s) past the undo window");
 
+        // A task made from a purged note keeps its card: `ON DELETE SET NULL` clears its `note_id`.
         note(tx.execute("DELETE FROM notes WHERE deleted_at IS NOT NULL AND deleted_at < ?1", [&cutoff])?, "deleted note(s) past the undo window");
 
         // Trashed files: the row and its `.relay/trash/<id>/` directory. Restored rows have no

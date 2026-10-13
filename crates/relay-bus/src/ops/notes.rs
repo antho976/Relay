@@ -43,7 +43,7 @@ op!(Restore, "notes.restore", IdIn => Note,
     OpMeta::mutation(Scope::Project, 5, "Restore a note").undo(Undo::Inverse).emits(&["notes.changed"]));
 payload!(#[schemars(rename = "NotesStandingIn")] StandingIn { pub project_id: Id });
 result!(#[schemars(rename = "NotesStandingOut")] StandingOut { pub text: String });
-op!(Standing, "notes.standing", StandingIn => StandingOut, OpMeta::query(Scope::Project, 5, "Exactly what gets injected at dispatch"));
+op!(Standing, "notes.standing", StandingIn => StandingOut, OpMeta::query(Scope::Project, 5, "The project's standing note: agents read it on request; it is not injected into briefs"));
 
 payload!(#[schemars(rename = "NotesSendIn")] SendIn { pub project_id: Id, pub to: String, pub text: String, pub re_task: Option<Id>, pub priority: Option<bool> });
 // One addressee of a message and where it currently stands.

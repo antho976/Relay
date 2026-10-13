@@ -16,12 +16,17 @@ mod task_pages;
 #[path = "board_view.rs"]
 mod board_view;
 pub use notes_window::{refresh_notes, show_notes, NotesWindow};
+pub(crate) use note_pages::NOTES_PAPER;
 pub use note_pages::{close_all_notes, discard_note, notes_prefs, open_draft, set_notes_prefs, shown_project, unsaved_notes, Prefs as NotesPrefs};
 pub use guardrail_pages::{guardrail_event, restore_prompts, settings_editor as guardrail_settings};
 #[allow(unused_imports)] // entry points for the workspace and project menus
 pub use guardrail_pages::{open_project_guardrails, open_workspace_guardrails};
 pub fn verify_note_tools() {
     note_pages::verify_tools();
+}
+/// Open notes list the tasks made from them; a task event refreshes those lists.
+pub fn note_tasks_changed(ui: &Rc<Ui>) {
+    note_pages::tasks_changed(ui);
 }
 pub fn open_note(ui: &Rc<Ui>, note: Value) {
     notes_window::show_project(ui, note["project_id"].as_i64().unwrap_or(ui.project.get()));

@@ -1627,7 +1627,7 @@
       }
     },
     "notes.standing": {
-      "summary": "Exactly what gets injected at dispatch",
+      "summary": "The project's standing note: agents read it on request; it is not injected into briefs",
       "kind": "query",
       "audit": "never",
       "undo": "none",
@@ -8280,6 +8280,14 @@
             "type": "string"
           },
           "description": "Free-form tags; unknown names are created in the project's label set."
+        },
+        "note_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "The note this task is made from: a live note in the same project, or `notes.not_found`."
         }
       },
       "required": [
@@ -8475,6 +8483,15 @@
           ],
           "format": "int64",
           "description": "The task this duplicates, if any."
+        },
+        "note_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "The note this task was made from, if any (`task.create` with `note_id`). Cleared when\nthat note is purged; absent from an older engine.",
+          "default": null
         },
         "sessions": {
           "type": "array",
@@ -8882,6 +8899,14 @@
             "null"
           ],
           "description": "A session name; matches every task that session was ever dispatched to."
+        },
+        "note_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "Only the tasks made from this note."
         },
         "parent_id": {
           "type": [
@@ -11022,7 +11047,7 @@
         },
         "compact": {
           "type": "string",
-          "description": "State, peers, notes and adjacent work only — the part small enough to inject on every\nspawn. Skill bodies are referenced by path instead of inlined (D101)."
+          "description": "State, peers and adjacent work only — the part small enough to inject on every\nspawn. Skill bodies are referenced by path instead of inlined (D101)."
         },
         "parts": {
           "$ref": "#/$defs/SessionBriefParts"
@@ -11043,9 +11068,6 @@
         "peers": {
           "type": "string"
         },
-        "notes": {
-          "type": "string"
-        },
         "adjacent": {
           "type": "string"
         },
@@ -11060,7 +11082,6 @@
       "required": [
         "state",
         "peers",
-        "notes",
         "adjacent",
         "skills"
       ]

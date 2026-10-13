@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// The schema version this build knows. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: i64 = 25;
+pub const SCHEMA_VERSION: i64 = 26;
 
 /// Numbered migrations; index 0 brings a fresh DB to `user_version = 1`.
 pub const MIGRATIONS: &[&str] = &[
@@ -416,6 +416,13 @@ pub const MIGRATIONS: &[&str] = &[
       author TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL
     );
     CREATE INDEX task_comments_task ON task_comments(task_id, id);
+    "#,
+    // v26 - a task remembers the note it was made from (`task.create` with `note_id`), so the
+    // note's thinking stays one step from the card. Purging the note clears the link instead
+    // of the task; existing tasks were made from no note.
+    r#"
+    ALTER TABLE tasks ADD COLUMN note_id INTEGER REFERENCES notes(id) ON DELETE SET NULL;
+    CREATE INDEX tasks_note ON tasks(note_id);
     "#,
 ];
 

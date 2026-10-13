@@ -61,6 +61,10 @@ pub struct Doc {
     pub inline: super::inline::Inline,
     /// The task the last "Create task" made, for its notice's Open key.
     last_task: Cell<i64>,
+    /// The tasks made from this note, under its title: the thinking and the work it became.
+    tasks: gtk::Box,
+    /// Bumped by every `load_tasks`, so a slow answer never overwrites a newer one.
+    tasks_generation: Cell<u64>,
 }
 
 /// The largest body this client sends. Replies and `notes.changed` events carry the whole
@@ -142,10 +146,14 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
     pin.add_css_class("notes-pin");
     pin.set_valign(gtk::Align::Center);
     pin.set_focus_on_click(false);
-    pin.set_tooltip_text(Some("Pin this note. Pinned notes are shared with agents."));
+    pin.set_tooltip_text(Some("Pin this note to the top of the library"));
     pin.set_active(note["pinned"].as_bool().unwrap_or(false));
     head.append(&pin);
     form.append(&head);
+    let tasks = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    tasks.add_css_class("notes-tasks");
+    tasks.set_visible(false);
+    form.append(&tasks);
 
     let notice = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     notice.add_css_class("notes-notice");
@@ -394,6 +402,8 @@ pub fn build(ui: &Rc<Ui>, note: &Value) -> Rc<Doc> {
         flash_timer: RefCell::new(None),
         inline,
         last_task: Cell::new(0),
+        tasks,
+        tasks_generation: Cell::new(0),
     });
     let weak_ui = Rc::downgrade(ui);
     let weak = Rc::downgrade(&doc);
@@ -746,11 +756,15 @@ impl Doc {
         ));
     }
 
-    /// Copy or cut a selection that references images: the files and, for one, the picture
-    /// travel with the text. Returns whether it handled the copy.
+    /// Copy or cut a selection of pictures alone: the files and, for one, the picture travel
+    /// with the text. A selection with words in it copies as text (`tx::only_images`). Returns
+    /// whether it handled the copy.
     fn copy_with_images(&self, cut: bool) -> bool {
         let Some((start, end)) = self.buffer.selection_bounds() else { return false };
         let selected = self.buffer.text(&start, &end, false).to_string();
+        if !tx::only_images(&selected) {
+            return false;
+        }
         let images = super::inline::referenced(&selected);
         if images.is_empty() {
             return false;
@@ -1271,7 +1285,11 @@ pub fn to_task(ui: &Rc<Ui>, doc: &Rc<Doc>) {
     let text = text.trim();
     let source = format!("From the note “{name}”.");
     let body = if text.is_empty() { source } else { format!("{text}\n\n{source}") };
-    let payload = json!({"project_id":doc.project,"title":title,"body":body,"column":"backlog"});
+    let mut payload = json!({"project_id":doc.project,"title":title,"body":body,"column":"backlog"});
+    // The task remembers its note, which lists it under its title from then on.
+    if doc.id > 0 {
+        payload["note_id"] = json!(doc.id);
+    }
     let (ui, doc) = (ui.clone(), doc.clone());
     glib::spawn_future_local(async move {
         match ui.call("task.create", payload).await {
@@ -1284,10 +1302,99 @@ pub fn to_task(ui: &Rc<Ui>, doc: &Rc<Doc>) {
                     vec![("Open task", |ui, doc| super::super::task_pages::open(ui, doc.last_task.get()))],
                 );
                 doc.notice.add_css_class("info");
+                load_tasks(&ui, &doc);
             }
             Err(error) => doc.show_notice(&ui, &format!("Could not create a task: {error}"), Vec::new()),
         }
     });
+}
+
+/// List the tasks made from this note under its title, each a key that opens the task. The
+/// strip stays hidden while there are none, or when the engine cannot say.
+pub fn load_tasks(ui: &Rc<Ui>, doc: &Rc<Doc>) {
+    if doc.id <= 0 || doc.orphan.get() {
+        doc.tasks.set_visible(false);
+        return;
+    }
+    let generation = doc.tasks_generation.get() + 1;
+    doc.tasks_generation.set(generation);
+    let payload = json!({"project_id":doc.project,"note_id":doc.id,"summary":true});
+    let (ui, doc) = (ui.clone(), doc.clone());
+    glib::spawn_future_local(async move {
+        let found = ui.call("task.list", payload).await;
+        if doc.tasks_generation.get() != generation {
+            return;
+        }
+        let tasks = match found {
+            Ok(value) => rows(&value, "tasks"),
+            Err(error) => {
+                tracing::debug!(%error, "the note's tasks could not be listed");
+                Vec::new()
+            }
+        };
+        clear(&doc.tasks);
+        doc.tasks.set_visible(!tasks.is_empty());
+        if tasks.is_empty() {
+            return;
+        }
+        let caption = label(if tasks.len() == 1 { "Task" } else { "Tasks" }, "notes-tasks-caption");
+        caption.set_valign(gtk::Align::Center);
+        doc.tasks.append(&caption);
+        let chips = gtk::FlowBox::new();
+        chips.add_css_class("notes-task-chips");
+        chips.set_selection_mode(gtk::SelectionMode::None);
+        chips.set_hexpand(true);
+        chips.set_max_children_per_line(12);
+        chips.set_column_spacing(4);
+        chips.set_row_spacing(4);
+        for task in &tasks {
+            chips.insert(&task_chip(&ui, task), -1);
+        }
+        doc.tasks.append(&chips);
+    });
+}
+
+/// One task made from the note: its state, number and title; a click opens it.
+fn task_chip(ui: &Rc<Ui>, task: &Value) -> gtk::Button {
+    let id = task["id"].as_i64().unwrap_or(0);
+    let column = text(task, "column");
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let lamp = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    lamp.add_css_class("notes-task-lamp");
+    lamp.add_css_class(column);
+    lamp.set_valign(gtk::Align::Center);
+    content.append(&lamp);
+    content.append(&label(&format!("#{id}"), "notes-task-number"));
+    let title = label(text(task, "title"), "notes-task-title");
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    title.set_max_width_chars(36);
+    content.append(&title);
+    let place = match column {
+        "backlog" => "Backlog",
+        "ready" => "Ready",
+        "active" => "In progress",
+        "in_review" => "In review",
+        "done" => "Done",
+        other => other,
+    };
+    content.append(&label(place, "notes-task-column"));
+    let chip = gtk::Button::new();
+    chip.add_css_class("notes-task-chip");
+    if column == "done" {
+        chip.add_css_class("done");
+    }
+    chip.set_child(Some(&content));
+    chip.set_focus_on_click(false);
+    chip.set_tooltip_text(Some("Open the task"));
+    let weak = Rc::downgrade(ui);
+    chip.connect_clicked(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            // The task opens on the main window's board, which comes forward for it.
+            ui.window.present();
+            super::super::task_pages::open(&ui, id);
+        }
+    });
+    chip
 }
 
 fn pin_changed(ui: &Rc<Ui>, doc: &Rc<Doc>) {

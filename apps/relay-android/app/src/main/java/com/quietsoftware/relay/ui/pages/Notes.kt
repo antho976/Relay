@@ -30,14 +30,11 @@ import com.quietsoftware.relay.core.model.Note
 import com.quietsoftware.relay.core.sync.Kind
 import com.quietsoftware.relay.core.sync.Optimistic
 import com.quietsoftware.relay.core.sync.Refs
-import com.quietsoftware.relay.core.wire.s
-import com.quietsoftware.relay.data.Relay.Live
 import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
 import com.quietsoftware.relay.ui.kit.Field
 import com.quietsoftware.relay.ui.kit.Gap
-import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.Hairline
 import com.quietsoftware.relay.ui.kit.IconKey
 import com.quietsoftware.relay.ui.kit.Key
@@ -45,7 +42,6 @@ import com.quietsoftware.relay.ui.kit.KeyKind
 import com.quietsoftware.relay.ui.kit.Markdown
 import com.quietsoftware.relay.ui.kit.SectionLabel
 import com.quietsoftware.relay.ui.kit.Segmented
-import com.quietsoftware.relay.ui.kit.Slab
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.ago
 import com.quietsoftware.relay.ui.kit.column
@@ -63,7 +59,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/** The project's notes: the standing brief at the top, pinned notes, the rest, and search. */
+/** The project's notes: pinned notes, the rest, and search. */
 @Composable
 fun NotesScreen(projectId: Long?, nav: Nav) {
     val s by nav.shell.state.collectAsStateWithLifecycle()
@@ -78,11 +74,7 @@ private fun NotesList(pid: Long, nav: Nav) {
     val c = Relay.colors
     val s by nav.shell.state.collectAsStateWithLifecycle()
     val notes by remember(pid) { nav.relay.notes(pid) }.collectAsStateWithLifecycle(initialValue = emptyList())
-    val standing by remember(pid) { nav.relay.live("notes.standing", buildJsonObject { put("project_id", pid) }) }
-        .collectAsStateWithLifecycle(initialValue = Live())
     var query by rememberSaveable { mutableStateOf("") }
-    var briefOpen by rememberSaveable { mutableStateOf(false) }
-    var append by rememberSaveable { mutableStateOf("") }
 
     // Notes with an edit or a create still on their way to the PC.
     val waiting = remember(s.outbox) {
@@ -92,7 +84,6 @@ private fun NotesList(pid: Long, nav: Nav) {
     val shown = if (q.isEmpty()) notes else notes.filter { n -> (n.title ?: "").lowercase().contains(q) || n.body.lowercase().contains(q) }
     val pinned = shown.filter { it.pinned }
     val rest = shown.filter { !it.pinned }
-    val standingText = (standing.result as? JsonObject)?.s("text")
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
@@ -106,51 +97,13 @@ private fun NotesList(pid: Long, nav: Nav) {
                 }
             }
             item {
-                Gap(8.dp)
-                Slab(Modifier.fillMaxWidth(), padding = PaddingValues(14.dp)) {
-                    Row(
-                        Modifier.fillMaxWidth().clickable { briefOpen = !briefOpen },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            T("Standing brief", style = Relay.type.uiMedium, color = c.ink)
-                            T("What every agent gets at dispatch", style = Relay.type.caption, color = c.ink3)
-                        }
-                        Glyph(if (briefOpen) "chevron-up" else "chevron-down", 16.dp, c.ink3)
-                    }
-                    if (briefOpen) {
-                        Gap(10.dp)
-                        when {
-                            standingText == null -> T(standing.error?.message ?: "Loading…", style = Relay.type.caption, color = c.ink3)
-                            standingText.isBlank() -> T("Empty. Agents get no standing notes until something is added.", style = Relay.type.caption, color = c.ink3)
-                            else -> T(standingText, style = Relay.type.code, color = c.ink2)
-                        }
-                        Gap(12.dp)
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Field(append, { append = it }, Modifier.weight(1f), placeholder = "Add a line to the brief")
-                            Key(
-                                "Add to brief",
-                                {
-                                    val text = append.trim()
-                                    if (text.isNotEmpty()) {
-                                        nav.shell.change("notes.append", buildJsonObject { put("project_id", pid); put("text", text) }, "Add to brief") { append = "" }
-                                    }
-                                },
-                                enabled = append.isNotBlank(),
-                                compact = true,
-                            )
-                        }
-                    }
-                }
-            }
-            item {
                 Gap(12.dp)
                 Field(query, { query = it }, Modifier.fillMaxWidth(), placeholder = "Search notes", leading = "search")
                 Gap(4.dp)
             }
 
             if (notes.isEmpty()) {
-                item { Empty("notes", "No notes yet", "Notes are shared with the PC and, when pinned, with the agents.") }
+                item { Empty("notes", "No notes yet", "Notes are shared with the PC. Agents read only the tasks they are given.") }
             } else if (shown.isEmpty()) {
                 item { Empty("search", "No note matches", query) }
             }

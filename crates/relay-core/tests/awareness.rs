@@ -181,7 +181,10 @@ fn notes_mailbox_and_brief_are_persistent_and_scoped() {
     let text = brief["text"].as_str().unwrap();
     assert!(text.contains("Build awareness"));
     assert!(text.contains("Phase 4 complete"));
-    assert!(text.contains("Always run cargo fmt"));
+    // Notes are not injected: an agent works from its task and reads a note when it asks (D166).
+    assert!(!text.contains("Always run cargo fmt"), "the standing note leaked into the brief");
+    assert!(!text.contains("Standing notes"), "the brief still has a notes section");
+    assert!(brief["parts"].get("notes").is_none(), "the brief still has a notes part");
     assert!(text.contains(f.b_name()));
     assert!(text.contains("Adjacent task"));
     assert!(brief["parts"]["skills"].as_str().unwrap().contains("### Verification"));
@@ -193,6 +196,7 @@ fn notes_mailbox_and_brief_are_persistent_and_scoped() {
     assert!(compact.contains(".claude/skills/verification/"), "no registered location: {compact}");
     assert!(compact.contains(".relay/session-skills.md"), "the bodies are still reachable");
     assert!(!compact.contains("Run the repository test suite"), "bodies stay out of the prompt (D101)");
+    assert!(!compact.contains("Always run cargo fmt"), "the standing note leaked into the injected half");
 
     let bootstrap = ok(
         e,
@@ -211,7 +215,7 @@ fn notes_mailbox_and_brief_are_persistent_and_scoped() {
     assert_eq!(bootstrap["task"]["body"], "Implement Phase 5");
     assert_eq!(bootstrap["task"]["changelog"], "Phase 4 complete");
     // F8: the one call every agent makes answers "who else is here and what may I do?".
-    // Standing notes and skill bodies still live in the brief, not here.
+    // Skill bodies still live in the brief, not here; notes are in neither.
     let peer_names: Vec<&str> = bootstrap["peers"].as_array().unwrap().iter()
         .map(|peer| peer["session"].as_str().unwrap()).collect();
     assert!(peer_names.contains(&f.b_name()), "bootstrap hides the live peers: {peer_names:?}");
@@ -643,10 +647,9 @@ fn an_oversized_brief_section_is_cut_with_a_pointer_to_the_full_list() {
     let adjacent = brief["parts"]["adjacent"].as_str().unwrap();
     assert!(adjacent.lines().count() <= 41, "{adjacent}");
     assert!(adjacent.ends_with("not shown here; the full list: `task.list {\"module_id\": 1}`"), "{adjacent}");
-    let notes = brief["parts"]["notes"].as_str().unwrap();
-    assert!(notes.len() < 17 * 1024, "{}", notes.len());
-    assert!(notes.starts_with("standing rule number 0\n"));
-    assert!(notes.ends_with("the whole text: `notes.standing {\"project_id\": 1}`]"), "{}", &notes[notes.len() - 200..]);
+    // However long the standing note, none of it rides in the brief (D166).
+    assert!(brief["parts"].get("notes").is_none());
+    assert!(!brief["text"].as_str().unwrap().contains("standing rule number"));
     // The compact half carries the same cut sections.
     assert!(brief["compact"].as_str().unwrap().contains("the full list: `task.list"));
     // A section within its budget is whole and says nothing more.
