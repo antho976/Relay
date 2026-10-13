@@ -444,6 +444,11 @@ impl Ui {
         before.is_some_and(|before| !idle.is_subset(&before))
     }
 
+    /// Whether any report carries a Fable window; until one does its chip stays hidden.
+    fn fable_reported(&self) -> bool {
+        self.usage.rows.borrow().iter().flat_map(windows).any(|w| classify(&w.name) == Some(Meter::Fable))
+    }
+
     fn stale_count(&self) -> usize {
         let now = now();
         self.usage
@@ -496,7 +501,7 @@ impl Ui {
             list.append(&note);
         }
         for (provider, name, item) in visible {
-            let section = gtk::Box::new(gtk::Orientation::Vertical, 10);
+            let section = gtk::Box::new(gtk::Orientation::Vertical, 6);
             section.add_css_class("usage-provider");
             let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             head.add_css_class("usage-provider-head");
@@ -538,14 +543,17 @@ impl Ui {
                 if !enabled(&prefs, provider, meter.key()) {
                     continue;
                 }
-                shown += 1;
                 match found.iter().find(|w| classify(&w.name) == Some(meter)) {
                     Some(window) => section.append(&meter_row(meter.title(), window, now)),
+                    // Claude Code's status line carries no Fable window today; a row saying so
+                    // on every open is noise, so Fable shows only once it is reported.
+                    None if meter == Meter::Fable => continue,
                     None => section.append(&missing_row(
                         meter.title(),
                         if provider == "claude" { "Not reported by Claude Code" } else { "Not reported by Codex" },
                     )),
                 }
+                shown += 1;
             }
             for window in found.iter().filter(|w| classify(&w.name).is_none()) {
                 section.append(&meter_row(&humanize(&window.name), window, now));
@@ -559,7 +567,7 @@ impl Ui {
     }
 
     pub(crate) fn usage_panel(self: &Rc<Self>) {
-        let Some(panel) = crate::panel::Panel::toggle(self, "Usage limits", 420) else {
+        let Some(panel) = crate::panel::Panel::toggle(self, "Usage limits", 360) else {
             return;
         };
         panel.beside(&self.page_overlay, &self.usage.card.root, 480);
@@ -628,8 +636,12 @@ impl Ui {
         for (switch, provider) in switches {
             switch.set_active(enabled(prefs, provider, "enabled"));
         }
+        let fable = self.fable_reported();
         for (chip, provider, key) in chips {
             chip.set_active(enabled(prefs, provider, key));
+            if key == Meter::Fable.key() {
+                chip.set_visible(fable);
+            }
         }
         let current = interval(prefs);
         for (choice, minutes) in intervals {
@@ -645,7 +657,7 @@ impl Ui {
         let prefs = self.usage.prefs.borrow().clone();
         let mut controls = Options::default();
         // Settings' shape: a quiet heading over a rounded card of rows, the control on the right.
-        let options = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let options = gtk::Box::new(gtk::Orientation::Vertical, 6);
         options.add_css_class("usage-options");
         let heading = label("Show in the sidebar", "usage-options-title");
         heading.set_xalign(0.0);
@@ -673,6 +685,9 @@ impl Ui {
             for &meter in meters(provider) {
                 let chip = gtk::ToggleButton::with_label(meter.title());
                 chip.add_css_class("usage-chip");
+                if meter == Meter::Fable {
+                    chip.set_visible(self.fable_reported());
+                }
                 chip.set_active(enabled(&prefs, provider, meter.key()));
                 chip.set_tooltip_text(Some(&format!("Show {name}'s {} limit", meter.title().to_lowercase())));
                 controls.chips.push((chip.downgrade(), provider, meter.key()));
@@ -741,7 +756,7 @@ impl Ui {
 
 fn meter_row(title: &str, window: &Window, now: u64) -> gtk::Box {
     let stale = window.stale(now);
-    let row = gtk::Box::new(gtk::Orientation::Vertical, 5);
+    let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
     row.add_css_class("usage-row");
     let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let name = label(title, "usage-row-title");
