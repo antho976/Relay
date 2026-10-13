@@ -665,7 +665,7 @@ pub fn show_start(ui: &Rc<Ui>) {
             dismiss_start(&ui, Some(to_money));
         }
     });
-    let crate::start::Built { screen, lines, keys } = crate::start::build(&greeting(), remembered, pick);
+    let crate::start::Built { screen, lines, rows, keys } = crate::start::build(&greeting(), remembered, pick);
     // Escape opens the space used last; 1 and 2 pick Dev and Threads, as the cards say.
     let escape = gtk::EventControllerKey::new();
     escape.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -697,33 +697,117 @@ pub fn show_start(ui: &Rc<Ui>) {
     STATE.with(|s| *s.start.borrow_mut() = Some(screen.clone().upcast()));
     keys[usize::from(remembered)].grab_focus();
     let [dev_line, money_line] = lines;
+    let [dev_rows, thread_rows] = rows;
     let reader = ui.clone();
     glib::spawn_future_local(async move {
-        let (dashboard, summary) = tokio::join!(
+        use crate::start::Lamp;
+        let (dashboard, summary, threads) = tokio::join!(
             reader.call("dashboard.get", json!({})),
-            reader.call("money.summary", json!({}))
+            reader.call("money.summary", json!({})),
+            reader.call("thread.list", json!({}))
         );
         match dashboard {
-            Ok(d) => crate::start::reading(&dev_line, &dev_reading(&d), !d["sessions_live"].as_array().is_none_or(Vec::is_empty)),
-            Err(e) => crate::start::reading(&dev_line, &e.to_string(), false),
+            Ok(d) => {
+                let lamp = if waiting_on_you(&d) > 0 {
+                    Lamp::Attention
+                } else if d["sessions_live"].as_array().is_none_or(Vec::is_empty) {
+                    Lamp::Idle
+                } else {
+                    Lamp::Live
+                };
+                crate::start::reading(&dev_line, &dev_reading(&d), lamp);
+                crate::start::recent(&dev_rows, &dev_projects(&d), "No projects yet");
+            }
+            Err(e) => {
+                crate::start::reading(&dev_line, &e.to_string(), Lamp::Idle);
+                crate::start::recent(&dev_rows, &[], "");
+            }
         }
         match summary {
-            Ok(s) => crate::start::reading(&money_line, &money_reading(&s), s["empty"] != true),
-            Err(e) => crate::start::reading(&money_line, &pages::unavailable(&e), false),
+            Ok(s) => crate::start::reading(&money_line, &money_reading(&s), if s["empty"] == true { Lamp::Idle } else { Lamp::Live }),
+            Err(e) => crate::start::reading(&money_line, &pages::unavailable(&e), Lamp::Idle),
+        }
+        match threads {
+            Ok(t) => crate::start::recent(&thread_rows, &recent_threads(&t), "No conversations yet"),
+            Err(_) => crate::start::recent(&thread_rows, &[], ""),
         }
     });
 }
 
-/// "3 agents running · 2 in review", from `dashboard.get`.
+/// Held actions waiting for a decision, and sessions stopped on a question.
+fn waiting_on_you(d: &Value) -> usize {
+    let holds = d["holds_open"].as_array().map_or(0, Vec::len);
+    let blocked: u64 = d["projects"].as_array().into_iter().flatten().filter_map(|p| p["blocked_sessions"].as_u64()).sum();
+    holds + blocked as usize
+}
+
+/// The two busiest projects, each with what is going on in it: "6 agents · 1 open".
+fn dev_projects(d: &Value) -> Vec<(String, String)> {
+    let count = |p: &Value, key: &str| p[key].as_u64().unwrap_or(0);
+    let mut projects: Vec<&Value> = d["projects"].as_array().into_iter().flatten().collect();
+    projects.sort_by_key(|p| std::cmp::Reverse((count(p, "blocked_sessions"), count(p, "live_sessions"), count(p, "tasks_open"))));
+    projects
+        .into_iter()
+        .take(2)
+        .map(|p| {
+            let mut parts = Vec::new();
+            match count(p, "live_sessions") {
+                0 => {}
+                1 => parts.push(String::from("1 agent")),
+                n => parts.push(format!("{n} agents")),
+            }
+            if count(p, "in_review") > 0 {
+                parts.push(format!("{} in review", count(p, "in_review")));
+            }
+            if count(p, "tasks_open") > 0 {
+                parts.push(format!("{} open", count(p, "tasks_open")));
+            }
+            let detail = if parts.is_empty() { String::from("quiet") } else { parts.join(" · ") };
+            (p["name"].as_str().unwrap_or("Project").to_string(), detail)
+        })
+        .collect()
+}
+
+/// The two threads used last, with when: "yesterday", or "replying" while one is.
+fn recent_threads(t: &Value) -> Vec<(String, String)> {
+    t["threads"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(2)
+        .map(|thread| {
+            let title = thread["title"].as_str().filter(|s| !s.trim().is_empty()).unwrap_or("New thread").to_string();
+            let when = if thread["working"] == true {
+                String::from("replying")
+            } else {
+                thread["updated_at"]
+                    .as_str()
+                    .and_then(|at| crate::relative::ago(at, crate::relative::Form::Long))
+                    .unwrap_or_default()
+            };
+            (title, when)
+        })
+        .collect()
+}
+
+/// "3 agents running · 2 need you · 1 in review", from `dashboard.get`.
 fn dev_reading(d: &Value) -> String {
     let live = d["sessions_live"].as_array().map_or(0, Vec::len);
     let review = d["in_review"].as_array().map_or(0, Vec::len);
-    let agents = match live {
+    let mut parts = vec![match live {
         0 => String::from("No agents running"),
         1 => String::from("1 agent running"),
         n => format!("{n} agents running"),
-    };
-    if review == 0 { agents } else { format!("{agents} · {review} in review") }
+    }];
+    match waiting_on_you(d) {
+        0 => {}
+        1 => parts.push(String::from("1 needs you")),
+        n => parts.push(format!("{n} need you")),
+    }
+    if review > 0 {
+        parts.push(format!("{review} in review"));
+    }
+    parts.join(" · ")
 }
 
 /// "Budget · $412 left · on pace", from `money.summary`: short enough for its card's one line.

@@ -37,7 +37,7 @@ import com.quietsoftware.relay.ui.kit.Eyebrow
 import com.quietsoftware.relay.ui.kit.Gap
 import com.quietsoftware.relay.ui.kit.Key
 import com.quietsoftware.relay.ui.kit.KeyKind
-import com.quietsoftware.relay.ui.kit.RingMark
+import com.quietsoftware.relay.ui.kit.RelayMark
 import com.quietsoftware.relay.ui.kit.Slab
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.column
@@ -148,7 +148,7 @@ private fun ConnectScreen(nav: Nav) {
                 Column(Modifier.column(560.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (paired.pc == null) {
                         Row(Modifier.padding(top = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-                            RingMark(34.dp)
+                            RelayMark(34.dp)
                             T("relay", Modifier.padding(start = 9.dp), Relay.type.brand.copy(fontSize = Relay.type.heading.fontSize), c.ink)
                         }
                     }

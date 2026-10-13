@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Notification icon: the ring mark in one colour, as the status bar requires. -->
+<!-- Notification icon: the mark in one colour, as the status bar requires. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="120"
     android:viewportHeight="120">
-    <path android:pathData="M24.55,53.75 A36,36 0 0,1 91.18,42" android:strokeColor="#FFFFFFFF" android:strokeWidth="12" android:strokeLineCap="round" />
-    <path android:pathData="M95.45,66.25 A36,36 0 0,1 28.82,78" android:strokeColor="#FFFFFFFF" android:strokeWidth="12" android:strokeLineCap="round" />
-    <path android:pathData="M94,54 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0z" android:fillColor="#FFFFFFFF" />
+    <path android:pathData="M29,91 V58 A29,29 0 0,1 66.96,30.42" android:strokeColor="#FFFFFFFF" android:strokeWidth="17" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M80.08,41.66 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0z" android:fillColor="#FFFFFFFF" />
 </vector>

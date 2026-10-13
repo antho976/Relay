@@ -432,17 +432,24 @@ fun Meter(fraction: Float, modifier: Modifier = Modifier, color: Color? = null, 
     }
 }
 
-/** The ring mark (start.rs): an ink upper arc, a dimmed lower arc and the signal dot. */
+/** The mark (start.rs): a lowercase r in one ink stroke, stem into shoulder, and the signal
+ *  that has left the end of it, on Relay's 120-unit grid. */
 @Composable
-fun RingMark(size: Dp, modifier: Modifier = Modifier, ink: Color = Relay.colors.ink, dim: Color = Palette.START_DIM, signal: Color = Palette.SIGNAL) {
+fun RelayMark(size: Dp, modifier: Modifier = Modifier, ink: Color = Relay.colors.ink, signal: Color = Palette.SIGNAL) {
     Canvas(modifier.size(size)) {
         val u = this.size.minDimension / 120f
-        val stroke = Stroke(width = 12f * u, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-        val topLeft = Offset((60f - 36f) * u, (60f - 36f) * u)
-        val box = Size(72f * u, 72f * u)
-        drawArc(ink, 190f, 140f, false, topLeft, box, style = stroke)
-        drawArc(dim, 10f, 140f, false, topLeft, box, style = stroke)
-        drawCircle(signal, 8f * u, Offset(102f * u, 54f * u))
+        val stroke = Stroke(
+            width = 17f * u,
+            cap = androidx.compose.ui.graphics.StrokeCap.Round,
+            join = androidx.compose.ui.graphics.StrokeJoin.Round,
+        )
+        val r = androidx.compose.ui.graphics.Path().apply {
+            moveTo(29f * u, 91f * u)
+            lineTo(29f * u, 58f * u)
+            arcTo(androidx.compose.ui.geometry.Rect(29f * u, 29f * u, 87f * u, 87f * u), 180f, 108f, false)
+        }
+        drawPath(r, ink, style = stroke)
+        drawCircle(signal, 10f * u, Offset(90.08f * u, 41.66f * u))
     }
 }
 

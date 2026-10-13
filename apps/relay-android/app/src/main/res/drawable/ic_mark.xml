@@ -1,14 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The ring mark (apps/relay-native/src/start.rs): an ink upper arc, a dimmed lower arc and the
-     signal dot, on Relay's 120-unit grid, inset for the splash screen's circle. -->
+<!-- The mark (apps/relay-native/src/start.rs): a lowercase r in one ink stroke and the signal
+     that has left the end of it, on Relay's 120-unit grid, inset for the splash screen's circle. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group android:scaleX="0.5" android:scaleY="0.5" android:translateX="24" android:translateY="24">
-        <path android:pathData="M24.55,53.75 A36,36 0 0,1 91.18,42" android:strokeColor="@color/ink" android:strokeWidth="12" android:strokeLineCap="round" />
-        <path android:pathData="M95.45,66.25 A36,36 0 0,1 28.82,78" android:strokeColor="@color/dimmed" android:strokeWidth="12" android:strokeLineCap="round" />
-        <path android:pathData="M94,54 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0z" android:fillColor="@color/signal" />
+        <path android:pathData="M29,91 V58 A29,29 0 0,1 66.96,30.42" android:strokeColor="@color/ink" android:strokeWidth="17" android:strokeLineCap="round" android:strokeLineJoin="round" />
+        <path android:pathData="M80.08,41.66 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0z" android:fillColor="@color/signal" />
     </group>
 </vector>
