@@ -411,9 +411,11 @@ fn owner_line(store: &crate::Store) -> String {
 }
 
 /// Whether a folder's marker says this store wrote it. A marker from before owners were
-/// recorded counts as anyone's, which is how every store treated it then.
+/// recorded counts as anyone's, which is how every store treated it then. Markers sit in the
+/// agent's checkout and are read under [`apply`]'s lock: a FIFO, a link or a huge file there
+/// is no marker, and is not waited on.
 fn owned(marker: &Path, owner: &str) -> bool {
-    fs::read_to_string(marker).is_ok_and(|text| !text.starts_with("owner ") || text.starts_with(owner))
+    crate::private::read_regular(marker).is_ok_and(|text| !text.starts_with("owner ") || text.starts_with(owner))
 }
 
 /// Returns whether the folder is Relay's to write (a checked-in skill of the same name wins).
@@ -430,7 +432,7 @@ fn write_skill(store: &crate::Store, row: &Row, dest: &Path, owner: &str) -> Res
         return Ok(false);
     }
     let stamp = format!("{owner}{}assets {}\n", row.stamp, assets_version(store, &row.source));
-    if fs::read_to_string(&marker).is_ok_and(|current| current == stamp) {
+    if crate::private::read_regular(&marker).is_ok_and(|current| current == stamp) {
         return Ok(true);
     }
     // A half-written folder must not survive: without its marker the next pass would read it
@@ -489,6 +491,20 @@ mod tests {
         assert_eq!(folder_name("  Impeccable  "), "impeccable");
         assert_eq!(folder_name("Review Carefully!"), "review-carefully");
         assert_eq!(folder_name("///"), "skill");
+    }
+
+    /// A marker in the checkout is read under `apply`'s lock: a FIFO there is no marker, and a
+    /// prune or a rewrite never waits on it.
+    #[test]
+    fn a_planted_fifo_marker_is_not_waited_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join(MARKER);
+        let name = std::ffi::CString::new(marker.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o644) }, 0);
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || done.send(owned(&marker, "owner x\n")).unwrap());
+        let owned = finished.recv_timeout(std::time::Duration::from_secs(10)).expect("a read blocked on a planted FIFO");
+        assert!(!owned, "a FIFO counted as a marker");
     }
 
     #[test]

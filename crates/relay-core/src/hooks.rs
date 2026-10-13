@@ -2,6 +2,10 @@
 //! they translate the host hook into a `guardrail.gate` call on the same bus as every other
 //! client.
 
+// Every file read here sits where an agent can write — its checkout, `<repo>/.relay/hooks` —
+// and is read under `writes()` or, by the launch sweep, under the store mutex; a FIFO planted
+// there would block every launch, close and commit, or Relay's start.
+use crate::private::read_regular;
 use crate::Instance;
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
@@ -101,42 +105,6 @@ fn inherited_hooks_dir(worktree: &Path) -> Option<PathBuf> {
         None => git_optional(worktree, &["rev-parse", "--git-common-dir"])
             .map(|dir| absolute_in(worktree, dir).join("hooks")),
     }
-}
-
-/// The most [`read_regular`] reads. Every file it serves is a few lines of config or JSON.
-const MAX_READ: u64 = 1 << 20;
-
-/// Read `path` as text only if it is a regular file of at most [`MAX_READ`] bytes. Everything
-/// read here sits where an agent can write — its checkout, `<repo>/.relay/hooks` — and is read
-/// under [`writes`] or, by the launch sweep, under the store mutex: a plain read of a FIFO
-/// planted there blocks forever, and with it every launch, close and commit, or Relay's start.
-/// So the open follows no link and does not wait on a FIFO (`O_NOFOLLOW|O_NONBLOCK`), and the
-/// opened file must be regular. A missing file is still `NotFound`.
-fn read_regular(path: &Path) -> std::io::Result<String> {
-    use std::io::Read as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let refuse = |why: &str| {
-        tracing::warn!(path = %path.display(), "not reading {why}");
-        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{} is {why}", path.display()))
-    };
-    let file = match fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path) {
-        Ok(file) => file,
-        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Err(refuse("a symlink")),
-        Err(error) => return Err(error),
-    };
-    let meta = file.metadata()?;
-    if !meta.is_file() {
-        return Err(refuse("not a regular file"));
-    }
-    if meta.len() > MAX_READ {
-        return Err(refuse("larger than 1 MiB"));
-    }
-    let mut text = String::new();
-    file.take(MAX_READ + 1).read_to_string(&mut text)?;
-    if text.len() as u64 > MAX_READ {
-        return Err(refuse("larger than 1 MiB"));
-    }
-    Ok(text)
 }
 
 fn read_record(dir: &Path) -> Option<String> {
@@ -1255,7 +1223,7 @@ mod tests {
         std::fs::create_dir_all(repo.join(".claude")).unwrap();
         mkfifo(&repo.join(".claude/settings.local.json"));
         std::fs::create_dir_all(repo.join(".codex")).unwrap();
-        std::fs::write(repo.join(".codex/hooks.json"), vec![b' '; (super::MAX_READ + 1) as usize]).unwrap();
+        std::fs::write(repo.join(".codex/hooks.json"), vec![b' '; (crate::private::MAX_READ + 1) as usize]).unwrap();
 
         let (done, finished) = std::sync::mpsc::channel();
         let worker = repo.clone();

@@ -3,6 +3,8 @@
 //! ledger — and were created with the umask's 0644 in a 0755 folder. These make them private too.
 //! A failure (a file someone else owns) is logged, not fatal: an existing install must keep
 //! opening.
+//!
+//! And files Relay reads where someone else may have put something else: [`read_regular`].
 
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -71,6 +73,56 @@ pub fn resolve_links(path: &Path) -> std::io::Result<std::path::PathBuf> {
         }
     }
     Err(std::io::Error::from_raw_os_error(libc::ELOOP))
+}
+
+/// The most [`read_regular`] reads. Every file it serves is a few lines of config, JSON or a
+/// git pointer.
+pub const MAX_READ: u64 = 1 << 20;
+
+/// Read `path` as text only if it is a regular file of at most [`MAX_READ`] bytes. For files
+/// an agent can write — in its checkout, under `<repo>/.relay/hooks`, in the git dir its checkout
+/// shares — read under a lock (`hooks::writes`, the store mutex, the exclude and skills locks):
+/// a plain read of a FIFO planted there blocks forever, and every request waiting on that lock
+/// with it. So the open does not wait on a FIFO (`O_NONBLOCK`) nor follow a final link
+/// (`O_NOFOLLOW`), and the opened file must be regular. A missing file is still `NotFound`.
+pub fn read_regular(path: &Path) -> std::io::Result<String> {
+    read_capped(path, false)
+}
+
+/// [`read_regular`], following a link at `path` to the file it leads to, which must be regular.
+/// For files git itself reads through links — a checkout's `.git` pointer, its slot's `gitdir`
+/// and `commondir`, `info/exclude` — where refusing a link would change what Relay takes for a
+/// worktree, not only refuse a FIFO.
+pub fn read_regular_through_links(path: &Path) -> std::io::Result<String> {
+    read_capped(path, true)
+}
+
+fn read_capped(path: &Path, follow: bool) -> std::io::Result<String> {
+    use std::io::Read as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let refuse = |why: &str| {
+        tracing::warn!(path = %path.display(), "not reading {why}");
+        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{} is {why}", path.display()))
+    };
+    let flags = if follow { libc::O_NONBLOCK } else { libc::O_NOFOLLOW | libc::O_NONBLOCK };
+    let file = match std::fs::OpenOptions::new().read(true).custom_flags(flags).open(path) {
+        Ok(file) => file,
+        Err(error) if !follow && error.raw_os_error() == Some(libc::ELOOP) => return Err(refuse("a symlink")),
+        Err(error) => return Err(error),
+    };
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(refuse("not a regular file"));
+    }
+    if meta.len() > MAX_READ {
+        return Err(refuse("larger than 1 MiB"));
+    }
+    let mut text = String::new();
+    file.take(MAX_READ + 1).read_to_string(&mut text)?;
+    if text.len() as u64 > MAX_READ {
+        return Err(refuse("larger than 1 MiB"));
+    }
+    Ok(text)
 }
 
 #[cfg(test)]
