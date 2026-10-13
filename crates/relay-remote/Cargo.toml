@@ -27,6 +27,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 qrcode = { version = "0.14", default-features = false }
 if-addrs = "0.15"
+# The owner's server's HTTP API (connect.rs): asking to connect, and a PC checking in for phones.
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 
 [dev-dependencies]
 tempfile = "3"

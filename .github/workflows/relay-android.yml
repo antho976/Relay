@@ -110,8 +110,18 @@ jobs:
         run: ./gradlew --continue :app:testDebugUnitTest
       - name: Android Lint
         run: ./gradlew --continue :app:lintRelease
-      - name: Build both APKs
-        run: ./gradlew :app:assembleDebug :app:assembleRelease -PrelayCiSmokeSigning
+      - name: Build the APKs
+        run: ./gradlew :app:assembleDebug :app:assembleRelease :app:assemblePersonal -PrelayCiSmokeSigning
+      - name: The owner's server only in the personal build
+        # Pairing through Antho's server lives in src/personal alone (docs/CLOUD.md); its address
+        # in any other APK means main or release started referring to it.
+        run: |
+          for apk in app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk; do
+            if unzip -p "$apk" 'classes*.dex' | grep -aq 'antho-s-bot'; then
+              echo "::error::$apk carries the personal build's server address"; exit 1
+            fi
+          done
+          echo "Only the personal build knows the server."
       - name: Permission allowlist
         # What the app may ask for, and why, is in its manifest; a new permission is a decision.
         run: |

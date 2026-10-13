@@ -90,20 +90,40 @@ relay --instance stable remote via ws://127.0.0.1:7430 --public wss://<server>/r
 relay --instance stable serve --remote --remote-bind 127.0.0.1:7420 --remote-ops cloud
 ```
 
-Then, in a shell on the server (Render: the service's **Shell** tab), once per device:
+Then each device connects with one tap on Discord (next section). Without the bot, a shell on the
+server (Render: the service's **Shell** tab) still pairs a device, once per device:
 
 ```fish
 relay --instance stable remote pair --via-only
 ```
 
-It prints a `relay://pair` link and asks `[y/N]` before the device that presents it is paired.
+It prints a `relay://pair` link and asks `[y/N]` before the device that presents it is paired:
+`relay cloud pair '<the link>'` on the PC, or the link pasted into the device.
 
-- **The PC:** `relay cloud pair '<the link>'`, then restart `relay serve --remote` (or `relay
-  cloud sync` to merge at once). `relay cloud status` says how the last round went; `relay cloud
-  off` forgets the link.
-- **Tally:** Settings, Relay on your PC, paste the link. Tally treats the cloud copy as its PC: its
-  first sync makes the cloud's ledger the phone's, and the PC takes it on its next round.
-- **Avex (personal build):** the "Avex → Relay" screen, paste the link.
+## Connecting through your server (`crates/relay-remote/src/connect.rs`)
+
+The bot beside the cloud copy (antho976/antho-s-bot, `/api/connect`, `deploy/relay/README.md`)
+takes a request from a device, DMs the owner **Allow** / **Deny** with a four-character code the
+device shows too, and hands the device a pairing link once allowed. The device proves it is the one
+that asked: it sent only the sha256 of a secret it keeps, and collects the link with the secret.
+
+- **The PC:** `relay cloud connect <server>` (e.g. `relay cloud connect antho-s-bot-8dve.onrender.com`),
+  tap Allow, then restart `relay serve --remote` (or Relay). It pairs with the cloud copy as `relay
+  cloud pair` did, and keeps a token for the server in `cloud.json` (`server`, `server_token`). A PC
+  already linked with `relay cloud pair` keeps its link and only adds the token.
+- **Tally** asks the first time it opens; **Avex** (personal build) from "Avex → Relay".
+- **The Relay app** (personal build only, `apps/relay-android/app/src/personal`): Pair, Connect
+  through my server. The bot cannot reach the PC, so the PC comes to it: while `relay serve
+  --remote` runs on a PC connected this way, it asks the server every five seconds for Relay phones
+  the owner allowed, opens a pairing window that **this desktop confirms** for each, and hands the
+  phone that window's link through the server. When the phone presents the code, the PC asks with a
+  notification carrying Accept and Deny (`notify-send --wait`; `RELAY_ASK` names another program
+  that prints `accept` or `deny`). With nothing to ask with, a toast says to run `relay remote
+  approve` (or `decline`) while the phone waits, about a minute and a half. The Discord tap alone
+  never gives a phone the PC: the phone gets in only once both answered yes.
+
+`relay cloud status` shows the server; forgetting the PC on the dashboard (Devices) stops its token
+working, and `relay cloud off` forgets the link here.
 
 ## Security
 
@@ -112,6 +132,11 @@ It prints a `relay://pair` link and asks `[y/N]` before the device that presents
   (docs/MOBILE.md §6); here the reach of an injected line is `CLOUD_OPS`: the data, never the PC.
 - The link's credential on the PC is good for the cloud copy alone. Revoke it there with `relay
   remote revoke <id>` (`relay remote devices` lists it).
+- Connecting through the server: the bot sees the PC's pairing link for a Relay phone, code
+  included, so whoever runs the server could present that code first. That is why the PC opens the
+  window with confirmation on: a phone gets in only after the person at the PC accepts the device
+  the notification names. The PC's token for the server opens nothing on the PC; it only lets the
+  PC ask for waiting phones and hand them links.
 - `relay remote rendezvous --queue-mib` caps what the server queues toward phones; the default
   (512 MiB) is more than a 512 MB container holds.
 

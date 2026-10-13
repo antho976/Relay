@@ -29,65 +29,65 @@
 /* The panel beside the card, in Settings' vocabulary: a rounded floating sheet, one rounded
    card per provider, rounded meters, Settings' switches and pill-segmented choices. */
 .usage-panel.floating-panel { border: 1px solid alpha(@ink, 0.09); border-radius: 16px; background: @backbox_chrome; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45); }
-.usage-panel .panel-heading { min-height: 46px; padding: 0 10px 0 18px; border-bottom: 0; }
-.usage-panel .panel-heading .section-title { color: @ink; font-size: 14px; font-weight: 600; letter-spacing: -0.005em; }
-.usage-panel .panel-heading button.icon-key { min-width: 28px; min-height: 28px; border-radius: 8px; color: @faint; }
+.usage-panel .panel-heading { min-height: 40px; padding: 0 8px 0 16px; border-bottom: 0; }
+.usage-panel .panel-heading .section-title { color: @ink; font-size: 13px; font-weight: 600; letter-spacing: -0.005em; }
+.usage-panel .panel-heading button.icon-key { min-width: 26px; min-height: 26px; border-radius: 8px; color: @faint; }
 .usage-panel .panel-heading button.icon-key:hover { background: alpha(@ink, 0.06); color: @ink; }
-.usage-panel .panel-body.usage-body { padding: 0 12px 12px; }
-.usage-checked { padding: 0 6px 12px; color: @faint; font-size: 12px; }
+.usage-panel .panel-body.usage-body { padding: 0 10px 10px; }
+.usage-checked { padding: 0 6px 8px; color: @faint; font-size: 11.5px; }
 .usage-providers { margin-bottom: 4px; }
-.usage-provider { margin-bottom: 8px; padding: 14px 16px 16px; border: 1px solid alpha(@ink, 0.08); border-radius: 12px; background: alpha(@ink, 0.03); }
+.usage-provider { margin-bottom: 6px; padding: 10px 12px 12px; border: 1px solid alpha(@ink, 0.08); border-radius: 10px; background: alpha(@ink, 0.03); }
 .usage-provider-head { min-height: 20px; }
 .usage-provider-head image { color: @secondary; }
-.usage-provider-name { font-size: 14px; font-weight: 600; color: @ink; }
-.usage-reported { color: @faint; font-size: 12px; }
-.usage-row { margin-top: 4px; }
+.usage-provider-name { font-size: 13px; font-weight: 600; color: @ink; }
+.usage-reported { color: @faint; font-size: 11.5px; }
+.usage-row { margin-top: 6px; }
 .usage-row.missing { min-height: 22px; }
-.usage-row-title { color: @secondary; font-size: 13px; }
+.usage-row-title { color: @secondary; font-size: 12.5px; }
 .usage-row.missing .usage-row-title { color: @faint; }
-.usage-pct { font-size: 18px; font-weight: 600; font-feature-settings: "tnum"; letter-spacing: -0.01em; color: @ink; line-height: 1; }
+.usage-pct { font-size: 14px; font-weight: 600; font-feature-settings: "tnum"; letter-spacing: -0.01em; color: @ink; line-height: 1; }
 .usage-pct.warn { color: @waiting; }
 .usage-pct.hot { color: @held; }
 .usage-pct.stale { color: @faint; }
-.usage-bar trough { min-height: 5px; border-radius: 999px; border: 0; background: alpha(@ink, 0.1); }
-.usage-bar progress { min-height: 5px; border-radius: 999px; border: 0; background-image: none; box-shadow: none; background: @ink; }
-.usage-reset { color: @faint; font-size: 12px; }
+.usage-bar trough { min-height: 4px; border-radius: 999px; border: 0; background: alpha(@ink, 0.1); }
+.usage-bar progress { min-height: 4px; border-radius: 999px; border: 0; background-image: none; box-shadow: none; background: @ink; }
+.usage-reset { color: @faint; font-size: 11.5px; }
 .usage-reset.stale { color: @secondary; }
-.usage-note { color: @secondary; font-size: 13px; padding: 2px 0; }
-.usage-providers > .usage-note { margin-bottom: 8px; padding: 14px 16px; border: 1px solid alpha(@ink, 0.08); border-radius: 12px; }
+.usage-note { color: @secondary; font-size: 12.5px; padding: 2px 0; }
+.usage-providers > .usage-note { margin-bottom: 6px; padding: 10px 12px; border: 1px solid alpha(@ink, 0.08); border-radius: 10px; }
 
-.usage-options { margin-top: 10px; }
-.usage-options-title { padding: 0 6px; color: @secondary; font-size: 13px; font-weight: 600; }
-.usage-options-card { border: 1px solid alpha(@ink, 0.08); border-radius: 12px; background: alpha(@ink, 0.03); }
-.usage-option-row { min-height: 34px; padding: 10px 12px 10px 16px; }
+.usage-options { margin-top: 8px; }
+.usage-options-title { padding: 0 6px; color: @secondary; font-size: 12px; font-weight: 600; }
+.usage-options-card { border: 1px solid alpha(@ink, 0.08); border-radius: 10px; background: alpha(@ink, 0.03); }
+.usage-option-row { min-height: 28px; padding: 6px 10px 6px 12px; }
 .usage-option-row + .usage-option-row { border-top: 1px solid alpha(@ink, 0.07); }
-.usage-option-name { color: @ink; font-size: 13px; font-weight: 500; }
+.usage-option-name { color: @ink; font-size: 12.5px; font-weight: 500; }
 .usage-option-row:disabled .usage-option-name { color: @faint; }
 .usage-chips { padding: 2px; border: 1px solid alpha(@ink, 0.07); border-radius: 9px; background: alpha(@ink, 0.03); }
-.usage-chips button.usage-chip { min-height: 24px; padding: 0 9px; border: 0; border-radius: 7px; background: transparent; box-shadow: none; color: @faint; font-size: 12px; font-weight: 500; }
+.usage-chips button.usage-chip { min-height: 22px; padding: 0 7px; border: 0; border-radius: 7px; background: transparent; box-shadow: none; color: @faint; font-size: 12px; font-weight: 500; }
 .usage-chips button.usage-chip label { color: @faint; }
 .usage-chips button.usage-chip:hover label { color: @secondary; }
 .usage-chips button.usage-chip:checked { background: alpha(@ink, 0.1); }
 .usage-chips button.usage-chip:checked label { color: @ink; }
 .usage-chips:disabled { opacity: 0.45; }
-.usage-footnote { padding: 12px 6px 0; color: @faint; font-size: 11.5px; }
+.usage-footnote { padding: 8px 6px 0; color: @faint; font-size: 11px; }
 
 /* The sidebar's card, above you at the foot: one provider, its meters as thin rounded bars. */
 /* It sits on the sidebar, which is already translucent: a faint veil, not a second slab. */
-.usage-card { margin-bottom: 10px; padding: 10px 10px 12px 12px; border: 1px solid alpha(@ink, 0.08); border-radius: 14px; background: alpha(@ink, 0.025); }
-.usage-card-tabs { padding: 3px; border: 1px solid alpha(@ink, 0.07); border-radius: 10px; background: alpha(@ink, 0.03); }
-.usage-card-tabs button { min-height: 26px; padding: 0 14px; border: 0; border-radius: 7px; background: transparent; color: @faint; font-size: 13px; font-weight: 500; }
+.usage-card { margin-bottom: 8px; padding: 8px 8px 10px 10px; border: 1px solid alpha(@ink, 0.08); border-radius: 14px; background: alpha(@ink, 0.025); }
+.usage-card-tabs { padding: 2px; border: 1px solid alpha(@ink, 0.07); border-radius: 10px; background: alpha(@ink, 0.03); }
+.usage-card-tabs button { min-height: 22px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: @faint; font-size: 12px; font-weight: 500; }
 .usage-card-tabs button label { color: @faint; }
 .usage-card-tabs button:hover { background: transparent; }
 .usage-card-tabs button:hover label { color: @secondary; }
 .usage-card-tabs button:checked { background: alpha(@ink, 0.09); }
 .usage-card-tabs button:checked label { color: @ink; }
-.usage-card-head button.icon-key { min-width: 26px; min-height: 26px; color: @faint; }
+.usage-card-head button.icon-key { min-width: 24px; min-height: 24px; color: @faint; }
 .usage-card-head button.icon-key:hover { color: @ink; }
 .usage-card-body { padding-right: 2px; }
-.usage-card-caption { margin: 14px 0 2px; color: @faint; font-size: 12px; }
-.usage-card-row { margin-top: 12px; }
-.usage-card-title { color: @secondary; font-size: 13px; }
+.usage-card-caption { margin: 8px 0 0; color: @faint; font-size: 11.5px; }
+.usage-card-row { margin-top: 8px; }
+.usage-card-title { color: @secondary; font-size: 12.5px; }
 .usage-card-pct { color: @secondary; font-family: 'Geist Mono', monospace; font-size: 12px; }
 .usage-card-pct.warn { color: @waiting; }
 .usage-card-pct.hot { color: @held; }
@@ -98,4 +98,5 @@
 .usage-card-bar.hot progress { background: @held; }
 .usage-card-bar.stale progress { background: @faint; }
 .usage-card-caption.failed { color: @waiting; }
-.usage-card-reset { margin-top: 14px; color: @faint; font-size: 12px; }
+.usage-card-reset { color: @faint; font-size: 11px; }
+.usage-card-reset.stale { color: @secondary; }
