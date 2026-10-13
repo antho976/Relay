@@ -386,8 +386,9 @@ impl<'a> Ctx<'a> {
         // its sessions — has no read/external phase behind it, so run it here, against the
         // transaction already open: everything its prepare does then holds the store. Keep slow
         // staged ops off this path: `guardrail.confirm` prepares its replay before it opens
-        // (`Unlocked::prepare_registered`), and `task.dispatch` creates and launches its
-        // sessions as requests of their own.
+        // (`Unlocked::prepare_registered`), as `audit.undo` does an inverse whose prepare only
+        // reads (`file.restore`), and `task.dispatch` creates and launches its sessions as
+        // requests of their own.
         let staged = match (prepared, self.engine.prepares.get(entry.name).cloned()) {
             (Some(prepared), _) if prepared.op == entry.name => {
                 self.events.extend(prepared.events);

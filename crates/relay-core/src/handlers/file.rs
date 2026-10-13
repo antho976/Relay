@@ -65,39 +65,24 @@ pub fn register(e: &mut Engine) {
             truncated,
         })
     });
-    e.register::<Write>(|ctx: &mut Ctx, p| {
-        let (project, root) = root_mut(ctx, p.project_id, p.worktree.as_deref())?;
+    // Staged (D149): the file being replaced is read, hashed and diffed, and the guardrail's
+    // probes of it — the old file again, and `git status` when the rewrite is large — are taken
+    // before the transaction opens. The transaction checks the file is still the one that was
+    // read; if it is not, it is read and judged again there, as before staging, so a write that
+    // raced another cannot pass on what the other replaced.
+    e.register_staged::<Write, PreparedWrite>(|ctx, p| {
+        let (project, root) = root_mut_unlocked(ctx, p.project_id, p.worktree.as_deref())?;
         let rel = rel(&p.path, false)?;
-        let path = safe_join(&root, &rel, true)?;
-        // A symlink is written through, not replaced: renaming the new text over the link
-        // turned it into a regular file and left its target as it was (RA-146). safe_join has
-        // confirmed the target is inside the worktree, and it is the target that is gated.
-        let (path, target_rel) = if fs::symlink_metadata(&path).is_ok_and(|md| md.file_type().is_symlink()) {
-            let target = fs::canonicalize(&path).map_err(|e| io_err("file.write_failed", &rel, e))?;
-            let target_rel = target.strip_prefix(&root).unwrap_or(&target).to_path_buf();
-            (target, Some(target_rel))
-        } else {
-            (path, None)
-        };
-        let old = read_current(&path);
-        if let Some(expected) = &p.expected_sha256 {
-            let matches = old.as_ref().is_ok_and(|text| {
-                Sha256::digest(text.as_bytes())
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>()
-                    == *expected
-            });
-            if !matches {
-                return Err(BusError::conflict(
-                    "file.edit_conflict",
-                    "File changed or was removed. Your draft has not been written.",
-                ));
-            }
-        }
-        let old = old.unwrap_or_default();
+        let (path, target_rel) = landing(&root, &rel)?;
+        // Taken before anything is read, so a change made while it is read shows too.
+        let stamp = stamp(&path);
+        let old = read_current(&path).ok();
+        let old_sha = p.expected_sha256.as_ref().and(old.as_deref()).map(sha256_hex);
+        expect_sha(p.expected_sha256.as_deref(), old_sha.as_deref())?;
+        let counts = line_counts(old.as_deref().unwrap_or(""), &p.text);
+        drop(old);
         let gated = target_rel.as_ref().map(|t| t.to_string_lossy().to_string());
-        guardrail::enforce(
+        let probes = guardrail::warm_enforce(
             ctx,
             project.id,
             &root,
@@ -106,8 +91,35 @@ pub fn register(e: &mut Engine) {
             Some(&p.text),
             None,
             None,
+        );
+        Ok(PreparedWrite { project_id: project.id, root, rel, path, stamp, old_sha, counts, probes })
+    }, |ctx: &mut Ctx, p, prepared| {
+        let PreparedWrite { project_id, root, rel, path: read_at, stamp: read_as, old_sha, counts, probes } = prepared;
+        let (path, target_rel) = landing(&root, &rel)?;
+        // Another write, an editor or a tool changed the file since the read phase, or the path
+        // now leads elsewhere: what was hashed, counted and probed is not what would be replaced.
+        let fresh = path == read_at && stamp(&path) == read_as;
+        let (old_sha, old) = if fresh {
+            (old_sha, None)
+        } else {
+            let old = read_current(&path).ok();
+            (p.expected_sha256.as_ref().and(old.as_deref()).map(sha256_hex), old)
+        };
+        expect_sha(p.expected_sha256.as_deref(), old_sha.as_deref())?;
+        let probes = if fresh { probes } else { crate::guardrail::Probes::default() };
+        let gated = target_rel.as_ref().map(|t| t.to_string_lossy().to_string());
+        guardrail::enforce_with(
+            ctx,
+            project_id,
+            &root,
+            GateKind::Write,
+            Some(gated.as_deref().unwrap_or(&p.path)),
+            Some(&p.text),
+            None,
+            None,
+            &probes,
         )?;
-        let (removed, added) = line_counts(&old, &p.text);
+        let (removed, added) = if fresh { counts } else { line_counts(old.as_deref().unwrap_or(""), &p.text) };
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| io_err("file.write_failed", &rel, e))?;
         }
@@ -125,10 +137,10 @@ pub fn register(e: &mut Engine) {
             let _ = fs::remove_file(&temp);
             return Err(io_err("file.write_failed", &rel, e));
         }
-        ctx.set_project(project.id);
+        ctx.set_project(project_id);
         ctx.emit(
             "file.changed",
-            json!({"project_id": project.id, "worktree": root, "path": p.path}),
+            json!({"project_id": project_id, "worktree": root, "path": p.path}),
         );
         Ok(WriteOut {
             bytes: p.text.len() as u64,
@@ -136,8 +148,22 @@ pub fn register(e: &mut Engine) {
             added_lines: added,
         })
     });
-    e.register::<Create>(|ctx: &mut Ctx, p| {
-        let (project, root) = root_mut(ctx, p.project_id, p.worktree.as_deref())?;
+    // Staged like write. Nothing is there to read, so the probes are cheap; the transaction
+    // checks again that nothing is there before it gates and creates.
+    e.register_staged::<Create, (Id, PathBuf, crate::guardrail::Probes)>(|ctx, p| {
+        let (project, root) = root_mut_unlocked(ctx, p.project_id, p.worktree.as_deref())?;
+        let rel = rel(&p.path, false)?;
+        let path = safe_join(&root, &rel, true)?;
+        if occupied(&path) {
+            return Err(BusError::conflict(
+                "file.exists",
+                format!("{} already exists", p.path),
+            ));
+        }
+        let text = p.text.as_deref().unwrap_or_default();
+        let probes = guardrail::warm_enforce(ctx, project.id, &root, GateKind::Write, Some(&p.path), Some(text), None, None);
+        Ok((project.id, root, probes))
+    }, |ctx: &mut Ctx, p, (project_id, root, probes)| {
         let rel = rel(&p.path, false)?;
         let path = safe_join(&root, &rel, true)?;
         if occupied(&path) {
@@ -147,15 +173,16 @@ pub fn register(e: &mut Engine) {
             ));
         }
         let text = p.text.clone().unwrap_or_default();
-        guardrail::enforce(
+        guardrail::enforce_with(
             ctx,
-            project.id,
+            project_id,
             &root,
             GateKind::Write,
             Some(&p.path),
             Some(&text),
             None,
             None,
+            &probes,
         )?;
         match p.kind.as_str() {
             "file" => {
@@ -170,7 +197,7 @@ pub fn register(e: &mut Engine) {
             }
             _ => return Err(BusError::invalid("file.kind", "kind must be file or dir")),
         }
-        changed(ctx, project.id, &root, &p.path);
+        changed(ctx, project_id, &root, &p.path);
         entry(&root, &path, &HashMap::new())
     });
     // Rename, move and delete are staged (D149): a directory source is walked for the gated
@@ -547,9 +574,9 @@ pub(crate) fn default_worktree_in(
     }
 }
 
-/// The store half of [`root_unlocked`] and [`root_mut`]: project row plus the worktree the
-/// caller means, before any of it is checked against the repository. Cheap, and the only part
-/// that needs the connection.
+/// The store half of [`root_unlocked`] and [`root_mut_unlocked`]: project row plus the worktree
+/// the caller means, before any of it is checked against the repository. Cheap, and the only
+/// part that needs the connection.
 pub(crate) fn root_choice(
     conn: &Connection,
     session_id: Option<Id>,
@@ -563,7 +590,7 @@ pub(crate) fn root_choice(
 
 /// The external half: canonicalize and confirm the path really is a worktree of this repository.
 /// Filesystem reads only — [`crate::worktree::contains`] reads the checkout's `.git` pointer and
-/// its slot, no subprocess — so the locked mutation path ([`root_mut`]) calls it too.
+/// its slot, no subprocess — so even a nested replay that holds the store may call it.
 pub(crate) fn root_verify(
     project: &relay_bus::types::Project,
     chosen: PathBuf,
@@ -585,8 +612,8 @@ pub(crate) fn root_verify(
 pub(crate) const PROJECT_ROOT: &str = "@project";
 
 /// The tree a query reads: one short read, then the check against the repository with nothing
-/// held. Mutations resolve theirs through [`root_mut`], which also confines an agent to its own
-/// checkout.
+/// held. Mutations resolve theirs through [`root_mut_unlocked`], which also confines an agent to
+/// its own checkout.
 pub(crate) fn root_unlocked(
     ctx: &Unlocked,
     project_id: Id,
@@ -620,21 +647,7 @@ fn rel(value: &str, allow_empty: bool) -> Result<PathBuf, BusError> {
 
 /// The tree a mutation changes: an agent may change files only in its own project and its own
 /// checkout (RA-148). Naming another project, or another worktree of its own, used to be
-/// enough to write there.
-fn root_mut(
-    ctx: &Ctx,
-    project_id: Id,
-    requested: Option<&str>,
-) -> Result<(relay_bus::types::Project, PathBuf), BusError> {
-    let session_id = ctx.actor_session_id();
-    let (project, chosen) = root_choice(ctx.tx(), session_id, project_id, requested)?;
-    let own = own_checkout(ctx.tx(), &ctx.actor, session_id, project.id)?;
-    let chosen = root_verify(&project, chosen, "file.worktree")?;
-    confine(own, &chosen)?;
-    Ok((project, chosen))
-}
-
-/// [`root_mut`] for the read phase of a staged mutation.
+/// enough to write there. Resolved in the read phase: every file mutation is staged (D149).
 fn root_mut_unlocked(
     ctx: &Unlocked,
     project_id: Id,
@@ -1047,10 +1060,11 @@ fn changed(ctx: &mut Ctx, project_id: Id, root: &Path, path: &str) {
     );
 }
 
-/// The text `file.write` is replacing, read under the store lock: a regular file only, and never
-/// more than [`OLD_TEXT_MAX`] of it. `fs::read_to_string` on a FIFO there blocked every request
-/// for good, and on a huge file filled memory. Anything else reads as an error, as a missing file
-/// does: it matches no `expected_sha256`, and counts as empty for the line counts.
+/// The text `file.write` is replacing: a regular file only, and never more than [`OLD_TEXT_MAX`]
+/// of it. Read before the transaction, and again under the store lock when the file changed in
+/// between. `fs::read_to_string` on a FIFO there blocked every request for good, and on a huge
+/// file filled memory. Anything else reads as an error, as a missing file does: it matches no
+/// `expected_sha256`, and counts as empty for the line counts.
 fn read_current(path: &Path) -> std::io::Result<String> {
     use std::io::Read as _;
     let md = fs::metadata(path)?;
@@ -1069,14 +1083,71 @@ fn read_current(path: &Path) -> std::io::Result<String> {
     String::from_utf8(bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
+/// What a staged `file.write` read before its transaction.
+struct PreparedWrite {
+    project_id: Id,
+    root: PathBuf,
+    rel: PathBuf,
+    /// Where the text lands ([`landing`]), and the file there as it was when it was read.
+    path: PathBuf,
+    stamp: Result<[i64; 7], std::io::ErrorKind>,
+    /// The old file's SHA-256, when the caller named the one it expects and the file was readable.
+    old_sha: Option<String>,
+    /// Lines removed and added, against the file as read.
+    counts: (i64, i64),
+    probes: crate::guardrail::Probes,
+}
+
+/// Where a write to `root/rel` lands, and the target's worktree-relative path when `rel` is a
+/// symlink. A symlink is written through, not replaced: renaming the new text over the link
+/// turned it into a regular file and left its target as it was (RA-146). [`safe_join`] has
+/// confirmed the target is inside the worktree, and it is the target that is gated.
+fn landing(root: &Path, rel: &Path) -> Result<(PathBuf, Option<PathBuf>), BusError> {
+    let path = safe_join(root, rel, true)?;
+    if fs::symlink_metadata(&path).is_ok_and(|md| md.file_type().is_symlink()) {
+        let target = fs::canonicalize(&path).map_err(|e| io_err("file.write_failed", rel, e))?;
+        let target_rel = target.strip_prefix(root).unwrap_or(&target).to_path_buf();
+        return Ok((target, Some(target_rel)));
+    }
+    Ok((path, None))
+}
+
+/// Enough of what sits at `path` to tell whether it changed since it was read: replaced (a
+/// rename, which is how every `file.write` lands), rewritten in place or truncated, or gone.
+/// The change time cannot be set back by the writer, so a rewrite that restores the size and
+/// modification time still shows. An error stands for itself: a missing file is not an
+/// unreadable one.
+fn stamp(path: &Path) -> Result<[i64; 7], std::io::ErrorKind> {
+    use std::os::unix::fs::MetadataExt;
+    let md = fs::metadata(path).map_err(|e| e.kind())?;
+    Ok([md.dev() as i64, md.ino() as i64, md.size() as i64, md.mtime(), md.mtime_nsec(), md.ctime(), md.ctime_nsec()])
+}
+
+fn sha256_hex(text: &str) -> String {
+    crate::hex(&Sha256::digest(text.as_bytes()))
+}
+
+/// Refuse a draft whose base is not the file there now: `old_sha` is `None` when the file is
+/// missing or unreadable, which matches no expectation.
+fn expect_sha(expected: Option<&str>, old_sha: Option<&str>) -> Result<(), BusError> {
+    match expected {
+        Some(expected) if old_sha != Some(expected) => Err(BusError::conflict(
+            "file.edit_conflict",
+            "File changed or was removed. Your draft has not been written.",
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// The guardrail's comparison cap: past it, the destructive-write rule does not read the old file
 /// either. `file.read` returns at most half of this, so no draft is of a file this big.
 const OLD_TEXT_MAX: u64 = 64 * 1024 * 1024;
 
-/// How long `file.write` may spend diffing for its line counts. It runs under the store lock,
-/// and Myers is quadratic in the worst case: a rewrite of a large generated file took seconds
-/// with every other request queued behind it (RA-145). Past the deadline `similar` finishes
-/// with a coarser diff, so the counts stay a true (if not minimal) account of the change.
+/// How long `file.write` may spend diffing for its line counts. It runs before the transaction,
+/// and under the store lock when the file changed since, and Myers is quadratic in the worst
+/// case: a rewrite of a large generated file took seconds with every other request queued
+/// behind it (RA-145). Past the deadline `similar` finishes with a coarser diff, so the counts
+/// stay a true (if not minimal) account of the change.
 const LINE_COUNT_DEADLINE: std::time::Duration = std::time::Duration::from_millis(50);
 
 fn line_counts(old: &str, new: &str) -> (i64, i64) {

@@ -866,7 +866,41 @@ pub(crate) fn enforce(
     ctx: &mut Ctx, project_id: Id, worktree: &Path, kind: GateKind, path: Option<&str>,
     new_text: Option<&str>, diff: Option<&str>, command: Option<&str>,
 ) -> Result<(), BusError> {
-    enforce_request(ctx, project_id, worktree, kind, path, new_text, diff, command, false)
+    enforce_request(ctx, project_id, worktree, kind, path, new_text, diff, command, false, None)
+}
+
+/// [`enforce`] judging by what [`warm_enforce`] read before the transaction opened, so the
+/// transaction only looks it up (D149). Whatever `probes` lacks is read on the spot, as
+/// [`enforce`] reads everything; a caller whose probes may be stale passes fresh, empty ones.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn enforce_with(
+    ctx: &mut Ctx, project_id: Id, worktree: &Path, kind: GateKind, path: Option<&str>,
+    new_text: Option<&str>, diff: Option<&str>, command: Option<&str>, probes: &Probes,
+) -> Result<(), BusError> {
+    enforce_request(ctx, project_id, worktree, kind, path, new_text, diff, command, false, Some(probes))
+}
+
+/// The read phase of a staged op that [`enforce_with`]s, as [`warm_gate`] is `guardrail.gate`'s:
+/// the project's config and the session's grants in one short read, then everything slow the
+/// evaluation could ask for — the old file, `git status` — with the store lock released. A read
+/// that fails caches nothing; the transaction then reads it and reports it as it always did.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn warm_enforce(
+    ctx: &Unlocked, project_id: Id, worktree: &Path, kind: GateKind, path: Option<&str>,
+    new_text: Option<&str>, diff: Option<&str>, command: Option<&str>,
+) -> Probes {
+    let probes = Probes::default();
+    let (session_id, agent) = (ctx.actor_session_id(), ctx.actor.is_agent());
+    let read = ctx.read(|conn| {
+        Ok((guardrail::config(conn, Some(project_id))?, session_grants(conn, session_id, agent)?))
+    });
+    if let Ok((cfg, granted)) = read {
+        guardrail::warm(&cfg, &GateRequest {
+            actor: &ctx.actor, project_id, worktree, kind, path, new_text, diff, command,
+            skip_policy: None, grants: None, path_only: false, probes: Some(&probes),
+        }, &granted);
+    }
+    probes
 }
 
 /// [`enforce`] for a rename, move or delete: the path rules only, never the file's content
@@ -874,18 +908,19 @@ pub(crate) fn enforce(
 pub(crate) fn enforce_path_mutation(
     ctx: &mut Ctx, project_id: Id, worktree: &Path, path: &str, new_text: Option<&str>,
 ) -> Result<(), BusError> {
-    enforce_request(ctx, project_id, worktree, GateKind::Write, Some(path), new_text, None, None, true)
+    enforce_request(ctx, project_id, worktree, GateKind::Write, Some(path), new_text, None, None, true, None)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn enforce_request(
     ctx: &mut Ctx, project_id: Id, worktree: &Path, kind: GateKind, path: Option<&str>,
     new_text: Option<&str>, diff: Option<&str>, command: Option<&str>, path_only: bool,
+    probes: Option<&Probes>,
 ) -> Result<(), BusError> {
     let session_id = ctx.actor_session_id();
     let (decision, used) = guardrail::evaluate_granted(ctx.tx(), &GateRequest {
         actor: &ctx.actor, project_id, worktree, kind, path, new_text, diff, command,
-        skip_policy: ctx.skip_policy(), grants: None, path_only, probes: None,
+        skip_policy: ctx.skip_policy(), grants: None, path_only, probes,
     }, session_id)?;
     match decision {
         Decision::Allow => use_grants(ctx, &used, None),
