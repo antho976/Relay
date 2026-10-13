@@ -727,9 +727,23 @@ impl Drop for Pty {
     }
 }
 
-/// Is anything left in process group `pgid`? (signal 0 to the group)
+/// Is anything left running in process group `pgid`? Signal 0 to the group also finds members
+/// that are dead and not yet reaped. Orphans go to the engine, a subreaper that reaps them on its
+/// own schedule (`peer::spawn_orphan_reaper`, up to a minute), so those zombies are looked past.
 fn group_alive(pgid: u32) -> bool {
-    unsafe { libc::kill(-(pgid as i32), 0) == 0 }
+    if unsafe { libc::kill(-(pgid as i32), 0) } != 0 {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir("/proc") else { return true };
+    entries.flatten().any(|entry| {
+        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else { return false };
+        // `pid (comm) state ppid pgrp …`; comm may hold spaces and parentheses.
+        let Some((_, rest)) = stat.rsplit_once(')') else { return false };
+        let mut fields = rest.split_whitespace();
+        let state = fields.next();
+        let pgrp = fields.nth(1).and_then(|p| p.parse::<u32>().ok());
+        pgrp == Some(pgid) && state != Some("Z")
+    })
 }
 
 /// Is `pid` alive? (signal 0)
