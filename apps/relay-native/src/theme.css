@@ -140,20 +140,15 @@ button.quiet.selected { color: @ink; background: @wash; }
 
 /* Compact utilities mirror the footer-anchored Relay controls. */
 .statusbar button { padding: 0 6px; }
-.resource-meter trough, .resource-meter progress { min-width: 58px; min-height: 4px; border-radius: 0; }
-.resource-meter progress { min-width: 0; background: @secondary; }
 .utility-layer .panel-scrim, .utility-layer .panel-scrim:hover { background: transparent; }
 .utility-panel { border: 1px solid @edge; }
 .utility-panel .panel-heading { min-height: 32px; padding: 0 10px; }
 .utility-panel .panel-body { padding: 12px; }
-.resource-row { border-bottom: 1px solid @edge; padding: 6px 0; font-size: 11px; }
-.resource-chart { border: 1px solid @edge; padding: 6px; font-size: 10px; }
 
 .utility-panel stackswitcher button:checked, .setup-body stackswitcher button:checked { background: @ink; color: @wall; }
 .utility-panel stackswitcher button { min-height: 24px; }
 .utility-panel .title { font-size: 13px; }
 .utility-panel .body { font-size: 12px; }
-.resource-meter progress { background-image: none; border: 0; box-shadow: none; }
 .setup-body { padding: 24px 0; }
 .setup-body > .title { font-size: 22px; }
 

@@ -413,6 +413,7 @@ pub fn run(rt: Handle) -> glib::ExitCode {
             include_str!("css/workspace.css"),
             include_str!("css/guardrails.css"),
             include_str!("css/usage.css"),
+            include_str!("css/resources.css"),
             include_str!("css/tools.css"),
             include_str!("css/money.css"),
             include_str!("css/threads.css"),
