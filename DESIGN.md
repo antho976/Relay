@@ -265,6 +265,18 @@ moves the stroke to line-focus with a faint ink ring. The palette key is drawn a
 field: glass, "Search or run a command", and a Ctrl K keycap. Native text views have 8px padding and ink carets.
 GTK supplies editing, selection and accessibility semantics.
 
+### New agents sheet
+The launch sheet (`launch.rs`, `css/launch.css`) reads top to bottom: a heading naming the project
+and base branch; one segmented choice between separate worktrees and a review group; then a crew
+rail beside the chosen agent's settings; and a footer stating how much work goes out, with a Ctrl
+Enter keycap and the primary key ("Launch agent", "Launch 3 agents", "Launch review group"). The
+crew is built with "Add an agent" and each row's remove key, not a count: six at most, a review
+group two or three, its last member the reviewer. Rail rows carry a number badge (lit ink when
+chosen), a name and provider facts. Settings sit in a caption column: provider tiles with a radio,
+segmented role and effort (lit with track, like the view switch), the model field, then one folded
+line for instructions, worktree and permissions that summarizes them. Tasks are single rows; a
+ticked row's badge shows its place in the queue, since the first becomes the agent's current task.
+
 ### Navigation
 Sidebar navigation (36px rows) selects with the selected fill and ink. Project rows have a 34px
 minimum height and select with the selected fill, no rail; counts are plain Geist Mono. Above

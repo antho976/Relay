@@ -135,16 +135,6 @@ button.quiet.selected { color: @ink; background: @wash; }
 .detail-page .panel-heading { min-height: 52px; }
 .detail-page .panel-body { padding: 4px; }
 
-.launch-heading { min-height: 56px; padding: 0 20px; border-bottom: 1px solid @edge; }
-.launch-body { padding: 16px 20px; }
-.launch-body .section-label { padding: 0; }
-.launch-profile { padding-top: 4px; }
-button.launch-choice { min-height: 62px; padding: 10px 11px; border: 1px solid @edge; background: @console; }
-button.launch-choice:checked { border-color: @ink; background: @wash; }
-.choice-title { font-size: 13px; font-weight: 600; }
-.launch-footer { min-height: 64px; padding: 0 20px; border-top: 1px solid @edge; background: @console; }
-.launch-footer button.primary { min-width: 156px; min-height: 34px; }
-.launch-task { padding: 10px; border: 1px solid @edge; background: @slab; }
 
 .task-edit { border: 1px solid @edge; background: @console; }
 
@@ -216,26 +206,6 @@ paned.sidebar-split > separator:hover { background-color: @line_focus; }
 .small-lamp { min-width: 4px; min-height: 4px; }
 .wall-split > separator { min-width: 6px; background: transparent; }
 .wall-split > separator:hover { background: @strong; }
-.launch-mode-icon { min-width: 30px; min-height: 30px; }
-.launch-choice-check { min-width: 15px; min-height: 15px; border: 1px solid @strong; border-radius: 50%; color: transparent; }
-.launch-choice:checked .launch-choice-check { background: @ink; border-color: @ink; color: @wall; }
-.launch-provider-card { min-height: 82px; padding: 10px; border: 1px solid @edge; background: @console; }
-.launch-provider-card:checked { border-color: @ink; background: @slab; }
-.launch-provider-mark { min-width: 32px; min-height: 32px; border: 1px solid @edge; background: @slab; }
-.launch-provider-facts { padding-top: 7px; border-top: 1px solid @edge; }
-.launch-segmented { border: 1px solid @strong; border-radius: 2px; }
-.launch-segmented button { min-height: 29px; border: 0; border-left: 1px solid @strong; border-radius: 0; background: @console; font-family: 'Geist'; font-size: 11px; letter-spacing: 0.06em; }
-.launch-segmented button:first-child { border-left: 0; }
-.launch-segmented button:checked { background: @ink; color: @wall; }
-.launch-segmented button:checked label { color: @wall; }
-.launch-count button { min-height: 26px; }
-button.launch-member-card { min-height: 52px; padding: 8px; border: 1px solid @edge; background: @console; }
-button.launch-member-card:checked { border-color: @ink; background: @wash; }
-.launch-agent-glyph { min-width: 28px; min-height: 28px; background: @slab; border: 1px solid @edge; }
-.launch-assignment { min-height: 240px; }
-.launch-task-tools { padding: 8px; background: @console; }
-.launch-task-list { padding: 2px; }
-.launch-task { min-height: 82px; }
 
 .window-controls { margin-left: 4px; }
 button.window-control { min-width: 44px; min-height: 52px; padding: 0; border: 0; border-radius: 0; background: transparent; color: @faint; }
@@ -281,11 +251,6 @@ label { line-height: 1.15; }
 button label, .section-label, .brand, .brand-mark, .umd label, .statusbar label { line-height: 1; }
 button.nav label, button.project label { line-height: 1.45; }
 .status-platform { color: @faint; font-size: 11px; }
-.launch-compact button.launch-choice { min-height: 34px; padding: 7px 9px; }
-.launch-compact button.launch-member-card { min-height: 36px; padding: 8px; }
-.launch-compact .launch-provider-card { min-height: 70px; padding: 8px; }
-.launch-task-check { min-width: 16px; min-height: 16px; border: 1px solid @strong; color: transparent; }
-button.launch-task:checked .launch-task-check { background: @ink; border-color: @ink; color: @wall; }
 .workspace-picker > button { min-height: 24px; padding: 0 8px; background: @slab; border: 1px solid @edge; }
 .workspace-picker-label { font-size: 11px; }
 button.workspace-project { min-height: 28px; padding: 0 8px; background: transparent; color: @secondary; }

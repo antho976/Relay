@@ -1,0 +1,85 @@
+/* The New agents sheet (launch.rs): a heading, how the crew runs, the crew rail beside the
+   chosen agent's settings, and a footer that launches. The sheet itself is `.launch` (theme.css). */
+.launch-head { min-height: 68px; padding: 0 14px 0 24px; border-bottom: 1px solid @edge; }
+.launch-title { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+.launch-context { color: @faint; font-family: 'Geist Mono', monospace; font-size: 11.5px; }
+.launch-mode-bar { padding: 12px 24px; border-bottom: 1px solid @edge; }
+.launch-hint { color: @faint; font-size: 12px; }
+
+/* Segmented keys: a raised well, the chosen key lit with track like the view switch. */
+.launch-segmented { padding: 2px; border: 1px solid @strong; border-radius: 10px; background: @raised; }
+.launch-segmented > button { min-height: 26px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: @secondary; font-size: 12.5px; font-weight: 500; }
+.launch-segmented > button:hover { background: @wash; color: @ink; }
+.launch-segmented > button:checked { background: @track; color: @ink; }
+.launch-segmented > button:disabled { opacity: 0.4; }
+.launch-segmented > button image { color: inherit; }
+
+/* The crew rail. */
+.launch-rail { padding: 14px 10px; border-right: 1px solid @edge; }
+.launch-member { border-radius: 10px; transition: background 120ms ease-out; }
+.launch-member:hover { background: alpha(@wash, 0.6); }
+.launch-member.selected { background: @wash; }
+button.launch-member-key { min-height: 46px; padding: 6px 4px 6px 8px; border: 0; border-radius: 10px; background: transparent; }
+button.launch-member-key:hover { background: transparent; }
+.launch-member-badge { min-width: 22px; min-height: 22px; border: 1px solid @line_emphasis; border-radius: 7px; color: @secondary; font-family: 'Geist Mono', monospace; font-size: 11px; font-weight: 600; }
+.launch-member.selected .launch-member-badge { background: @ink; border-color: @ink; color: @wall; }
+.launch-member-name { font-size: 13px; font-weight: 600; }
+.launch-member-facts { color: @faint; font-size: 12px; }
+button.launch-member-remove { min-width: 24px; min-height: 24px; margin-right: 6px; border-radius: 7px; opacity: 0; }
+.launch-member:hover button.launch-member-remove, .launch-member.selected button.launch-member-remove, button.launch-member-remove:focus-visible { opacity: 1; }
+button.launch-add { min-height: 40px; margin-top: 4px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: @secondary; }
+button.launch-add:hover { background: @wash; color: @ink; }
+.launch-add-mark { min-width: 22px; min-height: 22px; border: 1px dashed @line_focus; border-radius: 7px; }
+
+/* The chosen agent. */
+.launch-editor { padding: 22px 24px 32px; }
+.launch-row-label { color: @secondary; font-size: 13px; }
+button.launch-provider { min-height: 50px; padding: 0 12px 0 10px; border: 1px solid @strong; border-radius: 10px; background: @slab; }
+button.launch-provider:hover { border-color: @line_emphasis; background: @wash; }
+button.launch-provider:checked { border-color: alpha(@ink, 0.5); background: @wash; }
+.launch-provider-mark { min-width: 30px; min-height: 30px; border: 1px solid @strong; border-radius: 8px; background: @raised; }
+.launch-provider-name { font-size: 13px; font-weight: 600; }
+.launch-provider-status { color: @faint; font-size: 12px; }
+.launch-radio { min-width: 12px; min-height: 12px; border: 1px solid @line_focus; border-radius: 999px; }
+button.launch-provider:checked .launch-radio { min-width: 6px; min-height: 6px; border: 4px solid @ink; background: @wall; }
+
+button.launch-disclosure { min-height: 40px; margin-top: 20px; padding: 0 12px 0 10px; border: 1px solid @strong; border-radius: 10px; background: transparent; }
+button.launch-disclosure:hover { background: @wash; }
+.launch-disclosure image { color: @faint; }
+.launch-disclosure-title { font-size: 13px; font-weight: 500; }
+.launch-disclosure-summary { color: @faint; font-size: 12px; }
+.launch-options { padding: 16px 2px 4px; }
+.launch-field-label, .launch-switch-title { font-size: 13px; font-weight: 500; }
+.launch-prompt { border: 1px solid @strong; border-radius: 10px; background: @raised; transition: border-color 120ms ease-out; }
+.launch-prompt:focus-within { border-color: @line_focus; }
+.launch-prompt textview, .launch-prompt textview text { background: transparent; }
+.launch-prompt textview { min-height: 84px; padding: 9px 11px; }
+.launch-switch { min-height: 36px; }
+
+/* The task queue: rows, each numbered in queue order once ticked. */
+.launch-tasks { margin-top: 22px; padding-top: 20px; border-top: 1px solid @edge; }
+.launch-section-title { font-size: 14px; font-weight: 600; }
+.launch-count-pill { padding: 1px 8px; border: 1px solid @strong; border-radius: 999px; color: @faint; font-family: 'Geist Mono', monospace; font-size: 11px; }
+.launch-count-pill.on { border-color: @ink; background: @ink; color: @wall; }
+.launch-filter > button { min-height: 24px; padding: 0 10px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: @secondary; font-size: 12px; font-weight: 500; }
+.launch-filter > button:hover { background: @wash; color: @ink; }
+.launch-filter > button:checked { border-color: @strong; background: @slab; color: @ink; }
+.launch-task-list { margin: 0 -8px; }
+button.launch-task { min-height: 44px; padding: 5px 12px 5px 8px; border: 1px solid transparent; border-radius: 10px; background: transparent; }
+button.launch-task:hover { background: @wash; }
+button.launch-task:checked { border-color: @strong; background: @slab; }
+.launch-task-order { min-width: 20px; min-height: 20px; border: 1px solid @line_focus; border-radius: 6px; color: @wall; font-family: 'Geist Mono', monospace; font-size: 11px; font-weight: 600; }
+button.launch-task:hover .launch-task-order { border-color: @faint; }
+.launch-task-order.on, button.launch-task:hover .launch-task-order.on { border-color: @ink; background: @ink; }
+.launch-task-title { font-size: 13px; font-weight: 500; }
+.launch-task-desc { color: @faint; font-size: 12px; }
+.launch-task-column { padding: 1px 8px; border-radius: 999px; background: @raised; color: @secondary; font-size: 11.5px; }
+.launch-task-id { min-width: 40px; color: @faint; font-family: 'Geist Mono', monospace; font-size: 11.5px; }
+.launch-task-empty { padding: 14px 8px; }
+.launch-shared-note { margin-top: 22px; padding: 14px 16px; border: 1px solid @edge; border-radius: 10px; color: @secondary; font-size: 12.5px; }
+
+.launch-foot { min-height: 68px; padding: 0 16px 0 24px; border-top: 1px solid @edge; }
+.launch-status { color: @secondary; font-size: 12px; }
+.launch-status.error { color: @held_text; }
+.launch-keycap { padding: 1px 6px; border: 1px solid @line_emphasis; border-radius: 5px; color: @faint; font-family: 'Geist Mono', monospace; font-size: 11px; }
+button.launch-go { min-height: 36px; min-width: 150px; padding: 0 18px; }
