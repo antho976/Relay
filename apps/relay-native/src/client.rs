@@ -204,7 +204,10 @@ impl Client {
         let waiting = pending.clone();
         let reader_notices = notices.clone();
         let reader = tokio::spawn(async move {
-            let mut reader = BufReader::new(read);
+            // A connection allowed lines past the 2 MiB control limit carries video: a picture's
+            // line is tens to hundreds of KiB, which an 8 KiB buffer took a read call per 8 KiB of.
+            let capacity = if max_line > MAX_LINE { 256 * 1024 } else { 8 * 1024 };
+            let mut reader = BufReader::with_capacity(capacity, read);
             let outcome: Result<(), Error> = async {
                 loop {
                     // read_until alone has no size limit. Bound the frame before allocation.
@@ -361,6 +364,17 @@ impl Client {
             })),
             receiver,
         ))
+    }
+
+    /// Write `op` behind everything sent before it from the same caller, without waiting for its
+    /// answer, which the reader then drops. For a stream of small requests whose order matters and
+    /// whose answers do not — mirror input, where waiting out each round trip before sending the
+    /// next touch was latency added to every move. `request` cannot be used back to back for
+    /// that: each one is queued from its own task, so two of them may reach the socket swapped.
+    /// Waits only while the writer's queue is full.
+    pub async fn send_unanswered(&self, op: &str, payload: Value) -> Result<(), Error> {
+        let request = Request::new(Actor::User, op, payload);
+        self.0.tx.send(request).await.map_err(|_| Error::Disconnected)
     }
 
     pub async fn request(&self, rt: &Handle, op: &str, payload: Value) -> Result<Value, Error> {

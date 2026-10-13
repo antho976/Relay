@@ -70,11 +70,21 @@ pub fn decoder_bytes(packet: &[u8]) -> Option<Vec<u8>> {
 /// Decides, packet by packet, whether the decoder can take what arrives. A decoder cannot join
 /// an H.264 stream mid-GOP, so after a sequence gap (the engine dropped packets for a slow
 /// window) or a late join, it waits for the next codec config — and asks for one once.
+///
+/// It also says when the decoder itself has to go. FFmpeg scales every picture to the size of
+/// the first one it decoded (`-autoscale`), so after the device rotates, a landscape stream came
+/// back squashed into the portrait frame — and with it the size every touch is sent with, which
+/// the server then ignores as "generated for a different device size". `-noautoscale` is no way
+/// out: FFmpeg n9 crashes on the size change. So a stream of a new size gets a new decoder.
 #[derive(Debug)]
 pub struct Gate {
     last: Option<u64>,
     waiting: bool,
     asked: bool,
+    /// The stream's size from the engine's latest status.
+    size: Option<(u32, u32)>,
+    /// The size the running decoder took its codec config at; `None` until it has one.
+    decoding: Option<(u32, u32)>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -87,7 +97,7 @@ pub enum Admit {
 
 impl Default for Gate {
     fn default() -> Self {
-        Self { last: None, waiting: true, asked: false }
+        Self { last: None, waiting: true, asked: false, size: None, decoding: None }
     }
 }
 
@@ -101,6 +111,11 @@ impl Gate {
         if config {
             self.waiting = false;
             self.asked = false;
+            if self.decoding.is_none() {
+                // With no status seen yet the size is unknown; the first one then replaces this
+                // decoder, which costs a restart rather than a squashed picture.
+                self.decoding = Some(self.size.unwrap_or((0, 0)));
+            }
             return Admit::Write;
         }
         if !self.waiting {
@@ -112,6 +127,26 @@ impl Gate {
             self.asked = true;
             Admit::Reset
         }
+    }
+}
+
+impl Gate {
+    /// The stream's size from an engine status. `true` when the running decoder holds a stream of
+    /// another size and must be replaced; the gate then waits for the codec config that follows
+    /// the size change (the engine sends the status first), asking for one only if a picture
+    /// arrives without it.
+    pub fn resize(&mut self, width: u32, height: u32) -> bool {
+        if width == 0 || height == 0 {
+            return false;
+        }
+        self.size = Some((width, height));
+        if self.decoding.is_none_or(|size| size == (width, height)) {
+            return false;
+        }
+        self.decoding = None;
+        self.waiting = true;
+        self.asked = false;
+        true
     }
 }
 
@@ -221,6 +256,35 @@ mod tests {
         // The device answers the reset with config + key frame.
         assert_eq!(gate.admit(13, true), Admit::Write);
         assert_eq!(gate.admit(14, false), Admit::Write);
+    }
+
+    #[test]
+    fn a_new_stream_size_replaces_the_decoder_and_waits_for_its_config() {
+        let mut gate = Gate::default();
+        // The estimate, then the real size, both before any config: nothing to replace.
+        assert!(!gate.resize(576, 1280));
+        assert!(!gate.resize(576, 1264));
+        assert_eq!(gate.admit(1, true), Admit::Write);
+        assert_eq!(gate.admit(2, false), Admit::Write);
+        // A status that repeats the size (a name, a state) keeps the decoder.
+        assert!(!gate.resize(576, 1264));
+        assert!(!gate.resize(0, 0));
+        // The device rotated: a new decoder, fed from the config that follows.
+        assert!(gate.resize(1264, 576));
+        assert_eq!(gate.admit(3, true), Admit::Write);
+        assert_eq!(gate.admit(4, false), Admit::Write);
+        // Back to portrait; this time a picture slips in ahead of the config.
+        assert!(gate.resize(576, 1264));
+        assert_eq!(gate.admit(5, false), Admit::Reset);
+        assert_eq!(gate.admit(6, true), Admit::Write);
+        assert!(!gate.resize(576, 1264));
+    }
+
+    #[test]
+    fn a_config_before_any_status_is_replaced_by_the_first_one() {
+        let mut gate = Gate::default();
+        assert_eq!(gate.admit(1, true), Admit::Write);
+        assert!(gate.resize(576, 1264));
     }
 
     #[test]
