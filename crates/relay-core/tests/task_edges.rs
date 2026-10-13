@@ -585,3 +585,33 @@ fn a_task_made_from_a_note_keeps_the_link() {
     assert!(after["note_id"].is_null(), "{after}");
     assert!(after["deleted_at"].is_null());
 }
+
+/// Rows store an attachment's whole path, and the store's directory can be reached by more than
+/// one spelling (a moved or symlinked data directory). Under another one no row matched any
+/// file, and recovery deleted every attachment. A row outside the folder scanned now stops the
+/// sweep; under the folder's own spelling, files are matched by `<task>/<file>`.
+#[test]
+fn recovery_keeps_attachments_whose_rows_spell_the_store_directory_differently() {
+    let f = Fixture::new();
+    let e = &f.engine;
+    let task = f.task("Shots", json!({}));
+    let live = ok(e, "task.attach", json!({"task_id":task["id"],"name":"live.png","mime":"image/png","bytes_b64":b64(b"live")}));
+    let path = PathBuf::from(live["path"].as_str().unwrap());
+    let orphan = path.parent().unwrap().join("99-orphan.png");
+    std::fs::write(&orphan, b"orphan").unwrap();
+    let alias = f.root.path().join("alias");
+    std::os::unix::fs::symlink(f.root.path().join("store"), &alias).unwrap();
+    let elsewhere = alias.join("attachments").join(path.strip_prefix(f.attachments()).unwrap());
+    let set_path = |to: &Path| {
+        e.store.lock().execute("UPDATE attachments SET path=?1 WHERE id=?2", rusqlite::params![to.display().to_string(), live["id"].as_i64().unwrap()]).unwrap();
+    };
+    set_path(&elsewhere);
+    let report = relay_core::recovery::run(e).unwrap();
+    assert!(!report.fsck_fixes.iter().any(|x| x.contains("attachment")), "{:?}", report.fsck_fixes);
+    assert!(path.is_file() && orphan.is_file(), "a row under another spelling had its files swept");
+
+    set_path(&path);
+    let report = relay_core::recovery::run(e).unwrap();
+    assert!(report.fsck_fixes.iter().any(|x| x == "removed 1 orphaned attachment file(s)"), "{:?}", report.fsck_fixes);
+    assert!(path.is_file() && !orphan.exists());
+}

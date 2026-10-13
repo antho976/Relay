@@ -216,3 +216,52 @@ fn a_project_removed_with_its_workspace_brings_the_workspace_back() {
     assert_eq!(ok(e, "workspace.list", json!({}))["workspaces"][0]["id"], 1);
     assert_eq!(ok(e, "project.get", json!({"project_id": 1}))["workspace_id"], 1);
 }
+
+/// A `project-remove` backup is the only copy of the project it was taken for. Pruned by count,
+/// five were kept, and the sixth removal silently dropped the first project from
+/// `project.removed.list` (and let recovery sweep its attachment files). One holding the newest
+/// copy of a project still removed now stays; one whose projects are back, or held by a newer
+/// backup, still goes once past the five.
+#[test]
+fn removal_backups_outlive_the_count_while_they_hold_a_removed_project() {
+    let f = fixture();
+    let e = &f.engine;
+    for id in 2..=8 {
+        let repo = repo_in(&f.ws, &format!("p{id}"));
+        assert_eq!(ok(e, "project.add", json!({"workspace_id": 1, "path": repo}))["id"], id);
+    }
+    let removal_backups = || e.store.list_backups().unwrap().into_iter().filter(|b| b.reason == "project-remove").count();
+    let removed = || {
+        let listed = ok(e, "project.removed.list", json!({}));
+        let mut ids: Vec<i64> = listed["removed"].as_array().unwrap().iter().map(|r| r["project_id"].as_i64().unwrap()).collect();
+        ids.sort();
+        ids
+    };
+    for id in 1..=7 {
+        ok(e, "project.remove", json!({"project_id": id}));
+    }
+    assert_eq!(removal_backups(), 7);
+    assert_eq!(removed(), (1..=7).collect::<Vec<i64>>());
+
+    // Project 1 back, its backup holds only projects a newer backup holds too: past the five, it goes.
+    let listed = ok(e, "project.removed.list", json!({}));
+    let first = listed["removed"].as_array().unwrap().iter().find(|r| r["project_id"] == 1).unwrap()["backup_path"].as_str().unwrap().to_string();
+    ok(e, "project.restore", json!({"backup_path": first, "project_id": 1}));
+    ok(e, "project.remove", json!({"project_id": 8}));
+    assert!(!Path::new(&first).exists(), "a backup no removed project needs was kept");
+    assert_eq!(removal_backups(), 7);
+    assert_eq!(removed(), (2..=8).collect::<Vec<i64>>());
+}
+
+/// The base branch reaches git's command line: one that would read as an option is refused.
+#[test]
+fn project_update_refuses_a_base_branch_git_would_read_as_an_option() {
+    let f = fixture();
+    let e = &f.engine;
+    for bad in ["--output=/tmp/owned", "-b", "a..b", "has space"] {
+        let error = refused(call(e, "project.update", json!({"project_id": 1, "base_branch": bad})));
+        assert_eq!(error.code, "project.base_branch", "{bad}: {}", error.message);
+    }
+    assert_eq!(ok(e, "project.get", json!({"project_id": 1}))["base_branch"], "main");
+    assert_eq!(ok(e, "project.update", json!({"project_id": 1, "base_branch": "release/2.0"}))["base_branch"], "release/2.0");
+}

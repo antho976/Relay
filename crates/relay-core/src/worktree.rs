@@ -495,37 +495,39 @@ fn managed_dirs(repo: &Path) -> [PathBuf; 2] {
 }
 
 /// Remove a linked worktree (never the primary). Returns bytes freed. The branch is kept.
-///
-/// `path` must be a linked worktree git lists for `repo`, or a directory strictly inside one of
-/// Relay's own checkout areas (a pooled checkout half-deleted, whose admin entry may already be
-/// pruned). Anything else is refused before a byte is touched: this used to purge build
-/// directories under, and then `rm -rf`, whatever path it was handed (RA-017). The plain
-/// `rm -rf` fallback is likewise kept to Relay's own areas; a registered checkout elsewhere that
-/// git will not remove (locked, say) stays where it is.
+/// A rescue ref [`remove_rescuing`] had to make is logged.
 pub fn remove(repo: &Path, path: &Path, purge: bool) -> Result<u64> {
-    if !path.is_absolute() {
-        return Err(anyhow!("{} is not an absolute path", path.display()));
-    }
-    let repo_c = canon(repo);
-    let path_c = canon(path);
-    if repo_c == path_c {
-        return Err(anyhow!("refusing to remove the primary checkout"));
-    }
-    let managed = managed_dirs(repo).iter().any(|dir| {
-        let dir = PathBuf::from(canon(dir));
-        let path = Path::new(&path_c);
-        path != dir && path.starts_with(&dir)
-    });
-    let registered = list_with_dirty(repo, false)?.iter().skip(1).any(|wt| wt.path == path_c);
-    if !registered && !managed {
-        return Err(anyhow!("{path_c} is not a worktree of {repo_c}"));
-    }
-    // Relay never locks a worktree; someone did so to keep it. Refuse before purging anything.
-    if is_locked(Path::new(&path_c)) {
-        return Err(anyhow!("{path_c} is locked (git worktree unlock it first)"));
-    }
+    remove_rescuing(repo, path, purge).map(|removed| removed.freed)
+}
+
+/// What [`remove_rescuing`] did.
+pub struct Removed {
+    /// Bytes freed.
+    pub freed: u64,
+    /// The ref pinning a detached HEAD's commits that no branch or tag held.
+    pub rescued: Option<String>,
+}
+
+/// Remove a linked worktree (never the primary). The branch is kept, and so are the commits of
+/// a detached HEAD no branch or tag contains: they are pinned under `refs/relay/rescue/` first
+/// ([`rescue_detached`]), since the checkout's reflog goes with it.
+///
+/// `path` must be a linked worktree git lists for `repo`, or a direct child of one of Relay's
+/// own checkout areas (a pooled checkout half-deleted, whose admin entry may already be pruned).
+/// Anything else is refused before a byte is touched: this used to purge build directories
+/// under, and then `rm -rf`, whatever path it was handed (RA-017), and until the child rule a
+/// directory inside a live pooled checkout (`.relay/worktrees/<name>/src`) still passed. The
+/// plain `rm -rf` fallback is likewise kept to Relay's own areas; a registered checkout
+/// elsewhere that git will not remove (locked, say) stays where it is.
+pub fn remove_rescuing(repo: &Path, path: &Path, purge: bool) -> Result<Removed> {
+    let (path_c, managed) = removable(repo, path)?;
     let mut freed = 0;
+    let mut rescued = None;
     if path.exists() {
+        rescued = rescue_detached(repo, Path::new(&path_c))?;
+        if let Some(rescue) = &rescued {
+            tracing::warn!(worktree = %path_c, %rescue, "the checkout's detached HEAD was on no branch; pinned its commits before removing it");
+        }
         if purge { freed += purge_build(path); }
         freed += dir_size(path);
         git(repo, &["worktree", "remove", "--force", &path_c])
@@ -538,7 +540,59 @@ pub fn remove(repo: &Path, path: &Path, purge: bool) -> Result<u64> {
             })?;
     }
     let _ = git(repo, &["worktree", "prune"]);
-    Ok(freed)
+    Ok(Removed { freed, rescued })
+}
+
+/// Whether [`remove_rescuing`] would take `path` at all, without touching it: its canonical
+/// spelling, and whether it is in one of Relay's own areas. A caller with its own checks to
+/// make first (`worktree.remove`'s dirty check) refuses an unremovable path before them.
+pub fn removable(repo: &Path, path: &Path) -> Result<(String, bool)> {
+    if !path.is_absolute() {
+        return Err(anyhow!("{} is not an absolute path", path.display()));
+    }
+    let repo_c = canon(repo);
+    let path_c = canon(path);
+    if repo_c == path_c {
+        return Err(anyhow!("refusing to remove the primary checkout"));
+    }
+    let managed = managed_dirs(repo).iter().any(|dir| Path::new(&path_c).parent() == Some(Path::new(&canon(dir))));
+    let registered = list_with_dirty(repo, false)?.iter().skip(1).any(|wt| wt.path == path_c);
+    if !registered && !managed {
+        return Err(anyhow!("{path_c} is not a worktree of {repo_c}"));
+    }
+    // Relay never locks a worktree; someone did so to keep it. Refuse before purging anything.
+    if is_locked(Path::new(&path_c)) {
+        return Err(anyhow!("{path_c} is locked (git worktree unlock it first)"));
+    }
+    Ok((path_c, managed))
+}
+
+/// Pin a checkout's detached HEAD under `refs/relay/rescue/<checkout name>` when no branch, tag
+/// or earlier rescue contains it, and say which ref. A clean checkout passes every dirty check,
+/// yet commits made on a detached HEAD are reachable only from its HEAD and its reflog, and
+/// removing the checkout deletes both. A ref never blocks the removal and loses nothing; any
+/// `git` failure here refuses the removal instead. `git branch <name> <ref>` brings the work back.
+fn rescue_detached(repo: &Path, path: &Path) -> Result<Option<String>> {
+    // Without a `.git` of its own, git would answer for the primary checkout that holds it.
+    if !path.join(".git").exists() || git(path, &["symbolic-ref", "-q", "HEAD"]).is_ok() {
+        return Ok(None);
+    }
+    let Ok(head) = git(path, &["rev-parse", "--verify", "-q", "HEAD^{commit}"]) else { return Ok(None) };
+    let head = head.trim();
+    if !git(path, &["for-each-ref", "--count=1", "--contains", head, "refs/heads", "refs/tags", "refs/relay/rescue"])?.trim().is_empty() {
+        return Ok(None);
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let named = format!("refs/relay/rescue/{name}");
+    let named = if !name.is_empty() && git(repo, &["check-ref-format", &named]).is_ok() { named } else { "refs/relay/rescue/detached".to_string() };
+    // An empty old value creates the ref only if it is not there; a namesake from an earlier
+    // rescue holds other commits, so this one takes the commit's id as a suffix.
+    if git(repo, &["update-ref", &named, head, ""]).is_ok() {
+        return Ok(Some(named));
+    }
+    let suffixed = format!("{named}-{}", &head[..head.len().min(12)]);
+    git(repo, &["update-ref", &suffixed, head])?;
+    Ok(Some(suffixed))
 }
 
 /// Whether `git worktree lock` holds this checkout: its admin slot carries a `locked` file.

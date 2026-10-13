@@ -10,10 +10,21 @@ op!(WorktreeList, "worktree.list", WorktreeListIn => WorktreeListOut, OpMeta::qu
 payload!(#[schemars(rename = "WorktreeCreateIn")] WorktreeCreateIn { pub project_id: Id, pub branch: String, pub from: Option<String> });
 op!(WorktreeCreate, "worktree.create", WorktreeCreateIn => Worktree,
     OpMeta::mutation(Scope::Project, 3, "Create a worktree on a branch").actors(Actors::UserOnly).emits(&["worktree.changed"]));
-payload!(#[schemars(rename = "WorktreeRemoveIn")] WorktreeRemoveIn { pub project_id: Id, pub path: String, pub purge_build: Option<bool> });
-result!(#[schemars(rename = "GitFreedOut")] FreedOut { pub freed_mb: f64 });
+payload!(#[schemars(rename = "WorktreeRemoveIn")] WorktreeRemoveIn {
+    pub project_id: Id, pub path: String, pub purge_build: Option<bool>,
+    /// Delete the worktree even with uncommitted changes or git-ignored files worth keeping.
+    /// Without it, removing a dirty worktree is refused `worktree.dirty`, as `session.close` is.
+    pub discard_changes: Option<bool>,
+});
+result!(#[schemars(rename = "GitFreedOut")] FreedOut {
+    pub freed_mb: f64,
+    /// The ref (`refs/relay/rescue/...`) now holding the commits of a detached HEAD that no
+    /// branch or tag contained; absent when there were none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rescued: Option<String>,
+});
 op!(WorktreeRemove, "worktree.remove", WorktreeRemoveIn => FreedOut,
-    OpMeta::mutation(Scope::Project, 3, "Remove a worktree; conflict if a session owns it").actors(Actors::UserOnly).emits(&["worktree.changed"]));
+    OpMeta::mutation(Scope::Project, 3, "Remove a worktree; conflict if a session owns it or it is dirty (unless discard_changes)").actors(Actors::UserOnly).emits(&["worktree.changed"]));
 result!(#[schemars(rename = "WorktreeDiskOut")] WorktreeDiskOut { pub worktrees: Vec<crate::ops::app::WorktreeDisk> });
 op!(WorktreeDisk, "worktree.disk", ProjectIn => WorktreeDiskOut, OpMeta::query(Scope::Project, 3, "Disk per worktree, build output separately"));
 

@@ -236,10 +236,17 @@ struct Merged { reason: String, pr: Option<GhPr> }
 /// What Relay itself writes into a checkout, kept out of git through `info/exclude`.
 const RELAY_WRITTEN: &[&str] = &[".claude/settings.local.json", ".codex/hooks.json", ".claude/skills/", ".agents/skills/"];
 
+/// Ignored caches and environments a tool rebuilds on its own, wherever they appear: losing one
+/// with its checkout costs a reinstall, not work, so they never hold a checkout back.
+const REBUILT: &[&str] = &[
+    "__pycache__", ".venv", "venv", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".nox",
+    ".cache", ".parcel-cache", ".turbo", ".DS_Store",
+];
+
 /// Git-ignored paths in a checkout that are neither build output nor Relay's own files: an
 /// `.env`, local settings, notes. Removing the checkout would delete them, and nothing in git
 /// could bring them back.
-fn ignored_keepers(path: &Path) -> Result<Vec<String>, String> {
+pub(crate) fn ignored_keepers(path: &Path) -> Result<Vec<String>, String> {
     // `matching` names an ignored directory once and the files Relay writes one by one, where
     // the default would fold `.claude/settings.local.json` into an opaque `.claude/`.
     let ran = Git { repo: path }.run(&["status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all"], GIT_TIMEOUT)?;
@@ -250,6 +257,7 @@ fn ignored_keepers(path: &Path) -> Result<Vec<String>, String> {
         .filter_map(|record| record.strip_prefix("!! "))
         .filter(|ignored| !RELAY_WRITTEN.iter().any(|ours| ignored.starts_with(ours)))
         .filter(|ignored| !crate::watch::is_generated_path(path, &path.join(ignored)))
+        .filter(|ignored| !Path::new(ignored.trim_end_matches('/')).components().any(|c| REBUILT.iter().any(|r| c.as_os_str() == *r)))
         .map(str::to_string)
         .collect())
 }

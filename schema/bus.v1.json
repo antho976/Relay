@@ -2602,7 +2602,7 @@
       }
     },
     "worktree.remove": {
-      "summary": "Remove a worktree; conflict if a session owns it",
+      "summary": "Remove a worktree; conflict if a session owns it or it is dirty (unless discard_changes)",
       "kind": "mutation",
       "audit": "always",
       "undo": "none",
@@ -12894,6 +12894,13 @@
             "boolean",
             "null"
           ]
+        },
+        "discard_changes": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Delete the worktree even with uncommitted changes or git-ignored files worth keeping.\nWithout it, removing a dirty worktree is refused `worktree.dirty`, as `session.close` is."
         }
       },
       "required": [
@@ -12907,6 +12914,13 @@
         "freed_mb": {
           "type": "number",
           "format": "double"
+        },
+        "rescued": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The ref (`refs/relay/rescue/...`) now holding the commits of a detached HEAD that no\nbranch or tag contained; absent when there were none."
         }
       },
       "required": [

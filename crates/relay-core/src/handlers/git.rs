@@ -152,6 +152,9 @@ pub fn register(e: &mut Engine) {
     );
     // The build purge, the size walk and `git worktree remove` are seconds of disk work for a
     // checkout with real build output: done before the transaction, which only announces it.
+    // `git worktree remove --force` deletes whatever the checkout holds, so a dirty one is
+    // refused first, as `session.close` refuses it (RA-405); a detached HEAD on no branch is
+    // pinned under `refs/relay/rescue/` and named in the answer.
     e.register_staged::<WorktreeRemove, _>(
         |ctx, p| {
             // A relative path would resolve against the engine's cwd ($HOME under `relay serve`).
@@ -169,14 +172,18 @@ pub fn register(e: &mut Engine) {
             if let Some(name) = owner {
                 return Err(BusError::conflict("worktree.owned", format!("session {name} owns {want}")).with_hint("session.close it first"));
             }
-            let freed = worktree::remove(Path::new(&project.path), Path::new(&want), p.purge_build.unwrap_or(true))
-                .map_err(|e| BusError::conflict("worktree.remove_failed", e.to_string()))?;
-            Ok((project.id, freed))
+            let refuse = |e: anyhow::Error| BusError::conflict("worktree.remove_failed", e.to_string());
+            worktree::removable(Path::new(&project.path), Path::new(&want)).map_err(refuse)?;
+            if !p.discard_changes.unwrap_or(false) {
+                super::session::refuse_dirty(&[(std::path::PathBuf::from(&want), Vec::new())])?;
+            }
+            let removed = worktree::remove_rescuing(Path::new(&project.path), Path::new(&want), p.purge_build.unwrap_or(true)).map_err(refuse)?;
+            Ok((project.id, removed.freed, removed.rescued))
         },
-        |ctx: &mut Ctx, _p, (project_id, freed): (relay_bus::types::Id, u64)| {
+        |ctx: &mut Ctx, _p, (project_id, freed, rescued): (relay_bus::types::Id, u64, Option<String>)| {
             ctx.set_project(project_id);
             ctx.emit("worktree.changed", json!({ "project_id": project_id }));
-            Ok(FreedOut { freed_mb: freed as f64 / (1024.0 * 1024.0) })
+            Ok(FreedOut { freed_mb: freed as f64 / (1024.0 * 1024.0), rescued })
         },
     );
     e.register_unlocked::<WorktreeDisk>(|ctx, p| {
