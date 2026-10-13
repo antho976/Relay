@@ -256,3 +256,30 @@ fn a_rewrite_judged_on_a_file_since_replaced_is_judged_again() {
     assert_eq!(err(&held.1).code, "guardrail.user_bypass");
     assert_eq!(std::fs::read_to_string(repo.join("big.txt")).unwrap(), lines(landed[0]));
 }
+
+/// The trash row is only durable once the delete commits. A commit that fails after the file
+/// was moved into `.relay/trash` puts it back where it was, rather than leaving it in a trash
+/// nothing lists or restores; a delete that then commits trashes it as before.
+#[test]
+fn a_delete_whose_commit_fails_leaves_the_file_in_place() {
+    let (e, _ws, repo) = project();
+    std::fs::write(repo.join("keep.txt"), "kept\n").unwrap();
+    // A deferred foreign key is checked at COMMIT, so the handler succeeds and the commit fails.
+    e.store.lock().execute_batch(
+        "CREATE TABLE test_parent(id INTEGER PRIMARY KEY);
+         CREATE TABLE test_child(parent INTEGER REFERENCES test_parent(id) DEFERRABLE INITIALLY DEFERRED);
+         CREATE TRIGGER test_fail_commit AFTER UPDATE OF trash_path ON file_trash
+         BEGIN INSERT INTO test_child(parent) VALUES (404); END;",
+    ).unwrap();
+    let failed = call(&e, "file.delete", json!({"project_id": 1, "path": "keep.txt"}));
+    assert!(failed.error.is_some(), "{failed:?}");
+    assert_eq!(std::fs::read_to_string(repo.join("keep.txt")).unwrap(), "kept\n");
+    assert!(!repo.join(".relay/trash/1").exists(), "the payload's slot is cleared");
+    assert_eq!(ok(&e, "file.trash.list", json!({"project_id": 1}))["entries"], json!([]));
+
+    e.store.lock().execute_batch("DROP TRIGGER test_fail_commit;").unwrap();
+    let trash_id = ok(&e, "file.delete", json!({"project_id": 1, "path": "keep.txt"}))["trash_id"].clone();
+    assert!(!repo.join("keep.txt").exists());
+    ok(&e, "file.restore", json!({"project_id": 1, "trash_id": trash_id}));
+    assert_eq!(std::fs::read_to_string(repo.join("keep.txt")).unwrap(), "kept\n");
+}

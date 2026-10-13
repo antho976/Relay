@@ -1218,14 +1218,23 @@ pub struct BranchWork {
 /// numstat, and the shape-gated files it changes. `None` when git cannot measure the branch
 /// at all (no base, no history); a measurement Relay cannot take never blocks a done. Every
 /// call goes through [`crate::proc`] with a deadline, so it belongs before the store lock.
+///
+/// `base` comes from the repository (its `HEAD` at clone) or the person, so it is never let
+/// near git's option parser: a base that starts with `-` is not measured at all, and every
+/// revision goes after `--end-of-options` — a remote whose default branch is
+/// `--output=/some/path` would otherwise have git truncate that file on every done.
 pub fn measure_branch(cfg: &GuardrailConfig, worktree: &Path, base: &str) -> Option<BranchWork> {
     let note = |what: &str, error: &BusError| tracing::warn!(worktree = %worktree.display(), %what, error = %error.message, "measuring task work");
-    let range = git_output(worktree, &["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", &format!("{base}...HEAD"), "--"])
+    if base.starts_with('-') {
+        tracing::warn!(worktree = %worktree.display(), %base, "base branch starts with '-'; not measuring task work");
+        return None;
+    }
+    let range = git_output(worktree, &["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--end-of-options", &format!("{base}...HEAD"), "--"])
         .map_err(|error| note("diff", &error))
         .ok()?;
     let mut work = BranchWork { range, ..BranchWork::default() };
     let limit = format!("--max-count={}", RECHECK_MAX_COMMITS + 1);
-    let listed = git_output(worktree, &["rev-list", "--no-merges", &limit, &format!("{base}..HEAD"), "--"]);
+    let listed = git_output(worktree, &["rev-list", "--no-merges", &limit, "--end-of-options", &format!("{base}..HEAD"), "--"]);
     match listed {
         Ok(listed) => {
             let mut shas: Vec<&str> = listed.lines().filter(|line| !line.is_empty()).collect();
@@ -3243,5 +3252,47 @@ mod path_tests {
         assert_eq!(resolve(&root.join("link/../x")), root.join("real/x"));
         assert_eq!(resolve(&root.join("./a//b")), root.join("a/b"));
         assert_eq!(resolve(Path::new("/")), Path::new("/"));
+    }
+}
+
+#[cfg(test)]
+mod measure_tests {
+    use super::{config, measure_branch};
+    use std::path::Path;
+    use std::process::Command;
+
+    fn git(repo: &Path, args: &[&str]) {
+        let out = Command::new("git").arg("-C").arg(repo).args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// A base branch read from a cloned repository's `HEAD` can be named `--output=<path>`;
+    /// measuring a done against it never hands that to git as an option, so no file appears.
+    #[test]
+    fn a_base_that_looks_like_an_option_writes_no_file() {
+        let store = crate::Store::open_memory().unwrap();
+        let cfg = config(&store.lock(), None).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&repo, &["add", "a.txt"]);
+        git(&repo, &["commit", "-q", "-m", "work"]);
+        // Relative, so it lands in the worktree git runs in (a temp dir's `.tmp…` component is
+        // not a valid ref name); a cloned remote's HEAD can as well name an absolute path.
+        let base = "--output=pwned";
+        git(&repo, &["update-ref", &format!("refs/heads/{base}"), "HEAD~1"]);
+
+        assert!(measure_branch(&cfg, &repo, base).is_none());
+        let written: Vec<_> = std::fs::read_dir(&repo).unwrap().map(|entry| entry.unwrap().file_name()).filter(|name| name.to_string_lossy().starts_with("pwned")).collect();
+        assert!(written.is_empty(), "git wrote a file named by the base branch: {written:?}");
+
+        // An ordinary base still measures, revisions after `--end-of-options` and all.
+        let work = measure_branch(&cfg, &repo, "main~1").unwrap();
+        assert!(work.range.contains("a.txt"), "{:?}", work.range);
+        assert_eq!(work.commits.len(), 1);
+        assert!(!work.partial);
     }
 }

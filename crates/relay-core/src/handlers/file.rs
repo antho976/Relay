@@ -285,9 +285,14 @@ pub fn register(e: &mut Engine) {
                 Err(e) => return Err(io_err("file.delete_failed", &rel, e)),
             }
         };
+        // The row that lists the payload is not durable until the commit: should anything from
+        // here to the commit fail, the payload goes back where it was rather than sitting in a
+        // trash nothing lists or restores.
+        let untrash = Untrash { payload: trash.clone(), path, kept: false };
         ctx.tx().execute("UPDATE file_trash SET trash_path=?1 WHERE id=?2", params![trash.display().to_string(), id]).bus()?;
         ctx.set_undo("file.restore", json!({"project_id": project_id, "trash_id": id}), None);
         changed(ctx, project_id, &root, &p.path);
+        ctx.after_commit(move |_| untrash.keep());
         Ok(DeleteOut { trash_id: id })
     });
     // Staged like delete: the checkout is resolved and a directory payload walked for gated paths
@@ -724,6 +729,43 @@ fn trash_into(bases: &[&Path], id: Id, path: &Path) -> std::io::Result<PathBuf> 
         }
     }
     Err(taken.or(failed).unwrap_or_else(|| std::io::Error::other("no trash directory")))
+}
+
+/// A delete's payload, moved into the trash inside the transaction that records it. The engine
+/// has no rollback hook, but it drops a request's after-commit work unrun when the handler
+/// fails or the commit does: `file.delete` hands this to [`Ctx::after_commit`], which keeps it,
+/// and dropped unkept it moves the payload back, never onto anything that took its place.
+struct Untrash {
+    payload: PathBuf,
+    path: PathBuf,
+    kept: bool,
+}
+
+impl Untrash {
+    fn keep(mut self) {
+        self.kept = true;
+    }
+}
+
+impl Drop for Untrash {
+    fn drop(&mut self) {
+        if self.kept {
+            return;
+        }
+        let back = if occupied(&self.path) {
+            Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists))
+        } else {
+            fs::rename(&self.payload, &self.path)
+        };
+        match back {
+            Ok(()) => {
+                if let Some(dir) = self.payload.parent() {
+                    let _ = fs::remove_dir(dir);
+                }
+            }
+            Err(e) => tracing::error!(path = %self.path.display(), payload = %self.payload.display(), error = %e, "a delete that did not commit could not put its file back"),
+        }
+    }
 }
 
 /// The highest `<id>` directory under any base's `.relay/trash`, or 0.
