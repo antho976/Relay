@@ -116,14 +116,18 @@ impl Ui {
         });
     }
 
+
     pub fn resources(self: &Rc<Self>) {
-        let Some(panel) = crate::panel::Panel::toggle(self, "Resources", 460) else {
+        let Some(panel) = crate::panel::Panel::toggle(self, "Resources", 400) else {
             return;
         };
-        panel.bottom(260);
+        panel.bottom(220);
         panel.add_css_class("resources-panel");
+        panel.add_css_class("floating-panel");
         let body = panel.body.clone();
-        body.append(&label("Connecting…", "dim"));
+        body.add_css_class("resources-body");
+        body.set_spacing(0);
+        body.append(&label("Connecting…", "resource-empty"));
         let ui = self.clone();
         let task = glib::spawn_future_local(async move {
             let result = Client::connect(&ui.rt, ui.path.clone()).await;
@@ -131,7 +135,7 @@ impl Ui {
                 Ok(v) => v,
                 Err(e) => {
                     clear(&body);
-                    body.append(&label(&e.to_string(), "dim"));
+                    body.append(&label(&e.to_string(), "resource-empty"));
                     return;
                 }
             };
@@ -155,7 +159,7 @@ impl Ui {
                 Ok(v) => render_resources(&body, &v, &history, &mut view),
                 Err(e) => {
                     clear(&body);
-                    body.append(&label(&e.to_string(), "dim"));
+                    body.append(&label(&e.to_string(), "resource-empty"));
                     return;
                 }
             }
@@ -165,7 +169,7 @@ impl Ui {
                         render_resources(&body, &e.payload, &history, &mut view)
                     }
                     Notice::Disconnected(e) => {
-                        body.append(&label(&e.to_string(), "dim"));
+                        body.append(&label(&e.to_string(), "resource-empty"));
                         break;
                     }
                     _ => {}
@@ -181,18 +185,26 @@ impl Ui {
 /// D66: the panel keeps the last 30 samples.
 const HISTORY: usize = 30;
 
-/// The open panel's widgets. A sample updates them in place; they are rebuilt only when the
-/// set of sessions or worktrees changes, so a hovered path keeps its tooltip and a sample
-/// every 2 s does not recreate every row.
+/// The open panel's widgets, built on the first sample. A sample updates them in place; a
+/// list is rebuilt only when its set of sessions or worktrees changes, so a hovered row keeps
+/// its tooltip and a sample every 2 s does not recreate every row.
 struct ResourceView {
+    tiles: Vec<(gtk::Label, gtk::DrawingArea)>,
+    engine: gtk::Label,
+    tabs: [gtk::ToggleButton; 2],
+    sessions: ResourceList,
+    worktrees: ResourceList,
+}
+
+struct ResourceList {
+    root: gtk::Box,
+    /// Sorted, so a reordering alone does not rebuild the list.
     keys: Vec<String>,
-    summary: gtk::Label,
-    charts: Vec<(gtk::Label, gtk::DrawingArea)>,
-    rows: Vec<ResourceRow>,
+    rows: Vec<(String, ResourceRow)>,
 }
 
 struct ResourceRow {
-    detail: gtk::Label,
+    root: gtk::Box,
     bar: gtk::ProgressBar,
     value: gtk::Label,
     size: gtk::Label,
@@ -201,104 +213,232 @@ struct ResourceRow {
 struct RowData {
     key: String,
     name: String,
-    detail: String,
+    /// Faint text after the name: a worktree's project.
+    note: String,
+    tip: String,
     fraction: f64,
     value: String,
     size: f64,
 }
 
-/// Unchanged text is left alone: resetting a label's tooltip hides one being read.
-fn set_text(label: &gtk::Label, s: &str) {
-    if label.text() != s {
-        label.set_text(s);
-        label.set_tooltip_text(Some(s));
+/// Megabytes as people read them: MB below a gigabyte, one decimal below ten.
+fn amount(mb: f64) -> String {
+    match mb.max(0.) {
+        mb if mb < 1024. => format!("{mb:.0} MB"),
+        mb if mb < 10240. => format!("{:.1} GB", mb / 1024.),
+        mb => format!("{:.0} GB", mb / 1024.),
     }
 }
 
-fn resource_row(body: &gtk::Box, name: &str) -> ResourceRow {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    row.add_css_class("resource-row");
-    let title = gtk::Box::new(gtk::Orientation::Vertical, 2);
+/// The project a worktree belongs to: the directory holding `.relay/worktrees`, or the one
+/// above a checkout of its own.
+fn project_of(path: &str) -> &str {
+    let root = path.split("/.relay/worktrees/").next().filter(|_| path.contains("/.relay/worktrees/"));
+    let root = root.unwrap_or_else(|| path.rsplit_once('/').map_or("", |(dir, _)| dir));
+    root.rsplit('/').next().unwrap_or(root)
+}
+
+/// Unchanged text is left alone: resetting a label's tooltip hides one being read.
+fn set_tip(widget: &impl IsA<gtk::Widget>, s: &str) {
+    if widget.tooltip_text().as_deref() != Some(s) {
+        widget.set_tooltip_text(Some(s));
+    }
+}
+
+fn resource_row(item: &RowData) -> ResourceRow {
+    let root = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    root.add_css_class("resource-row");
+    let title = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     title.set_hexpand(true);
-    let name = label(name, "body");
+    let name = label(&item.name, "resource-name");
     name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    name.set_max_width_chars(23);
-    name.set_tooltip_text(Some(&name.text()));
     title.append(&name);
-    // A worktree path differs from its neighbours at the end, not in the shared prefix.
-    let detail = label("", "dim");
-    detail.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-    detail.set_max_width_chars(23);
-    title.append(&detail);
-    row.append(&title);
+    if !item.note.is_empty() {
+        let note = label(&item.note, "resource-note");
+        note.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title.append(&note);
+    }
+    root.append(&title);
     let bar = gtk::ProgressBar::new();
     bar.set_valign(gtk::Align::Center);
     bar.add_css_class("resource-meter");
-    bar.set_size_request(80, -1);
-    row.append(&bar);
-    let value = label("", "mono");
-    value.set_size_request(56, -1);
+    bar.set_size_request(56, -1);
+    root.append(&bar);
+    let value = label("", "resource-value");
+    value.set_size_request(58, -1);
     value.set_xalign(1.);
-    row.append(&value);
-    let size = label("", "mono");
-    size.set_size_request(76, -1);
+    root.append(&value);
+    let size = label("", "resource-size");
+    size.set_size_request(60, -1);
     size.set_xalign(1.);
-    row.append(&size);
-    body.append(&row);
-    ResourceRow { detail, bar, value, size }
+    root.append(&size);
+    ResourceRow { root, bar, value, size }
 }
 
-fn build_resources(body: &gtk::Box, history: &Rc<RefCell<VecDeque<[f64; 3]>>>, items: &[RowData]) -> ResourceView {
+/// The two column captions over a list, aligned with its value and size columns.
+fn list_head(value: &str, size: &str) -> gtk::Box {
+    let head = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    head.add_css_class("resource-head");
+    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    spacer.set_hexpand(true);
+    head.append(&spacer);
+    let value = label(value, "resource-head-label");
+    value.set_size_request(58, -1);
+    value.set_xalign(1.);
+    head.append(&value);
+    let size = label(size, "resource-head-label");
+    size.set_size_request(60, -1);
+    size.set_xalign(1.);
+    head.append(&size);
+    head
+}
+
+impl ResourceList {
+    fn new() -> Self {
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.add_css_class("resource-list");
+        ResourceList { root, keys: Vec::new(), rows: Vec::new() }
+    }
+
+    /// Rebuilds when the set of rows (or the footnote) changed, largest first; then writes
+    /// each row's numbers in place.
+    fn sync(&mut self, mut items: Vec<RowData>, head: (&str, &str), footnote: Option<String>, empty: &str) {
+        let mut keys: Vec<String> = items.iter().map(|i| i.key.clone()).collect();
+        keys.extend(footnote.clone());
+        keys.sort();
+        if keys != self.keys {
+            items.sort_by(|a, b| b.size.total_cmp(&a.size));
+            clear(&self.root);
+            self.rows.clear();
+            if items.is_empty() {
+                self.root.append(&label(empty, "resource-empty"));
+            } else {
+                self.root.append(&list_head(head.0, head.1));
+            }
+            for item in &items {
+                let row = resource_row(item);
+                self.root.append(&row.root);
+                self.rows.push((item.key.clone(), row));
+            }
+            if let Some(footnote) = footnote {
+                self.root.append(&label(&footnote, "resource-footnote"));
+            }
+            self.keys = keys;
+        }
+        for item in &items {
+            let Some((_, row)) = self.rows.iter().find(|(key, _)| *key == item.key) else {
+                continue;
+            };
+            set_tip(&row.root, &item.tip);
+            row.bar.set_fraction(item.fraction.clamp(0., 1.));
+            row.value.set_text(&item.value);
+            row.size.set_text(&amount(item.size));
+        }
+    }
+}
+
+fn build_resources(body: &gtk::Box, history: &Rc<RefCell<VecDeque<[f64; 3]>>>) -> ResourceView {
     clear(body);
-    let summary = label("", "mono");
-    body.append(&summary);
-    let charts_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let mut charts = Vec::new();
-    for i in 0..3 {
-        let chart = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        chart.add_css_class("resource-chart");
-        chart.set_hexpand(true);
-        let caption = label("", "dim");
-        chart.append(&caption);
+    let tiles_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    tiles_box.set_homogeneous(true);
+    tiles_box.add_css_class("resource-tiles");
+    let mut tiles = Vec::new();
+    for (i, caption) in ["CPU", "Memory", "Disk"].into_iter().enumerate() {
+        let tile = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        tile.add_css_class("resource-tile");
+        tile.append(&label(caption, "resource-tile-caption"));
+        let value = label("", "resource-tile-value");
+        tile.append(&value);
         let graph = gtk::DrawingArea::new();
-        graph.set_content_height(48);
+        graph.add_css_class("resource-spark");
+        graph.set_content_height(28);
         let history = history.clone();
-        graph.set_draw_func(move |_, cr, w, h| {
+        graph.set_draw_func(move |area, cr, w, h| {
             let history = history.borrow();
-            let max = history.iter().map(|p| p[i]).fold(1., f64::max);
-            cr.set_source_rgb(0.55, 0.56, 0.58);
-            cr.set_line_width(1.5);
-            for (n, val) in history.iter().map(|p| p[i]).enumerate() {
-                let x = 2. + (w - 4) as f64 * n as f64 / (history.len() - 1).max(1) as f64;
-                let y = h as f64 - 3. - val / max * (h - 6) as f64;
-                if n == 0 {
-                    cr.move_to(x, y);
+            if history.len() < 2 {
+                return;
+            }
+            let max = history.iter().map(|p| p[i]).fold(0., f64::max);
+            // A flat series sits at mid-height rather than on the floor.
+            let (lo, span) = {
+                let min = history.iter().map(|p| p[i]).fold(f64::MAX, f64::min);
+                if max - min < max * 0.02 + 1e-6 {
+                    (min - 1., 2.)
                 } else {
-                    cr.line_to(x, y);
+                    (min, max - min)
+                }
+            };
+            let points: Vec<(f64, f64)> = history
+                .iter()
+                .enumerate()
+                .map(|(n, p)| {
+                    let x = w as f64 * n as f64 / (history.len() - 1) as f64;
+                    let y = h as f64 - 2. - (p[i] - lo) / span * (h - 4) as f64;
+                    (x, y)
+                })
+                .collect();
+            let c = area.color();
+            let (r, g, b) = (c.red() as f64, c.green() as f64, c.blue() as f64);
+            for (n, (x, y)) in points.iter().enumerate() {
+                if n == 0 {
+                    cr.move_to(*x, *y);
+                } else {
+                    cr.line_to(*x, *y);
                 }
             }
+            cr.line_to(w as f64, h as f64);
+            cr.line_to(0., h as f64);
+            cr.close_path();
+            cr.set_source_rgba(r, g, b, 0.10);
+            let _ = cr.fill();
+            for (n, (x, y)) in points.iter().enumerate() {
+                if n == 0 {
+                    cr.move_to(*x, *y);
+                } else {
+                    cr.line_to(*x, *y);
+                }
+            }
+            cr.set_source_rgba(r, g, b, 0.85);
+            cr.set_line_width(1.25);
             let _ = cr.stroke();
         });
-        chart.append(&graph);
-        charts_box.append(&chart);
-        charts.push((caption, graph));
+        tile.append(&graph);
+        tiles_box.append(&tile);
+        tiles.push((value, graph));
     }
-    body.append(&charts_box);
-    let count = |prefix: &str| items.iter().filter(|r| r.key.starts_with(prefix)).count();
-    let sessions = count("session:");
-    body.append(&label("RELAY", "section-label"));
-    let mut rows = Vec::new();
-    for item in items {
-        rows.push(resource_row(body, &item.name));
-        // The relay row comes first, then the sessions, then the worktrees.
-        if rows.len() == 1 {
-            body.append(&label(&format!("SESSIONS {sessions}"), "section-label"));
-        }
-        if rows.len() == 1 + sessions {
-            body.append(&label(&format!("WORKTREES {}", count("worktree:")), "section-label"));
-        }
+    body.append(&tiles_box);
+    let engine = label("", "resource-engine");
+    engine.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    body.append(&engine);
+
+    let strip = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    strip.add_css_class("resource-tabs");
+    strip.set_halign(gtk::Align::Start);
+    let sessions_tab = gtk::ToggleButton::with_label("Sessions");
+    let worktrees_tab = gtk::ToggleButton::with_label("Worktrees");
+    worktrees_tab.set_group(Some(&sessions_tab));
+    sessions_tab.set_active(true);
+    strip.append(&sessions_tab);
+    strip.append(&worktrees_tab);
+    body.append(&strip);
+
+    let sessions = ResourceList::new();
+    let worktrees = ResourceList::new();
+    let stack = gtk::Stack::new();
+    stack.set_vhomogeneous(false);
+    stack.set_interpolate_size(false);
+    stack.add_named(&sessions.root, Some("sessions"));
+    stack.add_named(&worktrees.root, Some("worktrees"));
+    for (tab, name) in [(&sessions_tab, "sessions"), (&worktrees_tab, "worktrees")] {
+        let stack = stack.clone();
+        tab.connect_toggled(move |tab| {
+            if tab.is_active() {
+                stack.set_visible_child_name(name);
+            }
+        });
     }
-    ResourceView { keys: items.iter().map(|r| r.key.clone()).collect(), summary, charts, rows }
+    body.append(&stack);
+    ResourceView { tiles, engine, tabs: [sessions_tab, worktrees_tab], sessions, worktrees }
 }
 
 fn render_resources(
@@ -309,24 +449,11 @@ fn render_resources(
 ) {
     let panes = rows(v, "panes");
     let trees = rows(v, "worktrees");
-    let cpu = panes
-        .iter()
-        .map(|p| p["cpu_pct"].as_f64().unwrap_or(0.))
-        .sum::<f64>()
-        + v["relay"]["cpu_pct"].as_f64().unwrap_or(0.);
-    let memory = v["total_rss_mb"].as_f64().unwrap_or(0.);
-    let max_rss = panes
-        .iter()
-        .map(|p| p["rss_mb"].as_f64().unwrap_or(0.))
-        .fold(1., f64::max);
-    let max_disk = trees
-        .iter()
-        .map(|p| p["disk_mb"].as_f64().unwrap_or(0.))
-        .fold(1., f64::max);
-    let disk = trees
-        .iter()
-        .map(|t| t["disk_mb"].as_f64().unwrap_or(0.))
-        .sum::<f64>();
+    let num = |v: &Value, key: &str| v[key].as_f64().unwrap_or(0.);
+    let relay = &v["relay"];
+    let cpu = panes.iter().map(|p| num(p, "cpu_pct")).sum::<f64>() + num(relay, "cpu_pct");
+    let memory = num(v, "total_rss_mb");
+    let disk = trees.iter().map(|t| num(t, "disk_mb")).sum::<f64>();
     {
         let mut history = history.borrow_mut();
         history.push_back([cpu, memory, disk]);
@@ -334,65 +461,83 @@ fn render_resources(
             history.pop_front();
         }
     }
-    let relay = &v["relay"];
-    let relay_rss = relay["rss_mb"].as_f64().unwrap_or(0.);
-    let mut items = vec![RowData {
-        key: "relay".into(),
-        name: "Relay engine".into(),
-        detail: format!("pid {}", relay["pid"]),
-        fraction: relay_rss / max_rss.max(relay_rss),
-        value: format!("{:.1}%", relay["cpu_pct"].as_f64().unwrap_or(0.)),
-        size: relay_rss,
-    }];
-    for p in &panes {
-        let rss = p["rss_mb"].as_f64().unwrap_or(0.);
-        items.push(RowData {
-            key: format!("session:{}", text(p, "session")),
-            name: text(p, "session").to_owned(),
-            detail: p["pid"]
-                .as_i64()
-                .map(|pid| format!("pid {pid}"))
-                .unwrap_or_else(|| "parked".into()),
-            fraction: rss / max_rss,
-            value: format!("{:.1}%", p["cpu_pct"].as_f64().unwrap_or(0.)),
-            size: rss,
-        });
-    }
-    for t in &trees {
-        let path = text(t, "path");
-        items.push(RowData {
-            key: format!("worktree:{path}"),
-            name: path.rsplit('/').next().unwrap_or(path).to_owned(),
-            detail: path.to_owned(),
-            fraction: t["disk_mb"].as_f64().unwrap_or(0.) / max_disk,
-            value: t["build_mb"]
-                .as_f64()
-                .map(|n| format!("{n:.0} build"))
-                .unwrap_or_else(|| "clean".into()),
-            size: t["disk_mb"].as_f64().unwrap_or(0.),
-        });
-    }
-    if view.as_ref().is_none_or(|view| view.keys.iter().ne(items.iter().map(|r| &r.key))) {
-        *view = Some(build_resources(body, history, &items));
-    }
-    let Some(view) = view.as_ref() else { return };
-    view.summary.set_text(&format!(
-        "{:.0} MB Relay   {memory:.0} MB agents   {:.0} MB store",
-        relay_rss,
-        v["store_mb"].as_f64().unwrap_or(0.)
-    ));
-    for ((caption, graph), text) in view.charts.iter().zip([
-        format!("CPU  {cpu:.1}%"),
-        format!("Memory  {memory:.0} MB"),
-        format!("Disk  {:.1} GB", disk.max(0.) / 1024.),
-    ]) {
-        caption.set_text(&text);
+    let view = view.get_or_insert_with(|| build_resources(body, history));
+
+    for ((value, graph), text) in view.tiles.iter().zip([format!("{cpu:.1}%"), amount(memory), amount(disk)]) {
+        value.set_text(&text);
         graph.queue_draw();
     }
-    for (row, item) in view.rows.iter().zip(&items) {
-        set_text(&row.detail, &item.detail);
-        row.bar.set_fraction(item.fraction.clamp(0., 1.));
-        row.value.set_text(&item.value);
-        row.size.set_text(&format!("{:.0} MB", item.size));
+    view.engine.set_text(&format!(
+        "Relay engine {} · {:.1}% CPU · store {}",
+        amount(num(relay, "rss_mb")),
+        num(relay, "cpu_pct"),
+        amount(num(v, "store_mb")),
+    ));
+
+    // A parked session has no process: it is counted, not listed.
+    let (live, parked): (Vec<_>, Vec<_>) = panes.iter().partition(|p| p["pid"].as_i64().is_some());
+    let max_rss = live.iter().map(|p| num(p, "rss_mb")).fold(1., f64::max);
+    let sessions = live
+        .iter()
+        .map(|p| {
+            let name = text(p, "session");
+            RowData {
+                key: name.to_owned(),
+                name: name.to_owned(),
+                note: String::new(),
+                tip: format!("{name} · pid {}", p["pid"]),
+                fraction: num(p, "rss_mb") / max_rss,
+                value: format!("{:.1}%", num(p, "cpu_pct")),
+                size: num(p, "rss_mb"),
+            }
+        })
+        .collect();
+    let footnote = match parked.len() {
+        0 => None,
+        1 => Some("1 parked session, using no memory".to_owned()),
+        n => Some(format!("{n} parked sessions, using no memory")),
+    };
+    view.tabs[0].set_label(&format!("Sessions  {}", live.len()));
+    view.sessions.sync(sessions, ("CPU", "Memory"), footnote, "No agent is running.");
+
+    let max_disk = trees.iter().map(|t| num(t, "disk_mb")).fold(1., f64::max);
+    let worktrees = trees
+        .iter()
+        .map(|t| {
+            let path = text(t, "path");
+            let build = t["build_mb"].as_f64();
+            RowData {
+                key: path.to_owned(),
+                name: path.rsplit('/').next().unwrap_or(path).to_owned(),
+                note: project_of(path).to_owned(),
+                tip: match build {
+                    Some(mb) => format!("{path}\n{} of it is build output", amount(mb)),
+                    None => path.to_owned(),
+                },
+                fraction: num(t, "disk_mb") / max_disk,
+                value: build.map(amount).unwrap_or_else(|| "–".into()),
+                size: num(t, "disk_mb"),
+            }
+        })
+        .collect();
+    view.tabs[1].set_label(&format!("Worktrees  {}", trees.len()));
+    view.worktrees.sync(worktrees, ("Build", "Size"), None, "No worktrees.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{amount, project_of};
+
+    #[test]
+    fn amounts_read_in_the_unit_people_use() {
+        assert_eq!(amount(75.4), "75 MB");
+        assert_eq!(amount(2432.7), "2.4 GB");
+        assert_eq!(amount(64887.8), "63 GB");
+    }
+
+    #[test]
+    fn a_worktree_names_its_project() {
+        assert_eq!(project_of("/home/a/dev3/RelayV4/.relay/worktrees/witty-ibis"), "RelayV4");
+        assert_eq!(project_of("/home/a/dev3/ShooterGame2/UE5-shooter-game"), "ShooterGame2");
     }
 }
