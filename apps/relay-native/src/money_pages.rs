@@ -977,6 +977,20 @@ fn filter_words() -> String {
     [name(&head.category_rows, category), name(&head.account_rows, account)].into_iter().flatten().collect::<Vec<_>>().join(" · ")
 }
 
+/// What an Entries read was for: its period, its search and its (account, category) filters.
+type TxRead = (i64, String, (Option<i64>, Option<i64>));
+
+thread_local! {
+    /// The last Entries read whose `money.lists` answer is still good: the ledger has not moved
+    /// since.
+    static TX_READ: RefCell<Option<TxRead>> = const { RefCell::new(None) };
+}
+
+/// The ledger moved (`money.changed`): Entries reads its accounts and categories again.
+pub fn forget_lists() {
+    TX_READ.with(|r| *r.borrow_mut() = None);
+}
+
 pub async fn refresh(ui: &Rc<Ui>, name: &str) {
     let Some(page) = page(name) else { return };
     match name {
@@ -1002,17 +1016,33 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str) {
             if let Some(id) = filters.1 {
                 payload["category_id"] = json!(id);
             }
-            let (lists, list) = tokio::join!(ui.call("money.lists", json!({})), ui.call("money.tx.list", payload));
+            // A search typed since the last read changes only the entries: the accounts and
+            // categories it read stand until the ledger moves (`forget_lists`).
+            let searched = TX_READ.with(|r| r.borrow().as_ref().is_some_and(|(o, q, f)| (*o, f) == (offset, &filters) && *q != query));
+            let mut lists_read = searched;
+            let list = if searched {
+                ui.call("money.tx.list", payload).await
+            } else {
+                let (lists, list) = tokio::join!(ui.call("money.lists", json!({})), ui.call("money.tx.list", payload));
+                if *ui.page.borrow() != name || super::period_offset() != offset || super::query() != query || super::filters() != filters {
+                    return;
+                }
+                if let Ok(lists) = &lists {
+                    remember_currency(lists);
+                    if fill_filters(lists) {
+                        ui.refresh_page();
+                        return;
+                    }
+                    lists_read = true;
+                }
+                list
+            };
             if *ui.page.borrow() != name || super::period_offset() != offset || super::query() != query || super::filters() != filters {
                 return;
             }
-            if let Ok(lists) = &lists {
-                remember_currency(lists);
-                if fill_filters(lists) {
-                    ui.refresh_page();
-                    return;
-                }
-            }
+            // Only a read whose accounts and categories stand (both read, or kept) is one a
+            // search may build on.
+            TX_READ.with(|r| *r.borrow_mut() = (lists_read && list.is_ok()).then(|| (offset, query.clone(), filters)));
             match list {
                 Ok(list) => transactions(ui, &page, &list, offset, &query),
                 Err(e) => failed(ui, &page, "", &e),
@@ -1271,10 +1301,65 @@ fn empty_state(ui: &Rc<Ui>, body: &gtk::Box) {
     });
 }
 
-/// Entries: the period in a strip (count, in, out, net), then one card of days, each with its
-/// net and its entries.
-fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str) {
+/// What Entries drew last, so a read that changed little changes little: its strip and what the
+/// strip says, its card of days with its question, and each row of that card by what it shows.
+struct TxDrawn {
+    strip: gtk::Widget,
+    strip_key: u64,
+    card: gtk::Widget,
+    rows: gtk::Box,
+    question: String,
+    parts: std::collections::HashMap<u64, gtk::Widget>,
+}
+
+thread_local! {
+    static TX_DRAWN: RefCell<Option<TxDrawn>> = const { RefCell::new(None) };
+}
+
+/// A key for what a row shows: equal keys draw the same row.
+fn shown_key(parts: &[&dyn std::fmt::Display]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for part in parts {
+        part.to_string().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Entries' strip: how many, in, out and net.
+fn tx_strip(body: &gtk::Box, count: usize, name: &str, income: i64, spent: i64) -> gtk::Box {
     let fmt = formatter();
+    let (strip, cells) = strip(body);
+    cell(&cells, "list", "Entries", &count.to_string(), name, None);
+    cell(&cells, "income", "Money in", &fmt.format_whole(income), "income", (income > 0).then_some("money-in"));
+    cell(&cells, "spend", "Money out", &fmt.format_whole(spent), "spending", None);
+    let net = income - spent;
+    cell(&cells, "gauge", "Net", &signed_whole(&fmt, net), "in less out", Some(if net < 0 { "money-over" } else { "money-in" }));
+    strip
+}
+
+/// A day's head in Entries: its name, how many entries, and its net.
+fn day_head(day: &str, count: usize, day_net: i64) -> gtk::Box {
+    let fmt = formatter();
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    header.add_css_class("tally-day");
+    let when = label(&human_date(day), "tally-day-name");
+    when.set_hexpand(true);
+    header.append(&when);
+    header.append(&label(&copy::plural_as(count as i64, "entry", "entries"), "tally-figures"));
+    let total = label(&fmt.format_signed(day_net), "tally-day-total");
+    total.set_xalign(1.0);
+    if day_net > 0 {
+        total.add_css_class("money-in");
+    }
+    header.append(&total);
+    header
+}
+
+/// Entries: the period in a strip (count, in, out, net), then one card of days, each with its
+/// net and its entries. A read like the last one keeps its widgets: a row stays while what it
+/// shows does, and only rows that came, went or changed are touched.
+fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str) {
     let entries = rows(list, "transactions");
     let name = period_name(&list["period"]);
     let count = copy::plural_as(entries.len() as i64, "entry", "entries");
@@ -1288,15 +1373,11 @@ fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str
         head.period.set_text(&name);
         head.next.set_sensitive(offset < 0);
     }
-    clear(&page.body);
     let (income, spent) = (n(list, "income"), n(list, "spent"));
-    let (_, cells) = strip(&page.body);
-    cell(&cells, "list", "Entries", &entries.len().to_string(), &name, None);
-    cell(&cells, "income", "Money in", &fmt.format_whole(income), "income", (income > 0).then_some("money-in"));
-    cell(&cells, "spend", "Money out", &fmt.format_whole(spent), "spending", None);
-    let net = income - spent;
-    cell(&cells, "gauge", "Net", &signed_whole(&fmt, net), "in less out", Some(if net < 0 { "money-over" } else { "money-in" }));
+    let previous = TX_DRAWN.with(|d| d.borrow_mut().take());
     if entries.is_empty() {
+        clear(&page.body);
+        tx_strip(&page.body, entries.len(), &name, income, spent);
         let text = match (query.is_empty(), filtered.is_empty()) {
             (true, true) => format!("Nothing logged in {name}."),
             (true, false) => format!("Nothing in {name} for {filtered}."),
@@ -1320,8 +1401,46 @@ fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str
         }
         return;
     }
+    let currency = super::currency();
+    let today = today();
     let question = if filtered.is_empty() { format!("Where did my money go in {name}?") } else { format!("What stands out in my {filtered} entries for {name}?") };
-    let rows_box = card_asking(&page.body, "By day", None, Some((ui, &question)));
+    let strip_key = shown_key(&[&entries.len(), &name, &income, &spent, &currency]);
+    // The last read's strip and card, while the page still holds just them.
+    let body: &gtk::Widget = page.body.upcast_ref();
+    let previous = previous.filter(|d| {
+        d.question == question
+            && body.first_child().as_ref() == Some(&d.strip)
+            && d.strip.next_sibling().as_ref() == Some(&d.card)
+            && d.card.next_sibling().is_none()
+    });
+    let (strip, rows_box, card, mut old_parts) = match previous {
+        Some(d) => {
+            let strip = if d.strip_key == strip_key {
+                d.strip
+            } else {
+                let strip = tx_strip(&page.body, entries.len(), &name, income, spent);
+                page.body.reorder_child_after(&strip, None::<&gtk::Widget>);
+                page.body.remove(&d.strip);
+                strip.upcast()
+            };
+            (strip, d.rows, d.card, d.parts)
+        }
+        None => {
+            clear(&page.body);
+            let strip = tx_strip(&page.body, entries.len(), &name, income, spent);
+            let rows_box = card_asking(&page.body, "By day", None, Some((ui, &question)));
+            let card = rows_box.parent().expect("card_asking puts its rows in a card");
+            (strip.upcast(), rows_box, card, std::collections::HashMap::new())
+        }
+    };
+    let mut parts = std::collections::HashMap::new();
+    let mut wanted: Vec<gtk::Widget> = Vec::with_capacity(entries.len() + 16);
+    let mut keep = |key: u64, build: &dyn Fn() -> gtk::Widget| {
+        // A key seen twice in one read (it cannot be, ids differ) still draws twice.
+        let w = if parts.contains_key(&key) { build() } else { old_parts.remove(&key).unwrap_or_else(build) };
+        parts.entry(key).or_insert_with(|| w.clone());
+        wanted.push(w);
+    };
     let mut start = 0;
     while start < entries.len() {
         let day = text(&entries[start], "date").to_string();
@@ -1334,24 +1453,28 @@ fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str
                 _ => 0,
             })
             .sum();
-        let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        header.add_css_class("tally-day");
-        let when = label(&human_date(&day), "tally-day-name");
-        when.set_hexpand(true);
-        header.append(&when);
-        header.append(&label(&copy::plural_as((end - start) as i64, "entry", "entries"), "tally-figures"));
-        let total = label(&fmt.format_signed(day_net), "tally-day-total");
-        total.set_xalign(1.0);
-        if day_net > 0 {
-            total.add_css_class("money-in");
-        }
-        header.append(&total);
-        rows_box.append(&header);
+        let size = end - start;
+        keep(shown_key(&[&"day", &day, &size, &day_net, &currency, &today]), &|| day_head(&day, size, day_net).upcast());
         for tx in &entries[start..end] {
-            rows_box.append(&tx_row(ui, tx, true, false));
+            keep(shown_key(&[&"entry", tx, &currency]), &|| tx_row(ui, tx, true, false).upcast());
         }
         start = end;
     }
+    let mut previous: Option<gtk::Widget> = None;
+    for w in &wanted {
+        if w.parent().as_ref() == Some(rows_box.upcast_ref()) {
+            if w.prev_sibling() != previous {
+                rows_box.reorder_child_after(w, previous.as_ref());
+            }
+        } else {
+            rows_box.insert_child_after(w, previous.as_ref());
+        }
+        previous = Some(w.clone());
+    }
+    while let Some(extra) = previous.as_ref().map_or_else(|| rows_box.first_child(), |w| w.next_sibling()) {
+        rows_box.remove(&extra);
+    }
+    TX_DRAWN.with(|d| *d.borrow_mut() = Some(TxDrawn { strip, strip_key, card, rows: rows_box, question, parts }));
 }
 
 /// Plan: the monthly budget and its split, then every expense category in one table with what it

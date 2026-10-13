@@ -113,8 +113,9 @@ struct View {
     scroll: gtk::ScrolledWindow,
     jump: gtk::Button,
     column: gtk::Box,
-    /// The reply being written: its label, shown while `thread.delta` text arrives.
-    pending: gtk::Label,
+    /// The reply being written, shown while `thread.delta` text arrives: a label per finished
+    /// stretch of it and, last, the one still being written ([`show_pending`]).
+    pending: gtk::Box,
     working: gtk::Box,
     working_text: gtk::Label,
     panel: gtk::Box,
@@ -187,9 +188,17 @@ struct State {
     stopping: Cell<bool>,
     /// The newest message drawn, so an event already drawn by a read is not drawn twice.
     last: Cell<i64>,
+    /// Bumped by every thread shown: an older one's history stops showing in steps ([`show_history`]).
+    shown_serial: Cell<u64>,
     /// The local day of the last message drawn, for the separators between days.
     last_day: RefCell<String>,
     pending: RefCell<String>,
+    /// How much of `pending` its finished labels hold (up to and including a line break): only
+    /// the text after it is set again as words arrive.
+    pending_kept: Cell<usize>,
+    /// How much of `pending` shows, and whether a frame is due to show the rest.
+    pending_shown: Cell<usize>,
+    pending_due: Cell<bool>,
     /// Tool calls drawn in this thread, by id.
     tools: RefCell<HashMap<String, Tool>>,
     turn: RefCell<Option<Turn>>,
@@ -210,6 +219,8 @@ struct State {
     listing: Cell<bool>,
     /// The list changed while it was being read: read it again.
     list_dirty: Cell<bool>,
+    /// The list changed while it was off screen: read it when it shows.
+    list_stale: Cell<bool>,
     /// Threads seen working, and those that finished while another showed.
     was_working: RefCell<HashSet<i64>>,
     unread: RefCell<HashSet<i64>>,
@@ -390,10 +401,8 @@ pub fn page() -> gtk::Box {
     middle.add_named(&reading, Some("thread"));
     conversation.append(&middle);
 
-    let pending = label("", "threads-reply");
-    pending.set_wrap(true);
-    pending.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-    pending.set_selectable(false);
+    let pending = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    pending.append(&pending_label());
     let working = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     working.add_css_class("threads-working");
     let spinner = gtk::Spinner::new();
@@ -1079,7 +1088,11 @@ fn show_empty(v: &View) {
 
 /// Forget the thread drawn: `id` shows next, or a new thread when `None`.
 fn reset(id: Option<i64>) {
+    if let Some(v) = view() {
+        drop_pending(&v);
+    }
     STATE.with(|s| {
+        s.shown_serial.set(s.shown_serial.get() + 1);
         s.current.set(id);
         s.last.set(0);
         s.last_day.borrow_mut().clear();
@@ -1342,6 +1355,7 @@ fn draw_thread(read: &Value) {
     if !STATE.with(|s| s.working.get()) {
         settle_tools();
     }
+    show_history(&v);
     stick_to_bottom(&v, true);
     // Charts read their numbers after this and grow the column: land on the newest message again.
     glib::timeout_add_local_once(std::time::Duration::from_millis(400), || {
@@ -1356,6 +1370,90 @@ fn draw_thread(read: &Value) {
             refresh_panel(&ui);
         }
     }
+}
+
+/// How much of a thread's history its first frame lays out: its newest messages, this many views
+/// high. Laying out every message of a long thread at once holds the window for a moment.
+const FIRST_VIEWS: i32 = 2;
+/// How long each later frame spends showing more of it, older messages first after newer.
+const HISTORY_STEP: std::time::Duration = std::time::Duration::from_millis(4);
+
+/// A thread was just drawn whole: show its newest messages now and the older ones over the next
+/// frames, newest first, the view holding still over them as they come in above it.
+fn show_history(v: &View) {
+    let width = v.column.width();
+    if width <= 0 {
+        return; // never laid out: there is no view to fill first
+    }
+    let budget = FIRST_VIEWS * v.scroll.height().max(600);
+    let mut older: std::collections::VecDeque<gtk::Widget> = std::collections::VecDeque::new();
+    let mut height = 0;
+    let mut child = v.column.last_child();
+    while let Some(w) = child {
+        child = w.prev_sibling();
+        if height > budget {
+            older.push_back(w);
+        } else if w != *v.working.upcast_ref::<gtk::Widget>() {
+            height += w.measure(gtk::Orientation::Vertical, width).1 + v.column.spacing();
+        }
+    }
+    if older.is_empty() {
+        return;
+    }
+    for w in &older {
+        w.set_visible(false);
+    }
+    let serial = STATE.with(|s| s.shown_serial.get());
+    let column = v.column.clone();
+    let older = RefCell::new(older);
+    let first = Cell::new(true);
+    v.column.add_tick_callback(move |_, _| {
+        let Some(v) = view().filter(|_| STATE.with(|s| s.shown_serial.get()) == serial) else {
+            return glib::ControlFlow::Break;
+        };
+        let adj = v.scroll.vadjustment();
+        if first.replace(false) {
+            // The first frame lands on the newest message.
+            hold_from_bottom(&v, adj.page_size());
+            return glib::ControlFlow::Continue;
+        }
+        hold_from_bottom(&v, adj.upper() - adj.value());
+        let started = std::time::Instant::now();
+        let width = column.width();
+        let mut older = older.borrow_mut();
+        while let Some(w) = older.pop_front() {
+            if w.parent().as_ref() != Some(column.upcast_ref()) {
+                continue;
+            }
+            w.set_visible(true);
+            w.measure(gtk::Orientation::Vertical, width);
+            if started.elapsed() >= HISTORY_STEP {
+                break;
+            }
+        }
+        if older.is_empty() {
+            glib::ControlFlow::Break
+        } else {
+            glib::ControlFlow::Continue
+        }
+    });
+}
+
+/// After this frame's layout, put the view `from_bottom` above the end of the conversation, so
+/// what grew above it does not move what it shows.
+fn hold_from_bottom(v: &View, from_bottom: f64) {
+    let Some(clock) = v.scroll.frame_clock() else { return };
+    let adj = v.scroll.vadjustment();
+    let handler: Rc<Cell<Option<glib::SignalHandlerId>>> = Rc::default();
+    let held = handler.clone();
+    // Connected after the window's own, so it runs once the frame is laid out; the value it sets
+    // lays the scroller out again before the frame is drawn.
+    handler.set(Some(clock.connect_layout(move |clock| {
+        adj.set_value(adj.upper() - from_bottom);
+        if let Some(id) = held.take() {
+            clock.disconnect(id);
+        }
+    })));
 }
 
 fn header(v: &View, thread: &Value) {
@@ -1391,9 +1489,7 @@ fn set_working(v: &View, working: bool) {
         if let Some(parent) = v.working.parent().and_downcast::<gtk::Box>() {
             parent.remove(&v.working);
         }
-        if let Some(parent) = v.pending.parent().and_downcast::<gtk::Box>() {
-            parent.remove(&v.pending);
-        }
+        drop_pending(v);
         let pending = STATE.with(|s| std::mem::take(&mut *s.pending.borrow_mut()));
         // A stopped reply keeps what it wrote, said to be cut short. The engine stores only
         // finished replies, so a reload no longer shows it.
@@ -1525,9 +1621,7 @@ fn draw_message(v: &View, m: &Value) {
             v.column.append(&bubble);
         }
         "assistant" => {
-            if let Some(parent) = v.pending.parent().and_downcast::<gtk::Box>() {
-                parent.remove(&v.pending);
-            }
+            drop_pending(v);
             STATE.with(|s| s.pending.borrow_mut().clear());
             let turn = turn_of(v);
             for block in body["blocks"].as_array().into_iter().flatten() {
@@ -1584,6 +1678,72 @@ fn numeric(markup: &str) -> bool {
     let t = t.trim_start_matches(['$', '€', '£']).trim_end_matches(['%', '$', '€']).trim();
     t.starts_with(|c: char| c.is_ascii_digit())
         && t.chars().all(|c| c.is_ascii_digit() || matches!(c, ',' | '.' | ' ' | '\u{a0}' | '\u{202f}'))
+}
+
+/// The longest the last label of a reply being written grows before the text up to its last line
+/// break moves into a label of its own. Setting a label's text lays all of it out again, so a long
+/// reply set whole on every word costs more with each word.
+const PENDING_KEEP: usize = 240;
+
+/// One label of the reply being written: its words as they came, not yet read as Markdown.
+fn pending_label() -> gtk::Label {
+    let l = label("", "threads-reply");
+    l.set_wrap(true);
+    l.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    l.set_selectable(false);
+    l
+}
+
+/// Where the last label of a reply being written, holding `rest`, splits: at its last line break,
+/// once it is longer than [`PENDING_KEEP`] and has text after that break (so the new last label is
+/// never empty). The break itself becomes the boundary between the two labels.
+fn pending_split(rest: &str) -> Option<usize> {
+    if rest.len() <= PENDING_KEEP {
+        return None;
+    }
+    rest.rfind('\n').filter(|at| at + 1 < rest.len())
+}
+
+/// Show the reply being written as it now stands. Its labels split it at line breaks, each break
+/// the boundary between two labels, so the lines fall exactly where one label holding it all would
+/// put them; only the last label is set again.
+fn show_pending() {
+    STATE.with(|s| s.pending_due.set(false));
+    let Some(v) = view() else { return };
+    let Some(mut last) = v.pending.last_child().and_downcast::<gtk::Label>() else { return };
+    STATE.with(|s| {
+        let text = s.pending.borrow();
+        if s.pending_shown.replace(text.len()) == text.len() {
+            return;
+        }
+        let mut kept = s.pending_kept.get().min(text.len());
+        if let Some(at) = pending_split(&text[kept..]) {
+            last.set_text(&text[kept..kept + at]);
+            last = pending_label();
+            v.pending.append(&last);
+            kept += at + 1;
+            s.pending_kept.set(kept);
+        }
+        last.set_text(&text[kept..]);
+    });
+    stick_to_bottom(&v, false);
+}
+
+/// Take the reply being written out of the conversation, emptied for the next one.
+fn drop_pending(v: &View) {
+    if let Some(parent) = v.pending.parent().and_downcast::<gtk::Box>() {
+        parent.remove(&v.pending);
+    }
+    while let Some(first) = v.pending.first_child().filter(|w| w.next_sibling().is_some()) {
+        v.pending.remove(&first);
+    }
+    if let Some(last) = v.pending.last_child().and_downcast::<gtk::Label>() {
+        last.set_text("");
+    }
+    STATE.with(|s| {
+        s.pending_kept.set(0);
+        s.pending_shown.set(0);
+    });
 }
 
 /// An agent's text, its Markdown drawn as blocks.
@@ -2406,20 +2566,20 @@ pub fn event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
     let thread = payload["thread"].as_i64().or_else(|| payload["thread"]["id"].as_i64()).or_else(|| payload["id"].as_i64());
     match ev {
         "thread.delta" if thread == current() => {
-            let text = payload["text"].as_str().unwrap_or("");
-            let pending = STATE.with(|s| {
-                let mut p = s.pending.borrow_mut();
-                p.push_str(text);
-                p.clone()
-            });
+            STATE.with(|s| s.pending.borrow_mut().push_str(payload["text"].as_str().unwrap_or("")));
             if v.pending.parent().is_none() {
                 turn(&v).append(&v.pending);
             }
-            v.pending.set_text(&pending);
+            // Words arrive faster than frames: the next frame shows all that came before it.
+            if !STATE.with(|s| s.pending_due.replace(true)) {
+                v.pending.add_tick_callback(|_, _| {
+                    show_pending();
+                    glib::ControlFlow::Break
+                });
+            }
             if v.working_text.text() == STARTING {
                 v.working_text.set_text("Working…");
             }
-            stick_to_bottom(&v, false);
         }
         "thread.message" if thread == current() => {
             draw_message(&v, &payload["message"]);
@@ -2452,7 +2612,7 @@ pub fn event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
                     }
                 }
             }
-            refresh_list(ui);
+            refresh_list_shown(ui);
         }
         _ => {}
     }
@@ -2486,9 +2646,26 @@ pub fn sidebar_list() -> gtk::ScrolledWindow {
     let list = gtk::Box::new(gtk::Orientation::Vertical, 1);
     list.add_css_class("threads-list");
     STATE.with(|s| *s.list.borrow_mut() = Some(list.clone()));
+    list.connect_map(|_| {
+        if STATE.with(|s| s.list_stale.replace(false)) {
+            if let Some(ui) = the_ui() {
+                refresh_list(&ui);
+            }
+        }
+    });
     let scroll = crate::app::scrolled(&list);
     scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     scroll
+}
+
+/// [`refresh_list`] while the list is on screen; off it (the Dev space, a folded sidebar) the read
+/// waits for it to show.
+pub fn refresh_list_shown(ui: &Rc<Ui>) {
+    if STATE.with(|s| s.list.borrow().as_ref().is_some_and(|l| l.is_mapped())) {
+        refresh_list(ui);
+    } else {
+        STATE.with(|s| s.list_stale.set(true));
+    }
 }
 
 /// Re-read the thread list: one read at a time, and a change during a read reads it once more,
@@ -2531,56 +2708,157 @@ fn age(updated_at: &str) -> &'static str {
     }
 }
 
-fn draw_list(threads: &Value) {
-    let Some(list) = STATE.with(|s| s.list.borrow().clone()) else { return };
-    clear(&list);
-    let mut heading = "";
-    for t in threads.as_array().into_iter().flatten() {
-        let group = age(t["updated_at"].as_str().unwrap_or(""));
-        if group != heading {
-            heading = group;
-            list.append(&label(group, "section-label"));
+/// What a thread's row shows at its end: the green lamp while the agent answers, an ink dot for a
+/// reply not yet read, or nothing.
+#[derive(Clone, Copy, PartialEq)]
+enum Mark {
+    None,
+    Working,
+    Unread,
+}
+
+/// A thread's row in the sidebar list, kept from one read of the list to the next and changed in
+/// place, with what it shows now.
+struct ListRow {
+    key: gtk::Button,
+    row: gtk::Box,
+    title: gtk::Label,
+    mark: Option<gtk::Box>,
+    shown: (String, Mark, Option<String>),
+}
+
+#[derive(Default)]
+struct ListRows {
+    rows: HashMap<i64, ListRow>,
+    headings: HashMap<&'static str, gtk::Label>,
+    note: Option<gtk::Label>,
+}
+
+thread_local! {
+    static LIST_ROWS: RefCell<ListRows> = RefCell::default();
+}
+
+fn list_row(id: i64) -> ListRow {
+    let key = button("", "nav");
+    key.add_css_class("threads-row");
+    key.set_widget_name(&format!("thread-{id}"));
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let title = label("", "nav-label");
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    title.set_hexpand(true);
+    row.append(&title);
+    key.set_child(Some(&row));
+    key.connect_clicked(move |_| {
+        if let Some(ui) = the_ui() {
+            open(&ui, id);
         }
-        let id = t["id"].as_i64().unwrap_or(0);
-        let key = button("", "nav");
-        key.add_css_class("threads-row");
-        key.set_widget_name(&format!("thread-{id}"));
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let title = label(t["title"].as_str().unwrap_or("Thread"), "nav-label");
-        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        title.set_hexpand(true);
-        row.append(&title);
+    });
+    ListRow { key, row, title, mark: None, shown: (String::new(), Mark::None, None) }
+}
+
+/// Show `title`, `mark` and `preview` in `r`, touching only what changed.
+fn show_list_row(r: &mut ListRow, title: &str, mark: Mark, preview: Option<&str>) {
+    if r.shown.0 != title {
+        r.title.set_text(title);
+        r.shown.0 = title.to_string();
+    }
+    if r.shown.1 != mark {
+        if let Some(old) = r.mark.take() {
+            r.row.remove(&old);
+        }
         // Green while the agent answers; an ink dot for a reply not yet read. A finished reply is
         // news, not an alarm.
-        if t["working"] == true {
-            STATE.with(|s| s.was_working.borrow_mut().insert(id));
+        let (class, said) = match mark {
+            Mark::Working => ("threads-lamp", "Claude is answering"),
+            Mark::Unread => ("threads-unread", "New reply"),
+            Mark::None => ("", ""),
+        };
+        if class.is_empty() {
+            r.key.reset_property(gtk::AccessibleProperty::Description);
+        } else {
             let lamp = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            lamp.add_css_class("threads-lamp");
+            lamp.add_css_class(class);
             lamp.set_valign(gtk::Align::Center);
-            row.append(&lamp);
-            key.update_property(&[gtk::accessible::Property::Description("Claude is answering")]);
-        } else if STATE.with(|s| s.unread.borrow().contains(&id)) {
-            let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            dot.add_css_class("threads-unread");
-            dot.set_valign(gtk::Align::Center);
-            row.append(&dot);
-            key.update_property(&[gtk::accessible::Property::Description("New reply")]);
+            r.row.append(&lamp);
+            r.mark = Some(lamp);
+            r.key.update_property(&[gtk::accessible::Property::Description(said)]);
         }
-        key.set_child(Some(&row));
-        if let Some(preview) = t["preview"].as_str() {
-            key.set_tooltip_text(Some(preview));
-        }
-        key.connect_clicked(move |_| {
-            if let Some(ui) = the_ui() {
-                open(&ui, id);
-            }
-        });
-        list.append(&key);
+        r.shown.1 = mark;
     }
-    if threads.as_array().is_none_or(Vec::is_empty) {
-        let note = label("No threads yet. Ctrl N starts one.", "threads-list-note");
-        note.set_wrap(true);
-        list.append(&note);
+    if r.shown.2.as_deref() != preview {
+        r.key.set_tooltip_text(preview);
+        r.shown.2 = preview.map(str::to_string);
+    }
+}
+
+/// Draw the list from `thread.list`: each thread keeps its row, changed in place, and rows move
+/// only when the order changed. A read that changed nothing changes no widget.
+fn draw_list(threads: &Value) {
+    let Some(list) = STATE.with(|s| s.list.borrow().clone()) else { return };
+    let threads: &[Value] = threads.as_array().map_or(&[], Vec::as_slice);
+    let mut wanted: Vec<gtk::Widget> = Vec::with_capacity(threads.len() + 4);
+    LIST_ROWS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let cache = &mut *cache;
+        let mut heading = "";
+        let mut headed: HashSet<&'static str> = HashSet::new();
+        let mut seen = HashSet::new();
+        for t in threads {
+            let group = age(t["updated_at"].as_str().unwrap_or(""));
+            if group != heading {
+                heading = group;
+                // A heading shows once; were the list ever out of order, a repeat gets its own.
+                let name = if headed.insert(group) {
+                    cache.headings.entry(group).or_insert_with(|| label(group, "section-label")).clone()
+                } else {
+                    label(group, "section-label")
+                };
+                wanted.push(name.upcast());
+            }
+            let id = t["id"].as_i64().unwrap_or(0);
+            if !seen.insert(id) {
+                continue;
+            }
+            let mark = if t["working"] == true {
+                STATE.with(|s| s.was_working.borrow_mut().insert(id));
+                Mark::Working
+            } else if STATE.with(|s| s.unread.borrow().contains(&id)) {
+                Mark::Unread
+            } else {
+                Mark::None
+            };
+            let r = cache.rows.entry(id).or_insert_with(|| list_row(id));
+            show_list_row(r, t["title"].as_str().unwrap_or("Thread"), mark, t["preview"].as_str());
+            wanted.push(r.key.clone().upcast());
+        }
+        cache.rows.retain(|id, _| seen.contains(id));
+        if threads.is_empty() {
+            let note = cache.note.get_or_insert_with(|| {
+                let note = label("No threads yet. Ctrl N starts one.", "threads-list-note");
+                note.set_wrap(true);
+                note
+            });
+            wanted.push(note.clone().upcast());
+        }
+    });
+    let mut previous: Option<gtk::Widget> = None;
+    for w in &wanted {
+        if w.parent().as_ref() == Some(list.upcast_ref()) {
+            if w.prev_sibling() != previous {
+                list.reorder_child_after(w, previous.as_ref());
+            }
+        } else {
+            if let Some(parent) = w.parent().and_downcast::<gtk::Box>() {
+                parent.remove(w);
+            }
+            list.insert_child_after(w, previous.as_ref());
+        }
+        previous = Some(w.clone());
+    }
+    // What is left after the last wanted widget: rows of deleted threads, headings no longer
+    // used, a note or an error from an earlier read.
+    while let Some(extra) = previous.as_ref().map_or_else(|| list.first_child(), |w| w.next_sibling()) {
+        list.remove(&extra);
     }
     mark_selected();
 }
@@ -3369,4 +3647,49 @@ fn invest_empty(ui: &Rc<Ui>, body: &gtk::Box, currency: &str) {
     open.connect_clicked(move |_| run());
     head.append(&open);
     body.append(&head);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pending_split, PENDING_KEEP};
+
+    /// Labels a reply streamed in `pieces` ends up in, split as [`super::show_pending`] splits it.
+    fn stream(pieces: &[&str]) -> Vec<String> {
+        let (mut text, mut kept, mut labels) = (String::new(), 0, vec![String::new()]);
+        for piece in pieces {
+            text.push_str(piece);
+            if let Some(at) = pending_split(&text[kept..]) {
+                *labels.last_mut().unwrap() = text[kept..kept + at].to_string();
+                labels.push(String::new());
+                kept += at + 1;
+            }
+            *labels.last_mut().unwrap() = text[kept..].to_string();
+        }
+        labels
+    }
+
+    #[test]
+    fn a_streamed_reply_splits_only_at_line_breaks_and_loses_nothing() {
+        let paragraph = "A sentence that goes on for a while, more or less a line. ".repeat(3);
+        let reply = format!("## Heading\n\n{paragraph}\n\n- one\n- two\n\n{paragraph}\nA line\nand another\n\n{paragraph}");
+        let pieces: Vec<String> = reply.chars().collect::<Vec<_>>().chunks(5).map(|c| c.iter().collect()).collect();
+        let labels = stream(&pieces.iter().map(String::as_str).collect::<Vec<_>>());
+        assert!(labels.len() > 2, "a long reply moves into several labels: {labels:?}");
+        // Each boundary stands for one line break: joined with one, the labels are the reply.
+        assert_eq!(labels.join("\n"), reply);
+        assert!(labels.iter().all(|l| !l.is_empty()));
+        // Only the last label is still being written; the others were cut at a break.
+        assert!(labels[..labels.len() - 1].iter().all(|l| l.len() <= PENDING_KEEP + 5 + paragraph.len()));
+    }
+
+    #[test]
+    fn a_short_or_unbroken_reply_stays_in_one_label() {
+        assert_eq!(pending_split("short\n\nreply"), None);
+        assert_eq!(pending_split(&"x".repeat(PENDING_KEEP * 4)), None);
+        // A break at the very end waits for the text after it.
+        let ends_broken = format!("{}\n", "x".repeat(PENDING_KEEP + 1));
+        assert_eq!(pending_split(&ends_broken), None);
+        let broken = format!("{}\nmore", "x".repeat(PENDING_KEEP + 1));
+        assert_eq!(pending_split(&broken), Some(PENDING_KEEP + 1));
+    }
 }
