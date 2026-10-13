@@ -1545,7 +1545,11 @@ impl Ui {
                                 // Each refreshes only what it changed: a usage event spends
                                 // no adb call (RA-511).
                                 match e.ev.as_str() {
-                                    "usage.changed" => ui.refresh_usage(false),
+                                    // Only the usage meters read it; no page does.
+                                    "usage.changed" => {
+                                        ui.refresh_usage(false);
+                                        continue;
+                                    }
                                     "device.changed" | "run.changed" => ui.refresh_devices(),
                                     _ => {}
                                 }
@@ -1594,6 +1598,29 @@ impl Ui {
                                 {
                                     continue;
                                 }
+                                let reads = {
+                                    // Each page is re-read only for the events that change
+                                    // what it shows: a usage, notification or device event
+                                    // re-read (and the board redrew) for nothing. Money's
+                                    // pages read only the ledger, which says so with
+                                    // money.changed; the wall and Code refresh on their own.
+                                    let family = e.ev.split('.').next().unwrap_or("");
+                                    match ui.page.borrow().as_str() {
+                                        // Cards name their module; a module counts its tasks.
+                                        "board" | "modules" => matches!(family, "task" | "module"),
+                                        "mailbox" => family == "mailbox",
+                                        // Requests, held actions and grants, and overlaps.
+                                        "guardrails" => matches!(family, "guardrail" | "overlap"),
+                                        // A finished provider update says so with notify.new,
+                                        // which repaints the provider cards.
+                                        "settings" => family == "notify",
+                                        "skills" => family == "skill",
+                                        // A plugin's skills are listed with it.
+                                        "plugins" => matches!(family, "plugin" | "skill"),
+                                        "devices" => matches!(family, "device" | "run" | "avd" | "mirror"),
+                                        _ => false,
+                                    }
+                                };
                                 if e.ev.starts_with("project.") || e.ev.starts_with("workspace.") {
                                     ui.registry_dirty.set(true);
                                     ui.refresh();
@@ -1655,15 +1682,7 @@ impl Ui {
                                             });
                                         }
                                     }
-                                } else if crate::money::is_page(&ui.page.borrow()) {
-                                    // Money's pages read only the ledger, which says so with
-                                    // money.changed.
-                                } else if *ui.page.borrow() == "mailbox"
-                                    && !e.ev.starts_with("mailbox.")
-                                {
-                                    // Only mail changes the Mailbox page; a task, overlap or
-                                    // notification event re-read the whole page for nothing.
-                                } else {
+                                } else if reads {
                                     ui.refresh_page();
                                 }
                             }

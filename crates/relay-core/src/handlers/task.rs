@@ -291,9 +291,9 @@ pub(crate) fn row_task(tx: &rusqlite::Connection, row: &Row) -> Result<Task, rus
 
 /// Fill in what lives beside the task rows — sessions, commits, attachments, labels, relations
 /// and children — with one statement each for the whole batch, the ids passed as one JSON
-/// array, then the roll-up and depth, which walk the tree per task. `task.list` ran each of
-/// those per task, seven statements a row (RA-412); `task.get` goes through here with one id,
-/// so a task reads the same either way. The ids must be distinct. Every statement is
+/// array, then the roll-up and depth, walked over the projects' task tree read once ([`Tree`]).
+/// `task.list` ran each of those per task, seven statements a row (RA-412); `task.get` goes
+/// through here with one id, so a task reads the same either way. The ids must be distinct. Every statement is
 /// `prepare_cached` (PERF §1.2).
 pub(crate) fn hydrate(tx: &rusqlite::Connection, tasks: &mut [Task]) -> rusqlite::Result<()> {
     if tasks.is_empty() {
@@ -342,11 +342,90 @@ pub(crate) fn hydrate(tx: &rusqlite::Connection, tasks: &mut [Task]) -> rusqlite
             tasks[at[&id]].module_name.get_or_insert(name);
         }
     }
-    for task in tasks.iter_mut() {
+    if tasks.len() == 1 {
+        let task = &mut tasks[0];
         task.rollup = rollup_of(tx, task.id, &task.children)?;
         task.depth = depth_of(tx, task.id)?;
+        return Ok(());
+    }
+    // A page reads its projects' task tree once and walks it in memory: per task, the walks
+    // below cost a statement for every ancestor and two for every descendant.
+    let projects = serde_json::to_string(&tasks.iter().map(|t| t.project_id).collect::<std::collections::BTreeSet<_>>())
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let tree = Tree::read(tx, &projects)?;
+    for task in tasks.iter_mut() {
+        task.rollup = tree.rollup(task.id, &task.children);
+        task.depth = tree.depth(tx, task.id)?;
     }
     Ok(())
+}
+
+/// Every task of some projects, deleted ones included, as `parent_id`, `col` and the live
+/// children in board order: what [`rollup_of`] and [`depth_of`] read row by row. A sub-task stays
+/// in its parent's project (`assert_parent`), so a project's rows hold every subtree in it.
+struct Tree {
+    rows: std::collections::HashMap<Id, (Option<Id>, bool)>,
+    children: std::collections::HashMap<Id, Vec<Id>>,
+}
+
+impl Tree {
+    fn read(tx: &rusqlite::Connection, projects: &str) -> rusqlite::Result<Self> {
+        let mut stmt = tx.prepare_cached(
+            "SELECT id, parent_id, col='done', deleted_at IS NULL FROM tasks WHERE project_id IN (SELECT value FROM json_each(?1)) ORDER BY position,id",
+        )?;
+        let mut rows = std::collections::HashMap::new();
+        let mut children: std::collections::HashMap<Id, Vec<Id>> = std::collections::HashMap::new();
+        let mut query = stmt.query([projects])?;
+        while let Some(row) = query.next()? {
+            let (id, parent, done, live): (Id, Option<Id>, bool, bool) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?);
+            rows.insert(id, (parent, done));
+            if let (Some(parent), true) = (parent, live) {
+                children.entry(parent).or_default().push(id);
+            }
+        }
+        Ok(Self { rows, children })
+    }
+
+    /// [`rollup_of`] over the tree read once.
+    fn rollup(&self, id: Id, children: &[Id]) -> TaskRollup {
+        let mut rollup = TaskRollup::default();
+        let mut counted: std::collections::HashSet<Id> = std::collections::HashSet::from([id]);
+        let mut frontier = children.to_vec();
+        while let Some(current) = frontier.pop() {
+            if !counted.insert(current) {
+                continue;
+            }
+            rollup.total += 1;
+            if self.rows.get(&current).is_some_and(|(_, done)| *done) {
+                rollup.done += 1;
+            }
+            frontier.extend(self.children.get(&current).into_iter().flatten().copied());
+        }
+        rollup
+    }
+
+    /// [`depth_of`] over the tree read once; a parent outside it is read from the store.
+    fn depth(&self, tx: &rusqlite::Connection, task_id: Id) -> rusqlite::Result<i64> {
+        let mut depth = 0;
+        let mut cursor = task_id;
+        loop {
+            let parent = match self.rows.get(&cursor) {
+                Some((parent, _)) => *parent,
+                None => tx
+                    .prepare_cached("SELECT parent_id FROM tasks WHERE id=?1")?
+                    .query_row([cursor], |r| r.get::<_, Option<Id>>(0))
+                    .optional()?
+                    .flatten(),
+            };
+            let Some(parent) = parent else { break };
+            depth += 1;
+            cursor = parent;
+            if depth > TASK_DEPTH_MAX {
+                break;
+            }
+        }
+        Ok(depth)
+    }
 }
 
 /// Roll-up walks the subtree here rather than in a recursive CTE so it counts exactly the
