@@ -1064,25 +1064,24 @@ async fn hosts(addr: SocketAddr, secret: &str) -> Option<Ws> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_room_hosted_before_comes_back_past_rooms_strangers_made_up() {
-    let limits = relay_remote::rendezvous::Limits { max_rooms: 2, max_new_rooms: 1, ..Default::default() };
+    let limits = relay_remote::rendezvous::Limits { max_rooms: 2, max_new_rooms: 1, proven_after: Duration::from_secs(2), ..Default::default() };
     let server = RendezvousServer::bind_with("127.0.0.1:0".parse::<SocketAddr>().unwrap(), limits).await.unwrap();
     let addr = server.local_addr;
 
-    // The PC hosts its room, then its link blinks.
+    // The PC holds its room until it is remembered, then its link blinks.
     let pc = hosts(addr, "the-pc").await.expect("the pc hosts");
+    await_remembered(addr, 1).await;
     drop(pc);
     await_hosts(addr, 0).await;
 
-    // Strangers fill what is left: one more room is remembered, then one new room is held, and
-    // the next made-up room is refused.
-    let _s1 = hosts(addr, "stranger-1").await.expect("room to remember");
-    let _s2 = hosts(addr, "stranger-2").await.expect("one new room");
-    assert!(hosts(addr, "stranger-3").await.is_none(), "a second new room was let in");
-    await_hosts(addr, 2).await;
+    // A stranger holds the one new-room place, and the next made-up room is refused.
+    let _s1 = hosts(addr, "stranger-1").await.expect("one new room");
+    assert!(hosts(addr, "stranger-2").await.is_none(), "a second new room was let in");
+    await_hosts(addr, 1).await;
 
     // The PC comes back regardless.
     let _pc = hosts(addr, "the-pc").await.expect("the pc was kept out of its own room");
-    await_hosts(addr, 3).await;
+    await_hosts(addr, 2).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1157,7 +1156,7 @@ async fn quiet_joins_are_capped_per_address_only_behind_a_trusted_proxy() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     let _third = join_from(addr, room.clone(), "203.0.113.7").await.expect("a place given back");
 
-    // Not trusting the proxy, the header is ignored, and loopback is never counted.
+    // Not trusting the proxy, the header is ignored, and loopback (the proxy) is never counted.
     let limits = relay_remote::rendezvous::Limits { trust_proxy: 0, ..limits };
     let server = RendezvousServer::bind_with("127.0.0.1:0".parse::<SocketAddr>().unwrap(), limits).await.unwrap();
     let addr = server.local_addr;
@@ -1175,12 +1174,15 @@ async fn rooms_remembered_in_the_state_file_come_back_after_a_restart() {
     let limits = relay_remote::rendezvous::Limits {
         max_rooms: 1,
         max_new_rooms: 1,
+        // Long enough that the stranger below is not proven, and takes the PC's place, before
+        // the PC is back.
+        proven_after: Duration::from_millis(1500),
         state: Some(dir.path().join("rendezvous.json")),
         ..Default::default()
     };
     let server = RendezvousServer::bind_with("127.0.0.1:0".parse::<SocketAddr>().unwrap(), limits.clone()).await.unwrap();
     let pc = hosts(server.local_addr, "the-pc").await.unwrap();
-    for _ in 0..100 {
+    for _ in 0..250 {
         if std::fs::read_to_string(dir.path().join("rendezvous.json")).is_ok_and(|s| s.contains(&relay_remote::registry::room_for("the-pc"))) {
             break;
         }
@@ -1196,4 +1198,135 @@ async fn rooms_remembered_in_the_state_file_come_back_after_a_restart() {
     assert!(hosts(addr, "stranger-2").await.is_none());
     let _pc = hosts(addr, "the-pc").await.expect("the remembered room was refused after a restart");
     await_hosts(addr, 2).await;
+}
+
+/// Poll `/health` until `remembered` reads `want`, or fail after a few seconds.
+async fn await_remembered(addr: SocketAddr, want: u64) {
+    for _ in 0..200 {
+        if health(addr).await["remembered"] == want {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the rendezvous never remembered {want} room(s): {}", health(addr).await);
+}
+
+/// The rooms in a rendezvous state file, once it lists `want` of them.
+async fn state_rooms(path: &std::path::Path, want: usize) -> Value {
+    for _ in 0..200 {
+        if let Some(rooms) = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()).map(|v| v["rooms"].clone()) {
+            if rooms.as_object().is_some_and(|r| r.len() == want) {
+                return rooms;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the state file never listed {want} room(s): {:?}", std::fs::read_to_string(path));
+}
+
+/// The attack on a server with no room list (and, on Render, no state file): open and close
+/// more made-up rooms than it remembers, then hold the new-room places. Rooms that were only
+/// opened are never remembered, so the PC is still remembered once it has held its room, and
+/// comes back past a stranger holding every new-room place.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rooms_opened_and_closed_at_once_never_crowd_out_the_pc() {
+    let limits = relay_remote::rendezvous::Limits { max_rooms: 2, max_new_rooms: 1, proven_after: Duration::from_secs(1), ..Default::default() };
+    let server = RendezvousServer::bind_with("127.0.0.1:0".parse::<SocketAddr>().unwrap(), limits).await.unwrap();
+    let addr = server.local_addr;
+
+    for i in 0..6 {
+        let junk = hosts(addr, &format!("junk-{i}")).await.expect("a new room while none is held");
+        drop(junk);
+        await_hosts(addr, 0).await;
+    }
+    assert_eq!(health(addr).await["remembered"], 0, "a room only opened was remembered");
+
+    // The PC, which this server does not remember yet, takes the free place and holds it.
+    let pc = hosts(addr, "the-pc").await.expect("the pc hosts");
+    await_remembered(addr, 1).await;
+    drop(pc);
+    await_hosts(addr, 0).await;
+
+    // A stranger holds the only new-room place; the PC's link blinked, and it comes back anyway.
+    let _squatter = hosts(addr, "squatter").await.expect("one new room");
+    assert!(hosts(addr, "squatter-2").await.is_none(), "a second new room was let in");
+    let _pc = hosts(addr, "the-pc").await.expect("the remembered pc was kept out");
+    await_hosts(addr, 2).await;
+}
+
+/// A full memory makes space for a newly proven room by forgetting the room useful least
+/// recently that has no host now; a room whose host is here is never forgotten.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_full_memory_forgets_a_room_that_is_down_never_one_that_is_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rendezvous.json");
+    let limits = relay_remote::rendezvous::Limits {
+        max_rooms: 2,
+        max_new_rooms: 2,
+        proven_after: Duration::from_millis(500),
+        state: Some(path.clone()),
+        ..Default::default()
+    };
+    let server = RendezvousServer::bind_with("127.0.0.1:0".parse::<SocketAddr>().unwrap(), limits).await.unwrap();
+    let addr = server.local_addr;
+    let room = relay_remote::registry::room_for;
+
+    let a = hosts(addr, "a").await.unwrap();
+    let _b = hosts(addr, "b").await.unwrap();
+    await_remembered(addr, 2).await;
+    // A third room proven while both remembered rooms are up is served, not remembered.
+    let _c = hosts(addr, "c").await.expect("a new room while one place is free");
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let rooms = state_rooms(&path, 2).await;
+    assert!(rooms.get(room("a")).is_some() && rooms.get(room("b")).is_some(), "a room that is up was forgotten: {rooms}");
+    await_hosts(addr, 3).await;
+
+    // Once "a" is down, the next time "c" proves itself it takes "a"'s place.
+    drop(a);
+    await_hosts(addr, 2).await;
+    let mut rooms = Value::Null;
+    for _ in 0..100 {
+        rooms = state_rooms(&path, 2).await;
+        if rooms.get(room("c")).is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(rooms.get(room("c")).is_some() && rooms.get(room("b")).is_some() && rooms.get(room("a")).is_none(), "{rooms}");
+}
+
+/// Behind a proxy, every connection comes from the proxy. An address that can only be a proxy is
+/// never counted against the phones behind it: with the header unread (the peer here is
+/// loopback), with a private address where the phone's would be, and with fewer entries than the
+/// proxies the operator said append one (the one there is a proxy every phone shares).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_proxy_address_never_counts_against_the_phones_behind_it() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let join_from = |addr: SocketAddr, room: String, forwarded: &'static str| async move {
+        let mut req = format!("ws://{addr}/join/{room}").into_client_request().unwrap();
+        req.headers_mut().insert("x-forwarded-for", forwarded.parse().unwrap());
+        tokio_tungstenite::connect_async(req).await.map(|(ws, _)| ws)
+    };
+    let room = relay_remote::registry::room_for("the-pc");
+    for (trust, forwarded) in [(0, "203.0.113.7"), (1, "203.0.113.9, 172.17.0.1"), (2, "203.0.113.7"), (3, "198.51.100.1, 203.0.113.7")] {
+        let limits = relay_remote::rendezvous::Limits { trust_proxy: trust, quiet_lanes_per_ip: 2, pending_per_ip: 2, ..Default::default() };
+        let server = RendezvousServer::bind_with("127.0.0.1:0".parse::<SocketAddr>().unwrap(), limits).await.unwrap();
+        let addr = server.local_addr;
+        let _pc = raw_host(addr, "the-pc").await;
+        await_hosts(addr, 1).await;
+        let mut held = Vec::new();
+        for i in 0..5 {
+            let joined = join_from(addr, room.clone(), forwarded).await;
+            held.push(joined.unwrap_or_else(|e| panic!("trust {trust}, {forwarded:?}: quiet join {i} refused: {e}")));
+        }
+    }
+    // The same header, read as far as it is trusted, still caps a phone's own address.
+    let limits = relay_remote::rendezvous::Limits { trust_proxy: 2, quiet_lanes_per_ip: 2, ..Default::default() };
+    let server = RendezvousServer::bind_with("127.0.0.1:0".parse::<SocketAddr>().unwrap(), limits).await.unwrap();
+    let addr = server.local_addr;
+    let _pc = raw_host(addr, "the-pc").await;
+    await_hosts(addr, 1).await;
+    let _one = join_from(addr, room.clone(), "203.0.113.7, 10.0.0.2").await.unwrap();
+    let _two = join_from(addr, room.clone(), "203.0.113.7, 10.0.0.2").await.unwrap();
+    assert!(join_from(addr, room.clone(), "203.0.113.7, 10.0.0.2").await.is_err(), "a third quiet join from one phone's address");
 }

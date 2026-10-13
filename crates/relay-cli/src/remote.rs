@@ -79,16 +79,19 @@ pub enum RemoteCommand {
         queue_mib: Option<usize>,
         /// Host only this room, the id `relay remote via` prints (repeat for each, or list them
         /// comma-separated in RELAY_RENDEZVOUS_ROOMS). Without one, a stranger who makes up a
-        /// secret can host a room too, up to a cap
+        /// secret can host a room too, up to a cap, and by holding every place under it can keep
+        /// out a PC this server does not remember yet; the list is the only sure way in
         #[arg(long = "room", value_name = "ID", env = "RELAY_RENDEZVOUS_ROOMS", value_delimiter = ',')]
         rooms: Vec<String>,
-        /// Keep the rooms hosted here in this file, so after a restart they still come in ahead of
-        /// strangers' rooms. Without it they are remembered until the server exits
+        /// Keep the rooms remembered here (each hosted five minutes or more) in this file, so after
+        /// a restart they still come in ahead of strangers' rooms. Without it they are remembered
+        /// until the server exits
         #[arg(long, value_name = "FILE", env = "RELAY_RENDEZVOUS_STATE")]
         state: Option<PathBuf>,
-        /// How many proxies in front append to X-Forwarded-For (1 for one Caddy). The per-address
-        /// caps then count the phone's address. 0 trusts no header; set it only when nothing
-        /// reaches this server except through those proxies
+        /// How many proxies in front append to X-Forwarded-For (1 for one Caddy that phones reach
+        /// directly). The per-address caps then count the phone's address. 0 trusts no header, and
+        /// a loopback, private or link-local peer (a proxy) is never counted. Set it only when
+        /// nothing reaches this server except through those proxies (docs/MOBILE.md §4)
         #[arg(long, value_name = "N", env = "RELAY_RENDEZVOUS_TRUST_PROXY", default_value_t = 0)]
         trust_proxy: usize,
     },
@@ -320,7 +323,37 @@ async fn resolve_instance(requested: Instance) -> Instance {
     }
 }
 
+/// The variables a Relay agent session is launched with (`prepare_launch`); either one set means
+/// this command runs inside one.
+const SESSION_VARS: &[&str] = &["RELAY_SESSION", "RELAY_TOKEN"];
+
+/// Commands that decide who reaches this PC from a phone: a paired phone gets full control as
+/// the person, and `via` decides which server phones are sent through. An agent session must not
+/// run them, so each is refused there; reading (`devices`) and running a server stay allowed. The
+/// guardrail refuses them too; this is the door an agent that slips past it still finds shut.
+fn person_only(cmd: &RemoteCommand) -> Option<&'static str> {
+    match cmd {
+        RemoteCommand::Pair { .. } | RemoteCommand::Serve { pair: true, .. } => Some("pair"),
+        RemoteCommand::Approve => Some("approve"),
+        RemoteCommand::Decline => Some("decline"),
+        RemoteCommand::Revoke { .. } => Some("revoke"),
+        RemoteCommand::Via { .. } => Some("via"),
+        _ => None,
+    }
+}
+
+fn refuse_in_agent_session(cmd: &RemoteCommand, var: impl Fn(&str) -> Option<String>) -> Result<()> {
+    let Some(what) = person_only(cmd) else { return Ok(()) };
+    if SESSION_VARS.iter().any(|v| var(v).is_some_and(|s| !s.trim().is_empty())) {
+        return Err(anyhow!(
+            "`relay remote {what}` is refused inside an agent session: it decides which phones control this PC, so only the person can run it, from their own terminal"
+        ));
+    }
+    Ok(())
+}
+
 pub async fn run(requested: Instance, cmd: RemoteCommand) -> Result<u8> {
+    refuse_in_agent_session(&cmd, |v| std::env::var(v).ok())?;
     let instance = match cmd {
         // A door that starts its own engine fronts the instance it was asked for, never another
         // that happens to be running.
@@ -518,5 +551,42 @@ pub async fn run(requested: Instance, cmd: RemoteCommand) -> Result<u8> {
             drop(server);
             Ok(0)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_agent_session_cannot_decide_who_reaches_this_pc() {
+        let agent = |v: &str| (v == "RELAY_SESSION").then(|| "steady-badger".to_string());
+        let token_only = |v: &str| (v == "RELAY_TOKEN").then(|| "t0k3n".to_string());
+        let person = |_: &str| None;
+        let blank = |_: &str| Some(" ".to_string());
+        let serve = |pair| RemoteCommand::Serve { bind: String::new(), pair, no_confirm: true, no_rendezvous: false, start_engine: false };
+        let refused = [
+            RemoteCommand::Pair { no_confirm: true, via_only: true },
+            serve(true),
+            RemoteCommand::Approve,
+            RemoteCommand::Decline,
+            RemoteCommand::Revoke { id: "abc".into() },
+            RemoteCommand::Via { url: "wss://evil.example".into(), public: None },
+            RemoteCommand::Via { url: "off".into(), public: None },
+        ];
+        for cmd in &refused {
+            let what = person_only(cmd).expect("a person-only command");
+            let error = refuse_in_agent_session(cmd, agent).unwrap_err().to_string();
+            assert!(error.contains(&format!("relay remote {what}")) && error.contains("only the person"), "{error}");
+            assert!(refuse_in_agent_session(cmd, token_only).is_err(), "RELAY_TOKEN alone is a session too");
+            assert!(refuse_in_agent_session(cmd, person).is_ok(), "the person's own terminal runs it");
+            assert!(refuse_in_agent_session(cmd, blank).is_ok(), "an empty variable is no session");
+        }
+        let allowed = [RemoteCommand::Devices, serve(false), RemoteCommand::Name { name: "pc".into() }];
+        for cmd in &allowed {
+            assert!(refuse_in_agent_session(cmd, agent).is_ok());
+        }
+        let rendezvous = RemoteCommand::Rendezvous { bind: String::new(), queue_mib: None, rooms: Vec::new(), state: None, trust_proxy: 0 };
+        assert!(refuse_in_agent_session(&rendezvous, agent).is_ok(), "running a server lets no phone in");
     }
 }

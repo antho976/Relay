@@ -17,15 +17,21 @@
 //!
 //! A host proves a room by presenting the secret whose digest names it (`registry::room_for`),
 //! so anyone can open a room by making up a secret. An operator who lists the rooms it serves
-//! (`Limits::rooms`) shuts strangers out entirely. Without a list, a room hosted before is
-//! remembered and always let back in, while rooms the server has not seen are capped on their
-//! own, so strangers holding made-up rooms cannot keep a PC whose link blinked from coming back.
-//! What is remembered stays in memory unless `Limits::state` names a file to keep it in.
+//! (`Limits::rooms`) shuts strangers out entirely, and only the list does. Without one, rooms
+//! the server does not remember are capped (`Limits::max_new_rooms`), and a room is remembered
+//! only once a host has held it for `Limits::proven_after`: a remembered room is let in past that
+//! cap. Rooms opened and closed at once are never remembered, so they cannot crowd out the PC's.
+//! When the memory is full, a newly proven room takes the place of the one useful least recently
+//! that is not hosted at the moment. What a stranger can still do is hold every new-room place
+//! while the PC is not remembered (after a restart without `Limits::state`, or once its room was
+//! displaced by rooms proven since it was last up); only the list closes that.
 //!
 //! Joining needs only a room id, so what one address may hold before it has said anything is
-//! capped too, and a phone that joins and never sends its hello is dropped. Behind a proxy every
-//! connection comes from the proxy: the caps then count nothing (loopback is never counted) unless
-//! the operator says how many proxies to trust in `X-Forwarded-For` (`Limits::trust_proxy`).
+//! capped too, and a phone that joins and never sends its hello is dropped. The caps count
+//! neither loopback nor private and link-local addresses: those are a proxy on this machine or
+//! its network (a Docker bridge's gateway, say), which every phone comes through, never a phone
+//! on the internet. Behind a proxy the caps count phones only when the operator says how many
+//! proxies to trust in `X-Forwarded-For` (`Limits::trust_proxy`).
 //!
 //! Paths: `GET /host/<room>` with `Authorization: Bearer <secret>` for the PC, `GET /join/<room>`
 //! for a phone, `GET /health` for whoever runs it. The secret goes in a header, not the URL, so
@@ -78,14 +84,19 @@ const HOST_MESSAGE: usize = 16 << 20;
 pub struct Limits {
     /// Connections held at once, hosts and phones together, upgraded or not.
     pub max_connections: usize,
-    /// Rooms the server remembers as hosted before. One it remembers is always let back in, so
-    /// rooms strangers made up meanwhile never keep a returning PC out.
+    /// Rooms the server remembers as proven. One it remembers is let in past `max_new_rooms`; when
+    /// this many are remembered, a newly proven room takes the place of the one useful least
+    /// recently that has no host now. A room whose host is here is never forgotten.
     pub max_rooms: usize,
     /// Rooms hosted at once that the server does not remember: what strangers who make up
-    /// secrets can hold. Once `max_rooms` are remembered, every further room counts here.
+    /// secrets can hold. A host for another such room is refused.
     pub max_new_rooms: usize,
-    /// Connections from one address that have not finished their upgrade. Loopback is never
-    /// counted: there it is a proxy on the same machine, or this server's own engine.
+    /// How long a host must hold its room before the room is remembered, and how often after
+    /// that the room is marked useful again while it stays. Anyone can open a room, so being
+    /// opened proves nothing; a PC holds its room for days.
+    pub proven_after: Duration,
+    /// Connections from one address that have not finished their upgrade. Loopback, private and
+    /// link-local addresses are never counted (`counted`).
     pub pending_per_ip: usize,
     /// Phones from one address that joined a room and have not sent anything yet.
     pub quiet_lanes_per_ip: usize,
@@ -94,11 +105,12 @@ pub struct Limits {
     pub lane_hello: Duration,
     /// The only rooms that may be hosted or joined, when set (`relay remote rendezvous --room`).
     pub rooms: Option<HashSet<String>>,
-    /// The file the rooms hosted before are kept in across restarts. Without it they are
-    /// remembered until the server exits.
+    /// The file the rooms remembered are kept in across restarts, each with when it was last
+    /// useful. Without it they are remembered until the server exits.
     pub state: Option<PathBuf>,
     /// How many proxies in front append to `X-Forwarded-For`; the address the outermost of them
-    /// saw is the phone's. 0 reads no header, since anyone can send one.
+    /// saw is the phone's. 0 reads no header, since anyone can send one. A request whose header
+    /// has fewer entries than this is counted by its TCP peer, the innermost proxy.
     pub trust_proxy: usize,
     /// Phones one room carries at once. Joining needs no credential, so this bounds what a
     /// stranger who knows a room id can make the PC do.
@@ -132,6 +144,7 @@ impl Default for Limits {
             max_connections: 1024,
             max_rooms: 64,
             max_new_rooms: 16,
+            proven_after: Duration::from_secs(5 * 60),
             pending_per_ip: 16,
             quiet_lanes_per_ip: 8,
             lane_hello: Duration::from_secs(15),
@@ -236,8 +249,9 @@ struct Room {
 
 struct Shared {
     rooms: Mutex<HashMap<String, Room>>,
-    /// Rooms hosted before (`Limits::max_rooms`). Locked after `rooms` when both are.
-    known: Mutex<HashSet<String>>,
+    /// Rooms remembered (`Limits::max_rooms`), each with when it was last useful, in Unix
+    /// seconds. Locked after `rooms` when both are.
+    known: Mutex<HashMap<String, u64>>,
     /// One writer of `Limits::state` at a time.
     saving: Mutex<()>,
     limits: Limits,
@@ -247,6 +261,20 @@ struct Shared {
     pending: Arc<PerIp>,
     /// Joined phones that have not said anything yet, by address (`Limits::quiet_lanes_per_ip`).
     quiet: Arc<PerIp>,
+}
+
+impl Shared {
+    fn new(limits: Limits, known: HashMap<String, u64>) -> Shared {
+        Shared {
+            rooms: Mutex::default(),
+            known: Mutex::new(known),
+            saving: Mutex::default(),
+            limits,
+            queued: Arc::default(),
+            pending: Arc::default(),
+            quiet: Arc::default(),
+        }
+    }
 }
 
 /// How many of something each address holds; each one is a `Held` that gives it back when dropped.
@@ -283,39 +311,73 @@ impl Drop for Held {
     }
 }
 
-/// The address the per-address caps count, or `None` for loopback, which they never count: a
-/// proxy on this machine (every phone at once, as far as this server can tell) or a local engine.
+/// The address the per-address caps count, or `None` for one they never count: loopback, a
+/// private network (10/8, 172.16/12, 192.168/16, IPv6 unique local fc00::/7) or link-local
+/// (169.254/16, fe80::/10). Such a peer is a proxy on this machine or its network — Caddy on the
+/// host reaching a container comes from the Docker bridge's gateway, 172.17.0.1 — and counting it
+/// would count every phone as one. 100.64/10 is counted: on a server it is a Tailscale peer (or a
+/// carrier's NAT seen from inside it), one device per address.
 fn counted(ip: IpAddr) -> Option<IpAddr> {
     let ip = ip.to_canonical();
-    (!ip.is_loopback()).then_some(ip)
+    let local = match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
+    };
+    (!local).then_some(ip)
 }
 
-/// Where a request came from: the TCP peer, or with `trust` proxies in front, the address in
-/// `X-Forwarded-For` that the outermost of them wrote (the `trust`-th from the right; the
-/// leftmost when there are fewer). Entries further left are the phone's own say, never read.
+/// With `trust` proxies in front, the address in `X-Forwarded-For` that the outermost of them
+/// wrote: the `trust`-th from the right. Entries further left are the phone's own say, never read.
+/// `None` when the header has fewer entries than that, or that one is not an address: the request
+/// did not come through every proxy the operator named (or one of them writes no header), and the
+/// leftmost entry would then often be a proxy that every phone shares. The caller counts the TCP
+/// peer instead.
+fn forwarded_ip(forwarded: &str, trust: usize) -> Option<IpAddr> {
+    let hops: Vec<&str> = forwarded.split(',').map(str::trim).filter(|h| !h.is_empty()).collect();
+    let hop = hops[hops.len().checked_sub(trust)?];
+    hop.parse::<IpAddr>().or_else(|_| hop.parse::<SocketAddr>().map(|a| a.ip())).ok()
+}
+
+/// Where a request came from: the TCP peer, or with `trust` proxies in front, `forwarded_ip`.
 fn client_ip(peer: IpAddr, forwarded: &str, trust: usize) -> IpAddr {
     if trust == 0 {
         return peer;
     }
-    let hops: Vec<&str> = forwarded.split(',').map(str::trim).filter(|h| !h.is_empty()).collect();
-    let Some(hop) = hops.len().checked_sub(trust).map(|i| hops[i]).or(hops.first().copied()) else {
-        return peer;
-    };
-    hop.parse::<IpAddr>()
-        .or_else(|_| hop.parse::<SocketAddr>().map(|a| a.ip()))
-        .unwrap_or(peer)
+    forwarded_ip(forwarded, trust).unwrap_or_else(|| {
+        static SAID: std::sync::Once = std::sync::Once::new();
+        SAID.call_once(|| {
+            tracing::warn!(trust_proxy = trust, forwarded = %forwarded, peer = %peer,
+                "X-Forwarded-For has fewer addresses than --trust-proxy says proxies append; counting the connection's own peer. Is --trust-proxy too high, or is a proxy in front not passing the header on?")
+        });
+        peer
+    })
 }
 
-/// What `Limits::state` holds.
-#[derive(Serialize, Deserialize, Default)]
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// What `Limits::state` holds: each room remembered and when it was last useful. A file from
+/// before the times is a bare list; its rooms load as useful longest ago, since they were
+/// remembered when first hosted, proven or not.
+#[derive(Serialize, Deserialize)]
 struct Known {
-    rooms: Vec<String>,
+    rooms: KnownRooms,
 }
 
-fn load_known(path: &Path, max: usize) -> HashSet<String> {
-    let known = match std::fs::read_to_string(path) {
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum KnownRooms {
+    Useful(std::collections::BTreeMap<String, u64>),
+    Hosted(Vec<String>),
+}
+
+/// The rooms in `path`, at most `max` of them, the most recently useful first to stay.
+fn load_known(path: &Path, max: usize) -> HashMap<String, u64> {
+    let known: Vec<(String, u64)> = match std::fs::read_to_string(path) {
         Ok(text) => match serde_json::from_str::<Known>(&text) {
-            Ok(k) => k.rooms,
+            Ok(Known { rooms: KnownRooms::Useful(rooms) }) => rooms.into_iter().collect(),
+            Ok(Known { rooms: KnownRooms::Hosted(rooms) }) => rooms.into_iter().map(|r| (r, 0)).collect(),
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = %e, "rendezvous state unreadable; starting with no rooms remembered");
                 Vec::new()
@@ -327,6 +389,8 @@ fn load_known(path: &Path, max: usize) -> HashSet<String> {
             Vec::new()
         }
     };
+    let mut known = known;
+    known.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     known.into_iter().take(max).collect()
 }
 
@@ -335,13 +399,45 @@ fn load_known(path: &Path, max: usize) -> HashSet<String> {
 fn save_known(shared: &Shared) {
     let Some(path) = &shared.limits.state else { return };
     let _one = shared.saving.lock().unwrap();
-    let mut rooms: Vec<String> = shared.known.lock().unwrap().iter().cloned().collect();
-    rooms.sort();
-    let body = serde_json::to_string(&Known { rooms }).unwrap_or_default();
+    let rooms = shared.known.lock().unwrap().iter().map(|(r, at)| (r.clone(), *at)).collect();
+    let body = serde_json::to_string(&Known { rooms: KnownRooms::Useful(rooms) }).unwrap_or_default();
     let tmp = path.with_extension("tmp");
     if let Err(e) = std::fs::write(&tmp, body).and_then(|_| std::fs::rename(&tmp, path)) {
         tracing::warn!(path = %path.display(), error = %e, "rendezvous state not saved");
     }
+}
+
+fn save_known_soon(shared: &Rooms) {
+    if shared.limits.state.is_some() {
+        let shared = shared.clone();
+        tokio::task::spawn_blocking(move || save_known(&shared));
+    }
+}
+
+/// `room`'s host has held it for `Limits::proven_after`: remember the room as useful now. A full
+/// memory makes space by forgetting the room useful least recently among those with no host at
+/// the moment; with every remembered room hosted, this one is not remembered (it is still
+/// served). Returns whether it is remembered.
+fn vouch(shared: &Shared, room: &str) -> bool {
+    let all = shared.rooms.lock().unwrap();
+    let mut known = shared.known.lock().unwrap();
+    let now = now_secs();
+    if let Some(at) = known.get_mut(room) {
+        *at = now;
+        return true;
+    }
+    if known.len() >= shared.limits.max_rooms {
+        let stale = known
+            .iter()
+            .filter(|(r, _)| !all.get(*r).is_some_and(|x| x.host.is_some()))
+            .min_by(|a, b| a.1.cmp(b.1).then_with(|| a.0.cmp(b.0)))
+            .map(|(r, _)| r.clone());
+        let Some(stale) = stale else { return false };
+        known.remove(&stale);
+        tracing::info!(room = %stale, "rendezvous forgot the room useful least recently to remember a newer one");
+    }
+    known.insert(room.to_string(), now);
+    true
 }
 
 type Rooms = Arc<Shared>;
@@ -372,21 +468,17 @@ impl RendezvousServer {
             Some(rooms) => tracing::info!(rooms = rooms.len(), "rendezvous hosts only its listed rooms"),
             None => tracing::warn!(
                 new_rooms = limits.max_new_rooms,
-                "no room list: anyone who makes up a secret can host a room here, up to the cap on new rooms; \
-                 list yours with --room <id> or RELAY_RENDEZVOUS_ROOMS (docs/MOBILE.md §4)"
+                proven_after_s = limits.proven_after.as_secs(),
+                remembered_in = %limits.state.as_deref().map_or("memory only".to_string(), |p| p.display().to_string()),
+                "no room list: anyone who makes up a secret can host a room here, up to the cap on new rooms, and \
+                 a stranger holding all of them keeps out any PC this server does not remember yet (after a restart \
+                 without --state, a room is remembered only once hosted for a few minutes); list yours with \
+                 --room <id> or RELAY_RENDEZVOUS_ROOMS, the only way to make sure your PC always gets in (docs/MOBILE.md §4)"
             ),
         }
         let known = limits.state.as_deref().map(|p| load_known(p, limits.max_rooms)).unwrap_or_default();
         let slots = Arc::new(Semaphore::new(limits.max_connections));
-        let rooms: Rooms = Arc::new(Shared {
-            rooms: Mutex::default(),
-            known: Mutex::new(known),
-            saving: Mutex::default(),
-            limits,
-            queued: Arc::default(),
-            pending: Arc::default(),
-            quiet: Arc::default(),
-        });
+        let rooms: Rooms = Arc::new(Shared::new(limits, known));
         let accept = tokio::spawn(async move {
             loop {
                 match listener.accept().await {
@@ -503,10 +595,11 @@ async fn upgrade(rooms: &Rooms, mut stream: TcpStream, peer: SocketAddr) -> Resu
     if head.starts_with(b"GET /health") {
         use tokio::io::AsyncWriteExt as _;
         let body = {
-            let rooms = rooms.rooms.lock().unwrap();
-            let hosts = rooms.values().filter(|r| r.host.is_some()).count();
-            let lanes: usize = rooms.values().map(|r| r.lanes.len()).sum();
-            serde_json::json!({"relay":"rendezvous","hosts":hosts,"lanes":lanes}).to_string()
+            let all = rooms.rooms.lock().unwrap();
+            let hosts = all.values().filter(|r| r.host.is_some()).count();
+            let lanes: usize = all.values().map(|r| r.lanes.len()).sum();
+            let remembered = rooms.known.lock().unwrap().len();
+            serde_json::json!({"relay":"rendezvous","hosts":hosts,"lanes":lanes,"remembered":remembered}).to_string()
         };
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -531,7 +624,11 @@ async fn upgrade(rooms: &Rooms, mut stream: TcpStream, peer: SocketAddr) -> Resu
         let mut r = classify(path, bearer, rooms.limits.rooms.as_ref()).map_err(refuse)?;
         if let Role::Join { quiet, .. } = &mut r {
             let forwarded: Vec<&str> = req.headers().get_all("x-forwarded-for").iter().filter_map(|v| v.to_str().ok()).collect();
-            if let Some(ip) = counted(client_ip(peer.ip(), &forwarded.join(","), rooms.limits.trust_proxy)) {
+            let forwarded = forwarded.join(",");
+            let from = client_ip(peer.ip(), &forwarded, rooms.limits.trust_proxy);
+            // What to check `--trust-proxy` against: RELAY_LOG=relay_remote::rendezvous=debug.
+            tracing::debug!(peer = %peer, forwarded = %forwarded, trust_proxy = rooms.limits.trust_proxy, phone = %from, counted = counted(from).is_some(), "phone joining");
+            if let Some(ip) = counted(from) {
                 *quiet = Some(
                     rooms
                         .quiet
@@ -563,22 +660,17 @@ async fn host(rooms: Rooms, room: String, ws: Ws) -> Result<()> {
     let (lines, mut rx) = mpsc::channel::<(String, Option<OwnedSemaphorePermit>)>(1024);
     let budget_bytes = rooms.limits.host_budget;
     let tx = HostTx { lines, budget: Arc::new(Semaphore::new(budget_bytes)), budget_bytes };
-    let (admitted, remembered) = {
+    let admitted = {
         let mut all = rooms.rooms.lock().unwrap();
-        let mut known = rooms.known.lock().unwrap();
+        let known = rooms.known.lock().unwrap();
         let limits = &rooms.limits;
-        // A listed room (the list already turned the rest away), one hosted before, or one held
-        // now (a PC replacing its own socket) comes in whatever else is here.
-        let (admitted, remembered) = if limits.rooms.is_some() || known.contains(&room) || all.contains_key(&room) {
-            (true, false)
-        } else if all.keys().filter(|r| !known.contains(*r)).count() >= limits.max_new_rooms {
-            (false, false)
-        } else if known.len() < limits.max_rooms {
-            known.insert(room.clone());
-            (true, true)
-        } else {
-            (true, false)
-        };
+        // A listed room (the list already turned the rest away), a remembered one, or one held
+        // now (a PC replacing its own socket) comes in whatever else is here. Any other is new,
+        // and new rooms are capped: being hosted is not yet a reason to remember one.
+        let admitted = limits.rooms.is_some()
+            || known.contains_key(&room)
+            || all.contains_key(&room)
+            || all.keys().filter(|r| !known.contains_key(*r)).count() < limits.max_new_rooms;
         drop(known);
         if admitted {
             let entry = all.entry(room.clone()).or_default();
@@ -590,16 +682,12 @@ async fn host(rooms: Rooms, room: String, ws: Ws) -> Result<()> {
                 lane.cut();
             }
         }
-        (admitted, remembered)
+        admitted
     };
     if !admitted {
-        tracing::warn!(room = %room, "rendezvous holds its most new rooms; host of a room it has not seen refused");
+        tracing::warn!(room = %room, "rendezvous holds its most new rooms; host of a room it does not remember refused (list your rooms with --room to keep this from happening to yours)");
         let _ = sink.close().await;
         return Ok(());
-    }
-    if remembered && rooms.limits.state.is_some() {
-        let shared = rooms.clone();
-        tokio::task::spawn_blocking(move || save_known(&shared));
     }
     tracing::info!(room = %room, "host joined");
     let ping_every = rooms.limits.ping_every;
@@ -622,17 +710,38 @@ async fn host(rooms: Rooms, room: String, ws: Ws) -> Result<()> {
         let _ = sink.close().await;
     });
     let silence = rooms.limits.host_silence;
+    let mut heard = tokio::time::Instant::now();
+    // Without a room list, a room is remembered once this host has held it a while, and marked
+    // useful again each time as long again that it stays.
+    let remember = rooms.limits.rooms.is_none();
+    let proven_after = rooms.limits.proven_after.max(Duration::from_millis(1));
+    let mut useful = tokio::time::interval_at(heard + proven_after, proven_after);
+    let mut proven = false;
     loop {
         // Anything from the PC counts, its pings included; silence this long is a PC gone
         // without a FIN, and the room must stop listing it.
-        let msg = match tokio::time::timeout(silence, source.next()).await {
-            Ok(Some(msg)) => msg,
-            Ok(None) => break,
-            Err(_) => {
+        let msg = tokio::select! {
+            next = source.next() => match next {
+                Some(msg) => msg,
+                None => break,
+            },
+            _ = tokio::time::sleep_until(heard + silence) => {
                 tracing::info!(room = %room, silent_s = silence.as_secs(), "host went silent; dropping it");
                 break;
             }
+            _ = useful.tick(), if remember => {
+                let remembered = vouch(&rooms, &room);
+                if remembered && !proven {
+                    tracing::info!(room = %room, "room remembered: its host has held it {}s", proven_after.as_secs());
+                }
+                proven |= remembered;
+                if remembered {
+                    save_known_soon(&rooms);
+                }
+                continue;
+            }
         };
+        heard = tokio::time::Instant::now();
         let text = match msg {
             Ok(Message::Text(t)) => t.to_string(),
             Ok(Message::Close(_)) | Err(_) => break,
@@ -675,6 +784,13 @@ async fn host(rooms: Rooms, room: String, ws: Ws) -> Result<()> {
             }
         }
         rooms.retain(|_, r| r.host.is_some() || !r.lanes.is_empty());
+    }
+    // It was useful until now: what a full memory forgets first is the room down the longest.
+    if proven {
+        if let Some(at) = rooms.known.lock().unwrap().get_mut(&room) {
+            *at = now_secs();
+        }
+        save_known_soon(&rooms);
     }
     writer.abort();
     tracing::info!(room = %room, "host left");
@@ -838,15 +954,28 @@ mod tests {
         assert_eq!(client_ip(peer, "198.51.100.1, 203.0.113.7", 1), phone);
         // Two: the outer proxy's entry, second from the right.
         assert_eq!(client_ip(peer, "198.51.100.1, 203.0.113.7, 10.0.0.2", 2), phone);
-        // Fewer entries than proxies: the leftmost there is.
-        assert_eq!(client_ip(peer, "203.0.113.7", 2), phone);
+        // Fewer entries than proxies: the one there is most likely a proxy every phone shares
+        // (Render's, behind a Caddy that does not trust it), so the peer is counted instead.
+        assert_eq!(client_ip(peer, "203.0.113.7", 2), peer);
         assert_eq!(client_ip(peer, "", 1), peer);
         assert_eq!(client_ip(peer, "not-an-address", 1), peer);
         assert_eq!(client_ip(peer, "203.0.113.7:4431", 1), phone);
-        // Loopback is never counted, however it is written.
-        assert_eq!(counted(peer), None);
-        assert_eq!(counted("::ffff:127.0.0.1".parse().unwrap()), None);
-        assert_eq!(counted(phone), Some(phone));
+        assert_eq!(client_ip(peer, "[2001:db8::7]:4431", 1), "2001:db8::7".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn a_proxy_is_never_counted_as_a_phone() {
+        // Loopback, private networks and link-local, however they are written: a proxy on this
+        // machine or its network (Caddy on the host reaching a container comes from the bridge).
+        for local in ["127.0.0.1", "::1", "::ffff:127.0.0.1", "172.17.0.1", "::ffff:172.17.0.1", "10.0.0.2", "192.168.1.20", "172.31.255.255", "169.254.1.1", "fd7a:115c:a1e0::1", "fe80::1"] {
+            assert_eq!(counted(local.parse().unwrap()), None, "{local}");
+        }
+        // Public addresses are phones; so are tailnet peers (100.64/10), one device each, and the
+        // edges of the private ranges that are not in them.
+        for phone in ["203.0.113.7", "2001:db8::7", "::ffff:203.0.113.7", "100.64.0.1", "100.101.102.103", "172.32.0.1", "11.0.0.1", "192.169.0.1"] {
+            let ip: IpAddr = phone.parse().unwrap();
+            assert_eq!(counted(ip), Some(ip.to_canonical()), "{phone}");
+        }
     }
 
     #[test]
@@ -867,20 +996,38 @@ mod tests {
         let path = dir.path().join("rendezvous.json");
         assert!(load_known(&path, 4).is_empty(), "no file yet is no rooms");
         let limits = Limits { state: Some(path.clone()), ..Default::default() };
-        let shared = Shared {
-            rooms: Mutex::default(),
-            known: Mutex::new(["b".to_string(), "a".to_string()].into()),
-            saving: Mutex::default(),
-            limits,
-            queued: Arc::default(),
-            pending: Arc::default(),
-            quiet: Arc::default(),
-        };
+        let known: HashMap<String, u64> = [("b".to_string(), 200), ("a".to_string(), 100), ("c".to_string(), 300)].into();
+        let shared = Shared::new(limits, known.clone());
         save_known(&shared);
-        assert_eq!(load_known(&path, 4), ["a".to_string(), "b".to_string()].into());
-        assert_eq!(load_known(&path, 1).len(), 1, "never more than the server remembers");
+        assert_eq!(load_known(&path, 4), known);
+        // Never more than the server remembers, and the ones kept are the most recently useful.
+        assert_eq!(load_known(&path, 2), [("c".to_string(), 300), ("b".to_string(), 200)].into());
+        // A file from before the times: its rooms are kept, as useful longest ago.
+        std::fs::write(&path, r#"{"rooms":["x","y"]}"#).unwrap();
+        assert_eq!(load_known(&path, 4), [("x".to_string(), 0), ("y".to_string(), 0)].into());
         std::fs::write(&path, "garbage").unwrap();
         assert!(load_known(&path, 4).is_empty());
+    }
+
+    #[test]
+    fn a_full_memory_forgets_the_room_useful_least_recently_and_never_a_hosted_one() {
+        let limits = Limits { max_rooms: 2, ..Default::default() };
+        let shared = Shared::new(limits, [("old".to_string(), 100), ("older".to_string(), 50)].into());
+        let (lines, _rx) = mpsc::channel(1);
+        let host = HostTx { lines, budget: Arc::new(Semaphore::new(1)), budget_bytes: 1 };
+        // "older" is hosted right now: it stays, and "old", down and useful less recently than
+        // anything proven now, goes.
+        shared.rooms.lock().unwrap().insert("older".into(), Room { host: Some(host.clone()), lanes: HashMap::new() });
+        assert!(vouch(&shared, "new"));
+        let known = shared.known.lock().unwrap().clone();
+        assert!(known.contains_key("new") && known.contains_key("older") && !known.contains_key("old"), "{known:?}");
+        // With every remembered room hosted, a newly proven one is not remembered.
+        shared.rooms.lock().unwrap().insert("new".into(), Room { host: Some(host), lanes: HashMap::new() });
+        assert!(!vouch(&shared, "newer"));
+        assert_eq!(shared.known.lock().unwrap().len(), 2);
+        // A remembered room proven again is marked useful now.
+        assert!(vouch(&shared, "older"));
+        assert!(shared.known.lock().unwrap()["older"] > 50);
     }
 
     #[tokio::test]

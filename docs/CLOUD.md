@@ -155,13 +155,27 @@ working, and `relay cloud off` forgets the link here.
   §4). On this server, list the two rooms it is for: the PC's and the cloud engine's
   (`RELAY_RENDEZVOUS_ROOMS=<pc room>,<cloud room>`; each is the `room:` that `relay remote via`
   printed, or `rendezvous.room` in that engine's `remote.json`). Without the list it still works and
-  warns at start: rooms it has seen hosted are let back in ahead of strangers' made-up ones, until
-  it restarts. Behind Caddy every connection comes from loopback, so the per-address caps count
-  nothing unless `RELAY_RENDEZVOUS_TRUST_PROXY` says how many proxies append to
-  `X-Forwarded-For`: 2 only if Caddy is set to pass on the header from Render's proxy in front of
-  it (Caddy's `trusted_proxies`). Otherwise leave it unset: 1 would count Render's proxy, which
-  every phone shares, as one address. A phone that joins and never says hello is cut after 15 s
-  either way.
+  warns at start, but every deploy or spin-down restarts it remembering nothing (`start.sh` passes
+  no `--state`), and a room is remembered only once its host has held it five minutes. Until the
+  PC and the cloud engine have, a stranger holding the 16 new-room places keeps them out. The list
+  closes that; `RELAY_RENDEZVOUS_STATE=<a file on the service's disk>` only narrows it.
+- Per address, on Render: Render's proxy hands the connection to Caddy in the same container,
+  which hands it to the rendezvous on loopback. The rendezvous's peer is always Caddy on
+  127.0.0.1, which is never counted, so with `RELAY_RENDEZVOUS_TRUST_PROXY` unset (0, what runs
+  now) the per-address caps count nothing here; the 15 s hello deadline, the room caps and the
+  connection cap still apply. Leave it unset with the bot's Caddyfile as it is. That Caddyfile
+  sets no `trusted_proxies`, so Caddy drops the `X-Forwarded-For` Render's proxy sent and writes
+  only its own peer, Render's proxy: 1 would count that one address for every phone, and eight
+  quiet joins from anyone would turn every phone away (2 or more finds a single entry, fewer than
+  it trusts, and counts the loopback peer, which does nothing). To count phones here, add
+  `servers { trusted_proxies static 0.0.0.0/0 ::/0 }` to the Caddyfile's global options (nothing
+  but Render's proxy, and the account's own services on its private network, reaches `$PORT`).
+  Caddy then appends Render's proxy to the header Render wrote, and the phone's address is 2 from
+  the right if the last entry Render's proxy writes is the address it saw (a CDN hop in front of
+  it, appending its own, would make it 3). Confirm that once with
+  `RELAY_LOG=info,relay_remote::rendezvous=debug` (each join logs its header and the address
+  counted) before setting `RELAY_RENDEZVOUS_TRUST_PROXY=2`. A phone that joins and never says
+  hello is cut after 15 s either way.
 
 ## Verifying
 

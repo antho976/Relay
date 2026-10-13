@@ -2,6 +2,11 @@
 #   install -m 755 target/release/relay /usr/local/bin/relay
 #   cp deploy/relay-rendezvous.service /etc/systemd/system/
 #   systemctl enable --now relay-rendezvous
+#   systemctl edit relay-rendezvous   # Environment=RELAY_RENDEZVOUS_ROOMS=<room id>,<room id>
+#
+# It listens on loopback for a proxy on this machine (Caddy, docs/MOBILE.md §4) that writes the
+# phone's address into X-Forwarded-For: one proxy is trusted. Behind a second one in front of
+# that, set RELAY_RENDEZVOUS_TRUST_PROXY=2 only if the first trusts it (MOBILE.md §4).
 [Unit]
 Description=Relay rendezvous (phone door, away from home)
 After=network-online.target
@@ -13,6 +18,10 @@ Restart=always
 RestartSec=2
 DynamicUser=yes
 Environment=RELAY_LOG=info
+Environment=RELAY_RENDEZVOUS_TRUST_PROXY=1
+# The rooms it remembers survive a restart (with no room list, what keeps a known PC first in line).
+StateDirectory=relay-rendezvous
+Environment=RELAY_RENDEZVOUS_STATE=/var/lib/relay-rendezvous/rooms.json
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

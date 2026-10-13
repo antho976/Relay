@@ -71,6 +71,8 @@ proof of the device token; it adds no ops. The PC dials the rendezvous with the 
 in an `Authorization: Bearer` header, retrying once with `?secret=` only when an older server
 refuses it in its own words. The greeting before the proof carries only the challenge and what
 the handshake needs; the PC's name, id, version and Wake-on-LAN targets come in the welcome. The
-rendezvous hosts only the rooms its operator lists, or without a list remembers the rooms it has
-seen hosted and caps new ones, and caps per address what has not yet said hello. See
+rendezvous hosts only the rooms its operator lists, or without a list caps the rooms it does not
+remember and remembers a room only once a host has held it a few minutes (when full, forgetting
+the one useful least recently that has no host now). It caps per address what has not yet said
+hello, never counting a loopback, private or link-local peer: that is a proxy. See
 `docs/MOBILE.md`.
