@@ -25,7 +25,7 @@ use relay_bus::types::{Id, Provider};
 use relay_bus::BusError;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
@@ -412,21 +412,46 @@ fn not_found(id: Id) -> BusError {
 
 /// One running agent.
 struct Agent {
-    stdin: ChildStdin,
+    /// Written outside [`Live`]'s lock: an agent that stops reading must not hold it.
+    stdin: Arc<Mutex<ChildStdin>>,
     pid: u32,
     /// Which spawn this is, so the reader of an agent that was replaced cannot remove the new one.
     serial: u64,
+    /// The turn it was last given, the one its `result` ends.
+    turn: u64,
     last_used: Instant,
     /// It talks to the local model server (`local_models`), and stops with it.
     local: bool,
 }
 
+/// A thread's turn: the person's message until Claude's `result`.
+struct Turn {
+    /// Which turn this is. Work begun for a turn that was stopped finds a different one, or
+    /// none, and does nothing: a turn after it is not its to answer or end.
+    token: u64,
+    /// Whether [`deliver`] has handed its message on.
+    delivered: bool,
+}
+
 #[derive(Default)]
 struct Live {
     agents: HashMap<Id, Agent>,
-    /// Threads whose agent is writing a reply, from the person's message to Claude's `result`.
-    working: HashSet<Id>,
+    /// Threads whose agent is writing a reply, and the turn it is on.
+    working: HashMap<Id, Turn>,
+    /// Counts both agents' serials and turns' tokens.
     next_serial: u64,
+}
+
+impl Live {
+    fn mint(&mut self) -> u64 {
+        self.next_serial += 1;
+        self.next_serial
+    }
+
+    /// Whether `token` is still the thread's turn.
+    fn current(&self, id: Id, token: u64) -> bool {
+        self.working.get(&id).is_some_and(|t| t.token == token)
+    }
 }
 
 /// The engine's threads: the store, opened on first use, and the agents running now.
@@ -471,7 +496,7 @@ fn agent_dir(engine: &Engine) -> PathBuf {
 fn view(engine: &Engine, t: Stored) -> ThreadView {
     let live = lock(&engine.threads.live);
     ThreadView {
-        working: live.working.contains(&t.id),
+        working: live.working.contains_key(&t.id),
         live: live.agents.contains_key(&t.id),
         id: t.id,
         title: t.title,
@@ -534,7 +559,7 @@ pub fn create(engine: &Engine, title: &str, model: Option<&str>, effort: Option<
 /// message resumes the conversation with the new choice.
 pub fn set_agent(engine: &Engine, id: Id, model: Option<&str>, effort: Option<&str>) -> Result<ThreadView, BusError> {
     let (model, effort) = checked_agent(model, effort)?;
-    if lock(&engine.threads.live).working.contains(&id) {
+    if lock(&engine.threads.live).working.contains_key(&id) {
         return Err(BusError::conflict("thread.busy", "The agent is still answering in this thread")
             .with_hint("wait for its reply, or stop it with thread.stop"));
     }
@@ -556,26 +581,40 @@ pub fn rename(engine: &Engine, id: Id, title: &str) -> Result<ThreadView, BusErr
     get(engine, id)
 }
 
-/// Store the person's message and claim the thread's turn. The agent gets the message from
-/// [`deliver`], after the handler returns.
-pub fn post(engine: &Engine, id: Id, text: &str, now: &str) -> Result<MessageView, BusError> {
+/// Store the person's message and claim the thread's turn, whose token comes back with it. The
+/// agent gets the message from [`deliver`], given that token, after the handler returns.
+pub fn post(engine: &Engine, id: Id, text: &str, now: &str) -> Result<(MessageView, u64), BusError> {
     get(engine, id)?;
-    {
+    let token = {
         let mut live = lock(&engine.threads.live);
-        if !live.working.insert(id) {
+        if live.working.contains_key(&id) {
             return Err(BusError::conflict("thread.busy", "The agent is still answering in this thread")
                 .with_hint("wait for its reply, or stop it with thread.stop"));
         }
-    }
-    with_db(engine, |db| db.add(id, "user", &json!({"text": text}), now)).inspect_err(|_| {
-        lock(&engine.threads.live).working.remove(&id);
+        let token = live.mint();
+        live.working.insert(id, Turn { token, delivered: false });
+        token
+    };
+    with_db(engine, |db| db.add(id, "user", &json!({"text": text}), now)).map(|m| (m, token)).inspect_err(|_| {
+        end_turn(engine, id, token);
     })
 }
 
-/// Stop the thread's agent, if it runs. Its reader sees the pipe close and records nothing.
+/// End the turn `token`, if it is still the thread's.
+fn end_turn(engine: &Engine, id: Id, token: u64) -> bool {
+    let mut live = lock(&engine.threads.live);
+    let current = live.current(id, token);
+    if current {
+        live.working.remove(&id);
+    }
+    current
+}
+
+/// Stop the thread's agent, if it runs, and its turn. Its reader sees the pipe close and records
+/// nothing; a turn still waiting for a local model finds itself over when it loads.
 pub fn stop(engine: &Engine, id: Id) -> bool {
     let mut live = lock(&engine.threads.live);
-    let was_working = live.working.remove(&id);
+    let was_working = live.working.remove(&id).is_some();
     let Some(agent) = live.agents.remove(&id) else { return was_working };
     drop(live);
     kill(agent.pid);
@@ -602,7 +641,7 @@ pub fn stop_local(engine: &Engine) {
 /// Whether an agent on the local model server is writing a reply.
 pub fn local_busy(engine: &Engine) -> bool {
     let live = lock(&engine.threads.live);
-    live.agents.iter().any(|(t, a)| a.local && live.working.contains(t))
+    live.agents.iter().any(|(t, a)| a.local && live.working.contains_key(t))
 }
 
 pub fn delete(engine: &Engine, id: Id) -> Result<(), BusError> {
@@ -640,69 +679,92 @@ fn record(engine: &Engine, id: Id, role: &str, body: Value) {
     }
 }
 
-/// End the turn with `why` recorded as an error message.
-fn fail(engine: &Engine, id: Id, why: &str) {
-    lock(&engine.threads.live).working.remove(&id);
+/// End the turn `token` with `why` recorded as an error message; nothing when that turn is
+/// already over, stopped or answered, and another may be the thread's now.
+fn fail(engine: &Engine, id: Id, token: u64, why: &str) {
+    if !end_turn(engine, id, token) {
+        return;
+    }
     record(engine, id, "error", json!({"text": why}));
     emit_changed(engine, id);
 }
 
 /// Give the agent the person's message: to the running agent, or to one started for it.
-/// Runs after the handler that stored the message has returned.
-pub fn deliver(engine: &Arc<Engine>, id: Id, text: &str) {
+/// Runs after the handler that stored the message has returned; a message whose turn was
+/// stopped in between is not given.
+pub fn deliver(engine: &Arc<Engine>, id: Id, token: u64, text: &str) {
     let line = format!("{}\n", json!({"type": "user", "message": {"role": "user", "content": text}}));
-    {
+    let token = {
         let mut live = lock(&engine.threads.live);
-        if let Some(agent) = live.agents.get_mut(&id) {
+        // Only the turn this message began: stopped before this ran, there is none, or the
+        // turn of a message sent after it.
+        let Some(turn) = live.working.get_mut(&id).filter(|t| t.token == token && !t.delivered) else { return };
+        turn.delivered = true;
+        let running = live.agents.get_mut(&id).map(|agent| {
             agent.last_used = Instant::now();
-            if agent.stdin.write_all(line.as_bytes()).and_then(|()| agent.stdin.flush()).is_ok() {
-                let local = agent.local;
-                drop(live);
+            agent.turn = token;
+            (agent.stdin.clone(), agent.serial, agent.local)
+        });
+        drop(live);
+        if let Some((stdin, serial, local)) = running {
+            // Unlocked: a pipe that is full until the agent reads blocks only this.
+            let written = {
+                let mut stdin = lock(&stdin);
+                stdin.write_all(line.as_bytes()).and_then(|()| stdin.flush())
+            };
+            if written.is_ok() {
                 if local {
                     crate::local_models::touch(engine);
                 }
                 emit_changed(engine, id);
                 return;
             }
-            // It died between turns; its reader will find it gone. Start another.
-            if let Some(dead) = live.agents.remove(&id) {
-                kill(dead.pid);
+            // It died between turns, or was stopped as this was written; its reader will find
+            // it gone. Start another, for a turn that is still on.
+            let mut live = lock(&engine.threads.live);
+            if live.agents.get(&id).is_some_and(|a| a.serial == serial) {
+                if let Some(dead) = live.agents.remove(&id) {
+                    kill(dead.pid);
+                }
+            }
+            if !live.current(id, token) {
+                return;
             }
         }
-    }
+        token
+    };
     let local = with_db(engine, |db| db.get(id)).ok().flatten().and_then(|t| t.model).and_then(|m| crate::local_models::find(&m));
     let Some(model) = local else {
-        start(engine, id, &line, None);
+        start(engine, id, token, &line, None);
         return;
     };
     let waiting = engine.clone();
-    let started = std::thread::Builder::new().name(format!("thread-{id}-local")).spawn(move || start(&waiting, id, &line, Some(model)));
+    let started = std::thread::Builder::new().name(format!("thread-{id}-local")).spawn(move || start(&waiting, id, token, &line, Some(model)));
     if let Err(e) = started {
-        fail(engine, id, &format!("Could not start the agent: {e}"));
+        fail(engine, id, token, &format!("Could not start the agent: {e}"));
     }
 }
 
-/// Start an agent for the thread's turn and hand it `line`, the model's server loaded first
-/// when it is a local one.
-fn start(engine: &Arc<Engine>, id: Id, line: &str, local: Option<&'static crate::local_models::Model>) {
+/// Start an agent for the thread's turn `token` and hand it `line`, the model's server loaded
+/// first when it is a local one.
+fn start(engine: &Arc<Engine>, id: Id, token: u64, line: &str, local: Option<&'static crate::local_models::Model>) {
     let port = match local.map(|model| crate::local_models::ensure(engine, model)).transpose() {
         Ok(port) => port,
         Err(why) => {
-            // Stopped while the model loaded: the turn went with the stop, and there is nothing to say.
-            if lock(&engine.threads.live).working.contains(&id) {
-                fail(engine, id, &why);
-            }
+            // Stopped while the model loaded: the turn went with the stop, and there is nothing
+            // to say (`fail` says nothing for a turn that is over).
+            fail(engine, id, token, &why);
             return;
         }
     };
-    if local.is_some() && !lock(&engine.threads.live).working.contains(&id) {
+    if !lock(&engine.threads.live).current(id, token) {
         return;
     }
-    if let Err(why) = spawn(engine, id, line, local.zip(port)) {
-        fail(engine, id, &why);
-        return;
+    match spawn(engine, id, token, line, local.zip(port)) {
+        Ok(true) => emit_changed(engine, id),
+        Ok(false) => {}
+        Err(why) => fail(engine, id, token, &why),
     }
-    emit_changed(engine, id);
 }
 
 /// The MCP server the agent is given: Relay's, as the person. It lists only [`AGENT_OPS`] (the
@@ -739,7 +801,9 @@ pub fn agent_args(mcp: &str, model: Option<&str>, effort: Option<&str>, agent_re
     args
 }
 
-fn spawn(engine: &Arc<Engine>, id: Id, first_line: &str, local: Option<(&'static crate::local_models::Model, u16)>) -> Result<(), String> {
+/// Start the agent for the turn `token`; `false` when the turn ended while it started, and the
+/// agent was closed again.
+fn spawn(engine: &Arc<Engine>, id: Id, token: u64, first_line: &str, local: Option<(&'static crate::local_models::Model, u16)>) -> Result<bool, String> {
     let thread = with_db(engine, |db| db.get(id)).map_err(|e| e.message)?.ok_or_else(|| format!("No thread {id}"))?;
     let claude = {
         let conn = engine.store.lock();
@@ -784,11 +848,17 @@ fn spawn(engine: &Arc<Engine>, id: Id, first_line: &str, local: Option<(&'static
 
     let serial = {
         let mut live = lock(&engine.threads.live);
-        live.next_serial += 1;
-        let serial = live.next_serial;
+        // Stopped while Claude started: it has nothing to answer.
+        if !live.current(id, token) {
+            drop(live);
+            kill(child.id());
+            let _ = child.wait();
+            return Ok(false);
+        }
+        let serial = live.mint();
         if live.agents.len() >= MAX_LIVE {
             let oldest = live.agents.iter()
-                .filter(|(t, _)| !live.working.contains(t))
+                .filter(|(t, _)| !live.working.contains_key(t))
                 .min_by_key(|(_, a)| a.last_used)
                 .map(|(t, _)| *t);
             if let Some(oldest) = oldest {
@@ -797,7 +867,11 @@ fn spawn(engine: &Arc<Engine>, id: Id, first_line: &str, local: Option<(&'static
                 }
             }
         }
-        live.agents.insert(id, Agent { stdin, pid: child.id(), serial, last_used: Instant::now(), local: local.is_some() });
+        let agent = Agent { stdin: Arc::new(Mutex::new(stdin)), pid: child.id(), serial, turn: token, last_used: Instant::now(), local: local.is_some() };
+        // One agent per thread: one it replaces is closed, not left answering beside it.
+        if let Some(replaced) = live.agents.insert(id, agent) {
+            kill(replaced.pid);
+        }
         serial
     };
 
@@ -827,7 +901,7 @@ fn spawn(engine: &Arc<Engine>, id: Id, first_line: &str, local: Option<(&'static
                 let Ok(line) = line else { break };
                 let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
                 let Some(engine) = weak.upgrade() else { break };
-                handle(&engine, id, &event);
+                handle(&engine, id, serial, &event);
             }
             let _ = child.wait();
             if let Some(engine) = weak.upgrade() {
@@ -836,34 +910,35 @@ fn spawn(engine: &Arc<Engine>, id: Id, first_line: &str, local: Option<(&'static
         })
         .map_err(|e| format!("Could not watch Claude: {e}"))?;
     start_reaper(engine);
-    Ok(())
+    Ok(true)
 }
 
 /// The agent's output ended: it was stopped, closed for idling, or it died.
 fn ended(engine: &Engine, id: Id, serial: u64, stderr: &str) {
-    let (ours, working) = {
+    let (ours, turn) = {
         let mut live = lock(&engine.threads.live);
         let ours = live.agents.get(&id).is_some_and(|a| a.serial == serial);
-        if ours {
-            live.agents.remove(&id);
-        }
         // Only a turn this agent was still on is lost with it.
-        (ours, ours && live.working.contains(&id))
+        let turn = if ours { live.agents.remove(&id).map(|a| a.turn).filter(|t| live.current(id, *t)) } else { None };
+        (ours, turn)
     };
-    if working {
+    if let Some(turn) = turn {
         let detail = stderr.lines().rev().find(|l| !l.trim().is_empty()).map(|l| format!(": {}", cut(l.trim(), 300))).unwrap_or_default();
-        fail(engine, id, &format!("The agent stopped before it finished{detail}"));
+        fail(engine, id, turn, &format!("The agent stopped before it finished{detail}"));
     } else if ours {
         emit_changed(engine, id);
     }
 }
 
-/// One line of Claude's stream-json output.
-fn handle(engine: &Engine, id: Id, event: &Value) {
+/// One line of Claude's stream-json output, from the agent `serial`.
+fn handle(engine: &Engine, id: Id, serial: u64, event: &Value) {
     // A sub-agent's traffic is its parent tool call's business, not the thread's.
     if !event["parent_tool_use_id"].is_null() {
         return;
     }
+    // An agent stopped or replaced says nothing more in the thread: what it still had to say
+    // belongs to a turn that is over.
+    let Some(turn) = lock(&engine.threads.live).agents.get(&id).filter(|a| a.serial == serial).map(|a| a.turn) else { return };
     match event["type"].as_str() {
         Some("system") if event["subtype"] == "init" => {
             if let Some(reference) = event["session_id"].as_str().filter(|r| crate::providers::is_provider_ref(r)) {
@@ -918,11 +993,13 @@ fn handle(engine: &Engine, id: Id, event: &Value) {
                 let why = event["result"].as_str().filter(|r| !r.trim().is_empty()).map(str::to_string).or_else(|| {
                     event["errors"].as_array().map(|e| e.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; "))
                 });
-                fail(engine, id, &why.filter(|w| !w.is_empty()).unwrap_or_else(|| "The agent could not answer".into()));
+                fail(engine, id, turn, &why.filter(|w| !w.is_empty()).unwrap_or_else(|| "The agent could not answer".into()));
             } else {
                 {
                     let mut live = lock(&engine.threads.live);
-                    live.working.remove(&id);
+                    if live.current(id, turn) {
+                        live.working.remove(&id);
+                    }
                     if let Some(agent) = live.agents.get_mut(&id) {
                         agent.last_used = Instant::now();
                     }
@@ -944,7 +1021,7 @@ fn start_reaper(engine: &Arc<Engine>) {
             let idle: Vec<(Id, Agent)> = {
                 let mut live = lock(&engine.threads.live);
                 let ids: Vec<Id> = live.agents.iter()
-                    .filter(|(t, a)| !live.working.contains(t) && a.last_used.elapsed() >= IDLE)
+                    .filter(|(t, a)| !live.working.contains_key(t) && a.last_used.elapsed() >= IDLE)
                     .map(|(t, _)| *t)
                     .collect();
                 ids.into_iter().filter_map(|t| live.agents.remove(&t).map(|a| (t, a))).collect()
@@ -970,6 +1047,31 @@ mod tests {
         assert!(title.ends_with('…') && title.chars().count() <= 61, "{title}");
         assert!(!title.contains("please"));
         assert_eq!(title_from("   "), "New thread");
+    }
+
+    #[test]
+    fn a_stopped_turn_neither_answers_nor_ends_the_next() {
+        let engine = Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap());
+        let now = crate::time::now();
+        let id = create(&engine, "Groceries", None, None, &now).unwrap().id;
+        let token = |engine: &Engine| lock(&engine.threads.live).working.get(&id).map(|t| t.token);
+        let (_, first) = post(&engine, id, "first", &now).unwrap();
+        assert_eq!(token(&engine), Some(first));
+        assert!(stop(&engine, id));
+        let (_, second) = post(&engine, id, "second", &now).unwrap();
+        assert_eq!(token(&engine), Some(second));
+        assert_ne!(first, second);
+
+        // The first message, handed on late, is not given in the second's turn.
+        deliver(&engine, id, first, "first");
+        assert!(!lock(&engine.threads.live).working[&id].delivered);
+        // Its model failing to load ends nothing of the second, and says nothing.
+        fail(&engine, id, first, "The model did not load");
+        assert_eq!(token(&engine), Some(second));
+        assert_eq!(messages(&engine, id, None).unwrap().len(), 2);
+        fail(&engine, id, second, "The model did not load");
+        assert_eq!(token(&engine), None);
+        assert_eq!(messages(&engine, id, None).unwrap().len(), 3);
     }
 
     #[test]

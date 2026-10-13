@@ -180,3 +180,23 @@ fn one_turn_at_a_time_and_a_dead_agent_says_so() {
     assert_eq!(first["role"], "error");
     assert!(first["body"]["text"].as_str().unwrap().contains("without Relay's tools (failed)"), "{first}");
 }
+
+#[test]
+fn a_reply_stopped_midway_leaves_the_next_message_its_own_turn() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    let log = with_fake(&engine, dir.path());
+
+    let created = ok(&engine, "thread.create", json!({"text": "slow one"}));
+    ok(&engine, "thread.stop", json!({"id": created["id"]}));
+    ok(&engine, "thread.send", json!({"id": created["id"], "text": "the next"}));
+    let read = settled(&engine, &created["id"], 5);
+    // Only the second message is answered, by one agent, and nothing of the first follows it.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let read_again = thread(&engine, &created["id"]);
+    assert_eq!(read["messages"], read_again["messages"]);
+    let roles: Vec<&str> = read_again["messages"].as_array().unwrap().iter().map(|m| m["role"].as_str().unwrap()).collect();
+    assert_eq!(roles, ["user", "user", "assistant", "tool", "assistant"]);
+    assert_eq!(read_again["thread"]["working"], false);
+    assert!(std::fs::read_to_string(&log).unwrap().lines().count() <= 2);
+}

@@ -24,19 +24,19 @@ pub fn register(e: &mut Engine) {
         let thread = threads::create(ctx.engine(), &title, p.model.as_deref(), p.effort.as_deref(), &now)?;
         ctx.emit("thread.changed", json!({"thread": thread}));
         let Some(text) = text else { return Ok(thread) };
-        let message = threads::post(ctx.engine(), thread.id, &text, &now)?;
+        let (message, turn) = threads::post(ctx.engine(), thread.id, &text, &now)?;
         ctx.emit("thread.message", json!({"thread": thread.id, "message": message}));
         let id = thread.id;
-        ctx.after_commit(move |engine| threads::deliver(&engine, id, &text));
+        ctx.after_commit(move |engine| threads::deliver(&engine, id, turn, &text));
         threads::get(ctx.engine(), id)
     });
     e.register::<Send>(|ctx, p| {
         let text = threads::checked_text(&p.text)?;
         let now = ctx.now.clone();
-        let message = threads::post(ctx.engine(), p.id, &text, &now)?;
+        let (message, turn) = threads::post(ctx.engine(), p.id, &text, &now)?;
         ctx.emit("thread.message", json!({"thread": p.id, "message": message}));
         let id = p.id;
-        ctx.after_commit(move |engine| threads::deliver(&engine, id, &text));
+        ctx.after_commit(move |engine| threads::deliver(&engine, id, turn, &text));
         Ok(message)
     });
     e.register::<Stop>(|ctx, p| {
