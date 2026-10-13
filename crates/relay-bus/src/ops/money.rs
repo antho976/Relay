@@ -120,6 +120,10 @@ payload!(#[schemars(rename = "MoneySyncIn")] SyncIn {
     pub generation: Option<String>,
     /// The phone's rows changed since its last sync, and its tombstones.
     pub changes: Vec<Change>,
+    /// At most this many changes in the answer (1 or more). When more are left, the answer says
+    /// `more: true` and its `cursor` is where this page ended: ask again from there, and apply
+    /// the pages together once `more` is false. Absent, the whole answer at once.
+    pub limit: Option<u32>,
 });
 op!(Sync, "money.sync", SyncIn => SyncOut,
     OpMeta::mutation(Scope::Global, 12, "Tally's two-way sync (docs/MONEY.md): apply the phone's changes, newest edit winning per row, and answer with the PC's changes since the phone's cursor").actors(Actors::UserOnly).emits(&["money.changed"]));

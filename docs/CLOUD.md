@@ -84,7 +84,12 @@ neither posts bills: Tally alone does, as when it syncs with the PC directly. A 
 the 64 characters `money.sync` takes.
 
 Large merges go in batches of 2,000 rows, in dependency order across batches, under the 8 MiB a
-device may send the rendezvous in one message.
+device may send the rendezvous in one message. Answers come back in pages of 2,000 rows
+(`money.sync`'s `limit` and `more`, docs/MONEY.md), so the cloud's whole ledger never has to fit
+the 15 MiB line the rendezvous carries to a device; the link reads every page before it hands the
+rows on, keeps the newest of each, drops what the other side handed back unchanged, and moves a
+cursor only as it did before. A cloud engine from before pages refuses `limit` (`bus.schema`) and
+is asked whole, as before.
 
 ## Setting it up
 
@@ -146,6 +151,17 @@ working, and `relay cloud off` forgets the link here.
   PC ask for waiting phones and hand them links.
 - `relay remote rendezvous --queue-mib` caps what the server queues toward phones; the default
   (512 MiB) is more than a 512 MB container holds.
+- The rendezvous hosts any room whose secret is presented unless it is given a list (docs/MOBILE.md
+  §4). On this server, list the two rooms it is for: the PC's and the cloud engine's
+  (`RELAY_RENDEZVOUS_ROOMS=<pc room>,<cloud room>`; each is the `room:` that `relay remote via`
+  printed, or `rendezvous.room` in that engine's `remote.json`). Without the list it still works and
+  warns at start: rooms it has seen hosted are let back in ahead of strangers' made-up ones, until
+  it restarts. Behind Caddy every connection comes from loopback, so the per-address caps count
+  nothing unless `RELAY_RENDEZVOUS_TRUST_PROXY` says how many proxies append to
+  `X-Forwarded-For`: 2 only if Caddy is set to pass on the header from Render's proxy in front of
+  it (Caddy's `trusted_proxies`). Otherwise leave it unset: 1 would count Render's proxy, which
+  every phone shares, as one address. A phone that joins and never says hello is cut after 15 s
+  either way.
 
 ## Verifying
 

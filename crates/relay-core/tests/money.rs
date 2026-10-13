@@ -110,6 +110,33 @@ fn a_phone_syncs_its_ledger_across_the_bus() {
 }
 
 #[test]
+fn a_sync_answer_comes_in_pages_when_asked_for_them() {
+    let engine = engine();
+    ok(&engine, "money.sample", json!({}));
+    let whole = ok(&engine, "money.sync", json!({"device": "Pixel 9", "since": 0, "changes": []}));
+    assert!(whole.get("more").is_none(), "an answer asked for whole reads as it always did");
+    let total = whole["changes"].as_array().unwrap().len();
+    let (mut since, mut generation, mut taken, mut pages) = (0, serde_json::Value::Null, 0, 0);
+    loop {
+        let page = ok(&engine, "money.sync", json!({"device": "Pixel 9", "since": since, "generation": generation, "changes": [], "limit": 50}));
+        let n = page["changes"].as_array().unwrap().len();
+        assert!(n <= 50);
+        taken += n;
+        pages += 1;
+        since = page["cursor"].as_i64().unwrap();
+        generation = page["generation"].clone();
+        if page.get("more").is_none() {
+            break;
+        }
+        assert_eq!(page["more"], true);
+    }
+    assert_eq!(taken, total);
+    assert!(pages > 1, "the sample is more than one page");
+    let zero = call_as(&engine, Actor::User, "money.sync", json!({"device": "Pixel 9", "since": 0, "changes": [], "limit": 0}));
+    assert_eq!(code(zero), "money.invalid");
+}
+
+#[test]
 fn a_chart_asks_its_question_and_reads_the_ledger_now() {
     let engine = engine();
     let account = ok(&engine, "money.account.add", json!({"name": "Chequing", "type": "CHEQUING"}));

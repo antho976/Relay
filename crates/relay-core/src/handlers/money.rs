@@ -294,7 +294,13 @@ pub fn register(e: &mut Engine) {
         if device.is_empty() || device.chars().count() > 64 || device.contains(char::is_control) {
             return Err(BusError::invalid("money.invalid", "A device name is 1 to 64 printable characters"));
         }
-        let out = ledger(ctx.engine(), |l| l.sync(device, p.replace.unwrap_or(false), p.since, p.generation.as_deref(), &p.changes, &crate::time::now()))?;
+        if p.limit == Some(0) {
+            return Err(BusError::invalid("money.invalid", "A sync's limit is 1 or more changes"));
+        }
+        let limit = p.limit.map(|l| l as usize);
+        let out = ledger(ctx.engine(), |l| {
+            l.sync_page(device, p.replace.unwrap_or(false), p.since, p.generation.as_deref(), &p.changes, limit, &crate::time::now())
+        })?;
         if out.applied > 0 || out.replaced {
             ctx.emit("money.changed", json!({"synced": device, "applied": out.applied}));
         }

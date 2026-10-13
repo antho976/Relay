@@ -107,6 +107,24 @@ const TABLES: &[(&str, &[Col])] = &[
 /// The settings that travel; the rest are this device's own.
 const SYNCED_SETTINGS: &[&str] = &["currency", "month_start_day", "week_starts_monday"];
 
+/// The prefixes of uids both devices derive the same way: a posted bill's, and what an import
+/// writes (docs/INVESTMENTS.md). Tally's `SyncTables.DERIVED`. Such a row is written only when its
+/// uid is neither present nor deleted, so its tombstone is kept through a replace.
+pub const DERIVED: &[&str] = &["bill:", "imp:", "sec:", "hold:", "px:", "fx:", "room:", "val:", "ws:"];
+
+pub fn is_derived(uid: &str) -> bool {
+    DERIVED.iter().any(|p| uid.starts_with(p))
+}
+
+/// The stamp of a tombstone a replace keeps: older than any edit, so a row the device sends
+/// (in this request or a later batch of the same first sync) always wins over it. It is there
+/// for its presence, which keeps an import or the poster from writing that uid again.
+const KEPT_STAMP: i64 = 1;
+
+/// What a budget tombstone keeps in `category` when the device did not say which budget it was:
+/// it is matched by uid, and goes out again with `row: {}`. Null is the overall budget.
+const UNSAID: &str = "";
+
 fn spec(table: &str) -> Option<&'static [Col]> {
     TABLES.iter().find(|(t, _)| *t == table).map(|(_, c)| *c)
 }
@@ -176,6 +194,25 @@ impl Ledger {
     /// `since: 0`, no generation and no changes, rather than merging into a ledger it no longer
     /// shares rows with.
     pub fn sync(&mut self, device: &str, replace: bool, since: i64, generation: Option<&str>, changes: &[Change], now: &str) -> Result<SyncOut> {
+        self.sync_page(device, replace, since, generation, changes, None, now)
+    }
+
+    /// [`Ledger::sync`], with the answer cut to at most `limit` changes. The changes go in the
+    /// order this ledger numbered them; when some are left, the answer says `more` and its
+    /// `cursor` is the number of the last one sent, which the device sends back as `since` to
+    /// ask for the rest. A page may refer to rows a later page holds: a device applies the pages
+    /// together once `more` is false. Without `limit`, the whole answer at once.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sync_page(
+        &mut self,
+        device: &str,
+        replace: bool,
+        since: i64,
+        generation: Option<&str>,
+        changes: &[Change],
+        limit: Option<usize>,
+        now: &str,
+    ) -> Result<SyncOut> {
         if !replace {
             let mine = self.generation()?;
             if generation.is_some_and(|g| g != mine) || since > self.cursor()? {
@@ -185,6 +222,9 @@ impl Ledger {
             }
         }
         let tx = self.conn.transaction()?;
+        // A derived row deleted here stays deleted through the replace: the device's first sync
+        // sends no tombstones, and the next import of the same file would bring it back.
+        let kept = if replace { derived_buried(&tx)? } else { Vec::new() };
         if replace {
             Ledger::clear(&tx, true)?;
         }
@@ -199,12 +239,23 @@ impl Ledger {
                 skipped += 1;
             }
         }
-        let changes = if replace { Vec::new() } else { changed_since(&tx, since, &applied)? };
+        for (table, uid) in &kept {
+            let here = tx.prepare_cached(&format!("SELECT 1 FROM {table} WHERE uid = ?1"))?.exists([uid])?;
+            if !here {
+                tx.prepare_cached("INSERT OR IGNORE INTO tombstones (tbl, uid, updated_at) VALUES (?1, ?2, ?3)")?
+                    .execute(params![table, uid, KEPT_STAMP])?;
+            }
+        }
+        let (changes, page) = if replace { (Vec::new(), None) } else { changed_since(&tx, since, &applied, limit)? };
         tx.prepare_cached(
             "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, 0) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         )?.execute(params![format!("sync.device.{device}"), now])?;
         tx.commit()?;
-        Ok(SyncOut { cursor: self.cursor()?, generation: self.generation()?, changes, replaced: replace, applied: applied.len(), skipped })
+        let cursor = match page {
+            Some(last) => last,
+            None => self.cursor()?,
+        };
+        Ok(SyncOut { cursor, generation: self.generation()?, changes, replaced: replace, applied: applied.len(), skipped, more: page.is_some() })
     }
 
     /// Devices that have synced with this ledger and when they last did, newest first.
@@ -276,7 +327,12 @@ fn apply(tx: &Transaction, c: &Change) -> Result<bool> {
                 tx.prepare_cached(&format!("UPDATE {table} SET deleted = 1, updated_at = ?2 WHERE id = ?1"))?.execute(params![id, c.updated_at])?;
             }
             None => {
-                let category = c.row.get("category").and_then(Value::as_str);
+                // A budget's says which budget it was, or that it did not say: never the overall
+                // one by omission.
+                let category = match c.row.get("category") {
+                    None if table == "budgets" => Some(UNSAID),
+                    v => v.and_then(Value::as_str),
+                };
                 tx.prepare_cached("INSERT OR REPLACE INTO tombstones (tbl, uid, updated_at, category) VALUES (?1, ?2, ?3, ?4)")?
                     .execute(params![table, c.uid, c.updated_at, category])?;
             }
@@ -316,34 +372,54 @@ fn apply(tx: &Transaction, c: &Change) -> Result<bool> {
     Ok(true)
 }
 
-/// Every row and tombstone numbered above `since`, but the ones this sync just applied: the
-/// device already has those.
-fn changed_since(tx: &Transaction, since: i64, applied: &HashSet<(String, String)>) -> Result<Vec<Change>> {
+/// Every derived uid this ledger holds deleted, as `(table, uid)`: its tombstones and its
+/// deleted rows.
+fn derived_buried(tx: &Transaction) -> Result<Vec<(String, String)>> {
     let mut out = Vec::new();
-    let mut st = tx.prepare_cached("SELECT key, value, updated_at FROM settings WHERE seq > ?1")?;
-    let rows: Vec<(String, String, i64)> = st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<std::result::Result<_, _>>()?;
-    for (key, value, updated_at) in rows {
+    for (table, _) in TABLES {
+        let mut st = tx.prepare_cached(&format!("SELECT uid FROM {table} WHERE deleted = 1"))?;
+        let uids: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
+        out.extend(uids.into_iter().filter(|u| is_derived(u)).map(|u| (table.to_string(), u)));
+    }
+    let mut st = tx.prepare_cached("SELECT tbl, uid FROM tombstones")?;
+    let rows: Vec<(String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
+    // Only a synced table's: its name goes into SQL.
+    out.extend(rows.into_iter().filter(|(t, u)| spec(t).is_some() && is_derived(u)));
+    Ok(out)
+}
+
+/// Every row and tombstone numbered above `since`, but the ones this sync just applied: the
+/// device already has those. With `limit`, the first that many in the order they were numbered,
+/// and the number of the last one when more are left.
+fn changed_since(tx: &Transaction, since: i64, applied: &HashSet<(String, String)>, limit: Option<usize>) -> Result<(Vec<Change>, Option<i64>)> {
+    // Each table's first rows are enough for a page: the ones applied are skipped, and the rest
+    // of a page's rows are each table's earliest.
+    let per_table = limit.map_or(-1, |l| i64::try_from(l.saturating_add(applied.len()).saturating_add(1)).unwrap_or(i64::MAX));
+    let mut out: Vec<(i64, Change)> = Vec::new();
+    let mut st = tx.prepare_cached("SELECT key, value, updated_at, seq FROM settings WHERE seq > ?1")?;
+    let rows: Vec<(String, String, i64, i64)> = st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<std::result::Result<_, _>>()?;
+    for (key, value, updated_at, seq) in rows {
         if SYNCED_SETTINGS.contains(&key.as_str()) && !applied.contains(&("settings".to_string(), key.clone())) {
             let mut row = Map::new();
             row.insert("value".into(), Value::String(value));
-            out.push(Change { table: "settings".into(), uid: key, updated_at, deleted: false, row });
+            out.push((seq, Change { table: "settings".into(), uid: key, updated_at, deleted: false, row }));
         }
     }
     for (table, cols) in TABLES {
         let names: Vec<&str> = cols.iter().map(|c| c.sql).collect();
-        let sql = format!("SELECT uid, updated_at, deleted, {} FROM {table} WHERE seq > ?1 ORDER BY seq", names.join(", "));
-        let rows: Vec<(String, i64, bool, Vec<rusqlite::types::Value>)> = {
+        let sql = format!("SELECT uid, updated_at, deleted, seq, {} FROM {table} WHERE seq > ?1 ORDER BY seq LIMIT ?2", names.join(", "));
+        let rows: Vec<(String, i64, bool, i64, Vec<rusqlite::types::Value>)> = {
             let mut st = tx.prepare_cached(&sql)?;
-            let mapped = st.query_map([since], |r| {
+            let mapped = st.query_map(params![since, per_table], |r| {
                 let mut vals = Vec::with_capacity(cols.len());
                 for i in 0..cols.len() {
-                    vals.push(r.get::<_, rusqlite::types::Value>(i + 3)?);
+                    vals.push(r.get::<_, rusqlite::types::Value>(i + 4)?);
                 }
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, vals))
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, vals))
             })?;
             mapped.collect::<std::result::Result<_, _>>()?
         };
-        for (uid, updated_at, deleted, vals) in rows {
+        for (uid, updated_at, deleted, seq, vals) in rows {
             if applied.contains(&(table.to_string(), uid.clone())) {
                 continue;
             }
@@ -352,23 +428,32 @@ fn changed_since(tx: &Transaction, since: i64, applied: &HashSet<(String, String
                 // The overall budget's category 0 matches no row, so it travels as null.
                 row.insert(c.json.into(), to_json(tx, c, v)?);
             }
-            out.push(Change { table: table.to_string(), uid, updated_at, deleted, row });
+            out.push((seq, Change { table: table.to_string(), uid, updated_at, deleted, row }));
         }
     }
-    let mut st = tx.prepare_cached("SELECT tbl, uid, updated_at, category FROM tombstones WHERE seq > ?1 ORDER BY seq")?;
-    let rows: Vec<(String, String, i64, Option<String>)> =
-        st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<std::result::Result<_, _>>()?;
-    for (table, uid, updated_at, category) in rows {
+    let mut st = tx.prepare_cached("SELECT tbl, uid, updated_at, category, seq FROM tombstones WHERE seq > ?1 ORDER BY seq LIMIT ?2")?;
+    let rows: Vec<(String, String, i64, Option<String>, i64)> =
+        st.query_map(params![since, per_table], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<std::result::Result<_, _>>()?;
+    for (table, uid, updated_at, category, seq) in rows {
         if !applied.contains(&(table.clone(), uid.clone())) {
             let mut row = Map::new();
-            // A budget's tombstone says which budget: null is the overall one.
-            if table == "budgets" {
+            // A budget's tombstone says which budget: null is the overall one. One the device
+            // sent without saying goes out without saying, matched by its uid.
+            if table == "budgets" && category.as_deref() != Some(UNSAID) {
                 row.insert("category".into(), category.map_or(Value::Null, Value::String));
             }
-            out.push(Change { table, uid, updated_at, deleted: true, row });
+            out.push((seq, Change { table, uid, updated_at, deleted: true, row }));
         }
     }
-    Ok(out)
+    let Some(limit) = limit.filter(|&l| out.len() > l) else {
+        return Ok((out.into_iter().map(|(_, c)| c).collect(), None));
+    };
+    out.sort_by_key(|(seq, _)| *seq);
+    out.truncate(limit.max(1));
+    let last = out.last().map(|(seq, _)| *seq);
+    // In dependency order within the page, as a whole answer is.
+    out.sort_by_key(|(_, c)| order(&c.table));
+    Ok((out.into_iter().map(|(_, c)| c).collect(), last))
 }
 
 #[cfg(test)]
@@ -562,6 +647,121 @@ mod tests {
         assert!(budgets.iter().all(|c| c.deleted && c.row.contains_key("category")));
         assert!(budgets.iter().any(|c| c.row["category"] == "c1"));
         assert!(budgets.iter().any(|c| c.row["category"].is_null()), "the overall budget");
+    }
+
+    /// Every page of the answer to one request and the ones after it, as a device asks for them.
+    fn pages(l: &mut Ledger, since: i64, generation: Option<&str>, first: &[Change], limit: usize) -> (Vec<Vec<Change>>, SyncOut) {
+        let mut out = l.sync_page("Pixel", false, since, generation, first, Some(limit), "t").unwrap();
+        let mut all = vec![out.changes.clone()];
+        while out.more {
+            assert!(out.cursor > since);
+            let g = out.generation.clone();
+            out = l.sync_page("Pixel", false, out.cursor, Some(&g), &[], Some(limit), "t").unwrap();
+            all.push(out.changes.clone());
+        }
+        (all, out)
+    }
+
+    fn keys(changes: &[Change]) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = changes.iter().map(|c| (c.table.clone(), c.uid.clone())).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn a_long_answer_comes_in_pages_and_misses_nothing() {
+        let mut l = Ledger::open_in_memory().unwrap();
+        l.load_sample(date(2026, 10, 4), "CAD").unwrap();
+        let account = l.accounts().unwrap()[0].id;
+        l.tx_delete(l.tx_list(&TxQuery::default(), date(2026, 10, 7)).unwrap().transactions[0].id).unwrap();
+        let whole = l.sync("Pixel", false, 0, None, &[], "t").unwrap();
+        assert!(!whole.more);
+        assert!(!serde_json::to_string(&whole).unwrap().contains("more"), "an answer asked for whole reads as it always did");
+        let (paged, last) = pages(&mut l, 0, None, &[], 7);
+        assert!(paged.len() > 5);
+        assert!(paged.iter().all(|p| p.len() <= 7));
+        assert_eq!(keys(&paged.concat()), keys(&whole.changes), "every row, deleted ones included, exactly once");
+        assert_eq!((last.cursor, &last.generation), (l.cursor().unwrap(), &whole.generation));
+
+        // An edit made between two pages is in a later one.
+        let mut out = l.sync_page("Pixel", false, 0, None, &[], Some(3), "t").unwrap();
+        let added = l.tx_add(&TxInput { r#type: TxType::Expense, amount: 1_00, date: "2026-10-06".into(), account_id: account,
+            to_account_id: None, category_id: None, note: None }).unwrap();
+        let mut seen = out.changes.clone();
+        while out.more {
+            let g = out.generation.clone();
+            out = l.sync_page("Pixel", false, out.cursor, Some(&g), &[], Some(3), "t").unwrap();
+            seen.extend(out.changes.clone());
+        }
+        assert!(seen.iter().any(|c| c.uid == added.uid));
+        // A page's cursor is one this ledger gave: asking from it is not stale.
+        assert!(l.sync_page("Pixel", false, 0, None, &[], Some(1), "t").unwrap().more);
+    }
+
+    #[test]
+    fn a_paged_answer_does_not_send_back_what_its_request_brought() {
+        let mut pc = Ledger::open_in_memory().unwrap();
+        let first = pc.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        let account = pc.accounts().unwrap()[0].id;
+        for i in 0..5 {
+            pc.tx_add(&TxInput { r#type: TxType::Expense, amount: 1_00 + i, date: "2026-10-06".into(), account_id: account,
+                to_account_id: None, category_id: None, note: None }).unwrap();
+        }
+        let edit = change("transactions", "t1", 900, json!({"type": "EXPENSE", "amount": 50_00, "date": "2026-10-05", "account": "a1",
+            "toAccount": null, "category": "c1", "note": "Metro", "recurring": null, "createdAt": 100}));
+        let (paged, _) = pages(&mut pc, first.cursor, Some(&first.generation), &[edit], 2);
+        let back = paged.concat();
+        assert_eq!(paged[0].len(), 2);
+        assert_eq!(back.iter().filter(|c| c.table == "transactions" && c.uid != "t1").count(), 5, "the PC's five entries");
+        assert!(paged[0].iter().all(|c| c.uid != "t1"), "the page answering the edit leaves it out");
+        // A later page, asked for without it, may hand it back as it was sent: no news to the device.
+        assert!(back.iter().filter(|c| c.uid == "t1").all(|c| c.updated_at == 900));
+    }
+
+    #[test]
+    fn a_budget_tombstone_that_did_not_say_its_category_goes_on_without_one() {
+        let mut pc = Ledger::open_in_memory().unwrap();
+        let first = pc.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        // An older Tally deletes a budget this PC never had, and does not say which.
+        let out = pc.sync("Pixel", false, first.cursor, Some(&first.generation), &[tomb("budgets", "b-elsewhere", 500)], "t").unwrap();
+        let whole = pc.sync("Probe", false, 0, None, &[], "t").unwrap();
+        let sent = whole.changes.iter().find(|c| c.uid == "b-elsewhere").unwrap();
+        assert!(sent.deleted && sent.row.is_empty(), "not the overall budget's {:?}", sent.row);
+        // On to the cloud copy: its overall budget stays.
+        let mut cloud = Ledger::open_in_memory().unwrap();
+        let cf = cloud.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        cloud.sync("PC", false, cf.cursor, Some(&cf.generation), &whole.changes, "t").unwrap();
+        assert_eq!(cloud.summary(date(2026, 10, 7), &Locale::new("en-CA")).unwrap().pace.budget, 310_00);
+        // A tombstone that names its budget still does, the overall one as null.
+        pc.sync("Pixel", false, out.cursor, Some(&out.generation), &[Change { row: json!({"category": null}).as_object().unwrap().clone(), ..tomb("budgets", "b1", 600) }], "t").unwrap();
+        assert_eq!(pc.summary(date(2026, 10, 7), &Locale::new("en-CA")).unwrap().pace.budget, 0);
+    }
+
+    #[test]
+    fn a_derived_row_deleted_here_stays_deleted_through_a_replace() {
+        let mut pc = Ledger::open_in_memory().unwrap();
+        let first = pc.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        let line = change("transactions", "imp:9", 200, json!({"type": "EXPENSE", "amount": 5_00, "date": "2026-10-05", "account": "a1",
+            "toAccount": null, "category": "c1", "note": "Imported", "recurring": null, "createdAt": 200}));
+        let out = pc.sync("Pixel", false, first.cursor, Some(&first.generation), std::slice::from_ref(&line), "t").unwrap();
+        // The phone deletes the imported line and a posted bill it never sent; both reach the PC.
+        pc.sync("Pixel", false, out.cursor, Some(&out.generation), &[tomb("transactions", "imp:9", 300), tomb("transactions", "bill:r1:2026-10-01", 300)], "t").unwrap();
+        // The phone pairs again: its first sync sends its rows, never its tombstones.
+        let again = pc.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        let buried: Vec<(String, i64)> = pc.conn.prepare("SELECT uid, updated_at FROM tombstones ORDER BY uid").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(|r| r.unwrap()).collect();
+        assert_eq!(buried, [("bill:r1:2026-10-01".to_string(), KEPT_STAMP), ("imp:9".to_string(), KEPT_STAMP)]);
+        // A device taking this ledger whole hears of them.
+        let whole = pc.sync("Other", false, 0, None, &[], "t").unwrap();
+        assert!(whole.changes.iter().any(|c| c.uid == "imp:9" && c.deleted));
+        assert!(whole.changes.iter().any(|c| c.uid == "bill:r1:2026-10-01" && c.deleted));
+        // A later batch of the same first sync that holds the row still wins over the kept tombstone.
+        pc.sync("Pixel", false, again.cursor, Some(&again.generation), &[line], "t").unwrap();
+        assert_eq!(spent(&pc), 42_50 + 5_00);
+        // A random uid's tombstone goes with the replace, as before.
+        pc.sync("Pixel", false, pc.cursor().unwrap(), None, &[tomb("transactions", "t1", 9_000)], "t").unwrap();
+        pc.sync("Pixel", true, 0, None, &[], "t").unwrap();
+        assert!(!pc.conn.prepare("SELECT 1 FROM tombstones WHERE uid = 't1'").unwrap().exists([]).unwrap());
     }
 
     #[test]

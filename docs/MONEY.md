@@ -158,7 +158,7 @@ greeting, pairing code once, then a proof per connection; docs/MOBILE.md §2, §
 bus request, `money.sync`, which is in `PHONE_OPS`.
 
 ```
-money.sync { device, replace?, since, generation?, changes: [Change] }  →  { cursor, generation, changes: [Change], replaced, applied, skipped }
+money.sync { device, replace?, since, generation?, changes: [Change], limit? }  →  { cursor, generation, changes: [Change], replaced, applied, skipped, more? }
 Change = { table, uid, updated_at, deleted, row }
 ```
 
@@ -177,6 +177,19 @@ Change = { table, uid, updated_at, deleted, row }
   merge. Tally says so on its pairing page before the first sync runs.
 - A large first sync may come in batches: the first carries `replace: true`, the rest
   `replace: false` with the cursor the one before answered, tables in order across them.
+- **A long answer may come in pages** (optional; a device that never sends `limit` gets the whole
+  answer at once, with no `more` field, as before). With `limit: n` (1 or more), the answer holds
+  at most `n` changes, in the order the PC numbered them. When more are left it says `more: true`
+  and its `cursor` is the number of the last change in the page: ask again with `since` set to
+  that cursor, the answer's `generation`, and no changes, until an answer leaves `more` out (or
+  false); its `cursor` is the one to keep. A page may refer to a row a later page holds, and a
+  row edited while the pages are read comes again, newer: keep the newest of each row and apply
+  the pages together at the end. A page asked for after a request whose changes the PC applied
+  may hand some of those back with the stamp they were sent with, which is no news. Pages need
+  no more than this: a replace answers no changes, and the PC's ledger replaced between two pages
+  makes the next one `money.sync_stale`, as any sync. Through the rendezvous an answer is one
+  line, and a line over 15 MiB closes the connection, so a ledger of tens of thousands of rows
+  (prices and rates add up) can be taken whole off the home network only in pages.
 - **Newest edit wins, per row**, by `updated_at` (ms since the epoch). An equal or older change
   is ignored. A tombstone (`deleted: true`) wins like any edit.
 - **A stamp never goes backwards.** Every edit on either side is stamped
@@ -194,9 +207,10 @@ Change = { table, uid, updated_at, deleted, row }
   uid. Budgets are matched by their category (`row.category`, null for the overall budget), not
   by uid, because each category has one budget.
 - A tombstone's `row` is `{}`, except a budget's, which carries `{ category }` both ways (null
-  for the overall budget); the PC matches a budget tombstone with no category by its uid. Tally keeps the category's uid in its
-  tombstone for that, and sends nothing for a budget whose category is already gone (the
-  category's own tombstone takes it on the PC). A row whose reference the receiving side does
+  for the overall budget); the PC matches a budget tombstone with no category by its uid, and
+  one it keeps goes on to other devices with `row: {}` still, never as the overall budget's.
+  Tally keeps the category's uid in its tombstone for that, and sends nothing for a budget whose
+  category is already gone (the category's own tombstone takes it on the PC). A row whose reference the receiving side does
   not have is skipped (counted in `skipped`), not fatal.
 - A posted bill's uid is `bill:<recurring uid>:<date>` on both devices. **Once a phone syncs, the
   phone alone posts bills**: two devices posting the same bill at different times would each stamp
@@ -242,3 +256,11 @@ are derived, never stored or synced. The ledger's writes are in `crates/relay-mo
 Rows an import or a write derives a uid for (`sec:`, `hold:`, `imp:`, `px:`, `fx:`, `room:`,
 `val:`, `ws:`) are the same rows on both devices, so a file imported on each merges on sync; an
 imported line is added only when its uid is neither present nor deleted, as a posted bill is.
+A row written again under such a uid (a price, a rate, a room figure, a security, an account) is
+stamped `max(now, its tombstone + 1)`, as Tally's trigger stamps it, so a device holding the
+tombstone takes it. A device's first sync (`replace`) erases the PC's ledger but keeps the PC's
+tombstones for these uids (`bill:` included), and its deleted rows', as tombstones stamped 1:
+older than any row, so a row the device sends in any batch of that sync wins, and there all the
+same for an import or the poster, which never write a uid with a tombstone. They go out in every
+whole answer (`since: 0`). A line deleted on the phone that the PC never heard of before the
+phone's first sync cannot be kept so: Tally sends no tombstones with `replace`.

@@ -18,6 +18,7 @@ use relay_bus::envelope::{Actor, Request, Response};
 use relay_money::views::{Change, SyncOut};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
@@ -29,6 +30,11 @@ pub const EVERY: Duration = Duration::from_secs(60);
 /// takes at most 8 MiB from a device in one message; a few hundred bytes a row keeps a batch well
 /// under that.
 const BATCH: usize = 2000;
+
+/// Changes per page of a `money.sync` answer. A whole ledger in one answer is one line, and the
+/// rendezvous closes a lane on a line past `MAX_LANE_LINE` (15 MiB): a ledger of tens of thousands
+/// of prices and rates could never be taken whole off the home network otherwise.
+const PAGE: usize = 2000;
 
 /// How many times one round passes changes back and forth before leaving the rest to the next
 /// round: an edit made on the PC while a round runs is sent on in the same round.
@@ -221,6 +227,13 @@ impl Remote {
         if !welcome.ok {
             return Err(anyhow!("{}", denial(welcome.error.as_deref())));
         }
+        // A door names its host only once the device is in; an older one named it in the greeting.
+        let mut greeting = greeting;
+        for (theirs, ours) in [(&welcome.host, &mut greeting.host), (&welcome.host_id, &mut greeting.host_id), (&welcome.version, &mut greeting.version)] {
+            if let Some(v) = theirs.as_ref().filter(|v| !v.is_empty()) {
+                ours.clone_from(v);
+            }
+        }
         Ok((Remote { ws, greeting }, welcome))
     }
 
@@ -381,41 +394,76 @@ pub struct Report {
     pub gym: bool,
 }
 
-/// `money.sync` with the changes split into batches, in dependency order across them. Answers
-/// with the last batch's cursor and generation and every change the side sent back.
+/// `money.sync` with the changes split into batches, in dependency order across them, and the
+/// answer asked for in pages until the side has no more. Answers with the last request's cursor
+/// and generation and every change the side sent back, the newest of each row once. A side from
+/// before pages (it refuses `limit`) is asked whole, as before.
 async fn send(bus: &mut impl Bus, device: &str, replace: bool, side: &Side, mut changes: Vec<Change>) -> std::result::Result<SyncOut, Fail> {
     changes.sort_by_key(|c| relay_money::sync::order(&c.table));
+    // What goes out, by row: a page asked for after a batch was applied hands that batch back.
+    let sent: HashMap<(&str, &str), i64> = changes.iter().map(|c| ((c.table.as_str(), c.uid.as_str()), c.updated_at)).collect();
     let mut since = side.since;
     let mut generation = side.generation.clone();
     let mut first = true;
+    let mut paged = true;
     let mut answers: Vec<Change> = Vec::new();
+    let mut seen: HashMap<(String, String), usize> = HashMap::new();
     let (mut applied, mut skipped) = (0, 0);
-    let mut chunks: Vec<Vec<Change>> = changes.chunks(BATCH).map(<[Change]>::to_vec).collect();
-    if chunks.is_empty() {
-        chunks.push(Vec::new());
-    }
-    let mut last = None;
-    for chunk in chunks {
-        let payload = json!({
+    let mut chunks = changes.chunks(BATCH).peekable();
+    let mut out = loop {
+        let chunk = chunks.next().unwrap_or(&[]);
+        let mut payload = json!({
             "device": device,
             "replace": replace && first,
             "since": since,
             "generation": if replace && first { None } else { generation.clone() },
             "changes": chunk,
         });
-        let out: SyncOut = serde_json::from_value(bus.call("money.sync", payload).await?).map_err(anyhow::Error::from)?;
+        if paged {
+            payload["limit"] = json!(PAGE);
+        }
+        let answer = match bus.call("money.sync", payload.clone()).await {
+            // An engine from before pages refuses the field it does not know, before applying anything.
+            Err(e) if paged && e.is("bus.schema") => {
+                paged = false;
+                if let Some(p) = payload.as_object_mut() {
+                    p.remove("limit");
+                }
+                bus.call("money.sync", payload).await?
+            }
+            answer => answer?,
+        };
+        let out: SyncOut = serde_json::from_value(answer).map_err(anyhow::Error::from)?;
+        if out.more && out.cursor <= since {
+            return Err(anyhow!("the other side's money.sync said more without moving its cursor").into());
+        }
         since = out.cursor;
         generation = Some(out.generation.clone());
         applied += out.applied;
         skipped += out.skipped;
-        answers.extend(out.changes.iter().cloned());
+        for c in &out.changes {
+            if sent.get(&(c.table.as_str(), c.uid.as_str())) == Some(&c.updated_at) {
+                continue;
+            }
+            // A row changed between pages comes again: the newest stands.
+            match seen.get(&(c.table.clone(), c.uid.clone())) {
+                Some(&i) if answers[i].updated_at >= c.updated_at => {}
+                Some(&i) => answers[i] = c.clone(),
+                None => {
+                    seen.insert((c.table.clone(), c.uid.clone()), answers.len());
+                    answers.push(c.clone());
+                }
+            }
+        }
         first = false;
-        last = Some(out);
-    }
-    let mut out = last.expect("one batch at least");
+        if !out.more && chunks.peek().is_none() {
+            break out;
+        }
+    };
     out.changes = answers;
     out.applied = applied;
     out.skipped = skipped;
+    out.more = false;
     Ok(out)
 }
 
@@ -666,12 +714,13 @@ mod tests {
         async fn call(&mut self, op: &str, p: Value) -> std::result::Result<Value, Fail> {
             assert_eq!(op, "money.sync");
             let changes: Vec<Change> = serde_json::from_value(p["changes"].clone()).unwrap();
-            let out = self.0.sync(
+            let out = self.0.sync_page(
                 p["device"].as_str().unwrap(),
                 p["replace"].as_bool().unwrap_or(false),
                 p["since"].as_i64().unwrap(),
                 p["generation"].as_str(),
                 &changes,
+                p["limit"].as_u64().map(|l| l as usize),
                 "2026-10-11T12:00:00Z",
             );
             match out {
@@ -714,6 +763,89 @@ mod tests {
             self.left -= 1;
             self.bus.call(op, p).await
         }
+    }
+
+    /// A side that keeps count: requests, rows sent to it, the longest answer, and pages that
+    /// said more. `old` is an engine from before pages, which refuses `limit` as it refuses any
+    /// field it does not know.
+    struct Watched<'a> {
+        bus: &'a mut Ledgered,
+        old: bool,
+        calls: usize,
+        rows_in: usize,
+        longest: usize,
+        more: usize,
+    }
+
+    impl<'a> Watched<'a> {
+        fn new(bus: &'a mut Ledgered, old: bool) -> Watched<'a> {
+            Watched { bus, old, calls: 0, rows_in: 0, longest: 0, more: 0 }
+        }
+    }
+
+    impl Bus for Watched<'_> {
+        async fn call(&mut self, op: &str, p: Value) -> std::result::Result<Value, Fail> {
+            if self.old && p.get("limit").is_some() {
+                return Err(Fail::Refused { code: "bus.schema".into(), message: "unknown field `limit`".into() });
+            }
+            self.calls += 1;
+            self.rows_in += p["changes"].as_array().map_or(0, Vec::len);
+            let out = self.bus.call(op, p).await?;
+            self.longest = self.longest.max(out["changes"].as_array().map_or(0, Vec::len));
+            self.more += usize::from(out["more"].as_bool().unwrap_or(false));
+            Ok(out)
+        }
+    }
+
+    fn accounts(l: &mut Ledger, prefix: &str, n: usize) {
+        for i in 0..n {
+            l.account_add(&format!("{prefix}{i:04}"), AccountType::Cash, 0, None, "").unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_ledger_longer_than_a_page_is_taken_in_pages_and_each_row_crosses_once() {
+        let (mut pc, mut cloud) = (Ledgered(Ledger::open_in_memory().unwrap()), Ledgered(Ledger::open_in_memory().unwrap()));
+        accounts(&mut pc.0, "P", PAGE + 300);
+        accounts(&mut cloud.0, "C", PAGE + 300);
+        let mut link = link();
+        let (mut p, mut c) = (Watched::new(&mut pc, false), Watched::new(&mut cloud, false));
+        let r = merge_money(&mut p, &mut c, &mut link, "PC (desk)", "Cloud (render)", &mut |_| Ok(())).await.unwrap();
+        // Each side's accounts, and the categories a new ledger starts with.
+        assert!(r.to_pc > PAGE + 300 && r.to_cloud == r.to_pc, "{r:?}");
+        assert!(p.longest <= PAGE && c.longest <= PAGE, "{} {}", p.longest, c.longest);
+        assert!(p.more > 0 && c.more > 0);
+        // The cloud's later pages hand back the batch this PC sent first; none of it comes home.
+        assert_eq!(p.rows_in, r.to_pc, "every row sent here was news here");
+        assert_eq!(names(&pc.0).len(), 2 * (PAGE + 300));
+        assert_eq!(names(&cloud.0), names(&pc.0));
+        let quiet = merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!((quiet.to_pc, quiet.to_cloud, quiet.replaced_by), (0, 0, None), "{quiet:?}");
+
+        // Tally's first sync replaces the cloud's ledger: it comes here whole, in pages.
+        let mut phone = Ledger::open_in_memory().unwrap();
+        accounts(&mut phone, "T", PAGE + 300);
+        let everything = phone.sync("probe", false, 0, None, &[], "t").unwrap().changes;
+        cloud.0.sync("Pixel", true, 0, None, &everything, "t").unwrap();
+        let mut c = Watched::new(&mut cloud, false);
+        let r = merge_money(&mut pc, &mut c, &mut link, "PC (desk)", "Cloud (render)", &mut |_| Ok(())).await.unwrap();
+        assert_eq!(r.replaced_by, Some("cloud"));
+        assert!(c.longest <= PAGE && c.more > 0);
+        assert_eq!(names(&pc.0).len(), PAGE + 300);
+        assert_eq!(names(&pc.0), names(&cloud.0));
+    }
+
+    #[tokio::test]
+    async fn a_cloud_engine_from_before_pages_is_asked_whole() {
+        let (mut pc, mut cloud) = (Ledgered(Ledger::open_in_memory().unwrap()), Ledgered(Ledger::open_in_memory().unwrap()));
+        accounts(&mut pc.0, "P", 10);
+        accounts(&mut cloud.0, "C", PAGE + 10);
+        let mut link = link();
+        let mut c = Watched::new(&mut cloud, true);
+        let r = merge_money(&mut pc, &mut c, &mut link, "PC (desk)", "Cloud (render)", &mut |_| Ok(())).await.unwrap();
+        assert_eq!(r.to_pc - r.to_cloud, PAGE, "{r:?}");
+        assert!(c.longest > PAGE, "one answer, as before");
+        assert_eq!(names(&cloud.0), names(&pc.0));
     }
 
     #[tokio::test]
