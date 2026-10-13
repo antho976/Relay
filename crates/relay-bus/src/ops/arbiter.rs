@@ -9,7 +9,7 @@
 //! changes a limit, restarts after a halt or answers a proposal is the person's alone. An agent's
 //! order goes through the same risk gate as a rule's, and outside "AI trades within limits" it
 //! becomes a proposal instead of an order.
-use crate::registry::{Actors, OpMeta, Scope};
+use crate::registry::{Actors, Audit, OpMeta, Scope};
 use crate::{op, Empty};
 use relay_arbiter::backtest::Report;
 use relay_arbiter::gate::Refusal;
@@ -80,7 +80,10 @@ payload!(#[schemars(rename = "ArbiterKeySetIn")] KeySetIn {
     pub private_key: String,
 });
 op!(KeySet, "arbiter.key.set", KeySetIn => Connection,
-    OpMeta::mutation(Scope::Global, 12, "Check a Coinbase key with Coinbase and keep it in the system keyring. A key that can transfer money out is refused").actors(Actors::UserOnly).emits(&["arbiter.changed"]));
+    OpMeta::mutation(Scope::Global, 12, "Check a Coinbase key with Coinbase and keep it in the system keyring. A key that can transfer money out is refused")
+        // The payload is the private key itself: an audit row would keep it in the store and
+        // every backup of it, outside the keyring ARBITER.md promises it stays in.
+        .audit(Audit::Never).actors(Actors::UserOnly).emits(&["arbiter.changed"]));
 op!(KeyRemove, "arbiter.key.remove", Empty => Connection,
     OpMeta::mutation(Scope::Global, 12, "Forget the Coinbase key; live strategies stop").actors(Actors::UserOnly).emits(&["arbiter.changed"]));
 op!(Refresh, "arbiter.refresh", Empty => Connection,

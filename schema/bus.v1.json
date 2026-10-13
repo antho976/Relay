@@ -5432,7 +5432,7 @@
     "arbiter.key.set": {
       "summary": "Check a Coinbase key with Coinbase and keep it in the system keyring. A key that can transfer money out is refused",
       "kind": "mutation",
-      "audit": "always",
+      "audit": "never",
       "undo": "none",
       "scope": "global",
       "actors": "user_only",

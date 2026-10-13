@@ -413,6 +413,7 @@ impl Book {
         if old.product != d.product && self.position(id, old.venue)?.base > Decimal::ZERO {
             return invalid("It still holds what it bought: sell it before changing the product");
         }
+        Book::check_limits_for(&old, &d.limits)?;
         let hash = rules::hash(&d.rule);
         let changed_rule = hash != old.rule_hash || old.product != d.product || old.granularity != d.granularity;
         self.conn.prepare_cached(
@@ -435,12 +436,22 @@ impl Book {
         let mut d = s.draft();
         d.limits = limits.clone();
         Book::check_draft(&d)?;
-        if s.mode == Mode::Agent && !limits.bounded() {
-            return invalid("While the AI trades this strategy, it needs a limit per order, per holding and per day");
-        }
+        Book::check_limits_for(&s, limits)?;
         self.conn.prepare_cached("UPDATE strategies SET limits = ?2, updated_at = ?3 WHERE id = ?1")?
             .execute(params![id, serde_json::to_string(limits).unwrap_or_default(), now()])?;
         self.log(Some(id), "setting", &format!("Limits: {}.", limits_text(limits)), None)?;
+        Ok(())
+    }
+
+    /// What `set_mode` and `set_venue` asked of a strategy's limits still holds whichever way
+    /// the limits change afterwards: an edit, or an agent's approved change, cannot drop them.
+    fn check_limits_for(s: &StrategyRec, limits: &Limits) -> Result<()> {
+        if s.mode == Mode::Agent && !limits.bounded() {
+            return invalid("While the AI trades this strategy, it needs a limit per order, per holding and per day");
+        }
+        if s.venue == Venue::Live && s.mode != Mode::Ask && limits.max_order.is_none() {
+            return invalid("While it trades real money on its own, it needs a limit per order (or let every order ask)");
+        }
         Ok(())
     }
 
@@ -448,6 +459,9 @@ impl Book {
         let s = self.strategy(id)?;
         if mode == Mode::Agent && !s.limits.bounded() {
             return invalid("Before the AI may trade this strategy, give it a limit per order, per holding and per day");
+        }
+        if s.venue == Venue::Live && mode != Mode::Ask && s.limits.max_order.is_none() {
+            return invalid("Before it trades real money on its own, give it a limit per order (or let every order ask)");
         }
         self.conn.prepare_cached("UPDATE strategies SET mode = ?2, updated_at = ?3 WHERE id = ?1")?.execute(params![id, mode.as_str(), now()])?;
         self.log(Some(id), "setting", &format!("Who decides: {}.", mode.label()), None)?;
@@ -641,6 +655,14 @@ impl Book {
             return Ok(None);
         }
         let o = self.order(order_id)?;
+        // An order placed in quote reports its fills in quote, and size over price runs to 28
+        // places. The account moves in the product's base increment, so the fill is booked in it:
+        // otherwise a sell, floored to that increment, leaves dust that reads as still holding.
+        let mut f = f.clone();
+        if let Some(inc) = self.cached_product(&o.product)?.map(|p| p.base_increment).filter(|i| *i > Decimal::ZERO) {
+            f.size = (f.size / inc).round() * inc;
+        }
+        let f = &f;
         let pnl = match (o.side, o.strategy_id) {
             (Side::Sell, Some(sid)) => {
                 let p = self.position(sid, venue)?;
@@ -739,6 +761,15 @@ impl Book {
         Ok(n as u32)
     }
 
+    /// A strategy's sells on a venue that failed since `since`: how many, and when the last one
+    /// did. An exit that failed is tried again under a new cause, not answered by the dead order.
+    pub fn failed_sells_since(&self, strategy: i64, venue: Venue, since: i64) -> Result<(u32, Option<i64>)> {
+        let (n, last): (i64, Option<i64>) = self.conn.prepare_cached(
+            "SELECT COUNT(*), MAX(updated_at) FROM orders WHERE strategy_id = ?1 AND venue = ?2 AND side = 'sell' AND status = 'failed' AND created_at >= ?3",
+        )?.query_row(params![strategy, venue.as_str(), since], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok((n as u32, last))
+    }
+
     /// Fees paid on a venue since `since`.
     pub fn fees_since(&self, venue: Venue, since: i64) -> Result<Decimal> {
         let mut st = self.conn.prepare_cached("SELECT fee FROM fills WHERE venue = ?1 AND at >= ?2")?;
@@ -821,8 +852,10 @@ impl Book {
     }
 
     /// The pending order proposal for a cause, so the runner asks once per decision.
+    /// The proposal a cause already made, unless it expired or failed: then the cause may ask
+    /// again. One the person dismissed stays the answer.
     pub fn proposal_for_cause(&self, cause: &str) -> Result<Option<ProposalView>> {
-        Ok(self.proposals_where("p.cause = ?1", params![cause], 1)?.pop().map(|(p, _)| p))
+        Ok(self.proposals_where("p.cause = ?1 AND p.status NOT IN ('expired', 'failed')", params![cause], 1)?.pop().map(|(p, _)| p))
     }
 
     fn proposals_where(&self, cond: &str, p: &[&dyn rusqlite::ToSql], limit: u32) -> Result<Vec<(ProposalView, Option<String>)>> {
@@ -1129,6 +1162,52 @@ mod tests {
         assert_eq!(p.realized, Decimal::new(44, 1));
         assert_eq!((p.sells, p.won), (1, 1));
         assert_eq!(book.paper_cash_now().unwrap(), Decimal::new(1000, 0) + Decimal::new(44, 1));
+    }
+
+    #[test]
+    fn a_fill_reported_in_quote_is_booked_in_the_base_increment() {
+        let mut book = Book::open_in_memory().unwrap();
+        let product = Product {
+            id: "ETH-CAD".into(), base: "ETH".into(), quote: "CAD".into(), base_increment: Decimal::new(1, 8),
+            quote_increment: Decimal::new(1, 2), price_increment: Decimal::new(1, 2), base_min_size: Decimal::new(1, 8),
+            quote_min_size: Decimal::ONE, price: None, change_24h: None, tradable: true, limit_only: false,
+        };
+        book.store_products(&[product]).unwrap();
+        let sid = book.create_strategy(&draft()).unwrap();
+        let buy = order(&book, sid, Side::Buy, "a");
+        // 50 spent at 3 per coin: 16.666… to 28 places, which no sell floored to 1e-8 empties.
+        let size = Decimal::new(50, 0) / Decimal::new(3, 0);
+        book.add_fill(buy, Venue::Paper, &fill("t1", 3, size, Decimal::ZERO, now())).unwrap();
+        assert_eq!(book.position(sid, Venue::Paper).unwrap().base, Decimal::new(1666666667, 8));
+        let sell = order(&book, sid, Side::Sell, "b");
+        book.add_fill(sell, Venue::Paper, &fill("t2", 3, Decimal::new(1666666667, 8), Decimal::ZERO, now())).unwrap();
+        assert!(book.position(sid, Venue::Paper).unwrap().base.is_zero());
+    }
+
+    #[test]
+    fn a_cause_asks_again_once_its_card_expired_but_not_once_dismissed() {
+        let book = Book::open_in_memory().unwrap();
+        let sid = book.create_strategy(&draft()).unwrap();
+        let ask = |cause: &str| book.add_proposal(&NewProposal { kind: "order".into(), strategy_id: Some(sid), title: "Sell".into(), why: "stop".into(), cause: Some(cause.into()), expires_at: Some(now() - 1), ..Default::default() }).unwrap();
+        ask("stop");
+        book.expire_proposals(now()).unwrap();
+        assert!(book.proposal_for_cause("stop").unwrap().is_none());
+        let id = ask("again");
+        book.resolve_proposal(id, "dismissed", None).unwrap();
+        assert!(book.proposal_for_cause("again").unwrap().is_some());
+    }
+
+    #[test]
+    fn a_failed_sell_is_counted_from_when_the_holding_opened() {
+        let book = Book::open_in_memory().unwrap();
+        let sid = book.create_strategy(&draft()).unwrap();
+        let sell = order(&book, sid, Side::Sell, "s1");
+        assert_eq!(book.failed_sells_since(sid, Venue::Paper, 0).unwrap(), (0, None));
+        book.fail_order(sell, "refused").unwrap();
+        let (n, last) = book.failed_sells_since(sid, Venue::Paper, 0).unwrap();
+        assert_eq!(n, 1);
+        assert!(last.is_some());
+        assert_eq!(book.failed_sells_since(sid, Venue::Paper, now() + 10).unwrap().0, 0);
     }
 
     #[test]

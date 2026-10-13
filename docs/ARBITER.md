@@ -67,6 +67,8 @@ the exchange. It refuses rather than shrinks (a limit that resizes an order is n
 - a limit price within a band of the best bid/ask (default 2%);
 - the most per order, per product position, and total exposure;
 - the most orders per hour;
+- one open order per strategy: a second beside one still resting is refused, since the caps weigh
+  only what has filled;
 - a cooldown after a losing trade;
 - the **daily loss limit**, per strategy and Arbiter-wide: it halts the strategy, or everything,
   until Antho restarts it. (A drawdown halt is not built yet.)
@@ -188,7 +190,13 @@ Behind the `engine` feature:
   proposed.
 - **Live orders** are previewed, then placed. When Coinbase does not answer, the order stays
   pending; the runner asks again with the same id for a minute, then marks it unconfirmed and says
-  to check the Coinbase app.
+  to check the Coinbase app. A cancel reads the order and its fills back from Coinbase, so a fill
+  that raced the kill switch is still booked.
+- **A proposal** is placed on the venue it was asked for, or not at all: a card asked on paper
+  fails once the strategy has gone live.
+- **An exit that failed** (refused, unconfirmed, or filled in part) is tried again a minute later
+  under a new cause, which names the holding as it is then; an expired card asks again, a dismissed
+  one does not. The key's payload is never written to the audit log.
 - **The runner** is a thread, as `purge` is. Every 20 seconds, while anything runs or waits, it:
   1. reconciles open orders;
   2. expires proposals;

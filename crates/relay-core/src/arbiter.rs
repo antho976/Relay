@@ -34,6 +34,8 @@ impl<T: Market + Account> Exchange for T {}
 
 /// How often the runner looks, and how long a quote is reused.
 const PASS: Duration = Duration::from_secs(20);
+/// How long a failed exit waits before it is tried again, in seconds.
+const EXIT_RETRY: i64 = 60;
 const QUOTE_TTL: i64 = 10;
 /// The product list is re-read hourly; sizes and increments rarely change.
 const PRODUCTS_TTL: i64 = 3600;
@@ -475,6 +477,17 @@ pub fn execute(engine: &Engine, strategy_id: i64, intent: &Intent, why: &str) ->
             return Ok(Outcome::Refused(r));
         }
     }
+    // The gate weighs holdings from fills only, so an order still resting is not in them: a
+    // second order beside it could pass every size cap twice, or sell what the first already
+    // sells. One open order per strategy, as the runner already keeps; the same order asked
+    // again still comes back as itself below.
+    let cid = gate::client_order_id(&intent.cause);
+    let open = with_book(engine, |b| b.open_orders(Some(s.id)))?;
+    if !open.is_empty() && open.iter().all(|o| o.client_order_id != cid) {
+        let r = Refusal { code: "arbiter.order_open".into(), message: "This strategy has an order open: wait for it, or halt the strategy to cancel it.".into() };
+        with_book(engine, |b| b.log(Some(s.id), "refused", &format!("{why} — refused: {}", r.message), None))?;
+        return Ok(Outcome::Refused(r));
+    }
     let req = match gate_only(engine, &s, intent)? {
         Ok(r) => r,
         Err(r) => {
@@ -595,14 +608,7 @@ pub fn reconcile_order(engine: &Engine, id: i64) -> Result<(), BusError> {
                 return Ok(());
             };
             let order = client.order(&eid).map_err(ex)?;
-            if order.filled_size > Decimal::ZERO {
-                for f in client.fills(&eid).map_err(ex)? {
-                    let added = with_book(engine, |b| b.add_fill(id, Venue::Live, &f))?;
-                    if added.is_some() {
-                        with_book(engine, |b| b.log(o.strategy_id, "fill", &format!("{} {} {} filled at {}.", if o.side == Side::Buy { "Bought" } else { "Sold" }, f.size.normalize(), o.product, f.price.round_dp(2).normalize()), Some(id)).map(|_| ()))?;
-                    }
-                }
-            }
+            book_live_fills(engine, client.as_ref(), &o, &eid, &order)?;
             with_book(engine, |b| b.update_order(id, &order))?;
             if !order.status.is_done() {
                 if let Some(sid) = o.strategy_id {
@@ -626,10 +632,36 @@ fn stale_limit(engine: &Engine, sid: i64, o: &OrderView) -> bool {
     book::now() - created > bar
 }
 
+/// Books a live order's fills the exchange reports and the book does not have yet.
+fn book_live_fills(engine: &Engine, client: &dyn Exchange, o: &OrderView, eid: &str, order: &ExchangeOrder) -> Result<(), BusError> {
+    if order.filled_size <= Decimal::ZERO {
+        return Ok(());
+    }
+    for f in client.fills(eid).map_err(ex)? {
+        let added = with_book(engine, |b| b.add_fill(o.id, Venue::Live, &f))?;
+        if added.is_some() {
+            with_book(engine, |b| b.log(o.strategy_id, "fill", &format!("{} {} {} filled at {}.", if o.side == Side::Buy { "Bought" } else { "Sold" }, f.size.normalize(), o.product, f.price.round_dp(2).normalize()), Some(o.id)).map(|_| ()))?;
+        }
+    }
+    Ok(())
+}
+
 fn cancel_one(engine: &Engine, o: &OrderView, why: &str) -> Result<(), BusError> {
     if o.venue == Venue::Live {
         if let (Some(client), Some(eid)) = (account(engine), o.exchange_order_id.as_ref()) {
             client.cancel(std::slice::from_ref(eid)).map_err(ex)?;
+            // A cancel races the order's fills: it may have filled, wholly or in part, since the
+            // last pass, and the exchange answers a filled order's cancel as done. Book what the
+            // exchange says it did; a cancel still queued stays open for the next pass.
+            let mut order = client.order(eid).map_err(ex)?;
+            book_live_fills(engine, client.as_ref(), o, eid, &order)?;
+            if order.status == OrderStatus::Cancelled && order.reason.is_none() {
+                order.reason = Some(why.to_string());
+            }
+            return with_book(engine, |b| {
+                b.update_order(o.id, &order)?;
+                b.log(o.strategy_id, "cancel", &format!("Cancelled an order: {why}."), Some(o.id)).map(|_| ())
+            });
         }
     }
     let x = ExchangeOrder {
@@ -705,6 +737,14 @@ pub fn resolve(engine: &Engine, id: i64, approve: bool, draft_hash: Option<&str>
     match p.kind.as_str() {
         "order" => {
             let sid = p.strategy_id.ok_or_else(|| BusError::invalid("arbiter.invalid", "The proposal names no strategy"))?;
+            // The card said which venue it was for; `execute` uses the strategy's venue now. A
+            // card asked on paper must never become a real order because the strategy went live.
+            let venue = with_book(engine, |b| b.strategy(sid))?.venue;
+            if p.venue.is_some_and(|v| v != venue) {
+                let text = format!("The strategy has switched to {} since this was asked; nothing was placed.", venue.as_str());
+                with_book(engine, |b| b.resolve_proposal(id, "failed", Some(&text)))?;
+                return Ok(with_book(engine, |b| b.proposal(id))?.0);
+            }
             let intent = Intent {
                 product: p.product.clone().unwrap_or_default(),
                 side: p.side.unwrap_or(Side::Buy),
@@ -873,7 +913,16 @@ fn decide(engine: &Engine, s: &StrategyRec, now: i64) -> Result<(), BusError> {
             with_book(engine, |b| b.set_peak(s.id, Some(peak)))?;
         }
         if let Some(reason) = rules::price_exit(&s.rule.exit, pos.avg_price().unwrap_or(0.0), peak, q.bid) {
-            let intent = Intent { product: s.product.clone(), side: Side::Sell, quote: None, base: None, limit: false, source: Source::Rule, cause: format!("s{}:v{}:exit:{}", s.id, s.version, pos.opened_at.unwrap_or(0)) };
+            // The cause names the holding as it is now: a sell that failed, or filled in part,
+            // leaves a new cause behind it, so the stop is tried again instead of being answered
+            // by the order that did not get out. A failure waits a minute before the next try.
+            let opened = pos.opened_at.unwrap_or(0);
+            let (failed, last) = with_book(engine, |b| b.failed_sells_since(s.id, s.venue, opened))?;
+            if last.is_some_and(|t| now - t < EXIT_RETRY) {
+                return Ok(());
+            }
+            let cause = format!("s{}:v{}:exit:{opened}:{}:{failed}", s.id, s.version, pos.base.normalize());
+            let intent = Intent { product: s.product.clone(), side: Side::Sell, quote: None, base: None, limit: false, source: Source::Rule, cause };
             route(engine, s.id, &intent, &format!("{} at {:.2}", reason.as_str(), q.bid), None)?;
             return Ok(());
         }
