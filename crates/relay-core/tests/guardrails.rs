@@ -977,3 +977,53 @@ async fn an_approval_that_lands_before_the_wait_still_wakes_it_and_explain_sees_
         "session": name, "kind": "write", "path": format!("{sdk}/licenses/x"), "new_text": "x\n",
     })).ok);
 }
+
+/// The default rules' gaps: every destructive remote push is the force rule, and the CLI's
+/// pairing and cloud-link commands, which hand out phone tokens and the room secret, are the
+/// user's to run. Ordinary pushes and the CLI's other commands stay an agent's.
+#[test]
+fn destructive_pushes_and_pairing_commands_are_refused_to_an_agent() {
+    let fixture = Fixture::new();
+    let engine = &fixture.engine;
+    let session = fixture.session("builder", "claude");
+    let name = session["name"].as_str().unwrap();
+    let agent = Actor::agent(name);
+    let check = |command: &str| ok(engine, agent.clone(), "guardrail.check",
+        json!({"project_id": 1, "kind": "exec", "command": command}));
+    for command in [
+        "git push --mirror origin", "git push origin :main", "git push origin :refs/heads/main",
+        "git push --delete origin main", "git push -d origin main", "git push origin -d main",
+        "git push --force-with-lease origin main", "git push --force-with-lease=main:abc123 origin main",
+        "git push --force-if-includes --force-with-lease origin main", "git push -f", "git push --prune origin",
+        "git -C ../app push --mirror origin",
+    ] {
+        let verdict = check(command);
+        assert_eq!(verdict["verdict"], "refuse", "{command}: {verdict}");
+        assert_eq!(verdict["error"]["code"], "guardrail.command", "{command}: {verdict}");
+    }
+    for command in [
+        "git push", "git push -u origin relay/x", "git push origin relay/x", "git push --set-upstream origin HEAD",
+        "git push origin :", "git push --tags origin", "git push -o ci.skip origin relay/x", "git branch -d old",
+    ] {
+        assert_eq!(check(command)["verdict"], "allow", "{command} is an ordinary push");
+    }
+    for command in [
+        "relay remote approve", "relay remote pair --no-confirm", "relay remote decline", "relay remote revoke abc",
+        "relay remote via wss://example.test", "relay remote serve --pair --no-confirm", "relay --instance dev remote approve",
+        "relay cloud connect my-bot.onrender.com", "relay cloud pair 'relay://x'", "relay cloud off",
+        "\"$RELAY_BIN\" remote approve", "sh -c 'relay remote revoke abc'",
+    ] {
+        let verdict = check(command);
+        assert_eq!(verdict["verdict"], "refuse", "{command}: {verdict}");
+        assert_eq!(verdict["error"]["code"], "guardrail.self_approval", "{command}: {verdict}");
+    }
+    for command in [
+        "relay remote devices", "relay cloud status", "relay cloud sync", "relay remote serve",
+        "rg 'remote approve' docs", "relay q task.list",
+    ] {
+        assert_eq!(check(command)["verdict"], "allow", "{command} is not the user's alone");
+    }
+    // The person runs them as they like.
+    let user = ok(engine, Actor::User, "guardrail.check", json!({"project_id": 1, "kind": "exec", "command": "relay remote approve"}));
+    assert_eq!(user["verdict"], "allow");
+}

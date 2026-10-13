@@ -173,11 +173,69 @@ fn done_judges_shape_gated_files_as_the_branch_leaves_them() {
     f.done().into_result().expect("the branch leaves it valid");
 }
 
+/// Work git cannot measure is not taken as within limits: an agent can break the measurement
+/// on purpose, so the done is refused until it can be taken, and blocked stays sayable.
 #[test]
-fn done_still_allows_work_git_cannot_measure() {
+fn done_refuses_work_git_cannot_measure() {
     let f = Fixture::new();
     f.commit(&[("secret/key", Some("x\n"))], "touch the key");
-    // A base that no longer exists: nothing to measure against, so nothing is refused.
+    // A base that no longer exists: nothing to measure against.
     f.engine.store.lock().execute("UPDATE projects SET base_branch='gone' WHERE id=1", []).unwrap();
-    f.done().into_result().expect("a measurement Relay cannot take never blocks a done");
+    let refused = f.done().error.expect("a branch Relay cannot measure is not handed to review");
+    assert_eq!(refused.code, "guardrail.unmeasured", "{}", refused.message);
+    assert!(refused.hint.unwrap().contains("blocked"));
+    assert_eq!(f.column(), "active");
+    ok_as(&f.engine, f.agent(), "session.done",
+        json!({"session": f.name, "status": "blocked", "blockers": ["the base branch is gone"]}));
+}
+
+#[test]
+fn a_config_git_rejects_or_an_orphan_branch_does_not_wave_the_done_through() {
+    let f = Fixture::new();
+    f.commit(&[("secret/key", Some("x\n"))], "touch the key");
+    git(&f.worktree, &["config", "core.quotePath", "notabool"]);
+    assert_eq!(f.done().error.expect("a broken config refuses").code, "guardrail.unmeasured");
+    git(&f.worktree, &["config", "--unset", "core.quotePath"]);
+    assert_eq!(f.done().error.expect("measured again").code, "guardrail.protected_path");
+
+    let g = Fixture::new();
+    git(&g.worktree, &["checkout", "-q", "--orphan", "fresh"]);
+    g.commit(&[("secret/key", Some("x\n"))], "no history in common with main");
+    assert_eq!(g.done().error.expect("an orphan branch refuses").code, "guardrail.unmeasured");
+    assert_eq!(g.column(), "active");
+}
+
+/// Settings the checkout may hold that change what git prints do not change the measurement.
+#[test]
+fn the_measurement_pins_the_config_it_reads_by() {
+    let f = Fixture::new();
+    f.commit(&[("secret/kéy", Some("x\n"))], "a key with an accent");
+    git(&f.worktree, &["config", "core.quotePath", "false"]);
+    git(&f.worktree, &["config", "diff.noprefix", "true"]);
+    git(&f.worktree, &["config", "color.ui", "always"]);
+    let refused = f.done().error.expect("still seen");
+    assert_eq!(refused.code, "guardrail.protected_path");
+    assert_eq!(refused.details.unwrap()["path"], "secret/kéy");
+}
+
+/// An agent hands its task to review only through session.done, which judges the branch: a
+/// task.move straight to in_review skipped the check, the other builders and the reviewer.
+#[test]
+fn an_agent_cannot_move_its_task_to_review_past_the_done() {
+    let f = Fixture::new();
+    f.commit(&[("secret/key", Some("x\n"))], "touch the key");
+    let moved = call_as(&f.engine, f.agent(), "task.move", json!({"task_id": f.task, "column": "in_review"}))
+        .error.expect("an agent's move is refused");
+    // The default builder allowlist no longer lists it; a config that still does meets the handler.
+    assert_eq!(moved.code, "actor.allowlist", "{}", moved.message);
+    ok(&f.engine, "guardrail.config.set", json!({"project_id": 1, "patch": {"roles": {"builder": ["task.move", "session.done"]}}}));
+    let moved = call_as(&f.engine, f.agent(), "task.move", json!({"task_id": f.task, "column": "in_review"}))
+        .error.expect("still refused with the op allowed");
+    assert_eq!(moved.code, "task.column_transition");
+    assert!(moved.hint.unwrap().contains("session.done"));
+    assert_eq!(f.column(), "active");
+    assert_eq!(f.done().error.unwrap().code, "guardrail.protected_path");
+    // The person still moves it as they like.
+    ok(&f.engine, "task.move", json!({"task_id": f.task, "column": "in_review"}));
+    assert_eq!(f.column(), "in_review");
 }

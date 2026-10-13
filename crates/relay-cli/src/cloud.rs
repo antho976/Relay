@@ -71,7 +71,25 @@ async fn ask_and_wait(api: &Server, name: &str) -> Result<(String, Option<String
     }
 }
 
+/// Connecting, pairing and forgetting the link are the person's: each one hands this PC's data
+/// to a cloud engine or cuts it off. An agent's shell carries `RELAY_SESSION` (providers.rs);
+/// its exec gate refuses these too, and this is the same rule for a command it reaches some
+/// other way. A seatbelt, not a boundary (BUS.md §9.5).
+fn refuse_in_agent_session(cmd: &CloudCommand, session: Option<&str>) -> Result<()> {
+    let what = match cmd {
+        CloudCommand::Connect { .. } => "connect",
+        CloudCommand::Pair { .. } => "pair",
+        CloudCommand::Off => "off",
+        CloudCommand::Sync | CloudCommand::Status => return Ok(()),
+    };
+    match session.filter(|s| !s.is_empty()) {
+        Some(session) => Err(anyhow!("`relay cloud {what}` is the user's to run, not an agent's (this shell is session {session})")),
+        None => Ok(()),
+    }
+}
+
 pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
+    refuse_in_agent_session(&cmd, std::env::var("RELAY_SESSION").ok().as_deref())?;
     let path = Link::path_for(instance);
     match cmd {
         CloudCommand::Connect { server } => {
@@ -158,6 +176,25 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
                 Err(e) => return Err(e.into()),
             }
             Ok(0)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{refuse_in_agent_session, CloudCommand};
+
+    #[test]
+    fn an_agent_session_cannot_connect_pair_or_forget_the_link() {
+        let session = Some("steady-badger");
+        for cmd in [CloudCommand::Connect { server: "x.test".into() }, CloudCommand::Pair { link: "x".into() }, CloudCommand::Off] {
+            let refused = refuse_in_agent_session(&cmd, session).unwrap_err().to_string();
+            assert!(refused.contains("the user's to run") && refused.contains("steady-badger"), "{refused}");
+            refuse_in_agent_session(&cmd, None).expect("the person runs it");
+            refuse_in_agent_session(&cmd, Some("")).expect("an empty RELAY_SESSION is no session");
+        }
+        for cmd in [CloudCommand::Sync, CloudCommand::Status] {
+            refuse_in_agent_session(&cmd, session).expect("reading and merging are not the person's alone");
         }
     }
 }

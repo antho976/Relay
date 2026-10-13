@@ -557,9 +557,14 @@ allow-sets, straight from SPEC §3's agent action list plus reads:
 
 | role | may call |
 |---|---|
-| `builder` | all queries · `task.move` (own, `active → in_review`) · `task.link_commit` · `task.changelog.write` (own) · `task.comment` (own) · `task.update` (own; body/changelog only) · `mailbox.*` · `notes.append` · `overlap.flag/ack` · `integration.request` · `session.done/report/intent/claim/release` (self) · `device.claim/release` · `usage.report` · `guardrail.gate/check` |
+| `builder` | all queries · `task.link_commit` · `task.changelog.write` (own) · `task.comment` (own) · `task.update` (own; body/changelog only) · `mailbox.*` · `notes.append` · `overlap.flag/ack` · `integration.request` · `session.done/report/intent/claim/release` (self) · `device.claim/release` · `usage.report` · `guardrail.gate/check` |
 | `reviewer` | all queries · `mailbox.*` · `notes.append` · `overlap.flag` · `task.changelog.write` / `task.comment` on the reviewed task · `session.done/report/intent/claim/release` (self) · `device.claim/release` · `usage.report` · `guardrail.check` — **nothing** that writes files, commits, or moves the task |
 | `docs` | builder's set minus `task.link_commit`/`integration.request`, plus `notes.create/update` |
+
+No role moves a task on the board: an agent hands its task to review with `session.done`, which
+judges the branch first (§9.2), waits for the task's other builders and tells the reviewer. A
+`task.move` from an agent is `conflict` / `task.column_transition` even where a configured
+allowlist still lists it.
 
 Session options widen a role deliberately, per session, never by default:
 - `bus_writes: true` — adds `file.*` and `git.stage/unstage/commit` mutations for agents that
@@ -591,10 +596,10 @@ instead: `session.peers` with neither means "my project, minus me".
 | destructive write (> N lines removed, or > P% of a file of at least `min_file_lines`) | `gate {kind: write}`, `file.write` | `held` / `guardrail.destructive_write`; `confirm: guardrail.confirm {hold_id}`; notification. The old size is read from the file on disk, for a `new_text` and a `diff` alike; the percentage is skipped for short files, where a share measures nothing (D112) |
 | shape gates (registered validators for critical files) | `gate {kind: write}`, `file.write` | `held` / `guardrail.shape_gate` with `details.validator`, `details.reason` |
 | per-task caps (files, lines) | `gate {kind: commit}`, `git.commit`, `session.done` | `refused` / `guardrail.cap` with the numbers |
-| branch re-check | `session.done {status: completed}` from an agent on a task | every commit since base (newest 200) against protected paths, the net diff against caps and protected paths, and each shape-gated file the branch changes as it is at `HEAD`; uses the session's grants without spending them; `refused` with the policy's code (a per-commit refusal names `details.commit`). A hook can be skipped, so this is the check a skipped hook cannot dodge (RA-109). If git cannot measure, the done is allowed and logged |
+| branch re-check | `session.done {status: completed}` from an agent on a task | every commit since base (newest 200) against protected paths, the net diff against caps and protected paths, and each shape-gated file the branch changes as it is at `HEAD`; uses the session's grants without spending them; `refused` with the policy's code (a per-commit refusal names `details.commit`). A hook can be skipped, so this is the check a skipped hook cannot dodge (RA-109). git runs with the settings that change its output pinned (`-c core.quotePath=true`, `color.ui=never`, `diff.noprefix=false`, …). If git still cannot measure — no base, no history in common with it, a config value git refuses to read — the done is `refused` / `guardrail.unmeasured`, never taken as within limits; `blocked`/`partial` stay sayable, and the person moves the task |
 | hook bypass | `gate {kind: exec}` from an agent | `git commit -n`/`--no-verify` (also in flag clusters and abbreviations), any `core.hooksPath` override (`-c`, `--config-env`, `GIT_CONFIG_*`) and `git config` writes to it: `refused` / `guardrail.hook_bypass`, not grantable |
 | write roots | `gate {kind: write}` with a path outside the worktree | allowed inside `guardrails.allowed_write_roots` or the process temp directory (scratch space is not a repo-integrity concern); otherwise `refused` / `guardrail.write_root`, naming the roots that would have worked (D102) |
-| denied commands | `gate {kind: exec}` | matched against the **parsed argv** of each command in the line, never a raw substring, so quoted data naming a pattern is not a match; a `relay … guardrail.check` command is exempt so the dry run is always askable (D103) |
+| denied commands | `gate {kind: exec}` | matched against the **parsed argv** of each command in the line, never a raw substring, so quoted data naming a pattern is not a match; a `relay … guardrail.check` command is exempt so the dry run is always askable (D103). The defaults are `rm -rf`, `git reset --hard`, `git clean -fd` and `git push --force`, and a `git push … -f` pattern covers every push that can destroy what the remote holds: `--force`, `-f`, `+ref`, `:ref`, `--force-with-lease`, `--force-if-includes`, `--mirror`, `--delete`/`-d` and `--prune`. `git push` and `git push -u origin <branch>` are not |
 | user bypass | any of the above when actor is `user` | `held` / `guardrail.user_bypass` — you confirm, it proceeds, audit says you did |
 
 ### 9.3 Enforcement doors — how a policy actually binds an agent
@@ -701,8 +706,10 @@ naming the request to make:
   {project_id?, session?, state?: open|active|all}` lists them.
 - **No self-approval.** The answers are user-only on the bus. An agent's `exec` gate also refuses,
   with the ungrantable `guardrail.self_approval`, any `relay q|cmd` invocation whose op (or
-  `cmd` envelope) is a user-only guardrail/settings answer, any call claiming `--actor
-  user|test`, any envelope claiming `"actor":"user"`, and any line that sheds `RELAY_SESSION`
+  `cmd` envelope) is a user-only guardrail/settings answer, the CLI commands that pair a phone
+  or link the PC to a cloud engine (`relay remote approve|pair|decline|revoke|via`, `relay remote
+  serve --pair`, `relay cloud connect|pair|off`, which also refuse to run with `RELAY_SESSION`
+  set), any call claiming `--actor user|test`, any envelope claiming `"actor":"user"`, and any line that sheds `RELAY_SESSION`
   (`unset`, `env -u`, `env -i`, `sudo`, …) or sets `RELAY_ACTOR`. Commands inside `sh -c`,
   heredocs fed to a shell, scripts piped into one and interpreter `-c`/`-e` code are read too;
   searching for the names (`rg guardrail.confirm`) is not an invocation. Behind that, the socket
@@ -803,7 +810,7 @@ unique; nothing else is.
 | `task.get` | query | `{ task_id }` → `Task` (with attachments, commits) |
 | `task.list` | query | `{ project_id?, column?, state?, module_id?, priority?, include_deleted?, sort?: "column"\|"priority"\|"updated", type?, label?, session?, note_id?, parent_id?: Id\|null, limit? (1000, ≤2000), offset?, summary? }` → `{ tasks: Task[], next_offset? }` — a page; `summary` leaves `body` and `changelog` empty. `project_id` optional so the Dashboard can ask "in review, everywhere"; `parent_id: null` is roots only, `session` is "every card this agent was ever sent", `note_id` the tasks made from that note. Each page reads its sessions, commits, attachments, labels, relations and children in one statement per table, and every task in it equals its `task.get` (RA-412) Every task names its module (`module_name`, completed modules included), so a board labels cards without `module.list` |
 | `task.update` | mutation · always · inverse | `{ task_id, title?, body?, priority?, size?, module_id?: Id\|null, state?, changelog?, type? }` → `Task` |
-| `task.move` | mutation · always · inverse | `{ task_id, column: Column, position?: number }` → `Task` — transitions table in §11.1; `position` is the 0-based index the task ends at in the column (the others shift around it, clamped to the end), omitted means last; agents may only move their own task and only `active → in_review` |
+| `task.move` | mutation · always · inverse | `{ task_id, column: Column, position?: number }` → `Task` — transitions table in §11.1; `position` is the 0-based index the task ends at in the column (the others shift around it, clamped to the end), omitted means last; agents may not move tasks (`conflict` / `task.column_transition`): `session.done` hands theirs to review |
 | `task.delete` | mutation · always · inverse (restore) | `{ task_id }` → `{}` |
 | `task.restore` | mutation · always · inverse (delete) | `{ task_id }` → `Task` |
 | `task.link_commit` | mutation · always | `{ task_id, sha, branch? }` → `Task` |
@@ -817,7 +824,7 @@ unique; nothing else is.
 | `task.label.add` / `task.label.remove` | mutation · always · inverse | `{ task_id, label }` → `Task` — `add` creates the project label if the name is new; names are matched case-insensitively and the stored spelling wins |
 | `task.label.list` | query | `{ project_id }` → `{ labels: Label[] }` |
 | `task.relate` / `task.unrelate` | mutation · always · inverse | `{ task_id, relation: "blocked_by"\|"duplicate_of", other_id }` → `Task` — stored and rendered, never enforced; `duplicate_of` is single-valued, so a second `relate` replaces the first |
-| `task.dispatch` | mutation · always · project · user | `{ task_id, session?: string, create?: SessionCreateIn, fanout?, start?: bool }` → `{ task: Task, session: Session, fanned: { task, session }[] }` — one of `session`/`create`; moves the task to `active`, sets `state: dispatched`, and appends it to the session queue. `start` defaults true; false stages assignments before the provider starts. `fanout` also dispatches every not-done descendant, one fresh session each, and therefore requires `create` (`task.fanout_target`) |
+| `task.dispatch` | mutation · always · project · user | `{ task_id, session?: string, create?: SessionCreateIn, fanout?, start?: bool }` → `{ task: Task, session: Session, fanned: { task, session }[] }` — one of `session`/`create`; moves the task to `active`, sets `state: dispatched`, and appends it to the session queue. `start` defaults true; false stages assignments before the provider starts. `fanout` also dispatches every not-done descendant, one fresh session each, and therefore requires `create` (`task.fanout_target`). The sessions are created before the transaction; if it fails, they are closed with their checkouts, and one made for a sub-task finished meanwhile is closed after it |
 | `task.approve` | mutation · always · inverse (unapprove) · project · user | `{ task_id, sha? }` → `Task` — any open column → `done`, links sha (defaults to the recorded session branch head, or the project checkout HEAD without a session) |
 | `task.unapprove` | mutation · always · inverse (approve) · project · user | `{ task_id, column: Column, position: number, state: TaskState, sha? }` → `Task` — `task.approve`'s inverse: a `done` task goes back to `column` (not `done`) at index `position`, as `task.move` places it, with run state `state`, and the commit link `sha` is removed. The approval records `sha` only when it created that link, so a commit linked before it stays (RA-416). Refuses `task.column_transition` when the task is not done |
 | `task.copy_text` | query | `{ task_id }` → `{ text }` — a task as plain text: `#id title`, then the body when it has one. Agents' copy; the desktop board's copy button still builds its own string (title, body, `#id`) and does not call it |
@@ -1139,7 +1146,7 @@ Column transitions by actor (anything else is `conflict` / `task.column_transiti
 | from → to | user | agent (own task) |
 |---|---|---|
 | any → any (drag) | ✓ | ✗ |
-| `active → in_review` | ✓ | ✓ (also implicit on `session.done`) |
+| `active → in_review` | ✓ | only through `session.done`, which judges the branch first |
 | `* → done` | via `task.approve` (links sha) | ✗ |
 | `* → active` | via `task.dispatch` or drag | ✗ |
 

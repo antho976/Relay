@@ -1207,34 +1207,55 @@ pub struct BranchWork {
     range: String,
     /// Each non-merge commit since the base, newest first, with its own numstat, renames found.
     commits: Vec<(String, String)>,
-    /// More commits than [`RECHECK_MAX_COMMITS`]; or git could not list them, and only the
-    /// net change is judged.
+    /// More commits than [`RECHECK_MAX_COMMITS`]: the older ones are judged only in the net
+    /// change.
     partial: bool,
     /// Each shape-gated file the branch changes, as it is at `HEAD`, or why it cannot be read.
     shaped: Vec<(String, Result<String, &'static str>)>,
+    /// Why git could not measure the branch. Such a branch is not taken as within limits: the
+    /// done is refused until it can be measured, or a person moves the task.
+    unmeasured: Option<String>,
+}
+
+/// Repository settings a measurement pins, so a checkout's own config cannot change what git
+/// reports (an agent writes that config). A value git cannot parse at all still fails the
+/// command — `-c` does not reach past a broken file — and that refuses the done instead.
+const MEASURE_CONFIG: &[&str] = &[
+    "-c", "core.quotePath=true", "-c", "core.fsmonitor=false", "-c", "color.ui=never", "-c", "diff.noprefix=false",
+    "-c", "diff.relative=false", "-c", "diff.ignoreSubmodules=none",
+];
+
+/// `git <MEASURE_CONFIG> <args>`, for [`git_output`] and [`git_with_input`].
+fn measuring<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    MEASURE_CONFIG.iter().copied().chain(args.iter().copied()).collect()
 }
 
 /// Read what [`recheck_branch`] judges: the branch's net numstat against `base`, each commit's
-/// numstat, and the shape-gated files it changes. `None` when git cannot measure the branch
-/// at all (no base, no history); a measurement Relay cannot take never blocks a done. Every
-/// call goes through [`crate::proc`] with a deadline, so it belongs before the store lock.
+/// numstat, and the shape-gated files it changes. Always `Some`; when git cannot measure the
+/// branch (no base, no shared history, a config git refuses to read) it says why, and the
+/// done is refused rather than waved through — an agent can break a measurement on purpose
+/// (`git config core.quotePath x`, an orphan branch). Every call goes through [`crate::proc`]
+/// with a deadline, so it belongs before the store lock.
 ///
 /// `base` comes from the repository (its `HEAD` at clone) or the person, so it is never let
 /// near git's option parser: a base that starts with `-` is not measured at all, and every
 /// revision goes after `--end-of-options` — a remote whose default branch is
 /// `--output=/some/path` would otherwise have git truncate that file on every done.
 pub fn measure_branch(cfg: &GuardrailConfig, worktree: &Path, base: &str) -> Option<BranchWork> {
-    let note = |what: &str, error: &BusError| tracing::warn!(worktree = %worktree.display(), %what, error = %error.message, "measuring task work");
+    let unmeasured = |what: &str, why: String| {
+        tracing::warn!(worktree = %worktree.display(), %what, error = %why, "measuring task work");
+        Some(BranchWork { unmeasured: Some(format!("git {what}: {why}")), ..BranchWork::default() })
+    };
     if base.starts_with('-') {
-        tracing::warn!(worktree = %worktree.display(), %base, "base branch starts with '-'; not measuring task work");
-        return None;
+        return unmeasured("diff", format!("the base branch {base:?} starts with '-'"));
     }
-    let range = git_output(worktree, &["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--end-of-options", &format!("{base}...HEAD"), "--"])
-        .map_err(|error| note("diff", &error))
-        .ok()?;
+    let range = match git_output(worktree, &measuring(&["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--end-of-options", &format!("{base}...HEAD"), "--"])) {
+        Ok(range) => range,
+        Err(error) => return unmeasured("diff", error.message),
+    };
     let mut work = BranchWork { range, ..BranchWork::default() };
     let limit = format!("--max-count={}", RECHECK_MAX_COMMITS + 1);
-    let listed = git_output(worktree, &["rev-list", "--no-merges", &limit, "--end-of-options", &format!("{base}..HEAD"), "--"]);
+    let listed = git_output(worktree, &measuring(&["rev-list", "--no-merges", &limit, "--end-of-options", &format!("{base}..HEAD"), "--"]));
     match listed {
         Ok(listed) => {
             let mut shas: Vec<&str> = listed.lines().filter(|line| !line.is_empty()).collect();
@@ -1245,19 +1266,13 @@ pub fn measure_branch(cfg: &GuardrailConfig, worktree: &Path, base: &str) -> Opt
             }
             if !shas.is_empty() {
                 let input = shas.iter().map(|sha| format!("{sha}\n")).collect::<String>();
-                match git_with_input(worktree, &["diff-tree", "--stdin", "-r", "-z", "-M", "--numstat", "--root"], input.as_bytes()) {
+                match git_with_input(worktree, &measuring(&["diff-tree", "--stdin", "-r", "-z", "-M", "--numstat", "--root"]), input.as_bytes()) {
                     Ok(out) => work.commits = split_commits(&String::from_utf8_lossy(&out)),
-                    Err(error) => {
-                        note("diff-tree", &error);
-                        work.partial = true;
-                    }
+                    Err(error) => return unmeasured("diff-tree", error.message),
                 }
             }
         }
-        Err(error) => {
-            note("rev-list", &error);
-            work.partial = true;
-        }
+        Err(error) => return unmeasured("rev-list", error.message),
     }
     let shaped: Vec<String> = parse_numstat(&work.range)
         .into_iter()
@@ -1268,7 +1283,7 @@ pub fn measure_branch(cfg: &GuardrailConfig, worktree: &Path, base: &str) -> Opt
     if !shaped.is_empty() {
         match read_at_head(worktree, &shaped) {
             Some(texts) => work.shaped = shaped.into_iter().zip(texts).collect(),
-            None => tracing::warn!(worktree = %worktree.display(), "could not read shape-gated files at HEAD"),
+            None => return unmeasured("cat-file", "could not read the shape-gated files at HEAD".into()),
         }
     }
     Some(work)
@@ -1304,7 +1319,7 @@ fn split_commits(out: &str) -> Vec<(String, String)> {
 /// Each of `paths` as it is at `HEAD`, in one `git cat-file --batch`. `None` when git fails.
 fn read_at_head(worktree: &Path, paths: &[String]) -> Option<Vec<Result<String, &'static str>>> {
     let input: String = paths.iter().map(|path| format!("HEAD:{path}\n")).collect();
-    let out = git_with_input(worktree, &["cat-file", "--batch"], input.as_bytes()).ok()?;
+    let out = git_with_input(worktree, &measuring(&["cat-file", "--batch"]), input.as_bytes()).ok()?;
     let mut at = 0;
     let mut texts = Vec::with_capacity(paths.len());
     for _ in paths {
@@ -1345,6 +1360,18 @@ pub fn recheck_branch(
     session_id: Id,
     work: &BranchWork,
 ) -> Result<(), BusError> {
+    if let Some(why) = &work.unmeasured {
+        return Err(BusError::refused(
+            "guardrail.unmeasured",
+            format!("Relay could not measure this branch against the project's base ({why}), so it is not handed to review"),
+        )
+        .with_details(json!({"reason": why}))
+        .with_hint(
+            "Put the checkout back the way git can read it (a config value it rejects, a branch with no history in \
+             common with the base) and call session.done again; if you cannot, report the task blocked and say why, \
+             and the person moves it.",
+        ));
+    }
     let cfg = config(conn, Some(project_id))?;
     let grants = grants_given(conn, session_id)?;
     let judge = |diff: &str, skip_policy: Option<&str>| -> Result<Option<BusError>, BusError> {
@@ -1453,10 +1480,17 @@ fn evaluate_exec(cfg: &GuardrailConfig, request: &GateRequest<'_>) -> Result<Dec
             return Ok(Decision::Refuse(
                 BusError::refused(
                     "guardrail.self_approval",
-                    format!("{} would answer a guardrail as the user; only the user can do that", argv.join(" ")),
+                    format!(
+                        "{} would act as the user (answer a guardrail, or pair, approve or revoke a phone or a cloud \
+                         link); only the user can do that",
+                        argv.join(" ")
+                    ),
                 )
                 .with_details(json!({"command": command, "argv": argv}))
-                .with_hint("Ask with guardrail.request and wait for guardrail.request_resolved; the user answers it in Relay."),
+                .with_hint(
+                    "Ask with guardrail.request and wait for guardrail.request_resolved; the user answers it in Relay. \
+                     Pairing and cloud links the user sets up themselves: say what you need in your report.",
+                ),
             ));
         }
         // Nor this one: it would switch off the check a grant is an exception to.
@@ -1507,6 +1541,16 @@ const USER_ONLY_ANSWERS: &[&str] = &[
     "guardrail.confirm", "guardrail.reject", "guardrail.config.set", "guardrail.grant.revoke", "settings.set", "settings.reset",
 ];
 
+/// The CLI's own commands that are the user's alone, as `(command, subcommands)`: they pair a
+/// phone or let one in, forget one, point the engine at a rendezvous, or link this PC to a cloud
+/// engine — each hands out (or takes away) a phone token or the room secret. They talk to the
+/// door and the data directory, not the bus, so no op check sees them. `relay remote serve`
+/// counts only with `--pair`, which opens a pairing window the agent could answer itself.
+const USER_ONLY_COMMANDS: &[(&str, &[&str])] = &[
+    ("remote", &["approve", "pair", "decline", "revoke", "via"]),
+    ("cloud", &["connect", "pair", "off"]),
+];
+
 /// The environment the CLI takes its identity from (`actor_from_env`): without `RELAY_SESSION`
 /// it falls back to the user.
 const IDENTITY_VARS: &[&str] = &["RELAY_SESSION", "RELAY_TOKEN", "RELAY_ACTOR"];
@@ -1548,6 +1592,9 @@ fn self_approval(line: &str) -> Option<Vec<String>> {
             return Some(argv());
         }
         for at in relay_at {
+            if user_only_command(&words, at) {
+                return Some(argv());
+            }
             let Some(op) = relay_call(&words, at) else { continue };
             let answers = match op {
                 // `q` with nothing after it takes the op from somewhere this line does not show.
@@ -1582,23 +1629,38 @@ fn is_relay(word: &str) -> bool {
 /// The op a Relay CLI call at `at` runs: `Some(Some(op))` for `relay [flags] q|cmd <op>`,
 /// `Some(None)` when `q`/`cmd` has no op after it, `None` when this is no bus call at all.
 fn relay_call<'w>(words: &[&'w str], at: usize) -> Option<Option<&'w str>> {
-    let skip_flags = |mut at: usize| {
-        while let Some(word) = words.get(at) {
-            if matches!(*word, "--instance" | "--actor") {
-                at += 2;
-            } else if word.starts_with('-') {
-                at += 1;
-            } else {
-                break;
-            }
-        }
-        at
-    };
-    let sub = skip_flags(at + 1);
+    let sub = skip_cli_flags(words, at + 1);
     if !matches!(words.get(sub), Some(&"q") | Some(&"cmd")) {
         return None;
     }
-    Some(words.get(skip_flags(sub + 1)).copied())
+    Some(words.get(skip_cli_flags(words, sub + 1)).copied())
+}
+
+/// Is the Relay CLI call at `at` one of [`USER_ONLY_COMMANDS`]: `relay [flags] remote approve`,
+/// `relay cloud off`, `relay remote serve --pair`?
+fn user_only_command(words: &[&str], at: usize) -> bool {
+    let command = skip_cli_flags(words, at + 1);
+    let Some(&name) = words.get(command) else { return false };
+    let sub = skip_cli_flags(words, command + 1);
+    let Some(&sub_name) = words.get(sub) else { return false };
+    if name == "remote" && sub_name == "serve" {
+        return words[sub + 1..].contains(&"--pair");
+    }
+    USER_ONLY_COMMANDS.iter().any(|(cli, subs)| *cli == name && subs.contains(&sub_name))
+}
+
+/// The first word from `at` on that is not one of the CLI's global options.
+fn skip_cli_flags(words: &[&str], mut at: usize) -> usize {
+    while let Some(word) = words.get(at) {
+        if matches!(*word, "--instance" | "--actor") {
+            at += 2;
+        } else if word.starts_with('-') {
+            at += 1;
+        } else {
+            break;
+        }
+    }
+    at
 }
 
 /// Clearing or overriding the session identity, which makes the CLI fall back to the user:
@@ -2250,11 +2312,15 @@ impl DeniedPattern {
             .filter(|word| !word.starts_with('-'))
             .map(|word| word.to_ascii_lowercase())
             .collect();
-        // `git push origin +main` is a force push spelled as a refspec.
-        let plus_refspec = self.program == "git"
+        // A forced push is any push that can destroy what the remote holds: `+main` and `:main`
+        // as refspecs, `--force-with-lease`, `--mirror`, `--delete`/`-d` and `--prune`.
+        let destroys_remote = self.program == "git"
             && self.subcommands.first().is_some_and(|sub| sub == "push")
-            && operands.iter().any(|word| word.len() > 1 && word.starts_with('+'));
-        self.flags.iter().all(|flag| flags.contains(flag) || flag == "-f" && plus_refspec)
+            && (operands.iter().any(|word| word.len() > 1 && (word.starts_with('+') || word.starts_with(':')))
+                || flags.iter().any(|flag| {
+                    matches!(flag.as_str(), "-d" | "--delete" | "--mirror" | "--prune" | "--force-with-lease" | "--force-if-includes")
+                }));
+        self.flags.iter().all(|flag| flags.contains(flag) || flag == "-f" && destroys_remote)
             && self.operands.iter().all(|operand| operands.contains(operand))
     }
 }
@@ -3008,6 +3074,8 @@ mod denied_tests {
             "git -C sub clean -fd",
             "git push --force", "git push -f origin main", "git push origin main --force",
             "git push origin +main", "git push --force=true origin main",
+            "git push --mirror origin", "git push origin :main", "git push --delete origin main", "git push -d origin main",
+            "git push --force-with-lease origin main", "git push --force-if-includes origin main", "git push --prune origin",
             "(git reset --hard)", "cd sub && (git clean -fd)", "(cd frontend && rm -rf node_modules)",
             "echo $(rm -rf build)", "echo `rm -rf build`", "echo \"$(rm -rf build)\"",
             "sh -c 'rm -rf build'", "bash -lc \"git reset --hard\"", "eval 'git push -f'",
@@ -3025,6 +3093,7 @@ mod denied_tests {
             "echo \"rm -rf /\"", "git commit -m \"git reset --hard was a mistake\"",
             "relay q guardrail.check '{\"command\":\"rm -rf /\"}'", "rm -r build", "rm -f build",
             "git reset --soft HEAD~1", "git clean -n", "git push origin main", "git push -u origin main",
+            "git push origin :", "git push --tags origin", "git push -o ci.skip origin relay/x", "git branch -d old",
             "git log --grep reset", "cargo test", "grep -rf patterns.txt src",
         ] {
             assert!(!denied(line), "{line:?} does not run a denied command");
@@ -3285,7 +3354,8 @@ mod measure_tests {
         let base = "--output=pwned";
         git(&repo, &["update-ref", &format!("refs/heads/{base}"), "HEAD~1"]);
 
-        assert!(measure_branch(&cfg, &repo, base).is_none());
+        let unmeasured = measure_branch(&cfg, &repo, base).unwrap().unmeasured;
+        assert!(unmeasured.is_some_and(|why| why.contains("starts with '-'")), "an option-like base is not measured");
         let written: Vec<_> = std::fs::read_dir(&repo).unwrap().map(|entry| entry.unwrap().file_name()).filter(|name| name.to_string_lossy().starts_with("pwned")).collect();
         assert!(written.is_empty(), "git wrote a file named by the base branch: {written:?}");
 
@@ -3294,5 +3364,6 @@ mod measure_tests {
         assert!(work.range.contains("a.txt"), "{:?}", work.range);
         assert_eq!(work.commits.len(), 1);
         assert!(!work.partial);
+        assert_eq!(work.unmeasured, None);
     }
 }

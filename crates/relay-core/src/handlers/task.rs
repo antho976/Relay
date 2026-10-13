@@ -13,6 +13,7 @@ use relay_bus::Empty;
 use rusqlite::{params, OptionalExtension, Row, Transaction};
 use serde_json::json;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub(crate) fn column_str(value: Column) -> &'static str {
     match value {
@@ -784,7 +785,41 @@ fn launch_op(name: &str, state: relay_bus::types::SessionState) -> Result<Option
 /// so the fetch and checkout never run under the store lock).
 struct PreparedDispatch {
     children: Vec<Id>,
-    created: Vec<String>,
+    created: Created,
+}
+
+/// The sessions a dispatch created, until its commit lands. Dropped unkept — the transaction
+/// failed (a sub-task deleted while it prepared) or never committed — they are closed with their
+/// checkouts, like a failed prepare's (RA-405). The transaction hands this to
+/// [`Ctx::after_commit`], which keeps it; a failure drops it unrun, perhaps with the store
+/// lock still held, so the closing runs on a thread of its own, which waits for the lock.
+struct Created {
+    engine: Option<Arc<Engine>>,
+    names: Vec<String>,
+    kept: bool,
+}
+
+impl Created {
+    fn keep(mut self) {
+        self.kept = true;
+    }
+}
+
+impl Drop for Created {
+    fn drop(&mut self) {
+        if self.kept || self.names.is_empty() {
+            return;
+        }
+        let names = std::mem::take(&mut self.names);
+        let Some(engine) = self.engine.take() else {
+            tracing::error!(sessions = ?names, "a dispatch that did not commit could not close the sessions it created");
+            return;
+        };
+        let spawned = std::thread::Builder::new().name("dispatch-discard".into()).spawn(move || discard_created(&engine, &names));
+        if let Err(error) = spawned {
+            tracing::error!(%error, "a dispatch that did not commit could not close the sessions it created");
+        }
+    }
 }
 
 /// Close sessions this dispatch created when it cannot go on; their checkouts go with them.
@@ -1092,7 +1127,13 @@ pub fn register(e: &mut Engine) {
 
     e.register::<Move>(|ctx: &mut Ctx,p| {
         let before=get_task(ctx.tx(),p.task_id,false)?;
-        if ctx.actor.is_agent() && !(before.column==Column::Active && p.column==Column::InReview) { return Err(BusError::conflict("task.column_transition","agents may only move their active task to in_review")) }
+        // An agent hands its task to review with session.done, which judges the branch first
+        // (BUS.md §9.2), waits for the task's other builders and tells the reviewer. A move
+        // straight to in_review skipped all three, so the board is the person's alone.
+        if ctx.actor.is_agent() {
+            return Err(BusError::conflict("task.column_transition", "agents do not move tasks; hand yours to review with session.done")
+                .with_hint("Call session.done {summary}: it checks the branch against the guardrails and moves the task to in_review."));
+        }
         // Done means a commit is linked, and task.approve is what links one. A task that already
         // has one — it left Done, and this is that move undone — may go straight back; refusing
         // it made every move out of Done un-undoable and jammed the board's Ctrl+Z (RA-189).
@@ -1353,7 +1394,7 @@ pub fn register(e: &mut Engine) {
             }
             Ok(children)
         })?;
-        let mut created = Vec::new();
+        let mut created = Created { engine: ctx.engine().arc(), names: Vec::new(), kept: false };
         if let Some(template) = &p.create {
             for at in 0..=children.len() {
                 let mut create = template.clone();
@@ -1371,9 +1412,10 @@ pub fn register(e: &mut Engine) {
                     crate::engine::Door::InProcess,
                 );
                 match out.into_result() {
-                    Ok(session) => created.push(session["name"].as_str().unwrap_or_default().to_string()),
+                    Ok(session) => created.names.push(session["name"].as_str().unwrap_or_default().to_string()),
                     Err(error) => {
-                        discard_created(ctx.engine(), &created);
+                        // Unlocked here, so closed before the refusal answers.
+                        discard_created(ctx.engine(), &std::mem::take(&mut created.names));
                         return Err(error);
                     }
                 }
@@ -1383,7 +1425,7 @@ pub fn register(e: &mut Engine) {
     }, |ctx: &mut Ctx, p, prepared| {
         let start = p.start.unwrap_or(true);
         let PreparedDispatch { children, created } = prepared;
-        let mut names = created.iter().cloned();
+        let mut names = created.names.clone().into_iter();
         let main = match p.session.clone() {
             Some(name) => name,
             None => names.next().ok_or_else(|| BusError::internal("dispatch created no session"))?,
@@ -1403,6 +1445,13 @@ pub fn register(e: &mut Engine) {
             launches.extend(launch.map(|op| (op, name.clone())));
             fanned.push(Dispatched { task, session });
         }
+        // Committed, the sessions are the tasks' — but one made for a sub-task that was done
+        // by then has no task, and goes. Not committed, every one goes ([`Created`]).
+        let unused: Vec<String> = names.collect();
+        ctx.after_commit(move |engine| {
+            created.keep();
+            discard_created(&engine, &unused);
+        });
         // Each launch is its own request, after the commit and before the reply, so a client
         // that attaches as soon as the dispatch answers finds the PTY. A launch that fails then
         // has nobody to answer: it is audited, and said in a notification.
