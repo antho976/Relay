@@ -567,42 +567,8 @@ fn safe_name(name: &str) -> Result<String, BusError> {
     Ok(name.to_string())
 }
 
-fn attach_bytes(
-    ctx: &mut Ctx,
-    task: &Task,
-    name: &str,
-    mime: &str,
-    bytes: &[u8],
-) -> Result<Attachment, BusError> {
-    let name = safe_name(name)?;
-    if bytes.is_empty() {
-        return Err(BusError::invalid(
-            "task.attachment_empty",
-            "attachment cannot be empty",
-        ));
-    }
-    ctx.tx().execute("INSERT INTO attachments(task_id,name,mime,bytes,path,created_at) VALUES (?1,?2,?3,?4,'',?5)", params![task.id, name, mime, bytes.len() as i64, ctx.now]).bus()?;
-    let id = ctx.tx().last_insert_rowid();
-    let dir = attachment_root(ctx.engine()).join(task.id.to_string());
-    std::fs::create_dir_all(&dir).bus()?;
-    let path = dir.join(format!("{id}-{name}"));
-    let recorded = std::fs::write(&path, bytes).bus().and_then(|()| {
-        ctx.tx()
-            .execute(
-                "UPDATE attachments SET path=?1 WHERE id=?2",
-                params![path.display().to_string(), id],
-            )
-            .and_then(|_| ctx.tx().query_row("SELECT * FROM attachments WHERE id=?1", [id], attachment_row))
-            .bus()
-    });
-    if recorded.is_err() {
-        let _ = std::fs::remove_file(&path);
-    }
-    recorded
-}
-
-/// An attachment copied into `attachments/.staging` by `task.attach`'s read phase. Removed on
-/// drop unless [`attach_staged`] has already renamed it into place.
+/// An attachment copied into `attachments/.staging` by `task.attach`'s or `task.create`'s read
+/// phase. Removed on drop unless [`attach_staged`] has already renamed it into place.
 struct StagedFile(PathBuf);
 
 impl Drop for StagedFile {
@@ -618,7 +584,7 @@ struct PreparedAttach {
     bytes: u64,
 }
 
-/// [`attach_bytes`] for a file already staged: the row, and a rename instead of a write.
+/// Record a staged attachment on `task` and rename its copy into place.
 fn attach_staged(ctx: &mut Ctx, task: &Task, prepared: PreparedAttach) -> Result<Attachment, BusError> {
     let PreparedAttach { staged, name, mime, bytes } = prepared;
     ctx.tx().execute("INSERT INTO attachments(task_id,name,mime,bytes,path,created_at) VALUES (?1,?2,?3,?4,'',?5)", params![task.id, name, mime, bytes as i64, ctx.now]).bus()?;
@@ -880,7 +846,26 @@ const TASK_PAGE: u32 = 1000;
 const TASK_PAGE_MAX: u32 = 2000;
 
 pub fn register(e: &mut Engine) {
-    e.register::<Create>(|ctx: &mut Ctx, p| {
+    // Staged (D149, RA-190) like task.attach: inline attachments, up to the bus's line limit,
+    // are decoded and written into the attachment store's staging area with the lock released;
+    // the transaction records them and renames each copy into place.
+    e.register_staged::<Create, Vec<PreparedAttach>>(|ctx, p| {
+        let Some(inputs) = p.attachments.as_ref().filter(|inputs| !inputs.is_empty()) else { return Ok(Vec::new()) };
+        // What the transaction would refuse first is refused before anything is decoded.
+        ctx.read(|conn| crate::handlers::workspace::get_project(conn, p.project_id))?;
+        if p.title.trim().is_empty() { return Err(BusError::invalid("task.title", "task title cannot be empty")) }
+        let staging = attachment_root(ctx.engine()).join(".staging");
+        std::fs::create_dir_all(&staging).bus()?;
+        inputs.iter().map(|input| {
+            let bytes = base64::engine::general_purpose::STANDARD.decode(&input.bytes_b64)
+                .map_err(|_| BusError::invalid("task.attachment_base64", "attachment bytes_b64 is invalid"))?;
+            let name = safe_name(&input.name)?;
+            if bytes.is_empty() { return Err(BusError::invalid("task.attachment_empty", "attachment cannot be empty")) }
+            let staged = StagedFile(staging.join(uuid::Uuid::new_v4().to_string()));
+            std::fs::write(&staged.0, &bytes).bus()?;
+            Ok(PreparedAttach { staged, name, mime: input.mime.clone(), bytes: bytes.len() as u64 })
+        }).collect()
+    }, |ctx: &mut Ctx, p, staged| {
         crate::handlers::workspace::get_project(ctx.tx(), p.project_id)?;
         let title = p.title.trim();
         if title.is_empty() { return Err(BusError::invalid("task.title", "task title cannot be empty")) }
@@ -902,14 +887,12 @@ pub fn register(e: &mut Engine) {
         let id = ctx.tx().last_insert_rowid();
         let mut task = get_task(ctx.tx(), id, false)?;
         if let Some(labels) = p.labels.as_ref() { set_labels(ctx, &task, labels)?; }
-        // The files are written before the transaction commits: one this request wrote is
-        // removed again when a later attachment refuses and the rows roll back (RA-409).
+        // The copies are renamed into place before the transaction commits: one this request
+        // placed is removed again when a later one fails and the rows roll back (RA-409); those
+        // not yet placed go with their staging.
         let mut written = Vec::new();
-        for input in p.attachments.unwrap_or_default() {
-            let stored = base64::engine::general_purpose::STANDARD.decode(&input.bytes_b64)
-                .map_err(|_| BusError::invalid("task.attachment_base64", "attachment bytes_b64 is invalid"))
-                .and_then(|bytes| attach_bytes(ctx, &task, &input.name, &input.mime, &bytes));
-            match stored {
+        for prepared in staged {
+            match attach_staged(ctx, &task, prepared) {
                 Ok(attachment) => written.push(PathBuf::from(attachment.path)),
                 Err(error) => {
                     for path in &written { let _ = std::fs::remove_file(path); }

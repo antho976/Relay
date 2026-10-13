@@ -608,23 +608,20 @@ pub fn register(e: &mut Engine) {
             crate::hooks::run_user_pre_commit(Path::new(&project.path), &root)
                 .map_err(|error| BusError::conflict("git.pre_commit_failed", error.to_string()))?;
             // The commit is made without git's own hooks, so the user's prepare-commit-msg and
-            // commit-msg hooks run here and may refuse or rewrite the message (RA-110). Concluding
-            // a merge or the like, `git commit --no-verify` runs prepare-commit-msg itself.
-            let message = if commit_in_progress(&root)? {
-                p.message.clone()
-            } else {
-                crate::hooks::run_user_prepare_commit_msg(Path::new(&project.path), &root, &p.message)
-                    .map_err(|error| BusError::conflict("git.prepare_commit_msg_failed", error.to_string()))?
-            };
+            // commit-msg hooks run here and may refuse or rewrite the message (RA-110), in git's
+            // order — concluding a merge or the like too, since `git commit` no longer does.
+            let message = crate::hooks::run_user_prepare_commit_msg(Path::new(&project.path), &root, &p.message)
+                .map_err(|error| BusError::conflict("git.prepare_commit_msg_failed", error.to_string()))?;
             let message = crate::hooks::run_user_commit_msg(Path::new(&project.path), &root, &message)
                 .map_err(|error| BusError::conflict("git.commit_msg_failed", error.to_string()))?;
             // The commit object itself — and a signing prompt, if commit.gpgSign asks for one —
-            // is made here too. The transaction gates exactly that object's tree and publishes
-            // it; the numstat is of that tree, not of an index read a moment earlier (RA-154).
+            // is made here too, a merge's or cherry-pick's included. The transaction gates exactly
+            // that object's tree and publishes it; the numstat is of that tree, not of an index
+            // read a moment earlier (RA-154).
             let (staged, numstat) = stage_commit(&root, &message)?;
-            Ok((project, root, numstat, staged, message))
+            Ok((project, root, numstat, staged))
         },
-        |ctx: &mut Ctx, _p, (project, root, numstat, staged, message)| {
+        |ctx: &mut Ctx, _p, (project, root, numstat, staged)| {
             super::guardrail::enforce(
                 ctx,
                 project.id,
@@ -635,40 +632,37 @@ pub fn register(e: &mut Engine) {
                 Some(&numstat),
                 None,
             )?;
-            match staged {
-                // A merge, cherry-pick, revert or rebase in progress has state only `git commit`
-                // knows how to finish; those stay the slow path they always were.
-                StagedCommit::InProgress { tree } => {
-                    // `git commit` reads the index again: it must still hold the tree the gate
-                    // judged, or this would commit something nobody checked (RA-154).
-                    let now = worktree::git_mutate(&root, &["write-tree"]).map_err(git_mutation("git.commit_failed"))?;
-                    if now.trim() != tree {
-                        return Err(BusError::conflict(
-                            "git.commit_raced",
-                            "the staged changes changed while this commit was being made; nothing was committed",
-                        ));
-                    }
-                    worktree::git_mutate(&root, &["commit", "--no-verify", "-m", &message])
-                        .map_err(git_mutation("git.commit_failed"))?;
-                }
-                StagedCommit::Object { sha, parent, subject } => {
-                    // Compare-and-swap: the gate and its grants judged this object against this
-                    // parent, so it lands only if the branch has not moved since.
-                    let reflog = match parent {
-                        Some(_) => format!("commit: {subject}"),
-                        None => format!("commit (initial): {subject}"),
-                    };
-                    worktree::git_mutate(&root, &["update-ref", "-m", &reflog, "HEAD", &sha, parent.as_deref().unwrap_or("")])
-                        .map_err(|error| BusError::conflict(
-                            "git.commit_raced",
-                            format!("the branch moved while this commit was being made; nothing was committed ({error})"),
-                        ))?;
-                    let hook_root = root.clone();
-                    ctx.after_commit(move |_| run_post_commit(hook_root));
+            // The object was made with the merge then pending as its parents; one started, ended
+            // or moved on since would publish it wrong.
+            let StagedCommit { sha, parent, reflog, git_dir, pending } = staged;
+            if read_merge_head(&git_dir) != pending.merge {
+                return Err(BusError::conflict(
+                    "git.commit_raced",
+                    "a merge started or ended while this commit was being made; nothing was committed",
+                ));
+            }
+            // Compare-and-swap, in one ref transaction: the gate and its grants judged this object
+            // against this parent and this pick or revert (its author, its sequencer), so it lands
+            // only if none of them has moved since, and the pick it concludes is cleared with it.
+            // Nothing here waits on a person: a signature, if any, was made before the store was
+            // locked (D144).
+            let zero = "0".repeat(sha.len());
+            let mut refs = format!("update HEAD {sha} {}\n", parent.as_deref().unwrap_or(&zero));
+            for (name, seen) in [("CHERRY_PICK_HEAD", &pending.pick), ("REVERT_HEAD", &pending.revert)] {
+                match seen {
+                    Some(oid) => refs.push_str(&format!("delete {name} {oid}\n")),
+                    None => refs.push_str(&format!("verify {name} {zero}\n")),
                 }
             }
-            let repo = gix::open(&root).map_err(gix_err("git.open_failed"))?;
-            let sha = repo.head_id().map_err(gix_err("git.head"))?.to_string();
+            refs.push_str("delete AUTO_MERGE\n");
+            git_with(&root, &["update-ref", "--stdin", "-m", &reflog], &[], Some(refs.as_bytes()), "git.commit_raced")
+                .map_err(|error| BusError::conflict(
+                    "git.commit_raced",
+                    format!("the branch, or the cherry-pick or revert in progress, moved while this commit was being made; nothing was committed ({})", error.message),
+                ))?;
+            clear_concluded(&git_dir, &pending);
+            let hook_root = root.clone();
+            ctx.after_commit(move |_| run_post_commit(hook_root));
             changed(ctx, project.id, &root);
             Ok(CommitOut { sha })
         },
@@ -878,13 +872,44 @@ pub fn status_badges(root: &Path) -> Result<HashMap<String, String>, BusError> {
         .collect())
 }
 
-/// What `git.commit`'s unlocked phase prepared.
-enum StagedCommit {
-    /// A commit object for the staged tree, not yet on any branch.
-    Object { sha: String, parent: Option<String>, subject: String },
-    /// A merge, cherry-pick, revert or rebase is in progress: `git commit` must conclude it,
-    /// and must find `tree` still staged when it does.
-    InProgress { tree: String },
+/// What `git.commit`'s unlocked phase prepared: a commit object for the staged tree, not yet on
+/// any branch, and what publishing it needs.
+struct StagedCommit {
+    sha: String,
+    /// HEAD when the object was made: the compare-and-swap's expected value.
+    parent: Option<String>,
+    /// The reflog line `git commit` would write, `commit (merge): …` and the like.
+    reflog: String,
+    /// This checkout's own git dir, where a pending merge or pick keeps its state.
+    git_dir: PathBuf,
+    /// The merge, cherry-pick or revert the object concludes, as it stood then.
+    pending: Pending,
+}
+
+/// What says a merge, cherry-pick or revert is waiting for its commit: it decides the commit's
+/// parents and author, so the transaction checks it is unchanged before publishing.
+struct Pending {
+    /// `MERGE_HEAD`'s lines. Always a file, as git keeps it, reftable or not.
+    merge: Option<String>,
+    /// `CHERRY_PICK_HEAD` and `REVERT_HEAD`: refs, which a reftable repository keeps in its
+    /// tables rather than as files, so they are read and cleared through git.
+    pick: Option<String>,
+    revert: Option<String>,
+}
+
+impl Pending {
+    fn read(root: &Path, git_dir: &Path) -> Pending {
+        Pending { merge: read_merge_head(git_dir), pick: ref_oid(root, "CHERRY_PICK_HEAD"), revert: ref_oid(root, "REVERT_HEAD") }
+    }
+}
+
+fn read_merge_head(git_dir: &Path) -> Option<String> {
+    std::fs::read_to_string(git_dir.join("MERGE_HEAD")).ok()
+}
+
+/// What `name` (a ref such as `CHERRY_PICK_HEAD`) points at, if it exists.
+fn ref_oid(root: &Path, name: &str) -> Option<String> {
+    worktree::git_mutate(root, &["rev-parse", "-q", "--verify", name]).ok().map(|oid| oid.trim().to_string())
 }
 
 /// Refuse while the index still has unmerged entries: a conflict not yet marked resolved.
@@ -915,57 +940,156 @@ fn refuse_unmerged(root: &Path) -> Result<(), BusError> {
     ))
 }
 
-/// Whether a merge, cherry-pick, revert or rebase is in progress in `root`, so only `git commit`
-/// can conclude it.
-fn commit_in_progress(root: &Path) -> Result<bool, BusError> {
-    Ok(in_progress_in(&gix::open(root).map_err(gix_err("git.open_failed"))?))
-}
-
-fn in_progress_in(repo: &gix::Repository) -> bool {
-    // Per-worktree state: a linked checkout's own git dir, not the shared one.
-    let git_dir = repo.path();
-    ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "sequencer", "rebase-merge", "rebase-apply"]
-        .iter()
-        .any(|name| git_dir.join(name).exists())
-}
-
 /// Build the commit `git commit -m message` would make, without moving any ref, and the
-/// numstat of exactly its tree for the commit gate.
+/// numstat of exactly its tree for the commit gate. Concluding a merge, cherry-pick or revert,
+/// it is the commit `git commit` would make of that too — the merged heads as parents, a picked
+/// commit's author kept — so that publishing it is the transaction's one ref update, and a
+/// signing prompt never waits with the store locked.
 fn stage_commit(root: &Path, message: &str) -> Result<(StagedCommit, String), BusError> {
     let repo = gix::open(root).map_err(gix_err("git.open_failed"))?;
-    let in_progress = in_progress_in(&repo);
-    let message = clean_message(message);
-    if !in_progress && message.is_empty() {
+    // Per-worktree state: a linked checkout's own git dir, not the shared one.
+    let git_dir = repo.path().to_path_buf();
+    let pending = Pending::read(root, &git_dir);
+    let message = cleanup_message(root, message)?;
+    if message.is_empty() {
         return Err(BusError::invalid("git.message", "commit message cannot be empty"));
     }
     let tree = worktree::git_mutate(root, &["write-tree"]).map_err(git_mutation("git.commit_failed"))?.trim().to_string();
-    let parent = repo.head_id().ok().map(|id| id.to_string());
-    if in_progress {
-        let numstat = tree_numstat(root, &repo, parent.as_deref(), &tree)?;
-        return Ok((StagedCommit::InProgress { tree }, numstat));
-    }
-    if let Some(parent) = &parent {
-        let parent_tree = worktree::git_mutate(root, &["rev-parse", &format!("{parent}^{{tree}}")])
-            .map_err(git_mutation("git.commit_failed"))?;
-        if parent_tree.trim() == tree {
-            return Err(BusError::conflict("git.commit_failed", "nothing to commit: no staged changes"));
+    // Through git, not gix: a reftable repository's HEAD is in its tables.
+    let parent = ref_oid(root, "HEAD");
+    let mut parents: Vec<String> = parent.iter().cloned().collect();
+    let mut author = None;
+    // `git commit`'s own choices, in its order: an unborn branch takes no parents at all, a merge
+    // takes the heads it merges and may be as empty as it likes, anything else must change
+    // something, and a cherry-pick keeps the author of the commit it picked.
+    let kind = match (&parent, &pending.merge) {
+        (None, _) => "commit (initial)",
+        (Some(_), Some(merged)) => {
+            parents.extend(merged.split_whitespace().map(str::to_owned));
+            let mode = std::fs::read_to_string(git_dir.join("MERGE_MODE")).unwrap_or_default();
+            if mode.trim() != "no-ff" && parents.len() > 1 {
+                parents = independent(root, parents)?;
+            }
+            "commit (merge)"
         }
-    }
+        (Some(parent), None) => {
+            let parent_tree = worktree::git_mutate(root, &["rev-parse", &format!("{parent}^{{tree}}")])
+                .map_err(git_mutation("git.commit_failed"))?;
+            if parent_tree.trim() == tree {
+                return Err(BusError::conflict("git.commit_failed", "nothing to commit: no staged changes"));
+            }
+            match &pending.pick {
+                Some(picked) => {
+                    author = Some(author_of(root, picked)?);
+                    if git_dir.join("rebase-merge").is_dir() && ref_oid(root, "REBASE_HEAD").as_deref() == Some(picked.as_str()) {
+                        "commit (rebase)"
+                    } else {
+                        "commit (cherry-pick)"
+                    }
+                }
+                None => "commit",
+            }
+        }
+    };
     let numstat = tree_numstat(root, &repo, parent.as_deref(), &tree)?;
     // `commit-tree` ignores commit.gpgSign, so honour it here the way `git commit` would.
     let sign = worktree::git_mutate(root, &["config", "--bool", "--get", "commit.gpgsign"])
         .is_ok_and(|value| value.trim() == "true");
     let mut args = vec!["commit-tree", tree.as_str()];
-    if let Some(parent) = &parent {
+    for parent in &parents {
         args.extend(["-p", parent.as_str()]);
     }
     if sign {
         args.push("-S");
     }
     args.extend(["-m", message.as_str()]);
-    let sha = worktree::git_mutate(root, &args).map_err(git_mutation("git.commit_failed"))?.trim().to_string();
-    let subject = message.lines().next().unwrap_or_default().to_string();
-    Ok((StagedCommit::Object { sha, parent, subject }, numstat))
+    let sha = commit_tree(root, &args, author)?;
+    let reflog = format!("{kind}: {}", message.lines().next().unwrap_or_default());
+    Ok((StagedCommit { sha, parent, reflog, git_dir, pending }, numstat))
+}
+
+/// `git commit`'s `reduce_heads` for a merge that may fast-forward: drop every parent another
+/// one already contains, keeping the rest in order.
+fn independent(root: &Path, parents: Vec<String>) -> Result<Vec<String>, BusError> {
+    let mut args = vec!["merge-base", "--independent"];
+    args.extend(parents.iter().map(String::as_str));
+    let keep = worktree::git_mutate(root, &args).map_err(git_mutation("git.commit_failed"))?;
+    let keep: Vec<&str> = keep.split_whitespace().collect();
+    let mut out: Vec<String> = Vec::new();
+    for parent in parents {
+        if keep.contains(&parent.as_str()) && !out.contains(&parent) {
+            out.push(parent);
+        }
+    }
+    Ok(out)
+}
+
+/// The author of commit `oid` as `GIT_AUTHOR_NAME`, `_EMAIL` and `_DATE` take it, read from the
+/// commit's own header: nothing a log format or log.showSignature adds can get into it.
+fn author_of(root: &Path, oid: &str) -> Result<[String; 3], BusError> {
+    let raw = worktree::git_mutate(root, &["cat-file", "commit", oid]).map_err(git_mutation("git.commit_failed"))?;
+    let author = raw.lines().take_while(|line| !line.is_empty()).find_map(|line| line.strip_prefix("author "));
+    // `Name <email> 1600000000 +0200`
+    author
+        .and_then(|line| {
+            let (ident, date) = line.rsplit_once('>')?;
+            let (name, email) = ident.rsplit_once('<')?;
+            Some([name.trim_end().to_string(), email.to_string(), date.trim().to_string()])
+        })
+        .ok_or_else(|| BusError::internal(format!("reading the author of {oid}")))
+}
+
+/// `git commit-tree args`, as `author` when one is given.
+fn commit_tree(root: &Path, args: &[&str], author: Option<[String; 3]>) -> Result<String, BusError> {
+    let sha = match &author {
+        Some([name, email, date]) => {
+            let env = [("GIT_AUTHOR_NAME", name.as_str()), ("GIT_AUTHOR_EMAIL", email.as_str()), ("GIT_AUTHOR_DATE", date.as_str())];
+            git_with(root, args, &env, None, "git.commit_failed")?
+        }
+        None => worktree::git_mutate(root, args).map_err(git_mutation("git.commit_failed"))?,
+    };
+    Ok(sha.trim().to_string())
+}
+
+/// Git with what `worktree::git_mutate` cannot pass — `env`, and `input` on stdin — and the same
+/// bound as every other git call here: a signing prompt may be behind it. Its stdout, or a
+/// conflict under `code` naming what failed.
+fn git_with(root: &Path, args: &[&str], env: &[(&str, &str)], input: Option<&[u8]>, code: &'static str) -> Result<String, BusError> {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+    let mut command = std::process::Command::new("git");
+    command.arg("-C").arg(root).args(args).envs(env.iter().copied());
+    let out = match input {
+        Some(input) => crate::proc::output_with_input(&mut command, input, TIMEOUT),
+        None => crate::proc::output_with_timeout(&mut command, TIMEOUT),
+    }
+    .map_err(|error| BusError::conflict(code, format!("running git {}: {error}", args.join(" "))))?
+    .ok_or_else(|| BusError::conflict(code, format!("git {} did not finish within {} s", args.join(" "), TIMEOUT.as_secs())))?;
+    if !out.status.success() {
+        return Err(BusError::conflict(
+            code,
+            format!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// The files `git commit` clears once its commit lands, a few unlinks in the transaction: a
+/// concluded merge's and a squash's always, and — once the last pick of a sequence is concluded
+/// — the sequencer. These are files whatever the ref storage; CHERRY_PICK_HEAD, REVERT_HEAD and
+/// AUTO_MERGE are refs, cleared in the commit's own ref transaction.
+fn clear_concluded(git_dir: &Path, pending: &Pending) {
+    for name in ["MERGE_HEAD", "MERGE_MSG", "MERGE_MODE", "SQUASH_MSG"] {
+        let _ = std::fs::remove_file(git_dir.join(name));
+    }
+    if pending.pick.is_none() && pending.revert.is_none() {
+        return;
+    }
+    // git's `have_finished_the_last_pick`: the todo's one remaining line was this commit's.
+    let sequencer = git_dir.join("sequencer");
+    let Ok(todo) = std::fs::read_to_string(sequencer.join("todo")) else { return };
+    if todo.find('\n').is_none_or(|eol| eol + 1 == todo.len()) {
+        let _ = std::fs::remove_dir_all(&sequencer);
+    }
 }
 
 /// The commit gate's numstat for `tree` against `parent` (or nothing), as git's own
@@ -1004,6 +1128,22 @@ fn numstat_lines(raw: &str) -> String {
     out
 }
 
+/// The message as `git commit -m` leaves it under commit.cleanup, which with no editor open is
+/// `whitespace` for the default and for `scissors`; `strip` drops comment lines as well, as
+/// `git stripspace` does with core.commentChar, and `verbatim` changes nothing.
+fn cleanup_message(root: &Path, message: &str) -> Result<String, BusError> {
+    let mode = worktree::git_mutate(root, &["config", "--get", "commit.cleanup"]).unwrap_or_default();
+    match mode.trim() {
+        "" | "default" | "whitespace" | "scissors" => Ok(clean_message(message)),
+        "verbatim" => Ok(message.to_string()),
+        "strip" => {
+            let stripped = git_with(root, &["stripspace", "--strip-comments"], &[], Some(message.as_bytes()), "git.commit_failed")?;
+            Ok(stripped.trim_end_matches('\n').to_string())
+        }
+        other => Err(BusError::conflict("git.commit_failed", format!("invalid commit.cleanup mode {other}"))),
+    }
+}
+
 /// `git commit -m`'s default cleanup: trailing whitespace off every line, runs of blank lines
 /// collapsed to one, and none at either end.
 fn clean_message(message: &str) -> String {
@@ -1021,14 +1161,37 @@ fn clean_message(message: &str) -> String {
 }
 
 /// `git commit` runs post-commit itself; a commit published with `update-ref` runs it here,
-/// after the store is unlocked and on its own thread.
+/// after the store is unlocked and on its own thread, with the rest of what `git commit` does
+/// after every commit, in its order: rerere records conflict resolutions (a no-op unless it is
+/// enabled), and a stash a `merge --autostash` set aside comes back last.
 fn run_post_commit(root: PathBuf) {
     let _ = std::thread::Builder::new().name("post-commit".into()).spawn(move || {
-        let mut command = std::process::Command::new("git");
-        command.arg("-C").arg(&root).args(["hook", "run", "--ignore-missing", "post-commit"]);
-        if let Err(error) = crate::proc::output_with_timeout(&mut command, std::time::Duration::from_secs(120)) {
+        let run = |args: &[&str]| {
+            let mut command = std::process::Command::new("git");
+            command.arg("-C").arg(&root).args(args);
+            match crate::proc::output_with_timeout(&mut command, std::time::Duration::from_secs(120)) {
+                Ok(Some(out)) if out.status.success() => Ok(String::from_utf8_lossy(&out.stdout).trim().to_string()),
+                Ok(Some(out)) => Err(String::from_utf8_lossy(&out.stderr).trim().to_string()),
+                Ok(None) => Err("did not finish within 120 s".to_string()),
+                Err(error) => Err(error.to_string()),
+            }
+        };
+        if let Err(error) = run(&["rerere"]) {
+            tracing::warn!(root = %root.display(), %error, "recording conflict resolutions after a commit");
+        }
+        if let Err(error) = run(&["hook", "run", "--ignore-missing", "post-commit"]) {
             tracing::warn!(root = %root.display(), %error, "running the post-commit hook");
         }
+        // git's `apply_autostash_ref`: apply it, or keep it in the stash list if it conflicts.
+        let Ok(stash) = run(&["rev-parse", "-q", "--verify", "MERGE_AUTOSTASH"]) else { return };
+        if run(&["stash", "apply", &stash]).is_err() {
+            if let Err(error) = run(&["stash", "store", "-m", "autostash", &stash]) {
+                tracing::warn!(root = %root.display(), %error, "keeping a merge's autostash");
+                return;
+            }
+            tracing::warn!(root = %root.display(), "a merge's autostash conflicted; it is kept in the stash list");
+        }
+        let _ = run(&["update-ref", "-d", "MERGE_AUTOSTASH"]);
     });
 }
 
