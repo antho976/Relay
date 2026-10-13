@@ -137,15 +137,18 @@ fn read_backup(path: &str) -> Result<BackupFile, BusError> {
 /// read. A path that is there already must be a regular file: writing into a pipe blocks until
 /// something reads it. The new backup is renamed in over the old one, so a crash or a full disk
 /// mid-write leaves last week's whole, and only the user can read it (it is the whole ledger).
+/// A symlink is written through, not replaced: a backup linked into a synced folder keeps syncing.
 fn write_backup(engine: &Engine, path: &str) -> Result<ExportOut, BusError> {
     let path = absolute(path)?;
-    if let Ok(meta) = std::fs::metadata(path) {
+    let target = crate::private::resolve_links(path)
+        .map_err(|e| BusError::invalid("money.path", format!("{}: {e}", path.display())))?;
+    if let Ok(meta) = std::fs::symlink_metadata(&target) {
         if !meta.is_file() {
             return Err(BusError::invalid("money.path", format!("{}: not a file", path.display())));
         }
     }
     let file = ledger(engine, |l| l.export_backup(&crate::time::now()))?;
-    crate::private::write_private_replace(path, backup::encode(&file).as_bytes()).bus()?;
+    crate::private::write_private_replace(&target, backup::encode(&file).as_bytes()).bus()?;
     Ok(ExportOut { path: path.display().to_string(), transactions: file.transactions.len() })
 }
 

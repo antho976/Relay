@@ -51,6 +51,28 @@ pub fn write_private_replace(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The file a symlink at `path` leads to, through every link in the chain, or `path` when it is
+/// no symlink. A link to a file not made yet resolves too. [`write_private_replace`] at the result
+/// writes through the link, where a rename over `path` would replace the link with a plain file:
+/// a backup linked into a synced folder would stop syncing. Its own files (`gym-upload.json`)
+/// Relay replaces, link or not.
+pub fn resolve_links(path: &Path) -> std::io::Result<std::path::PathBuf> {
+    let mut at = path.to_path_buf();
+    for _ in 0..40 {
+        match std::fs::symlink_metadata(&at) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let target = std::fs::read_link(&at)?;
+                at = match at.parent() {
+                    Some(parent) if target.is_relative() => parent.join(target),
+                    _ => target,
+                };
+            }
+            _ => return Ok(at),
+        }
+    }
+    Err(std::io::Error::from_raw_os_error(libc::ELOOP))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,5 +115,24 @@ mod tests {
         std::fs::set_permissions(&upload, std::fs::Permissions::from_mode(0o644)).unwrap();
         write_private_replace(&upload, b"{}").unwrap();
         assert_eq!((std::fs::read_to_string(&upload).unwrap().as_str(), mode(&upload)), ("{}", 0o600));
+    }
+
+    #[test]
+    fn links_resolve_to_the_file_they_lead_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("sync").join("tally.json");
+        std::fs::create_dir(real.parent().unwrap()).unwrap();
+        let (relative, absolute) = (dir.path().join("relative.json"), dir.path().join("absolute.json"));
+        std::os::unix::fs::symlink("sync/tally.json", &relative).unwrap();
+        std::os::unix::fs::symlink(&relative, &absolute).unwrap();
+        // Not made yet, then made: either way the chain ends at the real file.
+        assert_eq!(resolve_links(&absolute).unwrap(), real);
+        std::fs::write(&real, "old").unwrap();
+        assert_eq!(resolve_links(&absolute).unwrap(), real);
+        assert_eq!(resolve_links(&real).unwrap(), real);
+        let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+        std::os::unix::fs::symlink(&b, &a).unwrap();
+        std::os::unix::fs::symlink(&a, &b).unwrap();
+        assert_eq!(resolve_links(&a).unwrap_err().raw_os_error(), Some(libc::ELOOP));
     }
 }

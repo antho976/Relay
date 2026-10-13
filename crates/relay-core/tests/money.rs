@@ -407,3 +407,34 @@ fn a_backup_is_only_ever_a_regular_file() {
     assert_eq!(code(call_as(&engine, Actor::User, "money.import", json!({"path": not_text}))), "money.import");
     assert_eq!(ok(&engine, "money.import", json!({"path": out}))["kind"], "backup");
 }
+
+/// A backup that is a symlink into a synced folder is written through the link: renamed over the
+/// link, it became a plain local file and the synced copy stopped updating.
+#[test]
+fn an_export_writes_through_a_symlink_and_keeps_it() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    let (sync, backups) = (dir.path().join("Sync"), dir.path().join("backups"));
+    std::fs::create_dir(&sync).unwrap();
+    std::fs::create_dir(&backups).unwrap();
+    let (real, link) = (sync.join("tally.json"), backups.join("tally.json"));
+    std::os::unix::fs::symlink("../Sync/tally.json", &link).unwrap();
+    ok(&engine, "money.sample", json!({}));
+    // A link to a file not made yet, then to last week's (0644).
+    for _ in 0..2 {
+        let exported = ok(&engine, "money.export", json!({"path": link}));
+        assert_eq!(exported["path"], link.display().to_string());
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "the link was replaced");
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&real).unwrap().permissions()) & 0o777, 0o600);
+        assert_eq!(ok(&engine, "money.import", json!({"path": real}))["kind"], "backup");
+        assert_eq!(std::fs::read_dir(&sync).unwrap().count(), 1, "a temporary file was left beside the export");
+        assert_eq!(std::fs::read_dir(&backups).unwrap().count(), 1);
+        std::fs::set_permissions(&real, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+    }
+    // A link to something that is not a file is still refused.
+    let fifo = sync.join("pipe.json");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let to_pipe = backups.join("pipe.json");
+    std::os::unix::fs::symlink(&fifo, &to_pipe).unwrap();
+    assert_eq!(code(call_as(&engine, Actor::User, "money.export", json!({"path": to_pipe}))), "money.path");
+}
