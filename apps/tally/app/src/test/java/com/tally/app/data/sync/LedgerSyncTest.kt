@@ -330,6 +330,54 @@ class LedgerSyncTest {
         assertFalse("The cascade's entry is told to the PC, in case it kept it", db.sync().tombstones().none { it.uid == "t1" })
     }
 
+    /** relay_money's `a_stamp_far_ahead_or_below_zero_is_not_taken_and_the_rest_is`. */
+    @Test fun aStampFarAheadOrBelowZeroIsNotTakenAndTheRestIs() = runTest {
+        val now = System.currentTimeMillis()
+        val got = sync.apply(
+            listOf(
+                Change("accounts", "a1", future, row = accountRow("Chequing")),
+                Change("transactions", "max", Long.MAX_VALUE, row = expenseRow("a1", 1_00)),
+                Change("transactions", "days", now + 2 * SyncTables.STAMP_AHEAD_MS, row = expenseRow("a1", 1_00)),
+                Change("transactions", "neg", -5, row = expenseRow("a1", 1_00)),
+                Change("transactions", "hours", now + 3 * 3_600_000L, row = expenseRow("a1", 1_00)),
+            ),
+            now,
+        )
+        assertEquals("The account and the entry a few hours fast", Applied(2, 3), got)
+        assertEquals(listOf("hours"), db.transactions().all().map { it.uid })
+        assertTrue(SyncTables.stampOk(0, now))
+        assertFalse(SyncTables.stampOk(-1, now))
+        // An edit of what was taken stamps as any edit does: no overflow.
+        val tx = db.transactions().all().single()
+        db.transactions().update(tx.copy(amount = 2_00))
+        assertTrue(db.transactions().all().single().updatedAt > tx.updatedAt)
+    }
+
+    /** relay_money's `a_ledger_poisoned_by_a_stamp_at_the_end_of_i64_recovers_when_opened`. */
+    @Test fun aLedgerPoisonedByAStampAtTheEndOfALongRecoversWhenOpened() = runTest {
+        sync.apply(listOf(Change("accounts", "a1", future, row = accountRow("Chequing"))))
+        val sql = db.openHelper.writableDatabase
+        // What a build without the bound let in, and an edit then made of it: a real.
+        sql.execSQL("UPDATE accounts SET updatedAt = 9223372036854775807")
+        sql.execSQL("INSERT INTO sync_state (key, value) VALUES ('applying', 1)")
+        sql.execSQL("UPDATE accounts SET updatedAt = updatedAt + 1")
+        sql.execSQL("DELETE FROM sync_state WHERE key = 'applying'")
+        sql.query("SELECT typeof(updatedAt) FROM accounts").use { c -> c.moveToFirst(); assertEquals("real", c.getString(0)) }
+
+        com.tally.app.data.db.SyncSchema.refreshTriggers(sql)
+
+        val ceiling = System.currentTimeMillis() + SyncTables.STAMP_AHEAD_MS
+        sql.query("SELECT typeof(updatedAt), updatedAt FROM accounts").use { c ->
+            c.moveToFirst()
+            assertEquals("integer", c.getString(0))
+            assertTrue(c.getLong(1) <= ceiling)
+        }
+        // It goes to the PC with its new stamp, and edits stamp past it again.
+        val repaired = db.accounts().all().single()
+        db.accounts().update(repaired.copy(name = "Everyday"))
+        assertTrue(db.accounts().all().single().updatedAt in (repaired.updatedAt + 1)..ceiling)
+    }
+
     @Test fun changesReadBackFromTheWire() {
         val c = Change("transactions", "t1", 1234, deleted = false, row = expenseRow("a1", 5))
         assertEquals(c, Change.fromJson(c.toJson()))

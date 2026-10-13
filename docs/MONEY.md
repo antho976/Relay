@@ -175,6 +175,11 @@ Change = { table, uid, updated_at, deleted, row }
   deleted before pairing is not posted or imported again on the PC.
   The phone is where the ledger lives; the PC is a second view of it. After that, both sides
   merge. Tally says so on its pairing page before the first sync runs.
+  Before a replace erases a ledger that holds anything but categories, the PC (or a cloud copy,
+  docs/CLOUD.md) copies it whole to `money-backups/money-<time>-<n>.db` beside `money.db`: a
+  0700 folder, 0600 files, the newest ten kept. A copy that cannot be written refuses the replace
+  (`money.invalid`) and nothing is erased. To go back to one, stop Relay and put it in place of
+  `money.db`.
 - A large first sync may come in batches: the first carries `replace: true`, the rest
   `replace: false` with the cursor the one before answered, tables in order across them.
 - **A long answer may come in pages** (optional; a device that never sends `limit` gets the whole
@@ -195,6 +200,14 @@ Change = { table, uid, updated_at, deleted, row }
 - **A stamp never goes backwards.** Every edit on either side is stamped
   `max(now, the row's stamp + 1)`, so a device whose clock runs behind still wins with the edit
   it made last. Settings do the same.
+- **A stamp is from 0 to a day ahead.** A change stamped below 0, or more than a day ahead of the
+  receiving side's clock, is not applied there and counts as `skipped`; the rest of the request
+  goes on (the PC's log names the device). Such a stamp is a broken clock or a forged change: no
+  edit could outrank it, and an edit's `+ 1` near the end of i64 made SQLite store a real that
+  every later sync failed to read. On the PC, `relay_money::ledger::stamp_ok`; in Tally,
+  `SyncTables.stampOk`. A ledger that took such stamps before the rule is repaired when it opens
+  (each side's stored stamps more than a day ahead, or stored as reals, become now and go out
+  again), and the PC's stamp arithmetic saturates (`MIN(updated_at, 4000000000000000) + 1`).
 - **Generation.** The PC returns a `generation` with every answer; the phone keeps it and sends it
   back. It changes when the PC's ledger is restored, erased, sampled or replaced by a device's
   first sync. A phone whose generation is not the PC's, or whose `since` is above the PC's

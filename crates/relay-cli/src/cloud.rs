@@ -26,6 +26,12 @@ pub enum CloudCommand {
     Sync,
     /// Where the link points and how its last round went
     Status,
+    /// Settle a replace the link held (`relay cloud status` says when): `cloud` takes the cloud
+    /// copy's ledger here, `pc` sends this PC's to the cloud in its place. Then merges
+    Accept {
+        #[arg(value_enum)]
+        ledger: Keep,
+    },
     /// Forget the cloud engine: this PC stops merging with it (revoke it there with `relay remote revoke`)
     Off,
 }
@@ -71,6 +77,49 @@ async fn ask_and_wait(api: &Server, name: &str) -> Result<(String, Option<String
     }
 }
 
+/// Whose ledger stays when the link held a replace from the cloud (`relay cloud accept`).
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum Keep {
+    /// The cloud copy's ledger replaces this PC's
+    Cloud,
+    /// This PC's ledger replaces the cloud copy's
+    Pc,
+}
+
+/// `relay cloud accept`: writes the choice into `cloud.json` (a running engine's next round would
+/// carry it out too), then merges now.
+async fn accept(instance: Instance, path: &std::path::Path, ledger: Keep) -> Result<u8> {
+    let choice = match ledger {
+        Keep::Cloud => cloud::Whole::Cloud,
+        Keep::Pc => cloud::Whole::Pc,
+    };
+    if !cloud::decide(path, choice).await? {
+        println!("Nothing is held: the link has no replace waiting on you.");
+        return Ok(0);
+    }
+    let report = cloud::round(&instance.socket_path(), path, &pc_name(instance)).await?;
+    match report.replaced_by {
+        Some("pc") => println!("This PC's ledger replaced the cloud copy's ({} rows); what the cloud's held is kept in money-backups/ on the server.", report.to_cloud),
+        _ => println!("The cloud copy's ledger replaced this PC's ({} rows); this PC's is kept in money-backups/ beside money.db.", report.to_pc),
+    }
+    Ok(0)
+}
+
+/// The replace the link holds, if it holds one, and how to settle it.
+fn print_held(link: &Link) {
+    if let Some(held) = &link.held {
+        let chosen = match held.accept {
+            Some(cloud::Whole::Cloud) => " (taking the cloud's on the next round)",
+            Some(cloud::Whole::Pc) => " (sending this PC's on the next round)",
+            None => "",
+        };
+        println!(
+            "held:      the cloud's ledger was replaced by one with {} accounts and entries, against {} here{chosen}: `relay cloud accept cloud` takes it, `relay cloud accept pc` keeps this PC's",
+            held.cloud_rows, held.pc_rows
+        );
+    }
+}
+
 /// Connecting, pairing and forgetting the link are the person's: each one hands this PC's data
 /// to a cloud engine or cuts it off. An agent's shell carries `RELAY_SESSION` (providers.rs);
 /// its exec gate refuses these too, and this is the same rule for a command it reaches some
@@ -80,6 +129,7 @@ fn refuse_in_agent_session(cmd: &CloudCommand, session: Option<&str>) -> Result<
         CloudCommand::Connect { .. } => "connect",
         CloudCommand::Pair { .. } => "pair",
         CloudCommand::Off => "off",
+        CloudCommand::Accept { .. } => "accept",
         CloudCommand::Sync | CloudCommand::Status => return Ok(()),
     };
     match session.filter(|s| !s.is_empty()) {
@@ -160,6 +210,7 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
             if let Some(error) = &link.last_error {
                 println!("last error: {error}");
             }
+            print_held(&link);
             println!("avex:      {}", if link.gym_digest.is_some() { "an export came home" } else { "nothing yet" });
             match (&link.server, &link.server_token) {
                 (Some(server), Some(_)) => println!("server:    {server} (the Relay app can pair through it)"),
@@ -167,6 +218,7 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
             }
             Ok(0)
         }
+        CloudCommand::Accept { ledger } => accept(instance, &path, ledger).await,
         CloudCommand::Off => {
             // After any round under way, which would otherwise write the link back.
             let _lock = cloud::lock(&path).await?;

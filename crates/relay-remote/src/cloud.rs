@@ -8,7 +8,8 @@
 //! the cloud with its own cursor there, and hands the cloud's answer back to this PC. Newest edit
 //! wins per row on each side, so the two converge. The wholesale acts keep their meaning: a ledger
 //! restored, erased or replaced on one side (`money.sync_stale` on the next round) replaces the
-//! other side's whole, as it would a phone's.
+//! other side's whole, as it would a phone's; but a cloud ledger far smaller than this PC's is held
+//! for the person to decide rather than copied over this PC's ([`Held`]).
 
 use crate::registry::{normalize_code, random_hex, sha256_hex};
 use crate::wire::{self, Greeting, Hello, Welcome, WIRE_V};
@@ -88,6 +89,49 @@ pub struct Link {
     /// next one, never read as a restore of the half-copied ledger.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacing: Option<Whole>,
+    /// Where the side being filled stood once the replace's first batch landed there: its new
+    /// generation and cursor (the side's own field moves there too, and the source's to the
+    /// whole ledger it sent). A replace cut short after that is finished by merging the source's
+    /// whole ledger into that side under this generation, newest edit winning, so what was edited
+    /// there since stays. `None` before the first batch landed, and in a marker an older build
+    /// wrote (it may not know this field): the replace then runs again whole, as it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed: Option<Side>,
+    /// A replace from the cloud this PC would not make by itself, waiting on the person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<Held>,
+}
+
+/// The cloud's ledger was replaced wholesale by one empty, or under half this PC's in accounts and
+/// entries, while this PC's is not empty. Any device the cloud copy lets sync can replace its
+/// ledger (an Avex included), and that would otherwise reach this PC and every phone after it, so
+/// the link holds it until the person chooses (`relay cloud accept cloud|pc`, [`decide`]); each
+/// round meanwhile fails with `cloud.replace_held`, kept in `last_error`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Held {
+    /// The cloud ledger's generation when it was held: a later wholesale act there is looked at
+    /// afresh.
+    pub generation: String,
+    /// Live accounts and entries on each side then.
+    pub pc_rows: usize,
+    pub cloud_rows: usize,
+    /// The person's choice, which the next round carries out: `cloud` takes the cloud's ledger
+    /// here, `pc` sends this PC's to the cloud in its place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept: Option<Whole>,
+}
+
+impl Held {
+    fn refusal(&self) -> Fail {
+        Fail::Refused {
+            code: "cloud.replace_held".into(),
+            message: format!(
+                "the cloud copy's ledger was replaced by one with {} accounts and entries, against {} on this PC; it was not copied over this PC's. \
+                 `relay cloud accept cloud` takes the cloud's here; `relay cloud accept pc` sends this PC's to the cloud instead",
+                self.cloud_rows, self.pc_rows
+            ),
+        }
+    }
 }
 
 /// One side of the link, as the side whose whole ledger replaces the other's.
@@ -375,6 +419,8 @@ pub async fn pair(path: &Path, link: &str, name: &str) -> Result<Link> {
         server: None,
         server_token: None,
         replacing: None,
+        landed: None,
+        held: None,
     };
     link.save(path)?;
     Ok(link)
@@ -398,7 +444,20 @@ pub struct Report {
 /// answer asked for in pages until the side has no more. Answers with the last request's cursor
 /// and generation and every change the side sent back, the newest of each row once. A side from
 /// before pages (it refuses `limit`) is asked whole, as before.
-async fn send(bus: &mut impl Bus, device: &str, replace: bool, side: &Side, mut changes: Vec<Change>) -> std::result::Result<SyncOut, Fail> {
+async fn send(bus: &mut impl Bus, device: &str, replace: bool, side: &Side, changes: Vec<Change>) -> std::result::Result<SyncOut, Fail> {
+    send_noting(bus, device, replace, side, changes, &mut |_| Ok(())).await
+}
+
+/// [`send`], telling `first` where the side stands once the first request's answer is in: for a
+/// replace, the cleared side's new generation, with the first batch in it.
+async fn send_noting(
+    bus: &mut impl Bus,
+    device: &str,
+    replace: bool,
+    side: &Side,
+    mut changes: Vec<Change>,
+    first_landed: &mut impl FnMut(&Side) -> Result<()>,
+) -> std::result::Result<SyncOut, Fail> {
     changes.sort_by_key(|c| relay_money::sync::order(&c.table));
     // What goes out, by row: a page asked for after a batch was applied hands that batch back.
     let sent: HashMap<(&str, &str), i64> = changes.iter().map(|c| ((c.table.as_str(), c.uid.as_str()), c.updated_at)).collect();
@@ -439,6 +498,9 @@ async fn send(bus: &mut impl Bus, device: &str, replace: bool, side: &Side, mut 
         }
         since = out.cursor;
         generation = Some(out.generation.clone());
+        if first {
+            first_landed(&Side { since, generation: generation.clone() })?;
+        }
         applied += out.applied;
         skipped += out.skipped;
         for c in &out.changes {
@@ -471,50 +533,193 @@ fn side_of(out: &SyncOut) -> Side {
     Side { since: out.cursor, generation: Some(out.generation.clone()) }
 }
 
-/// `from`'s whole ledger replaces `to`'s: the wholesale act made on `from` reaches `to`. Each
-/// side is asked under the name it lists the link by. Answers both sides' new places and how many
-/// rows went.
-async fn replace_whole(
+/// Accounts and entries in a whole ledger: what the person would miss. Categories are left out,
+/// since every new ledger is given some.
+fn weight(changes: &[Change]) -> usize {
+    changes.iter().filter(|c| !c.deleted && (c.table == "accounts" || c.table == "transactions")).count()
+}
+
+/// The generation `bus`'s ledger has now, asked for with one change at most.
+async fn generation_of(bus: &mut impl Bus, device: &str) -> std::result::Result<String, Fail> {
+    let mut payload = json!({"device": device, "replace": false, "since": 0, "changes": [], "limit": 1});
+    let answer = match bus.call("money.sync", payload.clone()).await {
+        Err(e) if e.is("bus.schema") => {
+            if let Some(p) = payload.as_object_mut() {
+                p.remove("limit");
+            }
+            bus.call("money.sync", payload).await?
+        }
+        answer => answer?,
+    };
+    Ok(serde_json::from_value::<SyncOut>(answer).map_err(anyhow::Error::from)?.generation)
+}
+
+/// What [`fill`] did: both sides' new places, the rows that went over, and the rows edited on the
+/// filled side meanwhile that went back.
+struct Filled {
+    from: Side,
+    to: Side,
+    rows: usize,
+    back: usize,
+}
+
+/// `whole`, `from`'s whole ledger, goes to `to`: replacing `to`'s (`at` is `None`), or, to finish
+/// a replace cut short, merged into it under the place `to` took when the first batch landed, so
+/// what was edited there since stays (newest edit wins, as in any round). Each side is asked under
+/// the name it lists the link by. `landed` hears both sides' places once a replace's first batch is
+/// in. Rows `to` answers with were edited there while it was being filled: they go back to `from`,
+/// whose cursor stays at `whole`, so `from`'s own edits made meanwhile come over next round (with
+/// what was just sent back, which `to` already has). `None`: `to` is not that ledger any more.
+async fn fill(
     from: &mut impl Bus,
     from_device: &str,
     to: &mut impl Bus,
     to_device: &str,
-) -> std::result::Result<(Side, Side, usize), Fail> {
-    let whole = send(from, from_device, false, &Side::default(), Vec::new()).await?;
-    let n = whole.changes.len();
-    let taken = send(to, to_device, true, &Side::default(), whole.changes.clone()).await?;
-    Ok((side_of(&whole), side_of(&taken), n))
+    whole: SyncOut,
+    at: Option<&Side>,
+    landed: &mut impl FnMut(&Side, &Side) -> Result<()>,
+) -> std::result::Result<Option<Filled>, Fail> {
+    let rows = whole.changes.len();
+    let from_side = side_of(&whole);
+    let taken = match at {
+        None => send_noting(to, to_device, true, &Side::default(), whole.changes, &mut |t| landed(&from_side, t)).await?,
+        Some(at) => match send(to, to_device, false, at, whole.changes).await {
+            Ok(taken) => taken,
+            Err(e) if e.is("money.sync_stale") => return Ok(None),
+            Err(e) => return Err(e),
+        },
+    };
+    let back = if taken.changes.is_empty() { 0 } else { send(from, from_device, false, &from_side, taken.changes.clone()).await?.applied };
+    Ok(Some(Filled { from: from_side, to: side_of(&taken), rows, back }))
 }
 
-/// `from`'s whole ledger replaces the other side's, with [`Link::replacing`] saved first and
-/// cleared once it is done.
-async fn replace(
+/// `from`'s whole ledger goes to the other side: a replace (`at` is `None`, with [`Link::replacing`]
+/// saved first), or the end of one cut short after its first batch landed (`at`, the place
+/// [`Link::landed`] kept). Clears the marker once it is done. `whole` is `from`'s whole ledger when
+/// the caller has it. `None`: a side's ledger was replaced again since the cut, and the marker is
+/// dropped for the usual rules to decide which way the latest wholesale act goes.
+#[allow(clippy::too_many_arguments)]
+async fn carry(
     from: Whole,
+    at: Option<Side>,
     pc: &mut impl Bus,
     cloud: &mut impl Bus,
     link: &mut Link,
     (pc_name, cloud_name): (&str, &str),
     save: &mut impl FnMut(&Link) -> Result<()>,
-) -> std::result::Result<Report, Fail> {
-    link.replacing = Some(from);
-    save(link)?;
+    whole: Option<SyncOut>,
+) -> std::result::Result<Option<Report>, Fail> {
+    if at.is_none() {
+        link.replacing = Some(from);
+        link.landed = None;
+        save(link)?;
+    }
+    let whole = match (whole, from) {
+        (Some(whole), _) => whole,
+        (None, Whole::Pc) => send(pc, cloud_name, false, &Side::default(), Vec::new()).await?,
+        (None, Whole::Cloud) => send(cloud, pc_name, false, &Side::default(), Vec::new()).await?,
+    };
+    // Finishing: the source's ledger must still be the one whose first batch landed.
+    let source = match from {
+        Whole::Pc => &link.pc,
+        Whole::Cloud => &link.cloud,
+    };
+    let filled = if at.is_some() && source.generation.as_deref() != Some(whole.generation.as_str()) {
+        None
+    } else {
+        match from {
+            Whole::Pc => {
+                let mut landed = |f: &Side, t: &Side| {
+                    (link.pc, link.cloud, link.landed) = (f.clone(), t.clone(), Some(t.clone()));
+                    save(link)
+                };
+                fill(pc, cloud_name, cloud, pc_name, whole, at.as_ref(), &mut landed).await?
+            }
+            Whole::Cloud => {
+                let mut landed = |f: &Side, t: &Side| {
+                    (link.cloud, link.pc, link.landed) = (f.clone(), t.clone(), Some(t.clone()));
+                    save(link)
+                };
+                fill(cloud, pc_name, pc, cloud_name, whole, at.as_ref(), &mut landed).await?
+            }
+        }
+    };
+    link.replacing = None;
+    link.landed = None;
+    let Some(f) = filled else { return Ok(None) };
     let mut report = Report::default();
     match from {
         Whole::Pc => {
-            let (pc_side, cloud_side, n) = replace_whole(pc, cloud_name, cloud, pc_name).await?;
-            (link.pc, link.cloud) = (pc_side, cloud_side);
-            report.to_cloud = n;
+            (link.pc, link.cloud) = (f.from, f.to);
+            (report.to_cloud, report.to_pc) = (f.rows, f.back);
             report.replaced_by = Some("pc");
         }
         Whole::Cloud => {
-            let (cloud_side, pc_side, n) = replace_whole(cloud, pc_name, pc, cloud_name).await?;
-            (link.pc, link.cloud) = (pc_side, cloud_side);
-            report.to_pc = n;
+            (link.cloud, link.pc) = (f.from, f.to);
+            (report.to_pc, report.to_cloud) = (f.rows, f.back);
             report.replaced_by = Some("cloud");
         }
     }
-    link.replacing = None;
-    Ok(report)
+    link.held = None;
+    Ok(Some(report))
+}
+
+/// `from`'s whole ledger replaces the other side's.
+async fn replace(
+    from: Whole,
+    pc: &mut impl Bus,
+    cloud: &mut impl Bus,
+    link: &mut Link,
+    names: (&str, &str),
+    save: &mut impl FnMut(&Link) -> Result<()>,
+    whole: Option<SyncOut>,
+) -> std::result::Result<Report, Fail> {
+    // A replace from scratch sends with `replace: true`, which no ledger answers as stale.
+    Ok(carry(from, None, pc, cloud, link, names, save, whole).await?.unwrap_or_default())
+}
+
+/// The cloud's ledger was replaced wholesale: it replaces this PC's, unless that is held ([`Held`]),
+/// or the person chose already.
+async fn from_cloud(
+    pc: &mut impl Bus,
+    cloud: &mut impl Bus,
+    link: &mut Link,
+    names: (&str, &str),
+    save: &mut impl FnMut(&Link) -> Result<()>,
+) -> std::result::Result<Report, Fail> {
+    let (pc_name, cloud_name) = names;
+    if let Some(held) = link.held.clone() {
+        match held.accept {
+            Some(choice) => return replace(choice, pc, cloud, link, names, save, None).await,
+            // Still the ledger held: no need to read either side whole again.
+            None if generation_of(cloud, pc_name).await? == held.generation => return Err(held.refusal()),
+            None => link.held = None,
+        }
+    }
+    let whole = send(cloud, pc_name, false, &Side::default(), Vec::new()).await?;
+    let ours = send(pc, cloud_name, false, &Side::default(), Vec::new()).await?;
+    let (cloud_rows, pc_rows) = (weight(&whole.changes), weight(&ours.changes));
+    if pc_rows > 0 && cloud_rows * 2 < pc_rows {
+        let held = Held { generation: whole.generation.clone(), pc_rows, cloud_rows, accept: None };
+        let refusal = held.refusal();
+        link.held = Some(held);
+        return Err(refusal);
+    }
+    replace(Whole::Cloud, pc, cloud, link, names, save, Some(whole)).await
+}
+
+/// Writes the person's choice for a replace the link holds ([`Held`]) into `cloud.json`, for the
+/// next round to carry out: `Whole::Cloud` takes the cloud's ledger here, `Whole::Pc` sends this
+/// PC's to the cloud in its place. False when nothing is held.
+pub async fn decide(path: &Path, choice: Whole) -> Result<bool> {
+    let _lock = lock(path).await?;
+    let Some(mut link) = Link::load(path)? else {
+        anyhow::bail!("this PC has no cloud link");
+    };
+    let Some(held) = link.held.as_mut() else { return Ok(false) };
+    held.accept = Some(choice);
+    link.save(path)?;
+    Ok(true)
 }
 
 /// One merge of the two ledgers. `pc_name` is how the cloud lists this PC, `cloud_name` how this
@@ -532,14 +737,22 @@ pub async fn merge_money(
     // A replace the last round left partway goes on from the same side, before anything else: the
     // side it was clearing holds part of the ledger and a new generation, and would read as stale.
     if let Some(from) = link.replacing {
-        return replace(from, pc, cloud, link, names, save).await;
+        match link.landed.clone() {
+            None => return replace(from, pc, cloud, link, names, save, None).await,
+            Some(at) => {
+                if let Some(report) = carry(from, Some(at), pc, cloud, link, names, save, None).await? {
+                    return Ok(report);
+                }
+                // A side was replaced again since: the round goes on as any other.
+            }
+        }
     }
     let mut report = Report::default();
     // This PC's changes since the last round.
     let ours = match send(pc, cloud_name, false, &link.pc, Vec::new()).await {
         Ok(out) => out,
         // Restored, erased or replaced on this PC: it goes to the cloud whole.
-        Err(e) if e.is("money.sync_stale") => return replace(Whole::Pc, pc, cloud, link, names, save).await,
+        Err(e) if e.is("money.sync_stale") => return replace(Whole::Pc, pc, cloud, link, names, save, None).await,
         Err(e) => return Err(e),
     };
     let mut pc_side = side_of(&ours);
@@ -548,7 +761,7 @@ pub async fn merge_money(
         let theirs = match send(cloud, pc_name, false, &link.cloud, changes).await {
             Ok(out) => out,
             // Tally's first sync, or a restore, replaced the cloud's ledger: it comes here whole.
-            Err(e) if pass == 0 && e.is("money.sync_stale") => return replace(Whole::Cloud, pc, cloud, link, names, save).await,
+            Err(e) if pass == 0 && e.is("money.sync_stale") => return from_cloud(pc, cloud, link, names, save).await,
             Err(e) => return Err(e),
         };
         report.to_cloud += theirs.applied;
@@ -579,8 +792,46 @@ pub async fn merge_money(
     Ok(report)
 }
 
-/// Bring the newest Avex export home, when the cloud holds one this PC has not taken.
-pub async fn fetch_gym(pc: &mut impl Bus, cloud: &mut impl Bus, link: &mut Link) -> std::result::Result<bool, Fail> {
+/// How many of the exports this PC's training history came from [`fetch_gym`] keeps.
+pub const GYM_KEPT: usize = 5;
+
+/// Before an upload replaces this PC's training history, the export it was last uploaded from
+/// (this PC's `gym.raw`) is kept in `dir` (0700) as `avex-<time>-<n>.json` (0600), the newest
+/// [`GYM_KEPT`]: `gym.import` of that file (the Gym page's import) puts it back. A history
+/// imported from a file has no such text here; that file is wherever it was imported from.
+async fn keep_gym(pc: &mut impl Bus, dir: &Path) -> std::result::Result<(), Fail> {
+    use std::io::Write as _;
+    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+    let raw = match pc.call("gym.raw", json!({})).await {
+        Ok(raw) => raw,
+        Err(e) if e.is("bus.unknown_op") => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    let Some(text) = raw["json"].as_str() else { return Ok(()) };
+    let kept = (|| -> std::io::Result<()> {
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        let name = format!("avex-{}-{}.json", jiff::Timestamp::now().strftime("%Y%m%dT%H%M%SZ"), random_hex(4));
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(dir.join(name))?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()?;
+        let mut all: Vec<PathBuf> = std::fs::read_dir(dir)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("avex-") && n.ends_with(".json")))
+            .collect();
+        all.sort();
+        for old in all.iter().rev().skip(GYM_KEPT) {
+            let _ = std::fs::remove_file(old);
+        }
+        Ok(())
+    })();
+    kept.with_context(|| format!("keeping this PC's training history in {} before replacing it", dir.display()))?;
+    Ok(())
+}
+
+/// Bring the newest Avex export home, when the cloud holds one this PC has not taken. With `keep`,
+/// the export this PC's history came from is kept there first ([`keep_gym`]).
+pub async fn fetch_gym(pc: &mut impl Bus, cloud: &mut impl Bus, link: &mut Link, keep: Option<&Path>) -> std::result::Result<bool, Fail> {
     let raw = match cloud.call("gym.raw", json!({"have": link.gym_digest})).await {
         Ok(raw) => raw,
         // A cloud engine from before the upload: nothing to bring.
@@ -592,6 +843,9 @@ pub async fn fetch_gym(pc: &mut impl Bus, cloud: &mut impl Bus, link: &mut Link)
     };
     if link.gym_digest.as_deref() == Some(digest) || sha256_hex(text) != digest {
         return Ok(false);
+    }
+    if let Some(dir) = keep {
+        keep_gym(pc, dir).await?;
     }
     pc.call("gym.upload", json!({"json": text, "name": "avex_export.json"})).await?;
     link.gym_digest = Some(digest.to_string());
@@ -636,7 +890,7 @@ pub async fn round(socket: &Path, path: &Path, pc_name: &str) -> Result<Report> 
         let cloud_name = device_name("Cloud", &link.host);
         let mut save = |l: &Link| if keep(l, path)? { Ok(()) } else { Err(anyhow!("the cloud link was removed during the round")) };
         let mut report = merge_money(&mut pc, &mut cloud, &mut link, pc_name, &cloud_name, &mut save).await.map_err(anyhow::Error::from)?;
-        report.gym = fetch_gym(&mut pc, &mut cloud, &mut link).await.map_err(anyhow::Error::from)?;
+        report.gym = fetch_gym(&mut pc, &mut cloud, &mut link, Some(&path.with_file_name("cloud-gym"))).await.map_err(anyhow::Error::from)?;
         anyhow::Ok(report)
     }
     .await;
@@ -735,7 +989,7 @@ mod tests {
         Link {
             v: 1, url: "wss://x/join/r".into(), host: "cloud".into(), host_id: "h".into(), device: "d".into(), token: "t".into(),
             pc: Side::default(), cloud: Side::default(), gym_digest: None, last_ok: None, last_error: None, server: None, server_token: None,
-            replacing: None,
+            replacing: None, landed: None, held: None,
         }
     }
 
@@ -848,6 +1102,17 @@ mod tests {
         assert_eq!(names(&cloud.0), names(&pc.0));
     }
 
+    /// A whole ledger of `n` accounts, as a phone's first sync sends it.
+    fn phone_ledger(n: usize) -> Vec<Change> {
+        let mut phone = Ledger::open_in_memory().unwrap();
+        accounts(&mut phone, "A", n);
+        phone.sync("probe", false, 0, None, &[], "t").unwrap().changes
+    }
+
+    fn has(l: &Ledger, name: &str) -> bool {
+        names(l).iter().any(|n| n == name)
+    }
+
     #[tokio::test]
     async fn a_replace_cut_short_is_finished_from_the_same_side() {
         let (mut pc, mut cloud) = (Ledgered(Ledger::open_in_memory().unwrap()), Ledgered(Ledger::open_in_memory().unwrap()));
@@ -856,35 +1121,212 @@ mod tests {
         merge(&mut pc, &mut cloud, &mut link).await;
 
         // Tally's first sync gives the cloud a ledger bigger than one batch.
-        let mut phone = Ledger::open_in_memory().unwrap();
-        for i in 0..BATCH + 100 {
-            phone.account_add(&format!("A{i:04}"), AccountType::Cash, 0, None, "").unwrap();
-        }
-        let everything = phone.sync("probe", false, 0, None, &[], "t").unwrap().changes;
-        cloud.0.sync("Pixel", true, 0, None, &everything, "t").unwrap();
+        cloud.0.sync("Pixel", true, 0, None, &phone_ledger(BATCH + 100), "t").unwrap();
 
-        // The round stops after this PC took the first batch: it holds part of the phone's ledger.
+        // The round stops after this PC took the first batch (its changes, its whole ledger, the
+        // batch): it holds part of the phone's ledger.
         let mut saved = Vec::new();
-        let mut flaky = Flaky { bus: &mut pc, left: 2 };
+        let mut flaky = Flaky { bus: &mut pc, left: 3 };
         let cut = merge_money(&mut flaky, &mut cloud, &mut link, "PC (desk)", "Cloud (render)", &mut |l| {
             saved.push(l.clone());
             Ok(())
         })
         .await;
         assert!(cut.is_err());
-        assert!(names(&pc.0).len() < BATCH + 100);
-        // What reached the disk before the PC was cleared says which way the replace went.
+        assert_eq!(names(&pc.0).len(), BATCH);
+        // What reached the disk once the first batch landed says which way the replace went, and
+        // where this PC's ledger stood then.
         let mut on_disk = saved.pop().expect("the link was saved before the replace");
         assert_eq!(on_disk.replacing, Some(Whole::Cloud));
+        assert_eq!(on_disk.landed.as_ref().and_then(|l| l.generation.clone()), Some(pc.0.generation().unwrap()));
 
-        // The next round finishes it, rather than sending the half-copied ledger to the cloud.
+        // The cloud is out of reach for a while, and the person adds an account on the PC.
+        pc.0.account_add("Edited while the cloud was down", AccountType::Cash, 0, None, "").unwrap();
+
+        // The next round finishes the replace, rather than sending the half-copied ledger to the
+        // cloud, and keeps what was edited here since.
         let r = merge(&mut pc, &mut cloud, &mut on_disk).await;
         assert_eq!(r.replaced_by, Some("cloud"));
-        assert_eq!(names(&pc.0).len(), BATCH + 100);
-        assert_eq!(names(&cloud.0).len(), BATCH + 100);
-        assert_eq!(on_disk.replacing, None);
+        // The account, and the categories adding one gave a ledger that had none yet.
+        assert!(r.to_cloud > 0, "{r:?}");
+        assert_eq!(names(&pc.0).len(), BATCH + 101);
+        assert!(has(&pc.0, "Edited while the cloud was down") && !has(&pc.0, "Old"));
+        assert_eq!(names(&cloud.0), names(&pc.0));
+        assert_eq!((on_disk.replacing, on_disk.landed.as_ref()), (None, None));
         let quiet = merge(&mut pc, &mut cloud, &mut on_disk).await;
         assert_eq!((quiet.to_pc, quiet.to_cloud, quiet.replaced_by), (0, 0, None), "{quiet:?}");
+    }
+
+    #[tokio::test]
+    async fn finishing_a_replace_keeps_what_a_phone_did_on_the_half_copied_cloud() {
+        let (mut pc, mut cloud) = (Ledgered(Ledger::open_in_memory().unwrap()), Ledgered(Ledger::open_in_memory().unwrap()));
+        let mut link = link();
+        merge(&mut pc, &mut cloud, &mut link).await;
+        // The PC's ledger is restored: it goes to the cloud whole, and the link breaks after the
+        // first batch.
+        pc.0.reset().unwrap();
+        accounts(&mut pc.0, "R", BATCH + 100);
+        let mut flaky = Flaky { bus: &mut cloud, left: 1 };
+        assert!(merge_money(&mut pc, &mut flaky, &mut link, "PC (desk)", "Cloud (render)", &mut |_| Ok(())).await.is_err());
+        assert_eq!((link.replacing, names(&cloud.0).len()), (Some(Whole::Pc), BATCH));
+
+        // Tally, stale, takes the cloud's ledger whole and merges an edit into it, for days.
+        let whole = cloud.0.sync("Tally", false, 0, None, &[], "t").unwrap();
+        let mut phone = Ledger::open_in_memory().unwrap();
+        phone.account_add("Phone edit", AccountType::Cash, 0, None, "").unwrap();
+        let mine: Vec<Change> = phone.sync("p", false, 0, None, &[], "t").unwrap().changes.into_iter().filter(|c| c.table == "accounts").collect();
+        cloud.0.sync("Tally", false, whole.cursor, Some(&whole.generation), &mine, "t").unwrap();
+
+        let r = merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!(r.replaced_by, Some("pc"));
+        assert!(has(&cloud.0, "Phone edit") && has(&pc.0, "Phone edit"), "the phone's edit stays and comes to the PC");
+        assert_eq!(names(&cloud.0).len(), BATCH + 101);
+        assert_eq!(names(&cloud.0), names(&pc.0));
+        // Tally merges on with the generation it took: the cloud's ledger is still that one.
+        assert!(cloud.0.sync("Tally", false, whole.cursor, Some(&whole.generation), &[], "t").is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_marker_without_where_it_landed_runs_the_replace_again_whole() {
+        let (mut pc, mut cloud) = (Ledgered(Ledger::open_in_memory().unwrap()), Ledgered(Ledger::open_in_memory().unwrap()));
+        pc.0.account_add("Old", AccountType::Cash, 0, None, "").unwrap();
+        let mut link = link();
+        merge(&mut pc, &mut cloud, &mut link).await;
+        cloud.0.sync("Pixel", true, 0, None, &phone_ledger(BATCH + 100), "t").unwrap();
+        // An older build's marker: the direction only, after part of the ledger landed.
+        let mut flaky = Flaky { bus: &mut pc, left: 3 };
+        assert!(merge_money(&mut flaky, &mut cloud, &mut link, "PC (desk)", "Cloud (render)", &mut |_| Ok(())).await.is_err());
+        let old: Link = serde_json::from_str(&serde_json::to_string(&link).unwrap().replace(r#""landed""#, r#""landed_by_a_newer_build""#)).unwrap();
+        let mut link = old;
+        assert_eq!((link.replacing, link.landed.as_ref()), (Some(Whole::Cloud), None));
+        let r = merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!(r.replaced_by, Some("cloud"));
+        assert_eq!(names(&pc.0), names(&cloud.0));
+        assert_eq!(names(&pc.0).len(), BATCH + 100);
+    }
+
+    #[tokio::test]
+    async fn a_side_replaced_again_after_the_cut_wins_by_the_usual_rules() {
+        let (mut pc, mut cloud) = (Ledgered(Ledger::open_in_memory().unwrap()), Ledgered(Ledger::open_in_memory().unwrap()));
+        let mut link = link();
+        merge(&mut pc, &mut cloud, &mut link).await;
+        cloud.0.sync("Pixel", true, 0, None, &phone_ledger(BATCH + 100), "t").unwrap();
+        let mut flaky = Flaky { bus: &mut pc, left: 3 };
+        assert!(merge_money(&mut flaky, &mut cloud, &mut link, "PC (desk)", "Cloud (render)", &mut |_| Ok(())).await.is_err());
+        assert!(link.landed.is_some());
+        // Another phone pairs with the cloud before the PC is back: the newest wholesale act.
+        let mut other = Ledger::open_in_memory().unwrap();
+        accounts(&mut other, "New", BATCH + 50);
+        cloud.0.sync("Other phone", true, 0, None, &other.sync("probe", false, 0, None, &[], "t").unwrap().changes, "t").unwrap();
+        let r = merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!(r.replaced_by, Some("cloud"));
+        assert_eq!(names(&pc.0), names(&other));
+        assert_eq!(names(&cloud.0), names(&other));
+        assert_eq!(link.replacing, None);
+    }
+
+    /// A PC on which the person adds an account right after a replace's first batch lands here.
+    struct EditsBetween<'a> {
+        bus: &'a mut Ledgered,
+        done: bool,
+    }
+
+    impl Bus for EditsBetween<'_> {
+        async fn call(&mut self, op: &str, p: Value) -> std::result::Result<Value, Fail> {
+            let replacing = p["replace"].as_bool() == Some(true);
+            let out = self.bus.call(op, p).await;
+            if replacing && !self.done {
+                self.done = true;
+                self.bus.0.account_add("Between", AccountType::Cash, 0, None, "").unwrap();
+            }
+            out
+        }
+    }
+
+    #[tokio::test]
+    async fn an_edit_made_between_two_batches_of_a_replace_reaches_the_other_side() {
+        let (mut pc, mut cloud) = (Ledgered(Ledger::open_in_memory().unwrap()), Ledgered(Ledger::open_in_memory().unwrap()));
+        let mut link = link();
+        merge(&mut pc, &mut cloud, &mut link).await;
+        cloud.0.sync("Pixel", true, 0, None, &phone_ledger(BATCH + 100), "t").unwrap();
+        let mut between = EditsBetween { bus: &mut pc, done: false };
+        let r = merge_money(&mut between, &mut cloud, &mut link, "PC (desk)", "Cloud (render)", &mut |_| Ok(())).await.unwrap();
+        assert!(r.replaced_by == Some("cloud") && r.to_cloud > 0, "{r:?}");
+        assert!(has(&cloud.0, "Between"), "it went to the cloud in the same round");
+        let r = merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!(r.to_pc, 0, "{r:?}");
+        assert_eq!(names(&cloud.0), names(&pc.0));
+        let quiet = merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!((quiet.to_pc, quiet.to_cloud, quiet.replaced_by), (0, 0, None), "{quiet:?}");
+    }
+
+    #[tokio::test]
+    async fn an_empty_ledger_any_credential_put_on_the_cloud_is_held_not_copied_here() {
+        let (mut pc, mut cloud) = (Ledgered(Ledger::open_in_memory().unwrap()), Ledgered(Ledger::open_in_memory().unwrap()));
+        accounts(&mut pc.0, "Mine", 50);
+        let mut link = link();
+        merge(&mut pc, &mut cloud, &mut link).await;
+        // Avex's credential may sync: it sends a replace with nothing in it.
+        cloud.0.sync("Avex (S21)", true, 0, None, &[], "t").unwrap();
+        let held = merge_money(&mut pc, &mut cloud, &mut link, "PC (desk)", "Cloud (render)", &mut |_| Ok(())).await.unwrap_err();
+        assert!(held.is("cloud.replace_held"), "{held}");
+        assert!(held.to_string().contains("relay cloud accept cloud"), "{held}");
+        assert_eq!(names(&pc.0).len(), 50, "this PC's ledger is as it was");
+        assert_eq!(link.held.as_ref().map(|h| (h.pc_rows, h.cloud_rows)), Some((50, 0)));
+        assert_eq!(link.replacing, None);
+
+        // Held, a round reads neither ledger whole again.
+        let mut c = Watched::new(&mut cloud, false);
+        let again = merge_money(&mut pc, &mut c, &mut link, "PC (desk)", "Cloud (render)", &mut |_| Ok(())).await.unwrap_err();
+        assert!(again.is("cloud.replace_held"));
+        assert_eq!((c.calls, c.longest), (2, 0), "the stale answer, then one look at the generation");
+
+        // The person keeps this PC's: it goes to the cloud whole.
+        link.held.as_mut().unwrap().accept = Some(Whole::Pc);
+        let r = merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!(r.replaced_by, Some("pc"));
+        assert_eq!(names(&cloud.0).len(), 50);
+        assert_eq!(link.held, None);
+        let quiet = merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!((quiet.to_pc, quiet.to_cloud, quiet.replaced_by), (0, 0, None), "{quiet:?}");
+
+        // Or takes the cloud's, small as it is.
+        cloud.0.sync("Pixel", true, 0, None, &phone_ledger(3), "t").unwrap();
+        assert!(merge_money(&mut pc, &mut cloud, &mut link, "PC (desk)", "Cloud (render)", &mut |_| Ok(())).await.is_err());
+        link.held.as_mut().unwrap().accept = Some(Whole::Cloud);
+        let r = merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!(r.replaced_by, Some("cloud"));
+        assert_eq!(names(&pc.0).len(), 3);
+
+        // A ledger as big as this PC's (a phone pairing with the cloud) replaces it as before.
+        cloud.0.sync("Pixel", true, 0, None, &phone_ledger(2), "t").unwrap();
+        let r = merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!(r.replaced_by, Some("cloud"));
+        assert_eq!(names(&pc.0).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_held_replace_is_looked_at_afresh_once_the_cloud_is_replaced_again() {
+        let (mut pc, mut cloud) = (Ledgered(Ledger::open_in_memory().unwrap()), Ledgered(Ledger::open_in_memory().unwrap()));
+        accounts(&mut pc.0, "Mine", 10);
+        let mut link = link();
+        merge(&mut pc, &mut cloud, &mut link).await;
+        cloud.0.sync("Avex (S21)", true, 0, None, &[], "t").unwrap();
+        assert!(merge_money(&mut pc, &mut cloud, &mut link, "PC (desk)", "Cloud (render)", &mut |_| Ok(())).await.is_err());
+        // Tally pairs with the cloud and sends its whole ledger.
+        cloud.0.sync("Pixel", true, 0, None, &phone_ledger(12), "t").unwrap();
+        let r = merge(&mut pc, &mut cloud, &mut link).await;
+        assert_eq!(r.replaced_by, Some("cloud"));
+        assert_eq!((names(&pc.0).len(), link.held.as_ref()), (12, None));
+    }
+
+    #[test]
+    fn a_held_link_says_so_and_reads_back() {
+        let mut l = link();
+        l.held = Some(Held { generation: "g".into(), pc_rows: 50, cloud_rows: 0, accept: None });
+        let text = serde_json::to_string(&l).unwrap();
+        assert!(text.contains(r#""held":{"generation":"g","pc_rows":50,"cloud_rows":0}"#), "{text}");
+        assert_eq!(serde_json::from_str::<Link>(&text).unwrap(), l);
     }
 
     #[tokio::test]

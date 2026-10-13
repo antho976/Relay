@@ -120,11 +120,27 @@ object SyncSchema {
         db.beginTransaction()
         try {
             TABLES.forEach { table -> SUFFIXES.forEach { db.execSQL("DROP TRIGGER IF EXISTS ${table}_$it") } }
+            repairStamps(db)
             createTriggers(db)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
         }
+    }
+
+    /**
+     * Brings back a ledger the PC stamped out of range before [com.tally.app.data.sync.SyncTables.stampOk]
+     * was checked: a stamp more than a day ahead, or one an edit's `+ 1` overflowed into a real,
+     * becomes now. An edit of such a row would overflow again, and the PC no longer takes its stamp.
+     * Run with the triggers down, so nothing restamps the repair; the rows go to the PC next sync,
+     * as relay_money's `repair_stamps` sends its own.
+     */
+    private fun repairStamps(db: SupportSQLiteDatabase) {
+        val ahead = "$NOW + ${com.tally.app.data.sync.SyncTables.STAMP_AHEAD_MS}"
+        TABLES.forEach { table ->
+            db.execSQL("UPDATE $table SET updatedAt = $NOW WHERE typeof(updatedAt) <> 'integer' OR updatedAt > $ahead")
+        }
+        db.execSQL("UPDATE sync_tombstones SET deletedAt = $NOW WHERE typeof(deletedAt) <> 'integer' OR deletedAt > $ahead")
     }
 
     /** Fresh installs: Room creates the tables, this adds the triggers; every open brings them up to date. */

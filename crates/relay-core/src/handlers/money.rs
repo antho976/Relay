@@ -302,6 +302,13 @@ pub fn register(e: &mut Engine) {
             return Err(BusError::invalid("money.invalid", "A sync's limit is 1 or more changes"));
         }
         let limit = p.limit.map(|l| l as usize);
+        // The ledger leaves out a change stamped below 0 or more than a day ahead of this clock;
+        // the device hears it as skipped, and the log says which device sent it.
+        let now = jiff::Timestamp::now().as_millisecond();
+        let out_of_range = p.changes.iter().filter(|c| !relay_money::ledger::stamp_ok(c.updated_at, now)).count();
+        if out_of_range > 0 {
+            tracing::warn!(device, out_of_range, "money.sync: changes stamped below 0 or more than a day ahead were not applied");
+        }
         let out = ledger(ctx.engine(), |l| {
             l.sync_page(device, p.replace.unwrap_or(false), p.since, p.generation.as_deref(), &p.changes, limit, &crate::time::now())
         })?;

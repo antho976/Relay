@@ -116,6 +116,22 @@ fn a_phone_syncs_its_ledger_across_the_bus() {
 }
 
 #[test]
+fn a_change_stamped_far_in_the_future_is_skipped_and_the_ledger_goes_on_syncing() {
+    let engine = engine();
+    let changes = json!([
+        {"table": "accounts", "uid": "a1", "updated_at": 100, "row": {"name": "Chequing", "type": "CHEQUING", "openingBalance": 50_000, "archived": false, "sortOrder": 0}},
+        {"table": "transactions", "uid": "t1", "updated_at": i64::MAX, "row": {"type": "INCOME", "amount": 210_000, "date": "2026-10-01", "account": "a1",
+            "toAccount": null, "category": null, "note": "Pay", "recurring": null, "createdAt": 100}}
+    ]);
+    let first = ok(&engine, "money.sync", json!({"device": "Avex (S21)", "replace": true, "since": 0, "changes": changes}));
+    assert_eq!((first["applied"].as_u64(), first["skipped"].as_u64()), (Some(1), Some(1)));
+    let home = ok(&engine, "money.summary", json!({"today": "2026-10-07"}));
+    ok(&engine, "money.tx.add", json!({"type": "EXPENSE", "amount": 1_500, "date": "2026-10-06", "account_id": home["accounts"][0]["id"]}));
+    let next = ok(&engine, "money.sync", json!({"device": "Pixel 9", "since": 0, "changes": []}));
+    assert!(next["changes"].as_array().unwrap().iter().all(|c| c["updated_at"].as_i64().unwrap() < i64::MAX / 2), "{next}");
+}
+
+#[test]
 fn a_sync_answer_comes_in_pages_when_asked_for_them() {
     let engine = engine();
     ok(&engine, "money.sample", json!({}));

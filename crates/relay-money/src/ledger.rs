@@ -24,7 +24,7 @@ use jiff::ToSpan;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Bumped with every entry appended to [`MIGRATIONS`]; every earlier version must stay openable.
 pub const SCHEMA_VERSION: i64 = 4;
@@ -261,6 +261,22 @@ pub(crate) fn now_ms() -> i64 {
     jiff::Timestamp::now().as_millisecond()
 }
 
+/// How far ahead of this clock a device's stamp may be (docs/MONEY.md, "Sync"). A phone a few
+/// hours fast is ordinary; a stamp days ahead, or near the end of i64, is a broken clock or a
+/// forged change: no edit here could outrank it, and an edit's `+ 1` past i64 turned the column
+/// into a real that every later sync failed to read.
+pub const STAMP_AHEAD_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// Where the stamp arithmetic saturates, written out in the SQL as `MIN(updated_at,
+/// 4000000000000000) + 1`: the year 128,000, far past any clock and far from an overflow.
+pub const STAMP_CEILING: i64 = 4_000_000_000_000_000;
+
+/// A stamp this ledger takes from a device: 0 (what an older ledger's settings carry) to a day
+/// ahead of `now`. Tally's `SyncTables.stampOk`.
+pub fn stamp_ok(at: i64, now: i64) -> bool {
+    (0..=now.saturating_add(STAMP_AHEAD_MS)).contains(&at)
+}
+
 pub(crate) fn new_uid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -290,6 +306,8 @@ pub const CATCH_UP_LIMIT: usize = 60;
 
 pub struct Ledger {
     pub(crate) conn: Connection,
+    /// The file, for the snapshot a replace keeps beside it (`sync.rs`); `None` in memory.
+    pub(crate) path: Option<PathBuf>,
 }
 
 /// 0600 on the ledger and its `-wal` and `-shm` files: every account, balance and payee, which
@@ -314,16 +332,17 @@ impl Ledger {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         private(path);
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        Ledger::init(conn)
+        Ledger::init(conn, Some(path.to_path_buf()))
     }
 
     pub fn open_in_memory() -> Result<Ledger> {
-        Ledger::init(Connection::open_in_memory()?)
+        Ledger::init(Connection::open_in_memory()?, None)
     }
 
-    fn init(conn: Connection) -> Result<Ledger> {
-        let mut ledger = Ledger { conn };
+    fn init(conn: Connection, path: Option<PathBuf>) -> Result<Ledger> {
+        let mut ledger = Ledger { conn, path };
         ledger.migrate()?;
+        ledger.repair_stamps()?;
         Ok(ledger)
     }
 
@@ -341,6 +360,25 @@ impl Ledger {
         Ok(())
     }
 
+    /// Brings back a ledger a device stamped out of range before [`stamp_ok`] was checked: a stamp
+    /// more than a day ahead, or one an edit's `+ 1` overflowed into a real, becomes now. Such a row
+    /// could not be edited again, and every sync failed reading it. Renumbered by the change,
+    /// the rows go out again with their new stamps. Run on every open; it finds nothing after the
+    /// first.
+    fn repair_stamps(&mut self) -> Result<usize> {
+        let now = now_ms();
+        let tx = self.conn.transaction()?;
+        let mut n = 0;
+        for t in TABLES.iter().copied().chain(["tombstones", "settings"]) {
+            n += tx.execute(
+                &format!("UPDATE {t} SET updated_at = ?1 WHERE typeof(updated_at) <> 'integer' OR updated_at > ?2"),
+                params![now, now.saturating_add(STAMP_AHEAD_MS)],
+            )?;
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
     fn setting(&self, key: &str) -> Result<Option<String>> {
         Ok(self.conn.prepare_cached("SELECT value FROM settings WHERE key = ?1")?.query_row([key], |r| r.get(0)).optional()?)
     }
@@ -348,7 +386,7 @@ impl Ledger {
     fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
         conn.prepare_cached(
             "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = MAX(excluded.updated_at, settings.updated_at + 1)",
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = MAX(excluded.updated_at, MIN(settings.updated_at, 4000000000000000) + 1)",
         )?.execute(params![key, value, now_ms()])?;
         Ok(())
     }
@@ -614,14 +652,14 @@ impl Ledger {
         let note = p.note.as_deref().map(str::trim).unwrap_or(&cur.note).to_string();
         self.conn.prepare_cached(
             "UPDATE transactions SET type = ?2, amount = ?3, date = ?4, account_id = ?5, to_account_id = ?6,
-                    category_id = ?7, note = ?8, updated_at = MAX(?9, updated_at + 1) WHERE id = ?1",
+                    category_id = ?7, note = ?8, updated_at = MAX(?9, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1",
         )?.execute(params![id, name_of(&ty), amount, date, account, to, category, note, now_ms()])?;
         self.tx(id)
     }
 
     /// Deletes are tombstones, so sync can carry them to the other device.
     pub fn tx_delete(&mut self, id: i64) -> Result<()> {
-        let n = self.conn.prepare_cached("UPDATE transactions SET deleted = 1, updated_at = MAX(?2, updated_at + 1) WHERE id = ?1 AND deleted = 0")?
+        let n = self.conn.prepare_cached("UPDATE transactions SET deleted = 1, updated_at = MAX(?2, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1 AND deleted = 0")?
             .execute(params![id, now_ms()])?;
         if n == 0 {
             return Err(LedgerError::NotFound(format!("No entry {id}")));
@@ -631,7 +669,7 @@ impl Ledger {
 
     /// Brings back a deleted entry: the Undo of [`Ledger::tx_delete`].
     pub fn tx_restore(&mut self, id: i64) -> Result<Tx> {
-        let n = self.conn.prepare_cached("UPDATE transactions SET deleted = 0, updated_at = MAX(?2, updated_at + 1) WHERE id = ?1 AND deleted = 1")?
+        let n = self.conn.prepare_cached("UPDATE transactions SET deleted = 0, updated_at = MAX(?2, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1 AND deleted = 1")?
             .execute(params![id, now_ms()])?;
         if n == 0 {
             return Err(LedgerError::NotFound(format!("No deleted entry {id}")));
@@ -658,11 +696,11 @@ impl Ledger {
         }
         let now = now_ms();
         if amount <= 0 {
-            self.conn.prepare_cached("UPDATE budgets SET deleted = 1, updated_at = MAX(?2, updated_at + 1) WHERE category_id = ?1")?.execute(params![key, now])?;
+            self.conn.prepare_cached("UPDATE budgets SET deleted = 1, updated_at = MAX(?2, MIN(updated_at, 4000000000000000) + 1) WHERE category_id = ?1")?.execute(params![key, now])?;
         } else {
             self.conn.prepare_cached(
                 "INSERT INTO budgets (uid, category_id, amount, updated_at) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(category_id) DO UPDATE SET amount = excluded.amount, deleted = 0, updated_at = MAX(excluded.updated_at, budgets.updated_at + 1)",
+                 ON CONFLICT(category_id) DO UPDATE SET amount = excluded.amount, deleted = 0, updated_at = MAX(excluded.updated_at, MIN(budgets.updated_at, 4000000000000000) + 1)",
             )?.execute(params![new_uid(), key, amount, now])?;
         }
         Ok(())
@@ -716,7 +754,7 @@ impl Ledger {
             };
             let following = Recurrence::new(anchor, freq, interval.clamp(1, 52) as i32).on_or_after(today);
             let active = end.as_deref().and_then(parse_date).is_none_or(|e| following <= e);
-            tx.prepare_cached("UPDATE recurring SET next_date = ?2, active = ?3, updated_at = MAX(?4, updated_at + 1) WHERE id = ?1")?
+            tx.prepare_cached("UPDATE recurring SET next_date = ?2, active = ?3, updated_at = MAX(?4, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1")?
                 .execute(params![id, following.to_string(), active, now])?;
         }
         for (id, uid, ty, amount, account, to, category, freq, interval, anchor, next, end) in due {
@@ -741,7 +779,7 @@ impl Ledger {
             // After the last date posted, not after today: a capped catch-up resumes there next pass.
             let following = rule.after(dates.last().copied().unwrap_or(today));
             let active = end.is_none_or(|e| following <= e);
-            tx.prepare_cached("UPDATE recurring SET next_date = ?2, active = ?3, updated_at = MAX(?4, updated_at + 1) WHERE id = ?1")?
+            tx.prepare_cached("UPDATE recurring SET next_date = ?2, active = ?3, updated_at = MAX(?4, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1")?
                 .execute(params![id, following.to_string(), active, now])?;
         }
         tx.commit()?;
@@ -918,7 +956,7 @@ impl Ledger {
             tx.execute(
                 &format!(
                     "INSERT OR REPLACE INTO tombstones (tbl, uid, updated_at, category)
-                     SELECT '{t}', uid, MAX(?1, updated_at + 1), {category} FROM {t} WHERE deleted = 0"
+                     SELECT '{t}', uid, MAX(?1, MIN(updated_at, 4000000000000000) + 1), {category} FROM {t} WHERE deleted = 0"
                 ),
                 [now],
             )?;
@@ -1688,7 +1726,7 @@ mod tests {
              INSERT INTO account_values (uid, account_id, date, value, updated_at) VALUES ('v1', 2, '2026-10-01', 600000, 1);",
         )
         .unwrap();
-        let mut l = Ledger::init(conn).unwrap();
+        let mut l = Ledger::init(conn, None).unwrap();
         assert_eq!(4i64, l.conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)).unwrap());
         let accounts = l.accounts().unwrap();
         let tfsa = accounts.iter().find(|a| a.name == "TFSA").unwrap();

@@ -6,11 +6,15 @@
 //! local ids never leave the device. A device's first sync replaces this ledger outright: the
 //! phone is where the ledger lives.
 
-use crate::ledger::{Ledger, LedgerError, Result};
+use crate::ledger::{now_ms, stamp_ok, Ledger, LedgerError, Result};
 use crate::views::{Change, SyncOut};
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
+use std::path::PathBuf;
+
+/// How many copies of the ledger a replace keeps in `money-backups/` beside `money.db`.
+pub const SNAPSHOTS_KEPT: usize = 10;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -186,7 +190,11 @@ impl Ledger {
     }
 
     /// Applies `changes` from `device` and answers with this ledger's changes after `since`.
-    /// With `replace`, this ledger is erased first and becomes the device's (its first sync).
+    /// With `replace`, this ledger is erased first and becomes the device's (its first sync); a
+    /// ledger that holds anything is copied to `money-backups/` first ([`Ledger::snapshot`]).
+    ///
+    /// A change stamped outside [`stamp_ok`] (below 0, or more than a day ahead of this clock) is
+    /// not applied, and counts as skipped: the rest of the request goes on.
     ///
     /// `generation` is the one this ledger gave the device last time. A device whose ledger is not
     /// this one any more (restored, erased or replaced since, or a cursor this ledger never gave)
@@ -221,6 +229,12 @@ impl Ledger {
                 ));
             }
         }
+        // Whoever sends a replace (any paired device, a cloud copy's included) erases this ledger:
+        // what it held is kept on disk first, and a copy that cannot be kept stops the replace.
+        if replace && self.holds_anything()? {
+            self.snapshot()?;
+        }
+        let clock = now_ms();
         let tx = self.conn.transaction()?;
         // A derived row deleted here stays deleted through the replace: the device's first sync
         // sends no tombstones, and the next import of the same file would bring it back.
@@ -228,10 +242,10 @@ impl Ledger {
         if replace {
             Ledger::clear(&tx, true)?;
         }
-        let mut sorted: Vec<&Change> = changes.iter().collect();
+        let (mut sorted, out_of_range): (Vec<&Change>, Vec<&Change>) = changes.iter().partition(|c| stamp_ok(c.updated_at, clock));
         sorted.sort_by_key(|c| order(&c.table));
         let mut applied = HashSet::new();
-        let mut skipped = 0;
+        let mut skipped = out_of_range.len();
         for c in sorted {
             if apply(&tx, c)? {
                 applied.insert((c.table.clone(), c.uid.clone()));
@@ -258,12 +272,70 @@ impl Ledger {
         Ok(SyncOut { cursor, generation: self.generation()?, changes, replaced: replace, applied: applied.len(), skipped, more: page.is_some() })
     }
 
+    /// Whether any row is live here but the categories, which every new ledger is given.
+    fn holds_anything(&self) -> Result<bool> {
+        for (table, _) in TABLES.iter().filter(|(t, _)| *t != "categories") {
+            if self.conn.prepare_cached(&format!("SELECT 1 FROM {table} WHERE deleted = 0 LIMIT 1"))?.exists([])? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Copies this ledger, whole, to `money-backups/money-<time>-<n>.db` beside its file (0700
+    /// folder, 0600 file), and keeps the newest [`SNAPSHOTS_KEPT`]. A copy is a `money.db` like any
+    /// other: put it in place of `money.db` while Relay is stopped to go back to it. `None` in memory.
+    pub fn snapshot(&self) -> Result<Option<PathBuf>> {
+        let Some(path) = &self.path else { return Ok(None) };
+        let failed = |e: std::io::Error| LedgerError::Invalid(format!("Could not keep a copy of the ledger before replacing it, so nothing was replaced: {e}"));
+        let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new(".")).join("money-backups");
+        private_dir(&dir).map_err(failed)?;
+        let name = format!("money-{}-{}.db", jiff::Timestamp::now().strftime("%Y%m%dT%H%M%SZ"), &crate::ledger::new_uid()[..8]);
+        let to = dir.join(name);
+        self.conn.execute("VACUUM INTO ?1", [to.to_string_lossy().into_owned()])?;
+        private_file(&to).map_err(failed)?;
+        // The newest stay: the names sort by time.
+        let mut kept: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .map_err(failed)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("money-") && n.ends_with(".db")))
+            .collect();
+        kept.sort();
+        for old in kept.iter().rev().skip(SNAPSHOTS_KEPT) {
+            let _ = std::fs::remove_file(old);
+        }
+        Ok(Some(to))
+    }
+
     /// Devices that have synced with this ledger and when they last did, newest first.
     pub fn synced_devices(&self) -> Result<Vec<(String, String)>> {
         let mut st = self.conn.prepare_cached("SELECT substr(key, 13), value FROM settings WHERE key LIKE 'sync.device.%' ORDER BY value DESC")?;
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
+}
+
+#[cfg(unix)]
+fn private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+}
+
+#[cfg(not(unix))]
+fn private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
+#[cfg(unix)]
+fn private_file(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn private_file(_path: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 /// Applies one change; false when it was older than what is here or could not be placed.
@@ -762,6 +834,99 @@ mod tests {
         pc.sync("Pixel", false, pc.cursor().unwrap(), None, &[tomb("transactions", "t1", 9_000)], "t").unwrap();
         pc.sync("Pixel", true, 0, None, &[], "t").unwrap();
         assert!(!pc.conn.prepare("SELECT 1 FROM tombstones WHERE uid = 't1'").unwrap().exists([]).unwrap());
+    }
+
+    #[test]
+    fn a_stamp_far_ahead_or_below_zero_is_not_taken_and_the_rest_is() {
+        let mut pc = Ledger::open_in_memory().unwrap();
+        let mut batch = phone();
+        let tx = |uid: &str, at: i64| change("transactions", uid, at, json!({"type": "EXPENSE", "amount": 1_00, "date": "2026-10-05",
+            "account": "a1", "toAccount": null, "category": null, "note": "", "recurring": null, "createdAt": 1}));
+        let now = crate::ledger::now_ms();
+        batch.extend([tx("max", i64::MAX), tx("days", now + 2 * crate::ledger::STAMP_AHEAD_MS), tx("neg", -5), tx("hours", now + 3 * 3_600_000)]);
+        let first = pc.sync("Evil", true, 0, None, &batch, "t").unwrap();
+        assert_eq!((first.applied, first.skipped), (6, 3), "the phone's five and the entry a few hours fast");
+        assert_eq!(spent(&pc), 42_50 + 1_00);
+        // Settings stamped 0, as an older ledger's are, still travel.
+        let zero = change("settings", "month_start_day", 0, json!({"value": "15"}));
+        assert_eq!(pc.sync("Evil", false, first.cursor, Some(&first.generation), &[zero], "t").unwrap().applied, 1);
+        // Edits and syncs go on.
+        let id = pc.tx_list(&TxQuery::default(), date(2026, 10, 7)).unwrap().transactions[0].id;
+        pc.tx_update(id, &crate::ledger::TxPatch { amount: Some(2_00), ..Default::default() }).unwrap();
+        assert!(pc.sync("Other", false, 0, None, &[], "t").is_ok());
+    }
+
+    #[test]
+    fn a_ledger_poisoned_by_a_stamp_at_the_end_of_i64_recovers_when_opened() {
+        let dir = std::env::temp_dir().join(format!("relay-money-{}", crate::ledger::new_uid()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("money.db");
+        {
+            let mut l = Ledger::open(&path).unwrap();
+            l.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+            // What a build without the bound let in, and an edit then made of it: a real.
+            l.conn.execute("UPDATE transactions SET updated_at = 9223372036854775807 WHERE uid = 't1'", []).unwrap();
+            l.conn.execute("UPDATE transactions SET updated_at = updated_at + 1 WHERE uid = 't1'", []).unwrap();
+            l.conn.execute("UPDATE accounts SET updated_at = 9223372036854775807", []).unwrap();
+            l.conn.execute("INSERT INTO tombstones (tbl, uid, updated_at) VALUES ('transactions', 'gone', 9.5e18)", []).unwrap();
+            assert!(l.sync("Other", false, 0, None, &[], "t").is_err(), "the poison as it was");
+        }
+        let mut l = Ledger::open(&path).unwrap();
+        let whole = l.sync("Other", false, 0, None, &[], "t").unwrap();
+        let ceiling = crate::ledger::now_ms() + crate::ledger::STAMP_AHEAD_MS;
+        assert!(whole.changes.iter().all(|c| c.updated_at <= ceiling), "{:?}", whole.changes);
+        // And an edit of the row stamps past the repaired stamp, as any edit does.
+        let id = l.tx_list(&TxQuery::default(), date(2026, 10, 7)).unwrap().transactions[0].id;
+        let before = whole.changes.iter().find(|c| c.uid == "t1").unwrap().updated_at;
+        l.tx_update(id, &crate::ledger::TxPatch { amount: Some(1_00), ..Default::default() }).unwrap();
+        let after = l.sync("Other", false, whole.cursor, Some(&whole.generation), &[], "t").unwrap();
+        assert!(after.changes.iter().find(|c| c.uid == "t1").unwrap().updated_at > before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_stamp_arithmetic_saturates_instead_of_overflowing() {
+        let mut l = Ledger::open_in_memory().unwrap();
+        l.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        l.conn.execute("UPDATE transactions SET updated_at = 9223372036854775807", []).unwrap();
+        let id = l.tx_list(&TxQuery::default(), date(2026, 10, 7)).unwrap().transactions[0].id;
+        l.tx_update(id, &crate::ledger::TxPatch { amount: Some(1_00), ..Default::default() }).unwrap();
+        let (kind, at): (String, i64) = l.conn.query_row("SELECT typeof(updated_at), updated_at FROM transactions", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((kind.as_str(), at), ("integer", crate::ledger::STAMP_CEILING + 1));
+        l.reset().unwrap();
+        assert!(l.sync("Other", false, 0, None, &[], "t").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_replace_keeps_a_private_copy_of_the_ledger_it_erases() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("relay-money-{}", crate::ledger::new_uid()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("money.db");
+        let backups = dir.join("money-backups");
+        let mut l = Ledger::open(&path).unwrap();
+        // Nothing to keep yet: a new ledger's categories are not the person's.
+        l.ensure_categories().unwrap();
+        l.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        assert!(!backups.exists());
+        // Any credential that may sync can send a replace with nothing in it.
+        l.sync("Avex (S21)", true, 0, None, &[], "t").unwrap();
+        assert!(l.accounts().unwrap().is_empty());
+        let copies: Vec<PathBuf> = std::fs::read_dir(&backups).unwrap().map(|e| e.unwrap().path()).collect();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(std::fs::metadata(&copies[0]).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(&backups).unwrap().permissions().mode() & 0o777, 0o700);
+        let kept = Ledger::open(&copies[0]).unwrap();
+        assert_eq!(kept.accounts().unwrap()[0].name, "Chequing", "the copy is the ledger as it was");
+        drop(kept);
+        // The newest ten stay.
+        for _ in 0..SNAPSHOTS_KEPT + 3 {
+            l.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        }
+        let n = std::fs::read_dir(&backups).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".db")).count();
+        assert_eq!(n, SNAPSHOTS_KEPT);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

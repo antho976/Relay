@@ -223,10 +223,16 @@ class PcSync @Inject constructor(
 
     private operator fun JsonElement?.get(key: String): JsonElement? = (this as? JsonObject)?.get(key)
 
-    /** The PC's settings; [whole] takes them whatever their stamps, with the PC's ledger. */
-    private suspend fun applySettings(rows: List<Change>, whole: Boolean): Int = rows.count { c ->
-        val value = (c.row["value"] as? JsonPrimitive)?.contentOrNull
-        !c.deleted && value != null && settings.applySynced(c.uid, value, c.updatedAt, force = whole)
+    /**
+     * The PC's settings; [whole] takes them whatever their stamps, with the PC's ledger, but never
+     * one stamped outside [SyncTables.stampOk].
+     */
+    private suspend fun applySettings(rows: List<Change>, whole: Boolean): Int {
+        val now = System.currentTimeMillis()
+        return rows.count { c ->
+            val value = (c.row["value"] as? JsonPrimitive)?.contentOrNull
+            !c.deleted && value != null && SyncTables.stampOk(c.updatedAt, now) && settings.applySynced(c.uid, value, c.updatedAt, force = whole)
+        }
     }
 
     /** The synced settings changed since [since] (all of them on a first sync), as the PC keeps them. */
