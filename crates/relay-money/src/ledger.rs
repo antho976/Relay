@@ -281,6 +281,13 @@ pub fn parse_date(s: &str) -> Option<Date> {
 /// interval, anchor, next date, end date.
 type DueRow = (i64, String, String, i64, i64, Option<i64>, Option<i64>, String, i64, String, String, Option<String>);
 
+/// A reminder whose day is over: id, frequency, interval, anchor, end date.
+type ReminderRow = (i64, String, i64, String, Option<String>);
+
+/// The most dates one bill posts in one pass, as Tally's `RecurringPoster.CATCH_UP_LIMIT`: a weekly
+/// bill a year overdue. A longer backlog is paid over the passes that follow, never dropped.
+pub const CATCH_UP_LIMIT: usize = 60;
+
 pub struct Ledger {
     pub(crate) conn: Connection,
 }
@@ -657,10 +664,22 @@ impl Ledger {
     /// Once a phone syncs with this ledger, the phone posts bills and this ledger leaves them be:
     /// two devices posting the same bill at different times would each stamp it with their own
     /// time, and the later post would undo an edit or a delete made on the other side between.
+    ///
+    /// It also moves reminders on, as Tally's poster does: a reminder never posts, and nothing can
+    /// tell whether it was paid, so once its day is over it moves to its next date. Left in place
+    /// it would read as overdue for good. Reminders moved on are not counted: they post nothing.
     pub fn post_due(&mut self, today: Date) -> Result<usize> {
         if !self.synced_devices()?.is_empty() {
             return Ok(0);
         }
+        let reminders: Vec<ReminderRow> = {
+            let mut st = self.conn.prepare_cached(
+                "SELECT id, frequency, interval, anchor_date, end_date
+                 FROM recurring WHERE deleted = 0 AND active = 1 AND auto_post = 0 AND next_date < ?1",
+            )?;
+            let rows = st.query_map([today.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+            rows.collect::<std::result::Result<_, _>>()?
+        };
         let due: Vec<DueRow> = {
             let mut st = self.conn.prepare_cached(
                 "SELECT id, uid, type, amount, account_id, to_account_id, category_id, frequency, interval, anchor_date, next_date, end_date
@@ -674,6 +693,15 @@ impl Ledger {
         let mut posted = 0;
         let now = now_ms();
         let tx = self.conn.transaction()?;
+        for (id, freq, interval, anchor, end) in reminders {
+            let (Some(anchor), Some(freq)) = (parse_date(&anchor), parse_name::<Frequency>(&freq)) else {
+                continue;
+            };
+            let following = Recurrence::new(anchor, freq, interval.clamp(1, 52) as i32).on_or_after(today);
+            let active = end.as_deref().and_then(parse_date).is_none_or(|e| following <= e);
+            tx.prepare_cached("UPDATE recurring SET next_date = ?2, active = ?3, updated_at = MAX(?4, updated_at + 1) WHERE id = ?1")?
+                .execute(params![id, following.to_string(), active, now])?;
+        }
         for (id, uid, ty, amount, account, to, category, freq, interval, anchor, next, end) in due {
             let (Some(anchor), Some(next), Some(freq)) = (parse_date(&anchor), parse_date(&next), parse_name::<Frequency>(&freq)) else {
                 continue;
@@ -681,14 +709,20 @@ impl Ledger {
             let rule = Recurrence::new(anchor, freq, interval.clamp(1, 52) as i32);
             let end = end.as_deref().and_then(parse_date);
             let through = end.map_or(today, |e| e.min(today));
-            for date in rule.between(next, through) {
+            // A category on a transfer bill, or a receiving account on any other, is a data slip
+            // the entry must not carry (Tally's poster drops them the same way).
+            let transfer = parse_name::<TxType>(&ty) == Some(TxType::Transfer);
+            let (to, category) = (to.filter(|_| transfer), category.filter(|_| !transfer));
+            let dates = rule.between_limited(next, through, CATCH_UP_LIMIT);
+            for date in &dates {
                 posted += tx.prepare_cached(
                     "INSERT OR IGNORE INTO transactions (uid, type, amount, date, account_id, to_account_id, category_id, note, recurring_id, created_at, updated_at)
                      SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, name, id, ?8, ?8 FROM recurring WHERE id = ?9
                        AND NOT EXISTS (SELECT 1 FROM tombstones WHERE tbl = 'transactions' AND uid = ?1)",
                 )?.execute(params![format!("bill:{uid}:{date}"), ty, amount, date.to_string(), account, to, category, now, id])?;
             }
-            let following = rule.after(today);
+            // After the last date posted, not after today: a capped catch-up resumes there next pass.
+            let following = rule.after(dates.last().copied().unwrap_or(today));
             let active = end.is_none_or(|e| following <= e);
             tx.prepare_cached("UPDATE recurring SET next_date = ?2, active = ?3, updated_at = MAX(?4, updated_at + 1) WHERE id = ?1")?
                 .execute(params![id, following.to_string(), active, now])?;
@@ -1482,6 +1516,138 @@ mod tests {
         l.import_backup(&file).unwrap();
         l.conn.execute("INSERT INTO tombstones (tbl, uid, updated_at) SELECT 'transactions', 'bill:' || uid || ':2026-10-01', 1 FROM recurring", []).unwrap();
         assert_eq!(l.post_due(date(2026, 10, 7)).unwrap(), 0);
+    }
+
+    // Twins of Tally's `RecurringPosterTest` (apps/tally/app) for what the PC's poster shares
+    // with it: reminders moving on, a capped catch-up resumed, transfer bills' references.
+
+    /// Rent as `RecurringPosterTest.bill()` writes it: monthly from Jan 31, next due on the anchor.
+    fn rent(id: i64, account: i64, category: i64) -> RecurringDto {
+        RecurringDto {
+            id, name: "Rent".into(), r#type: TxType::Expense, amount: 1_350_00, account_id: account, to_account_id: None,
+            category_id: Some(category), frequency: Frequency::Monthly, interval: 1, anchor_date: "2026-01-31".into(),
+            next_date: "2026-01-31".into(), end_date: None, auto_post: true, active: true,
+        }
+    }
+
+    fn with_bills(l: &mut Ledger, bills: Vec<RecurringDto>) {
+        let mut file = l.export_backup("x").unwrap();
+        file.recurring.extend(bills);
+        l.import_backup(&file).unwrap();
+    }
+
+    /// A bill's next date and whether it still runs.
+    fn bill_state(l: &Ledger, id: i64) -> (String, bool) {
+        l.conn.query_row("SELECT next_date, active FROM recurring WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
+    }
+
+    /// The entries bill `id` posted: date, to-account, category.
+    fn posted(l: &Ledger, id: i64) -> Vec<(String, Option<i64>, Option<i64>)> {
+        let mut st = l.conn.prepare("SELECT date, to_account_id, category_id FROM transactions WHERE deleted = 0 AND recurring_id = ?1 ORDER BY date").unwrap();
+        st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().collect::<std::result::Result<_, _>>().unwrap()
+    }
+
+    fn entries(l: &Ledger) -> i64 {
+        l.conn.query_row("SELECT COUNT(*) FROM transactions WHERE deleted = 0", [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn paused_bills_and_reminders_never_post() {
+        let (mut l, acct) = with_account();
+        let housing = category(&l, "Housing");
+        with_bills(&mut l, vec![
+            RecurringDto { name: "Paused".into(), active: false, ..rent(1, acct, housing) },
+            RecurringDto { name: "Reminder".into(), auto_post: false, ..rent(2, acct, housing) },
+        ]);
+        assert_eq!(l.post_due(date(2026, 5, 15)).unwrap(), 0);
+        assert_eq!(entries(&l), 0);
+        assert_eq!(bill_state(&l, 1), ("2026-01-31".into(), false), "a paused bill keeps its date");
+        assert_eq!(bill_state(&l, 2), ("2026-05-31".into(), true), "a reminder moves on to its next date");
+    }
+
+    #[test]
+    fn a_reminder_stays_on_its_day_and_moves_on_once_the_day_is_over() {
+        let (mut l, acct) = with_account();
+        let housing = category(&l, "Housing");
+        with_bills(&mut l, vec![RecurringDto {
+            name: "Phone".into(), amount: 45_00, anchor_date: "2026-01-15".into(), next_date: "2026-05-15".into(), auto_post: false,
+            ..rent(1, acct, housing)
+        }]);
+        assert_eq!(l.post_due(date(2026, 5, 15)).unwrap(), 0);
+        assert_eq!(bill_state(&l, 1).0, "2026-05-15", "due today stays due today");
+        assert_eq!(l.post_due(date(2026, 5, 16)).unwrap(), 0);
+        assert_eq!(bill_state(&l, 1).0, "2026-06-15");
+        assert_eq!(entries(&l), 0);
+    }
+
+    #[test]
+    fn a_reminder_left_for_months_is_not_overdue_once_the_poster_runs() {
+        let (mut l, acct) = with_account();
+        let housing = category(&l, "Housing");
+        // Due Jul 1 and paid by hand each month since; nothing ever marked it paid.
+        with_bills(&mut l, vec![RecurringDto { anchor_date: "2026-07-01".into(), next_date: "2026-07-01".into(), auto_post: false, ..rent(1, acct, housing) }]);
+        let today = date(2026, 10, 4);
+        assert_eq!(l.post_due(today).unwrap(), 0);
+        assert_eq!(bill_state(&l, 1).0, "2026-11-01");
+        assert_eq!(entries(&l), 0);
+        assert_eq!(l.summary(today, &en()).unwrap().bills[0].due_line, "Due in 28 days");
+    }
+
+    #[test]
+    fn a_reminder_past_its_end_date_ends() {
+        let (mut l, acct) = with_account();
+        let housing = category(&l, "Housing");
+        with_bills(&mut l, vec![RecurringDto { name: "Lease".into(), end_date: Some("2026-04-30".into()), auto_post: false, ..rent(1, acct, housing) }]);
+        l.post_due(date(2026, 5, 15)).unwrap();
+        assert!(!bill_state(&l, 1).1);
+        assert_eq!(entries(&l), 0);
+    }
+
+    #[test]
+    fn transfer_bills_post_to_the_receiving_account_with_no_category() {
+        let (mut l, acct) = with_account();
+        let housing = category(&l, "Housing");
+        let savings = l.account_add("Savings", AccountType::Savings, 0, None, "").unwrap().id;
+        // A category on a transfer bill is a data slip; the ledger entry must not carry it.
+        with_bills(&mut l, vec![RecurringDto {
+            name: "To savings".into(), r#type: TxType::Transfer, amount: 250_00, anchor_date: "2026-04-06".into(),
+            next_date: "2026-04-06".into(), to_account_id: Some(savings), ..rent(1, acct, housing)
+        }]);
+        assert_eq!(l.post_due(date(2026, 5, 15)).unwrap(), 2);
+        assert_eq!(posted(&l, 1), vec![("2026-04-06".into(), Some(savings), None), ("2026-05-06".into(), Some(savings), None)]);
+    }
+
+    #[test]
+    fn an_expense_bill_never_posts_a_receiving_account() {
+        let (mut l, acct) = with_account();
+        let housing = category(&l, "Housing");
+        let savings = l.account_add("Savings", AccountType::Savings, 0, None, "").unwrap().id;
+        with_bills(&mut l, vec![RecurringDto { anchor_date: "2026-05-01".into(), next_date: "2026-05-01".into(), to_account_id: Some(savings), ..rent(1, acct, housing) }]);
+        assert_eq!(l.post_due(date(2026, 5, 15)).unwrap(), 1);
+        assert_eq!(posted(&l, 1), vec![("2026-05-01".into(), None, Some(housing))]);
+    }
+
+    #[test]
+    fn a_long_backlog_is_paid_over_several_runs_and_never_twice() {
+        let (mut l, acct) = with_account();
+        let housing = category(&l, "Housing");
+        let today = date(2026, 5, 15);
+        let anchor = today.checked_sub(100.weeks()).unwrap();
+        with_bills(&mut l, vec![RecurringDto {
+            name: "Lessons".into(), amount: 20_00, frequency: Frequency::Weekly, anchor_date: anchor.to_string(), next_date: anchor.to_string(),
+            ..rent(1, acct, housing)
+        }]);
+        let first = l.post_due(today).unwrap();
+        assert_eq!(first, CATCH_UP_LIMIT);
+        let resume = anchor.checked_add((CATCH_UP_LIMIT as i64).weeks()).unwrap();
+        assert_eq!(bill_state(&l, 1).0, resume.to_string(), "the dates past the cap are still owed");
+        let second = l.post_due(today).unwrap();
+        assert_eq!(first + second, 101, "weeks 0 through 100 inclusive");
+        assert_eq!(l.post_due(today).unwrap(), 0);
+        let dates: Vec<String> = posted(&l, 1).into_iter().map(|p| p.0).collect();
+        assert_eq!(dates.iter().collect::<HashSet<_>>().len(), 101);
+        assert_eq!(dates.last().unwrap(), &today.to_string());
+        assert_eq!(bill_state(&l, 1).0, today.checked_add(1.weeks()).unwrap().to_string());
     }
 
     #[test]

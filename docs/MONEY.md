@@ -196,7 +196,9 @@ Change = { table, uid, updated_at, deleted, row }
 - A posted bill's uid is `bill:<recurring uid>:<date>` on both devices. **Once a phone syncs, the
   phone alone posts bills**: two devices posting the same bill at different times would each stamp
   it with their own time, and the later post would undo an edit or a delete made in between. A
-  PC with no phone posts them itself, and never posts a uid it holds a tombstone for.
+  PC with no phone posts them itself, and never posts a uid it holds a tombstone for. It posts as
+  Tally's `RecurringPoster` does: at most 60 dates of one bill a pass, the rest on the next, and a
+  reminder whose day is over moves to its next date (the phone does that once it syncs).
 - The PC changes the currency only when the decimals stay the same (CAD to USD); Tally converts
   every amount when they differ (CAD to JPY), so that change is made on the phone.
 - `table` is one of `settings`, `accounts`, `categories`, `recurring`, `goals`, `transactions`,
