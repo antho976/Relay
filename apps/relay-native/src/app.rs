@@ -420,6 +420,7 @@ pub fn run(rt: Handle) -> glib::ExitCode {
             include_str!("css/avex.css"),
             include_str!("css/start.css"),
             include_str!("css/settings.css"),
+            include_str!("css/launch.css"),
         ));
         if let Some(display) = gtk::gdk::Display::default() {
             gtk::style_context_add_provider_for_display(

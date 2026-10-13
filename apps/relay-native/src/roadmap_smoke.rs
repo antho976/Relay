@@ -169,17 +169,17 @@ pub(crate) async fn run(ui: &Rc<Ui>) -> Result<(), String> {
     );
     ui.open_project(project, "agents");
 
-    // Exercise the visible count keys after show_launch has returned: the count must reach
-    // the launch, not just the keys (checked by the session count below).
+    // Add an agent with the rail's key after show_launch has returned: the crew must reach
+    // the launch, not just the rail (checked by the session count below).
     ui.show_launch(None);
     wait_for(|| named(&ui.window, "launch-start").is_some_and(|w| w.is_sensitive()), "multi-agent form").await?;
-    choose(&ui.window, "launch-count", 1)?;
+    click(&ui.window, "launch-add")?;
     let submit = named(&ui.window, "launch-start").unwrap().downcast::<gtk::Button>().unwrap();
     let started = std::time::Instant::now();
     press(&submit, "launch-start")?;
     wait_for(|| submit.is_sensitive(), "two-agent launch").await?;
     let all = call(ui, "session.list", json!({"project_id":project})).await?;
-    assert_eq!(all["sessions"].as_array().unwrap().len(), before + 2, "Count keys must launch two agents");
+    assert_eq!(all["sessions"].as_array().unwrap().len(), before + 2, "The add key must launch two agents");
     // Both new sessions are running even if event refresh already cached them.
     assert!(all["sessions"].as_array().unwrap().iter().all(|s| s["state"] != "created"));
     println!("TWO_AGENT_LAUNCH_MS={}", started.elapsed().as_millis());
