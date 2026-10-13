@@ -799,9 +799,9 @@ unique; nothing else is.
 
 | op | attrs | payload → result |
 |---|---|---|
-| `task.create` | mutation · always · inverse (delete) · project | `{ project_id, title, body?, column?: Column = "backlog", state?: TaskState, priority?: Priority = "medium", size?: Size, module_id?, changelog?, attachments?: AttachmentIn[], type?: TaskType = "task", parent_id?, labels?: string[] }` → `Task` |
+| `task.create` | mutation · always · inverse (delete) · project | `{ project_id, title, body?, column?: Column = "backlog", state?: TaskState, priority?: Priority = "medium", size?: Size, module_id?, changelog?, attachments?: AttachmentIn[], type?: TaskType = "task", parent_id?, labels?: string[], note_id? }` → `Task` — `note_id` records the note the task was made from: a live note in the same project, else `not_found` / `notes.not_found` |
 | `task.get` | query | `{ task_id }` → `Task` (with attachments, commits) |
-| `task.list` | query | `{ project_id?, column?, state?, module_id?, priority?, include_deleted?, sort?: "column"\|"priority"\|"updated", type?, label?, session?, parent_id?: Id\|null, limit? (1000, ≤2000), offset?, summary? }` → `{ tasks: Task[], next_offset? }` — a page; `summary` leaves `body` and `changelog` empty. `project_id` optional so the Dashboard can ask "in review, everywhere"; `parent_id: null` is roots only, `session` is "every card this agent was ever sent". Each page reads its sessions, commits, attachments, labels, relations and children in one statement per table, and every task in it equals its `task.get` (RA-412) Every task names its module (`module_name`, completed modules included), so a board labels cards without `module.list` |
+| `task.list` | query | `{ project_id?, column?, state?, module_id?, priority?, include_deleted?, sort?: "column"\|"priority"\|"updated", type?, label?, session?, note_id?, parent_id?: Id\|null, limit? (1000, ≤2000), offset?, summary? }` → `{ tasks: Task[], next_offset? }` — a page; `summary` leaves `body` and `changelog` empty. `project_id` optional so the Dashboard can ask "in review, everywhere"; `parent_id: null` is roots only, `session` is "every card this agent was ever sent", `note_id` the tasks made from that note. Each page reads its sessions, commits, attachments, labels, relations and children in one statement per table, and every task in it equals its `task.get` (RA-412) Every task names its module (`module_name`, completed modules included), so a board labels cards without `module.list` |
 | `task.update` | mutation · always · inverse | `{ task_id, title?, body?, priority?, size?, module_id?: Id\|null, state?, changelog?, type? }` → `Task` |
 | `task.move` | mutation · always · inverse | `{ task_id, column: Column, position?: number }` → `Task` — transitions table in §11.1; `position` is the 0-based index the task ends at in the column (the others shift around it, clamped to the end), omitted means last; agents may only move their own task and only `active → in_review` |
 | `task.delete` | mutation · always · inverse (restore) | `{ task_id }` → `{}` |
@@ -847,7 +847,7 @@ unique; nothing else is.
 | `notes.append` | mutation · always | `{ note_id?, project_id?, target?: "standing" \| "suggestions", text, expected_updated_at? }` → `Note` — appends to an explicit note, the standing note by default, or the unpinned per-project Agent suggestions note. Suggestions require a bound agent with a current task; Relay adds timestamp, session, and task identity and never injects this note into a brief. `expected_updated_at` is the target note's `updated_at` as the caller last read it: given and no longer current, nothing is appended (`conflict` / `notes.edit_conflict`); omitted, it appends as before (RA-413). Of the other note writes an agent role can reach, `notes.create` makes a new note and `notes.update` takes `expected`; `notes.pin/delete/restore` are in no agent role |
 | `notes.pin` | mutation · always · inverse | `{ note_id, pinned: bool }` → `Note` |
 | `notes.delete` / `notes.restore` | mutation · always · inverse | `{ note_id }` |
-| `notes.standing` | query | `{ project_id }` → `{ text }` — exactly what gets injected at dispatch |
+| `notes.standing` | query | `{ project_id }` → `{ text }` — the project's standing note. Agents read it on request; it is not injected into briefs (D166) |
 | `mailbox.send` | mutation · always · project | `{ project_id, to: string \| "*", text, re_task?: Id, priority?: bool }` → `{ message, recipients, delivery }` — priority mail produces the response `mail` hint until acknowledged. Agents may prioritize only direct task-linked mail and may have only one unread priority message outstanding per recipient; user/system sends are unrestricted. |
 | `mailbox.outbox` | query | `{ project_id, since?, limit? = 100 }` → `{ sent: {message: Message, recipients: {session, state, acked_at?}[]}[] }` — what this actor sent, and where each addressee stands (D109) |
 | `mailbox.list` | query | `{ project_id, session?: string, unread_only?, since?, limit? (200, ≤1000), before?: message id }` → `{ messages: Message[], next_before?, more_unread? }` — a page, oldest first: the newest page (older ones through `before: next_before`), or with `unread_only` the oldest unread, `more_unread` when more wait. Message text is at most 64 KiB; system notices are clipped to 2,000 bytes |
@@ -875,7 +875,7 @@ are `user_only` (§9.1). Agents get `done`, `report`, `attach`/`scrollback`, `bo
 | `session.get` | query | `{ session }` → `Session` |
 | `session.list` | query | `{ project_id?, state?: SessionState[], include_closed? }` → `{ sessions: Session[] }` — an agent sees its own project only; another `project_id` is `refused`/`actor.scope` (D106) |
 | `session.peers` | query | `{ session }` or `{ project_id }` or `{}` → `{ peers: Peer[] }` — the live peer table (name, provider, branch, claimed files, task title, state). For an agent, neither target means "my project, minus me" |
-| `session.brief` | query | `{ session }` → `{ text, compact, parts: {state, peers, notes, adjacent, skills}: string }` — the knowledge injection, inspectable. `compact` is the half injected on every spawn: state, peers, notes and adjacent work, naming the enabled skills and the folders they are registered in (bodies stay on disk) and the launch assignment omitted (D101, D147). Own session or PAIR partner only |
+| `session.brief` | query | `{ session }` → `{ text, compact, parts: {state, peers, adjacent, skills, plugins}: string }` — the knowledge injection, inspectable. `compact` is the half injected on every spawn: state, peers and adjacent work, naming the enabled skills and the folders they are registered in (bodies stay on disk) and the launch assignment omitted (D101, D147). Own session or PAIR partner only |
 | `session.bootstrap` | query · agent | `{}` → `{ session, role, project_id, project, base_branch, worktree, branch, module?, task?, tasks: Task[], pair?, assignment?, brief_path, peers: Peer[], can_call: string[], discovery, comms, guardrails: {caps, denied_commands, write_roots, dry_run} }` — the one call every agent makes first, so it answers "who else is here and what may I do?" as well as "who am I" (D105). `discovery` points to `bus.ops`/`bus.schema` and their shell equivalents; `can_call` is the §9.1 verdict. `assignment` is the launch prompt on the session's first launch only: after a relaunch (fresh or resumed) it is absent, and the brief keeps the text labelled as the original launch assignment (RA-397). User/unbound calls are `invalid`/`bus.actor` |
 | `session.update` | mutation · always · inverse · user | `{ session, branch?, model?, effort?, task_id?: Id\|null, module_id?: Id\|null, bus_writes?, allow_ui? }` → `Session` — `branch`/`model`/`effort` are `conflict`/`session.already_spawned` after first spawn; the rest any time. A branch rename is refused `conflict`/`session.branch_primary` on the project's primary checkout and `conflict`/`session.branch_shared` on a checkout another session shares (RA-402). Its undo records `expect: { fields, queued }` instead of `updated_at`, which every `session.report` moves: `audit.undo` is `audit.stale` only if one of the fields it wrote now holds something else, and it deletes the `(task, session)` queue rows the update added that are not yet completed (RA-403) |
 | `session.report` | mutation · agent_only · session · agent | `{ session, kind: "session_start"\|"tool_use"\|"stop"\|"notification"\|"idle"\|"blocked", data?: object }` → `{}` — the provider's hooks calling home (§9.3); this is where `state: blocked`, `provider_ref` and "agent asking" notifications come from. Codex, having no hooks, degrades to PTY-derived idle/busy |
@@ -894,16 +894,16 @@ before each provider launch. It comes in two halves, because delivering it whole
 27 KB of skill bodies around four lines of peer table (D101):
 
 - **compact** — state (worktree, branch, project, module, task title+body+changelog), peer table
-  (§10.8 `session.peers`), standing notes (`notes.standing`), adjacent tasks
-  (`task.list {module_id}` titles+states), and the comms hint. This is delivered on **every**
+  (§10.8 `session.peers`), adjacent tasks (`task.list {module_id}` titles+states), and the
+  comms hint. Notes are not part of it: an agent works from its task and reads a note
+  (`notes.get`, `notes.standing`) only when it asks for one (D166). This is delivered on **every**
   spawn, appended to the provider-native role instruction — Claude's appended-system-prompt file
   or Codex `developer_instructions` — because a session spawned with no assignment is exactly the
   one that most needs to know who its peers are. It never carries the launch assignment: for
   Codex it lands in argv, and `session.bootstrap` already returns it privately. Each section has
-  a budget (RA-385): peers, adjacent tasks and the skill list at most 40 lines / 8 KiB, the
-  standing note 16 KiB, each task body and changelog 4 KiB. A section that is cut ends with a
-  line naming the op that returns the whole (`session.peers`, `task.list {module_id}`,
-  `skill.list`, `notes.standing {project_id}`, `task.get {task_id}`).
+  a budget (RA-385): peers, adjacent tasks and the skill list at most 40 lines / 8 KiB, each
+  task body and changelog 4 KiB. A section that is cut ends with a line naming the op that
+  returns the whole (`session.peers`, `task.list {module_id}`, `skill.list`, `task.get {task_id}`).
 - **skills** — `skill.list {enabled: true}` bodies, written to `.relay/session-skills.md`. The
   compact half names each enabled skill and the folder it is materialized in
   (`.claude/skills/<name>/`, `.agents/skills/<name>/`, and the provider's own home, D147), so an
@@ -1119,6 +1119,7 @@ interface Task {
   labels: string[];                     // sorted; free-form tags under `type`
   blocked_by: Id[]; blocks: Id[];       // `blocks` is the inverse read; only blocked_by is stored
   duplicate_of: Id | null;
+  note_id: Id | null;                   // the note it was made from; cleared when that note is purged
   sessions: string[];                   // every session ever dispatched to it, in order; a PAIR adds two
   commits: { sha: string; branch: string | null; linked_at: string }[];
   attachments: Attachment[];

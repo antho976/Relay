@@ -153,12 +153,11 @@ pub fn peers(
 }
 
 /// Each brief section's budget (RA-385). The compact half is injected into every spawn — for
-/// Codex as one argv element, cut at 64 KiB — so one long standing note or a module of hundreds
+/// Codex as one argv element, cut at 64 KiB — so one long task body or a module of hundreds
 /// of tasks crowded out everything after it. A section that is cut says so and names the op
 /// that returns the whole of it.
 const SECTION_LINES: usize = 40;
 const SECTION_BYTES: usize = 8 * 1024;
-const NOTES_BYTES: usize = 16 * 1024;
 /// Per task body and per changelog, in the current-state section.
 const TASK_TEXT_BYTES: usize = 4 * 1024;
 
@@ -347,21 +346,6 @@ pub fn brief(
         capped_lines(lines, "`session.peers`")
     };
 
-    let notes = conn
-        .query_row(
-            "SELECT body FROM notes WHERE project_id=?1 AND standing=1 AND deleted_at IS NULL",
-            [session.project_id],
-            |r| r.get::<_, String>(0),
-        )
-        .optional()
-        .bus()?
-        .unwrap_or_default();
-    let notes = if notes.is_empty() {
-        "No standing notes.".to_string()
-    } else {
-        capped_text(&notes, NOTES_BYTES, &format!("`notes.standing {{\"project_id\": {}}}`", session.project_id))
-    };
-
     let adjacent = if let Some(module_id) = module_id {
         let mut stmt = conn
             .prepare_cached(
@@ -450,18 +434,17 @@ pub fn brief(
     let parts = BriefParts {
         state,
         peers: peers_text,
-        notes,
         adjacent,
         skills,
         plugins,
     };
     let compact = format!(
-        "# Relay session brief\n\n## Current state\n{}\n\n## Live peers\n{}\n\n## Standing notes\n{}\n\n## Adjacent tasks\n{}\n\n## Comms\n{}\n\n## Assignment\nRun `session.bootstrap` for your launch assignment and current task.\n\n## Enabled skills\n{}\n\n## Enabled plugins\n{}",
-        state_public, parts.peers, parts.notes, parts.adjacent, COMMS_HINT, skills_summary, parts.plugins,
+        "# Relay session brief\n\n## Current state\n{}\n\n## Live peers\n{}\n\n## Adjacent tasks\n{}\n\n## Comms\n{}\n\n## Assignment\nRun `session.bootstrap` for your launch assignment and current task.\n\n## Enabled skills\n{}\n\n## Enabled plugins\n{}",
+        state_public, parts.peers, parts.adjacent, COMMS_HINT, skills_summary, parts.plugins,
     );
     let text = format!(
-        "# Relay session brief\n\n## Current state\n{}\n\n## Live peers\n{}\n\n## Standing notes\n{}\n\n## Adjacent tasks\n{}\n\n## Comms\n{}\n\n## Enabled skills\n{}\n\n## Enabled plugins\n{}",
-        parts.state, parts.peers, parts.notes, parts.adjacent, COMMS_HINT, parts.skills, parts.plugins,
+        "# Relay session brief\n\n## Current state\n{}\n\n## Live peers\n{}\n\n## Adjacent tasks\n{}\n\n## Comms\n{}\n\n## Enabled skills\n{}\n\n## Enabled plugins\n{}",
+        parts.state, parts.peers, parts.adjacent, COMMS_HINT, parts.skills, parts.plugins,
     );
     Ok(BriefOut {
         text,
@@ -473,7 +456,8 @@ pub fn brief(
 /// The actor-bound startup payload: identity, the live peer table, the ops this session may
 /// really call, how to reach the peers, and the guardrails it will meet. Every field is data
 /// the engine already holds; the one call every agent makes is the wrong place to be coy
-/// about it (D105). Standing notes, adjacent work and skills stay in the brief.
+/// about it (D105). Adjacent work and skills stay in the brief; notes are in neither, since an
+/// agent works from its task and reads a note only when it asks for one.
 pub fn bootstrap(
     conn: &Connection,
     session_name: &str,

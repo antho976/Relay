@@ -68,8 +68,9 @@ pub struct Inline {
     pictures: RefCell<Vec<Rc<Shown>>>,
     idle: RefCell<Option<glib::SourceId>>,
     place_idle: RefCell<Option<glib::SourceId>>,
-    /// Paints an item's `- [ ]` in the paper's colour, under its checkbox. Never `invisible`:
-    /// GTK leaves invisible text out of what the buffer reads back, so a save would drop it.
+    /// Paints an item's `- [ ]` fully transparent, under its checkbox (the paper is translucent,
+    /// so its colour would show). Never `invisible`: GTK leaves invisible text out of what the
+    /// buffer reads back, so a save would drop it.
     marker: gtk::TextTag,
     /// The line the cursor is on, shown as plain Markdown so it edits as typed.
     editing: Cell<i32>,
@@ -83,8 +84,7 @@ pub struct Inline {
 
 impl Inline {
     pub fn new(buffer: &sourceview5::Buffer) -> Self {
-        let paper = gtk::gdk::RGBA::parse(super::NOTES_PAPER).unwrap_or(gtk::gdk::RGBA::BLACK);
-        let marker = buffer.create_tag(None, &[("foreground-rgba", &paper)]).unwrap();
+        let marker = buffer.create_tag(None, &[("foreground-rgba", &gtk::gdk::RGBA::TRANSPARENT)]).unwrap();
         let done = buffer
             .create_tag(None, &[("strikethrough", &true), ("foreground-rgba", &gtk::gdk::RGBA::new(0.6, 0.6, 0.6, 0.75))])
             .unwrap();

@@ -323,8 +323,8 @@ pub struct Ui {
     layout_saves: RefCell<BTreeMap<i64, Value>>,
     layout_saving: Cell<bool>,
     appearance: gtk::CssProvider,
-    wallpaper: gtk::Picture,
-    wallpaper_dim: gtk::Box,
+    pub(crate) wallpaper: gtk::Picture,
+    pub(crate) wallpaper_dim: gtk::Box,
     font_size: Cell<f64>,
     pub(crate) palette: RefCell<String>,
     pub keybindings: RefCell<Value>,
@@ -1576,6 +1576,10 @@ impl Ui {
                                 if e.ev == "provider.update.changed" {
                                     crate::provider_updates::event(&ui, &e.payload);
                                     continue;
+                                }
+                                // A note lists the tasks made from it, whatever project it shows.
+                                if matches!(e.ev.as_str(), "task.changed" | "task.deleted") {
+                                    crate::pages::note_tasks_changed(&ui);
                                 }
                                 // Notes retains its own project when the main window switches.
                                 if matches!(e.ev.as_str(), "notes.changed" | "notes.deleted") {

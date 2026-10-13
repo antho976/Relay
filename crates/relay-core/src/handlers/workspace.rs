@@ -721,6 +721,7 @@ fn restore_project(ctx: &mut Ctx, project_id: Id, copied: Vec<Copied>) -> Result
     for sql in [
         "UPDATE tasks SET parent_id = NULL WHERE project_id = ?1 AND parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM tasks)",
         "UPDATE tasks SET module_id = NULL WHERE project_id = ?1 AND module_id IS NOT NULL AND module_id NOT IN (SELECT id FROM modules)",
+        "UPDATE tasks SET note_id = NULL WHERE project_id = ?1 AND note_id IS NOT NULL AND note_id NOT IN (SELECT id FROM notes)",
         "DELETE FROM task_relations WHERE from_task NOT IN (SELECT id FROM tasks) OR to_task NOT IN (SELECT id FROM tasks)",
         "DELETE FROM module_unlinked_tasks WHERE module_id NOT IN (SELECT id FROM modules) OR task_id NOT IN (SELECT id FROM tasks)",
         "DELETE FROM task_labels WHERE label_id NOT IN (SELECT id FROM labels)",

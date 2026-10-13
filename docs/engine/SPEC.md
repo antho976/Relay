@@ -83,7 +83,6 @@ provider-neutral snapshot is written to `.relay/sessions/<session>/session-brief
   including its changelog field
 - **Peer table** — live sessions: name, branch, claimed files, current task;
   refreshed mid-run on change via the mailbox
-- **Standing notes** — the per-repo notes pane, verbatim
 - **Adjacent tasks** — open tasks in the same module (titles + states)
 
 ## Agent actions (via bus)

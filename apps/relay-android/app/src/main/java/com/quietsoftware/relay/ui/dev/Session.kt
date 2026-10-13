@@ -263,7 +263,7 @@ private fun BriefFold(nav: Nav, name: String) {
         ListRow(onClick = { open = !open }) {
             Column(Modifier.weight(1f)) {
                 T("Launch brief", style = Relay.type.uiMedium, color = c.ink)
-                T("What the agent is told at launch: state, peers, notes and skills.", style = Relay.type.caption, color = c.ink3)
+                T("What the agent is told at launch: state, peers, nearby tasks and skills.", style = Relay.type.caption, color = c.ink3)
             }
             Glyph(if (open) "chevron-up" else "chevron-down", 13.dp, c.ink3)
         }

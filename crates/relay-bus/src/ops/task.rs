@@ -17,6 +17,8 @@ payload!(#[schemars(rename = "TaskCreateIn")] CreateIn {
     pub parent_id: Option<Id>,
     /// Free-form tags; unknown names are created in the project's label set.
     pub labels: Option<Vec<String>>,
+    /// The note this task is made from: a live note in the same project, or `notes.not_found`.
+    pub note_id: Option<Id>,
 });
 op!(Create, "task.create", CreateIn => Task,
     OpMeta::mutation(Scope::Project, 7, "Create a task; returns it").undo(Undo::Inverse).emits(&["task.changed"]));
@@ -50,6 +52,8 @@ payload!(#[schemars(rename = "TaskListIn")] ListIn {
     pub label: Option<String>,
     /// A session name; matches every task that session was ever dispatched to.
     pub session: Option<String>,
+    /// Only the tasks made from this note.
+    pub note_id: Option<Id>,
     /// `Some(Some(id))` = children of that task, `Some(None)` = roots only, absent = every task.
     #[serde(default, deserialize_with = "crate::nullable")] pub parent_id: Option<Option<Id>>,
     /// Page size, default 1000, at most 2000. Done cards sort last, so a page cut short drops

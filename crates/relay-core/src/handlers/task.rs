@@ -270,6 +270,7 @@ pub(crate) fn task_columns(row: &Row) -> rusqlite::Result<Task> {
         blocked_by: Vec::new(),
         blocks: Vec::new(),
         duplicate_of: None,
+        note_id: row.get("note_id")?,
         sessions: Vec::new(),
         commits: Vec::new(),
         attachments: Vec::new(),
@@ -408,6 +409,24 @@ fn assert_module(tx: &Transaction, project_id: Id, module_id: Option<Id>) -> Res
         return Err(BusError::not_found(
             "module.not_found",
             format!("no module {module_id} in project {project_id}"),
+        ));
+    }
+    Ok(())
+}
+
+/// A task is made from a live note of its own project, or from none.
+fn assert_note(tx: &Transaction, project_id: Id, note_id: Option<Id>) -> Result<(), BusError> {
+    let Some(note_id) = note_id else {
+        return Ok(());
+    };
+    let found: bool = tx
+        .prepare_cached("SELECT EXISTS(SELECT 1 FROM notes WHERE id=?1 AND project_id=?2 AND deleted_at IS NULL)")
+        .and_then(|mut stmt| stmt.query_row(params![note_id, project_id], |r| r.get(0)))
+        .bus()?;
+    if !found {
+        return Err(BusError::not_found(
+            "notes.not_found",
+            format!("no note {note_id} in project {project_id}"),
         ));
     }
     Ok(())
@@ -867,6 +886,7 @@ pub fn register(e: &mut Engine) {
         if title.is_empty() { return Err(BusError::invalid("task.title", "task title cannot be empty")) }
         assert_module(ctx.tx(), p.project_id, p.module_id)?;
         if let Some(parent_id) = p.parent_id { assert_parent(ctx.tx(), p.project_id, None, parent_id)?; }
+        assert_note(ctx.tx(), p.project_id, p.note_id)?;
         let column = p.column.unwrap_or(Column::Backlog);
         // An agent files work; it does not start or finish it. Active means a dispatched
         // session and done a linked commit, and task.move refuses both to an agent — creating
@@ -876,8 +896,8 @@ pub fn register(e: &mut Engine) {
         }
         let position = next_position(ctx.tx(), p.project_id, column)?;
         ctx.tx().execute(
-            "INSERT INTO tasks(project_id,module_id,title,body,changelog,col,position,state,priority,size,kind,parent_id,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13)",
-            params![p.project_id,p.module_id,title,p.body.unwrap_or_default(),p.changelog.unwrap_or_default(),column_str(column),position,state_str(p.state.unwrap_or(TaskState::None)),priority_str(p.priority.unwrap_or(Priority::Medium)),p.size.map(size_str),type_str(p.task_type.unwrap_or(TaskType::Task)),p.parent_id,ctx.now],
+            "INSERT INTO tasks(project_id,module_id,title,body,changelog,col,position,state,priority,size,kind,parent_id,created_at,updated_at,note_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13,?14)",
+            params![p.project_id,p.module_id,title,p.body.unwrap_or_default(),p.changelog.unwrap_or_default(),column_str(column),position,state_str(p.state.unwrap_or(TaskState::None)),priority_str(p.priority.unwrap_or(Priority::Medium)),p.size.map(size_str),type_str(p.task_type.unwrap_or(TaskType::Task)),p.parent_id,ctx.now,p.note_id],
         ).bus()?;
         let id = ctx.tx().last_insert_rowid();
         let mut task = get_task(ctx.tx(), id, false)?;
@@ -1025,6 +1045,7 @@ pub fn register(e: &mut Engine) {
             None => {}
         }
         if let Some(v)=p.label { sql.push_str(" AND EXISTS(SELECT 1 FROM task_labels tl JOIN labels l ON l.id=tl.label_id WHERE tl.task_id=tasks.id AND l.name=? COLLATE NOCASE)"); args.push(Box::new(normalise_label(&v)?)); }
+        if let Some(v)=p.note_id { sql.push_str(" AND note_id=?"); args.push(Box::new(v)); }
         if let Some(v)=p.session { sql.push_str(" AND EXISTS(SELECT 1 FROM task_sessions ts WHERE ts.task_id=tasks.id AND ts.session_id=(SELECT MAX(id) FROM sessions WHERE name=?))"); args.push(Box::new(v)); }
         match p.sort.as_deref().unwrap_or("column") {
             "priority" => sql.push_str(" ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,updated_at DESC,id"),

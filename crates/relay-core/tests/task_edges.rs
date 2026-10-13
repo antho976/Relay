@@ -545,3 +545,43 @@ fn undoing_approve_restores_the_task_and_drops_only_its_own_link() {
     // Called directly it refuses a task that is not done.
     assert_eq!(code(call(e, Actor::User, "task.unapprove", json!({"task_id":c["id"],"column":"ready","position":0,"state":"none"}))), "task.column_transition");
 }
+
+/// D166: a task remembers the note it was made from. The note must be live and in the task's
+/// project; `task.list {note_id}` finds the tasks made from it, and purging the note clears the
+/// link rather than the task.
+#[test]
+fn a_task_made_from_a_note_keeps_the_link() {
+    let f = Fixture::new();
+    let e = &f.engine;
+    let note = ok(e, "notes.create", json!({"project_id":1,"title":"Idea","body":"thinking"}));
+    let task = f.task("From the note", json!({"note_id":note["id"]}));
+    assert_eq!(task["note_id"], note["id"]);
+    assert_eq!(ok(e, "task.get", json!({"task_id":task["id"]}))["note_id"], note["id"]);
+    let plain = f.task("Unrelated", json!({}));
+    assert!(plain["note_id"].is_null());
+
+    let made: Vec<Value> = ok(e, "task.list", json!({"project_id":1,"note_id":note["id"]}))["tasks"].as_array().unwrap().clone();
+    assert_eq!(made.len(), 1);
+    assert_eq!(made[0]["id"], task["id"]);
+    assert_eq!(made[0]["note_id"], note["id"]);
+
+    // A missing note, one in another project, and a deleted one are refused.
+    repo(&f.root.path().join("ws/other"));
+    ok(e, "project.add", json!({"workspace_id":1,"path":f.root.path().join("ws/other")}));
+    let elsewhere = ok(e, "notes.create", json!({"project_id":2,"title":"Theirs","body":""}));
+    let gone = ok(e, "notes.create", json!({"project_id":1,"title":"Gone","body":""}));
+    ok(e, "notes.delete", json!({"note_id":gone["id"]}));
+    for note_id in [json!(9999), elsewhere["id"].clone(), gone["id"].clone()] {
+        let refused = call(e, Actor::User, "task.create", json!({"project_id":1,"title":"Nope","note_id":note_id}));
+        assert_eq!(code(refused), "notes.not_found", "note {note_id}");
+    }
+    assert_eq!(ok(e, "task.list", json!({"project_id":1}))["tasks"].as_array().unwrap().len(), 2, "a refused create left a task");
+
+    // Purging the note past the undo window keeps the task and clears its link.
+    ok(e, "notes.delete", json!({"note_id":note["id"]}));
+    e.store.lock().execute("UPDATE notes SET deleted_at='2000-01-01T00:00:00Z' WHERE id=?1", [note["id"].as_i64().unwrap()]).unwrap();
+    ok(e, "app.reconcile", json!({}));
+    let after = ok(e, "task.get", json!({"task_id":task["id"]}));
+    assert!(after["note_id"].is_null(), "{after}");
+    assert!(after["deleted_at"].is_null());
+}
