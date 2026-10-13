@@ -171,9 +171,14 @@ const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(5);
 /// line in the log is the record. A lasting entry in the notification centre needs an op that
 /// can write one (none exists for a client today; see docs/MOBILE.md §6).
 async fn announce_pairing(socket_path: PathBuf, name: String, id: String, origin: String) {
-    use relay_bus::envelope::{Actor, Request};
     let text = format!("A phone paired with this PC: \"{name}\" ({origin}). Not yours? Run `relay remote revoke {id}`.");
-    let request = Request::new(Actor::User, "ui.toast", serde_json::json!({"text": text, "level": "warn", "ttl_ms": 20_000}));
+    toast(socket_path, text, "warn", 20_000).await;
+}
+
+/// A `ui.toast` on every window the native client has open. Best effort, as above.
+pub(crate) async fn toast(socket_path: PathBuf, text: String, level: &str, ttl_ms: u64) {
+    use relay_bus::envelope::{Actor, Request};
+    let request = Request::new(Actor::User, "ui.toast", serde_json::json!({"text": text, "level": level, "ttl_ms": ttl_ms}));
     let attempt = async {
         let stream = UnixStream::connect(&socket_path).await?;
         relay_core::socket::same_user(&stream)?;
@@ -192,8 +197,8 @@ async fn announce_pairing(socket_path: PathBuf, name: String, id: String, origin
     };
     match tokio::time::timeout(ANNOUNCE_TIMEOUT, attempt).await {
         Ok(Ok(())) => {}
-        Ok(Err(e)) => tracing::debug!(error = %format!("{e:#}"), "pairing not announced to the desktop"),
-        Err(_) => tracing::debug!("pairing not announced to the desktop: the engine did not answer"),
+        Ok(Err(e)) => tracing::debug!(error = %format!("{e:#}"), "toast not shown on the desktop"),
+        Err(_) => tracing::debug!("toast not shown on the desktop: the engine did not answer"),
     }
 }
 

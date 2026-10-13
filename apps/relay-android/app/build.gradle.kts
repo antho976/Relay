@@ -65,7 +65,23 @@ android {
             applicationIdSuffix = ".debug"
             isDebuggable = true
         }
+        // Antho's own build: the release, plus src/personal, where pairing goes through his server
+        // (one tap on Discord, then Accept on the PC; docs/CLOUD.md, "Connecting through your
+        // server") instead of a QR code. Nothing in main, debug or release refers to it, and the
+        // server's address lives only there: `assembleRelease` compiles exactly what it did.
+        // Signed with the release key when keystore.properties is complete, else the debug key,
+        // so it installs straight from the PC: `./gradlew :app:assemblePersonal`.
+        create("personal") {
+            initWith(getByName("release"))
+            signingConfig = if (hasReleaseKeystore) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+        }
     }
+
+    // Pairing as the builds anyone can install do it (scan, paste or type what `relay remote pair`
+    // printed). The personal build has its own PairEntry in src/personal instead.
+    sourceSets["debug"].java.srcDir("src/standard/java")
+    sourceSets["release"].java.srcDir("src/standard/java")
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

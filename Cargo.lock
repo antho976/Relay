@@ -3006,6 +3006,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "ureq",
 ]
 
 [[package]]

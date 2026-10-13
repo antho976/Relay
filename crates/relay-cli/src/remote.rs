@@ -50,6 +50,11 @@ pub enum RemoteCommand {
         #[arg(long)]
         via_only: bool,
     },
+    /// Let in the phone waiting on an open pairing window (one allowed on Discord, when the
+    /// desktop could not ask)
+    Approve,
+    /// Turn away the phone waiting on an open pairing window
+    Decline,
     /// List paired phones
     Devices,
     /// Forget a paired phone by id
@@ -230,9 +235,16 @@ pub async fn serve_with_door(
     }
     // A PC linked to a cloud engine merges with it while it runs (docs/CLOUD.md).
     let cloud_path = relay_remote::cloud::Link::path_for(instance);
+    let mut phones = None;
     let cloud = match relay_remote::cloud::Link::load(&cloud_path) {
         Ok(Some(link)) => {
             println!("relay serve: merging with the cloud copy at {} every minute", link.host);
+            // Connected through the owner's server: the Relay app can pair through it too, each
+            // phone allowed on Discord and then confirmed on this desktop (connect.rs).
+            if let (Some(server), Some(token), Some(_)) = (link.server.clone(), link.server_token.clone(), registry.as_ref()) {
+                println!("relay serve: taking the Relay app's requests to pair through {server}");
+                phones = Some(relay_remote::connect::spawn_host(ctx.clone(), server, token));
+            }
             Some(relay_remote::cloud::spawn(ctx.socket_path.clone(), cloud_path, crate::cloud::pc_name(instance)))
         }
         Ok(None) => None,
@@ -252,6 +264,9 @@ pub async fn serve_with_door(
     }
     if let Some(c) = cloud {
         c.abort();
+    }
+    if let Some(p) = phones {
+        p.abort();
     }
     drop(door);
     // Quitting first and the socket door closed before the sessions go (RA-333).
@@ -386,6 +401,21 @@ pub async fn run(requested: Instance, cmd: RemoteCommand) -> Result<u8> {
                         println!("\nPairing window closed.");
                     }
                 }
+            }
+            Ok(0)
+        }
+        RemoteCommand::Approve | RemoteCommand::Decline => {
+            let yes = matches!(cmd, RemoteCommand::Approve);
+            let answered = Registry::update(&ctx.registry_path, |r| {
+                let waiting = r.pending.iter().find_map(|p| {
+                    p.request.as_ref().filter(|q| q.approved.is_none()).map(|q| (p.code.clone(), q.device_name.clone()))
+                });
+                Ok::<_, anyhow::Error>(waiting.map(|(code, name)| (r.decide(&code, yes), name)))
+            })?;
+            match answered {
+                Some((true, name)) if yes => println!("Approved \"{name}\". `relay remote devices` lists it; `relay remote revoke <id>` removes it."),
+                Some((true, name)) => println!("Declined \"{name}\"; nothing was paired."),
+                _ => println!("No phone is waiting on a pairing window."),
             }
             Ok(0)
         }

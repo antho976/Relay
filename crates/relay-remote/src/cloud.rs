@@ -71,6 +71,12 @@ pub struct Link {
     pub last_ok: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// The owner's server this PC connected through (`relay cloud connect`; connect.rs), and its
+    /// token there, which a running engine polls with for Relay phones the owner allowed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_token: Option<String>,
 }
 
 impl Link {
@@ -332,6 +338,8 @@ pub async fn pair(path: &Path, link: &str, name: &str) -> Result<Link> {
         gym_digest: None,
         last_ok: None,
         last_error: None,
+        server: None,
+        server_token: None,
     };
     link.save(path)?;
     Ok(link)
@@ -605,7 +613,7 @@ mod tests {
     fn link() -> Link {
         Link {
             v: 1, url: "wss://x/join/r".into(), host: "cloud".into(), host_id: "h".into(), device: "d".into(), token: "t".into(),
-            pc: Side::default(), cloud: Side::default(), gym_digest: None, last_ok: None, last_error: None,
+            pc: Side::default(), cloud: Side::default(), gym_digest: None, last_ok: None, last_error: None, server: None, server_token: None,
         }
     }
 

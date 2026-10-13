@@ -20,6 +20,7 @@
 
 pub mod bridge;
 pub mod cloud;
+pub mod connect;
 pub mod direct;
 pub mod pairlink;
 pub mod registry;
