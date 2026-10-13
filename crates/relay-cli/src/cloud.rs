@@ -33,7 +33,7 @@ pub enum CloudCommand {
 /// How the cloud engine lists this PC.
 pub fn pc_name(instance: Instance) -> String {
     let host = Registry::load(&Registry::path_for(instance)).map(|r| r.host_name).unwrap_or_else(|_| "Relay".into());
-    format!("PC ({host})")
+    cloud::device_name("PC", &host)
 }
 
 /// Runs a blocking call to the server off the async runtime.
@@ -91,13 +91,16 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
             let name = Registry::load(&Registry::path_for(instance)).map(|r| r.host_name).unwrap_or_else(|_| "this PC".into());
             println!("Asking {} to let {name} in…", api.base());
             let (pair_link, token) = ask_and_wait(&api, &name).await?;
-            let mut link = match existing {
-                // Linked with the cloud copy already (`relay cloud pair`): this only adds the server.
-                Some(link) => link,
-                None => {
-                    println!("Allowed. Pairing with the cloud copy…");
-                    cloud::pair(&path, &pair_link, &pc_name(instance)).await?
-                }
+            // Linked with the cloud copy already (`relay cloud pair`), this only adds the server.
+            // Looked at again: `relay cloud off` may have run while this waited.
+            if Link::load(&path)?.is_none() {
+                println!("Allowed. Pairing with the cloud copy…");
+                cloud::pair(&path, &pair_link, &pc_name(instance)).await?;
+            }
+            // The link as it is now, under the round lock: a round may have moved it on meanwhile.
+            let _lock = cloud::lock(&path).await?;
+            let Some(mut link) = Link::load(&path)? else {
+                return Err(anyhow!("the cloud link was removed while this ran: run `relay cloud connect` again"));
             };
             link.server = Some(api.base().to_string());
             link.server_token = token;
@@ -147,6 +150,8 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
             Ok(0)
         }
         CloudCommand::Off => {
+            // After any round under way, which would otherwise write the link back.
+            let _lock = cloud::lock(&path).await?;
             match std::fs::remove_file(&path) {
                 Ok(()) => println!("cloud link forgotten; revoke this PC on the server with `relay remote revoke <id>` (`relay remote devices` lists it)"),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => println!("no cloud link"),

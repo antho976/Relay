@@ -73,8 +73,15 @@ per row on each side, as with Tally, so the two converge. The wholesale acts kee
 - **This PC's ledger was restored, erased or replaced**: this PC answers `money.sync_stale`, and
   its whole ledger replaces the cloud's, and from there Tally's on its next sync.
 
+Before a replace clears either side, `cloud.json` records which side is going over (`replacing`).
+A round that stops partway (a batch failed, the engine shut down) leaves the other side holding part
+of the ledger, which would read as stale next time; the next round instead finishes the same
+replace from the same side, before anything else, and clears the mark. Otherwise a side's cursor
+moves only once the other side has taken its changes: a round that fails partway is asked again.
+
 Each side lists the link as a device (`PC (<name>)` on the cloud, `Cloud (<name>)` here), so
-neither posts bills: Tally alone does, as when it syncs with the PC directly.
+neither posts bills: Tally alone does, as when it syncs with the PC directly. A long name is cut to
+the 64 characters `money.sync` takes.
 
 Large merges go in batches of 2,000 rows, in dependency order across batches, under the 8 MiB a
 device may send the rendezvous in one message.
