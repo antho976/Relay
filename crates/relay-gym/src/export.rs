@@ -109,6 +109,12 @@ fn flag(o: &Map<String, Value>, k: &str) -> bool {
     o.get(k).and_then(Value::as_bool).unwrap_or(false)
 }
 
+/// The most active time one session can claim: a day. An export that says more is corrupt, and
+/// unbounded it is summed into weekly totals.
+const MAX_ACTIVE_SECONDS: i64 = 24 * 60 * 60;
+/// The most sets or PRs one session can claim. A float in the file saturates to `i64::MAX`.
+const MAX_COUNT: i64 = 10_000;
+
 fn session(s: &Map<String, Value>) -> Option<Session> {
     let started_at = positive(s, "startedAt")?;
     let mut exercises: Vec<Exercise> = s
@@ -122,10 +128,10 @@ fn session(s: &Map<String, Value>) -> Option<Session> {
         day_key: string(s, "dayKey"),
         started_at,
         finished_at: positive(s, "finishedAt"),
-        active_seconds: positive(s, "activeSeconds").unwrap_or(0),
+        active_seconds: positive(s, "activeSeconds").unwrap_or(0).min(MAX_ACTIVE_SECONDS),
         volume_lb: float(s, "totalVolumeLb").filter(|v| *v > 0.0).unwrap_or(0.0),
-        pr_count: int(s, "prCount").filter(|v| *v > 0).unwrap_or(0),
-        set_count: int(s, "setCount").filter(|v| *v > 0).unwrap_or(0),
+        pr_count: int(s, "prCount").filter(|v| *v > 0).unwrap_or(0).min(MAX_COUNT),
+        set_count: int(s, "setCount").filter(|v| *v > 0).unwrap_or(0).min(MAX_COUNT),
         session_type: string(s, "sessionType"),
         intensity: string(s, "intensity"),
         untracked: flag(s, "isUntracked"),
@@ -275,5 +281,17 @@ mod tests {
         let future = r#"{"exportVersion": 2, "settings": {}, "sessions": []}"#;
         assert_eq!(read(future, "x", "t"), Err(ReadError::TooNew(2)));
         assert!(ReadError::Partial("weekly").to_string().contains("Training history"));
+    }
+
+    /// A count or duration written as a huge float saturates to `i64::MAX` on the way in; it
+    /// is clamped instead, so the weekly totals it is summed into stay finite.
+    #[test]
+    fn implausible_counts_and_durations_are_clamped() {
+        let raw = r#"{"exportVersion": 1, "settings": {}, "sessions": [
+          {"id": 1, "startedAt": 1759870800000, "activeSeconds": 1e300, "prCount": 9.9e18, "setCount": 1e19, "exercises": []}
+        ], "cardio": []}"#;
+        let h = read(raw, "x.json", "t").unwrap();
+        let s = &h.sessions[0];
+        assert_eq!((s.active_seconds, s.pr_count, s.set_count), (MAX_ACTIVE_SECONDS, MAX_COUNT, MAX_COUNT));
     }
 }

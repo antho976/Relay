@@ -468,14 +468,15 @@ fn buckets(h: &History, clock: &Clock, starts: &[Date], of: impl Fn(Date) -> Dat
             let r = row(h, s, clock);
             let w = &mut out[i];
             w.sessions += 1;
-            w.sets += r.sets;
-            w.active_minutes += r.minutes;
+            // Saturating: a stored count is whatever an export said, and a sum past i64 is a panic.
+            w.sets = w.sets.saturating_add(r.sets);
+            w.active_minutes = w.active_minutes.saturating_add(r.minutes);
             w.volume += if s.volume_lb > 0.0 { s.volume_lb } else { s.exercises.iter().filter(|e| !e.skipped).map(lift_volume_lb).sum() };
         }
     }
     for c in &h.cardio {
         if let Some(&i) = index.get(&of(date_of(c.date, &clock.tz))) {
-            out[i].cardio_minutes += c.duration_min;
+            out[i].cardio_minutes = out[i].cardio_minutes.saturating_add(c.duration_min);
         }
     }
     for w in &mut out {
@@ -524,10 +525,10 @@ pub fn summary(h: &History, clock: &Clock, imported: bool) -> Summary {
     let rows: Vec<SessionRow> = tracked(h).map(|s| row(h, s, clock)).collect();
     let totals = Totals {
         sessions: rows.len() as u32,
-        sets: rows.iter().map(|r| r.sets).sum(),
+        sets: rows.iter().fold(0, |sum: i64, r| sum.saturating_add(r.sets)),
         volume: volume(tracked(h).map(|s| s.volume_lb).sum(), kg),
         cardio: h.cardio.len() as u32,
-        cardio_minutes: h.cardio.iter().map(|c| c.duration_min).sum(),
+        cardio_minutes: h.cardio.iter().fold(0, |sum: i64, c| sum.saturating_add(c.duration_min)),
         first_day: rows.first().map(|r| r.day.clone()),
         last_day: rows.last().map(|r| r.day.clone()),
     };
@@ -1081,5 +1082,21 @@ mod tests {
         assert_eq!(s.this_week.start, "2026-10-04");
         // Monday Oct 6 (untracked) and Tuesday Oct 7 fall in the week from Sunday Oct 4.
         assert_eq!(s.this_week.sessions, 1);
+    }
+
+    /// Counts already stored before the import clamped them still sum without overflowing.
+    #[test]
+    fn totals_saturate_instead_of_overflowing() {
+        let mut h = history(false);
+        for s in &mut h.sessions {
+            s.set_count = i64::MAX;
+            s.active_seconds = i64::MAX;
+        }
+        h.cardio.push(Cardio { date: ms("2026-10-08", 9), duration_min: i64::MAX, ..Cardio::default() });
+        let s = summary(&h, &clock(), true);
+        assert_eq!(s.totals.sets, i64::MAX);
+        assert_eq!(s.totals.cardio_minutes, i64::MAX);
+        assert_eq!(s.this_week.cardio_minutes, i64::MAX);
+        assert_eq!(s.this_week.sets, i64::MAX);
     }
 }

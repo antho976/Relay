@@ -20,35 +20,51 @@ const AGENT_BUILD_POLICY: &str = "agent_build";
 /// An agent reaches only its own project's integrations, like every other project-scoped op
 /// that names a `project_id` (`not_own("project")`).
 fn assert_own_project(ctx: &Ctx, project_id: Id) -> Result<(), BusError> {
-    if let Some(session_id) = ctx.actor_session_id() {
-        let row = crate::sessions::by_id(ctx.tx(), session_id)?
+    own_project(ctx.tx(), &ctx.actor, ctx.actor_session_id(), project_id)
+}
+
+fn own_project(conn: &rusqlite::Connection, actor: &relay_bus::Actor, session: Option<Id>, project_id: Id) -> Result<(), BusError> {
+    if let Some(session_id) = session {
+        let row = crate::sessions::by_id(conn, session_id)?
             .ok_or_else(|| BusError::actor("bound session no longer exists"))?;
         if row.session.project_id != project_id {
             return Err(BusError::not_own("project"));
         }
-    } else if ctx.actor.is_agent() {
+    } else if actor.is_agent() {
         return Err(BusError::actor("agent actor is not bound to a live session"));
     }
     Ok(())
 }
 
+/// The most branches one integration merges. Each is a ref lookup in the project's repository,
+/// and an octopus merge of more is not a test anyone reads.
+const MAX_BRANCHES: usize = 32;
+
 pub fn register(e: &mut Engine) {
-    e.register::<IntegrationRequest>(|ctx: &mut Ctx, p| {
-        let project = get_project(ctx.tx(), p.project_id)?;
-        assert_own_project(ctx, project.id)?;
+    // Each branch is looked up in the project's repository, with the store released: opening
+    // it and reading refs is file I/O no other request should wait on (D149).
+    e.register_staged::<IntegrationRequest, Vec<String>>(|ctx, p| {
+        let asked = p.branches.as_ref().map_or(0, Vec::len) + p.sessions.as_ref().map_or(0, Vec::len);
+        if asked > MAX_BRANCHES {
+            return Err(BusError::invalid("integration.branches", format!("at most {MAX_BRANCHES} branches can be integrated at once; {asked} were asked for")));
+        }
+        let (project, mut branches) = ctx.read(|conn| {
+            let project = get_project(conn, p.project_id)?;
+            own_project(conn, &ctx.actor, ctx.actor_session_id(), project.id)?;
+            let mut branches = p.branches.clone().unwrap_or_default();
+            for session in p.sessions.iter().flatten() {
+                let branch: Option<String> = conn.prepare_cached(
+                    "SELECT branch FROM sessions WHERE project_id=?1 AND name=?2 AND state!='closed'",
+                ).bus()?.query_row(params![project.id, session], |r| r.get(0)).optional().bus()?;
+                branches.push(branch.ok_or_else(|| BusError::not_found("integration.session_not_found", format!("no open session {session}")))?);
+            }
+            Ok((project, branches))
+        })?;
         // A deploy is a `device.run`, which is user-only: an agent asking for one here would
         // reach the device through a side door.
         if p.deploy.is_some() && ctx.actor.is_agent() {
             return Err(BusError::allowlist("device.run", "agent")
                 .with_hint("deploy is user-only; request the integration without deploy and ask the user to run it"));
-        }
-        let mut branches = p.branches.unwrap_or_default();
-        for session in p.sessions.unwrap_or_default() {
-            let branch: Option<String> = ctx.tx().query_row(
-                "SELECT branch FROM sessions WHERE project_id=?1 AND name=?2 AND state!='closed'",
-                params![project.id, session], |r| r.get(0),
-            ).optional().bus()?;
-            branches.push(branch.ok_or_else(|| BusError::not_found("integration.session_not_found", format!("no open session {session}")))?);
         }
         branches.retain(|b| !b.trim().is_empty()); branches.sort(); branches.dedup();
         if branches.len() < 2 { return Err(BusError::invalid("integration.branches", "select at least two distinct session branches")); }
@@ -56,8 +72,17 @@ pub fn register(e: &mut Engine) {
         for branch in &branches {
             // `git merge` would read a ref spelled like an option as one.
             if branch.starts_with('-') { return Err(BusError::invalid("integration.branch", format!("{branch}: a branch name cannot start with '-'"))); }
-            repo.rev_parse_single(branch.as_str()).map_err(|e| BusError::invalid("integration.branch", format!("{branch}: {e}")))?;
+            // A local branch by its exact name, never a revspec: `:/text` and `@{…}` walk history,
+            // and the name goes to `git merge` as it is.
+            let full = format!("refs/heads/{branch}");
+            if !repo.find_reference(full.as_str()).is_ok_and(|found| found.name().as_bstr() == full.as_str()) {
+                return Err(BusError::invalid("integration.branch", format!("{branch}: no such local branch")));
+            }
         }
+        Ok(branches)
+    }, |ctx: &mut Ctx, p, branches| {
+        let project = get_project(ctx.tx(), p.project_id)?;
+        assert_own_project(ctx, project.id)?;
         // The build is the project's own command, run by the engine outside any sandbox with the
         // user's rights. An agent may ask for one only with a person's say-so, unless the project
         // trusts agent builds (`guardrails.agent_builds`); a merge-only request needs neither.
@@ -405,12 +430,17 @@ fn drive(engine: &Arc<Engine>, runner: &Runner, id: i64, parent: uuid::Uuid) {
         id,
         parent,
         IntegrationState::Merging,
-        Some(&path),
+        None,
         "Preparing integration worktree",
         false,
         None,
     );
-    let created = worktree::create(&repo, &path, &branch, Some(&project.base_branch));
+    // Always a new branch from the base (`-b`, which git refuses when the name is taken), and
+    // the checkout is recorded only once it is this run's: a discard or prune force-removes the
+    // recorded path and deletes `relay/integration-<id>`, and another instance sharing the
+    // repository numbers its integrations from 1 too. Reusing a branch of that name would
+    // also have merged into whatever it held instead of the base.
+    let created = worktree::create_at(&repo, &path, &branch, &worktree::Start::New(Some(project.base_branch.clone())));
     if let Err(error) = created {
         fail(
             engine,
@@ -422,6 +452,7 @@ fn drive(engine: &Arc<Engine>, runner: &Runner, id: i64, parent: uuid::Uuid) {
         );
         return;
     }
+    let _ = set_state(engine, id, parent, IntegrationState::Merging, Some(&path), "Merging branches", false, None);
     if state_of(engine, id).is_none_or(|state| state == IntegrationState::Discarded) {
         let _ = worktree::remove(&repo, &path, true);
         let _ = worktree::git_mutate(&repo, &["branch", "-D", &branch]);

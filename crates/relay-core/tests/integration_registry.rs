@@ -252,3 +252,49 @@ fn a_v3_import_keeps_attachments_inside_and_refuses_unusable_caps() {
     assert!(rows[1].1.ends_with("escaped-1.png"), "{rows:?}");
     assert!(!f.root.join("escaped.png").exists());
 }
+
+/// Only local branches by their exact name are merged, at most 32 of them: a revspec such as
+/// `:/text` would walk all of history under the request, and was the agent's to send.
+#[test]
+fn only_named_local_branches_are_integrated_and_only_so_many() {
+    let f = fixture();
+    let e = &f.engine;
+    branch(&f.repo, "a", "a.txt", "a\n");
+    branch(&f.repo, "b", "b.txt", "b\n");
+    for spec in [":/nomatch", "a^", "HEAD", "main~1", "@{-1}", "refs/heads/a"] {
+        let refused = refused(call_as(e, Actor::User, "integration.request", json!({"project_id": 1, "branches": [spec, "b"], "build": false})));
+        assert_eq!(refused.code, "integration.branch", "{spec}: {refused:?}");
+    }
+    let many: Vec<String> = (0..33).map(|n| format!("b{n}")).collect();
+    let refused = refused(call_as(e, Actor::User, "integration.request", json!({"project_id": 1, "branches": many, "build": false})));
+    assert_eq!(refused.code, "integration.branches", "{refused:?}");
+    let count = e.store.lock().query_row("SELECT COUNT(*) FROM integrations", [], |r| r.get::<_, i64>(0)).unwrap();
+    assert_eq!(count, 0);
+    let queued = ok(e, "integration.request", json!({"project_id": 1, "branches": ["a", "b"], "build": false}));
+    assert_eq!(settle(e, queued["id"].as_i64().unwrap())["state"], "passed");
+}
+
+/// Another Relay sharing the repository numbers its integrations from 1 as well. A taken
+/// `relay/integration-<id>` is not reused, and the checkout path is recorded only once this
+/// run made it, so a discard never removes the other's checkout or branch.
+#[test]
+fn a_taken_integration_branch_is_neither_reused_nor_removed() {
+    let f = fixture();
+    let e = &f.engine;
+    branch(&f.repo, "a", "a.txt", "a\n");
+    branch(&f.repo, "b", "b.txt", "b\n");
+    branch(&f.repo, "relay/integration-1", "theirs.txt", "theirs\n");
+    let theirs = f.repo.join(".relay/integrations/1");
+    git(&f.repo, &["worktree", "add", "-q", theirs.to_str().unwrap(), "relay/integration-1"]);
+
+    let queued = ok(e, "integration.request", json!({"project_id": 1, "branches": ["a", "b"], "build": false}));
+    let id = queued["id"].as_i64().unwrap();
+    assert_eq!(id, 1);
+    let done = settle(e, id);
+    assert_eq!(done["state"], "failed", "{done}");
+    assert!(done["worktree"].is_null(), "a checkout this run never made was recorded: {done}");
+    ok(e, "integration.discard", json!({"integration_id": id}));
+    assert!(theirs.join("theirs.txt").is_file(), "the other instance's checkout was removed");
+    let kept = Command::new("git").arg("-C").arg(&f.repo).args(["rev-parse", "--verify", "--quiet", "refs/heads/relay/integration-1"]).status().unwrap();
+    assert!(kept.success(), "the other instance's branch was deleted");
+}

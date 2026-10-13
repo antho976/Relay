@@ -662,6 +662,15 @@ async fn dispatch_blocking(engine: &Arc<Engine>, req: Request) -> Result<Respons
     Ok(tokio::task::spawn_blocking(move || e.dispatch(req, Door::Socket)).await?)
 }
 
+/// The answer to an unlocked query run on the blocking pool. One that panicked is still
+/// answered, with an internal error: dropped, its caller waited for an answer forever.
+fn answered(id: uuid::Uuid, op: &str, joined: Result<Response, tokio::task::JoinError>) -> Response {
+    joined.unwrap_or_else(|error| {
+        tracing::error!(%op, %error, "an unlocked query did not finish");
+        Response::err(id, BusError::internal(format!("{op} failed inside Relay")))
+    })
+}
+
 /// A `logcat` or `mirror` frame (§7); `pty` frames have their own writer.
 fn stream_frame(stream: &str, run_id: Option<relay_bus::types::Id>, mirror_id: Option<relay_bus::types::Id>, seq: u64, data: serde_json::Value) -> Frame {
     Frame { v: ENVELOPE_V, stream: stream.into(), session: None, run_id, mirror_id, epoch: None, seq, data }
@@ -801,13 +810,13 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             // connection while it is spent.
             let permit = concurrent.clone().acquire_owned().await?;
             let (e, tx, recent) = (engine.clone(), out_tx.clone(), recent.clone());
+            let (id, op) = (req.id, req.op.clone());
             inflight.spawn(async move {
                 let resp = tokio::task::spawn_blocking(move || e.dispatch(req, Door::Socket)).await;
                 drop(permit);
-                if let Ok(resp) = &resp {
-                    recent.refused(arrival, resp);
-                }
-                if let Ok(line) = resp.map_err(anyhow::Error::from).and_then(|resp| Ok(serde_json::to_string(&resp)?)) {
+                let resp = answered(id, &op, resp);
+                recent.refused(arrival, &resp);
+                if let Ok(line) = serde_json::to_string(&resp) {
                     let _ = tx.send(line).await;
                 }
             });
@@ -1958,5 +1967,17 @@ mod frame_tests {
                 assert_eq!(&decoded, body);
             }
         }
+    }
+
+    /// An unlocked query that panics on the blocking pool is answered with an internal error
+    /// under its own id, not dropped.
+    #[tokio::test]
+    async fn a_panicked_unlocked_query_is_still_answered() {
+        let id = uuid::Uuid::new_v4();
+        let joined = tokio::task::spawn_blocking(|| -> Response { panic!("boom") }).await;
+        let resp = answered(id, "gym.summary", joined);
+        assert!(!resp.ok);
+        assert_eq!(resp.id, Some(id));
+        assert_eq!(resp.error.unwrap().kind, relay_bus::ErrorKind::Internal);
     }
 }
