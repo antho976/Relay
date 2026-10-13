@@ -339,6 +339,295 @@ fn spacer() -> gtk::Box {
     space
 }
 
+/// The Modules tab: the numbers across every module, then a card per module, the ones still
+/// in progress before the completed ones. A card opens its module's board.
+pub fn modules(ui: &Rc<Ui>, body: &gtk::Box, modules: &[Value]) {
+    let total_of = |m: &Value| -> i64 { m["counts"].as_object().map(|c| c.values().filter_map(Value::as_i64).sum()).unwrap_or(0) };
+    let count_of = |m: &Value, column: &str| m["counts"][column].as_i64().unwrap_or(0);
+    // The page scrolls itself (app.rs), so the content goes straight into it.
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    content.add_css_class("modules-content");
+    content.set_vexpand(true);
+    body.append(&content);
+    if modules.is_empty() {
+        let empty = gtk::Box::new(gtk::Orientation::Vertical, 10);
+        empty.add_css_class("modules-empty");
+        empty.set_halign(gtk::Align::Center);
+        empty.set_valign(gtk::Align::Center);
+        empty.set_vexpand(true);
+        let mark = crate::icons::image("modules", 28);
+        mark.add_css_class("modules-empty-mark");
+        empty.append(&mark);
+        empty.append(&label("No modules yet", "modules-empty-title"));
+        let hint = label(
+            "A module bundles tasks into one release. It gets its own board with progress and patch notes, and its tasks still show on the main board.",
+            "modules-empty-hint",
+        );
+        hint.set_wrap(true);
+        hint.set_max_width_chars(52);
+        hint.set_justify(gtk::Justification::Center);
+        empty.append(&hint);
+        let add = button("", "primary");
+        add.set_halign(gtk::Align::Center);
+        add.set_child(Some(&icon_text(crate::icons::image("plus", 12).upcast_ref(), "New module")));
+        let weak = Rc::downgrade(ui);
+        add.connect_clicked(move |_| {
+            if let Some(ui) = weak.upgrade() {
+                task_pages::compose_module(&ui, ui.project.get());
+            }
+        });
+        empty.append(&add);
+        content.set_vexpand(true);
+        content.append(&empty);
+        return;
+    }
+
+    // The numbers across every module, as the board's stats band shows its own.
+    let (done_modules, live): (Vec<&Value>, Vec<&Value>) = modules.iter().partition(|m| m["completed_at"].is_string());
+    let tasks: i64 = modules.iter().map(total_of).sum();
+    let finished: i64 = modules.iter().map(|m| count_of(m, "done")).sum();
+    let flight: i64 = modules.iter().map(|m| count_of(m, "active")).sum();
+    let review: i64 = modules.iter().map(|m| count_of(m, "in_review")).sum();
+    let band = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    band.add_css_class("board-stats");
+    let progress = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    progress.add_css_class("stat-tile");
+    progress.add_css_class("stat-progress");
+    progress.set_hexpand(true);
+    let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    head.append(&label("Across every module", "stat-caption"));
+    head.append(&spacer());
+    head.append(&label(&format!("{finished} of {tasks} tasks done"), "stat-note"));
+    progress.append(&head);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let pct = if tasks > 0 { finished as f64 * 100. / tasks as f64 } else { 0. };
+    row.append(&label(&format!("{pct:.0}%"), "stat-value"));
+    let counts: Vec<(&'static str, usize)> = COLUMNS
+        .iter()
+        .map(|c| (*c, modules.iter().map(|m| count_of(m, c)).sum::<i64>().max(0) as usize))
+        .collect();
+    row.append(&flow_bar(&counts, 8));
+    progress.append(&row);
+    let legend = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    legend.add_css_class("stat-legend");
+    for (column, count) in &counts {
+        let part = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+        part.append(&status_icon(column, 10));
+        part.append(&label(&format!("{} {count}", caption(column)), "stat-note"));
+        if *count == 0 {
+            part.add_css_class("stat-zero");
+        }
+        legend.append(&part);
+    }
+    progress.append(&legend);
+    band.append(&progress);
+    let tiles = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    tiles.set_homogeneous(true);
+    tiles.set_hexpand(true);
+    let plural = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
+    for tile in [
+        stat_tile("Modules", &modules.len().to_string(), &format!("{} in progress", live.len()), ""),
+        stat_tile("In flight", &flight.to_string(), if flight > 0 { "Tasks being worked on" } else { "Nothing in flight" }, if flight > 0 { "stat-warm" } else { "" }),
+        stat_tile("In review", &review.to_string(), if review > 0 { "Waiting on you" } else { "Nothing waiting" }, if review > 0 { "stat-review" } else { "" }),
+        stat_tile("Completed", &done_modules.len().to_string(), &plural(done_modules.len(), "module shipped", "modules shipped"), ""),
+    ] {
+        tiles.append(&tile);
+    }
+    band.append(&tiles);
+    content.append(&band);
+
+    for (title, group) in [("In progress", &live), ("Completed", &done_modules)] {
+        if group.is_empty() {
+            continue;
+        }
+        let heading = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        heading.add_css_class("modules-section-head");
+        heading.append(&label(title, "modules-section-title"));
+        heading.append(&label(&group.len().to_string(), "lane-count"));
+        content.append(&heading);
+        let grid = gtk::FlowBox::new();
+        grid.add_css_class("module-grid");
+        grid.set_selection_mode(gtk::SelectionMode::None);
+        grid.set_homogeneous(true);
+        grid.set_min_children_per_line(1);
+        grid.set_max_children_per_line(3);
+        grid.set_column_spacing(12);
+        grid.set_row_spacing(12);
+        grid.set_valign(gtk::Align::Start);
+        for module in group.iter() {
+            grid.insert(&module_card(ui, module, total_of(module), &count_of), -1);
+        }
+        content.append(&grid);
+    }
+}
+
+/// A module as a card: its name, priority and state; how far along it is, split by column;
+/// then its open and done counts and when it last changed.
+fn module_card(ui: &Rc<Ui>, module: &Value, total: i64, count_of: &dyn Fn(&Value, &str) -> i64) -> gtk::Button {
+    let card = button("", "module-card");
+    if module["completed_at"].is_string() {
+        card.add_css_class("module-complete");
+    }
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let mark = crate::icons::image("modules", 14);
+    mark.add_css_class("module-card-mark");
+    head.append(&mark);
+    let name = label(text(module, "name"), "module-card-name");
+    name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    name.set_hexpand(true);
+    name.set_xalign(0.);
+    head.append(&name);
+    if module["completed_at"].is_string() {
+        head.append(&label("Completed", "module-card-done"));
+    }
+    let priority = text(module, "priority");
+    let pill = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    pill.add_css_class("field-pill");
+    pill.add_css_class(&format!("pill-priority-{priority}"));
+    pill.set_valign(gtk::Align::Center);
+    pill.append(&priority_icon(priority));
+    pill.append(&label(&titled(priority), "field-pill-name"));
+    head.append(&pill);
+    content.append(&head);
+
+    let pct = module["progress_pct"].as_f64().unwrap_or(0.);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    row.append(&label(&format!("{pct:.0}%"), "module-card-pct"));
+    let counts: Vec<(&'static str, usize)> = COLUMNS.iter().map(|c| (*c, count_of(module, c).max(0) as usize)).collect();
+    row.append(&flow_bar(&counts, 6));
+    content.append(&row);
+
+    let columns = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    columns.add_css_class("module-card-columns");
+    for (column, count) in &counts {
+        let part = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+        part.append(&status_icon(column, 11));
+        part.append(&label(&count.to_string(), "module-card-meta"));
+        part.set_tooltip_text(Some(caption(column)));
+        if *count == 0 {
+            part.add_css_class("stat-zero");
+        }
+        columns.append(&part);
+    }
+    content.append(&columns);
+
+    let foot = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    foot.add_css_class("module-card-foot");
+    let open = total - count_of(module, "done");
+    foot.append(&label(
+        &if total == 0 { "No tasks yet".to_string() } else { format!("{open} open · {total} task{}", if total == 1 { "" } else { "s" }) },
+        "module-card-meta",
+    ));
+    foot.append(&spacer());
+    if let Some(when) = crate::relative::ago(text(module, "updated_at"), crate::relative::Form::CompactAgo) {
+        foot.append(&label(&format!("Updated {when}"), "module-card-ago"));
+    }
+    content.append(&foot);
+    card.set_child(Some(&content));
+    card.set_tooltip_text(Some("Open the module's board"));
+    card.set_size_request(320, -1);
+    let weak = Rc::downgrade(ui);
+    let id = module["id"].as_i64().unwrap_or(0);
+    card.connect_clicked(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            open_module(&ui, id)
+        }
+    });
+    card
+}
+
+/// Each column's ring colour (css/board.css `.status-*`), for drawings that paint several.
+fn column_rgb(column: &str) -> (f64, f64, f64) {
+    let hex = match column {
+        "ready" => 0x4493f8,
+        "active" => 0xf0a828,
+        "in_review" => 0xab7df8,
+        "done" => 0x2ec469,
+        _ => 0x8c877f,
+    };
+    (((hex >> 16) & 0xff) as f64 / 255., ((hex >> 8) & 0xff) as f64 / 255., (hex & 0xff) as f64 / 255.)
+}
+
+/// One bar split by how many tasks sit in each column, in board order: the board's mix at a
+/// glance. An empty board draws the bare track.
+pub(super) fn flow_bar(counts: &[(&'static str, usize)], height: i32) -> gtk::DrawingArea {
+    let area = gtk::DrawingArea::new();
+    area.add_css_class("flow-bar");
+    area.set_content_height(height);
+    area.set_hexpand(true);
+    area.set_valign(gtk::Align::Center);
+    let counts = counts.to_vec();
+    let total: usize = counts.iter().map(|(_, n)| n).sum();
+    area.set_tooltip_text(Some(
+        &counts.iter().filter(|(_, n)| *n > 0).map(|(c, n)| format!("{} {n}", caption(c))).collect::<Vec<_>>().join(" · "),
+    ));
+    area.set_draw_func(move |_, cr, w, h| {
+        let (w, h) = (w as f64, h as f64);
+        let r = (h / 2.).min(3.);
+        let round = |cr: &cairo::Context, x: f64, width: f64| {
+            cr.new_sub_path();
+            cr.arc(x + width - r, r, r, -std::f64::consts::FRAC_PI_2, 0.);
+            cr.arc(x + width - r, h - r, r, 0., std::f64::consts::FRAC_PI_2);
+            cr.arc(x + r, h - r, r, std::f64::consts::FRAC_PI_2, std::f64::consts::PI);
+            cr.arc(x + r, r, r, std::f64::consts::PI, 1.5 * std::f64::consts::PI);
+            cr.close_path();
+        };
+        cr.set_source_rgba(0.55, 0.53, 0.5, 0.18);
+        round(cr, 0., w);
+        let _ = cr.fill();
+        if total == 0 {
+            return;
+        }
+        // Clip to the rounded track, then lay the segments in with a hairline gap between.
+        round(cr, 0., w);
+        cr.clip();
+        let mut x = 0.;
+        for (column, n) in &counts {
+            if *n == 0 {
+                continue;
+            }
+            let width = w * *n as f64 / total as f64;
+            let (red, green, blue) = column_rgb(column);
+            cr.set_source_rgba(red, green, blue, if *column == "backlog" { 0.55 } else { 0.9 });
+            cr.rectangle(x, 0., (width - 2.).max(1.), h);
+            let _ = cr.fill();
+            x += width;
+        }
+    });
+    area
+}
+
+/// A number with its caption over it and a quiet line under it, as the stats band shows them.
+pub(super) fn stat_tile(caption: &str, value: &str, note: &str, class: &str) -> gtk::Box {
+    let tile = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    tile.add_css_class("stat-tile");
+    if !class.is_empty() {
+        tile.add_css_class(class);
+    }
+    tile.set_hexpand(true);
+    let head = label(caption, "stat-caption");
+    head.set_xalign(0.);
+    head.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    tile.append(&head);
+    let number = label(value, "stat-value");
+    number.set_xalign(0.);
+    tile.append(&number);
+    let line = label(note, "stat-note");
+    line.set_xalign(0.);
+    line.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    tile.append(&line);
+    tile
+}
+
+/// Whether `ts` (RFC 3339) is within the last `days` days.
+fn within_days(ts: &str, days: i64) -> bool {
+    let (Ok(then), Ok(now)) = (glib::DateTime::from_iso8601(ts, Some(&glib::TimeZone::utc())), glib::DateTime::now_utc()) else {
+        return false;
+    };
+    now.difference(&then).as_seconds() <= days * 86_400
+}
+
 fn icon_text(icon: &gtk::Widget, caption: &str) -> gtk::Box {
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     content.append(icon);
@@ -392,6 +681,8 @@ struct Board {
     query: gtk::Entry,
     filter: gtk::MenuButton,
     views: [gtk::ToggleButton; 2],
+    /// The stats band: progress across the columns and the numbers that need a look.
+    stats: gtk::Box,
     strip: gtk::Box,
     quick: Quick,
     rail: gtk::Box,
@@ -560,6 +851,10 @@ impl Board {
         banner.set_visible(false);
         page.append(&banner);
         page.append(&filterbar);
+        let stats = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        stats.add_css_class("board-stats");
+        stats.set_visible(false);
+        page.append(&stats);
 
         // Active filters and the grouping, as removable chips; hidden while there are none.
         let strip = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -648,6 +943,7 @@ impl Board {
             query: query.clone(),
             filter: filter.clone(),
             views: views.clone(),
+            stats,
             strip,
             quick: Quick {
                 bar,
@@ -1354,6 +1650,7 @@ impl Board {
         } else {
             self.filter.remove_css_class("active");
         }
+        self.render_stats(&tasks, &everything);
         self.render_strip(&tasks);
         if everything.is_empty() {
             self.render_empty();
@@ -1516,18 +1813,11 @@ impl Board {
         });
         self.banner.append(&edit);
         self.banner.append(&spacer());
-        let finished = tasks.iter().filter(|t| text(t, "column") == "done").count();
-        let fraction = if tasks.is_empty() { 0. } else { finished as f64 / tasks.len() as f64 };
-        let meter = gtk::ProgressBar::new();
-        meter.add_css_class("issue-progress");
-        meter.set_fraction(fraction);
-        meter.set_valign(gtk::Align::Center);
-        meter.set_size_request(160, -1);
-        self.banner.append(&meter);
-        self.banner.append(&label(
-            &format!("{finished} / {} done · {:.0}% · Estimate {}", tasks.len(), fraction * 100., relay_board::estimate(tasks.iter())),
-            "module-card-meta",
-        ));
+        // How far along it is shows in the stats band under the filter bar; here, only when
+        // the band has nothing to count.
+        if tasks.is_empty() {
+            self.banner.append(&label("No tasks yet", "module-card-meta"));
+        }
         let add = button("", "module-action");
         add.set_child(Some(&icon_text(crate::icons::image("plus", 12).upcast_ref(), "Add tasks")));
         add.set_tooltip_text(Some("Bring existing tasks into this module"));
@@ -1667,6 +1957,100 @@ impl Board {
             });
         });
         panel.present();
+    }
+
+    /// The band over the lanes: how far the board (or the module) is along, split by column,
+    /// then what is open, in flight, waiting on review, blocked and recently shipped. It counts
+    /// every task in scope, not only what the search shows: it describes the work, not the view.
+    fn render_stats(self: &Rc<Self>, tasks: &[Value], everything: &[Value]) {
+        clear(&self.stats);
+        self.stats.set_visible(!tasks.is_empty());
+        if tasks.is_empty() {
+            return;
+        }
+        let in_column = |column: &str| tasks.iter().filter(|t| text(t, "column") == column).count();
+        let counts: Vec<(&'static str, usize)> = COLUMNS.iter().map(|c| (*c, in_column(c))).collect();
+        let done = in_column("done");
+        let open: Vec<&Value> = tasks.iter().filter(|t| text(t, "column") != "done").collect();
+        let pct = done as f64 * 100. / tasks.len() as f64;
+        let left = relay_board::estimate(open.iter().copied());
+
+        let progress = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        progress.add_css_class("stat-tile");
+        progress.add_css_class("stat-progress");
+        progress.set_hexpand(true);
+        let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        head.append(&label(if scope().is_some() { "Module progress" } else { "Progress" }, "stat-caption"));
+        head.append(&spacer());
+        head.append(&label(&format!("{done} of {} done", tasks.len()), "stat-note"));
+        progress.append(&head);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        row.append(&label(&format!("{pct:.0}%"), "stat-value"));
+        row.append(&flow_bar(&counts, 8));
+        progress.append(&row);
+        let legend = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        legend.add_css_class("stat-legend");
+        for (column, count) in &counts {
+            let part = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+            part.append(&status_icon(column, 10));
+            part.append(&label(&format!("{} {count}", caption(column)), "stat-note"));
+            if *count == 0 {
+                part.add_css_class("stat-zero");
+            }
+            legend.append(&part);
+        }
+        legend.append(&spacer());
+        legend.append(&label(&format!("{left} pt left"), "stat-note"));
+        progress.append(&legend);
+        self.stats.append(&progress);
+
+        let urgent = open.iter().filter(|t| matches!(text(t, "priority"), "high" | "urgent")).count();
+        let running = tasks.iter().filter(|t| text(t, "state") == "running").count();
+        let review = in_column("in_review");
+        let all = by_id(everything);
+        let blocked = open.iter().filter(|t| !open_blockers(t, &all).is_empty()).count();
+        let shipped = tasks
+            .iter()
+            .filter(|t| text(t, "column") == "done" && within_days(text(t, "updated_at"), 7))
+            .count();
+        let plural = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
+        // Narrow, the lanes need the height more than the numbers: the progress card stays.
+        if (1..980).contains(&self.page.width()) {
+            return;
+        }
+        let tiles = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        tiles.set_homogeneous(true);
+        tiles.set_hexpand(true);
+        for tile in [
+            stat_tile(
+                "Open",
+                &open.len().to_string(),
+                &if urgent > 0 { format!("{urgent} high or urgent") } else { "None urgent".into() },
+                if urgent > 0 { "stat-warm" } else { "" },
+            ),
+            stat_tile(
+                "In flight",
+                &in_column("active").to_string(),
+                &if running > 0 { format!("{} running", plural(running, "agent", "agents")) } else { "No agents on it".into() },
+                if running > 0 { "stat-live" } else { "" },
+            ),
+            stat_tile(
+                "In review",
+                &review.to_string(),
+                if review > 0 { "Waiting on you" } else { "Nothing waiting" },
+                if review > 0 { "stat-review" } else { "" },
+            ),
+            stat_tile(
+                "Blocked",
+                &blocked.to_string(),
+                if blocked > 0 { "Waiting on other tasks" } else { "Nothing blocked" },
+                if blocked > 0 { "stat-alert" } else { "" },
+            ),
+            stat_tile("Shipped", &shipped.to_string(), &format!("This week · {done} in all"), ""),
+        ] {
+            tiles.append(&tile);
+        }
+        self.stats.append(&tiles);
     }
 
     fn render_empty(self: &Rc<Self>) {
@@ -1928,7 +2312,10 @@ impl Board {
         let estimate = label(&format!("{points} pt"), "lane-estimate");
         estimate.set_valign(gtk::Align::Center);
         estimate.set_tooltip_text(Some(&format!("Estimate: {points} points of work shown here (S = 1, M = 3, L = 5)")));
-        head.append(&estimate);
+        // A lane is narrow: its estimate goes on the meaning line, so the name never truncates.
+        if class != "lane-head" {
+            head.append(&estimate);
+        }
         head.append(&spacer());
         let more = gtk::MenuButton::new();
         more.set_child(Some(&crate::icons::image("more", 14)));
@@ -1998,9 +2385,14 @@ impl Board {
         }
         outer.append(&head);
         if class == "lane-head" {
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             let meaning = label(lane_meaning(column), "lane-meaning");
             meaning.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            outer.append(&meaning);
+            meaning.set_hexpand(true);
+            meaning.set_xalign(0.);
+            line.append(&meaning);
+            line.append(&estimate);
+            outer.append(&line);
         }
         outer
     }
@@ -2096,7 +2488,7 @@ impl Board {
                 let lane = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 lane.add_css_class("board-lane");
                 lane.add_css_class(&format!("lane-{column}"));
-                lane.set_size_request(250, -1);
+                lane.set_size_request(224, -1);
                 lane.append(&self.lane_head(column, &shown, total, "lane-head"));
                 let cards = gtk::Box::new(gtk::Orientation::Vertical, 6);
                 cards.add_css_class("board-cards");
@@ -2327,9 +2719,33 @@ impl Board {
             more.set_tooltip_text(Some(&tags[3..].join(", ")));
             pills.push((more.upcast(), 3));
         }
-        let fields = wrapped(pills, 34);
+        let fields = wrapped(pills, 28);
         fields.add_css_class("card-fields");
         card.append(&fields);
+
+        // What hangs off the task: sub-tasks, attachments and commits, as small counts.
+        let mut extras = Vec::new();
+        for (key, icon, one, many) in [
+            ("attachments", "file", "attachment", "attachments"),
+            ("commits", "commit", "commit", "commits"),
+        ] {
+            let n = rows(task, key).len();
+            if n > 0 {
+                let part = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+                part.append(&crate::icons::image(icon, 11));
+                part.append(&label(&n.to_string(), "card-extra-count"));
+                part.set_tooltip_text(Some(&format!("{n} {}", if n == 1 { one } else { many })));
+                extras.push(part);
+            }
+        }
+        if !extras.is_empty() {
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+            line.add_css_class("card-extras");
+            for part in extras {
+                line.append(&part);
+            }
+            card.append(&line);
+        }
 
         let agents: Vec<String> = rows(task, "sessions")
             .iter()
@@ -2347,6 +2763,9 @@ impl Board {
             card.append(&strip);
         }
         self.wire(&card, id);
+        if let Some(ui) = self.ui() {
+            task_pages::attach_on_drop(&ui, &card, id);
+        }
         card
     }
 

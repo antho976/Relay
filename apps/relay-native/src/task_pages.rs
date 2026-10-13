@@ -419,7 +419,10 @@ fn side_section(title: &str) -> gtk::Box {
 /// The page's width: a centred column with the sidebar beside it, or under it when narrow.
 /// GitHub keeps an issue to a readable measure instead of stretching it across the window.
 fn issue_columns(ui: &Rc<Ui>, panel: &Rc<crate::panel::Panel>, page: &gtk::Box, main: &gtk::Box, side: &gtk::Box) -> gtk::Box {
-    const SIDE: i32 = 264;
+    const SIDE: i32 = 272;
+    // The sidebar is a card (css/board.css .issue-sidebar): its padding and border, and the
+    // page's own wider margins, come out of the main column.
+    const CHROME: i32 = 42;
     let columns = gtk::Box::new(gtk::Orientation::Horizontal, 32);
     columns.add_css_class("issue-columns");
     main.set_hexpand(false);
@@ -438,12 +441,12 @@ fn issue_columns(ui: &Rc<Ui>, panel: &Rc<crate::panel::Panel>, page: &gtk::Box, 
             let room = (width - 260).max(360);
             if room >= 940 {
                 columns.set_orientation(gtk::Orientation::Horizontal);
-                main.set_size_request((room - SIDE - 32 - 64).clamp(520, 820), -1);
+                main.set_size_request((room - SIDE - 32 - 64 - CHROME).clamp(520, 820), -1);
                 side.set_size_request(SIDE, -1);
             } else {
                 columns.set_orientation(gtk::Orientation::Vertical);
-                main.set_size_request((room - 48).min(820), -1);
-                side.set_size_request((room - 48).min(820), -1);
+                main.set_size_request((room - 64 - CHROME).min(820), -1);
+                side.set_size_request((room - 64 - CHROME).min(820), -1);
             }
         }
     };
@@ -486,13 +489,86 @@ fn mime_of(name: &str) -> &'static str {
 fn texture_png(texture: &gtk::gdk::Texture) -> Vec<u8> {
     texture.save_to_png_bytes().to_vec()
 }
-/// Files and images dropped on `widget`, or pasted with Ctrl+V anywhere in it, go to `take`.
+/// Files and images dropped on `widget`, or pasted with Ctrl+V while it shows, go to `take`.
 /// A paste of plain text is left to the text field it lands in.
+///
+/// The drop target listens in the capture phase: the Markdown fields take any drop that also
+/// offers text, and a file manager's files and a browser's images both do, so in the bubble
+/// phase a drop on a field typed the file's URI instead of attaching it. Ctrl+V is heard at
+/// the window: labels take no focus, so after a click on the page, or Enter on a board card
+/// that the page then hides, focus is outside `widget` and a controller on it never sees the key.
 fn accept_attachments(widget: &impl IsA<gtk::Widget>, take: impl Fn(Vec<Incoming>) + 'static) {
     use gtk::gdk;
-    let take = Rc::new(take);
+    let take: Rc<dyn Fn(Vec<Incoming>)> = Rc::new(take);
+    accept_drops(widget, take.clone());
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let source = widget.as_ref().downgrade();
+    keys.connect_key_pressed(move |_, key, _, mods| {
+        let paste = matches!(key, gdk::Key::v | gdk::Key::V)
+            && mods.contains(gdk::ModifierType::CONTROL_MASK)
+            && !mods.intersects(gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK);
+        match source.upgrade() {
+            Some(widget) if paste && widget.is_mapped() => paste_attachments(&widget, take.clone()),
+            _ => glib::Propagation::Proceed,
+        }
+    });
+    // Each map adds the window's controller and each unmap takes it away, so a page that is
+    // covered or closed stops answering Ctrl+V.
+    let window: Rc<RefCell<Option<glib::WeakRef<gtk::Widget>>>> = Rc::default();
+    let (held, added) = (window.clone(), keys.clone());
+    widget.connect_map(move |widget| {
+        if held.borrow().is_some() {
+            return;
+        }
+        if let Some(root) = widget.root() {
+            root.add_controller(added.clone());
+            *held.borrow_mut() = Some(root.upcast_ref::<gtk::Widget>().downgrade());
+        }
+    });
+    widget.connect_unmap(move |_| {
+        if let Some(root) = window.borrow_mut().take().and_then(|root| root.upgrade()) {
+            root.remove_controller(&keys);
+        }
+    });
+}
+/// A board card takes a dropped image or file as an attachment of its task.
+pub(crate) fn attach_on_drop(ui: &Rc<Ui>, card: &impl IsA<gtk::Widget>, task: i64) {
+    let weak = Rc::downgrade(ui);
+    accept_drops(card, Rc::new(move |incoming| {
+        let Some(ui) = weak.upgrade() else { return };
+        glib::spawn_future_local(async move {
+            if let Some(error) = upload(&ui, task, incoming).await {
+                ui.show_error(&error);
+            }
+            ui.refresh_page();
+        });
+    }));
+}
+/// Sends each dropped or pasted item to `task.attach`; the last error, if any failed.
+async fn upload(ui: &Ui, task: i64, incoming: Vec<Incoming>) -> Option<String> {
+    use base64::Engine;
+    let mut failed = None;
+    for item in incoming {
+        let payload = match item {
+            Incoming::Path(path) => {
+                let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "attachment".into());
+                json!({"task_id":task,"path":path,"name":name,"mime":mime_of(&name)})
+            }
+            Incoming::Image { name, bytes } => json!({"task_id":task,"name":name,"mime":"image/png","bytes_b64":base64::engine::general_purpose::STANDARD.encode(bytes)}),
+        };
+        if let Err(e) = ui.call("task.attach", payload).await {
+            failed = Some(e.to_string());
+        }
+    }
+    failed
+}
+fn accept_drops(widget: &impl IsA<gtk::Widget>, take: Rc<dyn Fn(Vec<Incoming>)>) {
+    use gtk::gdk;
     let drop = gtk::DropTarget::new(glib::Type::INVALID, gdk::DragAction::COPY);
-    drop.set_types(&[gdk::FileList::static_type(), gdk::Texture::static_type()]);
+    drop.set_propagation_phase(gtk::PropagationPhase::Capture);
+    // A browser's image drag also offers its web address as a URI list: the picture comes first.
+    drop.set_types(&[gdk::Texture::static_type(), gdk::FileList::static_type()]);
     let target = widget.as_ref().downgrade();
     drop.connect_enter(move |_, _, _| {
         if let Some(w) = target.upgrade() {
@@ -506,7 +582,7 @@ fn accept_attachments(widget: &impl IsA<gtk::Widget>, take: impl Fn(Vec<Incoming
             w.remove_css_class("drop-attach");
         }
     });
-    let (sink, target) = (take.clone(), widget.as_ref().downgrade());
+    let (sink, target) = (take, widget.as_ref().downgrade());
     drop.connect_drop(move |_, value, _, _| {
         if let Some(w) = target.upgrade() {
             w.remove_css_class("drop-attach");
@@ -525,38 +601,45 @@ fn accept_attachments(widget: &impl IsA<gtk::Widget>, take: impl Fn(Vec<Incoming
         false
     });
     widget.add_controller(drop);
-    let keys = gtk::EventControllerKey::new();
-    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let source = widget.as_ref().downgrade();
-    keys.connect_key_pressed(move |_, key, _, mods| {
-        if !(matches!(key, gdk::Key::v | gdk::Key::V) && mods.contains(gdk::ModifierType::CONTROL_MASK)) {
-            return glib::Propagation::Proceed;
-        }
-        let Some(widget) = source.upgrade() else { return glib::Propagation::Proceed };
-        let clipboard = widget.clipboard();
-        let formats = clipboard.formats();
-        let sink = take.clone();
-        if formats.contains_type(gdk::FileList::static_type()) && !formats.contain_mime_type("text/plain;charset=utf-8") {
-            glib::spawn_future_local(async move {
-                if let Ok(value) = clipboard.read_value_future(gdk::FileList::static_type(), glib::Priority::DEFAULT).await {
-                    if let Ok(files) = value.get::<gdk::FileList>() {
-                        sink(files.files().iter().filter_map(|f| f.path()).map(|p| Incoming::Path(p.to_string_lossy().into_owned())).collect());
-                    }
+}
+/// Ctrl+V with files or an image on the clipboard attaches them. A file manager's copy offers
+/// its files as a URI list, which GTK also offers as text, so the list is read before any text
+/// check; a list with no local file in it (a copied link) is pasted as text after all.
+fn paste_attachments(widget: &gtk::Widget, sink: Rc<dyn Fn(Vec<Incoming>)>) -> glib::Propagation {
+    use gtk::gdk;
+    let clipboard = widget.clipboard();
+    let formats = clipboard.formats();
+    let files = formats.contain_mime_type("text/uri-list") || formats.contains_type(gdk::FileList::static_type());
+    let image = formats.contains_type(gdk::Texture::static_type());
+    if !files && !image {
+        return glib::Propagation::Proceed;
+    }
+    let focus = widget.root().and_then(|root| root.focus());
+    glib::spawn_future_local(async move {
+        if files {
+            if let Ok(value) = clipboard.read_value_future(gdk::FileList::static_type(), glib::Priority::DEFAULT).await {
+                let paths: Vec<Incoming> = value
+                    .get::<gdk::FileList>()
+                    .map(|list| list.files().iter().filter_map(|f| f.path()).map(|p| Incoming::Path(p.to_string_lossy().into_owned())).collect())
+                    .unwrap_or_default();
+                if !paths.is_empty() {
+                    sink(paths);
+                    return;
                 }
-            });
-            return glib::Propagation::Stop;
+            }
         }
-        if formats.contains_type(gdk::Texture::static_type()) {
-            glib::spawn_future_local(async move {
-                if let Ok(Some(texture)) = clipboard.read_texture_future().await {
-                    sink(vec![Incoming::Image { name: "pasted.png".into(), bytes: texture_png(&texture) }]);
-                }
-            });
-            return glib::Propagation::Stop;
+        if image {
+            if let Ok(Some(texture)) = clipboard.read_texture_future().await {
+                sink(vec![Incoming::Image { name: "pasted.png".into(), bytes: texture_png(&texture) }]);
+                return;
+            }
         }
-        glib::Propagation::Proceed
+        // Nothing to attach: hand the paste back to the field that had focus.
+        if let Some(focus) = focus {
+            let _ = focus.activate_action("clipboard.paste", None);
+        }
     });
-    widget.add_controller(keys);
+    glib::Propagation::Stop
 }
 /// A thumbnail for an image (or a named chip for any other file), with a remove key.
 fn attachment_tile(name: &str, mime: &str, image: Option<gtk::gdk::Texture>, path: Option<&str>, remove: impl Fn() + 'static) -> gtk::Overlay {
@@ -889,6 +972,13 @@ pub fn compose_module(ui: &Rc<Ui>, project: i64) {
     let chosen = priority.clone();
     section.append(&pills(titled_choices(&URGENT_FIRST, ""), "medium", priority_mark, move |p| *chosen.borrow_mut() = p.to_string()));
     side.append(&section);
+    // What the project already holds, so a new module is planned against the rest.
+    let project_stats = side_section("This project");
+    let numbers = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    numbers.add_css_class("side-stats");
+    numbers.append(&label("Loading…", "issue-side-empty"));
+    project_stats.append(&numbers);
+    side.append(&project_stats);
     let about = side_section("About modules");
     let note = label("A module groups tasks into one release. It gets its own board with progress and patch notes, and its tasks still show on the main board with the module's name.", "issue-side-empty");
     note.set_wrap(true);
@@ -900,13 +990,37 @@ pub fn compose_module(ui: &Rc<Ui>, project: i64) {
 
     let picked: Rc<RefCell<BTreeSet<i64>>> = Rc::default();
     let weak = Rc::downgrade(ui);
-    let (rows_box, chosen) = (list.downgrade(), picked.clone());
+    let (rows_box, chosen, numbers, tally) = (list.downgrade(), picked.clone(), numbers.downgrade(), status.downgrade());
     glib::spawn_future_local(async move {
         let Some(ui) = weak.upgrade() else { return };
         let tasks = ui.call("task.list", json!({"project_id":project,"summary":true})).await;
+        let modules = ui.call("module.list", json!({"project_id":project,"include_archived":true})).await;
         let Some(list) = rows_box.upgrade() else { return };
         clear(&list);
-        let tasks: Vec<Value> = tasks.map(|t| rows(&t, "tasks")).unwrap_or_default().into_iter().filter(|t| text(t, "column") != "done").collect();
+        let every = tasks.map(|t| rows(&t, "tasks")).unwrap_or_default();
+        if let Some(numbers) = numbers.upgrade() {
+            clear(&numbers);
+            let modules = modules.map(|m| rows(&m, "modules")).unwrap_or_default();
+            let shipped = modules.iter().filter(|m| m["completed_at"].is_string()).count();
+            let loose = every.iter().filter(|t| t["module_id"].is_null() && text(t, "column") != "done").count();
+            for (caption, value) in [
+                ("Modules", modules.len().to_string()),
+                ("In progress", (modules.len() - shipped).to_string()),
+                ("Completed", shipped.to_string()),
+                ("Open tasks in no module", loose.to_string()),
+            ] {
+                let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                row.add_css_class("side-stat");
+                let name = label(caption, "side-stat-caption");
+                name.set_hexpand(true);
+                name.set_xalign(0.);
+                row.append(&name);
+                row.append(&label(&value, "side-stat-value"));
+                numbers.append(&row);
+            }
+        }
+        let tasks: Vec<Value> = every.into_iter().filter(|t| text(t, "column") != "done").collect();
+        let points: Rc<BTreeMap<i64, u32>> = Rc::new(tasks.iter().map(|t| (t["id"].as_i64().unwrap_or(0), relay_board::points(text(t, "size")))).collect());
         if tasks.is_empty() {
             list.append(&label("No open tasks yet: add them from the module's board.", "issue-side-empty"));
         }
@@ -923,14 +1037,33 @@ pub fn compose_module(ui: &Rc<Ui>, project: i64) {
             if let Some(other) = task["module_name"].as_str() {
                 content.append(&label(other, "module-card-meta"));
             }
+            let priority = text(&task, "priority");
+            let mark = super::board_view::priority_icon(priority);
+            mark.set_tooltip_text(Some(&super::board_view::titled(priority)));
+            content.append(&mark);
+            let size = text(&task, "size");
+            if !size.is_empty() {
+                let chip = label(size, "pick-size");
+                chip.set_valign(gtk::Align::Center);
+                content.append(&chip);
+            }
             content.append(&label(&format!("#{id}"), "card-id"));
             row.set_child(Some(&content));
-            let chosen = chosen.clone();
+            let (chosen, tally, points) = (chosen.clone(), tally.clone(), points.clone());
             row.connect_toggled(move |row| {
                 if row.is_active() {
                     chosen.borrow_mut().insert(id);
                 } else {
                     chosen.borrow_mut().remove(&id);
+                }
+                // A running count of what the module will hold, beside its Create key.
+                if let Some(tally) = tally.upgrade() {
+                    let picked = chosen.borrow();
+                    let estimate: u32 = picked.iter().filter_map(|id| points.get(id)).sum();
+                    tally.set_text(&match picked.len() {
+                        0 => String::new(),
+                        n => format!("{n} task{} picked · {estimate} pt", if n == 1 { "" } else { "s" }),
+                    });
                 }
             });
             list.append(&row);
@@ -1194,20 +1327,7 @@ impl Detail {
         let id = self.id;
         self.say("Attaching…");
         glib::spawn_future_local(async move {
-            use base64::Engine;
-            let mut failed = None;
-            for item in incoming {
-                let payload = match item {
-                    Incoming::Path(path) => {
-                        let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "attachment".into());
-                        json!({"task_id":id,"path":path,"name":name,"mime":mime_of(&name)})
-                    }
-                    Incoming::Image { name, bytes } => json!({"task_id":id,"name":name,"mime":"image/png","bytes_b64":base64::engine::general_purpose::STANDARD.encode(bytes)}),
-                };
-                if let Err(e) = ui.call("task.attach", payload).await {
-                    failed = Some(e.to_string());
-                }
-            }
+            let failed = upload(&ui, id, incoming).await;
             detail.say(failed.as_deref().unwrap_or(""));
             detail.reload();
             ui.refresh_page();

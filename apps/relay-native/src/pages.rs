@@ -112,6 +112,7 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
             head.append(&gap);
             let add = button("", "primary");
             add.add_css_class("board-add");
+            add.set_valign(gtk::Align::Center);
             let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             content.append(&crate::icons::image("plus", 12));
             content.append(&label("New module", ""));
@@ -153,7 +154,8 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
         return;
     }
     clear(&body);
-    if data.is_empty() {
+    // Modules draws its own empty state (`board_view::modules`).
+    if data.is_empty() && name != "modules" {
         body.append(&paragraph(match name {
             "mailbox" => "No messages in this project.",
             _ => "No modules yet. A module bundles tasks into one release: choose New module to start one.",
@@ -196,7 +198,7 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
                 body.append(&row);
             }
         }
-        "modules" => note_pages::modules(ui, &body, &data),
+        "modules" => board_view::modules(ui, &body, &data),
         _ => {}
     }
 }
@@ -321,7 +323,7 @@ fn board_switcher(ui: &Rc<Ui>, selected: &str) -> gtk::Box {
     let tabs = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     tabs.add_css_class("board-switcher");
     tabs.set_valign(gtk::Align::Center);
-    for (name, caption) in [("board", "BOARD"), ("modules", "MODULES")] {
+    for (name, caption) in [("board", "Board"), ("modules", "Modules")] {
         let key = button(caption, "quiet");
         if name == selected {
             key.add_css_class("selected");

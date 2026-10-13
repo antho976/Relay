@@ -1,131 +1,157 @@
 /* board area styles: loaded after theme.css, so rules here override it. */
 
-/* See-through like the terminals (usage.css): every stack and scrolled window paints @wall,
-   and the board nests several between the wallpaper and a card, which compounds to opaque.
-   Inside the board only the page stack keeps its @wall; lanes and cards add a faint wash of
-   ink on top of it instead of another slab. Text entries stay opaque. */
+/* Surfaces. Panel opacity makes @wall, @slab and @wash translucent, and other pages stack two
+   or three @wall layers (the page stack, its scrolled window) before their first card, which
+   reads as solid. The board's lanes scroll inside the page, so their scrolled windows must
+   not paint @wall over the lane: instead the page itself is the second layer, and lanes and
+   cards are real surfaces on it: @slab lanes, opaque @raised cards, as Settings' cards sit on
+   its column. Radii follow the app: 14px cards, 10px rows and controls, 12px tab wells. */
+.page.board-page { background: @wall; }
 .board-page stack, .board-page scrolledwindow, .board-page viewport { background: transparent; }
 
 /* ── Header ─────────────────────────────────────────────────────────────── */
-.board-head { min-height: 52px; padding: 0 16px; background: transparent; }
-.board-count { margin-left: 4px; color: @secondary; font-size: 12px; }
-entry.board-search, .board-search { min-height: 28px; }
+.board-head { min-height: 56px; padding: 0 20px; background: transparent; }
+.board-count { margin-left: 4px; color: @faint; font-size: 12.5px; }
+entry.board-search, .board-search { min-height: 30px; }
 .board-head > button, .board-head > menubutton > button, .board-view-toggle button {
-  min-height: 28px; padding: 0 10px; border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.05); color: @secondary; font-size: 12px;
+  min-height: 34px; padding: 0 12px; border: 1px solid @strong; border-radius: 10px; background: @slab; color: @secondary; font-size: 13px; font-weight: 500;
 }
-.board-head > button:hover, .board-head > menubutton > button:hover, .board-view-toggle button:hover { background: @wash; color: @ink; }
-.board-head > button.primary, .modules-head > button.primary { min-height: 30px; padding: 0 12px; border-radius: 2px; background: @ink; border-color: @ink; color: @wall; font-weight: 600; }
-.board-head > button.primary label, .modules-head > button.primary label { color: @wall; }
-.board-head > button.primary:hover, .modules-head > button.primary:hover { background: shade(@ink, 0.9); }
-/* The header's own keys sit on the wallpaper like the filter bar's: a hairline over a faint wash. */
-.board-head > button.icon-key { min-height: 30px; min-width: 30px; padding: 0; border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.05); color: @secondary; }
-.board-head > button.icon-key:hover { background: alpha(@ink, 0.1); color: @ink; }
-.board-head .workspace-picker > button { min-height: 30px; padding: 0 10px; border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.05); color: @secondary; }
-.board-head .workspace-picker > button:hover { background: alpha(@ink, 0.1); color: @ink; }
+.board-head > button:hover, .board-head > menubutton > button:hover { background: @wash; border-color: @line_emphasis; color: @ink; }
+.board-head > button.primary, .modules-head > button.primary { min-height: 34px; padding: 0 14px; border-radius: 10px; background: @ink; border-color: @ink; color: @wall_solid; font-weight: 600; }
+.board-head > button.primary label, .modules-head > button.primary label, .board-head > button.primary image, .modules-head > button.primary image { color: @wall_solid; }
+.board-head > button.primary:hover, .modules-head > button.primary:hover { background: white; border-color: white; }
+.board-head > button.icon-key { min-height: 34px; min-width: 34px; padding: 0; border: 1px solid @strong; border-radius: 10px; background: @slab; color: @secondary; }
+.board-head > button.icon-key:hover { background: @wash; border-color: @line_emphasis; color: @ink; }
+.board-head .workspace-picker > button { min-height: 34px; padding: 0 12px; border: 1px solid @edge; border-radius: 10px; background: @slab; color: @ink; }
+.board-head .workspace-picker > button:hover { background: @wash; border-color: @line_emphasis; }
+.board-head .workspace-picker-label { font-size: 13px; }
 
-/* Board / Modules tabs: a quiet segmented control; the selected tab is lit, never inverted. */
-.board-switcher { padding: 2px; border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.04); }
-.board-switcher button, .board-switcher button.quiet { min-height: 26px; padding: 0 12px; border: 0; border-radius: 2px; background: transparent; color: @secondary; }
+/* Board / Modules: the same tab well as the title bar's Agents / Code / Git. */
+.board-switcher { margin-right: 4px; padding: 3px; border: 1px solid @edge; border-radius: 12px; background: @slab; }
+.board-switcher button, .board-switcher button.quiet { min-height: 28px; padding: 0 14px; border: 0; border-radius: 9px; background: transparent; color: @faint; font-family: 'Geist', sans-serif; font-size: 13px; font-weight: 500; letter-spacing: 0; }
 .board-switcher button label { color: inherit; }
-.board-switcher button:hover { background: alpha(@ink, 0.07); color: @ink; }
-.board-switcher button.selected, .board-switcher button.selected:hover { background: alpha(@ink, 0.14); color: @ink; }
-.board-head > button.icon-key { min-width: 28px; padding: 0; }
-.board-head > menubutton.active > button { border-color: @secondary; color: @ink; background: @wash; }
-.board-view-toggle { padding: 2px; border: 1px solid @edge; background: alpha(@ink, 0.05); border-radius: 2px; }
-.board-view-toggle button { border-radius: 2px; }
-.board-filterbar > menubutton > button { min-height: 34px; padding: 0 12px; border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.05); color: @secondary; font-size: 12px; }
-.board-filterbar > menubutton > button:hover { background: alpha(@ink, 0.08); color: @ink; }
-.board-filterbar > menubutton.active > button { border-color: @secondary; color: @ink; }
+.board-switcher button:hover { background: transparent; color: @ink; }
+.board-switcher button.selected, .board-switcher button.selected:hover { background: @track; color: @ink; }
+.board-head > menubutton.active > button { border-color: @line_focus; color: @ink; background: @wash; }
 
 /* The filter bar: one search field that also takes key:value filters, the View menu and
    the layout toggle beside it. */
-.board-filterbar { padding: 0 16px 12px; }
-.board-searchbar { min-height: 34px; padding: 0 4px 0 12px; border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.05); color: @faint; }
-.board-searchbar:focus-within { border-color: alpha(@ink, 0.35); background: alpha(@ink, 0.08); color: @secondary; }
-.board-searchbar entry.board-search, .board-searchbar entry.board-search:focus { min-height: 32px; padding: 0; border: 0; box-shadow: none; outline: 0; background: transparent; color: @ink; font-size: 13px; }
-.board-searchbar button.board-search-clear { min-height: 24px; min-width: 24px; border-radius: 2px; }
-.board-view-toggle button { min-height: 24px; border: 0; background: transparent; }
-.board-view-toggle button:checked { background: @wash; color: @ink; }
+.board-filterbar { padding: 0 20px 14px; }
+.board-searchbar { min-height: 36px; padding: 0 4px 0 12px; border: 1px solid @strong; border-radius: 10px; background: @raised; color: @faint; transition: border-color 120ms ease-out, box-shadow 120ms ease-out; }
+.board-searchbar:hover { border-color: @line_emphasis; }
+.board-searchbar:focus-within { border-color: alpha(@ink, 0.42); box-shadow: 0 0 0 3px alpha(@ink, 0.07); color: @secondary; }
+.board-searchbar entry.board-search, .board-searchbar entry.board-search:focus, .board-searchbar entry.board-search:focus-within { min-height: 34px; padding: 0; border: 0; box-shadow: none; outline: 0; background: transparent; color: @ink; font-size: 13px; }
+.board-searchbar button.board-search-clear { min-height: 26px; min-width: 26px; border-radius: 99px; }
+.board-filterbar > menubutton > button { min-height: 36px; padding: 0 14px; border: 1px solid @strong; border-radius: 10px; background: @slab; color: @secondary; font-size: 13px; font-weight: 500; }
+.board-filterbar > menubutton > button:hover { background: @wash; border-color: @line_emphasis; color: @ink; }
+.board-filterbar > menubutton.active > button { border-color: @line_focus; color: @ink; background: @wash; }
+.board-view-toggle { padding: 3px; border: 1px solid @edge; border-radius: 12px; background: @slab; }
+.board-view-toggle button { min-height: 28px; min-width: 32px; padding: 0 8px; border: 0; border-radius: 9px; background: transparent; color: @faint; }
+.board-view-toggle button:hover { background: transparent; color: @ink; }
+.board-view-toggle button:checked { background: @track; color: @ink; }
+
+/* ── Stats band: progress across the columns, then the numbers that need a look ── */
+.board-stats { margin: 0 20px 14px; }
+.stat-tile { min-height: 58px; padding: 12px 16px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.stat-progress { padding: 12px 18px; }
+.stat-caption { color: @faint; font-size: 12px; font-weight: 500; }
+.stat-value { color: @ink; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; font-feature-settings: "tnum"; }
+.stat-progress .stat-value { font-size: 20px; min-width: 52px; }
+.stat-note { color: @secondary; font-size: 12px; }
+.stat-legend { margin-top: 1px; }
+.stat-legend .stat-note { color: @secondary; font-size: 11.5px; }
+.stat-zero { opacity: 0.45; }
+.stat-warm .stat-note { color: @waiting; }
+.stat-live .stat-note { color: @live; }
+.stat-review .stat-note { color: #c4a5fa; }
+.stat-alert { border-color: alpha(@held, 0.4); }
+.stat-alert .stat-value, .stat-alert .stat-note { color: @held_text; }
 
 /* ── Columns strip and active filters ──────────────────────────────────── */
-.board-strip { min-height: 32px; padding: 0 16px 8px; background: transparent; }
-button.filter-chip { min-height: 22px; padding: 0 6px 0 9px; border: 1px solid @strong; border-radius: 2px; background: alpha(@ink, 0.05); color: @ink; font-size: 11px; }
-button.filter-chip:hover { border-color: @secondary; background: alpha(@ink, 0.1); }
+.board-strip { min-height: 32px; padding: 0 20px 10px; background: transparent; }
+button.filter-chip { min-height: 26px; padding: 0 6px 0 11px; border: 1px solid @strong; border-radius: 99px; background: @slab; color: @ink; font-size: 12px; font-weight: 500; }
+button.filter-chip:hover { border-color: @line_emphasis; background: @wash; }
 
 /* ── Quick create and drop rail ────────────────────────────────────────── */
-.board-quick { margin: 0 16px 10px; padding: 6px; border: 1px solid @strong; border-radius: 2px; background: @console; }
-.board-quick entry { min-height: 30px; font-size: 13px; }
-.board-quick dropdown > button { min-height: 30px; }
-.board-quick-note { color: @secondary; font-size: 11px; margin: 0 4px; }
-.board-drag-rail { margin: 10px 16px 0; padding: 5px 8px; background: @console; border: 1px dashed @strong; }
-.board-drag-rail button { min-height: 22px; padding: 0 8px; font-size: 11px; border: 1px solid transparent; }
+.board-quick { margin: 0 20px 12px; padding: 8px; border: 1px solid @strong; border-radius: 14px; background: @slab_solid; box-shadow: 0 10px 28px alpha(black, 0.35); }
+.board-quick entry { min-height: 32px; font-size: 13px; }
+.board-quick dropdown > button { min-height: 32px; border-radius: 9px; }
+.board-quick button { border-radius: 9px; }
+.board-quick-note { color: @secondary; font-size: 11.5px; margin: 0 4px; }
+.board-drag-rail { margin: 10px 20px 0; padding: 6px 8px; border: 1px dashed @line_focus; border-radius: 12px; background: @slab_solid; box-shadow: 0 10px 28px alpha(black, 0.4); }
+.board-drag-rail button { min-height: 26px; padding: 0 10px; border: 1px solid transparent; border-radius: 8px; font-size: 12px; }
 .board-drag-rail button:drop(active) { border-color: @ink; background: @wash; color: @ink; }
 .board-rail-caption { margin-right: 6px; color: @faint; font-family: 'Geist'; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; }
 
-/* ── Lanes: GitHub project columns ────────────────────────────────────── */
-.board-grid { padding: 2px 16px 10px; }
-.board-lane { background: alpha(@ink, 0.025); border: 1px solid @edge; border-radius: 2px; }
-.board-lane.drop-lane, .list-section.drop-lane { border-color: @secondary; background: alpha(@ink, 0.05); }
-.lane-head { padding: 10px 8px 8px 12px; }
-.list-head { padding: 6px 8px 6px 12px; border-bottom: 1px solid @edge; }
+/* ── Lanes ─────────────────────────────────────────────────────────────── */
+.board-grid { padding: 0 20px 16px; }
+.board-lane { border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.board-lane.drop-lane, .list-section.drop-lane { border-color: @line_focus; background: @wash; }
+.lane-head { padding: 12px 10px 10px 14px; border-bottom: 1px solid @line_subtle; }
+.list-head { padding: 8px 10px 8px 14px; border-bottom: 1px solid @edge; }
 .lane-head-row { min-height: 26px; }
-.lane-title { color: @ink; font-size: 13px; font-weight: 600; }
-.lane-count { padding: 0 7px; border-radius: 2px; background: alpha(@ink, 0.08); color: @secondary; font-family: 'Geist Mono'; font-size: 10.5px; }
-.lane-estimate { padding: 0 7px; border: 1px solid @edge; border-radius: 2px; color: @secondary; font-size: 10.5px; }
+.lane-title { color: @ink; font-size: 13.5px; font-weight: 600; }
+.lane-count { min-width: 12px; padding: 1px 7px; border-radius: 99px; background: @track; color: @secondary; font-family: 'Geist Mono'; font-size: 10.5px; }
+.lane-estimate { color: @faint; font-family: 'Geist Mono'; font-size: 10.5px; }
 .lane-meaning { margin-left: 21px; color: @faint; font-size: 11.5px; }
-button.lane-key, menubutton.lane-key > button { min-height: 24px; min-width: 24px; padding: 0; border: 0; border-radius: 2px; background: transparent; opacity: 0.6; }
-button.lane-key:hover, menubutton.lane-key > button:hover { opacity: 1; background: alpha(@ink, 0.08); }
-.board-cards { padding: 4px 8px 10px; }
-.board-empty { min-height: 96px; padding: 18px 10px; border: 1px dashed @edge; border-radius: 2px; }
-.board-empty-title { color: @secondary; font-size: 12px; font-weight: 500; }
-.board-empty-hint { color: @faint; font-size: 11px; }
-.board-group-heading { margin: 6px 2px 0; color: @faint; font-family: 'Geist'; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; }
+button.lane-key, menubutton.lane-key > button { min-height: 26px; min-width: 26px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: @faint; }
+button.lane-key:hover, menubutton.lane-key > button:hover { background: @wash; color: @ink; }
+.board-cards { padding: 10px 10px 12px; }
+/* An empty lane is a soft well that reads as somewhere to drop. */
+.board-empty { min-height: 104px; padding: 18px 12px; border: 1px dashed @line_emphasis; border-radius: 10px; background: alpha(@ink, 0.015); }
+.board-empty-title { color: @secondary; font-size: 12.5px; font-weight: 500; letter-spacing: 0; }
+.board-empty-hint { color: @faint; font-size: 11.5px; letter-spacing: 0; }
+.board-group-heading { margin: 8px 4px 0; color: @faint; font-family: 'Geist'; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; }
 
 /* ── Cards ──────────────────────────────────────────────────────────────── */
-.task-card { margin: 0; padding: 9px 11px 10px; background: alpha(@ink, 0.045); border: 1px solid @edge; border-radius: 2px; }
-.task-card:hover { border-color: @strong; background: alpha(@ink, 0.075); }
-.task-card:focus, .list-row:focus { outline: 0; box-shadow: inset 0 0 0 1px @secondary; border-color: @secondary; }
+.task-card { margin: 0; padding: 10px 12px 11px; border: 1px solid @line_emphasis; border-radius: 10px; background: mix(@slab_solid, @ink, 0.045); box-shadow: 0 1px 2px alpha(black, 0.28); transition: border-color 120ms ease-out, background 120ms ease-out; }
+.task-card:hover { border-color: @line_focus; background: mix(@slab_solid, @ink, 0.07); }
+.task-card:focus, .list-row:focus { outline: 0; box-shadow: 0 0 0 2px alpha(@ink, 0.28); border-color: alpha(@ink, 0.4); }
 .task-card:focus-visible, .list-row:focus-visible { outline: 0; }
-.task-card.task-child { border-left: 2px solid @strong; }
+.task-card.task-child { border-left: 3px solid @line_focus; }
 .task-card.dragging, .list-row.dragging { opacity: 0.4; }
 .task-card.drop-before, .list-row.drop-before { box-shadow: inset 0 2px 0 @ink; }
 .task-card.drop-after, .list-row.drop-after { box-shadow: inset 0 -2px 0 @ink; }
-.task-card.drop-into, .list-row.drop-into { border-color: @ink; background: alpha(@ink, 0.1); }
+.task-card.drop-into, .list-row.drop-into { border-color: @ink; background: mix(@slab_solid, @ink, 0.09); }
 .card-id { color: @faint; font-size: 11px; }
-.card-title { color: @ink; font-size: 13px; font-weight: 400; }
+.card-title { color: @ink; font-size: 13.5px; font-weight: 500; line-height: 1.3; }
 .task-card.done .card-title, .list-row.done .list-title { color: @secondary; }
-.task-card.done { background: alpha(@ink, 0.03); }
+.task-card.done { border-color: @line_subtle; background: mix(@slab_solid, @ink, 0.02); box-shadow: none; }
 .card-tools { opacity: 0; }
 .task-card:hover .card-tools, .task-card:focus-within .card-tools { opacity: 1; }
-button.card-key { min-height: 20px; min-width: 20px; padding: 0; }
+button.card-key { min-height: 22px; min-width: 22px; padding: 0; border-radius: 6px; }
 .card-lineage { color: @secondary; }
 .task-lineage { color: @secondary; font-size: 11px; }
 .task-rollup { margin-top: 2px; }
 .rollup-count { color: @secondary; font-family: 'Geist Mono'; font-size: 10.5px; }
-.task-rollup progressbar trough, .task-rollup progressbar progress, progressbar.issue-progress trough, progressbar.issue-progress progress { min-height: 6px; border-radius: 2px; border: 0; }
-.task-rollup progressbar trough, progressbar.issue-progress trough { background: alpha(@ink, 0.1); }
+.task-rollup progressbar trough, .task-rollup progressbar progress, progressbar.issue-progress trough, progressbar.issue-progress progress { min-height: 6px; border-radius: 99px; border: 0; }
+.task-rollup progressbar trough, progressbar.issue-progress trough { background: @track; }
 .task-rollup progressbar progress, progressbar.issue-progress progress { background: #8957e5; }
-.card-blocked-caption { color: @held; font-size: 11px; }
+.card-blocked-caption { color: @held_text; font-size: 11px; }
 .blocked-lamp { color: @held; }
-.card-fields { margin-top: 2px; }
-.field-pill { padding: 1px 8px; border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.03); }
+.card-fields { margin-top: 3px; }
+.card-extras { margin-top: 2px; color: @faint; }
+.card-extra-count { color: @faint; font-family: 'Geist Mono'; font-size: 10.5px; }
+.field-pill { padding: 2px 8px; border: 1px solid @edge; border-radius: 6px; background: alpha(@ink, 0.035); }
 .field-pill-name { color: @secondary; font-size: 11px; }
-.pill-priority-high { border-color: alpha(@waiting, 0.45); }
+.pill-priority-high { border-color: alpha(@waiting, 0.4); background: alpha(@waiting, 0.07); }
 .pill-priority-high .field-pill-name { color: @waiting; }
-.pill-priority-urgent { border-color: alpha(@held, 0.5); background: alpha(@held, 0.08); }
-.pill-priority-urgent .field-pill-name { color: @held; }
+.pill-priority-urgent { border-color: alpha(@held, 0.5); background: alpha(@held, 0.1); }
+.pill-priority-urgent .field-pill-name { color: @held_text; }
 .pill-size .field-pill-name { font-family: 'Geist Mono'; font-size: 10.5px; }
 .pill-module { color: @secondary; }
 .card-module { color: @secondary; font-size: 11px; }
-.task-chip { font-family: 'Geist Mono'; font-size: 10px; padding: 0 5px; border: 1px solid @edge; border-radius: 2px; color: @secondary; }
+.task-chip { font-family: 'Geist Mono'; font-size: 10px; padding: 0 5px; border: 1px solid @edge; border-radius: 6px; color: @secondary; }
 .card-sha { font-family: 'Geist Mono'; font-size: 10px; color: @faint; }
 .card-ago { color: @faint; font-family: 'Geist Mono'; font-size: 10.5px; }
-.task-agent { min-height: 22px; margin-top: 2px; padding-top: 5px; border-top: 1px solid @edge; color: @secondary; font-size: 10.5px; }
+.task-agent { min-height: 22px; margin-top: 3px; padding-top: 7px; border-top: 1px solid @line_subtle; color: @secondary; font-size: 11px; }
 .board-lamp { color: @faint; }
 .board-lamp.live-lamp { color: @live; }
+/* A file dragged over a card attaches to its task. */
+.task-card.drop-attach { border-color: alpha(@ink, 0.5); box-shadow: 0 0 0 2px alpha(@ink, 0.18); }
 
 /* Labels: an edge-outlined chip with a muted swatch, so tags read without shouting. */
-.label-chip { padding: 1px 8px 1px 7px; border: 1px solid @edge; border-radius: 2px; }
+.label-chip { padding: 2px 8px 2px 7px; border: 1px solid @edge; border-radius: 6px; }
 .label-chip-name { color: @secondary; font-size: 10.5px; }
 .label-more { color: @faint; font-size: 10.5px; }
 .label-hue-0 { color: #8fa3bf; }
@@ -138,7 +164,7 @@ button.card-key { min-height: 20px; min-width: 20px; padding: 0; }
 .label-hue-7 { color: #c09a8d; }
 
 /* Status glyphs, priority bars and execution-state badges carry the state colours. */
-/* Each column its own ring colour, as a GitHub project's status field. */
+/* Each column its own ring colour, as a GitHub project's status field (board_view::column_rgb). */
 .status-backlog { color: @faint; }
 .status-ready { color: #4493f8; }
 .status-active { color: @waiting; }
@@ -147,132 +173,141 @@ button.card-key { min-height: 20px; min-width: 20px; padding: 0; }
 .priority-icon { color: @secondary; }
 .priority-high { color: @waiting; }
 .priority-urgent { color: @held; }
-.state-badge { padding: 0 5px; border: 1px solid @edge; border-radius: 2px; min-height: 16px; }
+.state-badge { min-height: 18px; padding: 0 6px; border: 1px solid @edge; border-radius: 99px; }
 .state-caption { font-family: 'Geist'; font-size: 9.5px; font-weight: 600; letter-spacing: 0.06em; color: @secondary; }
 .state-badge .board-lamp { color: @secondary; }
+.state-running { border-color: alpha(@live, 0.4); }
 .state-running .board-lamp { color: @live; }
 .state-running .state-caption { color: @live; }
 .state-awaiting_review .board-lamp, .state-dispatched .board-lamp { color: @waiting; }
+.state-blocked, .state-failed { border-color: alpha(@held, 0.45); }
 .state-blocked .board-lamp, .state-failed .board-lamp { color: @held; }
-.state-blocked .state-caption, .state-failed .state-caption { color: @held; }
+.state-blocked .state-caption, .state-failed .state-caption { color: @held_text; }
 
 /* ── List view ──────────────────────────────────────────────────────────── */
-.board-list { padding: 2px 16px 10px; }
-.list-section { margin-bottom: 10px; background: alpha(@ink, 0.025); border: 1px solid @edge; border-radius: 2px; }
-.list-row { min-height: 36px; padding: 0 12px; border-bottom: 1px solid @edge; background: transparent; }
-.list-row:hover { background: alpha(@ink, 0.05); }
-.list-row:last-child { border-bottom: 0; }
+.board-list { padding: 0 20px 16px; }
+.list-section { margin-bottom: 12px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.list-row { min-height: 40px; padding: 0 14px; border-bottom: 1px solid @line_subtle; background: transparent; }
+.list-row:hover { background: alpha(@ink, 0.035); }
+.list-row:last-child { border-bottom: 0; border-radius: 0 0 14px 14px; }
 .list-title { color: @ink; font-size: 13px; }
 .list-lineage { color: @faint; font-size: 11px; }
 .list-meta, .list-agent { color: @secondary; font-size: 11px; }
-.list-empty { padding: 10px 12px; color: @faint; font-size: 11.5px; }
-.list-group-heading { padding: 6px 12px 3px; color: @faint; font-family: 'Geist'; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; border-bottom: 1px solid @edge; }
+.list-empty { padding: 12px 14px; color: @faint; font-size: 12px; }
+.list-group-heading { padding: 8px 14px 4px; color: @faint; font-family: 'Geist'; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; border-bottom: 1px solid @line_subtle; }
 
 /* ── Peek panel ─────────────────────────────────────────────────────────── */
-.board-peek { background: alpha(@ink, 0.035); border-left: 1px solid @edge; }
-.peek-head { min-height: 40px; padding: 0 8px 0 14px; border-bottom: 1px solid @edge; }
-.peek-body { padding: 14px 16px 18px; }
-.peek-title { color: @ink; font-size: 16px; font-weight: 600; }
-.peek-props { padding: 6px 0; border-top: 1px solid @edge; border-bottom: 1px solid @edge; }
-.peek-key { min-width: 70px; color: @faint; font-size: 11.5px; }
-.peek-value > button { min-height: 26px; padding: 0 8px; border: 1px solid transparent; background: transparent; color: @ink; font-size: 12px; }
-.peek-value > button:hover { border-color: @edge; background: @slab; }
-.peek-text { min-height: 26px; padding-left: 9px; color: @ink; font-size: 12px; }
-.peek-description { color: @ink; font-size: 12.5px; }
+.board-peek { margin: 0 20px 16px 0; border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.peek-head { min-height: 44px; padding: 0 8px 0 16px; border-bottom: 1px solid @edge; }
+.peek-body { padding: 16px 18px 20px; }
+.peek-title { color: @ink; font-size: 17px; font-weight: 600; }
+.peek-props { padding: 8px 0; border-top: 1px solid @edge; border-bottom: 1px solid @edge; }
+.peek-key { min-width: 70px; color: @faint; font-size: 12px; }
+.peek-value > button { min-height: 28px; padding: 0 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: @ink; font-size: 12.5px; }
+.peek-value > button:hover { border-color: @edge; background: @wash; }
+.peek-text { min-height: 28px; padding-left: 9px; color: @ink; font-size: 12.5px; }
+.peek-description { color: @ink; font-size: 13px; }
 .peek-muted { color: @faint; font-size: 12px; }
 .peek-commit { font-family: 'Geist Mono'; font-size: 11px; color: @secondary; }
-button.peek-link { min-height: 28px; padding: 0 8px; border: 1px solid @edge; border-radius: 2px; background: @slab; color: @ink; font-size: 12px; font-weight: 400; }
-button.peek-link:hover { background: @wash; border-color: @strong; }
+button.peek-link { min-height: 30px; padding: 0 10px; border: 1px solid @edge; border-radius: 9px; background: @raised; color: @ink; font-size: 12.5px; font-weight: 400; }
+button.peek-link:hover { background: @wash; border-color: @line_emphasis; }
 button.peek-link.done label { color: @secondary; }
 button.peek-edit { border: 1px solid @edge; }
 
 /* ── Menus (context, filter, pickers) ──────────────────────────────────── */
-popover.board-menu contents { padding: 6px; background: @slab; border: 1px solid @strong; }
+popover.board-menu contents { padding: 6px; border: 1px solid @strong; border-radius: 12px; background: @slab_solid; }
 .board-menu-title { padding: 4px 6px 6px; color: @ink; font-size: 12px; font-weight: 600; }
 .board-menu-caption { margin-top: 6px; padding: 0 6px; color: @faint; font-family: 'Geist'; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; }
-button.board-menu-item { min-height: 28px; padding: 0 8px; border: 0; border-radius: 2px; background: transparent; color: @ink; font-weight: 400; }
-button.board-menu-item:hover { background: @wash; }
-button.board-menu-item.selected { background: @wash; }
-button.board-menu-item.destructive label { color: @held; }
-button.board-menu-choice { min-height: 28px; padding: 0; border: 1px solid @edge; border-radius: 2px; background: @console; }
-button.board-menu-choice:hover { background: @wash; border-color: @strong; }
-button.board-menu-choice.selected { border-color: @ink; background: @wash; opacity: 1; }
+button.board-menu-item { min-height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: @ink; font-weight: 400; }
+button.board-menu-item:hover { background: @wash_solid; }
+button.board-menu-item.selected { background: @wash_solid; }
+button.board-menu-item.destructive label { color: @held_text; }
+button.board-menu-choice { min-height: 30px; padding: 0; border: 1px solid @edge; border-radius: 8px; background: @raised; }
+button.board-menu-choice:hover { background: @wash_solid; border-color: @line_emphasis; }
+button.board-menu-choice.selected { border-color: @ink; background: @wash_solid; opacity: 1; }
 .board-filter { padding: 4px; }
-button.filter-option { min-height: 24px; padding: 0 8px; border: 1px solid @edge; border-radius: 2px; background: @console; color: @secondary; font-size: 11.5px; font-weight: 400; }
-button.filter-option:hover { background: @wash; color: @ink; }
-button.filter-option:checked { border-color: @ink; background: @wash; color: @ink; }
+button.filter-option { min-height: 26px; padding: 0 10px; border: 1px solid @edge; border-radius: 99px; background: @raised; color: @secondary; font-size: 12px; font-weight: 400; }
+button.filter-option:hover { background: @wash_solid; color: @ink; }
+button.filter-option:checked { border-color: alpha(@ink, 0.45); background: @track; color: @ink; }
 .board-filter flowboxchild { padding: 0; }
 
 /* ── Empty board and shortcuts ─────────────────────────────────────────── */
-.board-blank { padding: 40px; }
-.board-blank-title { color: @ink; font-size: 15px; font-weight: 600; }
-.board-blank-hint { color: @secondary; font-size: 12px; margin-bottom: 6px; }
-.board-kbd { padding: 0 4px; border: 1px solid @edge; border-radius: 2px; font-family: 'Geist Mono'; font-size: 10px; color: @secondary; }
+.board-blank { margin: 0 20px 20px; padding: 48px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.board-blank-title { color: @ink; font-size: 17px; font-weight: 600; }
+.board-blank-hint { color: @secondary; font-size: 13px; margin-bottom: 8px; }
+.board-kbd { padding: 1px 6px; border: 1px solid @line_emphasis; border-radius: 6px; font-family: 'Geist Mono'; font-size: 10.5px; color: @faint; }
 .board-hint { margin-right: 8px; color: @faint; font-size: 11px; }
 
 /* ── Task pages: GitHub's new-issue form and issue thread ─────────────── */
-/* A full page hides the surface it covers (panel.rs), so one @wall layer over the wallpaper
-   reads exactly as the board does. */
+/* A full page hides the surface it covers (panel.rs), so the wallpaper sits right under it:
+   the panel and its scrolled window are the two @wall layers other pages have. */
 button.panel-scrim.page-scrim, button.panel-scrim.page-scrim:hover { background: transparent; }
 .app-panel.issue-page { background: @wall; border: 0; }
-.issue-page scrolledwindow, .issue-page viewport, .issue-page stack { background: transparent; }
+.issue-page scrolledwindow { background: @wall; }
+.issue-page viewport, .issue-page stack { background: transparent; }
+.issue-page .panel-heading { min-height: 52px; padding: 0 20px; border-bottom: 1px solid @edge; }
 .issue-page .panel-body { padding: 0; }
 .see-through, .see-through > viewport { background: transparent; }
-.issue-compose, .issue-detail { padding: 18px 24px 28px; }
-.issue-field-caption { color: @ink; font-size: 13px; font-weight: 600; margin-top: 4px; }
-entry.issue-title-entry { min-height: 34px; border-radius: 2px; font-size: 14px; }
-.issue-compose-footer { margin-top: 6px; }
-.issue-compose-footer button, .issue-composer button, .issue-header button.primary { border-radius: 2px; }
-.issue-page button.primary { min-height: 32px; padding: 0 14px; border-radius: 2px; }
+.issue-compose, .issue-detail { padding: 28px 28px 40px; }
+.issue-field-caption { color: @ink; font-size: 13.5px; font-weight: 600; margin-top: 6px; }
+entry.issue-title-entry { min-height: 40px; border-radius: 10px; font-size: 15px; }
+.issue-compose-footer { margin-top: 8px; }
+.issue-compose-footer button, .issue-composer button, .issue-header button.primary { border-radius: 10px; }
+.issue-page button.primary { min-height: 34px; padding: 0 16px; border-radius: 10px; }
+.issue-page button.quiet { min-height: 34px; border-radius: 10px; }
+.issue-page combobox button, .issue-page dropdown > button { min-height: 34px; border: 1px solid @strong; border-radius: 10px; background: @raised; }
 
 /* The Markdown field: Write / Preview tabs and a formatting bar over the text. */
-.md-field { border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.04); }
-.md-bar { padding: 4px 6px 0; border-bottom: 1px solid @edge; background: alpha(@ink, 0.03); }
-button.md-tab { min-height: 30px; padding: 0 14px; border: 1px solid transparent; border-bottom: 0; border-radius: 2px; background: transparent; color: @secondary; font-size: 12.5px; font-weight: 400; }
-button.md-tab:checked { border-color: @edge; background: alpha(@ink, 0.05); color: @ink; margin-bottom: -1px; }
-button.md-tool { min-height: 26px; min-width: 26px; padding: 0 5px; border: 0; background: transparent; color: @secondary; font-size: 12px; font-weight: 600; }
-button.md-tool:hover { color: @ink; background: alpha(@ink, 0.08); }
-textview.md-input, textview.md-input text { background: transparent; font-size: 13px; }
-.md-placeholder { margin: 9px 13px; color: @faint; font-size: 13px; }
-.md-preview { padding: 10px 12px; color: @ink; font-size: 13px; }
+.md-field { border: 1px solid @strong; border-radius: 12px; background: @raised; }
+.md-field:focus-within { border-color: alpha(@ink, 0.35); box-shadow: 0 0 0 3px alpha(@ink, 0.06); }
+.md-bar { padding: 6px 8px 6px; border-bottom: 1px solid @edge; border-radius: 12px 12px 0 0; background: alpha(@ink, 0.02); }
+button.md-tab { min-height: 28px; padding: 0 14px; border: 0; border-radius: 8px; background: transparent; color: @faint; font-size: 12.5px; font-weight: 500; }
+button.md-tab:hover { color: @ink; }
+button.md-tab:checked { background: @track; color: @ink; }
+button.md-tool { min-height: 28px; min-width: 28px; padding: 0 5px; border: 0; border-radius: 7px; background: transparent; color: @faint; font-size: 12px; font-weight: 600; }
+button.md-tool:hover { color: @ink; background: @wash; }
+textview.md-input, textview.md-input text { background: transparent; font-size: 13.5px; }
+.md-placeholder { margin: 10px 14px; color: @faint; font-size: 13.5px; }
+.md-preview { padding: 12px 14px; color: @ink; font-size: 13.5px; }
 
 /* The issue header: a large title, its number, then a status pill and the dates. */
-.issue-header { padding-bottom: 14px; border-bottom: 1px solid @edge; }
-.issue-title { color: @ink; font-size: 26px; font-weight: 400; }
-.issue-number { color: @faint; font-size: 26px; font-weight: 300; }
-.status-pill { padding: 4px 12px 4px 9px; border-radius: 2px; background: alpha(@ink, 0.08); }
+.issue-header { padding-bottom: 18px; border-bottom: 1px solid @edge; }
+.issue-title { color: @ink; font-size: 28px; font-weight: 500; letter-spacing: -0.02em; }
+.issue-number { color: @faint; font-size: 28px; font-weight: 300; }
+.status-pill { padding: 5px 13px 5px 10px; border-radius: 99px; background: @track; }
 .status-pill-name { color: @ink; font-size: 12.5px; font-weight: 600; }
 .status-pill-ready { background: alpha(#4493f8, 0.22); }
 .status-pill-active { background: alpha(@waiting, 0.2); }
 .status-pill-in_review { background: alpha(#ab7df8, 0.22); }
 .status-pill-done { background: #8957e5; }
 .status-pill-done .status-pill-name, .status-pill-done .status-icon { color: white; }
-button.issue-pill { min-height: 26px; padding: 0 10px; border: 1px solid @edge; border-radius: 2px; background: transparent; color: @secondary; font-size: 12px; font-weight: 400; }
-button.issue-pill:hover { color: @ink; border-color: @strong; }
-.issue-opened { color: @faint; font-size: 12px; }
-.issue-status { padding: 8px 12px; border: 1px solid alpha(@waiting, 0.35); border-radius: 2px; background: alpha(@waiting, 0.08); color: @ink; }
+button.issue-pill { min-height: 28px; padding: 0 12px; border: 1px solid @strong; border-radius: 99px; background: @slab; color: @secondary; font-size: 12.5px; font-weight: 400; }
+button.issue-pill:hover { color: @ink; border-color: @line_emphasis; background: @wash; }
+.issue-opened { color: @faint; font-size: 12.5px; }
+.issue-status { padding: 10px 14px; border: 1px solid alpha(@waiting, 0.35); border-radius: 10px; background: alpha(@waiting, 0.08); color: @ink; }
 
-/* The thread: comment boxes and the steps between them on one rail. */
-.issue-comment { border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.04); }
-.issue-comment-head { min-height: 38px; padding: 0 8px 0 14px; border-bottom: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.04); }
+/* The thread: comment cards and the steps between them on one rail. */
+.issue-comment { border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.issue-comment-head { min-height: 42px; padding: 0 10px 0 16px; border-bottom: 1px solid @edge; border-radius: 14px 14px 0 0; background: alpha(@ink, 0.025); }
 .issue-comment-who { color: @secondary; font-size: 12.5px; }
-.issue-comment-body { padding: 12px 14px 14px; color: @ink; font-size: 13px; }
-.issue-section-title { color: @ink; font-size: 13px; font-weight: 600; }
-button.issue-link { min-height: 32px; padding: 0 14px; border: 0; border-bottom: 1px solid @edge; border-radius: 2px; background: transparent; color: @ink; font-weight: 400; }
-button.issue-link:hover { background: alpha(@ink, 0.05); }
-.issue-sidebar button.issue-link { min-height: 26px; padding: 0 6px; border: 0; border-radius: 2px; }
-.issue-timeline { margin-top: 4px; }
-.issue-event { min-height: 40px; }
-.issue-rail { min-width: 32px; }
+.issue-comment-body { padding: 14px 16px 16px; color: @ink; font-size: 13.5px; }
+.issue-section-title { color: @ink; font-size: 13.5px; font-weight: 600; }
+button.issue-link { min-height: 34px; padding: 0 14px; border: 1px solid @edge; border-radius: 10px; background: @slab; color: @ink; font-weight: 400; }
+button.issue-link:hover { background: @wash; border-color: @line_emphasis; }
+.issue-sidebar button.issue-link { min-height: 28px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; }
+.issue-sidebar button.issue-link:hover { background: @wash; }
+.issue-timeline { margin-top: 6px; }
+.issue-event { min-height: 42px; }
+.issue-rail { min-width: 34px; }
 .issue-rail-line { min-width: 2px; background: @edge; }
-.issue-badge { min-width: 28px; min-height: 28px; margin-top: 6px; border-radius: 2px; background: @slab; border: 2px solid @wall; color: @secondary; }
+.issue-badge { min-width: 30px; min-height: 30px; margin-top: 6px; border-radius: 99px; background: @raised; border: 2px solid @wall_solid; color: @secondary; }
 .issue-badge-closed { background: #8957e5; }
 .issue-badge-closed .status-icon { color: white; }
 .issue-event > box.issue-comment { margin: 8px 0; }
-.issue-event-text { padding: 10px 0; color: @secondary; font-size: 12.5px; }
-.issue-message { padding: 8px 10px; margin-bottom: 10px; border-left: 2px solid @strong; color: @secondary; font-size: 12px; }
-.avatar { min-width: 28px; min-height: 28px; margin-top: 6px; border-radius: 2px; color: #111; font-size: 12px; font-weight: 700; }
-.issue-sidebar .avatar { min-width: 20px; min-height: 20px; margin-top: 0; border-radius: 2px; font-size: 10px; }
+.issue-event-text { padding: 11px 0; color: @secondary; font-size: 12.5px; }
+.issue-message { padding: 10px 12px; margin-bottom: 10px; border-left: 2px solid @line_focus; border-radius: 0 8px 8px 0; background: alpha(@ink, 0.025); color: @secondary; font-size: 12.5px; }
+.avatar { min-width: 30px; min-height: 30px; margin-top: 6px; border-radius: 99px; color: #111; font-size: 12px; font-weight: 700; }
+.issue-sidebar .avatar { min-width: 22px; min-height: 22px; margin-top: 0; border-radius: 99px; font-size: 10px; }
 .avatar-hue-0 { background: #8fa3bf; }
 .avatar-hue-1 { background: #a597c4; }
 .avatar-hue-2 { background: #c4949f; }
@@ -281,78 +316,101 @@ button.issue-link:hover { background: alpha(@ink, 0.05); }
 .avatar-hue-5 { background: #8db6bd; }
 .avatar-hue-6 { background: #b3b78b; }
 .avatar-hue-7 { background: #c09a8d; }
-.issue-composer { margin-top: 18px; padding-top: 16px; border-top: 2px solid @edge; }
+.issue-composer { margin-top: 22px; padding-top: 20px; border-top: 1px solid @edge; }
 .issue-composer-title { color: @ink; font-size: 15px; font-weight: 600; }
-button.issue-close { min-height: 32px; padding: 0 12px; border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.04); color: @ink; font-weight: 400; }
-button.issue-close:hover { background: alpha(@ink, 0.09); }
+button.issue-close { min-height: 34px; padding: 0 14px; border: 1px solid @strong; border-radius: 10px; background: @slab; color: @ink; font-weight: 500; }
+button.issue-close:hover { background: @wash; border-color: @line_emphasis; }
 
-/* The sidebar: compact sections of pills under hairlines. */
-.issue-sidebar { margin-top: 2px; }
-.issue-side-section { padding: 10px 0 12px; border-bottom: 1px solid alpha(@edge, 0.8); }
+/* The sidebar: one card of compact sections under hairlines, like a Settings card. */
+.issue-sidebar { margin-top: 2px; padding: 4px 16px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.issue-side-section { padding: 14px 0 15px; border-bottom: 1px solid @edge; }
 .issue-side-section:last-child { border-bottom: 0; }
-.issue-side-title { color: @faint; font-size: 11.5px; font-weight: 600; }
-.issue-side-empty { color: @faint; font-size: 12px; }
-.issue-side-value { color: @ink; font-size: 12.5px; }
-entry.issue-side-entry { min-height: 28px; border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.05); box-shadow: none; font-size: 12px; }
+.issue-side-title { color: @faint; font-size: 12px; font-weight: 600; }
+.issue-side-empty { color: @faint; font-size: 12.5px; }
+.issue-side-value { color: @ink; font-size: 13px; }
+entry.issue-side-entry { min-height: 32px; border: 1px solid @strong; border-radius: 9px; background: @raised; box-shadow: none; font-size: 12.5px; }
 entry.issue-side-entry:focus-within { border-color: alpha(@ink, 0.4); }
-button.choice-pill { min-height: 24px; padding: 0 10px; border: 1px solid @edge; border-radius: 2px; background: transparent; color: @secondary; font-size: 12px; font-weight: 400; }
-button.choice-pill:hover { background: alpha(@ink, 0.07); color: @ink; }
-button.choice-pill.selected { border-color: alpha(@ink, 0.45); background: alpha(@ink, 0.13); color: @ink; font-weight: 600; }
+button.choice-pill { min-height: 28px; padding: 0 9px; border: 1px solid @strong; border-radius: 8px; background: @raised; color: @secondary; font-size: 12.5px; font-weight: 400; }
+button.choice-pill:hover { background: @wash; border-color: @line_emphasis; color: @ink; }
+button.choice-pill.selected { border-color: alpha(@ink, 0.5); background: @track; color: @ink; font-weight: 600; }
 button.choice-pill label { color: inherit; }
-button.issue-side-key { min-height: 26px; padding: 0 8px; border: 0; border-radius: 2px; background: transparent; color: @secondary; font-weight: 400; }
-button.issue-side-key:hover { background: alpha(@ink, 0.07); color: @ink; }
+button.issue-side-key { min-height: 28px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: @secondary; font-weight: 400; }
+button.issue-side-key:hover { background: @wash; color: @ink; }
 button.issue-label { min-height: 0; padding: 0; border: 0; background: transparent; }
 button.issue-label:hover .label-chip { border-color: @held; }
-button.issue-delete { min-height: 26px; padding: 0 8px; border: 0; border-radius: 2px; background: transparent; color: @faint; font-weight: 400; }
-button.issue-delete:hover { background: alpha(@held, 0.12); color: @held; }
+button.issue-delete { min-height: 28px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: @faint; font-weight: 400; }
+button.issue-delete:hover { background: alpha(@held, 0.12); color: @held_text; }
+/* The New module page's numbers for the project. */
+.side-stat { min-height: 22px; }
+.side-stat-caption { color: @secondary; font-size: 12.5px; }
+.side-stat-value { color: @ink; font-size: 13px; font-weight: 600; font-feature-settings: "tnum"; }
 
 /* Attachments: tiles under the description; the whole page takes drops and pastes. */
-flowbox.attachment-tray { padding: 0 14px 10px; }
+flowbox.attachment-tray { padding: 0 16px 12px; }
 flowbox.attachment-tray > flowboxchild { padding: 0; }
-box.attachment-tray { margin-top: 2px; }
-.attachment-tile { border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.05); }
-.attachment-tile picture { border-radius: 2px; }
+box.attachment-tray { margin-top: 4px; }
+.attachment-tile { border: 1px solid @edge; border-radius: 10px; background: @raised; }
+.attachment-tile picture, .attachment-tile image { border-radius: 8px; }
 .attachment-name { color: @secondary; font-size: 11px; }
-button.attachment-remove { margin: 3px; min-height: 20px; min-width: 20px; border-radius: 2px; background: alpha(black, 0.55); opacity: 0; }
+button.attachment-remove { margin: 4px; min-height: 22px; min-width: 22px; border: 0; border-radius: 99px; background: alpha(black, 0.6); opacity: 0; }
 .attachment-tile:hover button.attachment-remove { opacity: 1; }
-.attachment-hint { padding: 0 14px 10px; color: @faint; font-size: 11px; }
+.attachment-hint { padding: 0 16px 12px; color: @faint; font-size: 11.5px; }
 .drop-attach { box-shadow: inset 0 0 0 2px alpha(@ink, 0.35); }
 
 /* ── View menu: compact rounded pills, grouped under small captions ───── */
-popover.view-popover contents { padding: 10px 12px 12px; border-radius: 2px; }
+popover.view-popover contents { padding: 12px 14px 14px; border-radius: 12px; }
 .view-menu-title { color: @ink; font-size: 13px; font-weight: 600; }
-button.view-reset { min-height: 22px; padding: 0 8px; border: 0; border-radius: 2px; background: transparent; color: @secondary; font-size: 11.5px; font-weight: 400; }
-button.view-reset:hover { background: alpha(@ink, 0.08); color: @ink; }
-.view-menu-caption { margin-top: 8px; margin-bottom: 1px; color: @faint; font-size: 11px; font-weight: 600; }
-button.view-pill { min-height: 22px; padding: 0 9px; border: 1px solid @edge; border-radius: 2px; background: transparent; color: @secondary; font-size: 11.5px; font-weight: 400; }
-button.view-pill:hover { background: alpha(@ink, 0.07); color: @ink; }
-button.view-pill:checked { border-color: alpha(@ink, 0.45); background: alpha(@ink, 0.13); color: @ink; }
+button.view-reset { min-height: 24px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: @secondary; font-size: 12px; font-weight: 400; }
+button.view-reset:hover { background: @wash_solid; color: @ink; }
+.view-menu-caption { margin-top: 10px; margin-bottom: 2px; color: @faint; font-size: 11.5px; font-weight: 600; }
+button.view-pill { min-height: 26px; padding: 0 11px; border: 1px solid @edge; border-radius: 99px; background: @raised; color: @secondary; font-size: 12px; font-weight: 400; }
+button.view-pill:hover { background: @wash_solid; color: @ink; }
+button.view-pill:checked { border-color: alpha(@ink, 0.45); background: @track; color: @ink; }
 button.view-pill label { color: inherit; }
 
 /* ── Modules: version bundles, each with its own board ────────────────── */
-.modules-page { padding: 12px 16px; }
-.modules-head { min-height: 40px; }
-button.module-card { padding: 12px 14px; border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.045); font-weight: 400; }
-button.module-card:hover { border-color: @strong; background: alpha(@ink, 0.075); }
-.module-card-name { color: @ink; font-size: 14px; font-weight: 600; }
-.module-card-meta { color: @secondary; font-size: 11.5px; }
-.module-card-done { padding: 1px 8px; border-radius: 2px; background: #8957e5; color: white; font-size: 11px; font-weight: 600; }
-.module-banner { min-height: 44px; margin: 0 16px 10px; padding: 0 8px 0 4px; border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.05); }
-.module-banner-name { color: @ink; font-size: 15px; font-weight: 600; }
+.page.modules-page { padding: 0 20px 24px; background: @wall; }
+.modules-head { min-height: 56px; }
+.modules-content .board-stats { margin: 0 0 18px; }
+.modules-section-head { margin: 4px 2px 10px; }
+.modules-section-title { color: @secondary; font-size: 13px; font-weight: 600; }
+flowbox.module-grid { margin-bottom: 22px; }
+flowbox.module-grid > flowboxchild { padding: 0; }
+button.module-card { padding: 16px 18px 14px; border: 1px solid @edge; border-radius: 14px; background: @slab; font-weight: 400; transition: border-color 120ms ease-out, background 120ms ease-out; }
+button.module-card:hover { border-color: @line_emphasis; background: @wash; }
+button.module-card.module-complete { background: alpha(@ink, 0.02); }
+.module-card-mark { color: @faint; }
+.module-card-name { color: @ink; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.module-card-pct { min-width: 44px; color: @ink; font-size: 18px; font-weight: 600; font-feature-settings: "tnum"; }
+.module-card-meta { color: @secondary; font-size: 12px; }
+.module-card-ago { color: @faint; font-size: 11.5px; }
+.module-card-foot { padding-top: 10px; border-top: 1px solid @edge; }
+.module-card-done { padding: 2px 9px; border-radius: 99px; background: #8957e5; color: white; font-size: 11px; font-weight: 600; }
+.modules-empty { margin-top: 40px; padding: 44px 56px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.modules-empty-mark { color: @faint; }
+.modules-empty-title { color: @ink; font-size: 17px; font-weight: 600; }
+.modules-empty-hint { color: @secondary; font-size: 13px; line-height: 1.4; }
+/* A module's own board: its name and actions on one card over the stats band. */
+.module-banner { min-height: 52px; margin: 0 20px 14px; padding: 0 10px 0 6px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.module-banner-name { color: @ink; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .module-banner .field-pill { min-height: 0; }
 .module-banner progressbar { margin-right: 4px; }
-button.module-back, button.module-action { min-height: 28px; padding: 0 10px; border: 0; border-radius: 2px; background: transparent; color: @secondary; font-weight: 400; }
-button.module-back:hover, button.module-action:hover { background: alpha(@ink, 0.08); color: @ink; }
-button.module-back { border-right: 1px solid @edge; border-radius: 2px; }
-.module-pick-list checkbutton, checkbutton.module-pick { min-height: 32px; padding: 0 8px; border-radius: 2px; }
-.module-pick-list checkbutton:hover { background: alpha(@ink, 0.05); }
+button.module-back, button.module-action { min-height: 32px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; color: @secondary; font-weight: 500; }
+button.module-back:hover, button.module-action:hover { background: @wash; color: @ink; }
+button.module-back { margin-right: 4px; }
+.module-banner > button.icon-key { border: 0; background: transparent; color: @faint; }
+.module-banner > button.icon-key:hover { background: @wash; color: @ink; }
+.module-pick-list { padding: 4px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.module-pick-list checkbutton, checkbutton.module-pick { min-height: 38px; padding: 0 10px; border-radius: 10px; }
+.module-pick-list checkbutton:hover { background: @wash; }
+.module-pick-list checkbutton + checkbutton { border-top: 1px solid @line_subtle; }
+.pick-size { padding: 1px 6px; border: 1px solid @edge; border-radius: 6px; color: @secondary; font-family: 'Geist Mono'; font-size: 10.5px; }
 .patch-notes { color: @ink; font-size: 13px; }
-flowbox.module-grid > flowboxchild { padding: 0; }
 .module-grid button.module-card progressbar { min-width: 120px; }
 /* Renaming a module happens in the banner's own height: a slim field and small pills. */
-.module-editor entry { min-height: 26px; padding: 0 8px; border: 1px solid @edge; border-radius: 2px; background: alpha(@ink, 0.06); box-shadow: none; font-size: 12.5px; }
+.module-editor entry { min-height: 30px; padding: 0 10px; border: 1px solid @strong; border-radius: 9px; background: @raised; box-shadow: none; font-size: 13px; }
 .module-editor entry:focus-within { border-color: alpha(@ink, 0.4); }
-.module-editor button.choice-pill { min-height: 24px; padding: 0 8px; }
-button.module-action.module-save { border: 1px solid alpha(@ink, 0.35); background: alpha(@ink, 0.1); color: @ink; }
-button.module-action.module-save:hover { background: alpha(@ink, 0.16); }
-.module-banner > button, .module-banner > box { margin-top: 6px; margin-bottom: 6px; }
+.module-editor button.choice-pill { min-height: 28px; padding: 0 9px; }
+button.module-action.module-save { border: 1px solid alpha(@ink, 0.35); background: @track; color: @ink; }
+button.module-action.module-save:hover { background: @line_focus; }
+.module-banner > button, .module-banner > box { margin-top: 8px; margin-bottom: 8px; }
