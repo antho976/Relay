@@ -99,7 +99,11 @@ object Wire {
     fun welcome(line: String): Welcome? {
         val o = parse(line) ?: return null
         val ok = o.bool("ok") ?: return null
-        return Welcome(ok = ok, device = o.str("device"), token = o.str("token"), error = o.str("error"))
+        return Welcome(
+            ok = ok, device = o.str("device"), token = o.str("token"), error = o.str("error"),
+            host = o.str("host"), hostId = o.str("host_id"), version = o.str("version"),
+            wake = o["wake"]?.let { w -> runCatching { w.jsonArray.mapNotNull { WakeTarget.from(it) } }.getOrNull() },
+        )
     }
 
     /** What a line from the engine is, told apart by the key that follows `v` (envelope.rs). */
@@ -153,7 +157,11 @@ data class Greeting(
     val engine: String? = null,
     /** The PC's network cards, for Wake-on-LAN from this phone when the PC is asleep. */
     val wake: List<WakeTarget> = emptyList(),
-)
+) {
+    /** A door this new names the PC in the welcome, not the greeting; an older one in the greeting. */
+    fun admittedBy(w: Welcome): Greeting =
+        copy(host = w.host ?: host, hostId = w.hostId ?: hostId, version = w.version ?: version, wake = w.wake ?: wake)
+}
 
 data class WakeTarget(val mac: String, val broadcast: String?) {
     companion object {
@@ -165,7 +173,16 @@ data class WakeTarget(val mac: String, val broadcast: String?) {
     }
 }
 
-data class Welcome(val ok: Boolean, val device: String?, val token: String?, val error: String?)
+data class Welcome(
+    val ok: Boolean,
+    val device: String?,
+    val token: String?,
+    val error: String?,
+    val host: String? = null,
+    val hostId: String? = null,
+    val version: String? = null,
+    val wake: List<WakeTarget>? = null,
+)
 
 sealed interface Incoming {
     data class Res(val response: Response) : Incoming

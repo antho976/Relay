@@ -12,14 +12,22 @@ use serde::{Deserialize, Serialize};
 
 pub const WIRE_V: u32 = 1;
 
-/// The first line the door sends, before the phone says anything.
+/// The first line the door sends, before the phone says anything. Anyone who reaches the door
+/// reads it, and through a rendezvous that is anyone who knows the room id, so it carries only
+/// what the handshake needs. Who the PC is (its name, id, Relay version and network cards) comes
+/// in the `Welcome`, once the phone has proved itself.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Greeting {
     pub v: u32,
     pub relay: String,
+    /// Always empty now; still sent, because a door older than this read these three as
+    /// required (an older PC's cloud link fails on a greeting without them).
+    #[serde(default)]
     pub host: String,
+    #[serde(default)]
     pub host_id: String,
     pub instance: String,
+    #[serde(default)]
     pub version: String,
     /// Random per connection; the phone answers with `proof(challenge, token)`.
     pub challenge: String,
@@ -28,9 +36,6 @@ pub struct Greeting {
     /// rather than leave the person looking at a silent link. Absent from older doors.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
-    /// This PC's network cards, for Wake-on-LAN from a phone on the same network (`wake.rs`).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub wake: Vec<crate::wake::WakeTarget>,
 }
 
 /// The phone's answer: either a pairing code (first time) or a proof (every time after).
@@ -47,8 +52,9 @@ pub struct Hello {
     pub proof: Option<String>,
 }
 
-/// The door's verdict. `token` is present exactly once: in the reply to a pairing.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// The door's verdict. `token` is present exactly once: in the reply to a pairing. An admitted
+/// phone also learns here who it reached; a door older than this put that in the greeting.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Welcome {
     pub v: u32,
     pub ok: bool,
@@ -58,17 +64,32 @@ pub struct Welcome {
     pub token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// This PC's name as phones see it (`relay remote name`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
+    /// The Relay version the door runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// This PC's network cards, for Wake-on-LAN from a phone on the same network (`wake.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wake: Vec<crate::wake::WakeTarget>,
 }
 
 impl Welcome {
     pub fn paired(device: &str, token: &str) -> Welcome {
-        Welcome { v: WIRE_V, ok: true, device: Some(device.into()), token: Some(token.into()), error: None }
+        Welcome { v: WIRE_V, ok: true, device: Some(device.into()), token: Some(token.into()), ..Default::default() }
     }
     pub fn admitted(device: &str) -> Welcome {
-        Welcome { v: WIRE_V, ok: true, device: Some(device.into()), token: None, error: None }
+        Welcome { v: WIRE_V, ok: true, device: Some(device.into()), ..Default::default() }
     }
     pub fn denied(code: &str) -> Welcome {
-        Welcome { v: WIRE_V, ok: false, device: None, token: None, error: Some(code.into()) }
+        Welcome { v: WIRE_V, ok: false, error: Some(code.into()), ..Default::default() }
+    }
+    /// Who the phone reached, for a welcome that lets it in.
+    pub fn with_host(self, host: &str, host_id: &str, version: &str, wake: Vec<crate::wake::WakeTarget>) -> Welcome {
+        Welcome { host: Some(host.into()), host_id: Some(host_id.into()), version: Some(version.into()), wake, ..self }
     }
 }
 
@@ -110,7 +131,6 @@ pub const PHONE_OPS: &[&str] = &[
     "arbiter.decision.list", "arbiter.halt", "arbiter.order.list", "arbiter.proposal.list",
     "arbiter.proposal.resolve", "arbiter.restart", "arbiter.series", "arbiter.settings.get",
     "arbiter.strategy.get", "arbiter.summary",
-    "audit.list", "audit.undo",
     "avd.boot", "avd.list",
     "bus.ping", "bus.subscribe", "bus.unsubscribe",
     "dashboard.get",
@@ -282,7 +302,9 @@ mod tests {
     fn a_phone_calls_only_the_ops_the_app_uses() {
         let line = |op: &str| format!(r#"{{"v":1,"id":"7f2b5d2e-2f1a-4b7c-9a6c-1c9d1e6a0004","actor":"user","op":"{op}","payload":{{}}}}"#);
         assert!(matches!(gate(&line("session.input"), Instance::Stable), Gate::Forward));
-        for op in ["settings.set", "app.quit", "guardrail.grant.revoke", "worktree.remove", "os.open_url", "no.such"] {
+        // Audit rows carry stored payloads (held actions, prompts, an old Arbiter key), and no
+        // screen of the app reads them.
+        for op in ["settings.set", "app.quit", "guardrail.grant.revoke", "worktree.remove", "os.open_url", "no.such", "audit.list", "audit.undo"] {
             match gate(&line(op), Instance::Stable) {
                 Gate::Reject(resp) => assert_eq!(resp.error.unwrap().code, "remote.op"),
                 Gate::Forward => panic!("{op} forwarded"),

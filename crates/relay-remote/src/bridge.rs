@@ -239,19 +239,26 @@ fn still_admitted(ctx: &Ctx, device_id: &str, token: &str) -> bool {
     Registry::load(&ctx.registry_path).is_ok_and(|r| r.device(device_id).is_some_and(|d| d.token == token))
 }
 
-pub fn greeting(ctx: &Ctx, registry: &Registry, challenge: &str, engine_up: bool) -> Greeting {
+/// What the door says before anything is proved: through a rendezvous, anyone who knows the room
+/// id reads it. Who this PC is goes in the welcome (`welcome_for`).
+pub fn greeting(ctx: &Ctx, challenge: &str, engine_up: bool) -> Greeting {
     Greeting {
         v: WIRE_V,
         relay: "remote".into(),
-        host: registry.host_name.clone(),
-        host_id: registry.host_id.clone(),
+        host: String::new(),
+        host_id: String::new(),
         instance: ctx.instance.as_str().into(),
-        version: ctx.version.clone(),
+        version: String::new(),
         challenge: challenge.into(),
         // Only a door that can start the engine says it is stopped: the phone then waits for it.
         engine: Some(if engine_up || ctx.start_engine.is_none() { "running" } else { "stopped" }.into()),
-        wake: crate::wake::targets(),
     }
+}
+
+/// An admitted phone's welcome, with who it reached: the PC's name and id, the Relay version, and
+/// the network cards it can wake from the same network.
+pub fn welcome_for(ctx: &Ctx, registry: &Registry, welcome: Welcome) -> Welcome {
+    welcome.with_host(&registry.host_name, &registry.host_id, &ctx.version, crate::wake::targets())
 }
 
 /// How long a door that started the engine waits for its socket to answer.
@@ -330,7 +337,7 @@ pub async fn run(
     let registry = Registry::load(&ctx.registry_path).map_err(BridgeEnd::Other)?;
     let challenge = crate::registry::random_hex(16);
     let engine_up = ctx.start_engine.is_none() || relay_core::socket::probe(&ctx.socket_path).await;
-    let greet = greeting(&ctx, &registry, &challenge, engine_up);
+    let greet = greeting(&ctx, &challenge, engine_up);
     outbound
         .send(serde_json::to_string(&greet).context("greeting")?)
         .await
@@ -369,8 +376,9 @@ pub async fn run(
             return Err(end);
         }
     };
+    let welcome = welcome_for(&ctx, &registry, admitted.welcome.clone());
     outbound
-        .send(serde_json::to_string(&admitted.welcome).context("welcome")?)
+        .send(serde_json::to_string(&welcome).context("welcome")?)
         .await
         .map_err(|_| BridgeEnd::ClosedEarly)?;
     tracing::info!(device = %admitted.device_id, instance = %ctx.instance, "remote device admitted");

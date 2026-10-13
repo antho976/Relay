@@ -15,8 +15,17 @@
 //! oversized message drops that phone, never the tunnel. Both sides are pinged, and a host or a
 //! phone silent for too long is dropped, so a PC that vanished stops being listed as the host.
 //!
-//! Rooms are not configured: a host proves a room by presenting the secret whose digest names
-//! it (`registry::room_for`). The server keeps nothing on disk and forgets everything on exit.
+//! A host proves a room by presenting the secret whose digest names it (`registry::room_for`),
+//! so anyone can open a room by making up a secret. An operator who lists the rooms it serves
+//! (`Limits::rooms`) shuts strangers out entirely. Without a list, a room hosted before is
+//! remembered and always let back in, while rooms the server has not seen are capped on their
+//! own, so strangers holding made-up rooms cannot keep a PC whose link blinked from coming back.
+//! What is remembered stays in memory unless `Limits::state` names a file to keep it in.
+//!
+//! Joining needs only a room id, so what one address may hold before it has said anything is
+//! capped too, and a phone that joins and never sends its hello is dropped. Behind a proxy every
+//! connection comes from the proxy: the caps then count nothing (loopback is never counted) unless
+//! the operator says how many proxies to trust in `X-Forwarded-For` (`Limits::trust_proxy`).
 //!
 //! Paths: `GET /host/<room>` with `Authorization: Bearer <secret>` for the PC, `GET /join/<room>`
 //! for a phone, `GET /health` for whoever runs it. The secret goes in a header, not the URL, so
@@ -25,8 +34,9 @@
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -68,9 +78,28 @@ const HOST_MESSAGE: usize = 16 << 20;
 pub struct Limits {
     /// Connections held at once, hosts and phones together, upgraded or not.
     pub max_connections: usize,
-    /// Rooms with a host at once. Anyone can host a room by making up a secret, so this bounds
-    /// what strangers can make the server hold.
+    /// Rooms the server remembers as hosted before. One it remembers is always let back in, so
+    /// rooms strangers made up meanwhile never keep a returning PC out.
     pub max_rooms: usize,
+    /// Rooms hosted at once that the server does not remember: what strangers who make up
+    /// secrets can hold. Once `max_rooms` are remembered, every further room counts here.
+    pub max_new_rooms: usize,
+    /// Connections from one address that have not finished their upgrade. Loopback is never
+    /// counted: there it is a proxy on the same machine, or this server's own engine.
+    pub pending_per_ip: usize,
+    /// Phones from one address that joined a room and have not sent anything yet.
+    pub quiet_lanes_per_ip: usize,
+    /// How long a phone that joined has to send its first line, its hello. The app waits 10 s
+    /// for the greeting and answers it at once.
+    pub lane_hello: Duration,
+    /// The only rooms that may be hosted or joined, when set (`relay remote rendezvous --room`).
+    pub rooms: Option<HashSet<String>>,
+    /// The file the rooms hosted before are kept in across restarts. Without it they are
+    /// remembered until the server exits.
+    pub state: Option<PathBuf>,
+    /// How many proxies in front append to `X-Forwarded-For`; the address the outermost of them
+    /// saw is the phone's. 0 reads no header, since anyone can send one.
+    pub trust_proxy: usize,
     /// Phones one room carries at once. Joining needs no credential, so this bounds what a
     /// stranger who knows a room id can make the PC do.
     pub max_lanes_per_room: usize,
@@ -102,6 +131,13 @@ impl Default for Limits {
         Limits {
             max_connections: 1024,
             max_rooms: 64,
+            max_new_rooms: 16,
+            pending_per_ip: 16,
+            quiet_lanes_per_ip: 8,
+            lane_hello: Duration::from_secs(15),
+            rooms: None,
+            state: None,
+            trust_proxy: 0,
             max_lanes_per_room: 32,
             phone_message: 8 << 20,
             lane_budget: 2 * MAX_LANE_LINE,
@@ -200,9 +236,112 @@ struct Room {
 
 struct Shared {
     rooms: Mutex<HashMap<String, Room>>,
+    /// Rooms hosted before (`Limits::max_rooms`). Locked after `rooms` when both are.
+    known: Mutex<HashSet<String>>,
+    /// One writer of `Limits::state` at a time.
+    saving: Mutex<()>,
     limits: Limits,
     /// Bytes queued toward every phone.
     queued: Arc<AtomicUsize>,
+    /// Connections still upgrading, by address (`Limits::pending_per_ip`).
+    pending: Arc<PerIp>,
+    /// Joined phones that have not said anything yet, by address (`Limits::quiet_lanes_per_ip`).
+    quiet: Arc<PerIp>,
+}
+
+/// How many of something each address holds; each one is a `Held` that gives it back when dropped.
+#[derive(Default)]
+struct PerIp(Mutex<HashMap<IpAddr, usize>>);
+
+struct Held {
+    counts: Arc<PerIp>,
+    ip: IpAddr,
+}
+
+impl PerIp {
+    /// One more for `ip`, unless it already holds `cap`.
+    fn take(self: &Arc<Self>, ip: IpAddr, cap: usize) -> Option<Held> {
+        let mut counts = self.0.lock().unwrap();
+        let held = counts.get(&ip).copied().unwrap_or(0);
+        if held >= cap {
+            return None;
+        }
+        counts.insert(ip, held + 1);
+        Some(Held { counts: self.clone(), ip })
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        let mut counts = self.counts.0.lock().unwrap();
+        if let Some(held) = counts.get_mut(&self.ip) {
+            *held -= 1;
+            if *held == 0 {
+                counts.remove(&self.ip);
+            }
+        }
+    }
+}
+
+/// The address the per-address caps count, or `None` for loopback, which they never count: a
+/// proxy on this machine (every phone at once, as far as this server can tell) or a local engine.
+fn counted(ip: IpAddr) -> Option<IpAddr> {
+    let ip = ip.to_canonical();
+    (!ip.is_loopback()).then_some(ip)
+}
+
+/// Where a request came from: the TCP peer, or with `trust` proxies in front, the address in
+/// `X-Forwarded-For` that the outermost of them wrote (the `trust`-th from the right; the
+/// leftmost when there are fewer). Entries further left are the phone's own say, never read.
+fn client_ip(peer: IpAddr, forwarded: &str, trust: usize) -> IpAddr {
+    if trust == 0 {
+        return peer;
+    }
+    let hops: Vec<&str> = forwarded.split(',').map(str::trim).filter(|h| !h.is_empty()).collect();
+    let Some(hop) = hops.len().checked_sub(trust).map(|i| hops[i]).or(hops.first().copied()) else {
+        return peer;
+    };
+    hop.parse::<IpAddr>()
+        .or_else(|_| hop.parse::<SocketAddr>().map(|a| a.ip()))
+        .unwrap_or(peer)
+}
+
+/// What `Limits::state` holds.
+#[derive(Serialize, Deserialize, Default)]
+struct Known {
+    rooms: Vec<String>,
+}
+
+fn load_known(path: &Path, max: usize) -> HashSet<String> {
+    let known = match std::fs::read_to_string(path) {
+        Ok(text) => match serde_json::from_str::<Known>(&text) {
+            Ok(k) => k.rooms,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "rendezvous state unreadable; starting with no rooms remembered");
+                Vec::new()
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "rendezvous state unreadable; starting with no rooms remembered");
+            Vec::new()
+        }
+    };
+    known.into_iter().take(max).collect()
+}
+
+/// Write the rooms remembered to `Limits::state`, if set. Best effort: a failure costs only
+/// what a restart would forget.
+fn save_known(shared: &Shared) {
+    let Some(path) = &shared.limits.state else { return };
+    let _one = shared.saving.lock().unwrap();
+    let mut rooms: Vec<String> = shared.known.lock().unwrap().iter().cloned().collect();
+    rooms.sort();
+    let body = serde_json::to_string(&Known { rooms }).unwrap_or_default();
+    let tmp = path.with_extension("tmp");
+    if let Err(e) = std::fs::write(&tmp, body).and_then(|_| std::fs::rename(&tmp, path)) {
+        tracing::warn!(path = %path.display(), error = %e, "rendezvous state not saved");
+    }
 }
 
 type Rooms = Arc<Shared>;
@@ -229,19 +368,49 @@ impl RendezvousServer {
             .with_context(|| format!("binding {addr}"))?;
         let local_addr = listener.local_addr()?;
         tracing::info!(addr = %local_addr, "rendezvous open");
+        match &limits.rooms {
+            Some(rooms) => tracing::info!(rooms = rooms.len(), "rendezvous hosts only its listed rooms"),
+            None => tracing::warn!(
+                new_rooms = limits.max_new_rooms,
+                "no room list: anyone who makes up a secret can host a room here, up to the cap on new rooms; \
+                 list yours with --room <id> or RELAY_RENDEZVOUS_ROOMS (docs/MOBILE.md §4)"
+            ),
+        }
+        let known = limits.state.as_deref().map(|p| load_known(p, limits.max_rooms)).unwrap_or_default();
         let slots = Arc::new(Semaphore::new(limits.max_connections));
-        let rooms: Rooms = Arc::new(Shared { rooms: Mutex::default(), limits, queued: Arc::default() });
+        let rooms: Rooms = Arc::new(Shared {
+            rooms: Mutex::default(),
+            known: Mutex::new(known),
+            saving: Mutex::default(),
+            limits,
+            queued: Arc::default(),
+            pending: Arc::default(),
+            quiet: Arc::default(),
+        });
         let accept = tokio::spawn(async move {
             loop {
                 match listener.accept().await {
                     Ok((stream, peer)) => {
+                        // Behind a trusted proxy the peer is the proxy; the phone's address is
+                        // known only once the request is read, by which time it is not pending.
+                        let key = if rooms.limits.trust_proxy == 0 { counted(peer.ip()) } else { None };
+                        let pending = match key {
+                            Some(ip) => match rooms.pending.take(ip, rooms.limits.pending_per_ip) {
+                                Some(held) => Some(held),
+                                None => {
+                                    tracing::debug!(peer = %peer, "too many connections from one address still upgrading; refused");
+                                    continue;
+                                }
+                            },
+                            None => None,
+                        };
                         let Ok(slot) = slots.clone().try_acquire_owned() else {
                             tracing::debug!(peer = %peer, "rendezvous full; connection refused");
                             continue;
                         };
                         let rooms = rooms.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle(rooms, stream).await {
+                            if let Err(e) = handle(rooms, stream, peer, pending).await {
                                 tracing::debug!(peer = %peer, error = %e, "rendezvous connection ended");
                             }
                             drop(slot);
@@ -260,12 +429,14 @@ impl RendezvousServer {
 
 enum Role {
     Host { room: String },
-    Join { room: String },
+    /// `quiet` is this phone's place under `Limits::quiet_lanes_per_ip` until it says something.
+    Join { room: String, quiet: Option<Held> },
 }
 
 /// Parse the request path into a role, refusing what is not for us before the upgrade. `bearer`
 /// is the secret from the `Authorization` header; without one, a `secret=` query is read.
-fn classify(path: &str, bearer: Option<&str>) -> std::result::Result<Role, (u16, &'static str)> {
+/// `listed` is the operator's room list, if there is one.
+fn classify(path: &str, bearer: Option<&str>, listed: Option<&HashSet<String>>) -> std::result::Result<Role, (u16, &'static str)> {
     let (path, query) = path.split_once('?').unwrap_or((path, ""));
     let secret = bearer
         .or_else(|| query.split('&').find_map(|kv| kv.strip_prefix("secret=")))
@@ -274,13 +445,17 @@ fn classify(path: &str, bearer: Option<&str>) -> std::result::Result<Role, (u16,
         if room.is_empty() || crate::registry::room_for(secret) != room {
             return Err((403, "room secret does not open this room"));
         }
+        // Worded unlike the refusal above, which a PC answers by retrying with `?secret=`.
+        if listed.is_some_and(|l| !l.contains(room)) {
+            return Err((403, "this rendezvous does not host that room"));
+        }
         return Ok(Role::Host { room: room.to_string() });
     }
     if let Some(room) = path.strip_prefix("/join/") {
-        if room.is_empty() {
+        if room.is_empty() || listed.is_some_and(|l| !l.contains(room)) {
             return Err((404, "no room"));
         }
-        return Ok(Role::Join { room: room.to_string() });
+        return Ok(Role::Join { room: room.to_string(), quiet: None });
     }
     Err((404, "relay rendezvous: /host/<room> or /join/<room>"))
 }
@@ -292,9 +467,11 @@ fn refuse((status, body): (u16, &str)) -> ErrorResponse {
     r
 }
 
-async fn handle(rooms: Rooms, stream: TcpStream) -> Result<()> {
+async fn handle(rooms: Rooms, stream: TcpStream, peer: SocketAddr, pending: Option<Held>) -> Result<()> {
     let handshake = rooms.limits.handshake;
-    let (role, ws) = match tokio::time::timeout(handshake, upgrade(&rooms, stream)).await {
+    let upgraded = tokio::time::timeout(handshake, upgrade(&rooms, stream, peer)).await;
+    drop(pending);
+    let (role, ws) = match upgraded {
         Err(_) => anyhow::bail!("no handshake within {}s", handshake.as_secs()),
         Ok(Err(e)) => return Err(e),
         Ok(Ok(None)) => return Ok(()),
@@ -302,7 +479,7 @@ async fn handle(rooms: Rooms, stream: TcpStream) -> Result<()> {
     };
     match role {
         Role::Host { room } => host(rooms, room, ws).await,
-        Role::Join { room } => join(rooms, room, ws).await,
+        Role::Join { room, quiet } => join(rooms, room, ws, quiet).await,
     }
 }
 
@@ -321,7 +498,7 @@ async fn peek_head(stream: &TcpStream) -> Result<Vec<u8>> {
 }
 
 /// Answer `/health` (`None`), or finish the WebSocket upgrade and say which side this is.
-async fn upgrade(rooms: &Rooms, mut stream: TcpStream) -> Result<Option<(Role, Ws)>> {
+async fn upgrade(rooms: &Rooms, mut stream: TcpStream, peer: SocketAddr) -> Result<Option<(Role, Ws)>> {
     let head = peek_head(&stream).await?;
     if head.starts_with(b"GET /health") {
         use tokio::io::AsyncWriteExt as _;
@@ -351,13 +528,20 @@ async fn upgrade(rooms: &Rooms, mut stream: TcpStream) -> Result<Option<(Role, W
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "));
-        match classify(path, bearer) {
-            Ok(r) => {
-                role = Some(r);
-                Ok(resp)
+        let mut r = classify(path, bearer, rooms.limits.rooms.as_ref()).map_err(refuse)?;
+        if let Role::Join { quiet, .. } = &mut r {
+            let forwarded: Vec<&str> = req.headers().get_all("x-forwarded-for").iter().filter_map(|v| v.to_str().ok()).collect();
+            if let Some(ip) = counted(client_ip(peer.ip(), &forwarded.join(","), rooms.limits.trust_proxy)) {
+                *quiet = Some(
+                    rooms
+                        .quiet
+                        .take(ip, rooms.limits.quiet_lanes_per_ip)
+                        .ok_or_else(|| refuse((429, "too many phones from this address have not said hello yet")))?,
+                );
             }
-            Err(e) => Err(refuse(e)),
         }
+        role = Some(r);
+        Ok(resp)
     };
     // A host carries every lane's lines; a phone only its own requests. Which one this is
     // decides the limit before tungstenite reads a byte of a message.
@@ -379,11 +563,24 @@ async fn host(rooms: Rooms, room: String, ws: Ws) -> Result<()> {
     let (lines, mut rx) = mpsc::channel::<(String, Option<OwnedSemaphorePermit>)>(1024);
     let budget_bytes = rooms.limits.host_budget;
     let tx = HostTx { lines, budget: Arc::new(Semaphore::new(budget_bytes)), budget_bytes };
-    let admitted = {
+    let (admitted, remembered) = {
         let mut all = rooms.rooms.lock().unwrap();
-        if !all.contains_key(&room) && all.len() >= rooms.limits.max_rooms {
-            false
+        let mut known = rooms.known.lock().unwrap();
+        let limits = &rooms.limits;
+        // A listed room (the list already turned the rest away), one hosted before, or one held
+        // now (a PC replacing its own socket) comes in whatever else is here.
+        let (admitted, remembered) = if limits.rooms.is_some() || known.contains(&room) || all.contains_key(&room) {
+            (true, false)
+        } else if all.keys().filter(|r| !known.contains(*r)).count() >= limits.max_new_rooms {
+            (false, false)
+        } else if known.len() < limits.max_rooms {
+            known.insert(room.clone());
+            (true, true)
         } else {
+            (true, false)
+        };
+        drop(known);
+        if admitted {
             let entry = all.entry(room.clone()).or_default();
             // A second host for the same room replaces the first: a PC that restarted is the
             // common case, and its old socket is about to time out anyway.
@@ -392,13 +589,17 @@ async fn host(rooms: Rooms, room: String, ws: Ws) -> Result<()> {
             for (_, lane) in entry.lanes.drain() {
                 lane.cut();
             }
-            true
         }
+        (admitted, remembered)
     };
     if !admitted {
-        tracing::warn!(room = %room, "rendezvous holds its most rooms; host refused");
+        tracing::warn!(room = %room, "rendezvous holds its most new rooms; host of a room it has not seen refused");
         let _ = sink.close().await;
         return Ok(());
+    }
+    if remembered && rooms.limits.state.is_some() {
+        let shared = rooms.clone();
+        tokio::task::spawn_blocking(move || save_known(&shared));
     }
     tracing::info!(room = %room, "host joined");
     let ping_every = rooms.limits.ping_every;
@@ -480,7 +681,7 @@ async fn host(rooms: Rooms, room: String, ws: Ws) -> Result<()> {
     Ok(())
 }
 
-async fn join(shared: Rooms, room: String, ws: Ws) -> Result<()> {
+async fn join(shared: Rooms, room: String, ws: Ws, mut quiet: Option<Held>) -> Result<()> {
     let lane_id = crate::registry::random_hex(8);
     let (mut sink, mut source) = ws.split();
     let refuse = |error: &str| Message::text(serde_json::json!({"v":1,"ok":false,"error":error}).to_string());
@@ -550,6 +751,9 @@ async fn join(shared: Rooms, room: String, ws: Ws) -> Result<()> {
         }
     }
     if host.send_control(Lane::Open { c: lane_id.clone() }.to_line()).await {
+        // Joining needs no credential, so a phone that never says hello is not left holding a lane.
+        let hello_by = tokio::time::Instant::now() + limits.lane_hello;
+        let mut said = false;
         loop {
             let msg = tokio::select! {
                 _ = gone.closed() => break,
@@ -557,6 +761,10 @@ async fn join(shared: Rooms, room: String, ws: Ws) -> Result<()> {
                     Ok(Some(msg)) => msg,
                     Ok(None) | Err(_) => break,
                 },
+                _ = tokio::time::sleep_until(hello_by), if !said => {
+                    tracing::info!(room = %room, lane = %lane_id, "phone sent nothing after joining; dropping it");
+                    break;
+                }
             };
             let text = match msg {
                 Ok(Message::Text(t)) => t.to_string(),
@@ -566,6 +774,10 @@ async fn join(shared: Rooms, room: String, ws: Ws) -> Result<()> {
                 Ok(Message::Close(_)) | Err(_) => break,
                 Ok(_) => continue,
             };
+            if !said {
+                said = true;
+                drop(quiet.take());
+            }
             let line = Lane::Data { c: lane_id.clone(), l: text }.to_line();
             if line.len() > MAX_LANE_LINE {
                 // Escaping grew it past what the host socket carries.
@@ -593,15 +805,82 @@ mod tests {
     fn paths_open_the_right_role_and_nothing_else() {
         let secret = "s3cret";
         let room = crate::registry::room_for(secret);
-        assert!(matches!(classify(&format!("/host/{room}"), Some(secret)), Ok(Role::Host { .. })));
-        assert!(classify(&format!("/host/{room}"), Some("wrong")).is_err());
-        assert!(classify(&format!("/host/{room}"), None).is_err());
+        let host = |path: &str, bearer| matches!(classify(path, bearer, None), Ok(Role::Host { .. }));
+        assert!(host(&format!("/host/{room}"), Some(secret)));
+        assert!(classify(&format!("/host/{room}"), Some("wrong"), None).is_err());
+        assert!(classify(&format!("/host/{room}"), None, None).is_err());
         // A PC from before the header still opens its room.
-        assert!(matches!(classify(&format!("/host/{room}?secret={secret}"), None), Ok(Role::Host { .. })));
-        assert!(classify(&format!("/host/{room}?secret={secret}"), Some("wrong")).is_err());
-        assert!(matches!(classify(&format!("/join/{room}"), None), Ok(Role::Join { .. })));
-        assert!(classify("/join/", None).is_err());
-        assert!(classify("/", None).is_err());
+        assert!(host(&format!("/host/{room}?secret={secret}"), None));
+        assert!(classify(&format!("/host/{room}?secret={secret}"), Some("wrong"), None).is_err());
+        assert!(matches!(classify(&format!("/join/{room}"), None, None), Ok(Role::Join { .. })));
+        assert!(classify("/join/", None, None).is_err());
+        assert!(classify("/", None, None).is_err());
+
+        // With a room list, a room off it is neither hosted, even with its own secret, nor joined.
+        let other = "another-secret";
+        let other_room = crate::registry::room_for(other);
+        let listed: HashSet<String> = [room.clone()].into();
+        assert!(matches!(classify(&format!("/host/{room}"), Some(secret), Some(&listed)), Ok(Role::Host { .. })));
+        assert!(matches!(classify(&format!("/join/{room}"), None, Some(&listed)), Ok(Role::Join { .. })));
+        let refused = classify(&format!("/host/{other_room}"), Some(other), Some(&listed)).err().unwrap();
+        assert_eq!(refused.0, 403);
+        assert_ne!(refused.1, "room secret does not open this room", "a PC would retry that with ?secret=");
+        assert_eq!(classify(&format!("/join/{other_room}"), None, Some(&listed)).err().unwrap().0, 404);
+    }
+
+    #[test]
+    fn forwarded_addresses_are_read_only_as_far_as_the_proxies_are_trusted() {
+        let peer: IpAddr = "127.0.0.1".parse().unwrap();
+        let phone: IpAddr = "203.0.113.7".parse().unwrap();
+        // Trusting nothing, the header is the sender's say and is ignored.
+        assert_eq!(client_ip(peer, "203.0.113.7", 0), peer);
+        // One proxy: the entry it appended, never the one the phone wrote before it.
+        assert_eq!(client_ip(peer, "198.51.100.1, 203.0.113.7", 1), phone);
+        // Two: the outer proxy's entry, second from the right.
+        assert_eq!(client_ip(peer, "198.51.100.1, 203.0.113.7, 10.0.0.2", 2), phone);
+        // Fewer entries than proxies: the leftmost there is.
+        assert_eq!(client_ip(peer, "203.0.113.7", 2), phone);
+        assert_eq!(client_ip(peer, "", 1), peer);
+        assert_eq!(client_ip(peer, "not-an-address", 1), peer);
+        assert_eq!(client_ip(peer, "203.0.113.7:4431", 1), phone);
+        // Loopback is never counted, however it is written.
+        assert_eq!(counted(peer), None);
+        assert_eq!(counted("::ffff:127.0.0.1".parse().unwrap()), None);
+        assert_eq!(counted(phone), Some(phone));
+    }
+
+    #[test]
+    fn an_address_holds_only_its_share_and_gets_it_back() {
+        let counts = Arc::new(PerIp::default());
+        let (a, b): (IpAddr, IpAddr) = ("203.0.113.7".parse().unwrap(), "203.0.113.8".parse().unwrap());
+        let first = counts.take(a, 2).unwrap();
+        let _second = counts.take(a, 2).unwrap();
+        assert!(counts.take(a, 2).is_none(), "a third over the cap");
+        assert!(counts.take(b, 2).is_some(), "another address has its own share");
+        drop(first);
+        assert!(counts.take(a, 2).is_some(), "a place given back is free again");
+    }
+
+    #[test]
+    fn remembered_rooms_survive_a_restart_in_the_state_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rendezvous.json");
+        assert!(load_known(&path, 4).is_empty(), "no file yet is no rooms");
+        let limits = Limits { state: Some(path.clone()), ..Default::default() };
+        let shared = Shared {
+            rooms: Mutex::default(),
+            known: Mutex::new(["b".to_string(), "a".to_string()].into()),
+            saving: Mutex::default(),
+            limits,
+            queued: Arc::default(),
+            pending: Arc::default(),
+            quiet: Arc::default(),
+        };
+        save_known(&shared);
+        assert_eq!(load_known(&path, 4), ["a".to_string(), "b".to_string()].into());
+        assert_eq!(load_known(&path, 1).len(), 1, "never more than the server remembers");
+        std::fs::write(&path, "garbage").unwrap();
+        assert!(load_known(&path, 4).is_empty());
     }
 
     #[tokio::test]

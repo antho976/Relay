@@ -1,5 +1,5 @@
 //! What a phone needs to wake this PC from sleep: each physical network card's MAC address and
-//! the broadcast address of the network it is on. The door sends them in its greeting; the phone
+//! the broadcast address of the network it is on. The door sends them in its welcome; the phone
 //! keeps them and, from the same network, sends a Wake-on-LAN packet when the PC does not answer.
 //! Whether the PC wakes is up to its firmware and card (`ethtool -s <card> wol g`); nothing here
 //! changes the machine's power settings.

@@ -77,6 +77,20 @@ pub enum RemoteCommand {
         /// server that hosts other things too; never below what one lane may queue (30 MiB)
         #[arg(long)]
         queue_mib: Option<usize>,
+        /// Host only this room, the id `relay remote via` prints (repeat for each, or list them
+        /// comma-separated in RELAY_RENDEZVOUS_ROOMS). Without one, a stranger who makes up a
+        /// secret can host a room too, up to a cap
+        #[arg(long = "room", value_name = "ID", env = "RELAY_RENDEZVOUS_ROOMS", value_delimiter = ',')]
+        rooms: Vec<String>,
+        /// Keep the rooms hosted here in this file, so after a restart they still come in ahead of
+        /// strangers' rooms. Without it they are remembered until the server exits
+        #[arg(long, value_name = "FILE", env = "RELAY_RENDEZVOUS_STATE")]
+        state: Option<PathBuf>,
+        /// How many proxies in front append to X-Forwarded-For (1 for one Caddy). The per-address
+        /// caps then count the phone's address. 0 trusts no header; set it only when nothing
+        /// reaches this server except through those proxies
+        #[arg(long, value_name = "N", env = "RELAY_RENDEZVOUS_TRUST_PROXY", default_value_t = 0)]
+        trust_proxy: usize,
     },
 }
 
@@ -486,7 +500,7 @@ pub async fn run(requested: Instance, cmd: RemoteCommand) -> Result<u8> {
             println!("restart `relay remote serve` to dial it");
             Ok(0)
         }
-        RemoteCommand::Rendezvous { bind, queue_mib } => {
+        RemoteCommand::Rendezvous { bind, queue_mib, rooms, state, trust_proxy } => {
             init_logging();
             let addr: SocketAddr = bind.parse().with_context(|| format!("bad --bind {bind:?}"))?;
             let mut limits = relay_remote::rendezvous::Limits::default();
@@ -494,6 +508,10 @@ pub async fn run(requested: Instance, cmd: RemoteCommand) -> Result<u8> {
                 // One lane's budget must still fit, or its largest line could never be queued.
                 limits.queued_total = (mib << 20).max(limits.lane_budget);
             }
+            let rooms: std::collections::HashSet<String> = rooms.iter().map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect();
+            limits.rooms = (!rooms.is_empty()).then_some(rooms);
+            limits.state = state;
+            limits.trust_proxy = trust_proxy;
             let server = RendezvousServer::bind_with(addr, limits).await?;
             println!("relay rendezvous: listening on {} (health: GET /health)", server.local_addr);
             tokio::signal::ctrl_c().await?;

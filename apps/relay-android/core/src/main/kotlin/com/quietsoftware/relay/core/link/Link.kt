@@ -132,10 +132,11 @@ class Link(
                 continue
             }
             check(welcome.ok)
-            val session = BusSession(greeted.socket, greeted.route, greeted.greeting, profile.device, scope)
-            profiles.connected(profile, greeted.route, greeted.greeting)
-            val starting = greeted.greeting.engine == "stopped" || greeted.greeting.engine == "starting"
-            if (starting) _state.value = LinkState.Starting(greeted.route, greeted.greeting)
+            val greeting = greeted.greeting.admittedBy(welcome)
+            val session = BusSession(greeted.socket, greeted.route, greeting, profile.device, scope)
+            profiles.connected(profile, greeted.route, greeting)
+            val starting = greeting.engine == "stopped" || greeting.engine == "starting"
+            if (starting) _state.value = LinkState.Starting(greeted.route, greeting)
             // The first request waits for the engine when the door had to start it.
             val ready = runCatching {
                 session.result("bus.ping", JsonObject(emptyMap()), timeoutMs = if (starting) ENGINE_START_TIMEOUT_MS else BusSession.DEFAULT_TIMEOUT_MS)
@@ -147,7 +148,7 @@ class Link(
             }
             // The session is usable before anyone is told the link is up.
             _session.value = session
-            _state.value = LinkState.Online(greeted.route, greeted.greeting)
+            _state.value = LinkState.Online(greeted.route, greeting)
             val began = now()
             runCatching { onSession(session) }
             keepAlive(session)

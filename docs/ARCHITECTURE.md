@@ -69,5 +69,8 @@ op outside the list). A line that passes is written to the Unix socket unchanged
 back is forwarded as-is, `pty` frames included. The door adds pairing and a per-connection
 proof of the device token; it adds no ops. The PC dials the rendezvous with the room secret
 in an `Authorization: Bearer` header, retrying once with `?secret=` only when an older server
-refuses it in its own words. See
+refuses it in its own words. The greeting before the proof carries only the challenge and what
+the handshake needs; the PC's name, id, version and Wake-on-LAN targets come in the welcome. The
+rendezvous hosts only the rooms its operator lists, or without a list remembers the rooms it has
+seen hosted and caps new ones, and caps per address what has not yet said hello. See
 `docs/MOBILE.md`.

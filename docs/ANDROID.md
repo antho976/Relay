@@ -51,7 +51,7 @@ envelopes, byte for byte as `crates/relay-remote` and `crates/relay-bus` speak t
 | --- | --- |
 | on, Relay running (desktop open or not) | live: terminals, events, edits applied at once |
 | on, Relay closed | with the door running at login (`deploy/relay-door.service`), the door starts the engine when the phone connects; the phone says "starting Relay on <PC>" meanwhile |
-| asleep | **Wake the PC** sends a Wake-on-LAN packet from the phone when it is on the same network; the PC told the phone its network cards' addresses in the door's greeting |
+| asleep | **Wake the PC** sends a Wake-on-LAN packet from the phone when it is on the same network; the PC told the phone its network cards' addresses in the door's welcome, once the phone was in |
 | off or out of reach | everything readable from the replica; edits wait in the outbox and go, once, when the PC is back |
 
 The desktop app was never needed for the phone: the engine (`relay serve`) is its own process and
@@ -93,8 +93,8 @@ The same door and the same model as `docs/MOBILE.md` §6: a paired phone acts as
 the ops in `PHONE_OPS`, proves its token on every connection without sending it, and the link is
 not sealed after the handshake, so use Tailscale or a network you trust. The token is sealed on the
 phone with a key in Android's keystore; the pairing and the replica are excluded from cloud backups
-and device transfers. Wake-on-LAN targets are sent in the greeting, which a door only sends while a
-phone is paired or a pairing window is open.
+and device transfers. Wake-on-LAN targets, like the PC's name and Relay's version, are sent in the welcome, only to a
+phone the door has admitted; the greeting before it names nothing.
 
 This app adds to `PHONE_OPS`: the Threads space (`thread.*`), the ledger's reads for the Tally
 panel and the Undo of an entry a thread added (`money.summary/lists/series/tx.list/invest.*`,

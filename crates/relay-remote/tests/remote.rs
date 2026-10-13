@@ -199,7 +199,8 @@ async fn a_phone_pairs_proves_itself_and_uses_the_bus_directly() {
     }
 
     let (device, token, greeting) = pair(&url, &code).await;
-    assert_eq!(greeting.host, Registry::load(&h.ctx.registry_path).unwrap().host_name);
+    // Who the PC is comes in the welcome, once the phone is in (`a_greeting_names_nobody_until_the_phone_is_in`).
+    assert!(greeting.host.is_empty() && greeting.host_id.is_empty() && greeting.version.is_empty(), "{greeting:?}");
 
     // The code is spent; a second phone with the same code is refused.
     {
@@ -1004,4 +1005,195 @@ async fn a_cloud_copy_takes_the_phones_data_and_the_pc_link_brings_it_home() {
     assert!(saved.last_ok.is_some() && saved.last_error.is_none());
 
     tunnel.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_greeting_names_nobody_until_the_phone_is_in() {
+    let h = harness().await;
+    let door = DirectServer::bind(h.ctx.clone(), "127.0.0.1:0".parse::<SocketAddr>().unwrap())
+        .await
+        .unwrap();
+    let url = format!("ws://{}", door.local_addr);
+    let code = pair_code(&h.ctx);
+    let registry = Registry::load(&h.ctx.registry_path).unwrap();
+
+    // Before any credential: the challenge, and nothing that says whose PC this is. The three
+    // names are still there, empty, for an older reader that requires them.
+    let (mut ws, _) = tokio_tungstenite::connect_async(url.as_str()).await.unwrap();
+    let greeting = recv_json(&mut ws).await;
+    assert!(greeting["challenge"].as_str().is_some_and(|c| !c.is_empty()), "{greeting}");
+    assert_eq!((&greeting["host"], &greeting["host_id"], &greeting["version"]), (&json!(""), &json!(""), &json!("")), "{greeting}");
+    assert!(greeting.get("wake").is_none(), "{greeting}");
+    let older: Greeting = serde_json::from_value(greeting).unwrap();
+    assert!(older.host.is_empty());
+
+    // A refused phone learns nothing more.
+    send(&mut ws, json!({"v":1,"device":"nobody","proof":"00"}).to_string()).await;
+    let denied = recv_json(&mut ws).await;
+    assert_eq!(denied["ok"], false);
+    assert!(denied.get("host").is_none() && denied.get("host_id").is_none() && denied.get("version").is_none(), "{denied}");
+
+    // A paired phone is told in its welcome, and again on every connection after.
+    let (mut ws, _) = tokio_tungstenite::connect_async(url.as_str()).await.unwrap();
+    let _ = recv_text(&mut ws).await;
+    send(&mut ws, json!({"v":1,"pair":code,"device_name":"Test Phone"}).to_string()).await;
+    let paired: Welcome = serde_json::from_str(&recv_text(&mut ws).await).unwrap();
+    assert!(paired.ok, "{paired:?}");
+    assert_eq!(paired.host.as_deref(), Some(registry.host_name.as_str()));
+    assert_eq!(paired.host_id.as_deref(), Some(registry.host_id.as_str()));
+    assert_eq!(paired.version.as_deref(), Some("test"));
+    let (device, token) = (paired.device.unwrap(), paired.token.unwrap());
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(url.as_str()).await.unwrap();
+    let greeting: Greeting = serde_json::from_str(&recv_text(&mut ws).await).unwrap();
+    send(&mut ws, json!({"v":1,"device":device,"proof":wire::proof(&greeting.challenge, &token)}).to_string()).await;
+    let welcome: Welcome = serde_json::from_str(&recv_text(&mut ws).await).unwrap();
+    assert!(welcome.ok && welcome.token.is_none(), "{welcome:?}");
+    assert_eq!(welcome.host_id.as_deref(), Some(registry.host_id.as_str()));
+}
+
+/// Whether a host for `secret` stays in the room: a refused one is upgraded, then closed at once.
+async fn hosts(addr: SocketAddr, secret: &str) -> Option<Ws> {
+    let mut ws = raw_host(addr, secret).await;
+    if closes_within(&mut ws, Duration::from_millis(300)).await {
+        None
+    } else {
+        Some(ws)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_room_hosted_before_comes_back_past_rooms_strangers_made_up() {
+    let limits = relay_remote::rendezvous::Limits { max_rooms: 2, max_new_rooms: 1, ..Default::default() };
+    let server = RendezvousServer::bind_with("127.0.0.1:0".parse::<SocketAddr>().unwrap(), limits).await.unwrap();
+    let addr = server.local_addr;
+
+    // The PC hosts its room, then its link blinks.
+    let pc = hosts(addr, "the-pc").await.expect("the pc hosts");
+    drop(pc);
+    await_hosts(addr, 0).await;
+
+    // Strangers fill what is left: one more room is remembered, then one new room is held, and
+    // the next made-up room is refused.
+    let _s1 = hosts(addr, "stranger-1").await.expect("room to remember");
+    let _s2 = hosts(addr, "stranger-2").await.expect("one new room");
+    assert!(hosts(addr, "stranger-3").await.is_none(), "a second new room was let in");
+    await_hosts(addr, 2).await;
+
+    // The PC comes back regardless.
+    let _pc = hosts(addr, "the-pc").await.expect("the pc was kept out of its own room");
+    await_hosts(addr, 3).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_rendezvous_with_a_room_list_hosts_only_those_rooms() {
+    let pc_room = relay_remote::registry::room_for("the-pc");
+    let limits = relay_remote::rendezvous::Limits { rooms: Some([pc_room.clone()].into()), ..Default::default() };
+    let server = RendezvousServer::bind_with("127.0.0.1:0".parse::<SocketAddr>().unwrap(), limits).await.unwrap();
+    let addr = server.local_addr;
+
+    let stranger = relay_remote::registry::room_for("made-up");
+    assert!(tokio_tungstenite::connect_async(format!("ws://{addr}/host/{stranger}?secret=made-up")).await.is_err(), "an unlisted room was hosted");
+    assert!(tokio_tungstenite::connect_async(format!("ws://{addr}/join/{stranger}")).await.is_err(), "an unlisted room was joined");
+
+    let mut pc = raw_host(addr, "the-pc").await;
+    await_hosts(addr, 1).await;
+    let (_phone, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/join/{pc_room}")).await.unwrap();
+    assert_eq!(recv_json(&mut pc).await["t"], "open");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_phone_that_never_says_hello_loses_its_lane() {
+    let limits = relay_remote::rendezvous::Limits { lane_hello: Duration::from_millis(400), ..Default::default() };
+    let server = RendezvousServer::bind_with("127.0.0.1:0".parse::<SocketAddr>().unwrap(), limits).await.unwrap();
+    let addr = server.local_addr;
+    let room = relay_remote::registry::room_for("the-pc");
+    let mut pc = raw_host(addr, "the-pc").await;
+    await_hosts(addr, 1).await;
+
+    let (mut quiet, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/join/{room}")).await.unwrap();
+    let (mut talker, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/join/{room}")).await.unwrap();
+    let a = recv_json(&mut pc).await;
+    let b = recv_json(&mut pc).await;
+    assert_eq!((&a["t"], &b["t"]), (&json!("open"), &json!("open")));
+    send(&mut talker, json!({"v":1,"device":"d","proof":"00"}).to_string()).await;
+
+    // The one that said something is past the deadline; the one that said nothing is cut.
+    assert!(closes_within(&mut quiet, Duration::from_secs(3)).await, "a phone that never said hello kept its lane");
+    let mut closed = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    while let Ok(Some(Ok(Message::Text(t)))) = tokio::time::timeout_at(deadline, pc.next()).await {
+        let line: Value = serde_json::from_str(&t).unwrap();
+        if line["t"] == "close" {
+            closed.push(line["c"].clone());
+        }
+    }
+    assert_eq!(closed.len(), 1, "{closed:?}");
+    assert!(!closes_within(&mut talker, Duration::from_millis(300)).await, "the phone that said hello was cut");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn quiet_joins_are_capped_per_address_only_behind_a_trusted_proxy() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let join_from = |addr: SocketAddr, room: String, from: &'static str| async move {
+        let mut req = format!("ws://{addr}/join/{room}").into_client_request().unwrap();
+        // What a phone writes itself, then what the proxy appended.
+        req.headers_mut().insert("x-forwarded-for", format!("192.0.2.99, {from}").parse().unwrap());
+        tokio_tungstenite::connect_async(req).await.map(|(ws, _)| ws)
+    };
+    let room = relay_remote::registry::room_for("the-pc");
+
+    let limits = relay_remote::rendezvous::Limits { trust_proxy: 1, quiet_lanes_per_ip: 2, ..Default::default() };
+    let server = RendezvousServer::bind_with("127.0.0.1:0".parse::<SocketAddr>().unwrap(), limits.clone()).await.unwrap();
+    let addr = server.local_addr;
+    let _pc = raw_host(addr, "the-pc").await;
+    await_hosts(addr, 1).await;
+    let mut first = join_from(addr, room.clone(), "203.0.113.7").await.unwrap();
+    let _second = join_from(addr, room.clone(), "203.0.113.7").await.unwrap();
+    assert!(join_from(addr, room.clone(), "203.0.113.7").await.is_err(), "a third quiet join from one address");
+    let _other = join_from(addr, room.clone(), "203.0.113.8").await.expect("another address has its own share");
+    // Saying something gives the place back.
+    send(&mut first, json!({"v":1}).to_string()).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let _third = join_from(addr, room.clone(), "203.0.113.7").await.expect("a place given back");
+
+    // Not trusting the proxy, the header is ignored, and loopback is never counted.
+    let limits = relay_remote::rendezvous::Limits { trust_proxy: 0, ..limits };
+    let server = RendezvousServer::bind_with("127.0.0.1:0".parse::<SocketAddr>().unwrap(), limits).await.unwrap();
+    let addr = server.local_addr;
+    let _pc = raw_host(addr, "the-pc").await;
+    await_hosts(addr, 1).await;
+    let mut held = Vec::new();
+    for _ in 0..4 {
+        held.push(join_from(addr, room.clone(), "203.0.113.7").await.expect("a header nobody trusts capped a join"));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rooms_remembered_in_the_state_file_come_back_after_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let limits = relay_remote::rendezvous::Limits {
+        max_rooms: 1,
+        max_new_rooms: 1,
+        state: Some(dir.path().join("rendezvous.json")),
+        ..Default::default()
+    };
+    let server = RendezvousServer::bind_with("127.0.0.1:0".parse::<SocketAddr>().unwrap(), limits.clone()).await.unwrap();
+    let pc = hosts(server.local_addr, "the-pc").await.unwrap();
+    for _ in 0..100 {
+        if std::fs::read_to_string(dir.path().join("rendezvous.json")).is_ok_and(|s| s.contains(&relay_remote::registry::room_for("the-pc"))) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    drop(pc);
+    drop(server);
+
+    // A fresh process: a stranger takes the one new room, and the PC still comes in.
+    let server = RendezvousServer::bind_with("127.0.0.1:0".parse::<SocketAddr>().unwrap(), limits).await.unwrap();
+    let addr = server.local_addr;
+    let _stranger = hosts(addr, "stranger").await.expect("one new room");
+    assert!(hosts(addr, "stranger-2").await.is_none());
+    let _pc = hosts(addr, "the-pc").await.expect("the remembered room was refused after a restart");
+    await_hosts(addr, 2).await;
 }

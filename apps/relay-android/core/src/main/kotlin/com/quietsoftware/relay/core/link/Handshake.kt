@@ -145,7 +145,7 @@ object Handshake {
             if (!welcome.ok) return Result.failure(RefusalException(Refusal.of(welcome.error)))
             val device = welcome.device ?: return Result.failure(RefusalException(Refusal.of("hello.shape")))
             val token = welcome.token ?: return Result.failure(RefusalException(Refusal.of("hello.shape")))
-            val g = greeted.greeting
+            val g = greeted.greeting.admittedBy(welcome)
             return Result.success(
                 PcProfile(
                     hostId = g.hostId.ifEmpty { link.hostId },
