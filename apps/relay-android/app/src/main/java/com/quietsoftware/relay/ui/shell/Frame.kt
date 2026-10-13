@@ -43,7 +43,7 @@ import com.quietsoftware.relay.ui.kit.Fill
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.IconKey
 import com.quietsoftware.relay.ui.kit.Radii
-import com.quietsoftware.relay.ui.kit.RingMark
+import com.quietsoftware.relay.ui.kit.RelayMark
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.kit.ago
 import com.quietsoftware.relay.ui.theme.Relay
@@ -71,7 +71,7 @@ fun TopBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconKey("sidebar", onSidebar, size = 18.dp)
-        RingMark(22.dp)
+        RelayMark(22.dp)
         T("relay", Modifier.padding(start = 7.dp, end = 10.dp), Relay.type.brand, c.ink)
         SpaceSwitch(space, onSpace)
         Fill()

@@ -471,7 +471,7 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     top_left.set_size_request(194, -1);
     sidebar_key.set_child(Some(&crate::icons::image("sidebar", 14)));
     top_left.append(&sidebar_key);
-    // The brand's ring mark, settled, beside the Sora wordmark.
+    // The brand's r mark, settled, beside the Sora wordmark.
     let mark = gtk::DrawingArea::new();
     mark.add_css_class("brand-mark");
     mark.set_content_width(22);

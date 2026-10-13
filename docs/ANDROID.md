@@ -5,7 +5,7 @@ SQLite), no web view, no on-device model. It replaced the Expo app that lived in
 `apps/relay-mobile`. Tally (`apps/tally`) is a separate app and is not part of it.
 
 It looks like the desktop app made for a phone: the same warm near-black chrome, Geist and Sora,
-the ring mark, the Dev | Threads switch, the sidebar (a drawer here), the status bar, the
+the r mark, the Dev | Threads switch, the sidebar (a drawer here), the status bar, the
 screen-black terminal plates, and the same words. Its tokens come from `DESIGN.md` and
 `apps/relay-native` (palettes from `fonts.rs`, glyph geometry from `icons.rs`, generated into
 `ui/kit/Glyphs.kt`), and its fonts are the desktop's bundled files.

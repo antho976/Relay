@@ -50,7 +50,7 @@ import com.quietsoftware.relay.ui.Nav
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.Radii
-import com.quietsoftware.relay.ui.kit.RingMark
+import com.quietsoftware.relay.ui.kit.RelayMark
 import com.quietsoftware.relay.ui.kit.T
 import com.quietsoftware.relay.ui.theme.Fonts
 import com.quietsoftware.relay.ui.theme.Palette
@@ -61,7 +61,7 @@ import java.time.LocalTime
 import java.util.Currency
 
 /**
- * The start screen (start.rs): the ring mark and wordmark on a field of dots, a greeting, and a
+ * The start screen (start.rs): the r mark and wordmark on a field of dots, a greeting, and a
  * card per space with one live line each. It has its own colours, as on the PC.
  */
 @Composable
@@ -88,7 +88,7 @@ fun StartScreen(nav: Nav) {
         ) {
             Column(Modifier.widthIn(max = 520.dp).fillMaxWidth().padding(top = 56.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    RingMark(58.dp, ink = START_INK)
+                    RelayMark(58.dp, ink = START_INK)
                     T("relay", Modifier.padding(start = 12.dp), TextStyle(fontFamily = Fonts.Sora, fontSize = 40.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-1.4).sp), START_INK)
                 }
                 T(greeting, Modifier.padding(top = 40.dp), TextStyle(fontFamily = Fonts.Sora, fontSize = 25.sp, fontWeight = FontWeight.SemiBold, lineHeight = 31.sp), START_INK)

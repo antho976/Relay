@@ -2,17 +2,19 @@
 //! space, opened with one animation and kept alive by a quiet pulse. What a card does and what its
 //! live line says is `money.rs`'s.
 //!
-//! The mark follows the brand sheet on a 120 grid: a ring of r36, stroke 12 with round caps, cut
-//! into an outgoing upper arc (190° to 330°, ink) and a receiving lower arc (10° to 150°,
-//! dimmed), with the signal, r8 at (102, 54), in the gap between them. The wordmark is Sora 600.
+//! The mark is a lowercase r written in one stroke on a 120 grid: a stem rising into a shoulder
+//! (centre (58, 58), r29, from 180° to 288°), stroke 17 with round caps and joins, in ink; the
+//! signal, r10, has left the end of the stroke and rests a little ahead of it, at 333° and 36 out.
+//! The wordmark is Sora 600.
 //!
 //! The opening runs once when the screen opens, about 1.9 s, all from one frame-clock tick: the
-//! ring turns into place as its arcs draw in, the signal rides the head of the outgoing arc and
-//! leaves it for the gap, and on landing it sends a wave across the field. The wordmark spells
-//! itself in, then the greeting, then the cards one after the other. After that the signal beats
-//! and sends a fainter wave every few seconds, until a card is picked; the screen then fades out.
-//! With animations off (GTK's setting) it opens at its last frame and holds still.
-//! `RELAY_NATIVE_START_T=<0..1>` holds it at one point of the opening, for screenshots.
+//! r writes itself, stem then shoulder, with the signal as the pen's lit tip; at the end of the
+//! stroke the signal leaves it for its place, and on landing it sends a wave across the field.
+//! The wordmark spells itself in, then the greeting, then the cards one after the other. After
+//! that the signal beats and sends a fainter wave every few seconds, until a card is picked; the
+//! screen then fades out. With animations off (GTK's setting) it opens at its last frame and
+//! holds still. `RELAY_NATIVE_START_T=<0..1>` holds it at one point of the opening, for
+//! screenshots.
 use crate::app::{button, label};
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -33,14 +35,12 @@ const DIM: (f64, f64, f64) = (0x63 as f64 / 255.0, 0x66 as f64 / 255.0, 0x6B as 
 const SIGNAL: (f64, f64, f64) = (0xC6 as f64 / 255.0, 0xF2 as f64 / 255.0, 0x4E as f64 / 255.0);
 
 /// Where each part's motion sits on the 0..1 timeline: (from, to).
-const SPIN: (f64, f64) = (0.0, 0.46);
-const ARC_A: (f64, f64) = (0.02, 0.36);
-const ARC_B: (f64, f64) = (0.10, 0.44);
-const SIGNAL_IN: (f64, f64) = (0.36, 0.52);
+const WRITE: (f64, f64) = (0.02, 0.40);
+const SIGNAL_IN: (f64, f64) = (0.40, 0.54);
 /// The dots coming up, from the mark outward.
 const WAVE: (f64, f64) = (0.0, 0.7);
 /// The wave the signal sends across the field as it lands.
-const PING: (f64, f64) = (0.50, 1.0);
+const PING: (f64, f64) = (0.52, 1.0);
 const WORDMARK: (f64, f64) = (0.36, 0.66);
 const GREETING: (f64, f64) = (0.50, 0.78);
 const QUESTION: (f64, f64) = (0.56, 0.84);
@@ -48,21 +48,37 @@ const CARD_DEV: (f64, f64) = (0.62, 0.92);
 const CARD_THREADS: (f64, f64) = (0.70, 1.0);
 const HINT: (f64, f64) = (0.84, 1.0);
 
-/// The ring turns this far (degrees) before it settles.
-const SPIN_FROM: f64 = -120.0;
-/// The signal's resting place in polar terms around the ring's centre.
-const SIGNAL_ANGLE: f64 = -8.130_102_354_155_978; // atan2(-6, 42) in degrees
-const SIGNAL_RADIUS: f64 = 42.426_406_871_192_85; // hypot(42, 6)
+/// The r on its 120 grid: the shoulder's centre and radius, the stem's length below that
+/// centre, where the shoulder ends (degrees, clockwise from three o'clock) and the stroke.
+const CENTRE: (f64, f64) = (58.0, 58.0);
+const RADIUS: f64 = 29.0;
+const STEM: f64 = 33.0;
+const SHOULDER_END: f64 = 288.0;
+const STROKE: f64 = 17.0;
+/// The signal at rest, in polar terms around the shoulder's centre, and its radius.
+const SIGNAL_ANGLE: f64 = 333.0;
+const SIGNAL_RADIUS: f64 = 36.0;
+const SIGNAL_DOT: f64 = 10.0;
 /// Field dots: one every `DOT_STEP` pixels.
 const DOT_STEP: f64 = 26.0;
 /// A settled dot's alpha, at the mark; it dims toward the far corners.
 const BASE_DOT: f64 = 0.11;
 
-/// What `build` hands back: the screen, each card's live line, and the cards (Dev, Threads).
+/// What `build` hands back: the screen, each card's live line, the box for its recent rows, and
+/// the cards (Dev, Threads).
 pub struct Built {
     pub screen: gtk::Box,
     pub lines: [gtk::Label; 2],
+    pub rows: [gtk::Box; 2],
     pub keys: [gtk::Button; 2],
+}
+
+/// The lamp beside a card's live line: grey, signal-lit, or amber when something waits on you.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Lamp {
+    Idle,
+    Live,
+    Attention,
 }
 
 /// `t` (0..1) within `span`, eased out: fast start, soft landing.
@@ -89,53 +105,81 @@ pub(crate) fn draw_mark(cr: &gtk::cairo::Context, size: f64, t: f64) {
     draw_mark_beat(cr, size, t, 0.0);
 }
 
+/// The stroke's length: the stem, then the shoulder.
+fn stroke_length() -> f64 {
+    STEM + RADIUS * (SHOULDER_END - 180.0).to_radians()
+}
+
+/// Where the signal rests, on the 120 grid.
+fn signal_rest() -> (f64, f64) {
+    let a = SIGNAL_ANGLE.to_radians();
+    (CENTRE.0 + SIGNAL_RADIUS * a.cos(), CENTRE.1 + SIGNAL_RADIUS * a.sin())
+}
+
+/// The point `along` the stroke, from the foot of the stem.
+fn stroke_point(along: f64) -> (f64, f64) {
+    if along <= STEM {
+        return (CENTRE.0 - RADIUS, CENTRE.1 + STEM - along);
+    }
+    let a = PI + (along - STEM) / RADIUS;
+    (CENTRE.0 + RADIUS * a.cos(), CENTRE.1 + RADIUS * a.sin())
+}
+
+/// Adds the stretch of the stroke from `from` to `to` (lengths from the foot) as one sub-path.
+fn trace(cr: &gtk::cairo::Context, from: f64, to: f64) {
+    let to = to.min(stroke_length());
+    cr.new_sub_path();
+    if from < STEM {
+        let (x, y) = stroke_point(from);
+        cr.move_to(x, y);
+        let (x, y) = stroke_point(to.min(STEM));
+        cr.line_to(x, y);
+    }
+    if to > STEM {
+        let a0 = PI + (from.max(STEM) - STEM) / RADIUS;
+        let a1 = PI + (to - STEM) / RADIUS;
+        cr.arc(CENTRE.0, CENTRE.1, RADIUS, a0, a1);
+    }
+}
+
 /// The mark at `t`, its signal swollen by `beat` (0..1, the ambient pulse's heartbeat).
 fn draw_mark_beat(cr: &gtk::cairo::Context, size: f64, t: f64, beat: f64) {
     let s = size / 120.0;
     cr.scale(s, s);
-    // The ring turns into place while it draws.
-    let turn = (1.0 - phase(t, SPIN)) * SPIN_FROM * PI / 180.0;
-    cr.translate(60.0, 60.0);
-    cr.rotate(turn);
-    cr.translate(-60.0, -60.0);
-    cr.set_line_width(12.0);
-    cr.set_line_cap(gtk::cairo::LineCap::Round);
-    let arc = |cr: &gtk::cairo::Context, from: f64, sweep: f64, (r, g, b): (f64, f64, f64), a: f64| {
-        if sweep <= 0.5 {
-            return;
-        }
-        cr.set_source_rgba(r, g, b, a);
-        cr.new_sub_path();
-        cr.arc(60.0, 60.0, 36.0, from * PI / 180.0, (from + sweep) * PI / 180.0);
-        let _ = cr.stroke();
-    };
-    // The receiving leg under, the outgoing leg over, each drawn along its own direction.
-    arc(cr, 10.0, 140.0 * phase(t, ARC_B), DIM, 1.0);
-    let sweep = 140.0 * phase(t, ARC_A);
-    arc(cr, 190.0, sweep, INK, 1.0);
+    cr.set_line_width(STROKE);
+    cr.set_line_join(gtk::cairo::LineJoin::Round);
+    let (ir, ig, ib) = INK;
     let (red, green, blue) = SIGNAL;
+    // The r writes itself, stem first, at a pen's even pace.
+    let drawn = stroke_length() * phase_smooth(t, WRITE);
+    if drawn > 0.5 {
+        cr.set_line_cap(gtk::cairo::LineCap::Round);
+        cr.set_source_rgb(ir, ig, ib);
+        trace(cr, 0.0, drawn);
+        let _ = cr.stroke();
+    }
     let travel = phase_smooth(t, SIGNAL_IN);
-    if sweep > 0.5 && travel <= 0.0 {
-        // While the outgoing arc draws, the signal is its head, with a short fading tail.
-        let head = 190.0 + sweep;
-        let tail = sweep.min(34.0);
+    if drawn > 0.5 && travel <= 0.0 {
+        // While it writes, the signal is the pen's tip, with a short fading tail behind it.
+        let tail = drawn.min(30.0);
+        cr.set_line_cap(gtk::cairo::LineCap::Butt);
         for step in 0..8 {
-            let from = head - tail * f64::from(8 - step) / 8.0;
-            let a = 0.12 + 0.11 * f64::from(step);
-            cr.set_line_cap(gtk::cairo::LineCap::Butt);
-            arc(cr, from, tail / 8.0 + 0.6, SIGNAL, a);
+            let from = drawn - tail * f64::from(8 - step) / 8.0;
+            cr.set_source_rgba(red, green, blue, 0.12 + 0.11 * f64::from(step));
+            trace(cr, from, from + tail / 8.0 + 0.6);
+            let _ = cr.stroke();
         }
-        let rad = head * PI / 180.0;
+        let (x, y) = stroke_point(drawn);
         cr.set_source_rgb(red, green, blue);
-        cr.arc(60.0 + 36.0 * rad.cos(), 60.0 + 36.0 * rad.sin(), 6.0, 0.0, 2.0 * PI);
+        cr.arc(x, y, STROKE / 2.0, 0.0, 2.0 * PI);
         let _ = cr.fill();
     } else if travel > 0.0 {
-        // Then it leaves the arc's end and lands in the gap, a little outside the ring.
-        let angle = (330.0 + (360.0 + SIGNAL_ANGLE - 330.0) * travel) * PI / 180.0;
-        let reach = 36.0 + (SIGNAL_RADIUS - 36.0) * travel;
-        let r = 6.0 + 2.0 * phase_back(t, SIGNAL_IN) + 1.6 * beat;
+        // Then it leaves the end of the stroke, carrying on round, and lands a little outside.
+        let angle = (SHOULDER_END + (SIGNAL_ANGLE - SHOULDER_END) * travel).to_radians();
+        let reach = RADIUS + (SIGNAL_RADIUS - RADIUS) * travel;
+        let r = STROKE / 2.0 + (SIGNAL_DOT - STROKE / 2.0) * phase_back(t, SIGNAL_IN) + 1.6 * beat;
         cr.set_source_rgb(red, green, blue);
-        cr.arc(60.0 + reach * angle.cos(), 60.0 + reach * angle.sin(), r, 0.0, 2.0 * PI);
+        cr.arc(CENTRE.0 + reach * angle.cos(), CENTRE.1 + reach * angle.sin(), r, 0.0, 2.0 * PI);
         let _ = cr.fill();
     }
 }
@@ -377,7 +421,8 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
                 Some(b) if b.width() > 0.0 => {
                     let s = f64::from(b.width().min(b.height())) / 120.0;
                     let (x, y) = (f64::from(b.x()), f64::from(b.y()));
-                    ((x + 102.0 * s, y + 54.0 * s), (x + 60.0 * s, y + 60.0 * s))
+                    let (sx, sy) = signal_rest();
+                    ((x + sx * s, y + sy * s), (x + 60.0 * s, y + 60.0 * s))
                 }
                 _ => ((size.0 / 2.0, size.1 * 0.3), (size.0 / 2.0, size.1 * 0.3)),
             };
@@ -408,6 +453,7 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
     cards.set_halign(gtk::Align::Center);
     cards.set_homogeneous(true);
     let mut lines = Vec::new();
+    let mut recents = Vec::new();
     let mut keys = Vec::new();
     for (index, (to_threads, title, about)) in [
         (false, "Dev", "Agents, tasks and code across your projects"),
@@ -419,7 +465,7 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
         let card = button("", "start-card");
         card.add_css_class(if to_threads { "threads" } else { "dev" });
         card.set_widget_name(if to_threads { "start-money" } else { "start-dev" });
-        card.set_tooltip_text(Some(&format!("Open {title} · {}", index + 1)));
+        card.set_tooltip_text(Some(&format!("Open {title}")));
         let inner = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         let glyph = gtk::DrawingArea::new();
@@ -433,16 +479,19 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
         name.set_xalign(0.0);
         name.set_hexpand(true);
         top.append(&name);
-        let go = crate::icons::image_with_stroke("chevron-right", 14, 1.8);
-        go.add_css_class("start-go");
-        go.set_valign(gtk::Align::Center);
-        top.append(&go);
+        // The key that picks it, where a chevron would be: the card says how to reach it.
+        let key = label(&(index + 1).to_string(), "start-key");
+        key.set_valign(gtk::Align::Center);
+        top.append(&key);
         inner.append(&top);
         let what = label(about, "start-about");
         what.set_xalign(0.0);
         what.set_wrap(true);
-        what.set_max_width_chars(30);
+        what.set_max_width_chars(34);
         inner.append(&what);
+        let rule = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        rule.add_css_class("start-rule");
+        inner.append(&rule);
         let foot = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         foot.add_css_class("start-foot");
         let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -454,22 +503,31 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
         line.set_xalign(0.0);
         line.set_hexpand(true);
         line.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        // Readings fill the card's width rather than set it.
+        line.set_max_width_chars(1);
         foot.append(&line);
         inner.append(&foot);
+        // Where you left off: two rows, their height held before they are read.
+        let recent = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        recent.add_css_class("start-rows");
+        inner.append(&recent);
         card.set_child(Some(&inner));
         let pick = pick.clone();
         card.connect_clicked(move |_| pick(to_threads));
         cards.append(&card);
         lines.push(line);
+        recents.push(recent);
         keys.push(card);
     }
     column.append(&cards);
 
-    let hint = label(
-        &format!("Press 1 or 2 to choose · Esc opens {}", if remembered { "Threads" } else { "Dev" }),
-        "start-hint",
-    );
-    hint.set_xalign(0.5);
+    let hint = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    hint.add_css_class("start-hint");
+    hint.set_halign(gtk::Align::Center);
+    let esc = label("Esc", "start-key");
+    esc.set_valign(gtk::Align::Center);
+    hint.append(&esc);
+    hint.append(&label(&format!("opens {}", if remembered { "Threads" } else { "Dev" }), "start-hint-text"));
     column.append(&hint);
     stage.add_overlay(&column);
     screen.append(&stage);
@@ -533,29 +591,66 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
         });
     }
     let [dev, threads]: [gtk::Label; 2] = lines.try_into().expect("two cards");
+    let [dev_rows, threads_rows]: [gtk::Box; 2] = recents.try_into().expect("two cards");
     let [dev_key, threads_key]: [gtk::Button; 2] = keys.try_into().expect("two cards");
-    Built { screen, lines: [dev, threads], keys: [dev_key, threads_key] }
+    Built { screen, lines: [dev, threads], rows: [dev_rows, threads_rows], keys: [dev_key, threads_key] }
 }
 
-/// Puts a card's live reading in place of its "Reading…": `live` lights its dot.
-pub fn reading(line: &gtk::Label, text: &str, live: bool) {
+/// Puts a card's live reading in place of its "Reading…", its lamp lit as `lamp` says.
+pub fn reading(line: &gtk::Label, text: &str, lamp: Lamp) {
     line.set_text(text);
     line.set_tooltip_text(Some(text));
     line.remove_css_class("pending");
     if let Some(dot) = line.prev_sibling() {
-        dot.add_css_class(if live { "live" } else { "idle" });
+        dot.add_css_class(match lamp {
+            Lamp::Idle => "idle",
+            Lamp::Live => "live",
+            Lamp::Attention => "attention",
+        });
     }
+    line.add_css_class(if lamp == Lamp::Attention { "attention" } else { "read" });
+    fade_in(line);
+}
+
+/// Fills a card's recent rows: each a name and, at its end, a short detail. With none, `empty`
+/// says so in their place.
+pub fn recent(rows: &gtk::Box, items: &[(String, String)], empty: &str) {
+    while let Some(child) = rows.first_child() {
+        rows.remove(&child);
+    }
+    if items.is_empty() {
+        let none = label(empty, "start-row-empty");
+        none.set_xalign(0.0);
+        rows.append(&none);
+    }
+    for (name, detail) in items.iter().take(2) {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        row.add_css_class("start-row");
+        let title = label(name, "start-row-name");
+        title.set_hexpand(true);
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title.set_max_width_chars(1);
+        title.set_tooltip_text(Some(name));
+        row.append(&title);
+        row.append(&label(detail, "start-row-detail"));
+        rows.append(&row);
+    }
+    fade_in(rows);
+}
+
+/// A reading arriving: it fades up rather than appearing, unless nothing animates.
+fn fade_in(widget: &impl IsA<gtk::Widget>) {
     if !animating() || std::env::var_os("RELAY_NATIVE_START_T").is_some() {
         return;
     }
-    line.set_opacity(0.0);
+    widget.set_opacity(0.0);
     let start = Cell::new(None::<i64>);
-    line.add_tick_callback(move |line, clock| {
+    widget.add_tick_callback(move |widget, clock| {
         let now = clock.frame_time();
         let began = start.get().unwrap_or(now);
         start.set(Some(began));
         let p = phase((now - began) as f64 / 320_000.0, (0.0, 1.0));
-        line.set_opacity(p);
+        widget.set_opacity(p);
         if p >= 1.0 { glib::ControlFlow::Break } else { glib::ControlFlow::Continue }
     });
 }
@@ -593,28 +688,50 @@ mod tests {
 
     #[test]
     fn every_part_starts_hidden_and_ends_in_place() {
-        for span in [SPIN, ARC_A, ARC_B, WAVE, PING, WORDMARK, GREETING, QUESTION, CARD_DEV, CARD_THREADS, HINT] {
+        for span in [WRITE, WAVE, PING, WORDMARK, GREETING, QUESTION, CARD_DEV, CARD_THREADS, HINT] {
             assert_eq!(phase(0.0, span), 0.0);
             assert!((phase(1.0, span) - 1.0).abs() < 1e-9);
         }
-        assert!(phase_smooth(0.0, SIGNAL_IN).abs() < 1e-9);
-        assert!((phase_smooth(1.0, SIGNAL_IN) - 1.0).abs() < 1e-9);
+        for span in [WRITE, SIGNAL_IN] {
+            assert!(phase_smooth(0.0, span).abs() < 1e-9);
+            assert!((phase_smooth(1.0, span) - 1.0).abs() < 1e-9);
+        }
         assert!(phase_back(0.0, SIGNAL_IN).abs() < 1e-9);
         assert!((phase_back(1.0, SIGNAL_IN) - 1.0).abs() < 1e-9);
     }
 
     #[test]
-    fn the_signal_leaves_the_arc_as_it_finishes_and_lands_on_the_brand_point() {
-        assert!((SIGNAL_IN.0 - ARC_A.1).abs() < 1e-9);
-        let angle = SIGNAL_ANGLE * PI / 180.0;
-        assert!((60.0 + SIGNAL_RADIUS * angle.cos() - 102.0).abs() < 1e-9);
-        assert!((60.0 + SIGNAL_RADIUS * angle.sin() - 54.0).abs() < 1e-9);
+    fn the_stroke_is_one_line_from_the_foot_of_the_stem_to_the_end_of_the_shoulder() {
+        let (x, y) = stroke_point(0.0);
+        assert!((x - 29.0).abs() < 1e-9 && (y - 91.0).abs() < 1e-9);
+        // The stem meets the shoulder where the shoulder starts: no step at the join.
+        let (x, y) = stroke_point(STEM);
+        assert!((x - (CENTRE.0 - RADIUS)).abs() < 1e-9 && (y - CENTRE.1).abs() < 1e-9);
+        let end = SHOULDER_END.to_radians();
+        let (x, y) = stroke_point(stroke_length());
+        assert!((x - (CENTRE.0 + RADIUS * end.cos())).abs() < 1e-9);
+        assert!((y - (CENTRE.1 + RADIUS * end.sin())).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_signal_leaves_as_the_stroke_ends_and_rests_clear_of_it_inside_the_grid() {
+        assert!((SIGNAL_IN.0 - WRITE.1).abs() < 1e-9);
+        let (x, y) = signal_rest();
+        let (ex, ey) = stroke_point(stroke_length());
+        // A visible gap between the end of the stroke's cap and the dot.
+        assert!((x - ex).hypot(y - ey) > STROKE / 2.0 + SIGNAL_DOT + 2.0);
+        assert!(x + SIGNAL_DOT < 120.0 && y - SIGNAL_DOT > 0.0);
+        // The whole mark sits about the grid's middle.
+        let left = CENTRE.0 - RADIUS - STROKE / 2.0;
+        let (top, bottom) = (CENTRE.1 - RADIUS - STROKE / 2.0, CENTRE.1 + STEM + STROKE / 2.0);
+        assert!(((left + x + SIGNAL_DOT) / 2.0 - 60.0).abs() < 2.0);
+        assert!(((top + bottom) / 2.0 - 60.0).abs() < 2.0);
     }
 
     #[test]
     fn the_words_follow_the_mark_and_the_cards_come_one_after_the_other() {
-        assert!(WORDMARK.0 >= SIGNAL_IN.0 && GREETING.0 > WORDMARK.0 && QUESTION.0 > GREETING.0);
+        assert!(WORDMARK.0 >= WRITE.0 && GREETING.0 > WORDMARK.0 && QUESTION.0 > GREETING.0);
         assert!(CARD_DEV.0 > QUESTION.0 - 0.1 && CARD_THREADS.0 > CARD_DEV.0);
-        assert!(CARD_THREADS.1 <= 1.0 && HINT.1 <= 1.0 && SPIN.1 < SIGNAL_IN.1);
+        assert!(CARD_THREADS.1 <= 1.0 && HINT.1 <= 1.0 && PING.0 < SIGNAL_IN.1);
     }
 }

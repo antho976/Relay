@@ -10,10 +10,10 @@ window.starting .topbar, window.starting .statusbar { background: #0F1114; borde
 .start-question { font-size: 15px; color: #8B8F96; }
 .start-words { margin-bottom: 34px; }
 
-/* The cards stay plain: quiet surfaces, sans text, colour only in the status dot. */
+/* The cards stay plain: quiet surfaces, sans text, colour only in the status lamp. */
 button.start-card {
-  background: #16181C; border: 1px solid #23262C; border-radius: 14px; padding: 18px 20px;
-  min-width: 300px; color: #EDEEF0; box-shadow: none;
+  background: #16181C; border: 1px solid #23262C; border-radius: 14px; padding: 18px 20px 14px;
+  min-width: 340px; color: #EDEEF0; box-shadow: none;
   transition: background 160ms ease-out, border-color 160ms ease-out;
 }
 button.start-card:hover { background: #1A1C21; border-color: #30333A; }
@@ -23,17 +23,35 @@ button.start-card:focus-visible { outline: 2px solid alpha(#C6F24E, 0.6); outlin
 .start-glyph { opacity: 0.9; }
 button.start-card .start-title { font-family: "Sora"; font-weight: 600; font-size: 19px; letter-spacing: -0.3px; }
 button.start-card .start-about { margin-top: 8px; font-size: 13px; color: #8B8F96; }
-.start-foot { margin-top: 16px; }
+.start-rule { margin-top: 16px; min-height: 1px; background: #23262C; }
+button.start-card:hover .start-rule { background: #2A2D33; }
+.start-foot { margin-top: 14px; }
+
+/* A key as a keycap: the card's number, and Esc under the cards. */
+.start-key {
+  padding: 1px 7px; min-width: 8px; border: 1px solid #30333A; border-radius: 6px;
+  font-family: "Geist Mono", monospace; font-size: 11px; color: #6E7178;
+  transition: color 160ms ease-out, border-color 160ms ease-out;
+}
+button.start-card:hover .start-key, button.start-card:focus-visible .start-key { color: #EDEEF0; border-color: #4A4E56; }
 
 .start-live { min-width: 6px; min-height: 6px; border-radius: 3px; background: #3A3E45; }
 .start-live.idle { background: #55585E; }
 .start-live.live { background: #C6F24E; }
+.start-live.attention { background: #F0A828; }
 
 button.start-card .start-line { font-size: 13px; color: #B4B7BD; font-feature-settings: "tnum"; }
+button.start-card .start-line.attention { color: #EDEEF0; }
 @keyframes start-reading { from { opacity: 0.4; } 50% { opacity: 0.85; } to { opacity: 0.4; } }
 button.start-card .start-line.pending { color: #6E7178; animation: start-reading 1.6s ease-in-out infinite; }
 
-.start-go { color: #4E5157; transition: color 160ms ease-out; }
-button.start-card:hover .start-go, button.start-card:focus-visible .start-go { color: #B4B7BD; }
+/* Where you left off: two rows under the reading, their height kept while they load. */
+.start-rows { margin-top: 8px; min-height: 48px; }
+.start-row { min-height: 24px; }
+button.start-card .start-row-name { font-size: 13px; color: #8B8F96; }
+button.start-card:hover .start-row-name { color: #B4B7BD; }
+button.start-card .start-row-detail { font-size: 12px; color: #6E7178; font-feature-settings: "tnum"; }
+button.start-card .start-row-empty { font-size: 13px; color: #6E7178; margin-top: 3px; }
 
-.start-hint { margin-top: 28px; font-size: 12px; color: #5E6168; }
+.start-hint { margin-top: 28px; }
+.start-hint-text { font-size: 12px; color: #6E7178; }
