@@ -2018,9 +2018,7 @@ fn results_card(ui: &Rc<Ui>, parent: &gtk::Box, d: &Value, id: i64, version: i64
     let b = block(&list);
     if running {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let spinner = gtk::Spinner::new();
-        spinner.start();
-        row.append(&spinner);
+        row.append(&crate::app::spinner());
         row.append(&label(&format!("Backtesting 180 days of {bars} bars on the exchange's candles…"), "money-muted"));
         b.append(&row);
     }

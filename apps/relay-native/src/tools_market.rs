@@ -326,8 +326,7 @@ fn build(ui: &Rc<Ui>, spec: &'static Spec) -> Rc<Market> {
     let body = gtk::Stack::new();
     body.set_vexpand(true);
     body.set_hexpand(true);
-    let spinner = gtk::Spinner::new();
-    spinner.set_spinning(true);
+    let spinner = crate::app::spinner();
     spinner.set_size_request(20, 20);
     let loading = gtk::Box::new(gtk::Orientation::Vertical, 10);
     loading.add_css_class("ext-state");
