@@ -707,13 +707,23 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
         // attached session. Writing each of them separately is one syscall per frame; whatever
         // is already queued behind the first goes out with it instead.
         let mut batch: Vec<u8> = Vec::with_capacity(WRITE_BATCH_BYTES);
+        // RELAY_MIRROR_TRACE: the mirror frames in this batch, logged once it is written.
+        let trace = crate::mirror::trace_enabled();
+        let mut traced: Vec<(i64, u64)> = Vec::new();
         while let Some(line) = out_rx.recv().await {
             batch.clear();
+            if trace {
+                traced.clear();
+                traced.extend(crate::mirror::trace_frame_ids(&line));
+            }
             batch.extend_from_slice(line.as_bytes());
             batch.push(b'\n');
             while batch.len() < WRITE_BATCH_BYTES {
                 match out_rx.try_recv() {
                     Ok(next) => {
+                        if trace {
+                            traced.extend(crate::mirror::trace_frame_ids(&next));
+                        }
                         batch.extend_from_slice(next.as_bytes());
                         batch.push(b'\n');
                     }
@@ -722,6 +732,12 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             }
             if w.write_all(&batch).await.is_err() {
                 break;
+            }
+            if !traced.is_empty() {
+                let mono_ns = crate::mirror::monotonic_ns();
+                for &(mirror_id, seq) in &traced {
+                    tracing::info!(target: "mirror_trace", stage = "flush", mono_ns, mirror_id, seq, batch_bytes = batch.len());
+                }
             }
             // One oversized frame must not hold its buffer for the rest of the connection.
             if batch.capacity() > WRITE_BATCH_BYTES * 4 {
@@ -1077,7 +1093,11 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                             let task = tokio::spawn(async move {
                                 use base64::Engine as _;
                                 let frame = |item: crate::device::MirrorChunk| {
-                                    serde_json::to_string(&stream_frame(
+                                    // RELAY_MIRROR_TRACE: when the packet left the broadcast
+                                    // queue, and what encoding it as a frame cost.
+                                    let recv_ns = crate::mirror::trace_enabled().then(crate::mirror::monotonic_ns);
+                                    let seq = item.seq;
+                                    let line = serde_json::to_string(&stream_frame(
                                         "mirror",
                                         None,
                                         Some(id),
@@ -1086,7 +1106,19 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                                             base64::engine::general_purpose::STANDARD
                                                 .encode(&*item.data),
                                         ),
-                                    ))
+                                    ));
+                                    if let Some(recv_ns) = recv_ns {
+                                        tracing::info!(
+                                            target: "mirror_trace",
+                                            stage = "serialize",
+                                            mono_ns = crate::mirror::monotonic_ns(),
+                                            recv_ns,
+                                            mirror_id = id,
+                                            seq,
+                                            bytes = line.as_ref().map_or(0, String::len),
+                                        );
+                                    }
+                                    line
                                 };
                                 let first = status.borrow_and_update().clone();
                                 let Ok(line) = status_frame(&first) else { return };

@@ -29,7 +29,14 @@ pub fn defaults() -> &'static Value {
                 "claude": { "enabled": true, "five_hour": true, "weekly": true, "fable": true },
                 "codex": { "enabled": true, "five_hour": true, "weekly": true }
             },
-            "device": { "sdk_path": null, "adb_path": null, "emulator_path": null, "avdmanager_path": null },
+            // `mirror` (handlers/device.rs, BUS.md §10.14 "Mirror launch"): `max_fps` null follows
+            // the device's refresh rate; `video_codec_options` is extra encoder keys
+            // (`key[:type]=value,…`), null for none; `pin_refresh_rate` holds an adaptive panel
+            // at its top rate while mirroring and puts the old value back after.
+            "device": {
+                "sdk_path": null, "adb_path": null, "emulator_path": null, "avdmanager_path": null,
+                "mirror": { "max_fps": null, "video_codec_options": null, "pin_refresh_rate": false }
+            },
             "guardrails": {
                 "caps": { "files": 40, "lines": 2000 },
                 "destructive_write": { "min_removed_lines": 50, "min_removed_pct": 40, "min_file_lines": 30, "allow_if_recoverable": true },

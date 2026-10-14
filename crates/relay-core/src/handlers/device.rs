@@ -83,7 +83,8 @@ pub fn register(e: &mut Engine) {
         Ok((adb, physical_width, physical_height))
     }, |ctx: &mut Ctx, p, (adb, physical_width, physical_height)| {
         let max_size = mirror::capture_size_for(p.max_size.unwrap_or(mirror::CAPTURE_MIN));
-        let bitrate = p.bitrate.unwrap_or_else(|| mirror::capture_bit_rate(max_size)).clamp(500_000, 50_000_000);
+        // A caller's rate is held to the same 8 Mbps floor as the ladder (`MIN_BIT_RATE`).
+        let bitrate = mirror::clamp_bit_rate(p.bitrate.unwrap_or_else(|| mirror::capture_bit_rate(max_size)));
         let (width, height) = mirror::fit_size(physical_width, physical_height, max_size);
         let id = ctx.engine().next_mirror.fetch_add(1, Ordering::SeqCst);
         let scid = new_scid(id);
@@ -1022,11 +1023,281 @@ const SHUTDOWN_FORWARD_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The engine is quitting with mirrors open: remove their forwards now, all at once and under
 /// a short deadline, rather than leave them to workers the process exit will not wait for.
-/// `mirrors` is taken before `Engine::shutdown` empties the map.
+/// `mirrors` is taken before `Engine::shutdown` empties the map. Refresh-rate pins those
+/// mirrors hold are put back alongside, under the same deadline per adb call.
 pub fn remove_mirror_forwards(engine: &Engine, mirrors: &[Arc<MirrorRuntime>]) {
     std::thread::scope(|scope| {
+        scope.spawn(|| restore_all_refresh(engine, mirrors));
         for runtime in mirrors {
             scope.spawn(move || remove_forward(engine, runtime, SHUTDOWN_FORWARD_TIMEOUT));
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// what a mirror start reads: Settings, and the device's display
+// ---------------------------------------------------------------------------
+
+/// `device.mirror.*` (defaults in `settings.rs`), read once per mirror start.
+#[derive(Debug, Default)]
+struct MirrorSettings {
+    /// `max_fps`: a fixed frame-rate cap instead of the device's refresh rate.
+    max_fps: Option<u32>,
+    /// `video_codec_options`: extra encoder keys, as typed (checked before use).
+    video_codec_options: Option<String>,
+    /// `pin_refresh_rate`: hold the panel at its top refresh rate while mirroring.
+    pin_refresh_rate: bool,
+}
+
+/// One short read of three leaf rows; the worker is off the bus, and this is the only time it
+/// takes the store.
+fn mirror_settings(engine: &Engine) -> MirrorSettings {
+    let conn = engine.store.lock();
+    let leaf = |path: &str| -> Option<Value> {
+        let value: String = conn
+            .prepare_cached("SELECT value FROM settings WHERE path = ?1")
+            .ok()?
+            .query_row([path], |row| row.get(0))
+            .ok()?;
+        serde_json::from_str(&value).ok()
+    };
+    MirrorSettings {
+        max_fps: leaf("device.mirror.max_fps")
+            .and_then(|value| value.as_u64())
+            .filter(|&fps| fps > 0)
+            .map(|fps| fps.min(u64::from(mirror::MAX_FPS_CAP)) as u32),
+        video_codec_options: leaf("device.mirror.video_codec_options")
+            .and_then(|value| value.as_str().map(str::trim).filter(|value| !value.is_empty()).map(String::from)),
+        pin_refresh_rate: leaf("device.mirror.pin_refresh_rate").and_then(|value| value.as_bool()).unwrap_or(false),
+    }
+}
+
+/// `dumpsys display` answers in well under a second; a device that does not is mirrored at the
+/// default cap rather than waited on.
+const DISPLAY_DUMP_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// The device's top refresh rate ([`mirror::display_refresh_rate`]), or `None` when adb or the
+/// output gave nothing usable.
+fn device_refresh_rate(adb: &str, serial: &str) -> Option<f32> {
+    let mut command = Command::new(adb);
+    command.args(["-s", serial, "shell", "dumpsys", "display"]);
+    let output = crate::proc::output_with_timeout(&mut command, DISPLAY_DUMP_TIMEOUT).ok()??;
+    if !output.status.success() {
+        return None;
+    }
+    mirror::display_refresh_rate(&String::from_utf8_lossy(&output.stdout))
+}
+
+// ---------------------------------------------------------------------------
+// refresh-rate pin (Settings `device.mirror.pin_refresh_rate`, off by default)
+// ---------------------------------------------------------------------------
+//
+// An adaptive (LTPO, Samsung "Adaptive" motion smoothness) panel idles at a low rate and only
+// ramps up once something moves, so the first frame after a tap can wait out a slow vsync. While
+// a mirror runs, `settings put system min_refresh_rate <top rate>` holds it up; afterwards the
+// previous value goes back. Only `min_refresh_rate` is touched — `peak_refresh_rate` (the user's
+// own 60/120 choice) is left as it is.
+//
+// Putting it back has to survive more than a clean stop, so before anything is changed the
+// previous value is written to `mirror-refresh` beside the store (`serial previous`, `null` for
+// unset). It is restored, and the line removed, when the last mirror on the device ends, when the
+// engine shuts down, at the next engine start, or at the next mirror start on that device —
+// whichever first finds the device connected. No file (an in-memory store), or a previous value
+// that cannot be written back verbatim, means no pin. A device that never comes back while Relay
+// runs keeps the pin until it does; `adb shell settings delete system min_refresh_rate` clears it
+// by hand (or puts back the value the file names).
+
+/// Mirrors on each device holding the pin, keyed by record file and serial (one engine per
+/// process in use, but the tests run several): the first pins, the last to end restores. The
+/// lock also serializes every edit of the record files.
+static REFRESH_PINS: Mutex<std::collections::BTreeMap<(PathBuf, String), usize>> = Mutex::new(std::collections::BTreeMap::new());
+
+const REFRESH_SETTING: &str = "min_refresh_rate";
+/// What `settings get` prints for a key that is not set; restored with `settings delete`.
+const SETTING_UNSET: &str = "null";
+const REFRESH_ADB_TIMEOUT: Duration = Duration::from_secs(3);
+
+fn refresh_file(engine: &Engine) -> Option<PathBuf> {
+    let store = engine.store.path();
+    if store == Path::new(":memory:") {
+        return None;
+    }
+    store.parent().map(|dir| dir.join("mirror-refresh"))
+}
+
+/// A `settings get` answer that can go back through `adb shell` verbatim: `null`, or a short
+/// number-like word (`120.0`, `Infinity`). Nothing a shell would interpret.
+fn restorable_setting(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 32 && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+}
+
+fn read_refresh_records(path: &Path) -> Vec<(String, String)> {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let (serial, previous) = line.trim().rsplit_once(' ')?;
+            (!serial.is_empty() && restorable_setting(previous)).then(|| (serial.to_string(), previous.to_string()))
+        })
+        .collect()
+}
+
+/// Replace the record file whole (written aside, synced, renamed), or remove it when empty. A
+/// pin is only made once this has succeeded.
+fn write_refresh_records(path: &Path, records: &[(String, String)]) -> std::io::Result<()> {
+    if records.is_empty() {
+        return match fs::remove_file(path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        };
+    }
+    let aside = path.with_extension("new");
+    let mut file = OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).open(&aside)?;
+    for (serial, previous) in records {
+        writeln!(file, "{serial} {previous}")?;
+    }
+    file.sync_all()?;
+    fs::rename(&aside, path)
+}
+
+fn refresh_adb(adb: &Path, serial: &str, action: &[&str], timeout: Duration) -> Option<String> {
+    let mut command = Command::new(adb);
+    command.args(["-s", serial, "shell", "settings"]).args(action);
+    let output = crate::proc::output_with_timeout(&mut command, timeout).ok()??;
+    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn read_refresh(adb: &Path, serial: &str, timeout: Duration) -> Option<String> {
+    refresh_adb(adb, serial, &["get", "system", REFRESH_SETTING], timeout)
+}
+
+/// Put `serial`'s recorded value back and drop its record, if it has one. Caller holds
+/// [`REFRESH_PINS`]. True when nothing is left to restore. Success is read back from the
+/// device rather than taken from adb's exit status, which older adb always reports as 0.
+fn restore_refresh_locked(path: &Path, adb: &Path, serial: &str, timeout: Duration) -> bool {
+    let mut records = read_refresh_records(path);
+    let Some(at) = records.iter().position(|(recorded, _)| recorded == serial) else { return true };
+    let previous = records[at].1.clone();
+    if previous == SETTING_UNSET {
+        refresh_adb(adb, serial, &["delete", "system", REFRESH_SETTING], timeout);
+    } else {
+        refresh_adb(adb, serial, &["put", "system", REFRESH_SETTING, &previous], timeout);
+    }
+    if read_refresh(adb, serial, timeout).as_deref() != Some(previous.as_str()) {
+        tracing::warn!(device = serial, previous = %previous, "could not restore the device's min_refresh_rate; retried at the next start");
+        return false;
+    }
+    records.remove(at);
+    let _ = write_refresh_records(path, &records);
+    true
+}
+
+/// Hold `serial`'s panel at `rate` Hz for one mirror. True when this mirror now holds a pin
+/// (and must [`unpin_refresh`]); false when it could not be made safely, which leaves the
+/// device as it was.
+fn pin_refresh(engine: &Engine, adb: &Path, serial: &str, rate: f32) -> bool {
+    let Some(path) = refresh_file(engine) else { return false };
+    let mut pins = REFRESH_PINS.lock().unwrap_or_else(|poison| poison.into_inner());
+    let pin = (path.clone(), serial.to_string());
+    if let Some(held) = pins.get_mut(&pin) {
+        *held += 1;
+        return true;
+    }
+    let mut records = read_refresh_records(&path);
+    // A record a previous run left holds the true previous value: what the device has now is
+    // that run's pin, so it must not become the value restored.
+    if !records.iter().any(|(recorded, _)| recorded == serial) {
+        let Some(previous) = read_refresh(adb, serial, REFRESH_ADB_TIMEOUT).filter(|value| restorable_setting(value)) else {
+            return false;
+        };
+        records.push((serial.to_string(), previous));
+        if write_refresh_records(&path, &records).is_err() {
+            return false;
+        }
+    }
+    // Floored: 120.00001 pins 120, and 59.94 must not pin above the mode it came from.
+    let value = (rate.floor() as u32).to_string();
+    refresh_adb(adb, serial, &["put", "system", REFRESH_SETTING, &value], REFRESH_ADB_TIMEOUT);
+    if read_refresh(adb, serial, REFRESH_ADB_TIMEOUT).as_deref() != Some(value.as_str()) {
+        restore_refresh_locked(&path, adb, serial, REFRESH_ADB_TIMEOUT);
+        return false;
+    }
+    pins.insert(pin, 1);
+    true
+}
+
+/// One mirror on `serial` let go of its pin; the last one restores.
+fn unpin_refresh(engine: &Engine, adb: &Path, serial: &str) {
+    let Some(path) = refresh_file(engine) else { return };
+    let mut pins = REFRESH_PINS.lock().unwrap_or_else(|poison| poison.into_inner());
+    let pin = (path.clone(), serial.to_string());
+    match pins.get_mut(&pin) {
+        Some(held) if *held > 1 => *held -= 1,
+        Some(_) => {
+            pins.remove(&pin);
+            restore_refresh_locked(&path, adb, serial, REFRESH_ADB_TIMEOUT);
+        }
+        // Already put back by the engine's shutdown.
+        None => {}
+    }
+}
+
+/// A mirror on `serial` that does not pin: a record a crashed run left for it is put back now
+/// rather than at the next engine start, unless another mirror here holds the pin.
+fn settle_refresh(engine: &Engine, adb: &Path, serial: &str) {
+    let Some(path) = refresh_file(engine) else { return };
+    let pins = REFRESH_PINS.lock().unwrap_or_else(|poison| poison.into_inner());
+    if !pins.contains_key(&(path.clone(), serial.to_string())) && read_refresh_records(&path).iter().any(|(recorded, _)| recorded == serial) {
+        restore_refresh_locked(&path, adb, serial, REFRESH_ADB_TIMEOUT);
+    }
+}
+
+/// Held by the worker for as long as its pin: dropping it (the worker's every way out, a panic
+/// included) lets go.
+struct RefreshPin {
+    engine: Arc<Engine>,
+    adb: PathBuf,
+    serial: String,
+}
+
+impl Drop for RefreshPin {
+    fn drop(&mut self) {
+        unpin_refresh(&self.engine, &self.adb, &self.serial);
+    }
+}
+
+/// The engine is shutting down: put back every pin its mirrors hold, whatever their count.
+fn restore_all_refresh(engine: &Engine, mirrors: &[Arc<MirrorRuntime>]) {
+    let Some(path) = refresh_file(engine) else { return };
+    let mut pins = REFRESH_PINS.lock().unwrap_or_else(|poison| poison.into_inner());
+    for runtime in mirrors {
+        if pins.remove(&(path.clone(), runtime.device.clone())).is_some() {
+            restore_refresh_locked(&path, Path::new(&runtime.adb), &runtime.device, SHUTDOWN_FORWARD_TIMEOUT);
+        }
+    }
+}
+
+/// Engine start: put back the pins a previous run recorded and did not restore, on every
+/// recorded device that is connected now. The rest stay recorded for later. On its own thread.
+fn restore_stale_refresh(engine: &Arc<Engine>) {
+    let Some(path) = refresh_file(engine) else { return };
+    if read_refresh_records(&path).is_empty() {
+        return;
+    }
+    let engine = engine.clone();
+    let _ = std::thread::Builder::new().name("mirror-refresh".into()).spawn(move || {
+        let Ok(adb) = adb_path(&engine.store.lock()) else { return };
+        let pins = REFRESH_PINS.lock().unwrap_or_else(|poison| poison.into_inner());
+        for (serial, _) in read_refresh_records(&path) {
+            let mut state = Command::new(&adb);
+            state.args(["-s", &serial, "get-state"]);
+            let present = crate::proc::output_with_timeout(&mut state, REFRESH_ADB_TIMEOUT)
+                .ok()
+                .flatten()
+                .is_some_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "device");
+            if present && !pins.contains_key(&(path.clone(), serial.clone())) {
+                restore_refresh_locked(&path, &adb, &serial, REFRESH_ADB_TIMEOUT);
+            }
         }
     });
 }
@@ -1035,7 +1306,10 @@ pub fn remove_mirror_forwards(engine: &Engine, mirrors: &[Arc<MirrorRuntime>]) {
 /// recorded and never removed (it crashed, or quit faster than adb). Each must still be in
 /// `adb forward --list` exactly as recorded — serial, port and Relay's scrcpy socket — or it is
 /// left alone: a port adb has since handed to someone else is theirs. On its own thread.
+///
+/// Also puts back any refresh-rate pin such a run left on a device (see [`pin_refresh`]).
 pub fn clear_stale_forwards(engine: &Arc<Engine>) {
+    restore_stale_refresh(engine);
     let Some(path) = forwards_file(engine) else { return };
     let recorded = {
         let _guard = FORWARDS_FILE.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -1088,6 +1362,13 @@ pub fn mirror_worker(engine: Arc<Engine>, runtime: Arc<MirrorRuntime>) {
             return;
         }
     };
+    // The panel's refresh rate sets the frame-rate cap. Asked alongside the push and forward
+    // rather than before them, so it adds no time to a start; a failure that returns early
+    // leaves this thread to finish on its own under its deadline.
+    let refresh_probe = {
+        let (adb, serial) = (runtime.adb.clone(), runtime.device.clone());
+        std::thread::spawn(move || device_refresh_rate(&adb, &serial))
+    };
 
     if let Err(error) = mirror_adb(&runtime, mirror::push_args(&runtime.device, &server_jar.to_string_lossy()), MIRROR_PUSH_TIMEOUT) {
         fail("device.mirror_push_failed", error);
@@ -1110,9 +1391,45 @@ pub fn mirror_worker(engine: Arc<Engine>, runtime: Arc<MirrorRuntime>) {
         return;
     }
 
+    let settings = mirror_settings(&engine);
+    let refresh = refresh_probe.join().ok().flatten();
+    let video_codec_options = match settings.video_codec_options {
+        Some(extra) => match mirror::merge_codec_options(mirror::BASE_CODEC_OPTIONS, &extra) {
+            Ok(_) => extra,
+            Err(error) => {
+                tracing::warn!(mirror_id = runtime.id, %error, "device.mirror.video_codec_options ignored");
+                String::new()
+            }
+        },
+        None => String::new(),
+    };
+    let launch = mirror::ServerLaunch {
+        max_size: runtime.max_size,
+        video_bit_rate: runtime.bitrate,
+        max_fps: settings.max_fps.unwrap_or_else(|| mirror::max_fps_for(refresh)),
+        video_codec_options,
+    };
+    // Held until the worker returns, by any path; its drop puts the device's setting back.
+    let refresh_pin = match refresh {
+        Some(rate) if settings.pin_refresh_rate => pin_refresh(&engine, Path::new(&runtime.adb), &runtime.device, rate)
+            .then(|| RefreshPin { engine: engine.clone(), adb: PathBuf::from(&runtime.adb), serial: runtime.device.clone() }),
+        _ => {
+            settle_refresh(&engine, Path::new(&runtime.adb), &runtime.device);
+            None
+        }
+    };
+    let args = mirror::server_shell_args(&runtime.device, runtime.scid, &launch);
+    tracing::info!(
+        mirror_id = runtime.id,
+        device = %runtime.device,
+        refresh_hz = refresh.unwrap_or(0.0),
+        refresh_pinned = refresh_pin.is_some(),
+        launch = %args.join(" "),
+        "mirror server launch"
+    );
     let mut command = Command::new(&runtime.adb);
     command
-        .args(mirror::server_shell_args(&runtime.device, runtime.scid, runtime.max_size, runtime.bitrate))
+        .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1158,6 +1475,8 @@ pub fn mirror_worker(engine: Arc<Engine>, runtime: Arc<MirrorRuntime>) {
         // picture size — so the window and tap/swipe never work from the `wm size` estimate.
         video.set_read_timeout(Some(MIRROR_FIRST_UNIT_TIMEOUT)).map_err(|error| error.to_string())?;
         let mut announced = false;
+        let trace = mirror::trace_enabled();
+        let mut pushed: u64 = 0;
         let announce = |announced: &mut bool| {
             if *announced {
                 return;
@@ -1191,7 +1510,8 @@ pub fn mirror_worker(engine: Arc<Engine>, runtime: Arc<MirrorRuntime>) {
                     }
                     announce(&mut announced);
                 }
-                mirror::StreamUnit::Media { config, key, len, .. } => {
+                mirror::StreamUnit::Media { config, key, pts, len } => {
+                    let header_ns = trace.then(mirror::monotonic_ns);
                     announce(&mut announced);
                     if len == 0 || len > 16 * 1024 * 1024 {
                         return Err("mirror stream desynced".into());
@@ -1200,6 +1520,23 @@ pub fn mirror_worker(engine: Arc<Engine>, runtime: Arc<MirrorRuntime>) {
                     packet[0] = u8::from(config) | (u8::from(key) << 1);
                     video.read_exact(&mut packet[1..]).map_err(|error| format!("mirror stream ended: {error}"))?;
                     runtime.push(packet);
+                    // The worker is the runtime's only writer, so this is the seq the packet
+                    // went out under — the key that joins it to the door's and client's lines.
+                    pushed += 1;
+                    if let Some(header_ns) = header_ns {
+                        tracing::info!(
+                            target: "mirror_trace",
+                            stage = "read",
+                            mono_ns = mirror::monotonic_ns(),
+                            header_ns,
+                            mirror_id = runtime.id,
+                            seq = pushed,
+                            pts_us = pts,
+                            len,
+                            key,
+                            config,
+                        );
+                    }
                 }
             }
         }

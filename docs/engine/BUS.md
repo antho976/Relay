@@ -1012,7 +1012,7 @@ at it; one moved by hand without `git worktree move` is refused until `git workt
 |---|---|---|
 | `device.list` | query | `{}` → `{ devices: Device[] }` (adb + AVDs later) |
 | `device.watch` | mutation · never · user | `{ on: bool }` → `{}`; while device control is visible, `adb track-devices` emits `device.changed`; off tears it down |
-| `device.mirror.start` | mutation · always | `{ device, max_size?, bitrate? }` → `{ mirror_id, width, height }` + `mirror` stream; the scrcpy server jar is taken from `$RELAY_SCRCPY_SERVER`, else `~/.local/share/relay-v4/scrcpy-server-v4.1`, else the checkout the engine was built from, and checked against its pinned SHA-256 before every push (`device.mirror_server_missing`, `device.mirror_server_mismatch`) |
+| `device.mirror.start` | mutation · always | `{ device, max_size?, bitrate? }` → `{ mirror_id, width, height }` + `mirror` stream; the scrcpy server jar is taken from `$RELAY_SCRCPY_SERVER`, else `~/.local/share/relay-v4/scrcpy-server-v4.1`, else the checkout the engine was built from, and checked against its pinned SHA-256 before every push (`device.mirror_server_missing`, `device.mirror_server_mismatch`). `bitrate` (and the size ladder's own rate) is held to 8–50 Mbps; see *Mirror launch* below |
 | `device.mirror.stop` | mutation · always | `{ mirror_id }` → `{}` |
 | `device.mirror.input` | mutation · never | `{ mirror_id, event }` → `{}`; `event` is `{type: "tap", x, y}`, `{type: "swipe", x1, y1, x2, y2}` (stream coordinates) or one of scrcpy's input messages (`touch`, `scroll`, `key`, `keypress`, `text`, `setclipboard`, `back`, `home`, …). A `swipe` is instant — DOWN, one MOVE, UP in one write, so it lands as a fling — and refuses any other field (`duration_ms`); send `touch` events for a timed drag. `setclipboard` text is at most 262,130 bytes (one message, never split); longer is `device.input` — use `text`, which is split |
 | `device.run` | mutation · always | `{ project_id, worktree?, device, variant?, integration_id? }` → `Run` (state `building`) + `logcat` stream; crashes surface as `run.crash` events |
@@ -1027,6 +1027,31 @@ at it; one moved by hand without `git worktree move` is refused until `git workt
 | `avd.create` | mutation · always | `{ name, package, device? }` → `Avd` |
 | `avd.boot` | mutation · always | `{ name, cold? }` → `{}`; boots headless (`-no-window`) — Relay's mirror is its screen. The emulator then appears through `device.list` and uses the normal deploy pipeline. An AVD adb already lists as running is refused `conflict`/`avd.already_running`. `avd.changed {name, state, message?}` follows it: `booting`, then `started`, or `failed` / `stopped` with the emulator's `message` when it exits early (RA-349) |
 | `avd.stop` | mutation · always | `{ name }` → `{}`; `adb emu kill` on the running AVD (`avd.not_running` otherwise), since a headless emulator has no window to close |
+
+**Mirror launch.** Each mirror start reads the device's display once (`adb shell dumpsys
+display`, alongside the jar push) and boots the scrcpy server with `max_fps` at the panel's top
+refresh rate — the highest of display 0's modes, rounded, at least 60 and at most 144; 60 when
+the output says nothing usable. A 120 Hz phone capped at 60 showed every other frame and added
+~4 ms on average. `video_bit_rate` follows the capture-size ladder (8 Mbps at 1024, up to 20 Mbps)
+and never goes under 8 Mbps: at 4 Mbps busy content was measured arriving 0.7–1.3 s late, the
+device queueing frames it could not encode in budget. The whole launch line is logged at INFO
+(`mirror server launch`). Settings, all read at each start:
+
+| setting | default | effect |
+|---|---|---|
+| `device.mirror.max_fps` | `null` | a fixed cap (1–144) instead of the device's refresh rate |
+| `device.mirror.video_codec_options` | `null` | extra encoder keys passed as scrcpy's `video_codec_options`, `key[:type]=value` comma-separated (`type` is `int`, `long`, `float` or `string`), merged over Relay's own (none today; a key given here wins). Meant for vendor low-latency keys such as `vendor.qti-ext-enc-low-latency.enable:int=1` (Qualcomm); unverified on real hardware, and a key the encoder does not know is ignored by it. Keys and values are limited to letters, digits and `._-` (`+` in values) because the line goes through the device's shell; a bad entry drops the whole value with a warning, and the mirror starts without it |
+| `device.mirror.pin_refresh_rate` | `false` | while a mirror runs, `settings put system min_refresh_rate <top rate>` so an adaptive (LTPO / Samsung "Adaptive") panel does not idle at a low rate and delay the first frame after a tap. The previous value is written to `mirror-refresh` beside the store *before* anything changes, and put back (`settings delete` when it was unset) when the device's last mirror ends, when the engine shuts down, at the next engine start, or at the next mirror start on that device — whichever first finds it connected. With no record file (an in-memory store) or a previous value that cannot be written back verbatim, nothing is pinned. `peak_refresh_rate` is never touched. A device that never comes back while Relay runs keeps the pin until it does: `adb shell settings delete system min_refresh_rate` (or the value the file names) undoes it by hand |
+
+**Mirror trace.** `RELAY_MIRROR_TRACE=1` (read once at first use; off costs one load per
+packet) logs each video packet at the `mirror_trace` tracing target, INFO, so the subscriber
+must let it through (`RUST_LOG=mirror_trace=info` for the native client, `RELAY_LOG` for
+`relay serve`). Stamps are `CLOCK_MONOTONIC` nanoseconds (`mono_ns`); `seq` is the packet's
+frame `seq`, the key that joins the engine's lines to the client's:
+`stage="read"` (worker, payload read off the scrcpy socket; also `header_ns`, `pts_us` — the
+device's presentation time — `len`, `key`, `config`), `stage="serialize"` (socket door, frame
+encoded; `recv_ns` when it left the broadcast queue, `bytes`), `stage="flush"` (socket door, the
+write holding it returned; `batch_bytes`).
 
 ### 10.15 provider / usage / skill / plugin
 

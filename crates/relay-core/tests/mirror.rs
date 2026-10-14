@@ -12,7 +12,7 @@ use relay_core::mirror::{
 
 #[test]
 fn server_args_pin_version_and_required_options() {
-    let args = mirror::server_shell_args("SERIAL1", 0xabcd_1234, mirror::CAPTURE_MIN, 8_000_000);
+    let args = mirror::server_shell_args("SERIAL1", 0xabcd_1234, &mirror::ServerLaunch::new(mirror::CAPTURE_MIN, 8_000_000));
     assert_eq!(args[0], "-s");
     assert_eq!(args[1], "SERIAL1");
     assert!(args.contains(&"4.1".to_string()));
@@ -54,11 +54,11 @@ fn bit_rate_scales_with_capture_size_and_is_capped() {
 
 #[test]
 fn server_args_carry_the_requested_capture_size() {
-    let args = mirror::server_shell_args("S", 1, 1600, mirror::capture_bit_rate(1600));
+    let args = mirror::server_shell_args("S", 1, &mirror::ServerLaunch::new(1600, mirror::capture_bit_rate(1600)));
     assert!(args.contains(&"max_size=1600".to_string()));
     assert!(args.contains(&"video_bit_rate=12500000".to_string()));
     // An off-ladder request can never reach the server: the builder snaps it.
-    let odd = mirror::server_shell_args("S", 1, 1300, 8_000_000);
+    let odd = mirror::server_shell_args("S", 1, &mirror::ServerLaunch::new(1300, 8_000_000));
     assert!(odd.contains(&"max_size=1600".to_string()));
 }
 
@@ -457,7 +457,7 @@ fn input_msg_round_trips_for_the_macro_recorder() {
 fn the_launch_line_is_pinned() {
     // Byte for byte what the vendored jar is asked to do — it hard-fails on an unknown key.
     assert_eq!(
-        mirror::server_shell_args("S", 0xabcd_1234, mirror::CAPTURE_MIN, mirror::capture_bit_rate(mirror::CAPTURE_MIN)),
+        mirror::server_shell_args("S", 0xabcd_1234, &mirror::ServerLaunch::new(mirror::CAPTURE_MIN, mirror::capture_bit_rate(mirror::CAPTURE_MIN))),
         vec![
             "-s",
             "S",
@@ -478,6 +478,166 @@ fn the_launch_line_is_pinned() {
             "tunnel_forward=true",
         ]
     );
+}
+
+#[test]
+fn the_launch_line_carries_the_refresh_cap_and_codec_options() {
+    let launch = mirror::ServerLaunch {
+        max_size: 1600,
+        video_bit_rate: 4_000_000,
+        max_fps: 120,
+        video_codec_options: "vendor.qti-ext-enc-low-latency.enable:int=1".into(),
+    };
+    let args = mirror::server_shell_args("S", 0xabcd_1234, &launch);
+    assert_eq!(
+        args[args.len() - 6..],
+        [
+            "max_size=1600",
+            // A starved rate never reaches the server, whoever asked for it.
+            "video_bit_rate=8000000",
+            "max_fps=120",
+            "video_codec_options=vendor.qti-ext-enc-low-latency.enable:int=1",
+            "stay_awake=true",
+            "tunnel_forward=true",
+        ]
+    );
+    // Out-of-range caps are clamped (0 would mean "uncapped" to the server), and a codec
+    // option set that fails its check is left out rather than sent.
+    let wild = mirror::ServerLaunch { max_fps: 0, video_codec_options: "a=1;reboot".into(), ..launch.clone() };
+    let args = mirror::server_shell_args("S", 1, &wild);
+    assert!(args.contains(&"max_fps=1".to_string()));
+    assert!(!args.iter().any(|a| a.starts_with("video_codec_options")));
+    let fast = mirror::ServerLaunch { max_fps: 240, video_bit_rate: 900_000_000, ..launch };
+    let args = mirror::server_shell_args("S", 1, &fast);
+    assert!(args.contains(&"max_fps=144".to_string()));
+    assert!(args.contains(&"video_bit_rate=50000000".to_string()));
+}
+
+#[test]
+fn every_rung_and_every_request_keeps_the_bit_rate_floor() {
+    for rung in mirror::CAPTURE_SIZES {
+        assert!(mirror::capture_bit_rate(rung) >= mirror::MIN_BIT_RATE, "rung {rung}");
+    }
+    assert_eq!(mirror::MIN_BIT_RATE, 8_000_000);
+    assert_eq!(mirror::clamp_bit_rate(500_000), 8_000_000);
+    assert_eq!(mirror::clamp_bit_rate(4_000_000), 8_000_000);
+    assert_eq!(mirror::clamp_bit_rate(12_500_000), 12_500_000);
+    assert_eq!(mirror::clamp_bit_rate(u32::MAX), 50_000_000);
+}
+
+// -- refresh rate from `dumpsys display` ----------------------------------------
+
+/// The Android 16 emulator (Tally_API36), as captured: one 60 Hz mode, plus a
+/// `frameRateCategoryRate … high=90.0` that is not a mode and must not count.
+const DUMPSYS_EMULATOR_36: &str = r#"Display Devices: size=1
+  DisplayDeviceInfo{"Built-in Screen": uniqueId="local:4619827259835644672", 1080 x 2400, modeId 1, renderFrameRate 60.000004, hasArrSupport false, frameRateCategoryRate FrameRateCategoryRate {normal=60.0, high=90.0}, supportedRefreshRates [60.000004], defaultModeId 1, userPreferredModeId -1, supportedModes [{id=1, width=1080, height=2400, fps=60.000004, vsync=60.000004, synthetic=false, alternativeRefreshRates=[], supportedHdrTypes=[]}], colorMode 0}
+    mAmbientLightSensor=SensorData{type= , name= , refreshRateRange: [0.0, Infinity], supportedModes=[]}
+    mBaseDisplayInfo=DisplayInfo{"Built-in Screen", displayId 0, displayGroupId 0, FLAG_SECURE, FLAG_SUPPORTS_PROTECTED_BUFFERS, FLAG_TRUSTED, real 1080 x 2400, largest app 1080 x 2400, smallest app 1080 x 2400, appVsyncOff 1000000, presDeadline 16666666, mode 1, renderFrameRate 60.000004, hasArrSupport false, frameRateCategoryRate FrameRateCategoryRate {normal=60.0, high=90.0}, supportedRefreshRates [60.000004], defaultMode 1, userPreferredModeId -1, supportedModes [{id=1, width=1080, height=2400, fps=60.000004, vsync=60.000004, synthetic=false, alternativeRefreshRates=[], supportedHdrTypes=[]}], rotation 0}
+"#;
+
+/// A Pixel on Android 14: two resolutions, each at 60 and 120, active mode 120.
+const DUMPSYS_PIXEL_14: &str = r#"  DisplayDeviceInfo{"Built-in Screen": uniqueId="local:4619827551948147201", 1344 x 2992, modeId 2, renderFrameRate 120.0, defaultModeId 2, supportedModes [{id=1, width=1344, height=2992, fps=60.0, alternativeRefreshRates=[120.0], supportedHdrTypes=[2, 3, 4]}, {id=2, width=1344, height=2992, fps=120.0, alternativeRefreshRates=[60.0], supportedHdrTypes=[2, 3, 4]}], colorMode 0}
+    mActiveSfDisplayMode=DisplayMode{id=1, width=1344, height=2992, xDpi=489.0, yDpi=489.0, refreshRate=120.0, appVsyncOffsetNanos=1000000, presentationDeadlineNanos=8333333, group=0}
+    mBaseDisplayInfo=DisplayInfo{"Built-in Screen", displayId 0, displayGroupId 0, FLAG_SECURE, FLAG_SUPPORTS_PROTECTED_BUFFERS, FLAG_TRUSTED, real 1008 x 2244, largest app 2244 x 2244, smallest app 1008 x 1008, appVsyncOff 1000000, presDeadline 8333333, mode 4, defaultMode 4, modes [{id=1, width=1344, height=2992, fps=60.0, alternativeRefreshRates=[120.0], supportedHdrTypes=[2, 3, 4]}, {id=2, width=1344, height=2992, fps=120.0, alternativeRefreshRates=[60.0], supportedHdrTypes=[2, 3, 4]}, {id=3, width=1008, height=2244, fps=60.0, alternativeRefreshRates=[120.0], supportedHdrTypes=[2, 3, 4]}, {id=4, width=1008, height=2244, fps=120.0, alternativeRefreshRates=[60.0], supportedHdrTypes=[2, 3, 4]}], rotation 0}
+"#;
+
+/// A Samsung on Android 14, "Adaptive" motion smoothness idling: display 0's ACTIVE mode is
+/// 60 Hz while it can run at 120, and a DeX monitor at 144 Hz is attached as display 2.
+const DUMPSYS_SAMSUNG_ADAPTIVE_DEX: &str = r#"    mBaseDisplayInfo=DisplayInfo{"Built-in Screen", displayId 0, displayGroupId 0, FLAG_SECURE, FLAG_SUPPORTS_PROTECTED_BUFFERS, FLAG_TRUSTED, real 1080 x 2340, largest app 2340 x 2340, smallest app 1080 x 1080, appVsyncOff 1000000, presDeadline 16666666, mode 2, defaultMode 1, modes [{id=1, width=1080, height=2340, fps=120.00001, alternativeRefreshRates=[60.000004, 48.0, 30.0, 24.0, 10.0], supportedHdrTypes=[2, 3, 4]}, {id=2, width=1080, height=2340, fps=60.000004, alternativeRefreshRates=[120.00001, 48.0, 30.0, 24.0, 10.0], supportedHdrTypes=[2, 3, 4]}], rotation 0}
+    mBaseDisplayInfo=DisplayInfo{"HDMI Screen", displayId 2, displayGroupId 1, real 2560 x 1440, mode 5, defaultMode 5, modes [{id=5, width=2560, height=1440, fps=144.0, alternativeRefreshRates=[], supportedHdrTypes=[]}], rotation 0}
+"#;
+
+/// Android 10: `displayId 0` sits inside the quoted name, and modes carry only `fps=`.
+const DUMPSYS_ANDROID_10: &str = r#"  mBaseDisplayInfo=DisplayInfo{"Built-in Screen, displayId 0", uniqueId "local:0", app 1080 x 2280, real 1080 x 2280, largest app 2280 x 2209, smallest app 1080 x 1009, mode 2, defaultMode 1, modes [{id=1, width=1080, height=2280, fps=60.000004}, {id=2, width=1080, height=2280, fps=90.0}], colorMode 0}
+  mBaseDisplayInfo=DisplayInfo{"Overlay #1, displayId 01", app 720 x 480, mode 9, modes [{id=9, width=720, height=480, fps=144.0}]}
+"#;
+
+#[test]
+fn the_refresh_rate_is_display_zeros_top_mode_across_formats() {
+    let rate = |text: &str| mirror::display_refresh_rate(text).map(|rate| (rate * 100.0).round() / 100.0);
+    assert_eq!(rate(DUMPSYS_EMULATOR_36), Some(60.0));
+    assert_eq!(rate(DUMPSYS_PIXEL_14), Some(120.0));
+    // The top mode, not the active one; display 0, not the faster monitor beside it.
+    assert_eq!(rate(DUMPSYS_SAMSUNG_ADAPTIVE_DEX), Some(120.0));
+    assert_eq!(rate(DUMPSYS_ANDROID_10), Some(90.0));
+    // Only SurfaceFlinger's spelling survives: still read.
+    assert_eq!(rate("mActiveSfDisplayMode=DisplayMode{id=0, width=1080, height=2400, refreshRate=90.0, group=0}"), Some(90.0));
+    // Nothing usable: `alternativeRefreshRates=` and `refreshRateRange` are not rates.
+    assert_eq!(rate(""), None);
+    assert_eq!(rate("error: closed"), None);
+    assert_eq!(rate("alternativeRefreshRates=[120.0] refreshRateRange: [0.0, Infinity] xfps=200"), None);
+}
+
+#[test]
+fn max_fps_follows_the_panel_within_bounds() {
+    assert_eq!(mirror::max_fps_for(None), 60);
+    assert_eq!(mirror::max_fps_for(Some(60.000004)), 60);
+    assert_eq!(mirror::max_fps_for(Some(59.94)), 60);
+    assert_eq!(mirror::max_fps_for(Some(90.0)), 90);
+    assert_eq!(mirror::max_fps_for(Some(120.00001)), 120);
+    assert_eq!(mirror::max_fps_for(Some(144.0)), 144);
+    // Never under today's 60, never past the cap.
+    assert_eq!(mirror::max_fps_for(Some(30.0)), 60);
+    assert_eq!(mirror::max_fps_for(Some(165.0)), 144);
+}
+
+// -- video_codec_options ----------------------------------------------------------
+
+#[test]
+fn codec_options_merge_over_the_base_by_key() {
+    // A user's key replaces the base's in place; new keys follow in the order given.
+    assert_eq!(
+        mirror::merge_codec_options("latency=1,priority=0", "priority:int=1, vendor.qti-ext-enc-low-latency.enable:int=1,").unwrap(),
+        "latency=1,priority:int=1,vendor.qti-ext-enc-low-latency.enable:int=1"
+    );
+    assert_eq!(mirror::merge_codec_options("", "").unwrap(), "");
+    assert_eq!(mirror::merge_codec_options(mirror::BASE_CODEC_OPTIONS, "i-frame-interval:float=0.5").unwrap(), "i-frame-interval:float=0.5");
+    // A key given twice is one entry: the last wins.
+    assert_eq!(mirror::merge_codec_options("", "a=1,a=2").unwrap(), "a=2");
+    assert_eq!(mirror::merge_codec_options("", "profile:string=high,bitrate-mode:long=-1").unwrap(), "profile:string=high,bitrate-mode:long=-1");
+}
+
+#[test]
+fn codec_options_refuse_what_the_server_or_the_device_shell_would_misread() {
+    for bad in [
+        "latency",                 // no value
+        "latency:bool=1",          // a type the server does not know
+        "latency:int=fast",        // does not parse as its type
+        "latency=99999999999",     // past an int
+        "a=1;reboot",              // the line goes through `adb shell`
+        "a=$(id)",
+        "a b=1",
+        "=1",
+        "a:string=two words",
+    ] {
+        assert!(mirror::merge_codec_options("", bad).is_err(), "{bad:?} was accepted");
+        // One bad entry refuses the whole value.
+        assert!(mirror::merge_codec_options("", &format!("ok=1,{bad}")).is_err(), "{bad:?} was accepted");
+    }
+}
+
+// -- trace -------------------------------------------------------------------
+
+#[test]
+fn trace_ids_come_off_the_head_of_a_serialized_video_frame() {
+    let frame = |seq: u64, data: serde_json::Value| {
+        serde_json::to_string(&relay_bus::envelope::Frame {
+            v: 1,
+            stream: "mirror".into(),
+            session: None,
+            run_id: None,
+            mirror_id: Some(7),
+            epoch: None,
+            seq,
+            data,
+        })
+        .unwrap()
+    };
+    assert_eq!(mirror::trace_frame_ids(&frame(42, serde_json::Value::String("AAAA".repeat(100)))), Some((7, 42)));
+    // Status frames go out at seq 0 and are not packets.
+    assert_eq!(mirror::trace_frame_ids(&frame(0, serde_json::json!({"state":"running"}))), None);
+    assert_eq!(mirror::trace_frame_ids(r#"{"id":1,"ok":true,"result":{}}"#), None);
+    assert!(mirror::monotonic_ns() > 0);
 }
 
 // -- runtime: picture size, status, input fast path, worker end -------------
@@ -511,8 +671,13 @@ mod runtime {
     /// A fake adb: one device, `wm size` 1080x2400, and enough of push/forward/shell for the
     /// worker. `forward` prints `$port`; the server "process" just sleeps, because the test
     /// itself plays the server on that port. `get-state` answers from `state`.
+    ///
+    /// `dumpsys display` prints `dir/dumpsys` when there is one; `settings` keeps the device's
+    /// `min_refresh_rate` in `dir/min_refresh_rate` (absent = unset) and logs each call to
+    /// `dir/settings-log`; the server launch line is written to `dir/server-args`.
     fn fake_adb(dir: &std::path::Path, port: u16, state: &str) -> String {
         let path = dir.join("adb");
+        let d = dir.display();
         std::fs::write(&path, format!(r#"#!/bin/sh
 [ "$1" = "-s" ] && shift 2
 case "$1" in
@@ -520,7 +685,20 @@ case "$1" in
   push) exit 0 ;;
   get-state) [ "{state}" = device ] && echo device && exit 0; echo "error: device not found" >&2; exit 1 ;;
   forward) [ "$2" = "--remove" ] && exit 0; echo {port} ;;
-  shell) [ "$2" = wm ] && echo 'Physical size: 1080x2400' && exit 0; exec sleep 30 ;;
+  shell)
+    [ "$2" = wm ] && echo 'Physical size: 1080x2400' && exit 0
+    if [ "$2" = dumpsys ]; then [ -f "{d}/dumpsys" ] && cat "{d}/dumpsys"; exit 0; fi
+    if [ "$2" = settings ]; then
+      echo "$*" >> "{d}/settings-log"
+      case "$3" in
+        get) if [ -f "{d}/min_refresh_rate" ]; then cat "{d}/min_refresh_rate"; else echo null; fi ;;
+        put) echo "$6" > "{d}/min_refresh_rate" ;;
+        delete) rm -f "{d}/min_refresh_rate" ;;
+      esac
+      exit 0
+    fi
+    echo "$*" > "{d}/server-args"
+    exec sleep 30 ;;
   *) exit 1 ;;
 esac
 "#)).unwrap();
@@ -704,13 +882,28 @@ esac
     }
 
     fn run_worker_until_it_ends(get_state: &str) -> (Arc<Engine>, i64, relay_core::device::MirrorStatus, Vec<Value>) {
-        let e = engine();
         let dir = tempfile::tempdir().unwrap();
+        let ended = run_worker_in(engine(), dir.path(), get_state);
+        // The launch line the worker built: the fixture's 120 Hz panel sets the cap, and the
+        // ladder's rate for 1024 is the 8 Mbps floor.
+        let args = std::fs::read_to_string(dir.path().join("server-args")).unwrap();
+        assert!(args.contains(" max_fps=120 "), "{args}");
+        assert!(args.contains(" video_bit_rate=8000000 "), "{args}");
+        assert!(!args.contains("video_codec_options"), "{args}");
+        ended
+    }
+
+    /// A Samsung-style `dumpsys display`: display 0 idling in its 60 Hz mode, a 120 Hz mode
+    /// beside it.
+    const DUMPSYS_120: &str = "    mBaseDisplayInfo=DisplayInfo{\"Built-in Screen\", displayId 0, displayGroupId 0, real 1080 x 2400, mode 2, defaultMode 1, modes [{id=1, width=1080, height=2400, fps=120.00001, alternativeRefreshRates=[60.000004]}, {id=2, width=1080, height=2400, fps=60.000004, alternativeRefreshRates=[120.00001]}], rotation 0}\n";
+
+    fn run_worker_in(e: Arc<Engine>, dir: &std::path::Path, get_state: &str) -> (Arc<Engine>, i64, relay_core::device::MirrorStatus, Vec<Value>) {
+        std::fs::write(dir.join("dumpsys"), DUMPSYS_120).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         // The source-tree jar is the server path in tests; the fake adb "pushes" it anywhere.
         assert!(relay_core::device::mirror_server().is_ok());
-        let adb = fake_adb(dir.path(), port, get_state);
+        let adb = fake_adb(dir, port, get_state);
         call(&e, "settings.set", json!({"path":"device.adb_path","value":adb})).unwrap();
         let mut events = e.subscribe();
         let started = call(&e, "device.mirror.start", json!({"device":"relay-phone","max_size":1024})).unwrap();
@@ -767,6 +960,161 @@ esac
         assert_eq!(status.code.as_deref(), Some("device.mirror_stream_failed"));
         assert!(status.message.unwrap().contains("mirror stream ended"));
         assert!(events.iter().any(|ev| ev["state"] == "failed"));
+    }
+
+    fn file_engine(dir: &std::path::Path) -> Arc<Engine> {
+        Engine::new(Instance::Test, Store::open(&dir.join("store.db"), false).unwrap())
+    }
+
+    fn device_setting(dir: &std::path::Path) -> Option<String> {
+        std::fs::read_to_string(dir.join("min_refresh_rate")).ok().map(|value| value.trim().to_string())
+    }
+
+    #[test]
+    fn a_pinned_refresh_rate_is_put_back_when_the_mirror_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = file_engine(dir.path());
+        call(&e, "settings.set", json!({"path":"device.mirror.pin_refresh_rate","value":true})).unwrap();
+        std::fs::write(dir.path().join("min_refresh_rate"), "48.0\n").unwrap();
+        run_worker_in(e, dir.path(), "device");
+        let log = std::fs::read_to_string(dir.path().join("settings-log")).unwrap();
+        // Read first, pinned at the panel's top rate, read back to check, and finally the
+        // previous value put back — and the record of it gone.
+        let calls: Vec<&str> = log.lines().collect();
+        assert_eq!(
+            calls,
+            [
+                "shell settings get system min_refresh_rate",
+                "shell settings put system min_refresh_rate 120",
+                "shell settings get system min_refresh_rate",
+                "shell settings put system min_refresh_rate 48.0",
+                "shell settings get system min_refresh_rate",
+            ],
+            "{log}"
+        );
+        assert_eq!(device_setting(dir.path()).as_deref(), Some("48.0"));
+        assert!(!dir.path().join("mirror-refresh").exists());
+    }
+
+    #[test]
+    fn a_pin_a_crashed_run_left_is_restored_to_what_was_there_before_it() {
+        // The last run pinned an unset setting and died: the device says 120, the record says
+        // it was unset. A new pin must not mistake 120 for the user's value.
+        let dir = tempfile::tempdir().unwrap();
+        let e = file_engine(dir.path());
+        call(&e, "settings.set", json!({"path":"device.mirror.pin_refresh_rate","value":true})).unwrap();
+        std::fs::write(dir.path().join("min_refresh_rate"), "120\n").unwrap();
+        std::fs::write(dir.path().join("mirror-refresh"), "relay-phone null\n").unwrap();
+        run_worker_in(e, dir.path(), "device");
+        assert_eq!(device_setting(dir.path()), None, "restored to unset, not to the stale pin");
+        assert!(!dir.path().join("mirror-refresh").exists());
+        let log = std::fs::read_to_string(dir.path().join("settings-log")).unwrap();
+        assert!(log.lines().any(|line| line == "shell settings delete system min_refresh_rate"), "{log}");
+    }
+
+    #[test]
+    fn without_the_setting_a_left_over_pin_is_put_back_and_nothing_new_is_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = file_engine(dir.path());
+        std::fs::write(dir.path().join("min_refresh_rate"), "120\n").unwrap();
+        std::fs::write(dir.path().join("mirror-refresh"), "relay-phone 60.0\n").unwrap();
+        run_worker_in(e, dir.path(), "device");
+        assert_eq!(device_setting(dir.path()).as_deref(), Some("60.0"));
+        assert!(!dir.path().join("mirror-refresh").exists());
+        let log = std::fs::read_to_string(dir.path().join("settings-log")).unwrap();
+        assert!(!log.contains("put system min_refresh_rate 120"), "{log}");
+    }
+
+    #[test]
+    fn an_in_memory_engine_never_pins() {
+        // Nowhere to remember the previous value across a crash: no pin at all.
+        let dir = tempfile::tempdir().unwrap();
+        let e = engine();
+        call(&e, "settings.set", json!({"path":"device.mirror.pin_refresh_rate","value":true})).unwrap();
+        run_worker_in(e, dir.path(), "device");
+        assert!(!dir.path().join("settings-log").exists());
+    }
+
+    #[test]
+    fn settings_override_the_cap_and_add_codec_options() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = engine();
+        call(&e, "settings.set", json!({"path":"device.mirror","value":{"max_fps":60,"video_codec_options":"vendor.qti-ext-enc-low-latency.enable:int=1"}})).unwrap();
+        run_worker_in(e, dir.path(), "device");
+        let args = std::fs::read_to_string(dir.path().join("server-args")).unwrap();
+        assert!(args.contains(" max_fps=60 "), "{args}");
+        assert!(args.contains(" video_codec_options=vendor.qti-ext-enc-low-latency.enable:int=1 "), "{args}");
+        // A value the device shell would interpret is dropped whole; the mirror still starts.
+        let dir = tempfile::tempdir().unwrap();
+        let e = engine();
+        call(&e, "settings.set", json!({"path":"device.mirror.video_codec_options","value":"latency=1;reboot"})).unwrap();
+        run_worker_in(e, dir.path(), "device");
+        let args = std::fs::read_to_string(dir.path().join("server-args")).unwrap();
+        assert!(!args.contains("video_codec_options") && !args.contains("reboot"), "{args}");
+    }
+
+    /// Against a real device: `RELAY_MIRROR_LIVE_SERIAL=<serial> cargo test -p relay-core --test
+    /// mirror -- --ignored live_mirror --nocapture` (adb from PATH). Starts a mirror the way the
+    /// engine does, prints the server's command line as the device runs it, and checks the frame
+    /// cap and bit rate made it there. `RELAY_MIRROR_LIVE_PIN=1` also pins the refresh rate, and
+    /// checks the device's `min_refresh_rate` is back where it was after the stop.
+    #[test]
+    #[ignore = "needs a device: RELAY_MIRROR_LIVE_SERIAL"]
+    fn live_mirror_launch() {
+        let Ok(serial) = std::env::var("RELAY_MIRROR_LIVE_SERIAL") else { return };
+        let pin = std::env::var("RELAY_MIRROR_LIVE_PIN").is_ok_and(|value| value == "1");
+        let adb = which::which("adb").unwrap().display().to_string();
+        let shell = |args: &[&str]| {
+            let out = std::process::Command::new(&adb).args(["-s", &serial, "shell"]).args(args).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let before = shell(&["settings", "get", "system", "min_refresh_rate"]);
+        let dir = tempfile::tempdir().unwrap();
+        let e = file_engine(dir.path());
+        call(&e, "settings.set", json!({"path":"device.adb_path","value":adb})).unwrap();
+        call(&e, "settings.set", json!({"path":"device.mirror.pin_refresh_rate","value":pin})).unwrap();
+        // Optional overrides, to see them reach the device: RELAY_MIRROR_LIVE_MAX_FPS and
+        // RELAY_MIRROR_LIVE_CODEC (a `video_codec_options` value).
+        if let Some(fps) = std::env::var("RELAY_MIRROR_LIVE_MAX_FPS").ok().and_then(|fps| fps.parse::<u64>().ok()) {
+            call(&e, "settings.set", json!({"path":"device.mirror.max_fps","value":fps})).unwrap();
+        }
+        if let Ok(options) = std::env::var("RELAY_MIRROR_LIVE_CODEC") {
+            call(&e, "settings.set", json!({"path":"device.mirror.video_codec_options","value":options})).unwrap();
+        }
+        let runtime = MirrorRuntime::new(MirrorRuntimeConfig {
+            id: 1,
+            device: serial.clone(),
+            width: 0,
+            height: 0,
+            max_size: 1024,
+            bitrate: mirror::capture_bit_rate(1024),
+            scid: 0x0bad_cafe,
+            adb: adb.clone(),
+        });
+        let packets = runtime.attach();
+        let worker = {
+            let (e, r) = (e.clone(), runtime.clone());
+            std::thread::spawn(move || relay_core::handlers::device::mirror_worker(e, r))
+        };
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while runtime.status().state != MirrorState::Running {
+            assert!(Instant::now() < deadline && !runtime.status().state.is_terminal(), "{:?}", runtime.status());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let server = shell(&["ps", "-A", "-o", "ARGS"]).lines().find(|line| line.contains("scid=0badcafe")).unwrap_or_default().to_string();
+        let during = shell(&["settings", "get", "system", "min_refresh_rate"]);
+        println!("device runs: {server}");
+        println!("min_refresh_rate: before {before}, during {during}");
+        std::thread::sleep(Duration::from_secs(2));
+        println!("packets in the first ~2 s: {}", packets.len());
+        runtime.stop();
+        worker.join().unwrap();
+        let after = shell(&["settings", "get", "system", "min_refresh_rate"]);
+        println!("min_refresh_rate after: {after}");
+        assert!(server.contains("max_fps="), "{server}");
+        assert!(server.contains("video_bit_rate=8000000"), "{server}");
+        assert_eq!(after, before, "the device's setting is back");
+        assert!(!dir.path().join("mirror-refresh").exists());
     }
 
     async fn next_frame(client: &mut relay_core::socket::Client, id: i64) -> relay_bus::envelope::Frame {
