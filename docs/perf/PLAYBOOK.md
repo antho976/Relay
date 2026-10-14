@@ -119,7 +119,10 @@ several may turn out to be cheap enough not to matter. File paths are current as
    scenarios; consider `register_unlocked` on a read connection for the hot reads.
 2. **`usage.get` walks `~/.codex/sessions`** (up to 20 000 files) and reads the tail of up to 32 of
    them on every call (`usage.rs`, `provider.rs`) — and the status bar calls it on connect and on
-   `usage.changed`. Measure on a real home directory; cache keyed on directory mtimes.
+   `usage.changed`. **Measured 2026-10-14, mostly cleared:** on a real home directory (478 session
+   files, 4.0 GB) `usage.get` through the CLI takes 2.9 ± 0.4 ms against 1.6 ± 0.2 ms for
+   `bus.ping` the same way (hyperfine, 30 runs, warm cache, dev build) — about 1.3 ms of work,
+   unlocked. Not worth a cache; recheck cold (after dropping the page cache) and at 20 000 files.
 3. **Handlers that still do filesystem work under the lock**: `app.resources.get` (`/proc` per
    session), `app.backup.list` (`read_dir`), `device.build` preamble (signing profile, temp script,
    probes), `task.approve` (`gix::open` + `rev_parse`), `project.add` (canonicalize, `.git/HEAD`),
