@@ -3,11 +3,12 @@
 Tally syncs its ledger with the PC (docs/MONEY.md) and Relay reads Avex's training history
 (docs/GYM.md), but only while the PC is on. A **cloud copy** is a second, headless Relay engine on
 an always-on server. Tally and Avex send their data to it whenever they have a connection, and the
-PC's **cloud link** merges that copy into its own every minute while it runs.
+PC's **cloud link** merges that copy into its own while it runs: within a second or two of a phone's
+data landing there, and every minute regardless.
 
 ```
 Tally ──money.sync──▶ ┐                              ┌──── PC: relay serve --remote
-                      │  server: rendezvous + cloud  │     (cloud link, every minute:
+                      │  server: rendezvous + cloud  │     (cloud link, on each change:
 Avex ──gym.upload───▶ ┘  engine (--remote-ops cloud) └────  money.sync both ways, gym.raw home)
 ```
 
@@ -52,8 +53,13 @@ an export the copy no longer holds.
 ## The cloud link (`crates/relay-remote/src/cloud.rs`)
 
 The PC pairs with the cloud copy like a phone, and keeps the credential in `cloud.json` beside
-`remote.json` (mode 0600). While `relay serve --remote` runs, it merges every minute; `relay cloud
-sync` merges now.
+`remote.json` (mode 0600). While `relay serve --remote` runs, it merges every minute, and sooner
+when the cloud copy takes a change: the link holds a second connection to it, subscribed to
+`money.changed` and `gym.changed`, and a change there starts a round half a second later (the rest
+of a burst rides along). The link's own `money.sync` names it, so its own rounds wake nothing. That
+connection pings every 30 s and dials again when it drops (from 1 s, doubling to a minute); the
+minute's round runs regardless, so a dropped connection costs speed, never data. `relay cloud sync`
+merges now.
 
 A round:
 
