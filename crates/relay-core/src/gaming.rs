@@ -17,7 +17,7 @@
 //! call here does nothing.
 
 use serde::Serialize;
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -55,19 +55,36 @@ pub fn status() -> Status {
     })
 }
 
-/// Whether agents can be capped here: Linux, a running systemd user manager, and the two tools
-/// that talk to it. Decided once.
-pub fn supported() -> bool {
-    static SUPPORTED: OnceLock<bool> = OnceLock::new();
-    *SUPPORTED.get_or_init(|| {
+/// The runtime directory of the user's systemd manager: `XDG_RUNTIME_DIR` when the manager is
+/// there, else `/run/user/<uid>` — an engine started with a private runtime directory (a test
+/// harness, a sandbox) still reaches the manager it runs under. Decided once.
+fn manager_dir() -> Option<&'static PathBuf> {
+    static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    DIR.get_or_init(|| {
         if !cfg!(target_os = "linux") {
-            return false;
+            return None;
         }
-        let manager = std::env::var_os("XDG_RUNTIME_DIR")
-            .map(|dir| Path::new(&dir).join("systemd/private").exists())
-            .unwrap_or(false);
-        manager && on_path("busctl") && on_path("systemctl")
-    })
+        use std::os::unix::fs::MetadataExt;
+        let from_env = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
+        let from_uid = std::fs::metadata("/proc/self").ok().map(|m| PathBuf::from(format!("/run/user/{}", m.uid())));
+        [from_env, from_uid].into_iter().flatten().find(|dir| dir.join("systemd/private").exists())
+    }).as_ref()
+}
+
+/// Whether agents can be capped here: Linux, a running systemd user manager, and the two tools
+/// that talk to it.
+pub fn supported() -> bool {
+    manager_dir().is_some() && on_path("busctl") && on_path("systemctl")
+}
+
+/// `busctl` or `systemctl` pointed at the user's manager, whatever runtime directory the engine
+/// itself was given.
+fn manager_command(tool: &str) -> Command {
+    let mut cmd = Command::new(tool);
+    if let Some(dir) = manager_dir() {
+        cmd.env("XDG_RUNTIME_DIR", dir).env_remove("DBUS_SESSION_BUS_ADDRESS");
+    }
+    cmd
 }
 
 fn on_path(tool: &str) -> bool {
@@ -80,19 +97,30 @@ fn on_path(tool: &str) -> bool {
 /// its own so the spawn never waits for the service manager. The agent's later children are born
 /// in the scope; one it forked in the few milliseconds before the move stays outside, which an
 /// agent's CLI, still loading, does not do. Failure is logged and changes nothing else.
+///
+/// Only in an engine whose worker runs ([`spawn_worker`], from `relay serve`): an engine built
+/// in process, as tests build them, never touches the user's service manager.
 pub fn adopt(pid: u32, session: &str) {
-    if !supported() {
+    if WORKER.get().is_none() || !supported() {
         return;
     }
     let safe: String = session.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
     let unit = format!("relay-agent-{safe}-{pid}.scope");
     let spawned = std::thread::Builder::new().name("gaming-adopt".into()).spawn(move || {
-        let mut cmd = Command::new("busctl");
+        let mut cmd = manager_command("busctl");
         cmd.args(["--user", "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
             "org.freedesktop.systemd1.Manager", "StartTransientUnit", "ssa(sv)a(sa(sv))", &unit, "fail", "3",
             "PIDs", "au", "1", &pid.to_string(), "Slice", "s", SLICE, "CollectMode", "s", "inactive-or-failed", "0"]);
         match crate::proc::output_with_timeout(&mut cmd, CALL_TIMEOUT) {
-            Ok(Some(out)) if out.status.success() => {}
+            // A process that exited before the manager took it leaves the scope empty, and an
+            // empty scope that never had a process is never stopped: stop it here.
+            Ok(Some(out)) if out.status.success() => {
+                if !crate::pty::pid_alive(pid) {
+                    let mut stop = manager_command("systemctl");
+                    stop.args(["--user", "stop", &unit]);
+                    let _ = crate::proc::output_with_timeout(&mut stop, CALL_TIMEOUT);
+                }
+            }
             Ok(Some(out)) => tracing::warn!(pid, unit, stderr = %String::from_utf8_lossy(&out.stderr).trim(), "could not move the agent into its scope; gaming mode will not cap it"),
             Ok(None) => tracing::warn!(pid, unit, "the service manager did not answer; gaming mode will not cap this agent"),
             Err(error) => tracing::warn!(pid, unit, error = %error, "could not run busctl; gaming mode will not cap this agent"),
@@ -105,7 +133,7 @@ pub fn adopt(pid: u32, session: &str) {
 
 /// Set the cap on [`SLICE`] (`Some(threads)`) or clear it (`None`).
 fn apply(cap: Option<u32>) -> bool {
-    let mut cmd = Command::new("systemctl");
+    let mut cmd = manager_command("systemctl");
     cmd.args(["--user", "set-property", "--runtime", SLICE]);
     match cap {
         Some(threads) => cmd.args([format!("CPUQuota={}%", threads.max(1) * 100), "CPUWeight=1".into(), "IOWeight=1".into()]),
