@@ -804,7 +804,12 @@ fn wall() -> Wall {
     empty_launch.set_child(Some(&empty_action));
     empty_launch.set_halign(gtk::Align::Center);
     empty.append(&empty_launch);
-    wall_stack.add_named(&empty, Some("empty"));
+    // The terminals' plates top up the page stack's @wall; with none, the page does.
+    let empty_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    empty_page.add_css_class("page-layer");
+    empty.set_vexpand(true);
+    empty_page.append(&empty);
+    wall_stack.add_named(&empty_page, Some("empty"));
     wall_stack.set_visible_child_name("empty");
     let agents = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let focus_tabs = gtk::Box::new(gtk::Orientation::Horizontal, 2);
@@ -839,9 +844,10 @@ fn pages(content: &gtk::Stack) -> BTreeMap<String, gtk::Box> {
             content.add_named(&page, Some(name));
         } else {
             let scroller = scrolled(&page);
-            if name == "modules" {
-                // One layer over the page stack, as the board: see-through to the wallpaper.
-                scroller.add_css_class("see-through");
+            if name == "settings" {
+                // Its category list stands in the sidebar's place and paints as the sidebar;
+                // only the column beside it is the page (css/settings.css).
+                scroller.add_css_class("split-page");
             }
             content.add_named(&scroller, Some(name));
         }
@@ -1009,6 +1015,7 @@ impl Ui {
         body.append(&split);
         follow_sidebar(&top.left, &split, &side.root);
         let content = gtk::Stack::new();
+        content.add_css_class("page-stack");
         content.set_hhomogeneous(false);
         content.set_vhomogeneous(false);
         content.set_hexpand(true);

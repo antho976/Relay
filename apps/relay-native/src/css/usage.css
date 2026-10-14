@@ -5,9 +5,11 @@
 @define-color backbox_chrome @console;
 
 /* See-through terminals. Every stack and scrolled window paints @wall (theme.css), and four
-   of them nest between the wallpaper and a terminal, which compounds to opaque. Inside the
-   agents surface only the page stack keeps its @wall; the plate adds @plate on top of it,
-   and VTE's own ground is clear (terminal.rs apply_appearance). Text entries stay opaque. */
+   of them nest between the wallpaper and a terminal, which compounds to opaque. The agents
+   surface paints @wall once and nothing inside it repaints; the plate adds @plate on top of
+   it, which makes a terminal exactly as see-through as a page (@page_fill, theme.css), and VTE's
+   own ground is clear (terminal.rs apply_appearance). Text entries stay opaque. */
+.agents-surface { background: @wall; }
 .agents-host,
 .agents-surface stack,
 .agents-surface scrolledwindow,
@@ -19,8 +21,6 @@
    more layers of it, which reads as opaque under the nav that shows the wallpaper. */
 .sidebar scrolledwindow, .sidebar viewport { background: transparent; }
 .session-slate { background: transparent; }
-/* The workspace strip above the wall is one layer over the page, not a second slab. */
-.code-bar.workspace-strip { background: transparent; }
 
 .usage-bar.warn progress { background: @waiting; }
 .usage-bar.hot progress { background: @held; }

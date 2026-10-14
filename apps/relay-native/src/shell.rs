@@ -1309,17 +1309,20 @@ impl Ui {
                 // panel opacity never shows the desktop through them.
                 css += &format!("\n@define-color {name}_solid {color};");
             }
-            // The Notes paper, translucent like the panels around it (css/notes.css).
-            css += &format!("\n@define-color notes_paper alpha({},{alpha});", crate::pages::NOTES_PAPER);
-            // Terminal plates sit on one @wall layer; @plate tops that up to slightly
-            // denser than the chrome. Matte's opaque default keeps the opaque screen.
-            let wall = (alpha + 0.02).min(1.);
-            let plate = if wall >= 1. {
-                1.
-            } else {
-                (((alpha + 0.05).min(1.) - wall) / (1. - wall)).clamp(0., 1.)
-            };
+            // Content is as see-through as a terminal: `page` coverage, slightly denser than the
+            // chrome (the bars and sidebars, at `alpha`). A terminal plate sits on one @wall
+            // layer and @plate tops that up to it; every other page paints @page_fill, the same
+            // coverage in one layer (theme.css, .page-stack). Matte's opaque default keeps the
+            // opaque screen.
+            let page = (alpha + 0.05).min(1.);
+            let top_up = |under: f64| if under >= 1. { 1. } else { ((page - under) / (1. - under)).clamp(0., 1.) };
+            let plate = top_up((alpha + 0.02).min(1.));
             css += &format!("\n@define-color plate alpha({},{plate:.3});", colors[crate::fonts::SCREEN]);
+            css += &format!("\n@define-color page_fill alpha({},{page});", colors[0]);
+            // The Notes paper, one layer in a window with no page stack (css/notes.css); a
+            // tab over the chrome's @console tops that up to the same coverage.
+            css += &format!("\n@define-color notes_paper alpha({},{page});", crate::pages::NOTES_PAPER);
+            css += &format!("\n@define-color notes_paper_top alpha({},{:.3});", crate::pages::NOTES_PAPER, top_up(alpha));
             css += &format!("\n@define-color backbox_chrome alpha({},{});", colors[1], alpha.max(0.84));
             let dim = dim.ok().and_then(|v| v["value"].as_f64()).unwrap_or(0.28).clamp(0., 0.85);
             // The picture, decoded off the GTK thread (base64 and a full-size JPEG or PNG) and
@@ -1374,6 +1377,7 @@ impl Ui {
                 if APPLIED.with(|a| a.borrow().css != css) {
                     ui.appearance.load_from_string(&css);
                     APPLIED.with(|a| a.borrow_mut().css = css);
+                    restyle_hidden();
                 }
                 ui.wallpaper_dim.set_opacity(dim);
             }
@@ -1410,5 +1414,32 @@ fn tab_lamp(lamp: &impl IsA<gtk::Widget>, state: &str) {
         "blocked" => lamp.add_css_class("held"),
         "restorable" => lamp.add_css_class("waiting"),
         _ => (),
+    }
+}
+
+/// GTK keeps the named colours a widget resolved while it is hidden at a stylesheet reload (a
+/// page not on screen, a closed panel) and shows it later with the old ones: every page built
+/// before panel opacity was read stayed at the opaque defaults. A class that flips with each
+/// reload gives every widget a new declaration, so each resolves its colours afresh when shown.
+fn restyle_hidden() {
+    thread_local! {
+        static FLIP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    fn walk(widget: &gtk::Widget, on: &str, off: &str) {
+        widget.remove_css_class(off);
+        widget.add_css_class(on);
+        let mut child = widget.first_child();
+        while let Some(next) = child {
+            walk(&next, on, off);
+            child = next.next_sibling();
+        }
+    }
+    let flip = FLIP.with(|f| {
+        f.set(!f.get());
+        f.get()
+    });
+    let (on, off) = if flip { ("restyle-a", "restyle-b") } else { ("restyle-b", "restyle-a") };
+    for window in gtk::Window::list_toplevels() {
+        walk(&window, on, off);
     }
 }

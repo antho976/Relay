@@ -75,8 +75,13 @@ impl NotesWindow {
         chrome.set_end_widget(Some(&controls));
         let handle = gtk::WindowHandle::new();
         handle.set_child(Some(&chrome));
-        // Keep GTK's resize edges while drawing our own compact titlebar.
-        window.set_titlebar(Some(&handle));
+        // The titlebar lives inside the wallpaper backdrop, as the main window's top bar, so
+        // panel opacity shows the wallpaper behind it too. A hidden titlebar keeps GTK's
+        // resize edges; the WindowHandle still drags and maximizes the window.
+        let titlebar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        titlebar.set_visible(false);
+        window.set_titlebar(Some(&titlebar));
+        root.append(&handle);
         let content = &ui.pages["notes"];
         content.set_vexpand(true);
         content.append(&label("Opening Notes…", "notes-window-loading"));

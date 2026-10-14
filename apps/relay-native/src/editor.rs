@@ -162,6 +162,7 @@ impl Editor {
         let project_tools = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         project_tools.add_css_class("code-bar");
         project_tools.add_css_class("workspace-strip");
+        project_tools.add_css_class("page-layer");
         project_tools.append(&scope);
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
@@ -217,6 +218,7 @@ impl Editor {
         file_sidebar.set_size_request(260, -1);
         file_sidebar.set_spacing(0);
         file_sidebar.add_css_class("code-files");
+        file_sidebar.add_css_class("page-layer");
         let file_header = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         file_header.add_css_class("code-bar");
         file_header.add_css_class("explorer-head");
@@ -333,6 +335,17 @@ impl Editor {
         content_stack.add_named(&empty, Some("empty"));
         content_stack.set_visible_child_name("empty");
         content.append(&content_stack);
+        // The terminals' plates top up the page stack themselves (theme.css .page-stack);
+        // a file, a picture or the empty state is a page like any other.
+        let page = content.clone();
+        content_stack.connect_visible_child_name_notify(move |stack| {
+            if stack.visible_child_name().as_deref() == Some("agents") {
+                page.remove_css_class("page-layer");
+            } else {
+                page.add_css_class("page-layer");
+            }
+        });
+        content.add_css_class("page-layer");
         let position = label("Select a file to edit", "dim");
         position.add_css_class("code-position");
         content.append(&position);
@@ -347,6 +360,7 @@ impl Editor {
         git.set_vexpand(true);
         git.set_size_request(320, -1);
         git.add_css_class("code-git");
+        git.add_css_class("page-layer");
         let git_panel = git.clone();
         workspace.set_shrink_end_child(false);
         workspace.set_end_child(Some(&git_panel));

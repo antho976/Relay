@@ -24,6 +24,8 @@
 @define-color console_solid #131211;
 @define-color slab_solid #1a1917;
 @define-color wash_solid #1f1d1b;
+/* A page's one layer, as see-through as a terminal plate on its @wall (shell.rs redefines it). */
+@define-color page_fill #131211;
 /* live, held and waiting are the same in every mode; fonts::STATUS gives them to the editor. */
 @define-color live #2ec469;
 @define-color held #e5382e;
@@ -33,6 +35,15 @@
 * { -gtk-icon-style: symbolic; }
 window { background: @wall; color: @ink; font-family: 'Geist', sans-serif; font-size: 13px; font-feature-settings: "tnum"; }
 window > box, stack, scrolledwindow { background: @wall; }
+/* Panel opacity, one value for every page: each page in the page stack (a direct child)
+   paints @page_fill once, exactly as see-through as a terminal, whose plate tops up the agents
+   view's @wall instead (css/usage.css). Nothing nested repaints, or translucent layers
+   compound to opaque; a card or field on a page is a deliberate step above it. The agents
+   view's other panes carry .page-layer (editor.rs), and a page with a column in the sidebar's
+   place paints its own (.split-page: Settings). Bars and sidebars (@console) stay at panel
+   opacity, a few points clearer. */
+.page-stack, .page-stack stack, .page-stack scrolledwindow, .page-stack viewport { background: transparent; }
+.page-stack > :not(.code-surface):not(.split-page), .page-stack .page-layer { background: @page_fill; }
 .titlebar { min-height: 0; background: @console; padding: 0; border: 0; box-shadow: none; }
 .topbar { min-height: 52px; padding: 0; background: @console; border-bottom: 1px solid @edge; }
 .brand-mark { margin: 0 2px 0 4px; }
@@ -131,7 +142,9 @@ button.quiet.selected { color: @ink; background: @wash; }
 .panel-body { padding: 16px; }
 
 .compact-panel { border: 1px solid @edge; border-radius: 14px; box-shadow: 0 12px 32px alpha(black, .45); }
-.detail-page { border-left: 0; }
+/* A full page hides the surface it covers (panel.rs), so it is a page: one @page_fill layer. */
+.app-panel.detail-page { border-left: 0; background: @page_fill; }
+.detail-page scrolledwindow, .detail-page viewport, .detail-page stack { background: transparent; }
 .detail-page .panel-heading { min-height: 52px; }
 .detail-page .panel-body { padding: 4px; }
 

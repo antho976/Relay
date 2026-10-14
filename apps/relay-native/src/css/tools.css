@@ -7,7 +7,6 @@
    rounded keys, pill-segmented choices. Colour only for state. */
 
 .page.ext-page { padding: 0; }
-.ext-page .ext-root { background: @wall; }
 
 /* Header */
 .ext-page .ext-head { padding: 26px 32px 22px; background: transparent; border-bottom: 1px solid @edge; }
@@ -41,8 +40,6 @@
 /* A hairline with a grab margin either side, like the sidebar's split. */
 .ext-page paned.ext-split > separator { min-width: 1px; margin: 0 -3px; border-left: 3px solid transparent; border-right: 3px solid transparent; background-clip: content-box; background-color: @edge; background-image: none; }
 .ext-page paned.ext-split > separator:hover { background-color: @line_focus; }
-.ext-page .ext-catalog { background: @console; }
-.ext-page .ext-catalog scrolledwindow, .ext-page .ext-catalog viewport { background: transparent; }
 .ext-page .ext-tools { padding: 18px 14px 10px; }
 .ext-page entry.ext-search { min-height: 34px; background: @raised; border: 1px solid @strong; border-radius: 10px; }
 .ext-page entry.ext-search:focus-within { border-color: alpha(@ink, 0.42); }
