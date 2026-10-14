@@ -228,13 +228,18 @@ shadow; OS file choosers keep their native decoration. Launch reveal duration is
 Optional PNG/JPEG wallpaper fills the window with cover sizing, beneath a black
 dim layer. Settings exposes a wallpaper library, panel opacity, wallpaper dim
 and content contrast. Increasing content contrast raises effective panel
-opacity. The top bar sits inside the wallpaper backdrop like the status bar, so
-both chrome strips show it through one console layer. Terminal plates follow
-panel opacity too, as one slightly denser layer (`@plate`, about 5 points above
-the chrome) over the page; VTE's own ground is clear, and a parked session's
-slate hides its stale screen. The workspace strip above the wall adds no layer
-of its own. Text-entry grounds remain opaque for legibility. The Matte default
-uses fully opaque panels, which keeps the screen-black plates.
+opacity. Chrome (the top bar, the status bar and the sidebars: the app's, Notes'
+library and title bar, Settings' categories) shows the wallpaper through one
+console layer at panel opacity; the top bar sits inside the wallpaper backdrop
+like the status bar, in Notes too. Everything else is a page, about 5 points
+denser, and every page is exactly as see-through as a terminal: a terminal
+plate tops up the agents view's wall layer with `@plate`, and every other page
+(Board, Skills, Plugins, Files, Git, the Notes paper, full-page panels) paints
+one `@page_fill` layer of the same coverage, with nothing nested repainting.
+VTE's own ground is clear, and a parked session's slate hides its stale screen.
+Cards, text-entry grounds and the code editor stay a step denser for
+legibility. The Matte default uses fully opaque panels, which keeps the
+screen-black plates.
 
 The status bar's usage meters show, per enabled provider, the 5-hour, weekly
 and Fable windows chosen in the limits popup, with amber at 70% and red at 90%,

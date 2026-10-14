@@ -42,12 +42,13 @@
 .tree-name.git-deleted, .scm-name.git-deleted { text-decoration-line: line-through; }
 
 /* ---- See-through project view ----
-   The page stack already paints @wall once over the wallpaper. Every bar, panel, scroller and
-   list here painted another layer of @console or @wall on top, which compounds to black, so
-   inside the project view they stay clear and the panes are told apart by hairlines. */
-.code-surface .code-bar, .code-surface .toolbar, .code-surface .code-position,
-.code-files, .code-files scrolledwindow, .code-files viewport, .file-tree,
-.code-git, .code-git scrolledwindow, .code-git viewport, .code-git stack,
+   The page stack paints @wall once over the wallpaper and each pane here (.page-layer: the
+   strip, Files, the open file, Git) tops it up once, as a terminal's plate does (theme.css).
+   Every bar, panel, scroller and list inside them painted another layer of @console or @wall,
+   which compounds to black, so they stay clear and the panes are told apart by hairlines. */
+.code-surface .code-bar:not(.page-layer), .code-surface .toolbar, .code-surface .code-position,
+.code-files scrolledwindow, .code-files viewport, .file-tree,
+.code-git scrolledwindow, .code-git viewport, .code-git stack,
 .code-history-pane { background: transparent; }
 .code-split > separator { min-width: 1px; background: alpha(@ink, 0.07); }
 

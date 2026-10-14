@@ -11,7 +11,8 @@
 .settings-tools entry.search { min-height: 34px; }
 
 .page.settings-page { padding: 0; }
-.settings-body { background: @wall; }
+/* The page paints no layer under the category list, which is the sidebar here (theme.css). */
+.settings-body > stack { background: @page_fill; }
 
 /* Category list */
 .settings-nav { padding: 24px 12px; background: @console; border-right: 1px solid @edge; }

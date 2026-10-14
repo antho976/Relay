@@ -1,13 +1,10 @@
 /* board area styles: loaded after theme.css, so rules here override it. */
 
-/* Surfaces. Panel opacity makes @wall, @slab and @wash translucent, and other pages stack two
-   or three @wall layers (the page stack, its scrolled window) before their first card, which
-   reads as solid. The board's lanes scroll inside the page, so their scrolled windows must
-   not paint @wall over the lane: instead the page itself is the second layer, and lanes and
-   cards are real surfaces on it: @slab lanes, opaque @raised cards, as Settings' cards sit on
-   its column. Radii follow the app: 14px cards, 10px rows and controls, 12px tab wells. */
-.page.board-page { background: @wall; }
-.board-page stack, .board-page scrolledwindow, .board-page viewport { background: transparent; }
+/* Surfaces. Panel opacity makes @wall, @slab and @wash translucent. The page paints @page_fill once
+   (theme.css .page-stack) and nothing between it and the lanes repaints. Lanes are an ink tint
+   on it, so the board stays as see-through as every other page; cards are real surfaces,
+   opaque @raised, as Settings' cards sit on its column. Radii follow the app: 14px cards, 10px
+   rows and controls, 12px tab wells. */
 
 /* ── Header ─────────────────────────────────────────────────────────────── */
 .board-head { min-height: 56px; padding: 0 20px; background: transparent; }
@@ -85,8 +82,8 @@ button.filter-chip:hover { border-color: @line_emphasis; background: @wash; }
 
 /* ── Lanes ─────────────────────────────────────────────────────────────── */
 .board-grid { padding: 0 20px 16px; }
-.board-lane { border: 1px solid @edge; border-radius: 14px; background: @slab; }
-.board-lane.drop-lane, .list-section.drop-lane { border-color: @line_focus; background: @wash; }
+.board-lane { border: 1px solid @edge; border-radius: 14px; background: alpha(@ink, 0.03); }
+.board-lane.drop-lane, .list-section.drop-lane { border-color: @line_focus; background: alpha(@ink, 0.07); }
 .lane-head { padding: 12px 10px 10px 14px; border-bottom: 1px solid @line_subtle; }
 .list-head { padding: 8px 10px 8px 14px; border-bottom: 1px solid @edge; }
 .lane-head-row { min-height: 26px; }
@@ -186,7 +183,7 @@ button.card-key { min-height: 22px; min-width: 22px; padding: 0; border-radius: 
 
 /* ── List view ──────────────────────────────────────────────────────────── */
 .board-list { padding: 0 20px 16px; }
-.list-section { margin-bottom: 12px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.list-section { margin-bottom: 12px; border: 1px solid @edge; border-radius: 14px; background: alpha(@ink, 0.03); }
 .list-row { min-height: 40px; padding: 0 14px; border-bottom: 1px solid @line_subtle; background: transparent; }
 .list-row:hover { background: alpha(@ink, 0.035); }
 .list-row:last-child { border-bottom: 0; border-radius: 0 0 14px 14px; }
@@ -240,14 +237,11 @@ button.filter-option:checked { border-color: alpha(@ink, 0.45); background: @tra
 
 /* ── Task pages: GitHub's new-issue form and issue thread ─────────────── */
 /* A full page hides the surface it covers (panel.rs), so the wallpaper sits right under it:
-   the panel and its scrolled window are the two @wall layers other pages have. */
+   one @page_fill layer, as every page (theme.css .detail-page). */
 button.panel-scrim.page-scrim, button.panel-scrim.page-scrim:hover { background: transparent; }
-.app-panel.issue-page { background: @wall; border: 0; }
-.issue-page scrolledwindow { background: @wall; }
-.issue-page viewport, .issue-page stack { background: transparent; }
+.app-panel.issue-page { border: 0; }
 .issue-page .panel-heading { min-height: 52px; padding: 0 20px; border-bottom: 1px solid @edge; }
 .issue-page .panel-body { padding: 0; }
-.see-through, .see-through > viewport { background: transparent; }
 .issue-compose, .issue-detail { padding: 28px 28px 40px; }
 .issue-field-caption { color: @ink; font-size: 13.5px; font-weight: 600; margin-top: 6px; }
 entry.issue-title-entry { min-height: 40px; border-radius: 10px; font-size: 15px; }
@@ -369,7 +363,7 @@ button.view-pill:checked { border-color: alpha(@ink, 0.45); background: @track; 
 button.view-pill label { color: inherit; }
 
 /* ── Modules: version bundles, each with its own board ────────────────── */
-.page.modules-page { padding: 0 20px 24px; background: @wall; }
+.page.modules-page { padding: 0 20px 24px; }
 .modules-head { min-height: 56px; }
 .modules-content .board-stats { margin: 0 0 18px; }
 .modules-section-head { margin: 4px 2px 10px; }

@@ -2,9 +2,12 @@
 /* Notes is a desktop text editor in the KWrite mould: menu bar, toolbar, library,
    tabbed documents on one paper surface, a find bar and a status bar. */
 /* The paper is deliberately the same in every appearance mode, so it is not a palette token;
-   NOTES_PAPER (note_pages.rs) holds the same value. shell.rs redefines it at panel opacity, so
-   the wallpaper shows through it as through every other panel. */
+   NOTES_PAPER (note_pages.rs) holds the same value. shell.rs redefines it as see-through as a
+   page in the main window (a terminal's plate), so the wallpaper shows through it alike; the
+   bars and the library are chrome, at panel opacity. @notes_paper_top is what the open tab adds
+   over the tab strip's @console to match the paper. */
 @define-color notes_paper #0c0c0e;
+@define-color notes_paper_top #0c0c0e;
 
 /* ---- titlebar: menu bar · document name · window keys ---- */
 .notes-chrome { min-height: 30px; background: @console; border-bottom: 1px solid @edge; }
@@ -86,7 +89,7 @@ checkbutton.notes-customize-check .notes-tool-mark { color: @secondary; }
 button.notes-customize-reset { min-height: 26px; padding: 0 10px; border-radius: 5px; font-size: 11.5px; }
 
 /* ---- library ---- */
-.notes-split > separator { min-width: 1px; background: @edge; }
+.notes-split > separator { min-width: 1px; margin: 0; padding: 0; border: 0; background: @edge; }
 .notes-library { background: @console; }
 .notes-library scrolledwindow, .notes-library viewport { background: transparent; }
 .notes-picker { padding: 8px 8px 4px; }
@@ -119,7 +122,7 @@ list.notes-list > row.notes-row:focus-visible { outline: 1px solid alpha(@ink, 0
 notebook.notes-tabs > header { min-height: 0; padding: 0; background: @console; border-bottom: 1px solid @edge; box-shadow: none; }
 notebook.notes-tabs > header > tabs > tab { min-height: 32px; padding: 0 4px 0 12px; margin: 0; border: 0; border-right: 1px solid @edge; border-radius: 0; background: transparent; color: @secondary; box-shadow: none; }
 notebook.notes-tabs > header > tabs > tab:hover { background: alpha(@ink, 0.03); color: @ink; }
-notebook.notes-tabs > header > tabs > tab:checked { background: @notes_paper; color: @ink; box-shadow: inset 0 2px @ink; }
+notebook.notes-tabs > header > tabs > tab:checked { background: @notes_paper_top; color: @ink; box-shadow: inset 0 2px @ink; }
 notebook.notes-tabs > header > tabs > arrow { min-width: 24px; color: @secondary; }
 /* The paper is painted once, by the document's head and text below, never by a container. */
 notebook.notes-tabs > stack { background: transparent; }
@@ -142,7 +145,7 @@ button.notes-pin:checked { color: @waiting; background: alpha(@waiting, 0.10); }
 .notes-window .notes-page scrolledwindow.notes-scroll { background: @notes_paper; }
 textview.notes-source { padding: 0; background: transparent; }
 textview.notes-source > text { background: transparent; }
-textview.notes-source > border.left gutter { background: transparent; }
+textview.notes-source > border, textview.notes-source gutter, textview.notes-source gutter > * { background: transparent; }
 
 /* ---- notices (conflicts, deletions, errors) ---- */
 .notes-notice { min-height: 34px; padding: 4px 8px 4px 16px; background: alpha(@waiting, 0.09); border-top: 1px solid alpha(@waiting, 0.28); border-bottom: 1px solid alpha(@waiting, 0.28); }
