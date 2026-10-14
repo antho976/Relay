@@ -417,6 +417,38 @@ mod tests {
     }
 
     #[test]
+    fn the_performance_plugin_is_bundled_and_complete() {
+        let plugin = get("performance").expect("performance is bundled");
+        assert!(!plugin.instructions().is_empty());
+        for doc in &plugin.manifest.docs {
+            assert!(plugin.file(doc).is_some(), "manifest names a missing doc {doc}");
+        }
+        assert!(plugin.manifest.mcp_servers.is_empty(), "the performance plugin runs no server");
+        assert!(plugin.manifest.detect.is_empty(), "it is for any project, so it suggests itself for none");
+        assert_eq!(plugin.skills.len(), 10);
+        for skill in &plugin.skills {
+            assert!(skill.dir.starts_with("perf-"), "{} is not prefixed", skill.dir);
+            assert_eq!(frontmatter(&skill.body, "name").as_deref(), Some(skill.dir.as_str()));
+            assert!(!skill.description.is_empty(), "{} has no description", skill.dir);
+            assert_eq!(crate::skills::folder_name(&skill.dir), skill.dir, "{} is not provider-safe", skill.dir);
+            // The rules name every skill, so an agent can find it from its brief alone.
+            assert!(plugin.instructions().contains(&format!("`{}`", skill.dir)), "instructions do not name {}", skill.dir);
+        }
+    }
+
+    #[test]
+    fn no_two_bundled_plugins_share_a_skill_folder() {
+        let mut seen = std::collections::BTreeMap::new();
+        for plugin in all() {
+            for skill in &plugin.skills {
+                if let Some(other) = seen.insert(skill.dir.as_str(), plugin.id()) {
+                    panic!("{} is in both {other} and {}", skill.dir, plugin.id());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn frontmatter_reads_single_line_values_only_inside_the_block() {
         let body = "---\nname: unreal-ai\ndescription: \"Behavior trees, EQS\"\n---\n\ndescription: not this\n";
         assert_eq!(frontmatter(body, "name").as_deref(), Some("unreal-ai"));

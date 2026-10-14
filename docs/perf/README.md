@@ -6,6 +6,10 @@ one reading: JSON from the harness and the generated `report.md` with every tabl
 `FIXES-<date>.md` records what was changed after a reading, with the same scenarios measured
 before and after.
 
+`PLAYBOOK.md` is how to work on Relay's performance: the journeys and their budgets, the
+invariants that are cliffs, how to measure each half, and the leads for the next audit. The
+method itself is the bundled Performance plugin's (`plugins/performance/`).
+
 ## Rerun
 
 ```fish
