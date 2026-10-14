@@ -312,6 +312,11 @@ fn keepers_in(dir: &Path, shown: &str, depth: usize, budget: &mut usize, keepers
         let name = entry.file_name().to_string_lossy().into_owned();
         let Ok(kind) = entry.file_type() else { continue };
         if kind.is_dir() {
+            // Linked repositories are judged on their own (`crate::linked::unpushed`), their
+            // ignored files included.
+            if format!("{shown}/{name}") == crate::linked::DIR {
+                continue;
+            }
             if depth + 1 < KEEPER_WALK_DEPTH && !rebuilt_dir(&name) {
                 keepers_in(&entry.path(), &format!("{shown}/{name}"), depth + 1, budget, keepers);
             }
@@ -445,6 +450,9 @@ fn evaluate_as(candidate: &Candidate, live_worktrees: &[String], options: &Optio
             Ok(ignored) => return kept(row.clone(), format!("{}, but {} holds git-ignored files ({}) that removing it would delete",
                 row.reason, path.display(), ignored.iter().take(3).cloned().collect::<Vec<_>>().join(", "))),
             Err(error) => return kept(row.clone(), format!("{}, but {} could not be checked: {error}", row.reason, path.display())),
+        }
+        if let Some((name, found)) = crate::linked::holding_work(path).into_iter().next() {
+            return kept(row.clone(), format!("{}, but {} links repo {name}, which has {}", row.reason, path.display(), crate::linked::summary(&found)));
         }
     }
     if options.dry_run {

@@ -727,6 +727,12 @@ impl Ui {
             self.launch_options(popover, body, session);
         }
 
+        // Linked repositories.
+        if state != "closed" {
+            body.append(&section("LINKED REPOS"));
+            self.linked_section(body, session);
+        }
+
         // Phone.
         body.append(&section("PHONE"));
         self.phone_section(body, session);
@@ -853,6 +859,167 @@ impl Ui {
             });
         });
         body.append(&save);
+    }
+
+    // ------------------------------------------------------------------ linked repositories
+
+    /// Other repositories cloned into this agent's checkout (`session.repo.*`): the list, read
+    /// when the popover opens, and a field to link one more. A removal that would lose unpushed
+    /// work asks first.
+    fn linked_section(self: &Rc<Self>, body: &gtk::Box, session: &Value) {
+        let name = text(session, "name").to_string();
+        let list = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        body.append(&list);
+        let add = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let url = gtk::Entry::new();
+        url.set_placeholder_text(Some("owner/repo or a git URL"));
+        url.set_hexpand(true);
+        url.update_property(&[gtk::accessible::Property::Label("Repository to link")]);
+        add.append(&url);
+        let link = gtk::Button::with_label("Link");
+        link.add_css_class("quiet");
+        link.set_tooltip_text(Some("Clone it into this agent's worktree under .relay/linked/, where the agent can read and edit it"));
+        add.append(&link);
+        body.append(&add);
+        let status = label("", "agent-menu-hint");
+        status.set_wrap(true);
+        status.set_max_width_chars(36);
+        status.set_xalign(0.0);
+        status.set_visible(false);
+        body.append(&status);
+        self.load_linked(&name, &list);
+
+        let weak = Rc::downgrade(self);
+        let (n, l, st) = (name.clone(), list.downgrade(), status.downgrade());
+        let start: Rc<dyn Fn()> = Rc::new({
+            let (url, link) = (url.downgrade(), link.downgrade());
+            move || {
+                let (Some(ui), Some(url), Some(link)) = (weak.upgrade(), url.upgrade(), link.upgrade()) else { return };
+                let wanted = url.text().trim().to_string();
+                if wanted.is_empty() {
+                    return;
+                }
+                link.set_sensitive(false);
+                url.set_sensitive(false);
+                if let Some(st) = st.upgrade() {
+                    st.set_text(&format!("Cloning {wanted}…"));
+                    st.set_visible(true);
+                }
+                let (n, l, st) = (n.clone(), l.clone(), st.clone());
+                glib::spawn_future_local(async move {
+                    let result = ui.call("session.repo.add", json!({"session": n, "url": wanted})).await;
+                    link.set_sensitive(true);
+                    url.set_sensitive(true);
+                    let said = match &result {
+                        Ok(repo) => {
+                            url.set_text("");
+                            format!("Linked {} at {}", text(repo, "name"), text(repo, "path"))
+                        }
+                        Err(e) => format!("Could not link it: {e}"),
+                    };
+                    if let Some(st) = st.upgrade() {
+                        st.set_text(&said);
+                    }
+                    if let Some(l) = l.upgrade() {
+                        ui.load_linked(&n, &l);
+                    }
+                });
+            }
+        });
+        let go = start.clone();
+        link.connect_clicked(move |_| go());
+        url.connect_activate(move |_| start());
+    }
+
+    /// Fill `list` with this session's linked repositories, each with a remove key.
+    fn load_linked(self: &Rc<Self>, session: &str, list: &gtk::Box) {
+        let ui = self.clone();
+        let (session, list) = (session.to_string(), list.downgrade());
+        glib::spawn_future_local(async move {
+            let result = ui.call("session.repo.list", json!({"session": session})).await;
+            let Some(list) = list.upgrade() else { return };
+            while let Some(child) = list.first_child() {
+                list.remove(&child);
+            }
+            let repos = match result {
+                Ok(out) => out["repos"].as_array().cloned().unwrap_or_default(),
+                Err(e) => {
+                    list.append(&label(&format!("Could not list them: {e}"), "agent-menu-hint"));
+                    return;
+                }
+            };
+            if repos.is_empty() {
+                list.append(&label("None. Link another repository this agent needs to read or edit.", "agent-menu-hint"));
+            }
+            for repo in repos {
+                let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                let words = gtk::Box::new(gtk::Orientation::Vertical, 1);
+                words.set_hexpand(true);
+                let repo_name = text(&repo, "name").to_string();
+                let title = label(&repo_name, "agent-menu-caption");
+                title.set_xalign(0.0);
+                words.append(&title);
+                let branch = text(&repo, "branch");
+                let mut hint = if branch.is_empty() { "detached HEAD".to_string() } else { branch.to_string() };
+                if repo["unpushed"].is_object() {
+                    hint.push_str(" · has unpushed work");
+                }
+                let sub = label(&hint, "agent-menu-hint");
+                sub.set_xalign(0.0);
+                words.append(&sub);
+                line.set_tooltip_text(Some(text(&repo, "path")));
+                line.append(&words);
+                let remove = gtk::Button::new();
+                remove.set_child(Some(&crate::icons::image("trash", 16)));
+                remove.add_css_class("quiet");
+                remove.set_valign(gtk::Align::Center);
+                remove.set_tooltip_text(Some("Delete this clone; you are asked first if it holds work that is not pushed"));
+                remove.update_property(&[gtk::accessible::Property::Label(&format!("Remove {repo_name}"))]);
+                let weak = Rc::downgrade(&ui);
+                let (s, l) = (session.clone(), list.downgrade());
+                remove.connect_clicked(move |key| {
+                    let Some(ui) = weak.upgrade() else { return };
+                    key.set_sensitive(false);
+                    let (s, l, repo_name, key) = (s.clone(), l.clone(), repo_name.clone(), key.clone());
+                    glib::spawn_future_local(async move {
+                        ui.remove_linked(&s, &repo_name).await;
+                        key.set_sensitive(true);
+                        if let Some(l) = l.upgrade() {
+                            ui.load_linked(&s, &l);
+                        }
+                    });
+                });
+                line.append(&remove);
+                list.append(&line);
+            }
+        });
+    }
+
+    /// `session.repo.remove`; when the clone holds unpushed work, say what and delete it only on
+    /// a yes.
+    async fn remove_linked(self: &Rc<Self>, session: &str, repo: &str) {
+        let payload = json!({"session": session, "name": repo});
+        match self.call("session.repo.remove", payload.clone()).await {
+            Ok(_) => {}
+            Err(Error::Bus(error)) if error.code == "session.repo_unpushed" => {
+                let dialog = gtk::AlertDialog::builder()
+                    .message(format!("Delete {repo} with work that is not pushed?"))
+                    .detail(format!("{}. To keep it, commit and push from inside the repository first.", error.message))
+                    .buttons(["Keep it", "Delete anyway"])
+                    .cancel_button(0)
+                    .default_button(0)
+                    .modal(true)
+                    .build();
+                if dialog.choose_future(Some(&self.window)).await.ok() == Some(1) {
+                    let mut payload = payload;
+                    payload["discard_changes"] = json!(true);
+                    if let Err(e) = self.call("session.repo.remove", payload).await {
+                        self.show_error(&format!("Could not remove {repo}: {e}"));
+                    }
+                }
+            }
+            Err(e) => self.show_error(&format!("Could not remove {repo}: {e}")),
+        }
     }
 
     // ------------------------------------------------------------------ build & install on phone

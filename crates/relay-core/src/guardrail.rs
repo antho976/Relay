@@ -971,6 +971,13 @@ fn write_target(
 /// is as often `.env`, local config or Terraform state as it is build output, and git cannot
 /// bring any of them back (D114, RA-094).
 fn recoverable(worktree: &Path, path: &Path) -> Option<&'static str> {
+    // A file in a linked repository is that repository's to judge: the checkout excludes
+    // `.relay/`, so its own status would call every file there ignored.
+    let linked = crate::linked::containing(worktree, path);
+    let (worktree, path) = match &linked {
+        Some((repo, inner)) => (repo.as_path(), inner.as_path()),
+        None => (worktree, path),
+    };
     let out = crate::proc::output_with_timeout(
         Command::new("git")
             .arg("-C")

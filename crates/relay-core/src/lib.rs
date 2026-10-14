@@ -16,6 +16,7 @@ pub mod guardrail;
 pub mod github;
 pub mod handlers;
 pub mod hooks;
+pub mod linked;
 pub mod local_models;
 pub mod mirror;
 pub mod paths;
