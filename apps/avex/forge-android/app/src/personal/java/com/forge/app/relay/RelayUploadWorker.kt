@@ -76,7 +76,7 @@ class RelayUploadWorker(context: Context, params: WorkerParameters) : CoroutineW
          * Sends once the phone has a connection. [delaySeconds] lets a burst of edits settle into
          * one send: a newer request replaces one still waiting.
          */
-        fun schedule(context: Context, delaySeconds: Long = 30, byHand: Boolean = false) {
+        fun schedule(context: Context, delaySeconds: Long = 3, byHand: Boolean = false) {
             val request = OneTimeWorkRequestBuilder<RelayUploadWorker>()
                 .setInitialDelay(delaySeconds, TimeUnit.SECONDS)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
