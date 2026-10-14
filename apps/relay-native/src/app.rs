@@ -469,7 +469,6 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     sidebar_key.set_widget_name("sidebar-toggle");
     let top_left = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     top_left.add_css_class("topbar-left");
-    top_left.set_size_request(194, -1);
     sidebar_key.set_child(Some(&crate::icons::image("sidebar", 14)));
     top_left.append(&sidebar_key);
     // The brand's r mark, settled, beside the Sora wordmark.
@@ -489,9 +488,11 @@ fn top_bar(window: &gtk::ApplicationWindow) -> TopBar {
     crumb.append(&label("Settings", "brand-page"));
     crumb.set_visible(false);
     top_left.append(&crumb);
-    let switcher = crate::money::switcher();
-    top_left.append(&switcher);
     top.append(&top_left);
+    // Dev | Threads switches what the page shows, so it sits over the page, past the sidebar's
+    // edge: the block before it keeps the sidebar's width (`follow_sidebar`).
+    let switcher = crate::money::switcher();
+    top.append(&switcher);
     let top_space = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     top_space.set_hexpand(true);
     top.append(&top_space);
@@ -651,6 +652,28 @@ fn notice_bar() -> (gtk::Label, gtk::Box) {
 const SIDEBAR_WIDTH: i32 = 248;
 const SIDEBAR_MIN: i32 = 200;
 const SIDEBAR_MAX: i32 = 420;
+
+/// Keeps the title bar's brand block as wide as the sidebar under it, so the Dev | Threads
+/// pill after it starts over the page however the sidebar is dragged, and follows the brand
+/// when the sidebar is hidden.
+fn follow_sidebar(brand: &gtk::Box, split: &gtk::Paned, sidebar: &gtk::Box) {
+    let fit = {
+        let (brand, split, sidebar) = (brand.downgrade(), split.downgrade(), sidebar.downgrade());
+        move || {
+            let (Some(brand), Some(split), Some(sidebar)) = (brand.upgrade(), split.upgrade(), sidebar.upgrade()) else {
+                return;
+            };
+            let width = if sidebar.is_visible() { split.position() } else { -1 };
+            if brand.width_request() != width {
+                brand.set_size_request(width, -1);
+            }
+        }
+    };
+    fit();
+    let on_drag = fit.clone();
+    split.connect_position_notify(move |_| on_drag());
+    sidebar.connect_visible_notify(move |_| fit());
+}
 
 /// The sidebar: page keys, the workspaces and their projects, and Settings at the foot.
 struct Sidebar {
@@ -984,6 +1007,7 @@ impl Ui {
             }
         });
         body.append(&split);
+        follow_sidebar(&top.left, &split, &side.root);
         let content = gtk::Stack::new();
         content.set_hhomogeneous(false);
         content.set_vhomogeneous(false);
@@ -1049,7 +1073,7 @@ impl Ui {
             focus_tabs: wall.focus_tabs,
             mode: RefCell::new("grid".into()),
             overlay: panel_host,
-            start_chrome: [top.left.clone().upcast(), top.settings_tools.clone().upcast(), top.actions.clone().upcast()]
+            start_chrome: [top.left.clone().upcast(), top.switcher.clone().upcast(), top.settings_tools.clone().upcast(), top.actions.clone().upcast()]
                 .into_iter()
                 .chain(bar.root.observe_children().into_iter().filter_map(|c| c.ok()?.downcast::<gtk::Widget>().ok()))
                 .collect(),
