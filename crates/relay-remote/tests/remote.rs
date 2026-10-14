@@ -1007,6 +1007,75 @@ async fn a_cloud_copy_takes_the_phones_data_and_the_pc_link_brings_it_home() {
     tunnel.abort();
 }
 
+/// A running link does not wait for the minute: Tally's sync and Avex's upload reach the PC within
+/// a second or two of landing on the cloud copy, and the link's own rounds do not wake it again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_running_link_merges_as_soon_as_the_cloud_copy_takes_a_change() {
+    let pc = harness().await;
+    let cloud = harness_with(relay_remote::wire::OpProfile::Cloud).await;
+    let server = RendezvousServer::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap()).await.unwrap();
+    let rendezvous = Registry::update(&cloud.ctx.registry_path, |r| {
+        Ok::<_, anyhow::Error>(r.set_rendezvous(&format!("ws://{}", server.local_addr)).clone())
+    })
+    .unwrap();
+    let join = relay_remote::tunnel::join_url(&rendezvous);
+    let tunnel = relay_remote::tunnel::spawn(cloud.ctx.clone(), rendezvous.clone());
+    await_hosts(server.local_addr, 1).await;
+
+    let (device, token, _) = pair(&join, &pair_code(&cloud.ctx)).await;
+    let mut phone = admit(&join, &device, &token).await;
+    let first = call(&mut phone, "money.sync", json!({"device": "Pixel", "replace": true, "since": 0, "changes": [
+        {"table": "accounts", "uid": "a1", "updated_at": 100, "deleted": false, "row": {"name": "Chequing", "type": "CHEQUING",
+            "openingBalance": 100_000, "archived": false, "sortOrder": 0}},
+    ]})).await;
+    assert_eq!(first["ok"], true, "{first}");
+    let cursor = first["result"]["cursor"].clone();
+
+    let code = pair_code(&cloud.ctx);
+    let registry = Registry::load(&cloud.ctx.registry_path).unwrap();
+    let link_url = relay_remote::pairlink::PairLink::build(&registry, "test", &code, 7420, &[]).to_url();
+    let link_path = pc.ctx.registry_path.with_file_name("cloud.json");
+    relay_remote::cloud::pair(&link_path, &link_url, "PC (test)").await.unwrap();
+
+    // The first round runs at once and brings the account home.
+    let link = relay_remote::cloud::spawn(pc.ctx.socket_path.clone(), link_path.clone(), "PC (test)".into());
+    let spent = |pc: &Harness| at_the_pc(pc, "money.summary", json!({"today": "2026-10-07"}))["spent"].as_i64();
+    within(Duration::from_secs(10), || at_the_pc(&pc, "money.summary", json!({"today": "2026-10-07"}))["accounts"].as_array().is_some_and(|a| a.len() == 1)).await;
+    let settled = relay_remote::cloud::Link::load(&link_path).unwrap().unwrap().last_ok;
+
+    // Tally syncs an entry: the PC has it long before the minute is up.
+    let synced = call(&mut phone, "money.sync", json!({"device": "Pixel", "since": cursor, "changes": [
+        {"table": "transactions", "uid": "t1", "updated_at": 200, "deleted": false, "row": {"type": "EXPENSE", "amount": 4_250,
+            "date": "2026-10-05", "account": "a1", "toAccount": null, "category": null, "note": "Metro", "recurring": null, "createdAt": 200}},
+    ]})).await;
+    assert_eq!(synced["result"]["applied"], 1, "{synced}");
+    within(Duration::from_secs(10), || spent(&pc) == Some(4_250)).await;
+
+    // Avex uploads: the export comes home just as fast.
+    let export = include_str!("../../relay-gym/tests/avex_export.json");
+    let uploaded = call(&mut phone, "gym.upload", json!({"json": export})).await;
+    assert_eq!(uploaded["ok"], true, "{uploaded}");
+    within(Duration::from_secs(10), || at_the_pc(&pc, "gym.summary", json!({}))["imported"]["exported_at"] == "2026-10-08 21:14").await;
+
+    // Its own rounds wake nothing: once quiet, cloud.json's last round stays put.
+    let quiet = relay_remote::cloud::Link::load(&link_path).unwrap().unwrap().last_ok;
+    assert_ne!(quiet, settled, "the rounds ran");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(relay_remote::cloud::Link::load(&link_path).unwrap().unwrap().last_ok, quiet, "the link woke itself");
+
+    link.abort();
+    tunnel.abort();
+}
+
+/// Waits until `done` holds, polling, or fails the test after `limit`.
+async fn within(limit: Duration, mut done: impl FnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + limit;
+    while !done() {
+        assert!(tokio::time::Instant::now() < deadline, "not within {limit:?}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_greeting_names_nobody_until_the_phone_is_in() {
     let h = harness().await;

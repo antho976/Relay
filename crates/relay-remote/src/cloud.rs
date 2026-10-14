@@ -24,8 +24,21 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
 
-/// How often a running engine merges with its cloud copy.
+/// How often a running engine merges with its cloud copy when nothing wakes it sooner: between
+/// rounds it listens to the cloud copy and merges as soon as a phone's data lands there ([`spawn`]).
 pub const EVERY: Duration = Duration::from_secs(60);
+
+/// How long a change the cloud copy announced waits for the rest of its burst (Tally's pages, an
+/// upload right behind a sync) before the round it starts.
+const SETTLE: Duration = Duration::from_millis(500);
+
+/// How often the listening connection pings; the rendezvous drops a device silent for 90 s, and a
+/// connection with no answer to three pings in a row is taken for dead.
+const LISTEN_PING: Duration = Duration::from_secs(30);
+const LISTEN_SILENCE: Duration = Duration::from_secs(90);
+
+/// The longest the listener waits before dialing again after its connection failed.
+const LISTEN_BACKOFF: Duration = Duration::from_secs(60);
 
 /// Changes per `money.sync` request. A first merge carries the whole ledger, and the rendezvous
 /// takes at most 8 MiB from a device in one message; a few hundred bytes a row keeps a batch well
@@ -906,15 +919,117 @@ pub async fn round(socket: &Path, path: &Path, pc_name: &str) -> Result<Report> 
     outcome
 }
 
-/// Merge every [`EVERY`] while the engine runs, starting now. Failures are logged and kept in
-/// `cloud.json`; the next round tries again.
+/// Whether a line from the listening connection asks for a round: a change the cloud copy took
+/// from anything but this PC's own rounds (whose `money.sync` it names `pc_name`), or word that
+/// events were dropped.
+fn wakes(line: &str, pc_name: &str) -> bool {
+    let Ok(v) = serde_json::from_str::<Value>(line) else { return false };
+    match v["ev"].as_str() {
+        Some("money.changed") => v["payload"]["synced"].as_str() != Some(pc_name),
+        Some("gym.changed" | "bus.lagged") => true,
+        _ => false,
+    }
+}
+
+/// One listening connection: subscribe to the cloud copy's ledger and training history, then wake
+/// the merging loop for each change, until the connection fails. `reconnected` wakes it once on
+/// connecting too, for what landed while there was no connection.
+async fn listen_once(link: &Link, pc_name: &str, wake: &tokio::sync::mpsc::Sender<()>, reconnected: bool) -> Result<()> {
+    let mut cloud = Remote::connect(link).await?;
+    cloud.call("bus.subscribe", json!({"events": ["money.changed", "gym.changed"]})).await?;
+    tracing::debug!("cloud link listening for changes");
+    if reconnected {
+        let _ = wake.try_send(());
+    }
+    let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + LISTEN_PING, LISTEN_PING);
+    let mut heard = tokio::time::Instant::now();
+    loop {
+        tokio::select! {
+            _ = ping.tick() => {
+                if heard.elapsed() > LISTEN_SILENCE {
+                    anyhow::bail!("the cloud engine went silent");
+                }
+                cloud.ws.send(Message::Ping(Vec::new().into())).await?;
+            }
+            msg = cloud.ws.next() => {
+                heard = tokio::time::Instant::now();
+                let text = match msg {
+                    None | Some(Ok(Message::Close(_))) => anyhow::bail!("the connection closed"),
+                    Some(Err(e)) => return Err(e.into()),
+                    Some(Ok(Message::Text(t))) => t.to_string(),
+                    Some(Ok(Message::Binary(b))) => String::from_utf8_lossy(&b).into_owned(),
+                    Some(Ok(_)) => continue,
+                };
+                if text.lines().any(|line| wakes(line, pc_name)) {
+                    // A round already waiting will take this change too.
+                    let _ = wake.try_send(());
+                }
+            }
+        }
+    }
+}
+
+/// Holds a connection to the cloud engine subscribed to its changes, so a round starts within a
+/// second of Tally's sync or Avex's upload rather than on the minute. Dials again with a growing
+/// wait when the connection fails; the minute's round runs regardless, so a dropped connection
+/// costs speed, never data. Returns once the link is gone.
+async fn listen(path: PathBuf, pc_name: String, wake: tokio::sync::mpsc::Sender<()>) {
+    let mut backoff = Duration::from_secs(1);
+    let mut reconnected = false;
+    loop {
+        let link = match Link::load(&path) {
+            Ok(Some(link)) => link,
+            Ok(None) => return,
+            // The merging loop says so at warn.
+            Err(_) => {
+                tokio::time::sleep(LISTEN_BACKOFF).await;
+                continue;
+            }
+        };
+        let started = tokio::time::Instant::now();
+        if let Err(e) = listen_once(&link, &pc_name, &wake, reconnected).await {
+            tracing::debug!(error = %format!("{e:#}"), "cloud link stopped listening; dialing again");
+        }
+        reconnected = true;
+        // A connection that held a while starts the wait over.
+        if started.elapsed() > LISTEN_BACKOFF {
+            backoff = Duration::from_secs(1);
+        }
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(LISTEN_BACKOFF);
+    }
+}
+
+/// Aborts the task when dropped: the listener goes with the merging loop.
+struct Aborting(tokio::task::JoinHandle<()>);
+
+impl Drop for Aborting {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Merge while the engine runs, starting now: as soon as the cloud copy says it took a change
+/// ([`listen`]), and every [`EVERY`] without one. Failures are logged and kept in `cloud.json`;
+/// the next round tries again.
 pub fn spawn(socket: PathBuf, path: PathBuf, pc_name: String) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let (wake, mut woken) = tokio::sync::mpsc::channel(1);
+        let _listener = Aborting(tokio::spawn(listen(path.clone(), pc_name.clone(), wake)));
         let mut tick = tokio::time::interval(EVERY);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut failing = false;
         loop {
-            tick.tick().await;
+            tokio::select! {
+                _ = tick.tick() => {}
+                Some(()) = woken.recv() => {
+                    tokio::time::sleep(SETTLE).await;
+                    // What arrived while settling is in this round.
+                    while woken.try_recv().is_ok() {}
+                }
+            }
+            // The minute counts from the last round, whatever started it.
+            tick.reset();
             match Link::load(&path) {
                 Ok(Some(_)) => {}
                 // Unpaired since (`relay cloud off`): nothing to do until the engine restarts.
@@ -948,6 +1063,18 @@ pub fn spawn(socket: PathBuf, path: PathBuf, pc_name: String) -> tokio::task::Jo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_change_wakes_the_link_unless_it_was_the_links_own() {
+        let ev = |ev: &str, payload: Value| json!({"v": 1, "ev": ev, "ts": "2026-10-14T00:00:00Z", "actor": "user", "payload": payload}).to_string();
+        assert!(wakes(&ev("money.changed", json!({"synced": "Pixel", "applied": 1})), "PC (desk)"), "Tally's sync");
+        assert!(!wakes(&ev("money.changed", json!({"synced": "PC (desk)", "applied": 3})), "PC (desk)"), "this PC's own round");
+        assert!(wakes(&ev("money.changed", json!({})), "PC (desk)"), "a reset or restore there");
+        assert!(wakes(&ev("gym.changed", json!({"imported": 4})), "PC (desk)"), "Avex's upload");
+        assert!(wakes(&ev("bus.lagged", json!({"dropped": 2})), "PC (desk)"), "dropped events may have been anything");
+        assert!(!wakes(r#"{"v":1,"id":"x","ok":true,"result":{}}"#, "PC (desk)"), "an answer");
+        assert!(!wakes("not json", "PC (desk)"));
+    }
 
     #[test]
     fn a_pairing_link_gives_its_code_and_rendezvous() {
