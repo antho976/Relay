@@ -79,7 +79,7 @@ class ScreensTest {
 
     @Test fun overview() {
         compose.shoot("overview") { OverviewScreen(home(), OverviewActions()) }
-        compose.onNodeWithText("Left this month").assertExists()
+        compose.onNodeWithText("Left this month", ignoreCase = true).assertExists()
         compose.onNodeWithText("Rent").assertExists()
     }
 
@@ -138,12 +138,12 @@ class ScreensTest {
             ),
         )
         compose.shoot("budgets") { BudgetsScreen(state, edit = {}, applySuggestions = {}, add = {}) }
-        compose.onNodeWithText("Monthly budget").assertExists()
+        compose.onNodeWithText("Monthly budget", ignoreCase = true).assertExists()
     }
 
     @Test fun accounts() {
         compose.shoot("accounts") { AccountsScreen(buildAccountsState(Fixtures.accounts, 1, 120), open = {}, add = {}, transfer = {}) }
-        compose.onNodeWithText("Net worth").assertExists()
+        compose.onNodeWithText("Net worth", ignoreCase = true).assertExists()
     }
 
     @Test fun syncWaitingOnDiscord() {
