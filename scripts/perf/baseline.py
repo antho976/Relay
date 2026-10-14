@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
 """The performance baseline: every bus op, every engine path, idle cost, memory, CLI startup.
 
-Drives `crates/relay-core/examples/perf.rs` four ways (native timing, callgrind attribution,
-strace syscall counts, a memory soak), then measures the real `relay serve` process from the
-outside (idle CPU and wakeups, output streaming, restart time) and the CLI's process startup.
-Everything lands in one run directory as JSON, and `report.py` turns it into Markdown.
+Drives `crates/relay-core/examples/perf.rs` five ways (native timing, instruction counts from
+the CPU's counters, instruction attribution, strace syscall counts, a memory soak), then
+measures the real `relay serve` process from the outside (idle CPU and wakeups, output
+streaming, restart time) and the CLI's process startup. Everything lands in one run directory
+as JSON, and `report.py` turns it into Markdown.
+
+Attribution is callgrind where Valgrind runs, and `perf record` sampling where it does not
+(a glibc built for x86-64-v4: Valgrind dies on the loader's AVX-512).
 
     python3 scripts/perf/baseline.py                  # full run, docs/perf/runs/<date>/
-    python3 scripts/perf/baseline.py --quick          # fewer iterations, no callgrind
+    python3 scripts/perf/baseline.py --quick          # fewer iterations, no attribution pass
     python3 scripts/perf/baseline.py --only 'op.task.*'   # a subset: a name, or a prefix ending in *
+    python3 scripts/perf/baseline.py --attribution perf   # sample with perf even where Valgrind runs
 
 No user store, no paid provider, no display. The fixture is disposable and lives in a temp dir.
 """
 import argparse
+import bisect
 import datetime
+import functools
+import gzip
 import json
 import os
 import platform
@@ -27,6 +35,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -63,10 +72,12 @@ def sh(cmd, **kw):
     return subprocess.run(cmd, **kw)
 
 
-def build():
+def build(attribution):
     log("building relay-core example perf and relay-cli (dev profile, the one run.sh uses)")
     subprocess.run(["cargo", "build", "-p", "relay-core", "--example", "perf"], cwd=ROOT, check=True)
     subprocess.run(["cargo", "build", "-p", "relay-cli"], cwd=ROOT, check=True)
+    if attribution == "perf":
+        build_fp()
 
 
 def environment():
@@ -101,6 +112,8 @@ def environment():
         "cores": os.cpu_count(),
         "mem_gib": round(mem_kb / 1024 / 1024, 1) if mem_kb else None,
         "valgrind": out(["valgrind", "--version"]),
+        "perf": out(["perf", "--version"]) if shutil.which("perf") else None,
+        "perf_event_paranoid": out(["cat", "/proc/sys/kernel/perf_event_paranoid"]),
         "strace": out(["strace", "-V"]).splitlines()[0] if shutil.which("strace") else None,
         "load_at_start": os.getloadavg(),
         "container": Path("/.dockerenv").exists() or "container" in (Path("/proc/1/cgroup").read_text() if Path("/proc/1/cgroup").exists() else ""),
@@ -156,7 +169,7 @@ def read_jsonl(path):
 
 BUCKETS = [
     ("harness", lambda s: "perf::" in s and "Counting" not in s),
-    ("allocation", lambda s: "Counting as core::alloc" in s or "GlobalAlloc" in s or re.search(r"\b(_int_malloc|_int_free|malloc|free|realloc|calloc|__libc_malloc|__libc_free|malloc_consolidate|unlink_chunk|tcache)", s) is not None or "alloc::alloc::" in s),
+    ("allocation", lambda s: "Counting as core::alloc" in s or "GlobalAlloc" in s or re.search(r"\b(_int_malloc|_int_free|_int_realloc|malloc|free|cfree|realloc|calloc|__libc_malloc|__libc_free|malloc_consolidate|unlink_chunk|tcache)", s) is not None or "alloc::alloc::" in s or "__rust_alloc" in s or "__rust_dealloc" in s or "__rust_realloc" in s or "__rust_no_alloc_shim" in s),
     ("sqlite", lambda s: "sqlite3" in s or "sqlite3.c" in s),
     ("rusqlite", lambda s: "rusqlite" in s),
     ("json", lambda s: "serde_json" in s),
@@ -175,7 +188,7 @@ BUCKETS = [
     ("gix (git)", lambda s: "gix" in s),
     ("tokio/mio", lambda s: "tokio" in s or "mio::" in s),
     ("time (jiff)", lambda s: "jiff" in s),
-    ("hashing (sha2)", lambda s: "sha2" in s or "digest" in s),
+    ("hashing (sha1/sha2)", lambda s: "sha2" in s or "digest" in s or "sha1" in s),
     ("ids (uuid/rand)", lambda s: "uuid" in s or "rand" in s or "getrandom" in s),
     ("regex", lambda s: "regex" in s or "aho_corasick" in s or "memchr" in s),
     ("tree-sitter", lambda s: "tree_sitter" in s or "ts_" in s and "tree-sitter" in s),
@@ -321,6 +334,300 @@ def run_callgrind(out_dir, names, jobs, iters_div):
         if "Trigger: Program termination" in path.read_text(errors="replace")[:4000]:
             path.unlink()
     return rows
+
+
+# ------------------------------------------------------------------ CPU counters and perf record
+#
+# Where Valgrind cannot run (a loader built for x86-64-v4 uses AVX-512, which it does not decode:
+# CachyOS, and any distribution that ships v4 packages), the same two answers come from the CPU.
+# `perf run --counters` counts instructions with the hardware counters around exactly the measured
+# call (perf.rs, `Counters`): deterministic to about 0.1 %, at native speed. `perf record` samples
+# one in every SAMPLE_PERIOD instructions with its call stack, and only the samples inside a
+# measured region are kept, so the subsystem shares are callgrind's, measured instead of emulated.
+# Sampled: two runs put a large bucket within 1–3 points of each other (6 on an op with occasional
+# WAL work), so read a difference under 5 points as noise; a function under 0.5 % may not show.
+
+# Prime, so it cannot fall into step with a loop. The kernel throttles above
+# perf_event_max_sample_rate (50 000/s here, 50 a millisecond), and a Zen 5 core runs SQLite and
+# serde at 15 G instructions/s or more: 200 003 lost a third of `task.list`'s samples, this
+# loses almost none. Each profile's `coverage` (sampled ÷ counted) says when it still happened.
+SAMPLE_PERIOD = 400_009
+SAMPLES_PER_SCENARIO = 1200
+SAMPLED_ITERS_MAX = 20_000
+# Iterations are bounded by what the native pass spent too: an op whose instructions are few but
+# whose uncounted setup is a whole session (`session.park`) would otherwise ask for hundreds of
+# worktrees, fill /tmp and take the shard down with it.
+SAMPLED_LOOP_SECONDS = 8
+SAMPLED_ITERS_FACTOR = {6: 10, 30: 20}  # by the scenario's default iterations; cheap ones: 100
+# A frame-pointer build of the same binary: perf's DWARF unwinding copies 8 KiB of stack per
+# sample and still stops short in Rust frames, while frame pointers walk to `main` for free.
+# Rust's own std is not rebuilt, so a frame inside a non-generic std function can drop the frame
+# above it; Relay, its dependencies and SQLite (built by `cc`, hence CFLAGS) all keep theirs.
+PERF_FP = ROOT / "target/perf-fp/debug/examples/perf"
+
+
+def valgrind_works():
+    """Whether Valgrind can run anything here. It cannot where glibc's loader uses AVX-512."""
+    if not shutil.which("valgrind"):
+        return False
+    # A run that dies writes `vgcore.<pid>` into the working directory: give it a throwaway one.
+    with tempfile.TemporaryDirectory() as tmp:
+        return subprocess.run(["valgrind", "--tool=none", "/bin/true"], capture_output=True, cwd=tmp).returncode == 0
+
+
+def perf_record_works():
+    """Why `perf record` cannot sample this process's own children here, or None."""
+    if not shutil.which("perf"):
+        return "perf is not installed"
+    try:
+        paranoid = int(Path("/proc/sys/kernel/perf_event_paranoid").read_text())
+    except (OSError, ValueError):
+        return "no /proc/sys/kernel/perf_event_paranoid: the kernel has no perf events"
+    if paranoid > 2:
+        return f"kernel.perf_event_paranoid is {paranoid} (try `sudo sysctl kernel.perf_event_paranoid=2` for the run)"
+    return None
+
+
+def build_fp():
+    log("building the frame-pointer copy of perf for the sampling pass (target/perf-fp)")
+    env = dict(os.environ, CARGO_TARGET_DIR=str(ROOT / "target/perf-fp"), RUSTFLAGS="-C force-frame-pointers=yes",
+               CFLAGS="-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer")
+    subprocess.run(["cargo", "build", "-p", "relay-core", "--example", "perf"], cwd=ROOT, check=True, env=env)
+
+
+def counted(row):
+    """Instructions per iteration from a `--counters` row: this process plus its children."""
+    c = row.get("counters") or {}
+    if not c.get("instructions"):
+        return None
+    return c["instructions"]["p50"] + (c.get("child_instructions") or {}).get("p50", 0)
+
+
+def sampled_iters(names, counter_rows, native_rows):
+    """Iterations per scenario for about SAMPLES_PER_SCENARIO samples each, within what the
+    scenario's setup can afford: a scenario that cannot have that many samples has fewer."""
+    out = {}
+    for name in names:
+        per = counted(counter_rows.get(name, {}))
+        if not per:
+            continue
+        want = -(-SAMPLES_PER_SCENARIO * SAMPLE_PERIOD // per)
+        native = native_rows.get(name) or counter_rows[name]
+        default = native["iters"]
+        cap = min(SAMPLED_ITERS_MAX, default * SAMPLED_ITERS_FACTOR.get(default, 100))
+        loop_ms = native.get("loop_wall_ms") or 0
+        if loop_ms:
+            cap = min(cap, int(default * SAMPLED_LOOP_SECONDS * 1000 / loop_ms))
+        out[name] = max(min(3, default), min(want, cap))
+    return out
+
+
+def run_sampled(out_dir, names, jobs, counter_rows, native_rows):
+    sd = out_dir / "sampled"
+    sd.mkdir(exist_ok=True)
+    for f in [*sd.glob("marks-*.txt"), *sd.glob("rows-*.jsonl"), *sd.glob("perf-*.data")]:
+        f.unlink()  # marks are appended to; a rerun starts clean
+    iters = sampled_iters(names, counter_rows, native_rows)
+    (sd / "iters.txt").write_text("".join(f"{n} {i}\n" for n, i in iters.items()))
+    groups = shards(names, jobs)
+
+    def one(i, group):
+        if not group:
+            return
+        ctl, ack, marks = sd / f"ctl-{i}", sd / f"ack-{i}", sd / f"marks-{i}.txt"
+        for f in (ctl, ack):
+            f.unlink(missing_ok=True)
+        os.mkfifo(ctl)
+        os.mkfifo(ack)
+        # -D -1: start with recording off; perf.rs switches it on for each measured loop only.
+        # -k CLOCK_MONOTONIC: sample times on the clock perf.rs writes its region marks with.
+        cmd = ["perf", "record", "-q", "--debuginfod", "-D", "-1", "--control", f"fifo:{ctl},{ack}", "-o", str(sd / f"perf-{i}.data"),
+               "-e", "instructions:u", "-c", str(SAMPLE_PERIOD), "--call-graph", "fp", "-k", "CLOCK_MONOTONIC",
+               str(PERF_FP), "run", *group, "--iters-file", str(sd / "iters.txt"), "--warmup", "1",
+               "--marks", str(marks), "--perf-ctl", f"{ctl},{ack}", "--out", str(sd / f"rows-{i}.jsonl")]
+        with open(sd / f"record-{i}.log", "w") as logf:
+            subprocess.run(cmd, check=False, stdout=logf, stderr=logf)
+        ctl.unlink(missing_ok=True)
+        ack.unlink(missing_ok=True)
+
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        list(pool.map(lambda ig: one(*ig), enumerate(groups)))
+    rows = {}
+    for i in range(jobs):
+        rows.update({r["name"]: r for r in read_jsonl(sd / f"rows-{i}.jsonl")})
+    return rows
+
+
+def perf_samples(data):
+    """(pid, comm, time_ns, frames) per sample, frames leaf first as `symbol [dso]`, user space
+    only. `--no-inline` names the real function, which is what callgrind attributed to."""
+    proc = subprocess.Popen(["perf", "script", "--no-inline", "-i", str(data), "-F", "comm,pid,time,ip,sym,dso", "--ns"],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, errors="replace")
+    head, frames = None, []
+    for line in proc.stdout:
+        if not line.strip():
+            if head:
+                yield (*head, frames)
+            head, frames = None, []
+        elif not line[0].isspace() or head is None:
+            m = re.match(r"^\s*(.*?)\s+(\d+)\s+(\d+)\.(\d+):\s*$", line)
+            if m:
+                head, frames = (int(m.group(2)), m.group(1), int(m.group(3)) * 1_000_000_000 + int(m.group(4).ljust(9, "0")[:9])), []
+        else:
+            m = re.match(r"^\s*([0-9a-f]+)\s+(.*?)\s+\((.*)\)\s*$", line)
+            if m and not m.group(1).startswith("ffffffff"):
+                sym = m.group(2)
+                if sym == "[unknown]":
+                    sym = "??? "
+                frames.append(f"{sym} [{m.group(3).rsplit('/', 1)[-1]}]")
+    if head:
+        yield (*head, frames)
+    proc.wait()
+
+
+def sampled_bucket(frame):
+    """`bucket_of` for a perf frame. Callgrind names `file:function`, so SQLite's static functions
+    match on `sqlite3.c`; perf names the function only. A C function inside the binary itself is
+    SQLite's, or tree-sitter's when it says so: everything else linked in is Rust."""
+    b = bucket_of(frame)
+    sym, _, dso = frame.rpartition(" [")
+    if b == "other" and dso.rstrip("]") == PERF_FP.name and "::" not in sym and not sym.startswith("??"):
+        return "tree-sitter" if sym.startswith(("ts_", "tree_sitter")) else "sqlite"
+    return b
+
+
+@functools.lru_cache(maxsize=None)
+def readable(sym):
+    """A Rust symbol short enough to read in a table: generic arguments dropped, `<T as Trait>::f`
+    as `T::f`, and only the type or module the function sits in kept before it."""
+    s = re.sub(r"\s*\[[^\]]*\]$", "", sym)
+    s = re.sub(r"::h[0-9a-f]{16}$", "", s)
+    out, i = [], 0
+    while i < len(s):
+        if s[i] != "<":
+            out.append(s[i])
+            i += 1
+            continue
+        depth, j = 0, i
+        while j < len(s):
+            depth += {"<": 1, ">": -1}.get(s[j], 0)
+            if depth == 0:
+                break
+            j += 1
+        inner = s[i + 1:j]
+        if i == 0 or s[i - 1] in " ;(&":  # `<T as Trait>::` heads a path: keep T
+            d, cut = 0, len(inner)
+            for k, ch in enumerate(inner):
+                d += {"<": 1, ">": -1}.get(ch, 0)
+                if d == 0 and inner.startswith(" as ", k):
+                    cut = k
+                    break
+            out.append(readable(inner[:cut]))
+        i = j + 1  # otherwise generic arguments: dropped
+    parts = [p for p in "".join(out).split("::") if p]
+    tail = 0
+    while tail < len(parts) and parts[-1 - tail].startswith("{"):
+        tail += 1
+    return "::".join(parts[-(tail + 2):])[:100]
+
+
+def parse_sampled(out_dir, rows_by_name, counter_rows, jobs):
+    sd = out_dir / "sampled"
+    per = {}  # name -> {"self": Counter, "incl": Counter, "n": int, "stacks": Counter}
+    for i in range(jobs):
+        data, marks_file = sd / f"perf-{i}.data", sd / f"marks-{i}.txt"
+        if not data.exists() or not marks_file.exists():
+            continue
+        lines = [l.split() for l in marks_file.read_text().splitlines() if l.strip()]
+        marks = sorted((int(a), int(b), n) for n, a, b, *_ in lines)
+        root_pid = int(lines[0][3]) if lines else None
+        # A child process counts for a scenario only if the scenario started it: one with a pid
+        # at or below the last pid handed out before its loop was already running (the fixture's
+        # provider stand-ins answering a paste, a `git` from the case before). The counters
+        # never saw those either.
+        first_pid = {n: int(rest[1]) for n, _, _, *rest in reversed(lines) if len(rest) > 1}
+        starts = [m[0] for m in marks]
+        for pid, comm, t, frames in perf_samples(data):
+            k = bisect.bisect_right(starts, t) - 1
+            if k < 0 or t > marks[k][1] or not frames:
+                continue
+            name = marks[k][2]
+            p = per.setdefault(name, {"self": Counter(), "incl": Counter(), "n": 0, "stacks": Counter(), "older": 0})
+            if pid != root_pid and pid <= first_pid.get(name, 0):
+                p["older"] += 1
+                continue
+            p["n"] += 1
+            if pid != root_pid:
+                # A process the op started (`git`, a hook): its own cost, not Relay's code.
+                p["self"][f"child process: {comm}"] += 1
+                p["stacks"][f"[{comm}]"] += 1
+                continue
+            p["self"][frames[0]] += 1
+            for f in set(frames):
+                p["incl"][f] += 1
+            # Folded for a flame graph, from the measured call down: the frames above it
+            # (`main` … `run_case`) are the same on every stack of the main thread.
+            stack = [readable(f) for f in reversed(frames) if not f.startswith("???")]
+            for k, f in enumerate(stack):
+                if f == "perf::run_case":
+                    stack = stack[k + 1:]
+                    break
+            p["stacks"][";".join(stack)] += 1
+
+    generic = ("Engine::dispatch", "Engine::register", "perf_measured", "perf::", "Engine::system_write")
+    profiles = {}
+    for name, p in per.items():
+        total = p["n"]
+        if not total:
+            continue
+        row = rows_by_name.get(name, {})
+        buckets = Counter()
+        for sym, n in p["self"].items():
+            buckets["child processes" if sym.startswith("child process") else sampled_bucket(sym)] += n
+        incl = sorted(p["incl"].items(), key=lambda kv: -kv[1])
+        relay, seen = [], set()
+        for sym, n in incl:
+            if not ("relay_core" in sym or "relay_bus" in sym) or any(g in sym for g in generic):
+                continue
+            fn = readable(sym)
+            if fn not in seen:
+                seen.add(fn)
+                relay.append((n, fn))
+        markers = {}
+        for label, needles in MARKERS.items():
+            best = max((n for sym, n in incl if any(x in sym for x in needles)), default=0)
+            if best:
+                markers[label] = round(min(best * 100.0 / total, 100.0), 1)
+        exact = counted(counter_rows.get(name, {}))
+        iters = row.get("iters") or 1
+        # Sampled instructions against counted ones. Well under 1: the kernel throttled the
+        # sampling (an op at very high IPC). Well over 1: this op costs more per call after the
+        # sampling pass's extra iterations (it grows with what earlier calls left behind).
+        c = (counter_rows.get(name) or {}).get("counters") or {}
+        mean = (c.get("instructions") or {}).get("mean", 0) + (c.get("child_instructions") or {}).get("mean", 0)
+        coverage = round(total * SAMPLE_PERIOD / iters / mean, 2) if mean else None
+        profiles[name] = {
+            "method": "perf record, sampled",
+            "period": SAMPLE_PERIOD,
+            "samples": total,
+            "ir_per_iter": exact if exact else total * SAMPLE_PERIOD // iters,
+            "ir_exact": bool(exact),
+            "coverage": coverage,
+            "older_process_samples": p["older"],
+            "iters": iters,
+            "buckets": {k: round(v * 100.0 / total, 1) for k, v in buckets.most_common() if v * 100.0 / total >= 0.5},
+            "top_self": [{"pct": round(n * 100.0 / total, 1), "fn": s if s.startswith("child process") else readable(s)} for s, n in p["self"].most_common(12)],
+            "top_inclusive_relay": [{"pct": round(min(n * 100.0 / total, 100.0), 1), "fn": fn} for n, fn in relay[:10]],
+            "markers": markers,
+        }
+        # Folded stacks for a flame graph: `zcat <name>.folded.gz | inferno-flamegraph > x.svg`
+        # (or flamegraph.pl, or speedscope). Gzipped: the stacks of 260 scenarios are 24 MB.
+        (sd / "folded").mkdir(exist_ok=True)
+        for old in (sd / "folded").glob("*.folded"):
+            old.unlink()
+        text = "".join(f"{s} {n}\n" for s, n in p["stacks"].most_common())
+        (sd / "folded" / f"{name}.folded.gz").write_bytes(gzip.compress(text.encode(), mtime=0))
+    return profiles
 
 
 # ------------------------------------------------------------------ the real process
@@ -664,36 +971,70 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out-dir", type=Path, default=None, help="default docs/perf/runs/<date>")
     ap.add_argument("--only", action="append", default=[], help="scenario name, or a prefix ending in * (repeatable)")
-    ap.add_argument("--quick", action="store_true", help="a quarter of the iterations, no callgrind, short process windows")
-    ap.add_argument("--skip-callgrind", action="store_true")
+    ap.add_argument("--quick", action="store_true", help="a quarter of the iterations, no attribution pass, short process windows")
+    ap.add_argument("--attribution", choices=["auto", "callgrind", "perf", "none"], default="auto",
+                    help="where the instructions go: callgrind (exact, emulated), perf (sampled from the CPU), "
+                         "or auto, callgrind where Valgrind runs and perf where it does not")
+    ap.add_argument("--skip-callgrind", action="store_true", help="the same as --attribution none")
+    ap.add_argument("--skip-counters", action="store_true")
+    ap.add_argument("--attribution-only", action="store_true",
+                    help="rerun only the attribution pass into an existing run directory, reusing its native and counter rows")
     ap.add_argument("--skip-strace", action="store_true")
     ap.add_argument("--skip-soak", action="store_true")
     ap.add_argument("--skip-process", action="store_true")
     ap.add_argument("--skip-scale", action="store_true")
     ap.add_argument("--skip-build", action="store_true")
-    ap.add_argument("--jobs", type=int, default=max(1, min(4, (os.cpu_count() or 2) - 1)), help="parallel callgrind processes")
+    ap.add_argument("--jobs", type=int, default=max(1, min(4, (os.cpu_count() or 2) - 1)), help="parallel attribution processes")
     ap.add_argument("--callgrind-iters-div", type=int, default=10)
     ap.add_argument("--process-seconds", type=int, default=30)
     args = ap.parse_args()
 
     out_dir = args.out_dir or ROOT / "docs/perf/runs" / datetime.date.today().isoformat()
     out_dir.mkdir(parents=True, exist_ok=True)
+    attribution, why = args.attribution, None
+    if args.skip_callgrind or args.quick:
+        attribution = "none"
+    if attribution == "auto":
+        if valgrind_works():
+            attribution = "callgrind"
+        elif perf_record_works() is None:
+            attribution = "perf"
+            why = "Valgrind cannot run here" if shutil.which("valgrind") else "Valgrind is not installed"
+        else:
+            attribution, why = "none", f"Valgrind cannot run here and {perf_record_works()}"
+    elif attribution == "perf" and perf_record_works():
+        raise SystemExit(f"--attribution perf: {perf_record_works()}")
     if not args.skip_build:
-        build()
+        build(attribution)
     env = environment()
     env["quick"] = args.quick  # compare.py warns when two runs differ in this
+    env["attribution"] = attribution + (f" ({why})" if why else "")
     strace_skip = None
     if not args.skip_strace and shutil.which("strace"):
         strace_skip = strace_blocked()
         if strace_skip:
             env["strace_skipped"] = strace_skip  # report.py says why the column is empty
+    if args.attribution_only:
+        # The run's environment is the one its other passes saw; only the attribution is new.
+        env = {**json.loads((out_dir / "environment.json").read_text()), "attribution": env["attribution"]}
+        args.skip_scale = args.skip_strace = args.skip_soak = args.skip_process = args.skip_counters = True
+        strace_skip = None
     (out_dir / "environment.json").write_text(json.dumps(env, indent=2) + "\n")
     names = [n for n in scenarios() if matches(n, args.only)]
     log(f"{len(names)} scenarios")
 
     native_args = ["--iters-div", "4"] if args.quick else []
-    log("native timing pass")
-    perf_run([*names, *native_args], out_dir / "native.jsonl")
+    if not args.attribution_only:
+        log("native timing pass")
+        perf_run([*names, *native_args], out_dir / "native.jsonl")
+    counter_rows = {r["name"]: r for r in read_jsonl(out_dir / "counters.jsonl")} if args.attribution_only else {}
+    if not args.skip_counters and perf_record_works() is None:
+        log("counter pass: instructions per iteration from the CPU's counters")
+        perf_run([*names, "--counters", "--iters-div", "8" if args.quick else "2"], out_dir / "counters.jsonl")
+        counter_rows = {r["name"]: r for r in read_jsonl(out_dir / "counters.jsonl")}
+        missing = sum(1 for r in counter_rows.values() if not r.get("counters"))
+        if missing:
+            log(f"{missing} scenarios came back without counts: see counters.log")
     if not args.skip_scale:
         scale_names = [n for n in SCALE_OPS if n in names]
         if scale_names:
@@ -710,12 +1051,27 @@ def main():
             subprocess.run([str(PERF), "soak", "--ops", "4000" if args.quick else "20000", "--out", str(out_dir / "soak.json")], check=True, stderr=logf)
     if not args.skip_process:
         run_process(out_dir, 8 if args.quick else args.process_seconds)
-    if not args.skip_callgrind and not args.quick and shutil.which("valgrind"):
+    if attribution == "callgrind":
         log(f"callgrind pass: {args.jobs} processes, instruction attribution per scenario")
         rows = run_callgrind(out_dir, names, args.jobs, args.callgrind_iters_div)
         profiles = parse_callgrind(out_dir, {r["name"]: r for r in rows})
         (out_dir / "profiles.json").write_text(json.dumps(profiles, indent=1) + "\n")
         log(f"{len(profiles)} profiles parsed")
+    elif attribution == "perf":
+        log(f"sampling pass: {args.jobs} perf record processes, one sample per {SAMPLE_PERIOD} instructions"
+            + (f" ({why})" if why else ""))
+        native_rows = {r["name"]: r for r in read_jsonl(out_dir / "native.jsonl")}
+        rows = run_sampled(out_dir, names, args.jobs, counter_rows, native_rows)
+        if len(rows) < len(names):
+            log(f"sampling pass: {len(names) - len(rows)} scenarios did not run, see sampled/record-*.log")
+        log("reading the samples (perf script)")
+        profiles = parse_sampled(out_dir, rows, counter_rows, args.jobs)
+        (out_dir / "profiles.json").write_text(json.dumps(profiles, indent=1) + "\n")
+        for f in [*(out_dir / "sampled").glob("perf-*.data"), *(out_dir / "sampled").glob("marks-*.txt")]:
+            f.unlink()  # tens of MB each; the folded stacks and profiles.json keep what was read
+        log(f"{len(profiles)} profiles from samples")
+    elif why:
+        log(f"no attribution pass: {why}")
     log("report")
     subprocess.run([sys.executable, str(ROOT / "scripts/perf/report.py"), str(out_dir)], check=True)
     log(f"done: {out_dir}")

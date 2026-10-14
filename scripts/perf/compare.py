@@ -3,8 +3,9 @@
 
     python3 scripts/perf/compare.py docs/perf/runs/2026-09-19 docs/perf/runs/2026-10-03 [--threshold 0.2]
 
-Instructions (callgrind) are the regression signal to trust: they do not move with machine load.
-Wall time is reported beside them for the paths that wait on the kernel or a child.
+Instructions are the regression signal to trust: they do not move with machine load. They come
+from the CPU's counters (`counters.jsonl`) when both runs have them, else from callgrind. Wall
+time is reported beside them for the paths that wait on the kernel or a child.
 """
 import argparse
 import json
@@ -29,6 +30,11 @@ def main():
     args = ap.parse_args()
     a_native, b_native = read_jsonl(args.before / "native.jsonl"), read_jsonl(args.after / "native.jsonl")
     a_prof, b_prof = read_json(args.before / "profiles.json"), read_json(args.after / "profiles.json")
+    a_cnt, b_cnt = read_jsonl(args.before / "counters.jsonl"), read_jsonl(args.after / "counters.jsonl")
+
+    def counted(rows, name):
+        c = (rows.get(name) or {}).get("counters") or {}
+        return c["instructions"]["p50"] if c.get("instructions") else None
 
     # Wall time only compares on one machine and toolchain, and --quick runs a quarter of the
     # iterations. Say so up front rather than let the rows below look like regressions.
@@ -48,7 +54,9 @@ def main():
         wall = b["wall_ns"]["p50"] / max(a["wall_ns"]["p50"], 1)
         allocs = b["allocs_per_iter"] / max(a["allocs_per_iter"], 1)
         ir = None
-        if name in a_prof and name in b_prof:
+        if counted(a_cnt, name) and counted(b_cnt, name):
+            ir = counted(b_cnt, name) / counted(a_cnt, name)
+        elif name in a_prof and name in b_prof and a_prof[name].get("ir_exact", True) and b_prof[name].get("ir_exact", True):
             ir = b_prof[name]["ir_per_iter"] / max(a_prof[name]["ir_per_iter"], 1)
         # Counts scale with the iteration count; what each iteration came back with does not.
         a_iters, b_iters = max(a.get("iters", 1), 1), max(b.get("iters", 1), 1)
