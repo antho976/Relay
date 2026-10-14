@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tally.app.BuildConfig
 import com.tally.app.ui.common.LocalMoney
+import com.tally.app.ui.home.statusMonthLine
 import com.tally.app.ui.common.Notice
 import com.tally.app.ui.common.Notices
 import com.tally.app.ui.kit.Dot
@@ -56,6 +57,7 @@ import com.tally.app.ui.kit.IconKey
 import com.tally.app.ui.kit.Key
 import com.tally.app.ui.kit.KeyKind
 import com.tally.app.ui.kit.ListRow
+import com.tally.app.ui.kit.LocalToastClearance
 import com.tally.app.ui.kit.NavRow
 import com.tally.app.ui.kit.Radii
 import com.tally.app.ui.kit.SectionLabel
@@ -65,7 +67,6 @@ import com.tally.app.ui.nav.AppNav
 import com.tally.app.ui.nav.Routes
 import com.tally.app.ui.nav.Space
 import com.tally.app.ui.theme.Tally
-import com.tally.core.Copy
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -197,12 +198,8 @@ fun StatusBar(s: ShellState, onSync: () -> Unit, onMonth: () -> Unit) {
                 T(s.sync.text, style = Tally.type.mono, color = c.ink3, maxLines = 1)
             }
             if (s.period != null) {
-                val text = when {
-                    s.left != null && s.left >= 0 -> fmt.formatWhole(s.left) + " left · " + Copy.plural(s.daysLeft, "day")
-                    s.left != null -> fmt.formatWhole(-s.left) + " over · " + Copy.plural(s.daysLeft, "day")
-                    else -> fmt.formatWhole(s.spent) + " spent · " + Copy.plural(s.daysLeft, "day")
-                }
-                T(text, Modifier.clickable(role = Role.Button, onClick = onMonth), Tally.type.mono, if (s.left != null && s.left < 0) c.heldText else c.ink3, maxLines = 1)
+                val month = statusMonthLine(s.left, s.spent, s.daysLeft, fmt)
+                T(month.text, Modifier.clickable(role = Role.Button, onClick = onMonth), Tally.type.mono, com.tally.app.ui.common.toneColor(month.tone), maxLines = 1)
             }
         }
     }
@@ -265,7 +262,9 @@ fun BoxScope.ToastHost(notices: Notices, modifier: Modifier = Modifier) {
     }
     AnimatedVisibility(
         visible = current != null,
-        modifier = modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding().padding(bottom = 44.dp, start = 16.dp, end = 16.dp),
+        // Above the status bar on a space page; above the keypad and Save on an editor.
+        modifier = modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()
+            .padding(bottom = maxOf(44.dp, LocalToastClearance.current.bottom + 10.dp), start = 16.dp, end = 16.dp),
         enter = fadeIn() + slideInVertically { it / 2 },
         exit = fadeOut() + slideOutVertically { it / 2 },
     ) {

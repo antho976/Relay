@@ -514,6 +514,7 @@ class InsightsViewModel @Inject constructor(
         // Net worth rebuilt from every entry: read once per change, not per lens.
         val worth = combine(ledger.balances(), ledger.allValues(), ledger.flows()) { accounts, values, flows ->
             worthReading(accounts, values, flows, i.current, i.offset, i.day)
+                .copy(tracked = accounts.any { !it.archived && com.tally.app.ui.accounts.tracksBalance(it) })
         }
 
         combine(reads, frame, worth) { r, c, w ->

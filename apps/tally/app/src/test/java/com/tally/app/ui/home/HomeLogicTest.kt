@@ -116,4 +116,55 @@ class HomeLogicTest {
         // A tablet in landscape: 1280dp less the 88dp rail.
         assertEquals(HomeLayout.PANES, homeLayout(1192.dp))
     }
+
+    // ── Spending against the limit ───────────────────────────────────────────
+
+    private val fmt = com.tally.core.MoneyFormatter("CAD", Locale.CANADA)
+
+    @Test fun theHeroSpeaksOfTheLimitOnceItIsReached() {
+        val under = PaceReading(300_000, 141_220, 31, 13)
+        assertEquals(com.tally.core.Copy.daysLine(under), heroLine(under, fmt).text)
+        val over = PaceReading(300_000, 312_000, 31, 13)
+        assertEquals(com.tally.app.ui.common.ToneLine("$120 past your $3,000 limit", com.tally.app.ui.common.LineTone.HELD), heroLine(over, fmt))
+        assertEquals("All of your $3,000 is spent", heroLine(PaceReading(300_000, 300_000, 31, 13), fmt).text)
+        assertEquals(false, heroLine(over, fmt).text.contains("-"))
+    }
+
+    @Test fun todayReadsAgainstItsShareOfTheRoom() {
+        // $3,000 for 31 days, $1,000 spent before today, day 13: $2,000 over 19 days is $105 for today.
+        val r = PaceReading(300_000, 100_000 + 2_300, 31, 13)
+        assertEquals("$82 left for today", todayLine(2_300, r, fmt).text)
+        assertEquals("$105 for today", todayLine(0, PaceReading(300_000, 100_000, 31, 13), fmt).text)
+        val big = PaceReading(300_000, 100_000 + 15_000, 31, 13)
+        assertEquals(com.tally.app.ui.common.ToneLine("$45 past today's share", com.tally.app.ui.common.LineTone.WARN), todayLine(15_000, big, fmt))
+        // Past the limit the hero carries the red; today only says what it took.
+        assertEquals(com.tally.app.ui.common.ToneLine("Spent so far today"), todayLine(4_000, PaceReading(300_000, 310_000, 31, 13), fmt))
+        assertEquals("Nothing spent yet today", todayLine(0, null, fmt).text)
+    }
+
+    @Test fun theStatusBarNeverShowsANegative() {
+        assertEquals("$1,588 left · 18 days", statusMonthLine(158_800, 141_200, 18, fmt).text)
+        val over = statusMonthLine(-12_000, 312_000, 18, fmt)
+        assertEquals("Limit reached · 18 days", over.text)
+        assertEquals(com.tally.app.ui.common.LineTone.HELD, over.tone)
+        assertEquals("Limit reached · 1 day", statusMonthLine(0, 300_000, 1, fmt).text)
+        assertEquals("$1,412 spent · 18 days", statusMonthLine(null, 141_200, 18, fmt).text)
+    }
+
+    @Test fun whereItWentIsTheLargestFewNamed() {
+        val cats = listOf(
+            com.tally.app.data.db.CategoryEntity(id = 1, name = "Groceries", kind = com.tally.core.CategoryKind.EXPENSE, color = 0, icon = "cart"),
+            com.tally.app.data.db.CategoryEntity(id = 2, name = "Dining", kind = com.tally.core.CategoryKind.EXPENSE, color = 6, icon = "dining"),
+        )
+        val totals = listOf(
+            com.tally.app.data.db.CategoryTotal(2, 23_100, 4),
+            com.tally.app.data.db.CategoryTotal(1, 41_800, 9),
+            com.tally.app.data.db.CategoryTotal(null, 1_200, 1),
+            com.tally.app.data.db.CategoryTotal(3, 0, 0),
+        )
+        val top = topCategories(totals, cats)
+        assertEquals(listOf("Groceries", "Dining", "Uncategorized"), top.map { it.name })
+        assertEquals(listOf(41_800L, 23_100L, 1_200L), top.map { it.total })
+        assertEquals(2, topCategories(totals, cats, limit = 2).size)
+    }
 }

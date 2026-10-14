@@ -3,11 +3,14 @@ package com.tally.app.ui.entry
 import com.tally.app.data.db.AccountBalance
 import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.db.TransactionEntity
+import com.tally.app.ui.common.LineTone
+import com.tally.app.ui.common.ToneLine
 import com.tally.core.AccountType
 import com.tally.core.AmountInput
 import com.tally.core.BudgetPeriod
 import com.tally.core.CategoryKind
 import com.tally.core.Frequency
+import com.tally.core.MoneyFormatter
 import com.tally.core.TxType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -15,6 +18,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
+import java.util.Locale
 
 class EntryLogicTest {
 
@@ -170,33 +174,6 @@ class EntryLogicTest {
 
     // ── Readings ─────────────────────────────────────────────────────────────
 
-    @Test fun aNewExpenseTakesFromItsAccount() {
-        assertEquals(-45_438L, balanceAfter(2, visa.balance, null, draft()))
-        assertEquals(chequing.balance, balanceAfter(1, chequing.balance, null, draft()))
-    }
-
-    @Test fun newIncomeAddsToItsAccount() {
-        assertEquals(304_218L, balanceAfter(1, chequing.balance, null, draft(type = TxType.INCOME, account = 1, category = 4)))
-    }
-
-    @Test fun anEditSwapsTheStoredAmountForTheNewOne() {
-        val stored = TransactionEntity(id = 7, type = TxType.EXPENSE, amount = 3_000, date = today, accountId = 2, categoryId = 1)
-        val edited = draft(amount = "50").copy(id = 7)
-        assertEquals(-41_220L + 3_000 - 5_000, balanceAfter(2, -41_220, stored, edited))
-        // Moved to another account: the old one gets the money back, the new one pays.
-        val moved = edited.copy(accountId = 1)
-        assertEquals(-41_220L + 3_000, balanceAfter(2, -41_220, stored, moved))
-        assertEquals(300_000L - 5_000, balanceAfter(1, 300_000, stored, moved))
-    }
-
-    @Test fun aTransferMovesMoneyBetweenItsAccounts() {
-        val t = draft(type = TxType.TRANSFER, amount = "900", account = 1, to = 2, category = null)
-        assertEquals(300_000L - 90_000, balanceAfter(1, 300_000, null, t))
-        assertEquals(-41_220L + 90_000, balanceAfter(2, -41_220, null, t))
-        val same = t.copy(toAccountId = 1)
-        assertEquals(300_000L, balanceAfter(1, 300_000, null, same))
-    }
-
     @Test fun theMonthCountsThisEntryOnce() {
         assertEquals(MonthReading(27_318, 9), categoryMonth(23_100, 8, null, draft(), period))
         val stored = TransactionEntity(id = 7, type = TxType.EXPENSE, amount = 3_000, date = today, accountId = 2, categoryId = 1)
@@ -256,5 +233,84 @@ class EntryLogicTest {
         val row = draft().copy(id = 7).toEntity(stored, null)
         assertEquals(7L, row?.id)
         assertEquals(1_700_000_000_000L, row?.createdAt)
+    }
+
+    // ── Spending, not balances ───────────────────────────────────────────────
+
+    private val fmt = MoneyFormatter("CAD", Locale.CANADA)
+
+    @Test fun theMonthsSpendingCountsThisExpenseOnce() {
+        assertEquals(140_000L + 4_218L, spentAfter(140_000, null, draft(), period))
+        val stored = TransactionEntity(id = 7, type = TxType.EXPENSE, amount = 3_000, date = today, accountId = 2, categoryId = 1)
+        assertEquals(140_000L - 3_000 + 5_000, spentAfter(140_000, stored, draft(amount = "50").copy(id = 7), period))
+        // Income and other months add nothing; spending never reads below zero.
+        assertEquals(140_000L, spentAfter(140_000, null, draft(type = TxType.INCOME, category = 4), period))
+        assertEquals(0L, spentAfter(0, stored, draft(date = today.minusMonths(2)).copy(id = 7), period))
+    }
+
+    @Test fun theAmountsLineSaysTheLimitInWordsNeverANegative() {
+        assertEquals(ToneLine("$1,575 left this month after this"), afterLine(TxType.EXPENSE, 157_530, 142_470, fmt))
+        assertEquals(ToneLine("This reaches this month's limit", LineTone.WARN), afterLine(TxType.EXPENSE, 0, 300_000, fmt))
+        val over = afterLine(TxType.EXPENSE, -3_100, 303_100, fmt)!!
+        assertEquals(ToneLine("Over this month's limit by $31", LineTone.HELD), over)
+        assertFalse(over.text.contains("-"))
+        // Without a budget it is the month's spending; income says nothing; a transfer says it is not spending.
+        assertEquals(ToneLine("$1,424 spent this month with this"), afterLine(TxType.EXPENSE, null, 142_400, fmt))
+        assertNull(afterLine(TxType.INCOME, null, null, fmt))
+        assertTrue(afterLine(TxType.TRANSFER, null, null, fmt)!!.text.contains("not count"))
+    }
+
+    @Test fun theCategoryLineReadsAgainstItsOwnLimit() {
+        assertEquals(ToneLine("$418 of $600 in Groceries this month, $182 left"), categoryLine(TxType.EXPENSE, "Groceries", MonthReading(41_800, 9), 60_000, fmt))
+        assertEquals(ToneLine("$600 of $600 in Groceries this month, its limit reached", LineTone.WARN), categoryLine(TxType.EXPENSE, "Groceries", MonthReading(60_000, 9), 60_000, fmt))
+        assertEquals(ToneLine("$631 of $600 in Groceries this month, $31 over its limit", LineTone.HELD), categoryLine(TxType.EXPENSE, "Groceries", MonthReading(63_100, 10), 60_000, fmt))
+        assertEquals(ToneLine("$231 in Dining this month · 4 entries"), categoryLine(TxType.EXPENSE, "Dining", MonthReading(23_100, 4), null, fmt))
+        assertEquals(ToneLine("Nothing in Salary yet this month"), categoryLine(TxType.INCOME, "Salary", MonthReading(), null, fmt))
+    }
+
+    @Test fun theSavedNoticeSaysWhereTheMonthStands() {
+        assertEquals("Groceries expense saved · $1,575 left this month", savedNotice(TxType.EXPENSE, "Groceries", 157_530, fmt))
+        assertEquals("Groceries expense saved · this month's limit reached", savedNotice(TxType.EXPENSE, "Groceries", 0, fmt))
+        assertEquals("Dining expense saved · $31 over this month's limit", savedNotice(TxType.EXPENSE, "Dining", -3_100, fmt))
+        assertEquals("Salary income saved", savedNotice(TxType.INCOME, "Salary", null, fmt))
+        assertEquals("Transfer saved", savedNotice(TxType.TRANSFER, null, null, fmt))
+    }
+
+    @Test fun anEntryCanBeMadeToRepeatAfterItIsSaved() {
+        val stored = draft().copy(id = 7, repeat = true)
+        // An edit with Repeat on and no bill makes one, as a new entry does.
+        assertTrue(makesBill(stored, linked = null))
+        assertTrue(makesBill(draft().copy(repeat = true), linked = null))
+        // Already a bill's posting: the switch is not offered, and nothing is made twice.
+        val bill = LinkedBill(3, Frequency.MONTHLY, 1, today.plusMonths(1), active = true, autoPost = true)
+        assertFalse(makesBill(stored.copy(recurringId = 3), bill))
+        assertFalse(makesBill(draft(), linked = null))
+    }
+
+    @Test fun aLinkedBillSaysWhenItPostsNext() {
+        val bill = LinkedBill(3, Frequency.MONTHLY, 1, LocalDate.of(2026, 11, 14), active = true, autoPost = true)
+        assertEquals("Posts itself next on 14 Nov", linkedBillLine(bill) { "${it.dayOfMonth} Nov" })
+        assertEquals("Reminds you next on 14 Nov", linkedBillLine(bill.copy(autoPost = false)) { "${it.dayOfMonth} Nov" })
+        assertEquals("Paused: nothing posts until you resume it", linkedBillLine(bill.copy(active = false)) { "" })
+    }
+
+    @Test fun theGridsOrderHoldsForTheVisit() {
+        val first = heldOrder(emptyMap(), TxType.EXPENSE, mapOf(1L to 5, 2L to 3))
+        // A save-and-next that counts one more Dining does not reorder the grid under the thumb.
+        val later = heldOrder(first, TxType.EXPENSE, mapOf(1L to 5, 2L to 9))
+        assertEquals(mapOf(1L to 5, 2L to 3), later[TxType.EXPENSE])
+        // Each kind holds its own first reading; an empty reading holds nothing yet.
+        assertEquals(mapOf(4L to 2), heldOrder(later, TxType.INCOME, mapOf(4L to 2))[TxType.INCOME])
+        assertNull(heldOrder(emptyMap(), TxType.EXPENSE, emptyMap())[TxType.EXPENSE])
+    }
+
+    @Test fun newLinesKeepTheVoice() {
+        val lines = listOfNotNull(
+            afterLine(TxType.EXPENSE, -3_100, null, fmt)?.text,
+            afterLine(TxType.TRANSFER, null, null, fmt)?.text,
+            categoryLine(TxType.EXPENSE, "Groceries", MonthReading(63_100, 10), 60_000, fmt).text,
+            savedNotice(TxType.EXPENSE, "Dining", -3_100, fmt),
+        )
+        lines.forEach { line -> com.tally.core.Copy.banned.forEach { bad -> assertFalse("\"$line\" has \"$bad\"", line.lowercase().contains(bad)) } }
     }
 }

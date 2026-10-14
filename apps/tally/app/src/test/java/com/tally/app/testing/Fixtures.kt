@@ -1,9 +1,11 @@
 package com.tally.app.testing
 
 import com.tally.app.data.db.AccountBalance
+import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.db.TransactionRow
 import com.tally.core.AccountType
 import com.tally.core.BudgetPeriod
+import com.tally.core.CategoryKind
 import com.tally.core.TxType
 import java.time.LocalDate
 
@@ -47,4 +49,11 @@ object Fixtures {
         AccountBalance(3, "Savings", AccountType.SAVINGS, 650_000, false, 2, 725_000, 3),
         AccountBalance(4, "Cash", AccountType.CASH, 12_000, false, 3, 7_350, 9),
     )
+
+    /** The spending categories as a first launch seeds them, most used first, for the entry grid. */
+    val categories: List<CategoryEntity> = listOf(
+        "Groceries" to "cart", "Dining" to "dining", "Transport" to "transport", "Shopping" to "bag",
+        "Coffee" to "coffee", "Home" to "home", "Utilities" to "bolt", "Health" to "health",
+        "Entertainment" to "ticket", "Subscriptions" to "repeat", "Travel" to "flight", "Gifts" to "gift",
+    ).mapIndexed { i, (name, icon) -> CategoryEntity(id = i + 1L, name = name, kind = CategoryKind.EXPENSE, color = i % 12, icon = icon, sortOrder = i) }
 }

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -24,6 +25,8 @@ import com.tally.app.ui.common.rememberMoney
 import com.tally.app.ui.nav.Launches
 import com.tally.app.ui.nav.TallyNavHost
 import com.tally.app.ui.settings.IncomingFiles
+import com.tally.app.ui.kit.LocalToastClearance
+import com.tally.app.ui.kit.ToastClearance
 import com.tally.app.ui.shell.ToastHost
 import com.tally.app.ui.theme.Palette
 import com.tally.app.ui.theme.Tally
@@ -56,7 +59,8 @@ class MainActivity : ComponentActivity() {
             val settings by root.settings.collectAsStateWithLifecycle()
             val s = settings ?: return@setContent
             TallyTheme(Palette.of(s.palette)) {
-                CompositionLocalProvider(LocalMoney provides rememberMoney(s.currency)) {
+                val clearance = remember { ToastClearance() }
+                CompositionLocalProvider(LocalMoney provides rememberMoney(s.currency), LocalToastClearance provides clearance) {
                     Box(Modifier.fillMaxSize().background(Tally.colors.wall)) {
                         TallyNavHost(onboarded = s.onboarded, incoming = incoming, launches = launches)
                         ToastHost(notices)

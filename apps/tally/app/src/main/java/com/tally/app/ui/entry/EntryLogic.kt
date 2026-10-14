@@ -4,10 +4,13 @@ import androidx.compose.runtime.Immutable
 import com.tally.app.data.db.AccountBalance
 import com.tally.app.data.db.CategoryEntity
 import com.tally.app.data.db.TransactionEntity
+import com.tally.app.ui.common.LineTone
+import com.tally.app.ui.common.ToneLine
 import com.tally.core.AmountInput
 import com.tally.core.BudgetPeriod
 import com.tally.core.CategoryKind
 import com.tally.core.Frequency
+import com.tally.core.MoneyFormatter
 import com.tally.core.Recurrence
 import com.tally.core.TxType
 import java.time.LocalDate
@@ -126,24 +129,6 @@ internal fun resolveDraft(
     return draft.copy(accountId = from, toAccountId = to, categoryId = category, categoryChosen = chosen)
 }
 
-/** How an entry moves one account's balance: income adds, an expense takes, a transfer moves. */
-internal fun effectOn(accountId: Long, type: TxType, amount: Long, from: Long?, to: Long?): Long = when {
-    type == TxType.TRANSFER -> (if (to == accountId) amount else 0L) - (if (from == accountId) amount else 0L)
-    from != accountId -> 0L
-    type == TxType.INCOME -> amount
-    else -> -amount
-}
-
-/**
- * [accountId]'s balance once this draft is saved. [balance] already holds the entry as it was
- * stored, so an edit takes the stored version out before putting the draft in.
- */
-internal fun balanceAfter(accountId: Long, balance: Long, original: TransactionEntity?, draft: EntryDraft): Long {
-    val before = original?.let { effectOn(accountId, it.type, it.amount, it.accountId, it.toAccountId) } ?: 0L
-    val to = if (draft.type == TxType.TRANSFER) draft.toAccountId else null
-    return balance - before + effectOn(accountId, draft.type, draft.amount.minor, draft.accountId, to)
-}
-
 /**
  * The draft's category over [period] with this entry in it. [total] and [count] are what the
  * ledger holds, which for an edit already include the stored version, so that is taken out first.
@@ -216,18 +201,88 @@ internal fun byUse(categories: List<CategoryEntity>, uses: Map<Long, Int>): List
         .map { it.value }
 
 /**
- * What the month's [budget] has left once this draft is saved. [spent] is the period's spending as
- * stored, which for an edit already holds the stored entry, so that is taken out first.
+ * The period's spending once this draft is saved. [spent] is the period's spending as stored,
+ * which for an edit already holds the stored entry, so that is taken out first.
  */
-internal fun leftAfter(budget: Long, spent: Long, original: TransactionEntity?, draft: EntryDraft, period: BudgetPeriod): Long {
+internal fun spentAfter(spent: Long, original: TransactionEntity?, draft: EntryDraft, period: BudgetPeriod): Long {
     var total = spent
     if (original != null && original.type == TxType.EXPENSE && original.date in period) total -= original.amount
     if (draft.type == TxType.EXPENSE && draft.date in period) total += draft.amount.minor
-    return budget - total
+    return total.coerceAtLeast(0)
 }
 
-/** The notice after a save that stays for the next one: "Groceries expense saved". */
+/** What the month's [budget] has left once this draft is saved; below zero once it is past the limit. */
+internal fun leftAfter(budget: Long, spent: Long, original: TransactionEntity?, draft: EntryDraft, period: BudgetPeriod): Long =
+    budget - spentAfter(spent, original, draft, period)
+
+/**
+ * The line under the amount: where this month's spending stands once this is in. Tally tracks
+ * spending against the limit, not what an account holds, so no figure here is ever negative:
+ * past the limit it says by how much.
+ */
+internal fun afterLine(type: TxType, leftAfter: Long?, spentAfter: Long?, fmt: MoneyFormatter): ToneLine? = when {
+    type == TxType.TRANSFER -> ToneLine("A transfer moves money between your accounts. Budgets do not count it.")
+    type == TxType.INCOME -> null
+    leftAfter == null -> spentAfter?.let { ToneLine(fmt.formatWhole(it) + " spent this month with this") }
+    leftAfter > 0 -> ToneLine(fmt.formatWhole(leftAfter) + " left this month after this")
+    leftAfter == 0L -> ToneLine("This reaches this month's limit", LineTone.WARN)
+    else -> ToneLine("Over this month's limit by " + fmt.formatWhole(-leftAfter), LineTone.HELD)
+}
+
+/**
+ * The picked category's month with this entry in it: against its own limit when it has one
+ * ("$418 of $600 in Groceries this month, $182 left"), else what it holds and how many entries.
+ */
+internal fun categoryLine(type: TxType, name: String, month: MonthReading, budget: Long?, fmt: MoneyFormatter): ToneLine {
+    if (type == TxType.EXPENSE && budget != null && budget > 0) {
+        val head = fmt.formatWhole(month.total) + " of " + fmt.formatWhole(budget) + " in " + name + " this month"
+        return when {
+            month.total > budget -> ToneLine(head + ", " + fmt.formatWhole(month.total - budget) + " over its limit", LineTone.HELD)
+            month.total == budget -> ToneLine("$head, its limit reached", LineTone.WARN)
+            else -> ToneLine(head + ", " + fmt.formatWhole(budget - month.total) + " left")
+        }
+    }
+    if (month.count == 0) return ToneLine("Nothing in $name yet this month")
+    return ToneLine(fmt.formatWhole(month.total) + " in " + name + " this month · " + com.tally.core.Copy.plural(month.count, "entry", "entries"))
+}
+
+/** "Groceries expense saved", the start of every save's notice. */
 internal fun savedLine(type: TxType, categoryName: String?): String = when (type) {
     TxType.TRANSFER -> "Transfer saved"
     else -> listOfNotNull(categoryName, typeLabel(type).lowercase()).joinToString(" ").replaceFirstChar { it.uppercase() } + " saved"
 }
+
+/** The notice after a save: what was saved, then where the month stands ("$1,575 left this month"). */
+internal fun savedNotice(type: TxType, categoryName: String?, leftAfter: Long?, fmt: MoneyFormatter): String {
+    val head = savedLine(type, categoryName)
+    if (type != TxType.EXPENSE || leftAfter == null) return head
+    return head + " · " + when {
+        leftAfter > 0 -> fmt.formatWhole(leftAfter) + " left this month"
+        leftAfter == 0L -> "this month's limit reached"
+        else -> fmt.formatWhole(-leftAfter) + " over this month's limit"
+    }
+}
+
+/** A bill an entry already belongs to, as the editor names it. */
+@Immutable
+data class LinkedBill(val id: Long, val frequency: Frequency, val interval: Int, val nextDate: LocalDate, val active: Boolean, val autoPost: Boolean)
+
+/** The line under "Repeats": when it posts next and how, or that it is paused. */
+internal fun linkedBillLine(bill: LinkedBill, day: (LocalDate) -> String): String = when {
+    !bill.active -> "Paused: nothing posts until you resume it"
+    bill.autoPost -> "Posts itself next on " + day(bill.nextDate)
+    else -> "Reminds you next on " + day(bill.nextDate)
+}
+
+/**
+ * Whether saving makes a bill: Repeat is on and the entry is not already one's posting (a link to
+ * a bill that was since deleted counts as none, so the entry can repeat again).
+ */
+internal fun makesBill(draft: EntryDraft, linked: LinkedBill?): Boolean = draft.repeat && linked == null
+
+/**
+ * The grid's order for a visit, held from the first reading of the owner's habits so a cell does
+ * not move under the thumb when a save-and-next counts one more use.
+ */
+internal fun heldOrder(held: Map<TxType, Map<Long, Int>>, type: TxType, uses: Map<Long, Int>): Map<TxType, Map<Long, Int>> =
+    if (type in held || uses.isEmpty()) held else held + (type to uses)

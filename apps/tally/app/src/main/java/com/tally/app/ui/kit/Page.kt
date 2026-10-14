@@ -23,8 +23,14 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.tally.app.ui.theme.Tally
@@ -34,6 +40,24 @@ fun gutter(width: Dp): Dp = if (width < 600.dp) 16.dp else 24.dp
 
 /** Room under a page's last row for the floating Add key. */
 val ADD_CLEARANCE = 84.dp
+
+/**
+ * Where the one toast must clear: each page's pinned footer (an editor's keypad and Save) reports
+ * its height here while it is on screen, so a notice never lands on a key. Keyed per footer, so a
+ * page leaving during a transition does not wipe the one arriving.
+ */
+class ToastClearance {
+    private val footers = mutableStateMapOf<Any, Dp>()
+
+    /** The tallest footer showing, or zero on a page without one. */
+    val bottom: Dp get() = footers.values.maxOrNull() ?: 0.dp
+
+    internal fun set(key: Any, height: Dp) { footers[key] = height }
+
+    internal fun clear(key: Any) { footers.remove(key) }
+}
+
+val LocalToastClearance = staticCompositionLocalOf { ToastClearance() }
 
 /**
  * A space page's body, as Relay's source pages: a readable column that scrolls, the page's title
@@ -152,7 +176,14 @@ fun DetailPage(
             }
         }
         footer?.let { f ->
-            Column(Modifier.fillMaxWidth().background(c.console).navigationBarsPadding()) {
+            val clearance = LocalToastClearance.current
+            val density = LocalDensity.current
+            val key = remember { Any() }
+            DisposableEffect(clearance, key) { onDispose { clearance.clear(key) } }
+            Column(
+                Modifier.fillMaxWidth().background(c.console).navigationBarsPadding()
+                    .onSizeChanged { clearance.set(key, with(density) { it.height.toDp() }) },
+            ) {
                 Hairline(color = c.edge)
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Column(Modifier.column().fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = f)

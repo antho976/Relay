@@ -189,4 +189,38 @@ class AccountsLogicTest {
             )
         lines.forEach { line -> Copy.banned.forEach { bad -> assertFalse("\"$line\" has \"$bad\"", line.lowercase().contains(bad)) } }
     }
+
+    // ── Spending first ───────────────────────────────────────────────────────
+
+    @Test fun theListLeadsWithWhatEachAccountPaidOut() {
+        val s = buildAccountsState(listOf(chequing, visa, savings, old), defaultAccountId = 1, entries = 0, spent = mapOf(1L to 30_000, 2L to 90_000, 4L to 5_000))
+        // Archived accounts do not count toward the month.
+        assertEquals(120_000L, s.monthSpent)
+        assertEquals(2L, s.topSpender?.account?.id)
+        assertEquals(.75f, s.active.first { it.account.id == 2L }.spentShare, 0.0001f)
+        assertEquals(0L, s.active.first { it.account.id == 3L }.spent)
+    }
+
+    @Test fun aBalanceShowsOnlyWhereOneWasGiven() {
+        // Visa never had a balance to start from: its spending is not a debt to show.
+        val s = buildAccountsState(listOf(chequing, visa, savings), defaultAccountId = 1, entries = 0)
+        assertTrue(s.active.first { it.account.id == 1L }.tracked)
+        assertFalse(s.active.first { it.account.id == 2L }.tracked)
+        assertEquals(1_000_000L, s.trackedHeld)
+        assertEquals(0L, s.trackedOwed)
+        assertTrue(s.anyTracked)
+        val valued = account(5, AccountType.INVESTMENT, 1_000).copy(valuedOn = java.time.LocalDate.of(2026, 10, 1))
+        assertTrue(tracksBalance(valued))
+        assertFalse(buildAccountsState(listOf(visa), 0, 0).anyTracked)
+    }
+
+    @Test fun aBalanceReadsInWordsNeverAsANegative() {
+        val fmt = MoneyFormatter("CAD", Locale.CANADA)
+        assertEquals("holds $3,000.00", balanceWords(AccountType.CHEQUING, 300_000, fmt))
+        assertEquals("owes $412.20", balanceWords(AccountType.CREDIT, -41_220, fmt))
+        assertEquals("$50.00 below zero", balanceWords(AccountType.CHEQUING, -5_000, fmt))
+        val line = buildAccountsState(listOf(chequing, visa), defaultAccountId = 1, entries = 0).active
+        assertEquals("Chequing · default · holds $3,000.00", accountCaption(line[0], fmt))
+        assertEquals("Credit card", accountCaption(line[1], fmt))
+    }
 }
