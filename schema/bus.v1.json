@@ -170,7 +170,7 @@
       }
     },
     "app.status": {
-      "summary": "Engine status: paths, live sessions, providers",
+      "summary": "Engine status: paths, live sessions, providers, gaming mode",
       "kind": "query",
       "audit": "never",
       "undo": "none",
@@ -6781,6 +6781,9 @@
           "items": {
             "$ref": "#/$defs/ProviderInfo"
           }
+        },
+        "gaming": {
+          "$ref": "#/$defs/GamingStatus"
         }
       },
       "required": [
@@ -6789,7 +6792,8 @@
         "store_path",
         "socket_path",
         "sessions_live",
-        "providers"
+        "providers",
+        "gaming"
       ]
     },
     "ProviderInfo": {
@@ -6845,6 +6849,41 @@
       "enum": [
         "claude",
         "codex"
+      ]
+    },
+    "GamingStatus": {
+      "type": "object",
+      "properties": {
+        "supported": {
+          "type": "boolean"
+        },
+        "on": {
+          "type": "boolean"
+        },
+        "auto": {
+          "type": "boolean"
+        },
+        "threads": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "game": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "supported",
+        "on",
+        "auto",
+        "threads",
+        "active"
       ]
     },
     "AppQuitIn": {

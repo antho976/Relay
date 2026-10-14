@@ -761,7 +761,7 @@ All `app.*` mutations except `app.resources.watch` are `user_only` (§9.1 layer 
 | op | attrs | payload → result |
 |---|---|---|
 | `app.version` | query | `{}` → `{ version, instance, build: {profile, git_sha, built_at} }` |
-| `app.status` | query | `{}` → `{ pid, uptime_s, store_path, socket_path, sessions_live: number, providers: ProviderInfo[] }` |
+| `app.status` | query | `{}` → `{ pid, uptime_s, store_path, socket_path, sessions_live: number, providers: ProviderInfo[], gaming: GamingStatus }` — `GamingStatus = { supported, on, auto, threads, active, game? }`: gaming mode (`settings: performance.gaming.{on, auto, threads}`, default off, off, 2). While `active` (`on`, or `auto` with a game running: Steam's launch reaper, gamescope or Lutris's wrapper), every agent and what it runs share `threads` CPU threads at the lowest CPU and disk priority — each agent is moved into a scope under the user manager's `relay-agents.slice`, and the cap is that slice's `CPUQuota`/`CPUWeight`/`IOWeight`, so the engine and the window stay uncapped. `supported` is false without a systemd user manager. The engine emits `gaming.changed` (the same object) when it changes |
 | `app.quit` | mutation · always · global | `{ force?: bool }` → `{}` — refuses (`conflict`/`app.sessions_live`) unless `force` or no live sessions |
 | `app.resources.get` | query | `{}` → `{ relay: {pid, rss_mb, cpu_pct}, panes: {session, pid, rss_mb, cpu_pct}[], worktrees: {path, disk_mb}[], store_mb, total_rss_mb }` |
 | `app.resources.watch` | mutation · never · global | `{ on: bool }` → `{}` — while any client watches, `resource.sample` events flow (§1.3); otherwise none |

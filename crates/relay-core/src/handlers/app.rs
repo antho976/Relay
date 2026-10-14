@@ -40,6 +40,10 @@ pub fn register(e: &mut Engine) {
             socket_path: eng.socket_path.lock().unwrap().clone().unwrap_or_default(),
             sessions_live: eng.live_pty_count() as i64,
             providers: crate::providers::list(ctx.tx())?,
+            gaming: {
+                let g = crate::gaming::status();
+                relay_bus::ops::app::GamingStatus { supported: g.supported, on: g.on, auto: g.auto, threads: g.threads, active: g.active, game: g.game }
+            },
         })
     });
     e.register::<Quit>(|ctx, p| {
