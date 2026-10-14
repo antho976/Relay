@@ -589,7 +589,10 @@ impl Store {
                             std::thread::sleep(std::time::Duration::from_millis(10));
                         }
                     }
-                    std::thread::yield_now();
+                    // Not `yield_now`: the store mutex is not fair, and a loop that re-locks at once
+                    // wins it back before a woken waiter runs, so a request waited out several
+                    // batches (14 ms behind a 64 MB copy). A millisecond off the lock hands it over.
+                    std::thread::sleep(BACKUP_STEP_PAUSE);
                 }
             })();
             let _guard = self.lock();
@@ -645,6 +648,8 @@ pub struct BackupInfo {
 
 /// Pages copied per step of [`Store::backup`]: 1024 × 4 KiB, a few ms of work under the lock.
 const BACKUP_STEP_PAGES: std::os::raw::c_int = 1024;
+/// How long [`Store::backup`] stays off the store lock between batches.
+const BACKUP_STEP_PAUSE: std::time::Duration = std::time::Duration::from_millis(1);
 /// Busy steps in a row before a backup gives up, 10 ms apart.
 const BACKUP_BUSY_RETRIES: u32 = 200;
 

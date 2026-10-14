@@ -871,11 +871,11 @@ fn backup_before(ctx: &Unlocked, reason: &str) -> Result<Option<String>, BusErro
     if store.path() == Path::new(":memory:") {
         return Ok(None);
     }
-    ctx.read(|conn| {
-        store.backup_with(conn, reason).map(|path| Some(path.display().to_string())).map_err(|error| {
-            BusError::unavailable("project.backup_failed", format!("backing up the store before the removal: {error}"))
-                .with_hint("nothing was removed; free space for the store's backups/ directory and try again")
-        })
+    // Not through `ctx.read`: a copy of the whole store under the lock stalled every request for
+    // as long as the file took to copy (142-453 ms on a 260 MB store, BASELINE-2026-10-14 §1.1).
+    ctx.backup_store(reason).map(|path| Some(path.display().to_string())).map_err(|error| {
+        BusError::unavailable("project.backup_failed", format!("backing up the store before the removal: {error}"))
+            .with_hint("nothing was removed; free space for the store's backups/ directory and try again")
     })
 }
 
