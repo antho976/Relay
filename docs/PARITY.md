@@ -42,7 +42,10 @@ drafts block dismissal and application closure until saved or discarded.
   mirror's state on that same stream (starting, running with the real picture size,
   then stopped, failed with its code, or lost), so a window never waits on silence.
   Input is answered from memory, queued moves collapse into the newest, and downs
-  and ups are never dropped; overflow no longer stops capture.
+  and ups are never dropped; overflow no longer stops capture. The client decodes
+  in process (libavcodec, low delay, one access unit per packet, one context across
+  rotations) and hands GTK the YUV planes, which it converts on the GPU; the
+  `ffmpeg` child and its RGB pipe are gone. `scripts/mirror-latency/` measures it.
 - Device watchers are leased per socket. Duplicate requests retain all schema and
   actor validation; disconnect releases only that connection's watcher.
 - Closing Notes hides its retained window and preserves drafts. The main

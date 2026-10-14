@@ -26,3 +26,7 @@ pango = { version = "0.22.9", features = ["v1_56"] }
 async-channel = "2.5.0"
 vte4 = { version = "0.10.0", features = ["v0_84"] }
 sourceview5 = { version = "0.11.2", features = ["v5_18"] }
+# The device mirror's H.264 decoder: libavcodec's types and constants, bound by bindgen against
+# the installed headers. The library itself is opened at run time (`mirror/avcodec.rs`), so a
+# machine without it still runs everything but the mirror.
+ffmpeg-sys-next = { version = "=9.0.1", default-features = false, features = ["avcodec"] }

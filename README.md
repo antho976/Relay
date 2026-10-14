@@ -11,7 +11,9 @@ this rebuild from that backlog.
 
 ## Run
 
-Requires GTK 4.22+, VTE 0.84+ and GtkSourceView 5.18+. From this checkout:
+Requires GTK 4.22+, VTE 0.84+ and GtkSourceView 5.18+, and to build, FFmpeg's development headers
+(libavcodec, for the device mirror's decoder) and libclang (bindgen reads those headers). From this
+checkout:
 
 ```fish
 ./run.sh
@@ -63,8 +65,11 @@ Open a repository from the sidebar, then add solo agents or a group of
 one or two builders sharing a reviewer. Code can edit the primary checkout or
 an agent worktree. Board, Notes, Skills, Settings, usage and Android device tools
 use the same bus as the CLI. [Parity coverage](docs/PARITY.md) records the current
-implementation and validation boundaries. Mirroring and notification audio use
-the installed FFmpeg tools (`ffmpeg` and `ffplay`).
+implementation and validation boundaries. The device mirror decodes in process with
+FFmpeg's libavcodec, opened when a mirror starts (`libavcodec.so` of the major version Relay was
+built against; without it everything else still runs and the mirror says what is missing), and
+notification audio plays through `ffplay`. `scripts/mirror-latency/` measures the mirror end to
+end against your own phone.
 
 **Plugins** bundle skills, standing agent rules, documentation and MCP servers, and are switched
 on per project from the Plugins page or the plugin key on a project's sidebar row. The first is

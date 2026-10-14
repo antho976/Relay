@@ -241,6 +241,8 @@ impl Client {
                             break;
                         }
                     }
+                    // RELAY_MIRROR_TRACE only (0 otherwise): when a video packet's line was complete.
+                    let line_done = crate::mirror::trace::now();
                     if oversized {
                         // One reply or event too large for this connection fails on its own;
                         // the connection, its subscriptions and every other request stay up.
@@ -304,8 +306,11 @@ impl Client {
                             .await
                             .map_err(|_| Error::Disconnected)?;
                     } else if matches!(shape, Shape::Frame) {
-                        let frame = serde_json::from_slice(&line)
+                        let frame: Frame = serde_json::from_slice(&line)
                             .map_err(|e| Error::Protocol(e.to_string()))?;
+                        if line_done != 0 && frame.stream == "mirror" && frame.data.is_string() {
+                            crate::mirror::trace::trace!(stage = "recv", mono_ns = crate::mirror::trace::monotonic(), mirror_id = frame.mirror_id.unwrap_or(0), seq = frame.seq, line_ns = line_done, bytes = line.len());
+                        }
                         reader_notices
                             .send(Notice::Frame(frame))
                             .await

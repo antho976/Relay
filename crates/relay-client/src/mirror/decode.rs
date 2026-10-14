@@ -1,90 +1,34 @@
-//! The video half of the mirror without the FFmpeg child: the decoder's command line, what its
-//! stdin receives for each engine packet, which packets it can take, and the pictures it sends
-//! back.
+//! The video half of the mirror without the decoder: which engine packets the decoder can take,
+//! how they become the whole access units it is fed, and the colors a decoded picture is shown in.
+//! The decoder itself (libavcodec, in process) and the GTK texture live in `apps/relay-native`'s
+//! `mirror/avcodec.rs`; nothing here links to either, so `cargo test` stays headless.
 //!
-//! The FFmpeg line is measured, not guessed (scratchpad harness: a real 464×1024 H.264 stream
-//! at 30 fps through a disposable engine, then a static screen):
-//!
-//! | input options                                   | AUD | median latency | frames never shown |
-//! |-------------------------------------------------|-----|----------------|--------------------|
-//! | `-probesize 32 -analyzeduration 0` (the old line) | no  | 535 ms         | 16 of 180          |
-//! | `+ -fflags nobuffer -flags low_delay -threads 1`  | no  | 2039 ms        | 61                 |
-//! | `+ -threads 1`                                    | no  | 34 ms          | 1                  |
-//! | `+ -threads 1`, `-fps_mode passthrough`           | yes | 1 ms           | 0                  |
-//!
-//! Two separate holds were stacking. Frame threading keeps one picture per decoder thread in
-//! flight (16 on a 16-core machine: 535 ms at 30 fps), and the raw H.264 parser cannot finish a
-//! frame until the *next* one starts — so the last picture before the screen goes still never
-//! appears at all. `-threads 1` removes the first; an access-unit delimiter written after each
-//! packet ends the frame at once and removes the second. `-fflags nobuffer` is a trap here: it
-//! makes this FFmpeg (n9) hold frames far longer, so it is deliberately absent.
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+//! The pipeline is measured, not guessed (`scripts/mirror-latency/`). It used to be an `ffmpeg`
+//! child: base64 packets in on stdin, PPM pictures back on stdout. Two holds stacked in that
+//! child — frame threading kept one picture per thread in flight, and the raw H.264 parser could
+//! not finish a frame until the next one started — and the RGB pictures coming back were
+//! 130–460 MB/s through a pipe. In process, with low-delay flags, one decoding thread and whole
+//! access units (no parser), a picture leaves the decoder the moment its packet goes in; GTK
+//! takes the YUV planes as they are and converts them on the GPU.
 
-/// H.264 access-unit delimiter (NAL type 9, primary_pic_type 7 = any slice type).
-pub const AUD: [u8; 6] = [0, 0, 0, 1, 0x09, 0xf0];
-
-pub fn ffmpeg_args() -> Vec<&'static str> {
-    vec![
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-probesize",
-        "32",
-        "-analyzeduration",
-        "0",
-        "-threads",
-        "1",
-        "-f",
-        "h264",
-        "-i",
-        "pipe:0",
-        "-an",
-        "-fps_mode",
-        "passthrough",
-        "-f",
-        "image2pipe",
-        "-vcodec",
-        "ppm",
-        "-pix_fmt",
-        "rgb24",
-        "pipe:1",
-    ]
-}
-
-/// What the decoder's stdin receives for one engine packet (`[flags][annex-b bytes]`, flag bit 0
-/// = codec config). Config packets carry SPS/PPS and belong to the frame that follows them, so
-/// only a picture gets the delimiter that closes it.
-pub fn decoder_bytes(packet: &[u8]) -> Option<Vec<u8>> {
-    let (flags, payload) = packet.split_first()?;
-    if payload.is_empty() {
-        return None;
-    }
-    let mut out = Vec::with_capacity(payload.len() + AUD.len());
-    out.extend_from_slice(payload);
-    if flags & 1 == 0 {
-        out.extend_from_slice(&AUD);
-    }
-    Some(out)
-}
+/// The engine's packet flags (`[flags][annex-b bytes]`): bit 0 is codec config (SPS/PPS).
+pub const CONFIG: u8 = 1;
+/// Bit 1: a key frame.
+pub const KEY: u8 = 2;
 
 /// Decides, packet by packet, whether the decoder can take what arrives. A decoder cannot join
 /// an H.264 stream mid-GOP, so after a sequence gap (the engine dropped packets for a slow
 /// window) or a late join, it waits for the next codec config — and asks for one once.
 ///
-/// It also says when the decoder itself has to go. FFmpeg scales every picture to the size of
-/// the first one it decoded (`-autoscale`), so after the device rotates, a landscape stream came
-/// back squashed into the portrait frame — and with it the size every touch is sent with, which
-/// the server then ignores as "generated for a different device size". `-noautoscale` is no way
-/// out: FFmpeg n9 crashes on the size change. So a stream of a new size gets a new decoder.
+/// A rotation needs nothing from the gate any more: the scrcpy server restarts its encoder and
+/// sends the new SPS ahead of the new size's key frame, and libavcodec's H.264 decoder takes an
+/// SPS change in stride. (The `ffmpeg` child could not: it scaled every picture to the size of
+/// the first one, and crashed with `-noautoscale`, so every size change used to cost a new child.)
 #[derive(Debug)]
 pub struct Gate {
     last: Option<u64>,
     waiting: bool,
     asked: bool,
-    /// The stream's size from the engine's latest status.
-    size: Option<(u32, u32)>,
-    /// The size the running decoder took its codec config at; `None` until it has one.
-    decoding: Option<(u32, u32)>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -97,7 +41,7 @@ pub enum Admit {
 
 impl Default for Gate {
     fn default() -> Self {
-        Self { last: None, waiting: true, asked: false, size: None, decoding: None }
+        Self { last: None, waiting: true, asked: false }
     }
 }
 
@@ -111,11 +55,6 @@ impl Gate {
         if config {
             self.waiting = false;
             self.asked = false;
-            if self.decoding.is_none() {
-                // With no status seen yet the size is unknown; the first one then replaces this
-                // decoder, which costs a restart rather than a squashed picture.
-                self.decoding = Some(self.size.unwrap_or((0, 0)));
-            }
             return Admit::Write;
         }
         if !self.waiting {
@@ -130,118 +69,80 @@ impl Gate {
     }
 }
 
-impl Gate {
-    /// The stream's size from an engine status. `true` when the running decoder holds a stream of
-    /// another size and must be replaced; the gate then waits for the codec config that follows
-    /// the size change (the engine sends the status first), asking for one only if a picture
-    /// arrives without it.
-    pub fn resize(&mut self, width: u32, height: u32) -> bool {
-        if width == 0 || height == 0 {
-            return false;
+/// An engine packet's flags and its Annex B bytes; `None` when it carries nothing.
+pub fn split(packet: &[u8]) -> Option<(u8, &[u8])> {
+    let (flags, payload) = packet.split_first()?;
+    (!payload.is_empty()).then_some((*flags, payload))
+}
+
+/// Turns admitted packets into what the decoder is fed: exactly one whole access unit per call,
+/// so a picture is complete — and decoded — the moment its packet arrives, with no parser
+/// waiting for the next frame to start. A config packet (SPS/PPS) is no picture: it is held and
+/// goes in ahead of the picture that follows it, as scrcpy's own client does.
+#[derive(Debug, Default)]
+pub struct Assembler {
+    config: Vec<u8>,
+}
+
+impl Assembler {
+    /// The access unit to decode for one admitted packet, if it completes one.
+    pub fn push(&mut self, flags: u8, payload: &[u8]) -> Option<Vec<u8>> {
+        if flags & CONFIG != 0 {
+            self.config.clear();
+            self.config.extend_from_slice(payload);
+            return None;
         }
-        self.size = Some((width, height));
-        if self.decoding.is_none_or(|size| size == (width, height)) {
-            return false;
-        }
-        self.decoding = None;
-        self.waiting = true;
-        self.asked = false;
-        true
+        let mut unit = std::mem::take(&mut self.config);
+        unit.extend_from_slice(payload);
+        Some(unit)
     }
 }
 
-pub struct Pixels {
-    pub width: i32,
-    pub height: i32,
-    pub rgb: Vec<u8>,
+/// The colors a decoded picture is shown in, as ITU-T H.273 (CICP) code points: what GTK's
+/// `GdkCicpParams` takes, and what libavcodec reports a stream's VUI as (`AVColorSpace` values are
+/// H.273 matrix coefficients).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Color {
+    pub primaries: u32,
+    pub transfer: u32,
+    pub matrix: u32,
+    pub full_range: bool,
 }
 
-pub async fn ppm<R: tokio::io::AsyncRead + Unpin>(read: &mut BufReader<R>) -> Result<Pixels, String> {
-    async fn line<R: tokio::io::AsyncRead + Unpin>(read: &mut BufReader<R>) -> Result<String, String> {
-        let mut value = String::new();
-        let count = read.read_line(&mut value).await.map_err(|e| e.to_string())?;
-        if count == 0 || value.len() > 64 {
-            return Err("The video decoder stopped.".into());
-        }
-        Ok(value)
-    }
-    if line(read).await?.trim() != "P6" {
-        return Err("The video decoder sent something other than an RGB picture.".into());
-    }
-    let size = line(read).await?;
-    let mut sizes = size.split_whitespace();
-    let mut dimension = || {
-        sizes
-            .next()
-            .and_then(|s| s.parse::<usize>().ok())
-            .filter(|n| *n > 0 && *n <= 4096)
-            .ok_or("The video decoder reported an impossible picture size.")
+/// H.273 matrix coefficients.
+pub const BT709: u32 = 1;
+pub const UNSPECIFIED: u32 = 2;
+pub const BT470BG: u32 = 5;
+pub const BT601: u32 = 6;
+pub const BT2020_NCL: u32 = 9;
+/// H.273 transfer characteristics 13: IEC 61966-2-1, the sRGB curve.
+pub const SRGB: u32 = 13;
+/// libavcodec's `AVColorRange`: 1 is narrow ("MPEG", 16–235), 2 is full ("JPEG", 0–255).
+pub const RANGE_FULL: u32 = 2;
+
+/// The colors to show a picture in, from the stream's VUI as libavcodec reports it (`matrix` an
+/// `AVColorSpace`, `range` an `AVColorRange`). Only the matrix and the range come from the stream:
+///
+/// - Android's encoders tag their screen captures in the VUI (the emulator's: BT.709, narrow
+///   range) or leave them unspecified, which is read as BT.601, narrow — what swscale assumed for
+///   the `ffmpeg` child too.
+/// - Primaries and transfer are always sRGB's. The device composes its screen in sRGB and the
+///   encoder converts those values straight to YUV; a VUI that says BT.709 or SMPTE 170M transfer
+///   describes a camera, not this, and honoring it would shift every mid-tone away from what the
+///   phone shows (and from what the RGB path showed — swscale applied the matrix and range only).
+pub fn color(matrix: u32, range: u32) -> Color {
+    let matrix = match matrix {
+        BT709 => BT709,
+        BT2020_NCL => BT2020_NCL,
+        // BT470BG and SMPTE 170M are the same matrix; unspecified, RGB and the rest fall back to it.
+        _ => BT601,
     };
-    let width = dimension()?;
-    let height = dimension()?;
-    if line(read).await?.trim() != "255" {
-        return Err("The video decoder used an unsupported pixel depth.".into());
-    }
-    let mut rgb = vec![0; width * height * 3];
-    read.read_exact(&mut rgb).await.map_err(|e| e.to_string())?;
-    Ok(Pixels { width: width as i32, height: height as i32, rgb })
+    Color { primaries: 1, transfer: SRGB, matrix, full_range: range == RANGE_FULL }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn decoder_frames_preserve_rotation_and_reject_bad_dimensions() {
-        let data = b"P6\n2 1\n255\nabcdefP6\n1 2\n255\nghijkl";
-        let mut reader = BufReader::new(&data[..]);
-        let a = ppm(&mut reader).await.unwrap();
-        let b = ppm(&mut reader).await.unwrap();
-        assert_eq!((a.width, a.height, a.rgb), (2, 1, b"abcdef".to_vec()));
-        assert_eq!((b.width, b.height, b.rgb), (1, 2, b"ghijkl".to_vec()));
-        let mut reader = BufReader::new(&b"P6\n9000 9000\n255\n"[..]);
-        assert!(ppm(&mut reader).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn a_picture_the_decoder_did_not_finish_is_an_error_not_a_frame() {
-        for data in [
-            &b"P3\n1 1\n255\n\0\0\0"[..],  // ASCII PPM, not raw RGB
-            b"P6\n1 1\n65535\n\0\0\0\0\0\0", // 16-bit samples
-            b"P6\n0 1\n255\n",              // zero-sized
-            b"P6\n2\n255\n\0\0\0\0\0\0",    // one dimension
-            b"P6\n2 1\n255\nabc",           // pixels cut off mid-picture
-            b"",                            // decoder exited
-        ] {
-            let mut reader = BufReader::new(data);
-            assert!(ppm(&mut reader).await.is_err(), "{:?}", String::from_utf8_lossy(data));
-        }
-    }
-
-    #[test]
-    fn the_decoder_line_is_the_measured_one() {
-        let args = ffmpeg_args();
-        let has = |pair: [&str; 2]| args.windows(2).any(|w| w == pair);
-        assert!(has(["-threads", "1"]), "frame threading holds one picture per thread");
-        assert!(has(["-fps_mode", "passthrough"]));
-        // Input options must come before `-i` to apply to the decoder.
-        let input = args.iter().position(|a| *a == "-i").unwrap();
-        assert!(args.iter().position(|a| *a == "-threads").unwrap() < input);
-        // Measured 4x worse than doing nothing; never add it back.
-        assert!(!args.contains(&"nobuffer"));
-    }
-
-    #[test]
-    fn pictures_get_a_delimiter_and_config_does_not() {
-        let picture = [2u8, 0, 0, 0, 1, 0x65, 0xaa];
-        let bytes = decoder_bytes(&picture).unwrap();
-        assert_eq!(&bytes[..6], &picture[1..]);
-        assert_eq!(&bytes[6..], &AUD);
-        let config = [1u8, 0, 0, 0, 1, 0x67];
-        assert_eq!(decoder_bytes(&config).unwrap(), config[1..].to_vec());
-        assert!(decoder_bytes(&[0]).is_none());
-        assert!(decoder_bytes(&[]).is_none());
-    }
 
     #[test]
     fn a_gap_waits_for_the_next_config_and_asks_once() {
@@ -259,32 +160,14 @@ mod tests {
     }
 
     #[test]
-    fn a_new_stream_size_replaces_the_decoder_and_waits_for_its_config() {
+    fn a_rotation_keeps_feeding_the_same_decoder() {
+        // The engine reports the new size, then the new stream's config; the gate has nothing to
+        // do with sizes, so the packets flow without a reset or a skip.
         let mut gate = Gate::default();
-        // The estimate, then the real size, both before any config: nothing to replace.
-        assert!(!gate.resize(576, 1280));
-        assert!(!gate.resize(576, 1264));
         assert_eq!(gate.admit(1, true), Admit::Write);
         assert_eq!(gate.admit(2, false), Admit::Write);
-        // A status that repeats the size (a name, a state) keeps the decoder.
-        assert!(!gate.resize(576, 1264));
-        assert!(!gate.resize(0, 0));
-        // The device rotated: a new decoder, fed from the config that follows.
-        assert!(gate.resize(1264, 576));
         assert_eq!(gate.admit(3, true), Admit::Write);
         assert_eq!(gate.admit(4, false), Admit::Write);
-        // Back to portrait; this time a picture slips in ahead of the config.
-        assert!(gate.resize(576, 1264));
-        assert_eq!(gate.admit(5, false), Admit::Reset);
-        assert_eq!(gate.admit(6, true), Admit::Write);
-        assert!(!gate.resize(576, 1264));
-    }
-
-    #[test]
-    fn a_config_before_any_status_is_replaced_by_the_first_one() {
-        let mut gate = Gate::default();
-        assert_eq!(gate.admit(1, true), Admit::Write);
-        assert!(gate.resize(576, 1264));
     }
 
     #[test]
@@ -296,5 +179,44 @@ mod tests {
         // A gap that lands exactly on a config packet needs nothing.
         assert_eq!(gate.admit(50, true), Admit::Write);
         assert_eq!(gate.admit(51, false), Admit::Write);
+    }
+
+    #[test]
+    fn packets_split_into_flags_and_bytes() {
+        assert_eq!(split(&[2, 0, 0, 0, 1, 0x65]), Some((KEY, &[0u8, 0, 0, 1, 0x65][..])));
+        assert_eq!(split(&[1]), None);
+        assert_eq!(split(&[]), None);
+    }
+
+    #[test]
+    fn config_goes_in_with_the_picture_after_it() {
+        let mut units = Assembler::default();
+        let sps = [0u8, 0, 0, 1, 0x67, 0x42];
+        let idr = [0u8, 0, 0, 1, 0x65, 0x88];
+        let p = [0u8, 0, 0, 1, 0x41, 0x9a];
+        assert_eq!(units.push(CONFIG, &sps), None);
+        assert_eq!(units.push(KEY, &idr), Some([&sps[..], &idr[..]].concat()));
+        // The config is spent: the next picture goes in alone.
+        assert_eq!(units.push(0, &p), Some(p.to_vec()));
+        // A newer config replaces one that never met its picture.
+        assert_eq!(units.push(CONFIG, &[0, 0, 0, 1, 0x67, 0x01]), None);
+        assert_eq!(units.push(CONFIG, &sps), None);
+        assert_eq!(units.push(KEY, &idr), Some([&sps[..], &idr[..]].concat()));
+    }
+
+    #[test]
+    fn colors_take_the_matrix_and_range_from_the_stream_and_srgb_for_the_rest() {
+        let narrow_601 = Color { primaries: 1, transfer: SRGB, matrix: BT601, full_range: false };
+        // BT.601 as tagged, and what an untagged stream means.
+        assert_eq!(color(BT601, 1), narrow_601);
+        assert_eq!(color(BT470BG, 1), narrow_601);
+        assert_eq!(color(UNSPECIFIED, 0), narrow_601);
+        assert_eq!(color(0, 0), narrow_601);
+        assert_eq!(color(BT709, 1), Color { matrix: BT709, ..narrow_601 });
+        assert_eq!(color(BT709, RANGE_FULL), Color { matrix: BT709, full_range: true, ..narrow_601 });
+        assert_eq!(color(BT2020_NCL, 1).matrix, BT2020_NCL);
+        // A matrix GTK has no conversion for (BT.2020 constant luminance, YCgCo) falls back.
+        assert_eq!(color(10, 1), narrow_601);
+        assert_eq!(color(8, 1), narrow_601);
     }
 }
