@@ -74,6 +74,7 @@ impl Ui {
         self.render_status_counts();
         self.refresh_usage(false);
         self.refresh_devices();
+        self.refresh_gaming();
     }
 
     pub(super) fn refresh_devices(self: &Rc<Self>) {

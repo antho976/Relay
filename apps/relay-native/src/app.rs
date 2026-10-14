@@ -16,6 +16,8 @@ mod onboarding;
 mod shell;
 #[path = "status.rs"]
 mod status;
+#[path = "gaming_key.rs"]
+mod gaming_key;
 
 pub fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or("")
@@ -422,6 +424,7 @@ pub fn run(rt: Handle) -> glib::ExitCode {
             include_str!("css/start.css"),
             include_str!("css/settings.css"),
             include_str!("css/launch.css"),
+            include_str!("css/gaming.css"),
         ));
         if let Some(display) = gtk::gdk::Display::default() {
             gtk::style_context_add_provider_for_display(
@@ -947,6 +950,8 @@ fn status_bar() -> (StatusBar, status::UsageState) {
     resources_key.set_child(Some(&resource_content));
     let usage = status::UsageState::new();
     bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+    bottom.append(&gaming_key::build());
+    bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
     bottom.append(&devices_key);
     bottom.append(&gtk::Separator::new(gtk::Orientation::Vertical));
     bottom.append(&resources_key);
@@ -1256,6 +1261,7 @@ impl Ui {
         scrim: &gtk::Button,
     ) {
         let ui = self;
+        gaming_key::wire(ui);
         let weak = Rc::downgrade(ui);
         top.palette_key.connect_clicked(move |_| {
             if let Some(ui) = weak.upgrade() {
@@ -1515,7 +1521,7 @@ impl Ui {
                         return;
                     }
                     *ui.client.borrow_mut() = Some(client);
-                    if let Err(e)=ui.call("bus.subscribe",json!({"events":["project.changed","project.deleted","workspace.changed","workspace.deleted","session.changed","task.changed","task.deleted","mailbox.new","mailbox.changed","guardrail.held","guardrail.resolved","guardrail.grant_used","overlap.changed","notes.changed","notes.deleted","file.changed","git.changed","worktree.changed","module.changed","module.deleted","skill.changed","skill.deleted","plugin.changed","settings.changed","provider.update.changed","notify.new","notify.changed","device.changed","device.lease.acquired","device.lease.released","run.changed","run.crash","device.signing.changed","avd.changed","layout.changed","ui.changed","ui.toast","usage.changed","integration.changed","integration.result","money.changed","arbiter.changed","gym.changed","thread.changed","thread.message","thread.delta","thread.local"]})).await {
+                    if let Err(e)=ui.call("bus.subscribe",json!({"events":["project.changed","project.deleted","workspace.changed","workspace.deleted","session.changed","task.changed","task.deleted","mailbox.new","mailbox.changed","guardrail.held","guardrail.resolved","guardrail.grant_used","overlap.changed","notes.changed","notes.deleted","file.changed","git.changed","worktree.changed","module.changed","module.deleted","skill.changed","skill.deleted","plugin.changed","settings.changed","provider.update.changed","notify.new","notify.changed","device.changed","device.lease.acquired","device.lease.released","run.changed","run.crash","device.signing.changed","avd.changed","layout.changed","ui.changed","ui.toast","usage.changed","integration.changed","integration.result","money.changed","arbiter.changed","gym.changed","thread.changed","thread.message","thread.delta","thread.local","gaming.changed"]})).await {
                         if generation == ui.generation.get() {
                             ui.show_error(&e.to_string());
                         }
@@ -1582,6 +1588,11 @@ impl Ui {
                                         continue;
                                     }
                                     "device.changed" | "run.changed" => ui.refresh_devices(),
+                                    // The status bar's key is all that shows it.
+                                    "gaming.changed" => {
+                                        gaming_key::render(&e.payload);
+                                        continue;
+                                    }
                                     _ => {}
                                 }
                                 if e.ev == "notify.new" {
