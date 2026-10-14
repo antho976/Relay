@@ -280,6 +280,7 @@ impl Ui {
             }
             moved += 1;
         }
+        self.sync_focus_keys();
         tracing::debug!(panes = names.len(), moved, elapsed_us = started.elapsed().as_micros() as u64, "wall layout");
         self.update_attachments();
     }
@@ -754,7 +755,7 @@ impl Ui {
             "restorable" | "exited" => {
                 ("Resume", "media-playback-start-symbolic", "session.resume", "Resume where it left off")
             }
-            _ => ("Park", "media-playback-pause-symbolic", "session.park", "Park: release the process, keep the worktree and scrollback"),
+            _ => ("Park", "park", "session.park", "Park: release the process, keep the worktree and scrollback"),
         };
         let action = icon_button(icon, tooltip);
         action.set_child(Some(&crate::icons::image(icon, 15)));

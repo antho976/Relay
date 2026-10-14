@@ -21,6 +21,8 @@ struct Agents {
     /// One settings key per pane, kept across header rebuilds so an open popover survives the
     /// state changes an agent produces every few seconds.
     keys: HashMap<String, (Weak<Pane>, gtk::Button)>,
+    /// Each pane's focus key, so a layout change can turn its corners in or out.
+    focus_keys: HashMap<String, glib::WeakRef<gtk::Button>>,
     /// The last phone install per session: run id and what it last said.
     phone: HashMap<String, Phone>,
     next_placeholder: u32,
@@ -67,6 +69,61 @@ fn row_key(icon: &str, caption: &str, tooltip: &str) -> gtk::Button {
     key.set_tooltip_text(Some(tooltip));
     key.update_property(&[gtk::accessible::Property::Label(caption)]);
     key
+}
+
+/// A compact key for the row under the identity: icon and one word.
+fn tool_key(icon: &str, caption: &str, tooltip: &str) -> gtk::Button {
+    let key = gtk::Button::new();
+    key.add_css_class("agent-menu-tool");
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row.set_halign(gtk::Align::Center);
+    row.append(&crate::icons::image(icon, 14));
+    row.append(&label(caption, "agent-menu-caption"));
+    key.set_child(Some(&row));
+    key.set_tooltip_text(Some(tooltip));
+    key.update_property(&[gtk::accessible::Property::Label(caption)]);
+    key
+}
+
+const MENU_WIDTH: i32 = 320;
+
+/// Cap the scrolling part so the whole popover fits on the roomier side of its key, however
+/// small the pane it belongs to; a confirmation opening in the footer takes its room from the
+/// scrolling part, and gives it back when it closes.
+fn fit_menu(key: &gtk::Button, scroller: &gtk::ScrolledWindow, foot: &gtk::Box) {
+    let Some(root) = key.root() else { return };
+    let Some(bounds) = key.compute_bounds(&root) else { return };
+    let window = root.height() as f32;
+    // The arrow, the popover's border and a margin from the window edge.
+    let room = bounds.y().max(window - bounds.y() - bounds.height()) - 28.0;
+    let base = room as i32 - foot.measure(gtk::Orientation::Vertical, MENU_WIDTH).1;
+    let mut strips = Vec::new();
+    let mut child = foot.first_child();
+    while let Some(widget) = child {
+        if let Some(revealer) = widget.downcast_ref::<gtk::Revealer>() {
+            strips.push(revealer.clone());
+        }
+        child = widget.next_sibling();
+    }
+    let apply: Rc<dyn Fn()> = Rc::new({
+        let (scroller, strips) = (scroller.downgrade(), strips.iter().map(|r| r.downgrade()).collect::<Vec<_>>());
+        move || {
+            let Some(scroller) = scroller.upgrade() else { return };
+            let open: i32 = strips
+                .iter()
+                .filter_map(|r| r.upgrade())
+                .filter(|r| r.reveals_child())
+                .filter_map(|r| r.child())
+                .map(|strip| strip.measure(gtk::Orientation::Vertical, MENU_WIDTH).1)
+                .sum();
+            scroller.set_max_content_height((base - open).max(120));
+        }
+    });
+    apply();
+    for revealer in strips {
+        let apply = apply.clone();
+        revealer.connect_reveal_child_notify(move |_| apply());
+    }
 }
 
 fn section(title: &str) -> gtk::Label {
@@ -384,20 +441,51 @@ impl Ui {
         true
     }
 
+    fn shown_alone(&self, name: &str) -> bool {
+        *self.mode.borrow() == "focus" && self.focused.borrow().as_deref() == Some(name)
+    }
+
+    /// Expand while the agent shares the wall, collapse while it is shown alone.
+    fn paint_focus_key(&self, key: &gtk::Button, name: &str) {
+        let alone = self.shown_alone(name);
+        if key.child().is_some() && key.has_css_class("alone") == alone {
+            return;
+        }
+        let (icon, caption) = if alone { ("shrink", "Back to the wall") } else { ("expand", "Focus this agent (show it alone)") };
+        key.set_child(Some(&crate::icons::image(icon, 15)));
+        key.set_tooltip_text(Some(caption));
+        key.update_property(&[gtk::accessible::Property::Label(caption)]);
+        if alone { key.add_css_class("alone") } else { key.remove_css_class("alone") }
+    }
+
+    /// Bring every focus key in line with the wall's mode; `layout` calls it after each change.
+    pub(super) fn sync_focus_keys(&self) {
+        let keys: Vec<(String, gtk::Button)> = with(|a| {
+            a.focus_keys.retain(|_, key| key.upgrade().is_some());
+            a.focus_keys.iter().filter_map(|(name, key)| Some((name.clone(), key.upgrade()?))).collect()
+        });
+        for (name, key) in keys {
+            self.paint_focus_key(&key, &name);
+        }
+    }
+
     /// Focus and Agent settings, last in the header.
     pub(super) fn agent_controls(self: &Rc<Self>, pane: &Rc<Pane>, session: &Value) {
         let name = text(session, "name").to_string();
-        let zoom = icon_button("focus", "Focus this agent (show it alone)");
-        zoom.set_child(Some(&crate::icons::image("focus", 15)));
+        let zoom = gtk::Button::new();
+        zoom.add_css_class("quiet");
+        zoom.add_css_class("icon-key");
+        self.paint_focus_key(&zoom, &name);
         let weak = Rc::downgrade(self);
         let n = name.clone();
         zoom.connect_clicked(move |_| {
             if let Some(ui) = weak.upgrade() {
-                let already = *ui.mode.borrow() == "focus" && ui.focused.borrow().as_ref() == Some(&n);
+                let already = ui.shown_alone(&n);
                 *ui.focused.borrow_mut() = Some(n.clone());
                 ui.set_mode(if already { "grid" } else { "focus" });
             }
         });
+        with(|a| a.focus_keys.insert(name.clone(), zoom.downgrade()));
         pane.actions.append(&zoom);
         let existing = with(|a| {
             a.keys.retain(|_, (owner, _)| owner.strong_count() > 0);
@@ -442,15 +530,28 @@ impl Ui {
             let popover = popover.clone();
             glib::idle_add_local_once(move || popover.unparent());
         });
+        // What the agent is and how it runs scrolls; Close stays pinned under it, so a pane
+        // squeezed small by a full wall can still be closed from its own menu.
+        let frame = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        frame.set_size_request(MENU_WIDTH, -1);
         let body = gtk::Box::new(gtk::Orientation::Vertical, 2);
         body.add_css_class("agent-menu");
-        body.set_size_request(340, -1);
-        popover.set_child(Some(&body));
-        self.agent_settings_body(&popover, &body, &session);
+        let scroller = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .child(&body)
+            .build();
+        let foot = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        foot.add_css_class("agent-menu-foot");
+        frame.append(&scroller);
+        frame.append(&foot);
+        popover.set_child(Some(&frame));
+        self.agent_settings_body(&popover, &body, &foot, &session);
+        fit_menu(key, &scroller, &foot);
         popover.popup();
     }
 
-    fn agent_settings_body(self: &Rc<Self>, popover: &gtk::Popover, body: &gtk::Box, session: &Value) {
+    fn agent_settings_body(self: &Rc<Self>, popover: &gtk::Popover, body: &gtk::Box, foot: &gtk::Box, session: &Value) {
         let name = text(session, "name").to_string();
         let state = text(session, "state").to_string();
 
@@ -459,9 +560,11 @@ impl Ui {
         head.add_css_class("agent-menu-head");
         let title = label(&name, "agent-menu-title");
         title.set_hexpand(true);
+        title.set_xalign(0.0);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         head.append(&title);
         let chip = label(&state.replace('_', " ").to_uppercase(), "agent-menu-state");
+        chip.set_valign(gtk::Align::Center);
         chip.add_css_class(match state.as_str() {
             "running" | "spawning" | "idle" => "live",
             "blocked" => "held",
@@ -469,7 +572,9 @@ impl Ui {
         });
         head.append(&chip);
         body.append(&head);
-        body.append(&label(&format!("{} · {}", text(session, "provider"), text(session, "role")), "agent-menu-meta"));
+        let meta = label(&format!("{} · {}", text(session, "provider"), text(session, "role")), "agent-menu-meta");
+        meta.set_xalign(0.0);
+        body.append(&meta);
         for (icon, value, ellipsize) in [
             ("branch", text(session, "branch"), gtk::pango::EllipsizeMode::Middle),
             ("folder", text(session, "worktree"), gtk::pango::EllipsizeMode::Start),
@@ -482,22 +587,26 @@ impl Ui {
             line.append(&crate::icons::image(icon, 12));
             let path = label(value, "mono");
             path.set_selectable(true);
+            // Selectable by pointer, but not the first stop for focus: opening the menu would
+            // otherwise park a text caret in the branch name.
+            path.set_focusable(false);
             path.set_ellipsize(ellipsize);
             path.set_hexpand(true);
+            path.set_xalign(0.0);
             path.set_tooltip_text(Some(value));
             line.append(&path);
             body.append(&line);
         }
 
-        // Arrange.
-        body.append(&section("ARRANGE"));
-        let arrange = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        arrange.set_homogeneous(true);
+        // Place on the wall and the launch brief: one row of keys.
+        let tools = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        tools.add_css_class("agent-menu-tools");
+        tools.set_homogeneous(true);
         for (icon, caption, tip, delta) in [
-            ("arrow-up", "Move earlier", "Move this agent one place earlier on the wall", -1),
-            ("arrow-down", "Move later", "Move this agent one place later on the wall", 1),
+            ("arrow-up", "Earlier", "Move this agent one place earlier on the wall", -1),
+            ("arrow-down", "Later", "Move this agent one place later on the wall", 1),
         ] {
-            let key = row_key(icon, caption, tip);
+            let key = tool_key(icon, caption, tip);
             let weak = Rc::downgrade(self);
             let n = name.clone();
             key.connect_clicked(move |_| {
@@ -512,10 +621,9 @@ impl Ui {
                     ui.save_layout();
                 }
             });
-            arrange.append(&key);
+            tools.append(&key);
         }
-        body.append(&arrange);
-        let brief = row_key("brief", "Inspect launch brief", "Read the instructions and peer brief this agent was started with");
+        let brief = tool_key("brief", "Brief", "Read the instructions and peer brief this agent was started with");
         let weak = Rc::downgrade(self);
         let n = name.clone();
         let p = popover.downgrade();
@@ -541,127 +649,89 @@ impl Ui {
                 }
             });
         });
-        body.append(&brief);
+        tools.append(&brief);
+        body.append(&tools);
 
-        // Launch options.
-        body.append(&section("LAUNCH OPTIONS"));
-        let spawned = !session["spawned_at"].is_null();
-        let options = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let model = gtk::Entry::builder().text(text(session, "model")).placeholder_text("Provider default").hexpand(true).build();
-        let effort = gtk::Entry::builder().text(text(session, "effort")).placeholder_text("Default").width_chars(8).build();
-        for (caption, entry) in [("Model", &model), ("Effort", &effort)] {
-            let column = gtk::Box::new(gtk::Orientation::Vertical, 3);
-            column.append(&label(caption, "agent-menu-field"));
-            entry.set_sensitive(!spawned);
-            if spawned {
-                entry.set_tooltip_text(Some("Fixed once the agent has started"));
-            }
-            column.append(entry);
-            column.set_hexpand(caption == "Model");
-            options.append(&column);
-        }
-        body.append(&options);
-        if spawned {
-            body.append(&label("Model and effort are fixed once the agent has started.", "agent-menu-hint"));
-        }
-        let mut switches = Vec::new();
-        for (caption, hint, key) in [
-            ("Agent bus writes", "Let this agent change tasks, notes and settings through Relay", "bus_writes"),
-            ("UI control", "Let this agent drive the Relay window", "allow_ui"),
+        // Permissions: a switch takes effect when flipped, and flips back if the engine refuses.
+        body.append(&section("PERMISSIONS"));
+        for (caption, hint, field) in [
+            ("Agent bus writes", "Change tasks, notes and settings through Relay", "bus_writes"),
+            ("UI control", "Drive the Relay window", "allow_ui"),
         ] {
             let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);
             line.add_css_class("agent-menu-switch");
             let words = gtk::Box::new(gtk::Orientation::Vertical, 1);
             words.set_hexpand(true);
-            words.append(&label(caption, "agent-menu-caption"));
+            let title = label(caption, "agent-menu-caption");
+            title.set_xalign(0.0);
+            words.append(&title);
             let sub = label(hint, "agent-menu-hint");
+            sub.set_xalign(0.0);
             sub.set_wrap(true);
             sub.set_max_width_chars(34);
             words.append(&sub);
             line.append(&words);
             let switch = gtk::Switch::new();
             switch.set_valign(gtk::Align::Center);
-            switch.set_active(session[key] == true);
+            switch.set_active(session[field] == true);
             switch.update_property(&[gtk::accessible::Property::Label(caption)]);
             line.append(&switch);
             body.append(&line);
-            switches.push(switch);
-        }
-        let save = gtk::Button::with_label("Save changes");
-        save.add_css_class("primary");
-        save.add_css_class("agent-menu-save");
-        save.set_sensitive(false);
-        let original = (text(session, "model").to_string(), text(session, "effort").to_string(), session["bus_writes"] == true, session["allow_ui"] == true);
-        let saved = original.clone();
-        let dirty: Rc<dyn Fn()> = Rc::new({
-            let (model, effort, writes, control, save) = (model.downgrade(), effort.downgrade(), switches[0].downgrade(), switches[1].downgrade(), save.downgrade());
-            move || {
-                let (Some(model), Some(effort), Some(writes), Some(control), Some(save)) = (model.upgrade(), effort.upgrade(), writes.upgrade(), control.upgrade(), save.upgrade()) else { return };
-                save.set_sensitive((model.text().to_string(), effort.text().to_string(), writes.is_active(), control.is_active()) != original);
-            }
-        });
-        for entry in [&model, &effort] {
-            let dirty = dirty.clone();
-            entry.connect_changed(move |_| dirty());
-        }
-        for switch in &switches {
-            let dirty = dirty.clone();
-            switch.connect_active_notify(move |_| dirty());
-        }
-        let weak = Rc::downgrade(self);
-        let n = name.clone();
-        let (writes, control) = (switches[0].clone(), switches[1].clone());
-        let p = popover.downgrade();
-        save.connect_clicked(move |key| {
-            let Some(ui) = weak.upgrade() else { return };
-            // Only what changed: the engine refuses an empty model or effort, and any model or
-            // effort at all once the agent has started.
-            let (old_model, old_effort, old_writes, old_control) = &saved;
-            let mut payload = json!({"session": n});
-            if writes.is_active() != *old_writes {
-                payload["bus_writes"] = writes.is_active().into();
-            }
-            if control.is_active() != *old_control {
-                payload["allow_ui"] = control.is_active().into();
-            }
-            if !spawned {
-                for (key, entry, old) in [("model", &model, old_model), ("effort", &effort, old_effort)] {
-                    let value = entry.text().trim().to_string();
-                    if !value.is_empty() && value != *old {
-                        payload[key] = value.into();
-                    }
+            let reverting = Rc::new(Cell::new(false));
+            let weak = Rc::downgrade(self);
+            let n = name.clone();
+            switch.connect_active_notify(move |switch| {
+                if reverting.get() {
+                    return;
                 }
-            }
-            if payload.as_object().is_some_and(|fields| fields.len() == 1) {
-                ui.show_error("Nothing to save: a model or effort cannot be cleared back to the provider default.");
-                return;
-            }
-            key.set_sensitive(false);
-            let key = key.clone();
-            let p = p.clone();
-            glib::spawn_future_local(async move {
-                match ui.call("session.update", payload).await {
-                    Ok(session) => {
-                        ui.upsert_session(&session);
-                        if let Some(p) = p.upgrade() {
-                            p.popdown();
+                let Some(ui) = weak.upgrade() else { return };
+                let on = switch.is_active();
+                switch.set_sensitive(false);
+                let (switch, n, reverting) = (switch.clone(), n.clone(), reverting.clone());
+                glib::spawn_future_local(async move {
+                    match ui.call("session.update", json!({"session": n, field: on})).await {
+                        Ok(session) => ui.upsert_session(&session),
+                        Err(e) => {
+                            ui.show_error(&e.to_string());
+                            reverting.set(true);
+                            switch.set_active(!on);
+                            reverting.set(false);
                         }
                     }
-                    Err(e) => {
-                        ui.show_error(&e.to_string());
-                        key.set_sensitive(true);
-                    }
-                }
+                    switch.set_sensitive(true);
+                });
             });
-        });
-        body.append(&save);
+        }
+
+        // Model and effort: editable until the agent starts, then only shown.
+        body.append(&section("MODEL"));
+        if !session["spawned_at"].is_null() {
+            for (caption, value, fallback) in [("Model", text(session, "model"), "Provider default"), ("Effort", text(session, "effort"), "Default")] {
+                let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+                line.add_css_class("agent-menu-fact");
+                line.set_tooltip_text(Some("Fixed once the agent has started"));
+                let key = label(caption, "agent-menu-hint");
+                key.set_xalign(0.0);
+                line.append(&key);
+                let shown = label(if value.is_empty() { fallback } else { value }, "mono");
+                shown.set_hexpand(true);
+                shown.set_xalign(1.0);
+                shown.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+                if value.is_empty() {
+                    shown.add_css_class("unset");
+                }
+                line.append(&shown);
+                body.append(&line);
+            }
+        } else {
+            self.launch_options(popover, body, session);
+        }
 
         // Phone.
         body.append(&section("PHONE"));
         self.phone_section(body, session);
 
-        // Session.
-        body.append(&section("SESSION"));
+        // Session: pinned under the scrolling part.
         // An exited agent (it quit, crashed or lost its login) starts fresh the same way.
         if matches!(state.as_str(), "restorable" | "exited") {
             let fresh = row_key("refresh", "Start fresh", "Start a new provider conversation in this same session and worktree; the saved context is cleared");
@@ -678,9 +748,9 @@ impl Ui {
                 }
             });
             let c = confirm.clone();
-            fresh.connect_clicked(move |_| c.set_reveal_child(true));
-            body.append(&fresh);
-            body.append(&confirm);
+            fresh.connect_clicked(move |_| c.set_reveal_child(!c.reveals_child()));
+            foot.append(&fresh);
+            foot.append(&confirm);
         }
         let close = row_key("power", "Close session…", "Stop the agent and take it off the wall; the worktree is kept unless you choose otherwise, and the branch unless its work is already merged");
         close.add_css_class("agent-menu-danger");
@@ -711,8 +781,78 @@ impl Ui {
         });
         let c = confirm.clone();
         close.connect_clicked(move |_| c.set_reveal_child(!c.reveals_child()));
-        body.append(&close);
-        body.append(&confirm);
+        foot.append(&close);
+        foot.append(&confirm);
+    }
+
+    /// Model and effort for an agent that has not started yet, saved together.
+    fn launch_options(self: &Rc<Self>, popover: &gtk::Popover, body: &gtk::Box, session: &Value) {
+        let name = text(session, "name").to_string();
+        let options = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let model = gtk::Entry::builder().text(text(session, "model")).placeholder_text("Provider default").hexpand(true).build();
+        let effort = gtk::Entry::builder().text(text(session, "effort")).placeholder_text("Default").width_chars(8).build();
+        for (caption, entry) in [("Model", &model), ("Effort", &effort)] {
+            let column = gtk::Box::new(gtk::Orientation::Vertical, 3);
+            let title = label(caption, "agent-menu-field");
+            title.set_xalign(0.0);
+            column.append(&title);
+            column.append(entry);
+            column.set_hexpand(caption == "Model");
+            options.append(&column);
+        }
+        body.append(&options);
+        let save = gtk::Button::with_label("Save");
+        save.add_css_class("primary");
+        save.add_css_class("agent-menu-save");
+        save.set_halign(gtk::Align::End);
+        save.set_sensitive(false);
+        let original = (text(session, "model").to_string(), text(session, "effort").to_string());
+        let dirty: Rc<dyn Fn()> = Rc::new({
+            let (model, effort, save, original) = (model.downgrade(), effort.downgrade(), save.downgrade(), original.clone());
+            move || {
+                let (Some(model), Some(effort), Some(save)) = (model.upgrade(), effort.upgrade(), save.upgrade()) else { return };
+                save.set_sensitive((model.text().to_string(), effort.text().to_string()) != original);
+            }
+        });
+        for entry in [&model, &effort] {
+            let dirty = dirty.clone();
+            entry.connect_changed(move |_| dirty());
+        }
+        let weak = Rc::downgrade(self);
+        let p = popover.downgrade();
+        save.connect_clicked(move |key| {
+            let Some(ui) = weak.upgrade() else { return };
+            // Only what changed: the engine refuses an empty model or effort.
+            let mut payload = json!({"session": name});
+            for (field, entry, old) in [("model", &model, &original.0), ("effort", &effort, &original.1)] {
+                let value = entry.text().trim().to_string();
+                if !value.is_empty() && value != *old {
+                    payload[field] = value.into();
+                }
+            }
+            if payload.as_object().is_some_and(|fields| fields.len() == 1) {
+                ui.show_error("Nothing to save: a model or effort cannot be cleared back to the provider default.");
+                return;
+            }
+            key.set_sensitive(false);
+            let key = key.clone();
+            let p = p.clone();
+            glib::spawn_future_local(async move {
+                match ui.call("session.update", payload).await {
+                    Ok(session) => {
+                        ui.upsert_session(&session);
+                        if let Some(p) = p.upgrade() {
+                            p.popdown();
+                        }
+                    }
+                    Err(e) => {
+                        ui.show_error(&e.to_string());
+                        key.set_sensitive(true);
+                    }
+                }
+            });
+        });
+        body.append(&save);
     }
 
     // ------------------------------------------------------------------ build & install on phone

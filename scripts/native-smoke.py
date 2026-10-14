@@ -181,6 +181,7 @@ for line in sys.stdin:
         PAGES_ONLY = [p for p in os.environ.get("RELAY_SMOKE_PAGES", "").split(",") if p]
         for viewport, size, page in (("desktop", "1440,900", "agents"), ("compact", "1024,768", "agents"), ("launch-preview", "1024,768", "launch-preview"), ("palette", "1024,768", "palette"), ("layouts", "1024,768", "layouts"), ("usage", "1440,900", "usage"), ("board", "1440,900", "board"), ("board-compact", "1024,768", "board"), ("mailbox", "1024,768", "mailbox"), ("guardrails", "1024,768", "guardrails"), ("code", "1440,900", "code"), ("resources", "1440,900", "resources"), *((name,"1440,900",name) for name in ("notes","modules","settings","skills","plugins","project-skills","project-plugins","notifications","devices","launch")),
                                      *((name,"1440,900",name) for name in ("money-home","money-transactions","money-data","start")), ("money-plan","1024,768","money-plan"), ("money-entry","1024,768","money-entry"),
+                                     ("agent-settings","1440,900","agent-settings"), ("agent-settings-compact","1024,768","agent-settings"),
                                      *((frame,"1440,900","start") for frame in START_FRAMES)):
             if PAGES_ONLY and viewport not in PAGES_ONLY:
                 continue
@@ -211,7 +212,9 @@ for line in sys.stdin:
             assert output.is_file(), f"No screenshot at {output}"
             captured.append(output.name)
             expected_size = (1080, 760) if page == "notes" else tuple(map(int, size.split(",")))
-            assert struct.unpack(">II", output.read_bytes()[16:24]) == expected_size, viewport
+            # The agent settings capture is the popover alone, sized by its content.
+            if page != "agent-settings":
+                assert struct.unpack(">II", output.read_bytes()[16:24]) == expected_size, viewport
             contents = (OUT / f"{viewport}.log").read_text()
             check_gtk_log(contents)
             assert "Shell layouts verified" in contents, contents
