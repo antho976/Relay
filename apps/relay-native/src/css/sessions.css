@@ -72,6 +72,17 @@ button.notification-open:hover { background: @wash; }
 popover.agent-settings > contents { background: @slab; border: 1px solid @strong; border-radius: 2px; padding: 0; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45); }
 popover.agent-settings > arrow { background: @slab; border: 1px solid @strong; }
 .agent-menu { padding: 12px 10px 10px 10px; }
+/* Start fresh and Close, pinned under the part that scrolls. */
+.agent-menu-foot { padding: 4px 10px 6px 10px; border-top: 1px solid @edge; }
+.agent-menu-tools { margin-top: 10px; }
+popover.agent-settings button.agent-menu-tool { background: transparent; border: 1px solid @edge; color: @ink; min-height: 30px; padding: 0 6px; border-radius: 2px; }
+popover.agent-settings button.agent-menu-tool:hover { background: @wash; border-color: @strong; }
+button.agent-menu-tool image { color: @secondary; }
+button.agent-menu-tool:hover image { color: @ink; }
+button.agent-menu-tool .agent-menu-caption { font-size: 12px; }
+.agent-menu-fact { padding: 3px 4px; }
+.agent-menu-fact .mono { color: @ink; font-size: 12px; }
+.agent-menu-fact .mono.unset { color: @secondary; }
 /* The popover lives under the pane header in the widget tree; undo the header's 22px keys. */
 popover.agent-settings button { min-height: 28px; min-width: 0; padding: 0 10px; font-size: 12px; }
 .agent-menu-head { padding: 0 4px; }
@@ -93,8 +104,8 @@ button.agent-menu-row:hover image { color: @ink; }
 .agent-menu-hint { color: @secondary; font-size: 11px; }
 .agent-menu entry { min-height: 28px; background: @screen; }
 .agent-menu entry:disabled { opacity: 0.55; }
-.agent-menu-switch { padding: 6px 4px; }
-popover.agent-settings button.agent-menu-save { margin-top: 6px; min-height: 30px; }
+.agent-menu-switch { padding: 4px 4px; }
+popover.agent-settings button.agent-menu-save { margin-top: 6px; min-height: 28px; padding: 0 16px; }
 .agent-menu-devices { margin: 2px 6px; }
 .agent-menu-phone { padding: 2px 6px 0 6px; }
 .agent-menu-phone label { font-family: 'Fira Mono', monospace; font-size: 11px; }

@@ -159,6 +159,9 @@ pub fn image_with_stroke(name: &str, size: i32, stroke: f64) -> gtk::Image {
         "pause" => {
             r##"<rect x="3.25" y="2.75" width="3.5" height="10.5" rx="1" /><rect x="9.25" y="2.75" width="3.5" height="10.5" rx="1" />"##
         }
+        // An agent pane's Park key: two plain strokes in the header's line weight, not the
+        // filled media bars, so it sits level with the focus and settings keys beside it.
+        "park" => r##"<path d="M5.75 3.5v9M10.25 3.5v9" />"##,
         // A thread's send key while the agent answers: stopping, not pausing.
         "stop" => r##"<rect x="4.5" y="4.5" width="7" height="7" rx="1.5" fill="currentColor" />"##,
         "resume" => r##"<path d="M3 8a5 5 0 1 0 1.5-3.5" /><path d="M3 2.5V5h2.5" />"##,
@@ -196,6 +199,9 @@ pub fn image_with_stroke(name: &str, size: i32, stroke: f64) -> gtk::Image {
         "focus" => {
             r##"<rect x="2" y="2" width="12" height="12" rx="2.25" /><rect x="5.25" y="5.25" width="5.5" height="5.5" rx="1" />"##
         }
+        // An agent pane's focus key: corners pulled out to show it alone, pushed in to go back.
+        "expand" => r##"<path d="M9.5 2.5h4v4M13.5 2.5L9.25 6.75M6.5 13.5h-4v-4M2.5 13.5l4.25-4.25" />"##,
+        "shrink" => r##"<path d="M9.25 3v3.75H13M13.5 2.5L9.25 6.75M6.75 13V9.25H3M2.5 13.5l4.25-4.25" />"##,
         "refresh" => r##"<path d="M13 8a5 5 0 1 1-1.5-3.5" /><path d="M13 2.5V5h-2.5" />"##,
         "download" => r##"<path d="M8 2v8M4.5 7L8 10.5 11.5 7M3 13h10" />"##,
         "user" => r##"<circle cx="8" cy="5.5" r="2.5" /><path d="M3 14a5 5 0 0 1 10 0" />"##,

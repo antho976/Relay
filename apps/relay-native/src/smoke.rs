@@ -902,6 +902,35 @@ pub fn install(ui: &Rc<Ui>) {
                 navigate.show_launch(None);
                 return;
             }
+            // The agent settings popover of the pane nearest the middle of a full wall, where it
+            // has the least room on either side; the capture is the popover itself.
+            if page == "agent-settings" {
+                navigate.navigate("agents");
+                let ui = navigate.clone();
+                track("agent settings", async move {
+                    wait_for(|| tightest_settings_key(&ui).is_some(), "Agent settings key shown").await?;
+                    tightest_settings_key(&ui).unwrap().emit_clicked();
+                    wait_for(|| agent_settings_popover(&ui).is_some(), "Agent settings open").await?;
+                    glib::timeout_future(Duration::from_millis(600)).await;
+                    let popover = agent_settings_popover(&ui).unwrap();
+                    let key = tightest_settings_key(&ui).unwrap();
+                    let bounds = key.compute_bounds(&ui.window).unwrap();
+                    println!("AGENT_SETTINGS window={} key_y={} popover={}", ui.window.height(), bounds.y(), popover.height());
+                    require(popover.height() <= ui.window.height(), "Agent settings popover fits the window")?;
+                    // The smaller window captures the tallest state: Close's confirmation open.
+                    if ui.window.height() < 800 {
+                        let close = util::find(&popover, &|w| w.has_css_class("agent-menu-danger")).ok_or("Close key")?;
+                        close.downcast::<gtk::Button>().unwrap().emit_clicked();
+                        glib::timeout_future(Duration::from_millis(400)).await;
+                        let go = util::find(&popover, &|w| w.has_css_class("agent-menu-confirm-go") && w.is_mapped()).ok_or("Close confirmation shown")?;
+                        let bounds = go.compute_bounds(&popover).ok_or("Close confirmation placed")?;
+                        println!("AGENT_SETTINGS confirm popover={} go_bottom={}", popover.height(), bounds.y() + bounds.height());
+                        require(popover.height() <= ui.window.height(), "Agent settings popover fits with Close's confirmation open")?;
+                    }
+                    Ok(())
+                });
+                return;
+            }
             // The agents bar's Agent skills and Plugins sheets, over the agents page.
             if matches!(page.as_str(), "project-skills" | "project-plugins") {
                 navigate.navigate("agents");
@@ -1011,6 +1040,32 @@ pub fn install(ui: &Rc<Ui>) {
     });
 }
 
+fn tightest_settings_key(ui: &Ui) -> Option<gtk::Button> {
+    fn walk(widget: &gtk::Widget, root: &gtk::Widget, middle: f32, best: &mut Option<(f32, gtk::Button)>) {
+        if widget.has_css_class("agent-settings-key") && widget.is_mapped() {
+            if let (Some(key), Some(bounds)) = (widget.downcast_ref::<gtk::Button>(), widget.compute_bounds(root)) {
+                let off = (bounds.y() - middle).abs();
+                if best.as_ref().is_none_or(|(o, _)| off < *o) {
+                    *best = Some((off, key.clone()));
+                }
+            }
+        }
+        let mut child = widget.first_child();
+        while let Some(next) = child {
+            walk(&next, root, middle, best);
+            child = next.next_sibling();
+        }
+    }
+    let root: gtk::Widget = ui.window.clone().upcast();
+    let mut best = None;
+    walk(&root, &root, ui.window.height() as f32 / 2.0, &mut best);
+    best.map(|(_, key)| key)
+}
+
+fn agent_settings_popover(ui: &Ui) -> Option<gtk::Widget> {
+    util::find(&ui.window.clone().upcast(), &|w| w.has_css_class("agent-settings") && w.is_mapped())
+}
+
 fn capture(ui: Rc<Ui>, path: String, fixture: bool) {
     if fixture && *ui.page.borrow() == "board" {
         assert!(
@@ -1056,8 +1111,10 @@ fn capture(ui: Rc<Ui>, path: String, fixture: bool) {
     let mut attempts = 0;
     glib::timeout_add_local(Duration::from_millis(50), move || {
         attempts += 1;
-        let target: gtk::Window =
-            if std::env::var("RELAY_NATIVE_PAGE").as_deref() == Ok("notes") {
+        let target: gtk::Widget =
+            if std::env::var("RELAY_NATIVE_PAGE").as_deref() == Ok("agent-settings") {
+                agent_settings_popover(&ui).expect("Agent settings popover")
+            } else if std::env::var("RELAY_NATIVE_PAGE").as_deref() == Ok("notes") {
                 ui.notes_window
                     .borrow()
                     .as_ref()
@@ -1071,7 +1128,7 @@ fn capture(ui: Rc<Ui>, path: String, fixture: bool) {
         let paintable = gtk::WidgetPaintable::new(Some(&target));
         let snapshot = gtk::Snapshot::new();
         paintable.snapshot(&snapshot, target.width() as f64, target.height() as f64);
-        let (Some(node), Some(renderer)) = (snapshot.to_node(), target.renderer()) else {
+        let (Some(node), Some(renderer)) = (snapshot.to_node(), target.native().and_then(|n| n.renderer())) else {
             assert!(
                 attempts < 40,
                 "Screenshot failed: no rendered frame after two seconds"
