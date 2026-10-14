@@ -34,7 +34,7 @@ The mockup: https://claude.ai/artifact/GPtaPk6YYLiFCHGpeNPMk4
    accounts), run as the person when they approve.
 5. **Investments in Tally** (built in the PC's engine and for the agent; `docs/INVESTMENTS.md` is
    the contract): holdings and their value tracked in the ledger, on the phone and the PC in the
-   same commit (`CLAUDE.md`: a money rule changes on both sides at once), and an agent that brings
+   same piece of work (`CLAUDE.md`: a money rule changes on both sides at once, a PR in each repository), and an agent that brings
    the person's Wealthsimple accounts in through the files Wealthsimple exports.
 
 ## The engine (phase 1)
