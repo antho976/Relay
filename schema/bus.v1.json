@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 309,
+  "op_count": 310,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -2167,6 +2167,24 @@
       },
       "result": {
         "$ref": "#/$defs/SessionScrollbackOut"
+      }
+    },
+    "session.transcript": {
+      "summary": "The agent's conversation as messages, read from the provider's own log, from a cursor",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "session",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 3,
+      "payload": {
+        "$ref": "#/$defs/SessionTranscriptIn"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionTranscriptOut"
       }
     },
     "session.restorable": {
@@ -11585,6 +11603,90 @@
         "text",
         "epoch",
         "seq"
+      ]
+    },
+    "SessionTranscriptIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "after": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The `cursor` of the previous answer: only what the agent wrote since. Absent, the\nconversation's last `limit` messages."
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "At most this many messages, the newest kept (default 200, at most 1000)."
+        }
+      },
+      "required": [
+        "session"
+      ]
+    },
+    "SessionTranscriptOut": {
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionTranscriptMessage"
+          }
+        },
+        "cursor": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Pass it back as `after` for what comes next."
+        },
+        "reset": {
+          "type": "boolean",
+          "description": "The messages replace everything read before: the conversation moved to another file\n(a resume, a new conversation) or `after` was past its end."
+        },
+        "found": {
+          "type": "boolean",
+          "description": "Whether the provider's conversation was found; false before its first hook names it."
+        }
+      },
+      "required": [
+        "messages",
+        "cursor",
+        "reset",
+        "found"
+      ]
+    },
+    "SessionTranscriptMessage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable across reads: the provider's own id for the record, or its byte offset."
+        },
+        "role": {
+          "type": "string",
+          "description": "`user`, `assistant` (`blocks` of `text` and `tool_use {id, name, summary}`), or `tool`\n(`{tool_use_id, is_error, text}`) — a thread message's shape (`thread.get`)."
+        },
+        "body": true,
+        "created_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "body",
+        "created_at"
       ]
     },
     "SessionRestorableIn": {

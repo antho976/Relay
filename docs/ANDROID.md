@@ -75,6 +75,25 @@ push service either: notifications come from the link while **Stay connected** k
 the background (an ongoing notification), and otherwise from a catch-up every half hour
 (WorkManager) that reaches the PC, sends the outbox and reads what changed.
 
+## Agents as a conversation
+
+Tapping an agent opens it as a conversation, not a terminal: the person's messages as bubbles,
+the agent's words as text, and what it did as quiet lines ("Ran `cargo test`", "Edited
+`src/main.rs`") that open to show the answer's head; three or more in a row fold into one line
+("Ran 3 commands, edited 2 files"). It reads the log the provider keeps anyway, Claude Code's
+`projects/<cwd>/<id>.jsonl` or Codex's rollout, through `session.transcript` (BUS.md), from a
+cursor: about once a second while the agent works, less while it waits. Nothing new runs on the
+PC and nothing streams.
+
+Typing still goes to the agent's terminal (`session.input`): the text, then Enter, several lines
+as one bracketed paste. With nothing typed, the send key stops a working agent (Esc). When the
+agent is held at a question in its terminal (a permission, a menu), the screen streams the
+terminal while the question shows, reads the question off it, and offers a key per numbered
+answer, and Esc. A row of keys (Esc,
+Shift-Tab for the mode, arrows, Enter, `/`, Ctrl-C) covers the rest, and the terminal itself is
+one tap away in the header for whatever a conversation cannot show. The conversation is kept on
+the phone, so it opens with the PC away.
+
 ## On the phone itself
 
 - **Notifications** say when an agent is held by a guardrail, blocked, or done. A held command's
@@ -96,7 +115,7 @@ phone with a key in Android's keystore; the pairing and the replica are excluded
 and device transfers. Wake-on-LAN targets, like the PC's name and Relay's version, are sent in the welcome, only to a
 phone the door has admitted; the greeting before it names nothing.
 
-This app adds to `PHONE_OPS`: the Threads space (`thread.*`), the ledger's reads for the Tally
+This app adds to `PHONE_OPS`: an agent's conversation (`session.transcript`), the Threads space (`thread.*`), the ledger's reads for the Tally
 panel and the Undo of an entry a thread added (`money.summary/lists/series/tx.list/invest.*`,
 `money.tx.delete/restore`, `money.invest.delete/restore`), Arbiter's reads, a proposal's answer and
 its halt and restart keys, and Avex's reads. A phone still cannot add, import, reset or replace

@@ -89,7 +89,8 @@ import kotlinx.serialization.json.put
  * of the keys a phone keyboard lacks, and a composer. Fitted, the PTY is borrowed at this phone's
  * size while the screen is open (the agent lays itself out for the phone); "Use the PC's width"
  * keeps the PC's columns, scaled to fit or panned sideways. With the PC away it shows the text the
- * phone saved and the composer waits.
+ * phone saved and the composer waits. The agent's own page is its chat (`ChatScreen`); this is
+ * the screen under it, for what a conversation cannot show.
  */
 @Composable
 fun TerminalScreen(name: String, nav: Nav) {
@@ -154,7 +155,9 @@ fun TerminalScreen(name: String, nav: Nav) {
 
     Page {
         Column(Modifier.fillMaxSize()) {
-            Header(session, name, onBack = nav::back, onDetails = { nav.session(name) }, onMenu = { menu = true })
+            Header(session, name, onBack = nav::back, onDetails = { nav.session(name) }, onMenu = { menu = true }) {
+                IconKey("notes", { nav.chat(name) }, size = 18.dp, tint = c.ink2)
+            }
             Banner(status, session, s.online, life)
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(c.screen)) {
                 val density = LocalDensity.current
@@ -250,7 +253,7 @@ private class Hold {
 }
 
 @Composable
-private fun KeepScreenOn(on: Boolean) {
+internal fun KeepScreenOn(on: Boolean) {
     val view = LocalView.current
     DisposableEffect(view, on) {
         view.keepScreenOn = on
@@ -262,7 +265,7 @@ private fun KeepScreenOn(on: Boolean) {
 
 /** The plate's identity strip, grown to a page header: back, lamp, name, state, what it is, its branch, ⋯. */
 @Composable
-private fun Header(session: Session?, name: String, onBack: () -> Unit, onDetails: () -> Unit, onMenu: () -> Unit) {
+internal fun Header(session: Session?, name: String, onBack: () -> Unit, onDetails: () -> Unit, onMenu: () -> Unit, extra: @Composable () -> Unit = {}) {
     val c = Relay.colors
     val held = session?.state == "blocked"
     Column(Modifier.fillMaxWidth().background(c.console).statusBarsPadding()) {
@@ -284,6 +287,7 @@ private fun Header(session: Session?, name: String, onBack: () -> Unit, onDetail
                     }
                 }
             }
+            extra()
             IconKey("more", onMenu, size = 18.dp, tint = c.ink2)
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.edge))
@@ -292,7 +296,7 @@ private fun Header(session: Session?, name: String, onBack: () -> Unit, onDetail
 
 /** Where the stream stands when it is not live, with the key that brings a stopped agent back. */
 @Composable
-private fun Banner(status: TerminalFeed.Status, session: Session?, online: Boolean, life: Lifecycle) {
+internal fun Banner(status: TerminalFeed.Status, session: Session?, online: Boolean, life: Lifecycle) {
     val c = Relay.colors
     val line: String
     val dot: Color?
@@ -417,7 +421,7 @@ private fun Composer(text: String, onText: (String) -> Unit, enabled: Boolean, p
 
 /** ⏎ on the glyphs' 16-unit grid: down from the top right, then left to an arrowhead. */
 @Composable
-private fun ReturnGlyph(size: Dp, tint: Color) {
+internal fun ReturnGlyph(size: Dp, tint: Color) {
     Box(
         Modifier.size(size).drawWithCache {
             val u = this.size.minDimension / 16f
@@ -442,7 +446,7 @@ private fun ReturnGlyph(size: Dp, tint: Color) {
  * call, where typed text would only sit in the PTY until it reads its prompt.
  */
 @Composable
-private fun MailSheet(session: Session, nav: Nav, onDismiss: () -> Unit) {
+internal fun MailSheet(session: Session, nav: Nav, onDismiss: () -> Unit) {
     var body by rememberSaveable(session.name) { mutableStateOf("") }
     DevSheet(onDismiss, "Mail ${session.name}", "Delivered as priority mail: the agent reads it at its next step, even while busy. For an agent waiting at its prompt, typing below is quicker.") { close ->
         Field(body, { body = it }, Modifier.fillMaxWidth().padding(horizontal = 6.dp), placeholder = "Also update the changelog when you are done.", singleLine = false, minLines = 3, maxLines = 8)

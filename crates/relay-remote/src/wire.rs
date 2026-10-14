@@ -166,7 +166,7 @@ pub const PHONE_OPS: &[&str] = &[
     "session.attach", "session.brief", "session.clear_restorable", "session.close", "session.create",
     "session.detach", "session.discard_restorable", "session.get", "session.input", "session.list",
     "session.park", "session.peers", "session.resize", "session.restorable", "session.resume",
-    "session.scrollback", "session.spawn", "session.update", "session.wake",
+    "session.scrollback", "session.spawn", "session.transcript", "session.update", "session.wake",
     "settings.get", "settings.reset",
     "skill.create", "skill.delete", "skill.enable", "skill.install", "skill.list", "skill.update",
     "task.activity", "task.approve", "task.attach", "task.changelog.write", "task.children",

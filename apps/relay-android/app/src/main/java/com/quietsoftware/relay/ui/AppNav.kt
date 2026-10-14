@@ -12,6 +12,7 @@ import com.quietsoftware.relay.ui.code.FileScreen
 import com.quietsoftware.relay.ui.code.FilesScreen
 import com.quietsoftware.relay.ui.code.GitScreen
 import com.quietsoftware.relay.ui.dev.AgentsScreen
+import com.quietsoftware.relay.ui.dev.ChatScreen
 import com.quietsoftware.relay.ui.dev.LaunchScreen
 import com.quietsoftware.relay.ui.dev.SessionScreen
 import com.quietsoftware.relay.ui.dev.TerminalScreen
@@ -60,6 +61,7 @@ fun AppNav(nav: Nav, startRoute: String) {
     ) {
         composable("start") { StartScreen(nav) }
         composable("agents") { AgentsScreen(nav) }
+        composable("chat/{name}") { ChatScreen(it.str("name").orEmpty(), nav) }
         composable("terminal/{name}") { TerminalScreen(it.str("name").orEmpty(), nav) }
         composable("session/{name}") { SessionScreen(it.str("name").orEmpty(), nav) }
         composable("launch?project={project}&task={task}&prompt={prompt}", listOf(opt("project"), opt("task"), opt("prompt"))) {

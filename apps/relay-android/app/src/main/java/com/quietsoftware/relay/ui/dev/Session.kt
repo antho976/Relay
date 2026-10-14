@@ -98,7 +98,7 @@ fun SessionScreen(name: String, nav: Nav) {
         Column(Modifier.fillMaxSize()) {
             PageBar(name, nav::back, subtitle = session?.let { "${it.provider} · ${it.role}" }) {
                 if (session != null && session.state != "closed" && !session.pending) {
-                    IconKey("terminal", { nav.terminal(name) }, size = 18.dp, tint = Relay.colors.ink2)
+                    IconKey("notes", { nav.chat(name) }, size = 18.dp, tint = Relay.colors.ink2)
                 }
             }
             if (session == null) {
@@ -164,7 +164,10 @@ private fun Actions(session: Session, nav: Nav, life: Lifecycle, online: Boolean
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (session.state != "closed") Key("Terminal", { nav.terminal(session.name) }, kind = KeyKind.Primary, glyph = "terminal")
+        if (session.state != "closed") {
+            Key("Conversation", { nav.chat(session.name) }, kind = KeyKind.Primary, glyph = "notes")
+            Key("Terminal", { nav.console(session.name) }, glyph = "terminal")
+        }
         for (act in actsFor(session.state)) {
             Key(
                 act.label,

@@ -38,7 +38,21 @@ class Nav(val controller: NavHostController, val shell: ShellModel) : SidebarNav
     }
 
     fun agents() = go("agents", top = true)
-    fun terminal(name: String) = go("terminal/${Uri.encode(name)}")
+    /** An agent's own page: its conversation ([chat]), with its terminal one tap under it. */
+    fun terminal(name: String) = chat(name)
+
+    /** The agent as a conversation; back to it when the screen under this one already is. */
+    fun chat(name: String) = swap("chat", name)
+
+    /** The agent's raw terminal, for what a conversation cannot show. */
+    fun console(name: String) = swap("terminal", name)
+
+    /** Chat and terminal open each other: going back to the one below beats stacking them. */
+    private fun swap(screen: String, name: String) {
+        val below = controller.previousBackStackEntry
+        if (below?.destination?.route == "$screen/{name}" && below.arguments?.getString("name") == name) controller.popBackStack()
+        else go("$screen/${Uri.encode(name)}")
+    }
     fun session(name: String) = go("session/${Uri.encode(name)}")
     fun launch(projectId: Long? = null, taskId: Long? = null, prompt: String? = null) = go("launch" + q("project" to projectId, "task" to taskId, "prompt" to prompt))
     fun board(projectId: Long?) = go("board" + q("project" to projectId))
