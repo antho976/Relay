@@ -134,7 +134,7 @@ pub fn switcher() -> gtk::Box {
     let pill = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     pill.add_css_class("space-switch");
     pill.set_valign(gtk::Align::Center);
-    pill.set_margin_start(6);
+    pill.set_margin_start(16);
     let dev = gtk::ToggleButton::with_label("Dev");
     dev.set_widget_name("space-dev");
     dev.set_tooltip_text(Some("Dev: agents, tasks and code · Ctrl `"));
