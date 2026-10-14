@@ -12,6 +12,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *
  * Every trigger but the delete one stands aside while a sync applies the PC's rows (the
  * "applying" row in sync_state), so those keep the PC's change time and uid.
+ *
+ * A local stamp is never under the watermark of the last sync (the "floor" row in sync_state,
+ * [CLOCK]), whatever the clock says. The triggers are re-created on every open, so this needs no
+ * migration: sync_state has been there since version 3.
  */
 object SyncSchema {
 
@@ -35,6 +39,15 @@ object SyncSchema {
     /** Epoch millis inside SQLite. One value for a whole statement, its triggers included. */
     private const val NOW = "CAST((julianday('now') - 2440587.5) * 86400000.0 AS INTEGER)"
 
+    /**
+     * What a local edit is stamped with: the clock, held at or above the floor in sync_state
+     * (LedgerSync.mark). A sync sends what is stamped at or after its watermark, and the floor is
+     * that watermark, so an edit made after a sync goes with the next one even when the clock was
+     * set back in between (a phone that synced while it ran a day fast). The clock alone would
+     * stamp it under the watermark, where no sync looks.
+     */
+    private const val CLOCK = "MAX($NOW, COALESCE((SELECT value FROM sync_state WHERE key = 'floor'), 0))"
+
     private const val LOCAL = "NOT EXISTS (SELECT 1 FROM sync_state WHERE key = 'applying')"
 
     /** A random UUID v4 in SQL, for rows that existed before uids did. */
@@ -53,30 +66,31 @@ object SyncSchema {
                WHEN OLD.categoryId = 0 OR EXISTS (SELECT 1 FROM categories WHERE id = OLD.categoryId)
                BEGIN
                  INSERT OR REPLACE INTO sync_tombstones (tableName, uid, deletedAt, category)
-                 VALUES ('budgets', OLD.uid, MAX($NOW, OLD.updatedAt + 1), (SELECT uid FROM categories WHERE id = OLD.categoryId));
+                 VALUES ('budgets', OLD.uid, MAX($CLOCK, OLD.updatedAt + 1), (SELECT uid FROM categories WHERE id = OLD.categoryId));
                END"""
         } else {
             """CREATE TRIGGER IF NOT EXISTS ${table}_sync_delete AFTER DELETE ON $table
                BEGIN
                  INSERT OR REPLACE INTO sync_tombstones (tableName, uid, deletedAt, category)
-                 VALUES ('$table', OLD.uid, MAX($NOW, OLD.updatedAt + 1), NULL);
+                 VALUES ('$table', OLD.uid, MAX($CLOCK, OLD.updatedAt + 1), NULL);
                END"""
         }
         return listOf(
-            // A new row is new now, and a row that comes back (an Undo) is no longer deleted:
-            // stamped past its own tombstone, so the coming back outranks the delete everywhere.
+            // A new row is new now (or at the floor), and a row that comes back (an Undo) is no
+            // longer deleted: stamped past its own tombstone, so the coming back outranks the
+            // delete everywhere.
             """CREATE TRIGGER IF NOT EXISTS ${table}_sync_insert AFTER INSERT ON $table WHEN $LOCAL
                BEGIN
-                 UPDATE $table SET updatedAt = MAX($NOW, $buried)
-                 WHERE id = NEW.id AND updatedAt < MAX($NOW, $buried);
+                 UPDATE $table SET updatedAt = MAX($CLOCK, $buried)
+                 WHERE id = NEW.id AND updatedAt < MAX($CLOCK, $buried);
                  DELETE FROM sync_tombstones WHERE tableName = '$table' AND uid = NEW.uid;
                END""",
             // An edit is newer than both the clock and the version it replaced, even when the
             // writer handed back a stale copy of the row.
             """CREATE TRIGGER IF NOT EXISTS ${table}_sync_update AFTER UPDATE ON $table
-               WHEN $LOCAL AND NEW.updatedAt < MAX($NOW, OLD.updatedAt + 1)
+               WHEN $LOCAL AND NEW.updatedAt < MAX($CLOCK, OLD.updatedAt + 1)
                BEGIN
-                 UPDATE $table SET updatedAt = MAX($NOW, OLD.updatedAt + 1) WHERE id = NEW.id;
+                 UPDATE $table SET updatedAt = MAX($CLOCK, OLD.updatedAt + 1) WHERE id = NEW.id;
                END""",
             // An editor that rebuilds a row from its fields carries a fresh default uid; the
             // row keeps the one it has. Android's SQLite runs triggers recursively, so the
@@ -106,11 +120,27 @@ object SyncSchema {
         db.beginTransaction()
         try {
             TABLES.forEach { table -> SUFFIXES.forEach { db.execSQL("DROP TRIGGER IF EXISTS ${table}_$it") } }
+            repairStamps(db)
             createTriggers(db)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
         }
+    }
+
+    /**
+     * Brings back a ledger the PC stamped out of range before [com.tally.app.data.sync.SyncTables.stampOk]
+     * was checked: a stamp more than a day ahead, or one an edit's `+ 1` overflowed into a real,
+     * becomes now. An edit of such a row would overflow again, and the PC no longer takes its stamp.
+     * Run with the triggers down, so nothing restamps the repair; the rows go to the PC next sync,
+     * as relay_money's `repair_stamps` sends its own.
+     */
+    private fun repairStamps(db: SupportSQLiteDatabase) {
+        val ahead = "$NOW + ${com.tally.app.data.sync.SyncTables.STAMP_AHEAD_MS}"
+        TABLES.forEach { table ->
+            db.execSQL("UPDATE $table SET updatedAt = $NOW WHERE typeof(updatedAt) <> 'integer' OR updatedAt > $ahead")
+        }
+        db.execSQL("UPDATE sync_tombstones SET deletedAt = $NOW WHERE typeof(deletedAt) <> 'integer' OR deletedAt > $ahead")
     }
 
     /** Fresh installs: Room creates the tables, this adds the triggers; every open brings them up to date. */

@@ -18,6 +18,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -318,6 +319,162 @@ class RelaySyncTest {
         assertEquals("Once", 9L, door.syncs.last()["since"]!!.jsonPrimitive.long)
     }
 
+    /**
+     * An earlier build synced with the clock a day fast and held no stamps at its watermark, so
+     * what was edited once the clock was set back sits under it: the next sync sends everything,
+     * once, and merges from a watermark the stamps are held at from then on.
+     */
+    @Test fun aWatermarkAheadOfTheClockFromAnEarlierBuildSendsEverythingOnce() = runBlocking<Unit> {
+        val account = db.addAccount("Chequing")
+        door.connection()
+        sync.pair(PairLink.manual(door.address, "ABCD-EFGH")!!)
+        Thread.sleep(5)
+        db.addExpense(4_00, day, account, note = "Coffee")
+        // As that build left it.
+        db.openHelper.writableDatabase.execSQL("DELETE FROM sync_state WHERE `key` = 'floor'")
+        store.restore(store.current().copy(watermark = System.currentTimeMillis() + 86_400_000L))
+        door.connection()
+
+        sync.syncNow()
+
+        val tables = door.syncs.last()["changes"]!!.jsonArray.map { it.jsonObject["table"]!!.jsonPrimitive.content }
+        assertTrue("The account, from before, goes again: $tables", "accounts" in tables)
+        assertTrue("and the entry made under the watermark", "transactions" in tables)
+        assertTrue("Merging goes on from the clock", store.current().watermark <= System.currentTimeMillis())
+
+        door.connection()
+        sync.syncNow()
+        val again = door.syncs.last()["changes"]!!.jsonArray.map { it.jsonObject["table"]!!.jsonPrimitive.content }
+        assertTrue("Once: $again", again.none { it == "accounts" || it == "transactions" })
+    }
+
+    /** The last sync ran with the clock fast; an entry added once it is set back still goes. */
+    @Test fun anEntryAddedAfterTheClockIsSetBackGoesNextSync() = runBlocking<Unit> {
+        val account = db.addAccount("Chequing")
+        door.connection()
+        sync.pair(PairLink.manual(door.address, "ABCD-EFGH")!!)
+        // As a sync with the clock fast leaves it. A few seconds stand for a day: the settings'
+        // floor this sync raises outlives the test, so it must be in the past again by the end.
+        val ahead = System.currentTimeMillis() + 3_000L
+        LedgerSync(db).mark(ahead)
+        store.restore(store.current().copy(watermark = ahead))
+        db.addExpense(4_00, day, account, note = "Coffee")
+        door.connection()
+
+        sync.syncNow()
+
+        val sent = door.syncs.last()["changes"]!!.jsonArray.map { it.jsonObject }.single { it["table"]!!.jsonPrimitive.content != "settings" }
+        assertEquals("Coffee", sent["row"]!!.jsonObject["note"]!!.jsonPrimitive.content)
+        assertTrue("Stamped at the watermark, not under it", sent["updated_at"]!!.jsonPrimitive.long >= ahead)
+        assertEquals("The watermark never comes down", ahead, store.current().watermark)
+        Thread.sleep(maxOf(0L, ahead - System.currentTimeMillis() + 1))
+    }
+
+    @Test fun aSettingChangedAfterTheClockIsSetBackIsStampedAtTheWatermark() = runBlocking<Unit> {
+        // Just ahead, so the floor is in the past again before any other test stamps a setting.
+        val watermark = System.currentTimeMillis() + 300
+        settings.raiseSyncFloor(watermark)
+        settings.raiseSyncFloor(watermark - 1_000)
+        settings.setWeekStartsMonday(true)
+
+        val stamped = settings.synced().all.single { it.key == "week_starts_monday" }.updatedAt
+        assertTrue("A change made under the last sync's watermark is stamped at it", stamped >= watermark)
+        Thread.sleep(maxOf(0L, watermark - System.currentTimeMillis() + 1))
+    }
+
+    /** relay_money's `stamp_ok`: a setting stamped days ahead is a broken clock, not news. */
+    @Test fun aServerChangeStampedDaysAheadIsNotTaken() = runBlocking<Unit> {
+        door.connection()
+        sync.pair(PairLink.manual(door.address, "ABCD-EFGH")!!)
+        val days = System.currentTimeMillis() + 2 * SyncTables.STAMP_AHEAD_MS
+        door.answer = { _ ->
+            page(cursor = 41, more = false, Change("settings", "month_start_day", days, row = buildJsonObject { put("value", "15") }))
+        }
+        door.connection()
+
+        val outcome = sync.syncNow()
+
+        assertEquals(0, (outcome as SyncOutcome.Done).received)
+        assertEquals(1, settings.current().monthStartDay)
+    }
+
+    /**
+     * A ledger too big for one answer through the rendezvous comes in pages: asked for until the
+     * server says no more, each page from the cursor the one before ended at, and applied together,
+     * so an entry in the first page whose account is in the second still lands. What the server
+     * hands back exactly as it was sent is no news, and a row that comes twice is taken newest.
+     */
+    @Test fun aLongAnswerIsReadInPagesAndAppliedTogether() = runBlocking<Unit> {
+        val account = db.addAccount("Chequing")
+        door.connection()
+        sync.pair(PairLink.manual(door.address, "ABCD-EFGH")!!)
+        val accountUid = db.accounts().get(account)!!.uid
+        Thread.sleep(5)
+        db.addExpense(4_00, day, account, note = "Coffee")
+        val stamp = System.currentTimeMillis() + 60_000
+        var sentFirst = JsonArray(emptyList())
+        door.answer = { payload ->
+            when (payload["since"]!!.jsonPrimitive.long) {
+                40L -> {
+                    sentFirst = payload["changes"]!!.jsonArray
+                    page(cursor = 41, more = true, entry("pc-1", accountUid, "Lunch", stamp), entry("pc-2", "a-pc", "Dinner", stamp))
+                }
+                else -> page(
+                    cursor = 43, more = false,
+                    Change("accounts", "a-pc", stamp, row = buildJsonObject {
+                        put("name", "Savings"); put("type", "SAVINGS"); put("openingBalance", 0); put("archived", false); put("sortOrder", 1)
+                    }),
+                    entry("pc-1", accountUid, "Late lunch", stamp + 1),
+                    extra = sentFirst,
+                )
+            }
+        }
+        door.connection()
+
+        val outcome = sync.syncNow()
+
+        assertEquals("The phone's own entry, handed back, is not counted", 3, (outcome as SyncOutcome.Done).received)
+        val (first, second) = door.syncs.takeLast(2)
+        assertEquals(RelaySync.PAGE, first["limit"]!!.jsonPrimitive.int)
+        assertEquals(listOf("Coffee"), first["changes"]!!.jsonArray.mapNotNull { it.jsonObject["row"]!!.jsonObject["note"]?.jsonPrimitive?.content })
+        assertEquals("The next page from where the last ended", 41L, second["since"]!!.jsonPrimitive.long)
+        assertEquals("gen-1", second["generation"]!!.jsonPrimitive.content)
+        assertTrue("Nothing is sent twice", second["changes"]!!.jsonArray.isEmpty())
+        assertEquals(RelaySync.PAGE, second["limit"]!!.jsonPrimitive.int)
+        assertEquals(listOf("Coffee", "Dinner", "Late lunch"), db.transactions().all().map { it.note }.sorted())
+        assertEquals(43L, store.current().cursor)
+    }
+
+    /** A server from before pages refuses `limit` before it applies anything: it is asked again, whole. */
+    @Test fun aServerFromBeforePagesIsAskedWhole() = runBlocking<Unit> {
+        db.addAccount("Chequing")
+        door.beforePages = true
+        door.connection()
+
+        val outcome = sync.pair(PairLink.manual(door.address, "ABCD-EFGH")!!)
+
+        assertTrue("$outcome", outcome is SyncOutcome.Done)
+        val (refused, whole) = door.syncs.toList()
+        assertEquals(RelaySync.PAGE, refused["limit"]!!.jsonPrimitive.int)
+        assertNull(whole["limit"])
+        assertEquals(refused["changes"], whole["changes"])
+        assertEquals(40L, store.current().cursor)
+        assertNull(store.current().lastError)
+    }
+
+    private fun entry(uid: String, account: String, note: String, stamp: Long) = Change("transactions", uid, stamp, row = buildJsonObject {
+        put("type", "EXPENSE"); put("amount", 9_00); put("date", "2026-10-06"); put("account", account)
+        put("toAccount", JsonNull); put("category", JsonNull); put("note", note); put("recurring", JsonNull); put("createdAt", 1)
+    })
+
+    private fun page(cursor: Long, more: Boolean, vararg changes: Change, extra: JsonArray = JsonArray(emptyList())) = buildJsonObject {
+        put("cursor", cursor)
+        put("generation", "gen-1")
+        put("changes", JsonArray(changes.map { it.toJson() } + extra))
+        put("replaced", false)
+        if (more) put("more", true)
+    }
+
     @Test fun settingStampsNeverGoBackAndACurrencyWithOtherDecimalsStaysOnThePhone() = runBlocking<Unit> {
         settings.setCurrency("CAD")
         val future = System.currentTimeMillis() + 3_600_000L
@@ -345,6 +502,8 @@ private class FakeDoor {
     @Volatile var generation = "gen-1"
     /** What the PC answers a phone that takes its ledger whole. */
     @Volatile var whole: List<Change> = emptyList()
+    /** An engine from before `money.sync` answered in pages: `limit` is a field it does not know. */
+    @Volatile var beforePages = false
     val syncs = CopyOnWriteArrayList<JsonObject>()
     @Volatile var answer: (JsonObject) -> JsonObject = { payload ->
         buildJsonObject {
@@ -397,6 +556,10 @@ private class FakeDoor {
                 }
                 val payload = o["payload"]!!.jsonObject
                 syncs += payload
+                if (beforePages && "limit" in payload) {
+                    webSocket.send("""{"v":1,"id":"$id","ok":false,"error":{"code":"bus.schema","kind":"invalid","message":"unknown field `limit`"}}""")
+                    return
+                }
                 val theirs = payload["generation"]?.jsonPrimitive?.content
                 if (theirs != null && theirs != generation) {
                     webSocket.send("""{"v":1,"id":"$id","ok":false,"error":{"code":"money.sync_stale","kind":"conflict","message":"stale"}}""")
