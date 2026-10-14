@@ -56,7 +56,8 @@ pub fn defaults() -> &'static Value {
             // when it is not on PATH, and the minutes unused before it stops (0 = never).
             "threads": { "local": { "dir": null, "server": null, "idle_minutes": 15 } },
             "undo": { "grace_days": 7 },
-            "audit": { "retention_days": 180 },
+            // `hook_retention_days`: allowed hook calls (purge.rs), a row per agent tool call.
+            "audit": { "retention_days": 180, "hook_retention_days": 30 },
             // `layout.current.<project>` is the shell's last arrangement (ui.rs).
             "layout": {},
             "keybindings": {

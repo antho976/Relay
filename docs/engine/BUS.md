@@ -336,6 +336,12 @@ fresh id per call, so each call is a new request.
 before that window is no longer deduplicated. Rows that are either half of an undo pair are
 never pruned. `session.report` and `usage.report` keep 2 KB of readable payload rather than the
 64 KB of §11.4 — their hash and result summary are unchanged, so idempotency is not affected.
+An allowed `guardrail.gate` and an accepted `session.report` — an audit row per agent tool call —
+keep only a summary (`session`, `kind`, the command up to 200 characters or the tool name, and
+`slim: true`); refusals and holds keep the whole payload (migration v27 slimmed older rows the
+same way). The hourly retention pass removes allowed `guardrail.gate`, `session.report` and
+`usage.report` rows older than `settings: audit.hook_retention_days` (default 30, `0` leaves them
+to the general window).
 
 ### 5.4 Soft delete
 

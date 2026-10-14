@@ -18,6 +18,10 @@ const NOTIFICATION_DAYS: i64 = 180;
 const ANSWERED_HOLD_DAYS: i64 = 30;
 /// The table never holds more than this many, newest kept.
 const MAX_NOTIFICATIONS: i64 = 5000;
+/// Allowed hook calls (`guardrail.gate`, `session.report`, `usage.report`) are an audit row per
+/// agent tool call, thousands a day; they are history after this long. Refusals, holds and every
+/// other op keep `audit.retention_days`.
+const HOOK_AUDIT_DAYS: i64 = 30;
 /// A message every recipient has acked is history after this long.
 const ACKED_MESSAGE_DAYS: i64 = 30;
 /// Any message, acked or not, after this long — the recipient sessions are long closed.
@@ -135,6 +139,18 @@ pub fn run(tx: &Transaction, store_dir: &Path) -> rusqlite::Result<Purged> {
     )? + tx.execute("DELETE FROM messages WHERE sent_at < ?1", params![crate::time::days_ago(MESSAGE_DAYS)])?;
     note(n, "old mailbox message(s)");
 
+    // Hook rows past their window (`audit.hook_retention_days`, 0 keeps them for the general
+    // window). Half of an undo pair is kept, as recovery's general pass keeps it.
+    let hooks = setting_days(tx, "audit.hook_retention_days", HOOK_AUDIT_DAYS);
+    if hooks > 0 {
+        let cutoff = crate::time::days_ago(hooks);
+        let n = tx.prepare_cached(
+            "DELETE FROM audit
+              WHERE op IN ('guardrail.gate', 'session.report', 'usage.report') AND kind = 'ok' AND ts < ?1
+                AND undo_of IS NULL AND undone_by IS NULL",
+        )?.execute([&cutoff])?;
+        note(n, "allowed hook audit row(s) past their window");
+    }
     out.paths = paths;
     Ok(out)
 }
@@ -223,5 +239,44 @@ mod tests {
         assert_eq!(trash_dir(Path::new("/w/src/7/payload"), 7), None);
         assert_eq!(trash_dir(Path::new("/w/.relay/trash/7"), 7), None);
         assert_eq!(trash_dir(Path::new(""), 7), None);
+    }
+}
+
+#[cfg(test)]
+mod hook_retention_tests {
+    use super::*;
+
+    /// Allowed hook rows go after `audit.hook_retention_days`; refusals, other ops and recent
+    /// rows stay, and 0 keeps them all.
+    #[test]
+    fn allowed_hook_rows_past_their_window_are_purged() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::store::Store::open(&dir.path().join("store.db"), false).unwrap();
+        let mut conn = store.lock();
+        let row = |tx: &Transaction, op: &str, kind: &str, ts: &str| {
+            tx.execute(
+                "INSERT INTO audit (ts, req_id, actor, op, kind, payload_hash) VALUES (?1, lower(hex(randomblob(16))), 'user', ?2, ?3, 'h')",
+                params![ts, op, kind],
+            ).unwrap();
+        };
+        let old = crate::time::days_ago(40);
+        let recent = crate::time::days_ago(2);
+        let tx = conn.transaction().unwrap();
+        row(&tx, "guardrail.gate", "ok", &old);
+        row(&tx, "session.report", "ok", &old);
+        row(&tx, "guardrail.gate", "refused", &old);
+        row(&tx, "settings.set", "ok", &old);
+        row(&tx, "guardrail.gate", "ok", &recent);
+        run(&tx, dir.path()).unwrap();
+        let left: Vec<(String, String)> = tx.prepare("SELECT op, kind FROM audit ORDER BY id").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(|r| r.unwrap()).collect();
+        let pairs: Vec<(&str, &str)> = left.iter().map(|(o, k)| (o.as_str(), k.as_str())).collect();
+        assert_eq!(pairs, vec![("guardrail.gate", "refused"), ("settings.set", "ok"), ("guardrail.gate", "ok")]);
+
+        tx.execute("INSERT INTO settings (path, value, updated_at) VALUES ('audit.hook_retention_days', '0', '')", []).unwrap();
+        row(&tx, "session.report", "ok", &old);
+        run(&tx, dir.path()).unwrap();
+        let n: i64 = tx.query_row("SELECT COUNT(*) FROM audit WHERE op='session.report'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "0 keeps hook rows for the general window");
     }
 }

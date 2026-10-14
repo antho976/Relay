@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// The schema version this build knows. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: i64 = 26;
+pub const SCHEMA_VERSION: i64 = 27;
 
 /// Numbered migrations; index 0 brings a fresh DB to `user_version = 1`.
 pub const MIGRATIONS: &[&str] = &[
@@ -424,6 +424,19 @@ pub const MIGRATIONS: &[&str] = &[
     ALTER TABLE tasks ADD COLUMN note_id INTEGER REFERENCES notes(id) ON DELETE SET NULL;
     CREATE INDEX tasks_note ON tasks(note_id);
     "#,
+    // v27 - agents' hooks write an audit row on every tool call, and allowed gate decisions and
+    // session reports kept the whole hook payload (~1.4 KB): 85 % of a 260 MB store
+    // (BASELINE-2026-10-14 §1.2). New rows keep what `audit::slim` keeps; this slims the rows
+    // already there the same way. The payload hash still names the full payload. Rows already
+    // reduced to a "truncated" marker, refusals and holds are left as they are.
+    r#"
+    UPDATE audit SET payload = json_object('session', json_extract(payload, '$.session'), 'kind', json_extract(payload, '$.kind'),
+        'command', substr(json_extract(payload, '$.command'), 1, 200), 'path', json_extract(payload, '$.path'), 'slim', json('true'))
+      WHERE op = 'guardrail.gate' AND kind = 'ok' AND json_valid(payload) AND json_extract(payload, '$.kind') IS NOT NULL;
+    UPDATE audit SET payload = json_object('session', json_extract(payload, '$.session'), 'kind', json_extract(payload, '$.kind'),
+        'tool', json_extract(payload, '$.data.tool_name'), 'slim', json('true'))
+      WHERE op = 'session.report' AND kind = 'ok' AND json_valid(payload) AND json_extract(payload, '$.kind') IS NOT NULL;
+    "#,
 ];
 
 pub struct Store {
@@ -488,6 +501,7 @@ impl Store {
     fn migrate(&self) -> Result<()> {
         let mut conn = self.lock();
         let mut v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let from = v;
         anyhow::ensure!(
             v <= SCHEMA_VERSION,
             "store is schema v{v} but this build knows only v{SCHEMA_VERSION}; refusing to open"
@@ -515,6 +529,16 @@ impl Store {
                 )?;
             }
             tx.commit()?;
+        }
+        // v27 slims every allowed hook row in place; the pages it empties stay in the file until
+        // a VACUUM gives them back (260 MB -> 116 MB in 2.4 s on the store that prompted it,
+        // migration included). Once, here, before the engine answers anyone.
+        if from > 0 && from < 27 && v >= 27 && self.path.is_file() {
+            let started = std::time::Instant::now();
+            match conn.execute_batch("VACUUM") {
+                Ok(()) => tracing::info!(ms = started.elapsed().as_millis() as u64, "store vacuumed after slimming hook audit rows"),
+                Err(error) => tracing::warn!(error = %error, "vacuum after slimming hook audit rows failed; the space is reused, not returned"),
+            }
         }
         Ok(())
     }
