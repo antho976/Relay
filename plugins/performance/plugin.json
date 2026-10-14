@@ -1,0 +1,15 @@
+{
+  "id": "performance",
+  "name": "Performance",
+  "version": "1.0.0",
+  "category": "Engineering",
+  "summary": "Makes every agent in the project a performance engineer: 10 skills and standing rules for measuring user journeys, deterministic benchmarks that gate CI with ratchets, profiling, perceived performance and the patterns that pay off in any codebase, with depth for Rust, SQLite, GTK 4 and Android.",
+  "description": "Turn it on for any project whose speed matters; its core skills are tied to no language, framework or app. Every agent launched there gets the performance skills as real skill folders (fundamentals and statistics, whole-app audits, deterministic benchmarks and CI ratchets, profiling, perceived performance, the code patterns that are good almost everywhere, and deeper skills for Rust, SQLite, GTK 4 desktop clients and Android with Compose and Room) and the plugin's working rules in its brief: measure before changing anything, start every measurement at a person's action and end it when the result is on screen, prove a lab metric tracks wall-clock time before optimizing it, gate CI on deterministic counts rather than noisy timings, lock every win in with a ratchet, and report before-and-after numbers from the same machine. The method follows how claude.ai was made three times faster in two weeks (August 2026) and the standard practice of performance teams at Google, Meta, Netflix and the browser vendors. A project goes deeper still by keeping its own performance folder, which the rules tell every agent to read first.",
+  "instructions": "instructions.md",
+  "docs": [
+    "README.md",
+    "docs/playbook.md",
+    "docs/case-study-claude-ai.md",
+    "docs/sources.md"
+  ]
+}

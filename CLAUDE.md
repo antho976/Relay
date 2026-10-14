@@ -83,6 +83,12 @@ such a change as verified.
 - Adding a column means appending a migration to `store::MIGRATIONS` and bumping
   `SCHEMA_VERSION`; every earlier version must stay openable.
 
+## Performance work
+
+Start from `docs/perf/PLAYBOOK.md`: Relay's journeys and budgets, the invariants above as
+numbers, the harness (`scripts/perf/`) and the open leads. Every claim carries a before and an
+after from the same machine and profile; readings go in `docs/perf/` in the existing format.
+
 ## Style
 
 The workspace is **not** rustfmt-clean, in places deliberately — roughly 900
