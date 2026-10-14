@@ -1,0 +1,1557 @@
+{
+  "date": "2026-10-14",
+  "size": "1440,900",
+  "seconds": 8,
+  "perf": true,
+  "gtk": "4.24.1",
+  "pages": {
+    "agents": {
+      "page": "agents",
+      "startup": {
+        "cpu_ms_first_2s": 610.0,
+        "rss_mb_at_2s": 220.5,
+        "threads": 17
+      },
+      "steady": {
+        "seconds": 8.05,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 1.7,
+        "rss_mb": 220.5,
+        "threads": 17
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 91.41,
+            "what": "relay-native"
+          },
+          {
+            "pct": 7.1,
+            "what": "[unknown]"
+          },
+          {
+            "pct": 1.49,
+            "what": "libc.so.6"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 89.96,
+            "what": "relay-native [.] <glib::auto::main_context::MainContext>::spawn_local_with_priority::<(), <relay_native::app::Ui>::save_layout::{closure#0}>"
+          },
+          {
+            "pct": 2.66,
+            "what": "[unknown] [k] 0xffffffff8edb9759                                                                                                           -"
+          },
+          {
+            "pct": 1.49,
+            "what": "libc.so.6 [.] 0x00000000000b6132                                                                                                           -"
+          },
+          {
+            "pct": 1.45,
+            "what": "relay-native [.] <tokio::runtime::io::driver::Driver>::turn                                                                                 "
+          },
+          {
+            "pct": 1.36,
+            "what": "[unknown] [k] 0xffffffff8ed7b90f                                                                                                           -"
+          },
+          {
+            "pct": 1.3,
+            "what": "[unknown] [k] 0xffffffff8edb995a                                                                                                           -"
+          },
+          {
+            "pct": 1.12,
+            "what": "[unknown] [k] 0xffffffff8f2cf0e0                                                                                                           -"
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 16.98,
+      "gdk_frame_log_lines": 11,
+      "screenshot": true
+    },
+    "board": {
+      "page": "board",
+      "startup": {
+        "cpu_ms_first_2s": 330.0,
+        "rss_mb_at_2s": 177.8,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.05,
+        "cpu_percent": 0.37,
+        "cpu_ms": 30.0,
+        "wakeups_per_s": 8.0,
+        "rss_mb": 181.0,
+        "threads": 13
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 54.56,
+            "what": "libgtk-4.so.1.2400.1"
+          },
+          {
+            "pct": 37.33,
+            "what": "libc.so.6"
+          },
+          {
+            "pct": 2.85,
+            "what": "libfontconfig.so.1.17.0"
+          },
+          {
+            "pct": 2.4,
+            "what": "libpango-1.0.so.0.5800.2"
+          },
+          {
+            "pct": 0.87,
+            "what": "relay-native"
+          },
+          {
+            "pct": 0.74,
+            "what": "libfreetype.so.6.20.6"
+          },
+          {
+            "pct": 0.71,
+            "what": "libgobject-2.0.so.0.9000.1"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 53.76,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000039de88                                                                                                 "
+          },
+          {
+            "pct": 36.65,
+            "what": "libc.so.6 [.] 0x00000000000bcd10                                                                                                            "
+          },
+          {
+            "pct": 1.23,
+            "what": "libpango-1.0.so.0.5800.2 [.] 0x0000000000026c1c                                                                                             "
+          },
+          {
+            "pct": 0.86,
+            "what": "relay-native [.] <&mut serde_json::de::Deserializer<serde_json::read::SliceRead> as serde_core::de::Deserializer>::deserialize_struct::<<rel"
+          },
+          {
+            "pct": 0.83,
+            "what": "libfontconfig.so.1.17.0 [.] 0x0000000000025cc0                                                                                              "
+          },
+          {
+            "pct": 0.81,
+            "what": "libgtk-4.so.1.2400.1 [.] gtk_widget_get_ancestor                                                                                            "
+          },
+          {
+            "pct": 0.74,
+            "what": "libfontconfig.so.1.17.0 [.] 0x0000000000034b50                                                                                              "
+          },
+          {
+            "pct": 0.74,
+            "what": "libfreetype.so.6.20.6 [.] 0x000000000000965a                                                                                                "
+          },
+          {
+            "pct": 0.71,
+            "what": "libgobject-2.0.so.0.9000.1 [.] g_type_check_instance_is_a                                                                                   "
+          },
+          {
+            "pct": 0.66,
+            "what": "libfontconfig.so.1.17.0 [.] 0x0000000000029b86                                                                                              "
+          },
+          {
+            "pct": 0.65,
+            "what": "libc.so.6 [.] cfree                                                                                                                         "
+          },
+          {
+            "pct": 0.61,
+            "what": "libfontconfig.so.1.17.0 [.] 0x0000000000034b74                                                                                              "
+          },
+          {
+            "pct": 0.59,
+            "what": "libpango-1.0.so.0.5800.2 [.] pango_layout_set_font_description                                                                              "
+          },
+          {
+            "pct": 0.58,
+            "what": "libpango-1.0.so.0.5800.2 [.] 0x0000000000027785                                                                                             "
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 18.9,
+      "gdk_frame_log_lines": 20,
+      "screenshot": true
+    },
+    "code": {
+      "page": "code",
+      "startup": {
+        "cpu_ms_first_2s": 350.0,
+        "rss_mb_at_2s": 180.8,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.04,
+        "cpu_percent": 0.12,
+        "cpu_ms": 10.0,
+        "wakeups_per_s": 6.0,
+        "rss_mb": 181.1,
+        "threads": 13
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 80.37,
+            "what": "libgtk-4.so.1.2400.1"
+          },
+          {
+            "pct": 7.21,
+            "what": "libfontconfig.so.1.17.0"
+          },
+          {
+            "pct": 6.44,
+            "what": "libglib-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 2.18,
+            "what": "libgobject-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 2.14,
+            "what": "libpango-1.0.so.0.5800.2"
+          },
+          {
+            "pct": 1.35,
+            "what": "libc.so.6"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 74.36,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x0000000000109b7e                                                                                                 "
+          },
+          {
+            "pct": 4.61,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_datalist_id_dup_data                                                                                          "
+          },
+          {
+            "pct": 3.35,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003b2439                                                                                                 "
+          },
+          {
+            "pct": 2.65,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000005c79b5                                                                                                 "
+          },
+          {
+            "pct": 2.47,
+            "what": "libfontconfig.so.1.17.0 [.] 0x0000000000029c90                                                                                              "
+          },
+          {
+            "pct": 2.4,
+            "what": "libfontconfig.so.1.17.0 [.] 0x0000000000029a91                                                                                              "
+          },
+          {
+            "pct": 2.24,
+            "what": "libfontconfig.so.1.17.0 [.] 0x000000000000a4d0                                                                                              "
+          },
+          {
+            "pct": 2.18,
+            "what": "libgobject-2.0.so.0.9000.1 [.] g_object_ref                                                                                                 "
+          },
+          {
+            "pct": 2.14,
+            "what": "libpango-1.0.so.0.5800.2 [.] 0x0000000000027d62                                                                                             "
+          },
+          {
+            "pct": 1.8,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_list_prepend                                                                                                  "
+          },
+          {
+            "pct": 1.35,
+            "what": "libc.so.6 [.] cfree                                                                                                                         "
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 19.67,
+      "gdk_frame_log_lines": 26,
+      "screenshot": true
+    },
+    "notes": {
+      "page": "notes",
+      "startup": {
+        "cpu_ms_first_2s": 330.0,
+        "rss_mb_at_2s": 178.0,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.04,
+        "cpu_percent": 0.25,
+        "cpu_ms": 20.0,
+        "wakeups_per_s": 1.2,
+        "rss_mb": 178.0,
+        "threads": 13
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 92.52,
+            "what": "libgobject-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 4.36,
+            "what": "libgtk-4.so.1.2400.1"
+          },
+          {
+            "pct": 3.03,
+            "what": "libglib-2.0.so.0.9000.1"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 92.5,
+            "what": "libgobject-2.0.so.0.9000.1 [.] g_type_is_a          -      -"
+          },
+          {
+            "pct": 1.89,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_hash_table_lookup  -      -"
+          },
+          {
+            "pct": 1.62,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x0000000000397528   -      -"
+          },
+          {
+            "pct": 1.54,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000039df57   -      -"
+          },
+          {
+            "pct": 1.16,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x0000000000358bf0   -      -"
+          },
+          {
+            "pct": 1.14,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_str_hash           -      -"
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 15.55,
+      "gdk_frame_log_lines": 16,
+      "screenshot": true
+    },
+    "modules": {
+      "page": "modules",
+      "startup": {
+        "cpu_ms_first_2s": 320.0,
+        "rss_mb_at_2s": 176.5,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.03,
+        "cpu_percent": 0.12,
+        "cpu_ms": 10.0,
+        "wakeups_per_s": 2.2,
+        "rss_mb": 176.9,
+        "threads": 13
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 55.59,
+            "what": "libfontconfig.so.1.17.0"
+          },
+          {
+            "pct": 23.06,
+            "what": "libglib-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 18.17,
+            "what": "libgtk-4.so.1.2400.1"
+          },
+          {
+            "pct": 2.55,
+            "what": "[unknown]"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 29.67,
+            "what": "libfontconfig.so.1.17.0 [.] 0x0000000000034bd0       -      -"
+          },
+          {
+            "pct": 25.6,
+            "what": "libfontconfig.so.1.17.0 [.] 0x000000000002f372       -      -"
+          },
+          {
+            "pct": 23.06,
+            "what": "libglib-2.0.so.0.9000.1 [.] 0x000000000006cc19       -      -"
+          },
+          {
+            "pct": 18.17,
+            "what": "libgtk-4.so.1.2400.1 [.] gtk_accessible_get_type  -      -"
+          },
+          {
+            "pct": 1.07,
+            "what": "[unknown] [k] 0xffffffff8ed7b90f       -      -"
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 15.53,
+      "gdk_frame_log_lines": 17,
+      "screenshot": true
+    },
+    "settings": {
+      "page": "settings",
+      "startup": {
+        "cpu_ms_first_2s": 320.0,
+        "rss_mb_at_2s": 176.4,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.04,
+        "cpu_percent": 0.62,
+        "cpu_ms": 50.0,
+        "wakeups_per_s": 29.6,
+        "rss_mb": 194.0,
+        "threads": 28
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 45.67,
+            "what": "libgtk-4.so.1.2400.1"
+          },
+          {
+            "pct": 20.66,
+            "what": "libvulkan_radeon.so"
+          },
+          {
+            "pct": 15.18,
+            "what": "libgobject-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 12.41,
+            "what": "libglib-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 3.65,
+            "what": "libfontconfig.so.1.17.0"
+          },
+          {
+            "pct": 1.72,
+            "what": "[unknown]"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 20.65,
+            "what": "libvulkan_radeon.so [.] 0x00000000004d4323                                                                                                  "
+          },
+          {
+            "pct": 17.0,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000039df88                                                                                                 "
+          },
+          {
+            "pct": 16.35,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000039de88                                                                                                 "
+          },
+          {
+            "pct": 14.73,
+            "what": "libgobject-2.0.so.0.9000.1 [.] g_enum_get_value_by_nick                                                                                     "
+          },
+          {
+            "pct": 12.39,
+            "what": "libglib-2.0.so.0.9000.1 [.] 0x00000000000c378a                                                                                              "
+          },
+          {
+            "pct": 10.43,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003974b3                                                                                                 "
+          },
+          {
+            "pct": 0.6,
+            "what": "libfontconfig.so.1.17.0 [.] 0x0000000000034bf0                                                                                              "
+          },
+          {
+            "pct": 0.53,
+            "what": "[unknown] [k] 0xffffffff8eccd06b                                                                                                            "
+          },
+          {
+            "pct": 0.51,
+            "what": "libfontconfig.so.1.17.0 [.] 0x0000000000034bd0                                                                                              "
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 16.74,
+      "gdk_frame_log_lines": 19,
+      "screenshot": true
+    },
+    "skills": {
+      "page": "skills",
+      "startup": {
+        "cpu_ms_first_2s": 370.0,
+        "rss_mb_at_2s": 183.9,
+        "threads": 26
+      },
+      "steady": {
+        "seconds": 8.04,
+        "cpu_percent": 0.99,
+        "cpu_ms": 80.0,
+        "wakeups_per_s": 64.4,
+        "rss_mb": 184.6,
+        "threads": 26
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 31.4,
+            "what": "libc.so.6"
+          },
+          {
+            "pct": 23.16,
+            "what": "libgtk-4.so.1.2400.1"
+          },
+          {
+            "pct": 19.7,
+            "what": "libgobject-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 13.06,
+            "what": "[unknown]"
+          },
+          {
+            "pct": 11.98,
+            "what": "libglib-2.0.so.0.9000.1"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 14.13,
+            "what": "libc.so.6 [.] 0x00000000000f25e0                                                                                                            "
+          },
+          {
+            "pct": 11.51,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_rw_lock_writer_lock                                                                                           "
+          },
+          {
+            "pct": 11.38,
+            "what": "libc.so.6 [.] 0x000000000006b614                                                                                                            "
+          },
+          {
+            "pct": 10.38,
+            "what": "libgobject-2.0.so.0.9000.1 [.] 0x000000000003f425                                                                                           "
+          },
+          {
+            "pct": 9.2,
+            "what": "libgobject-2.0.so.0.9000.1 [.] g_type_is_a                                                                                                  "
+          },
+          {
+            "pct": 8.19,
+            "what": "[unknown] [k] 0xffffffff8ed0c609                                                                                                            "
+          },
+          {
+            "pct": 6.87,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x0000000000386ae1                                                                                                 "
+          },
+          {
+            "pct": 6.69,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x0000000000386ac2                                                                                                 "
+          },
+          {
+            "pct": 5.58,
+            "what": "libc.so.6 [.] 0x000000000005ef8a                                                                                                            "
+          },
+          {
+            "pct": 4.95,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x0000000000606b00                                                                                                 "
+          },
+          {
+            "pct": 4.48,
+            "what": "[unknown] [k] 0xffffffff8ecfbde5                                                                                                            "
+          },
+          {
+            "pct": 3.4,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003cfbdb                                                                                                 "
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 35.78,
+      "gdk_frame_log_lines": 796,
+      "screenshot": true
+    },
+    "dashboard": {
+      "page": "dashboard",
+      "startup": {
+        "cpu_ms_first_2s": 350.0,
+        "rss_mb_at_2s": 178.7,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.04,
+        "cpu_percent": 0.87,
+        "cpu_ms": 70.0,
+        "wakeups_per_s": 60.1,
+        "rss_mb": 178.7,
+        "threads": 13
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 48.64,
+            "what": "libglib-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 34.92,
+            "what": "libgtk-4.so.1.2400.1"
+          },
+          {
+            "pct": 11.02,
+            "what": "relay-native"
+          },
+          {
+            "pct": 4.5,
+            "what": "[unknown]"
+          },
+          {
+            "pct": 0.7,
+            "what": "libgobject-2.0.so.0.9000.1"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 14.34,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_queue_unlink                                -      -"
+          },
+          {
+            "pct": 11.02,
+            "what": "relay-native [.] __rustc::__rust_no_alloc_shim_is_unstable_v2  -      -"
+          },
+          {
+            "pct": 10.13,
+            "what": "libgtk-4.so.1.2400.1 [.] gtk_widget_show                               -      -"
+          },
+          {
+            "pct": 9.05,
+            "what": "libgtk-4.so.1.2400.1 [.] gdk_frame_timings_get_frame_time              -      -"
+          },
+          {
+            "pct": 9.03,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003b66d7                            -      -"
+          },
+          {
+            "pct": 8.33,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_source_set_priority                         -      -"
+          },
+          {
+            "pct": 7.96,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_source_set_callback                         -      -"
+          },
+          {
+            "pct": 6.58,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_source_set_static_name                      -      -"
+          },
+          {
+            "pct": 6.13,
+            "what": "libglib-2.0.so.0.9000.1 [.] 0x000000000006b4e4                            -      -"
+          },
+          {
+            "pct": 5.61,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003b2434                            -      -"
+          },
+          {
+            "pct": 4.64,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_hash_table_steal_extended                   -      -"
+          },
+          {
+            "pct": 4.46,
+            "what": "[unknown] [k] 0xffffffff90029824                            -      -"
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 25.66,
+      "gdk_frame_log_lines": 900,
+      "screenshot": true
+    },
+    "notifications": {
+      "page": "notifications",
+      "startup": {
+        "cpu_ms_first_2s": 350.0,
+        "rss_mb_at_2s": 177.0,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.04,
+        "cpu_percent": 1.24,
+        "cpu_ms": 100.0,
+        "wakeups_per_s": 67.8,
+        "rss_mb": 177.5,
+        "threads": 13
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 55.73,
+            "what": "libgtk-4.so.1.2400.1"
+          },
+          {
+            "pct": 14.4,
+            "what": "libgobject-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 12.3,
+            "what": "libc.so.6"
+          },
+          {
+            "pct": 8.05,
+            "what": "[unknown]"
+          },
+          {
+            "pct": 5.19,
+            "what": "libglib-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 3.93,
+            "what": "libgraphene-1.0.so.0.1000.8"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 15.25,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000020a514                                                                                                 "
+          },
+          {
+            "pct": 10.86,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003b2430                                                                                                 "
+          },
+          {
+            "pct": 8.11,
+            "what": "libgobject-2.0.so.0.9000.1 [.] 0x000000000000f504                                                                                           "
+          },
+          {
+            "pct": 6.19,
+            "what": "libc.so.6 [.] 0x00000000001b8344                                                                                                            "
+          },
+          {
+            "pct": 6.12,
+            "what": "libgtk-4.so.1.2400.1 [.] gtk_widget_snapshot_child                                                                                          "
+          },
+          {
+            "pct": 6.06,
+            "what": "libgobject-2.0.so.0.9000.1 [.] g_type_check_instance_is_a                                                                                   "
+          },
+          {
+            "pct": 5.78,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003b66a6                                                                                                 "
+          },
+          {
+            "pct": 5.77,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000006eefac                                                                                                 "
+          },
+          {
+            "pct": 5.19,
+            "what": "[unknown] [k] 0xffffffff8f2c8b24                                                                                                            "
+          },
+          {
+            "pct": 4.56,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003915c1                                                                                                 "
+          },
+          {
+            "pct": 4.25,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000035c4da                                                                                                 "
+          },
+          {
+            "pct": 3.93,
+            "what": "libgraphene-1.0.so.0.1000.8 [.] graphene_matrix_multiply                                                                                    "
+          },
+          {
+            "pct": 3.08,
+            "what": "libc.so.6 [.] 0x00000000000bc847                                                                                                            "
+          },
+          {
+            "pct": 2.91,
+            "what": "libc.so.6 [.] 0x00000000001b8a47                                                                                                            "
+          },
+          {
+            "pct": 2.59,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_datalist_id_dup_data                                                                                          "
+          },
+          {
+            "pct": 2.41,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000005dafc4                                                                                                 "
+          },
+          {
+            "pct": 2.41,
+            "what": "[unknown] [k] 0xffffffff8ed16854                                                                                                            "
+          },
+          {
+            "pct": 2.34,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_source_ref                                                                                                    "
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 15.56,
+      "gdk_frame_log_lines": 903,
+      "screenshot": true
+    },
+    "devices": {
+      "page": "devices",
+      "startup": {
+        "cpu_ms_first_2s": 340.0,
+        "rss_mb_at_2s": 177.6,
+        "threads": 14
+      },
+      "steady": {
+        "seconds": 8.04,
+        "cpu_percent": 1.12,
+        "cpu_ms": 90.0,
+        "wakeups_per_s": 72.2,
+        "rss_mb": 179.8,
+        "threads": 14
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 36.63,
+            "what": "libglib-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 29.22,
+            "what": "libgtk-4.so.1.2400.1"
+          },
+          {
+            "pct": 11.17,
+            "what": "libgobject-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 9.74,
+            "what": "libc.so.6"
+          },
+          {
+            "pct": 4.49,
+            "what": "libvulkan_radeon.so"
+          },
+          {
+            "pct": 4.0,
+            "what": "libwayland-client.so.0.26.0"
+          },
+          {
+            "pct": 3.82,
+            "what": "[unknown]"
+          },
+          {
+            "pct": 0.55,
+            "what": "libfontconfig.so.1.17.0"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 10.81,
+            "what": "libgobject-2.0.so.0.9000.1 [.] g_closure_ref                                                         -      -"
+          },
+          {
+            "pct": 8.89,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_utf8_get_char_validated                                             -      -"
+          },
+          {
+            "pct": 8.18,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_source_set_priority                                                 -      -"
+          },
+          {
+            "pct": 7.01,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_slist_foreach                                                       -      -"
+          },
+          {
+            "pct": 6.74,
+            "what": "libc.so.6 [.] pthread_mutex_unlock                                                  -      -"
+          },
+          {
+            "pct": 6.54,
+            "what": "libglib-2.0.so.0.9000.1 [.] 0x000000000003f444                                                    -      -"
+          },
+          {
+            "pct": 5.48,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_free                                                                -      -"
+          },
+          {
+            "pct": 4.9,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003b96e3                                                    -      -"
+          },
+          {
+            "pct": 4.71,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x0000000000387c46                                                    -      -"
+          },
+          {
+            "pct": 4.49,
+            "what": "libvulkan_radeon.so [.] 0x000000000034ee54                                                    -      -"
+          },
+          {
+            "pct": 4.28,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003ba0db                                                    -      -"
+          },
+          {
+            "pct": 4.0,
+            "what": "libwayland-client.so.0.26.0 [.] wl_display_prepare_read                                               -      -"
+          },
+          {
+            "pct": 3.88,
+            "what": "libgtk-4.so.1.2400.1 [.] gtk_widget_compute_transform                                          -      -"
+          },
+          {
+            "pct": 3.88,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x0000000000391c30                                                    -      -"
+          },
+          {
+            "pct": 3.88,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003b9000                                                    -      -"
+          },
+          {
+            "pct": 3.69,
+            "what": "[unknown] [k] 0xffffffff8eec0ec0                                                    -      -"
+          },
+          {
+            "pct": 2.88,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003b2439                                                    -      -"
+          },
+          {
+            "pct": 2.73,
+            "what": "libc.so.6 [.] 0x00000000000fb466                                                    -      -"
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 35.8,
+      "gdk_frame_log_lines": 899,
+      "screenshot": true
+    },
+    "launch-preview": {
+      "page": "launch-preview",
+      "startup": {
+        "cpu_ms_first_2s": 340.0,
+        "rss_mb_at_2s": 178.6,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.04,
+        "cpu_percent": 0.37,
+        "cpu_ms": 30.0,
+        "wakeups_per_s": 4.9,
+        "rss_mb": 181.9,
+        "threads": 14
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 69.48,
+            "what": "libgtk-4.so.1.2400.1"
+          },
+          {
+            "pct": 16.59,
+            "what": "libc.so.6"
+          },
+          {
+            "pct": 10.33,
+            "what": "libfreetype.so.6.20.6"
+          },
+          {
+            "pct": 1.87,
+            "what": "libfontconfig.so.1.17.0"
+          },
+          {
+            "pct": 0.6,
+            "what": "[unknown]"
+          },
+          {
+            "pct": 0.57,
+            "what": "libpango-1.0.so.0.5800.2"
+          },
+          {
+            "pct": 0.52,
+            "what": "libgio-2.0.so.0.9000.1"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 23.68,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000039df53     -      -"
+          },
+          {
+            "pct": 19.2,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x0000000000387ff4     -      -"
+          },
+          {
+            "pct": 16.28,
+            "what": "libc.so.6 [.] cfree                  -      -"
+          },
+          {
+            "pct": 12.82,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000038b226     -      -"
+          },
+          {
+            "pct": 10.98,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x0000000000261bf7     -      -"
+          },
+          {
+            "pct": 10.33,
+            "what": "libfreetype.so.6.20.6 [.] 0x0000000000087130     -      -"
+          },
+          {
+            "pct": 0.67,
+            "what": "libfontconfig.so.1.17.0 [.] 0x0000000000029aae     -      -"
+          },
+          {
+            "pct": 0.62,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000039df60     -      -"
+          },
+          {
+            "pct": 0.61,
+            "what": "libfontconfig.so.1.17.0 [.] 0x0000000000029632     -      -"
+          },
+          {
+            "pct": 0.61,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000039737b     -      -"
+          },
+          {
+            "pct": 0.59,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000039df39     -      -"
+          },
+          {
+            "pct": 0.58,
+            "what": "libfontconfig.so.1.17.0 [.] 0x0000000000034b7f     -      -"
+          },
+          {
+            "pct": 0.57,
+            "what": "libpango-1.0.so.0.5800.2 [.] 0x000000000003f840     -      -"
+          },
+          {
+            "pct": 0.53,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x0000000000353740     -      -"
+          },
+          {
+            "pct": 0.52,
+            "what": "libgio-2.0.so.0.9000.1 [.] g_icon_get_type        -      -"
+          },
+          {
+            "pct": 0.51,
+            "what": "[unknown] [k] 0xffffffff900407bb     -      -"
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 15.56,
+      "gdk_frame_log_lines": 18,
+      "screenshot": true
+    },
+    "palette": {
+      "page": "palette",
+      "startup": {
+        "cpu_ms_first_2s": 360.0,
+        "rss_mb_at_2s": 178.7,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.04,
+        "cpu_percent": 1.62,
+        "cpu_ms": 130.0,
+        "wakeups_per_s": 125.7,
+        "rss_mb": 179.5,
+        "threads": 13
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 38.8,
+            "what": "libgtk-4.so.1.2400.1"
+          },
+          {
+            "pct": 21.98,
+            "what": "libvulkan_radeon.so"
+          },
+          {
+            "pct": 10.52,
+            "what": "libc.so.6"
+          },
+          {
+            "pct": 8.91,
+            "what": "[unknown]"
+          },
+          {
+            "pct": 8.73,
+            "what": "libwayland-client.so.0.26.0"
+          },
+          {
+            "pct": 4.5,
+            "what": "libglib-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 4.3,
+            "what": "libgobject-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 2.13,
+            "what": "libpixman-1.so.0.46.4"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 7.51,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000074ed92                  -      -"
+          },
+          {
+            "pct": 6.69,
+            "what": "libc.so.6 [.] pthread_setspecific                 -      -"
+          },
+          {
+            "pct": 6.62,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000006da1d4                  -      -"
+          },
+          {
+            "pct": 6.33,
+            "what": "libgtk-4.so.1.2400.1 [.] gtk_overlay_get_type                -      -"
+          },
+          {
+            "pct": 6.26,
+            "what": "libwayland-client.so.0.26.0 [.] 0x00000000000049e7                  -      -"
+          },
+          {
+            "pct": 6.23,
+            "what": "libgtk-4.so.1.2400.1 [.] gtk_settings_get_for_display        -      -"
+          },
+          {
+            "pct": 5.0,
+            "what": "libgtk-4.so.1.2400.1 [.] gsk_render_node_get_type            -      -"
+          },
+          {
+            "pct": 4.8,
+            "what": "libvulkan_radeon.so [.] 0x00000000000de844                  -      -"
+          },
+          {
+            "pct": 4.18,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_source_attach                     -      -"
+          },
+          {
+            "pct": 4.08,
+            "what": "libgobject-2.0.so.0.9000.1 [.] g_value_copy                        -      -"
+          },
+          {
+            "pct": 3.42,
+            "what": "libvulkan_radeon.so [.] 0x00000000001dbb34                  -      -"
+          },
+          {
+            "pct": 3.3,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000073a8f0                  -      -"
+          },
+          {
+            "pct": 3.11,
+            "what": "libvulkan_radeon.so [.] 0x0000000000038d48                  -      -"
+          },
+          {
+            "pct": 2.85,
+            "what": "libvulkan_radeon.so [.] 0x00000000001a0dc0                  -      -"
+          },
+          {
+            "pct": 2.75,
+            "what": "libvulkan_radeon.so [.] 0x00000000000d934d                  -      -"
+          },
+          {
+            "pct": 2.47,
+            "what": "libwayland-client.so.0.26.0 [.] wl_display_read_events              -      -"
+          },
+          {
+            "pct": 2.37,
+            "what": "libc.so.6 [.] 0x00000000000fc9cc                  -      -"
+          },
+          {
+            "pct": 2.37,
+            "what": "[unknown] [k] 0xffffffff8ecd440e                  -      -"
+          },
+          {
+            "pct": 2.13,
+            "what": "libpixman-1.so.0.46.4 [.] 0x0000000000127212                  -      -"
+          },
+          {
+            "pct": 2.01,
+            "what": "libvulkan_radeon.so [.] 0x00000000000d894a                  -      -"
+          },
+          {
+            "pct": 1.77,
+            "what": "libgtk-4.so.1.2400.1 [.] gsk_transform_scale_3d              -      -"
+          },
+          {
+            "pct": 1.76,
+            "what": "[unknown] [k] 0xffffffff900406c9                  -      -"
+          },
+          {
+            "pct": 1.59,
+            "what": "[unknown] [k] 0xffffffff8ed0327f                  -      -"
+          },
+          {
+            "pct": 1.55,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003cf885                  -      -"
+          },
+          {
+            "pct": 1.54,
+            "what": "[unknown] [k] 0xffffffffc2c00014                  -      -"
+          },
+          {
+            "pct": 1.51,
+            "what": "libvulkan_radeon.so [.] 0x00000000000de7fc                  -      -"
+          },
+          {
+            "pct": 1.51,
+            "what": "[unknown] [k] 0xffffffff8fb1fcfb                  -      -"
+          },
+          {
+            "pct": 1.46,
+            "what": "libc.so.6 [.] 0x000000000006c3a6                  -      -"
+          },
+          {
+            "pct": 1.46,
+            "what": "libvulkan_radeon.so [.] 0x0000000000355234                  -      -"
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 16.67,
+      "gdk_frame_log_lines": 637,
+      "screenshot": true
+    },
+    "layouts": {
+      "page": "layouts",
+      "startup": {
+        "cpu_ms_first_2s": 340.0,
+        "rss_mb_at_2s": 178.8,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.04,
+        "cpu_percent": 0.37,
+        "cpu_ms": 30.0,
+        "wakeups_per_s": 4.2,
+        "rss_mb": 190.2,
+        "threads": 13
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 63.83,
+            "what": "libpango-1.0.so.0.5800.2"
+          },
+          {
+            "pct": 31.13,
+            "what": "[unknown]"
+          },
+          {
+            "pct": 2.5,
+            "what": "libgtk-4.so.1.2400.1"
+          },
+          {
+            "pct": 0.84,
+            "what": "libvulkan_radeon.so"
+          },
+          {
+            "pct": 0.81,
+            "what": "libgio-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 0.69,
+            "what": "libc.so.6"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 63.83,
+            "what": "libpango-1.0.so.0.5800.2 [.] pango_extents_to_pixels                    -      -"
+          },
+          {
+            "pct": 30.97,
+            "what": "[unknown] [k] 0xffffffff8ece874f                         -      -"
+          },
+          {
+            "pct": 1.09,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000039e0fc                         -      -"
+          },
+          {
+            "pct": 0.88,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003974a7                         -      -"
+          },
+          {
+            "pct": 0.84,
+            "what": "libvulkan_radeon.so [.] 0x00000000003fe53c                         -      -"
+          },
+          {
+            "pct": 0.81,
+            "what": "libgio-2.0.so.0.9000.1 [.] 0x00000000000d228e                         -      -"
+          },
+          {
+            "pct": 0.69,
+            "what": "libc.so.6 [.] 0x00000000001b12e8                         -      -"
+          },
+          {
+            "pct": 0.51,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003b4c54                         -      -"
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 25.69,
+      "gdk_frame_log_lines": 22,
+      "screenshot": true
+    },
+    "agents-streaming": {
+      "page": "agents",
+      "startup": {
+        "cpu_ms_first_2s": 360.0,
+        "rss_mb_at_2s": 178.8,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.04,
+        "cpu_percent": 1.49,
+        "cpu_ms": 120.0,
+        "wakeups_per_s": 103.6,
+        "rss_mb": 180.2,
+        "threads": 13
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 28.07,
+            "what": "libgtk-4.so.1.2400.1"
+          },
+          {
+            "pct": 17.86,
+            "what": "libc.so.6"
+          },
+          {
+            "pct": 17.26,
+            "what": "libvte-2.91-gtk4.so.0"
+          },
+          {
+            "pct": 15.2,
+            "what": "libgobject-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 6.65,
+            "what": "libpixman-1.so.0.46.4"
+          },
+          {
+            "pct": 6.55,
+            "what": "libglib-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 3.74,
+            "what": "[unknown]"
+          },
+          {
+            "pct": 2.6,
+            "what": "libvulkan_radeon.so"
+          },
+          {
+            "pct": 1.82,
+            "what": "relay-native"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 7.9,
+            "what": "libgobject-2.0.so.0.9000.1 [.] 0x000000000003ee71                                                                                           "
+          },
+          {
+            "pct": 7.74,
+            "what": "libgtk-4.so.1.2400.1 [.] gsk_transform_node_new                                                                                             "
+          },
+          {
+            "pct": 7.57,
+            "what": "libc.so.6 [.] 0x00000000000efefd                                                                                                            "
+          },
+          {
+            "pct": 6.65,
+            "what": "libpixman-1.so.0.46.4 [.] 0x0000000000125e9e                                                                                                "
+          },
+          {
+            "pct": 6.38,
+            "what": "libc.so.6 [.] __libc_calloc                                                                                                                 "
+          },
+          {
+            "pct": 6.28,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x0000000000265f14                                                                                                 "
+          },
+          {
+            "pct": 5.38,
+            "what": "libvte-2.91-gtk4.so.0 [.] 0x00000000000b0974                                                                                                "
+          },
+          {
+            "pct": 5.21,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x0000000000795e2e                                                                                                 "
+          },
+          {
+            "pct": 4.62,
+            "what": "libvte-2.91-gtk4.so.0 [.] 0x00000000000aad85                                                                                                "
+          },
+          {
+            "pct": 4.01,
+            "what": "libvte-2.91-gtk4.so.0 [.] 0x000000000010c500                                                                                                "
+          },
+          {
+            "pct": 3.92,
+            "what": "libgobject-2.0.so.0.9000.1 [.] 0x000000000004020b                                                                                           "
+          },
+          {
+            "pct": 3.89,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000077a24b                                                                                                 "
+          },
+          {
+            "pct": 3.51,
+            "what": "libc.so.6 [.] 0x00000000000f4fbb                                                                                                            "
+          },
+          {
+            "pct": 3.38,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_utf8_get_char_validated                                                                                       "
+          },
+          {
+            "pct": 3.34,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x0000000000715b43                                                                                                 "
+          },
+          {
+            "pct": 3.14,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_list_prepend                                                                                                  "
+          },
+          {
+            "pct": 3.05,
+            "what": "libgobject-2.0.so.0.9000.1 [.] 0x0000000000021178                                                                                           "
+          },
+          {
+            "pct": 3.03,
+            "what": "libvte-2.91-gtk4.so.0 [.] 0x000000000010e7b8                                                                                                "
+          },
+          {
+            "pct": 2.44,
+            "what": "libvulkan_radeon.so [.] 0x000000000015d6e1                                                                                                  "
+          },
+          {
+            "pct": 2.15,
+            "what": "[unknown] [k] 0xffffffff8ecfbe76                                                                                                            "
+          },
+          {
+            "pct": 1.25,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x00000000003a4433                                                                                                 "
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 76.39,
+      "gdk_frame_log_lines": 260,
+      "screenshot": true
+    },
+    "agents-burst": {
+      "page": "agents",
+      "startup": {
+        "cpu_ms_first_2s": 360.0,
+        "rss_mb_at_2s": 190.8,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.04,
+        "cpu_percent": 0.37,
+        "cpu_ms": 30.0,
+        "wakeups_per_s": 61.9,
+        "rss_mb": 192.0,
+        "threads": 13
+      },
+      "profile": {
+        "by_dso": [
+          {
+            "pct": 28.37,
+            "what": "libgtk-4.so.1.2400.1"
+          },
+          {
+            "pct": 25.35,
+            "what": "libglib-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 12.2,
+            "what": "relay-native"
+          },
+          {
+            "pct": 11.84,
+            "what": "libvulkan_radeon.so"
+          },
+          {
+            "pct": 10.8,
+            "what": "libvte-2.91-gtk4.so.0"
+          },
+          {
+            "pct": 9.08,
+            "what": "libgobject-2.0.so.0.9000.1"
+          },
+          {
+            "pct": 2.12,
+            "what": "[unknown]"
+          }
+        ],
+        "by_symbol": [
+          {
+            "pct": 24.78,
+            "what": "libglib-2.0.so.0.9000.1 [.] g_str_hash                                                                                                      "
+          },
+          {
+            "pct": 11.84,
+            "what": "libvulkan_radeon.so [.] 0x00000000000cf120                                                                                                  "
+          },
+          {
+            "pct": 10.7,
+            "what": "libgtk-4.so.1.2400.1 [.] gtk_widget_get_ancestor                                                                                            "
+          },
+          {
+            "pct": 10.52,
+            "what": "libvte-2.91-gtk4.so.0 [.] 0x000000000007b313                                                                                                "
+          },
+          {
+            "pct": 9.08,
+            "what": "libgobject-2.0.so.0.9000.1 [.] g_signal_emit                                                                                                "
+          },
+          {
+            "pct": 8.19,
+            "what": "relay-native [.] <base64::engine::general_purpose::GeneralPurpose as base64::engine::Engine>::internal_decode                               "
+          },
+          {
+            "pct": 7.25,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000035811a                                                                                                 "
+          },
+          {
+            "pct": 5.65,
+            "what": "libgtk-4.so.1.2400.1 [.] gtk_native_get_surface                                                                                             "
+          },
+          {
+            "pct": 4.78,
+            "what": "libgtk-4.so.1.2400.1 [.] 0x000000000078ce84                                                                                                 "
+          },
+          {
+            "pct": 1.13,
+            "what": "relay-native [.] <relay_native::client::Client>::open_with_limit::{closure#0}::{closure#1}                                                  "
+          },
+          {
+            "pct": 0.67,
+            "what": "[unknown] [k] 0xffffffff8f2cf89e                                                                                                            "
+          }
+        ]
+      },
+      "exit_code": 0,
+      "total_wall_s": 76.29,
+      "gdk_frame_log_lines": 18,
+      "screenshot": true
+    }
+  },
+  "notes": [
+    "Hidden-window detach (PR #13) needs a compositor and is not measured by this script."
+  ],
+  "engine_rss_mb_six_sessions": 30.3,
+  "display": {
+    "GDK_BACKEND": "wayland",
+    "WAYLAND_DISPLAY": "relay-headless-3085100",
+    "DISPLAY": "",
+    "XDG_SESSION_TYPE": "wayland"
+  }
+}

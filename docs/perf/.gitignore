@@ -1,1 +1,3 @@
 runs/*/callgrind/callgrind.out.*
+runs/*/native/*.perf.data
+runs/*/native/*.perf.data.old

@@ -1,0 +1,23 @@
+Gdk-Message: 15:00:33.947:     0: layout_start=0.5  paint_start=5.0  frame_end=6.6  present=11.9 predicted=25.0 refresh_interval=16.7
+Gdk-Message: 15:00:33.947:     1: interval=32.3 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=12.9
+Gdk-Message: 15:00:34.003:     0: layout_start=4.5  paint_start=19.6 frame_end=22.1 present=38.7 predicted=25.0 refresh_interval=16.7
+Gdk-Message: 15:00:34.044:     1: interval=36.7 layout_start=18.2 paint_start=24.3 frame_end=41.1 present=52.0 predicted=25.0 refresh_interval=16.7
+Gdk-Message: 15:00:34.064:     2: interval=100.0 layout_start=18446744073709548.0 paint_start=2.9  frame_end=4.7  present=12.9 predicted=12.9 refresh_interval=16.7
+Gdk-Message: 15:00:34.064:     3: interval=16.1 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=13.5
+Gdk-Message: 15:00:34.080:     2: interval=100.0 layout_start=0.5  paint_start=1.6  frame_end=2.6  present=18.6 predicted=35.3 refresh_interval=16.7
+Gdk-Message: 15:00:34.083:     4: interval=16.7 layout_start=0.1  paint_start=0.1  frame_end=0.1  predicted=13.5
+Gdk-Message: 15:00:34.098:     3: interval=15.3 layout_start=0.1  paint_start=1.8  frame_end=2.5  present=20.0 predicted=36.6 refresh_interval=16.7
+Gdk-Message: 15:00:34.110:     5: interval=16.7 layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 predicted=36.5
+Gdk-Message: 15:00:34.113:     4: interval=16.8 layout_start=0.1  paint_start=0.1  frame_end=0.8  present=19.8 predicted=36.5 refresh_interval=16.7
+Gdk-Message: 15:00:34.927:     7: interval=16.7 layout_start=18446744073709544.0 paint_start=18446744073709544.0 frame_end=18446744073709544.0 predicted=12.0
+Gdk-Message: 15:00:34.929:     6: interval=807.8 layout_start=0.1  paint_start=0.2  frame_end=1.4  present=12.0 predicted=28.7 refresh_interval=16.7
+Shell layouts verified: grid, focus, review, mosaic, retained terminals
+In-app confirmation accept and cancel verified
+Gdk-Message: 15:00:35.951:     8: interval=987.6 layout_start=7.0  paint_start=8.1  frame_end=9.6  present=24.4 predicted=24.4 refresh_interval=16.7
+Burst layout: grid
+Gdk-Message: 15:00:35.964:     9: interval=33.3 layout_start=18446744073709544.0 paint_start=18446744073709544.0 frame_end=18446744073709544.0 present=7.8  predicted=7.8  refresh_interval=16.7
+Gdk-Message: 15:00:35.980:    10: interval=4.0  layout_start=3.5  paint_start=3.5  frame_end=4.3  present=20.4 predicted=20.4 refresh_interval=16.7
+Gdk-Message: 15:00:35.993:    12: interval=16.7 layout_start=18446744073709536.0 paint_start=18446744073709536.0 frame_end=18446744073709536.0 predicted=3.7 
+Gdk-Message: 15:00:35.996:    11: interval=33.3 layout_start=18446744073709536.0 paint_start=18446744073709536.0 frame_end=18446744073709536.0 present=3.7  predicted=3.7  refresh_interval=16.7
+BURST_RENDERED=6
+Screenshot saved: /tmp/claude-1000/-home-anthony-dev3-RelayV4--relay-worktrees-spry-kestrel/5fc5db58-7763-4c2c-97b9-4fcb680bc85d/scratchpad/relay-main/docs/perf/runs/2026-10-14/native/agents-burst.png

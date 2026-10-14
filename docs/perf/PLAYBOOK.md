@@ -23,6 +23,11 @@ run had none and skipped it), `perf` (native profiles), `strace`, and for deeper
 `sudo pacman -S valgrind perf heaptrack hyperfine sysprof` and `cargo install --locked samply`;
 profiling needs `sysctl kernel.perf_event_paranoid=1`.
 
+**Valgrind cannot run on CachyOS.** Its x86-64-v4 glibc builds the dynamic loader with AVX-512,
+which Valgrind does not decode, so every dynamically linked program dies with SIGILL before its
+first instruction. On such a machine skip the callgrind pass (`--skip-callgrind`) and attribute
+with `perf record` / `perf stat -e instructions:u`; instruction counts for a ratchet come from CI.
+
 **Profiles.** The harness measures the **dev** profile (`opt-level = 1` for the workspace, `3` for
 dependencies), which is what `run.sh` launches — say so in every number. `[profile.release]` strips
 symbols (`strip = "symbols"`), so profile a release-like build through a profile that keeps them:
@@ -119,7 +124,8 @@ several may turn out to be cheap enough not to matter. File paths are current as
    scenarios; consider `register_unlocked` on a read connection for the hot reads.
 2. **`usage.get` walks `~/.codex/sessions`** (up to 20 000 files) and reads the tail of up to 32 of
    them on every call (`usage.rs`, `provider.rs`) — and the status bar calls it on connect and on
-   `usage.changed`. Measure on a real home directory; cache keyed on directory mtimes.
+   `usage.changed`. **Measured 2026-10-14, cleared:** ~1.3 ms of work on a real home (478 files,
+   4.0 GB), unlocked (`BASELINE-2026-10-14.md` §2).
 3. **Handlers that still do filesystem work under the lock**: `app.resources.get` (`/proc` per
    session), `app.backup.list` (`read_dir`), `device.build` preamble (signing profile, temp script,
    probes), `task.approve` (`gix::open` + `rev_parse`), `project.add` (canonicalize, `.git/HEAD`),
@@ -134,7 +140,7 @@ several may turn out to be cheap enough not to matter. File paths are current as
 
 ### Native client
 
-7. **The sidebar rebuilds on every `session.changed`**: `render_projects` serializes all projects
+7. **Cleared 2026-10-14** — a signature guards the rebuild (BASELINE §2). Original lead: **the sidebar rebuilds on every `session.changed`**: `render_projects` serializes all projects
    and workspaces to JSON to hash them, then `clear()`s and rebuilds the whole box when anything
    changed (`shell/registry.rs`); status counts rebuild on every reconcile (`status.rs`). With many
    sessions emitting state changes, count widgets created per event and frame time during a burst.

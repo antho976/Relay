@@ -1,0 +1,23 @@
+Gdk-Message: 14:58:51.838:     0: layout_start=0.5  paint_start=4.6  frame_end=5.9  present=20.9 predicted=25.0 refresh_interval=16.7
+Gdk-Message: 14:58:51.838:     1: interval=31.9 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=22.3
+Gdk-Message: 14:58:51.849:     0: layout_start=5.0  paint_start=19.1 frame_end=22.1 present=31.7 predicted=25.0 refresh_interval=16.7
+Gdk-Message: 14:58:51.881:     1: interval=33.5 layout_start=17.0 paint_start=23.1 frame_end=25.7 present=31.5 predicted=31.5 refresh_interval=16.7
+Gdk-Message: 14:58:51.940:     2: interval=34.9 layout_start=0.7  paint_start=0.7  frame_end=0.9  present=20.8 predicted=20.8 refresh_interval=16.7
+Gdk-Message: 14:58:51.940:     2: interval=33.3 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709552.0 present=14.8 predicted=31.5 refresh_interval=16.7
+Gdk-Message: 14:58:51.962:     4: interval=17.1 layout_start=2.3  paint_start=2.3  frame_end=2.3  predicted=20.3
+Gdk-Message: 14:58:51.966:     3: interval=66.7 layout_start=1.1  paint_start=6.0  frame_end=8.6  present=20.8 predicted=20.8 refresh_interval=16.7
+Gdk-Message: 14:58:51.966:     3: interval=69.4 layout_start=6.6  paint_start=7.7  frame_end=8.3  present=12.1 predicted=28.8 refresh_interval=16.7
+Gdk-Message: 14:58:51.981:     4: interval=16.7 layout_start=18446744073709544.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=12.1 predicted=28.8 refresh_interval=16.7
+Gdk-Message: 14:58:51.995:     6: interval=16.3 layout_start=0.3  paint_start=0.5  frame_end=0.6  predicted=19.3
+Gdk-Message: 14:58:51.996:     5: interval=9.9  layout_start=0.4  paint_start=1.8  frame_end=2.5  present=18.9 predicted=18.9 refresh_interval=16.7
+Gdk-Message: 14:58:52.011:     7: interval=16.7 layout_start=0.1  paint_start=0.1  frame_end=0.1  predicted=19.2
+Gdk-Message: 14:58:52.028:     8: interval=16.7 layout_start=0.1  paint_start=0.1  frame_end=0.1  predicted=19.2
+Gdk-Message: 14:58:53.847:     9: interval=1784.0 layout_start=15.2 paint_start=16.3 frame_end=17.4 present=35.2 predicted=18.6 refresh_interval=16.7
+Gdk-Message: 14:58:53.864:    10: interval=20.8 layout_start=0.2  paint_start=0.2  frame_end=8.0  present=31.1 predicted=14.5 refresh_interval=16.7
+Gdk-Message: 14:58:53.880:    11: interval=28.1 layout_start=0.1  paint_start=0.1  frame_end=0.7  present=19.7 predicted=19.7 refresh_interval=16.7
+Gdk-Message: 14:58:53.897:    12: interval=16.0 layout_start=0.0  paint_start=0.1  frame_end=0.7  present=20.3 predicted=20.3 refresh_interval=16.7
+Gdk-Message: 14:58:53.914:    13: interval=17.1 layout_start=0.1  paint_start=0.1  frame_end=0.4  present=19.9 predicted=19.9 refresh_interval=16.7
+Gdk-Message: 14:58:53.930:    14: interval=16.5 layout_start=0.1  paint_start=0.2  frame_end=0.6  present=20.1 predicted=20.1 refresh_interval=16.7
+Gdk-Message: 14:58:53.943:    16: interval=16.6 layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 predicted=19.6
+Gdk-Message: 14:58:53.946:    15: interval=17.1 layout_start=0.0  paint_start=0.1  frame_end=0.3  present=19.6 predicted=19.6 refresh_interval=16.7
+Screenshot saved: /tmp/claude-1000/-home-anthony-dev3-RelayV4--relay-worktrees-spry-kestrel/5fc5db58-7763-4c2c-97b9-4fcb680bc85d/scratchpad/relay-main/docs/perf/runs/2026-10-14/native/layouts.png

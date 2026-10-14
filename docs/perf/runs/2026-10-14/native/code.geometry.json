@@ -1,0 +1,2884 @@
+[
+  {
+    "type": "GtkApplicationWindow",
+    "name": "GtkApplicationWindow",
+    "classes": [
+      "background",
+      "csd",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 0.0,
+    "width": 1440.0,
+    "height": 900.0
+  },
+  {
+    "type": "GtkOverlay",
+    "name": "GtkOverlay",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 0.0,
+    "width": 1440.0,
+    "height": 900.0
+  },
+  {
+    "type": "GtkPicture",
+    "name": "GtkPicture",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 0.0,
+    "width": 1440.0,
+    "height": 900.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "vertical",
+      "wallpaper-dim",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 0.0,
+    "width": 1440.0,
+    "height": 900.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "vertical",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 0.0,
+    "width": 1440.0,
+    "height": 900.0
+  },
+  {
+    "type": "GtkWindowHandle",
+    "name": "GtkWindowHandle",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 0.0,
+    "width": 1440.0,
+    "height": 53.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "topbar",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 0.0,
+    "width": 1440.0,
+    "height": 53.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "topbar-left",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 0.0,
+    "width": 248.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "sidebar-toggle",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 16.0,
+    "y": 0.0,
+    "width": 30.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [],
+    "text": null,
+    "x": 17.0,
+    "y": 1.0,
+    "width": 28.0,
+    "height": 50.0
+  },
+  {
+    "type": "GtkDrawingArea",
+    "name": "GtkDrawingArea",
+    "classes": [
+      "brand-mark",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 54.0,
+    "y": 15.0,
+    "width": 22.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "brand",
+      "restyle-a"
+    ],
+    "text": "relay",
+    "x": 84.0,
+    "y": 0.0,
+    "width": 41.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "space-switch",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 266.0,
+    "y": 13.0,
+    "width": 118.0,
+    "height": 26.0
+  },
+  {
+    "type": "GtkToggleButton",
+    "name": "space-dev",
+    "classes": [
+      "text-button",
+      "toggle",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 269.0,
+    "y": 16.0,
+    "width": 45.0,
+    "height": 20.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": "Dev",
+    "x": 280.0,
+    "y": 16.0,
+    "width": 23.0,
+    "height": 20.0
+  },
+  {
+    "type": "GtkToggleButton",
+    "name": "space-money",
+    "classes": [
+      "text-button",
+      "toggle",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 314.0,
+    "y": 16.0,
+    "width": 67.0,
+    "height": 20.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": "Threads",
+    "x": 325.0,
+    "y": 16.0,
+    "width": 45.0,
+    "height": 20.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 386.0,
+    "y": 0.0,
+    "width": 144.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "topbar-actions",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 532.0,
+    "y": 0.0,
+    "width": 770.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "command-palette",
+    "classes": [
+      "command-search",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 540.0,
+    "y": 8.0,
+    "width": 463.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 553.0,
+    "y": 9.0,
+    "width": 443.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 553.0,
+    "y": 9.0,
+    "width": 14.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "command-search-text",
+      "restyle-a"
+    ],
+    "text": "Search or run a command",
+    "x": 575.0,
+    "y": 9.0,
+    "width": 357.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "keycap",
+      "restyle-a"
+    ],
+    "text": "Ctrl K",
+    "x": 940.0,
+    "y": 9.0,
+    "width": 56.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "GtkButton",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1015.0,
+    "y": 0.0,
+    "width": 36.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1016.0,
+    "y": 1.0,
+    "width": 34.0,
+    "height": 50.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "project-plugins",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1053.0,
+    "y": 0.0,
+    "width": 36.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1054.0,
+    "y": 1.0,
+    "width": 34.0,
+    "height": 50.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "window-presets",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1091.0,
+    "y": 0.0,
+    "width": 36.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1092.0,
+    "y": 1.0,
+    "width": 34.0,
+    "height": 50.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "GtkButton",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1129.0,
+    "y": 0.0,
+    "width": 36.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkOverlay",
+    "name": "GtkOverlay",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1130.0,
+    "y": 1.0,
+    "width": 34.0,
+    "height": 50.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1130.0,
+    "y": 1.0,
+    "width": 34.0,
+    "height": 50.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "new-session",
+    "classes": [
+      "primary",
+      "launch-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1177.0,
+    "y": 8.0,
+    "width": 117.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1192.0,
+    "y": 9.0,
+    "width": 87.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1192.0,
+    "y": 9.0,
+    "width": 14.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": "New agent",
+    "x": 1212.0,
+    "y": 9.0,
+    "width": 67.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "window-controls",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1308.0,
+    "y": 0.0,
+    "width": 132.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "GtkButton",
+    "classes": [
+      "image-button",
+      "quiet",
+      "window-control",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1308.0,
+    "y": 0.0,
+    "width": 44.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1308.0,
+    "y": 0.0,
+    "width": 44.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "GtkButton",
+    "classes": [
+      "image-button",
+      "quiet",
+      "window-control",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1352.0,
+    "y": 0.0,
+    "width": 44.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1352.0,
+    "y": 0.0,
+    "width": 44.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "GtkButton",
+    "classes": [
+      "image-button",
+      "quiet",
+      "window-control",
+      "window-close",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1396.0,
+    "y": 0.0,
+    "width": 44.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1396.0,
+    "y": 0.0,
+    "width": 44.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkOverlay",
+    "name": "GtkOverlay",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 53.0,
+    "width": 1440.0,
+    "height": 816.0
+  },
+  {
+    "type": "GtkOverlay",
+    "name": "GtkOverlay",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 53.0,
+    "width": 1440.0,
+    "height": 816.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 53.0,
+    "width": 1440.0,
+    "height": 816.0
+  },
+  {
+    "type": "GtkPaned",
+    "name": "GtkPaned",
+    "classes": [
+      "horizontal",
+      "sidebar-split",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 53.0,
+    "width": 1440.0,
+    "height": 816.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "sidebar",
+      "vertical",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 53.0,
+    "width": 248.0,
+    "height": 816.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "vertical",
+      "navigation",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 53.0,
+    "width": 248.0,
+    "height": 173.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "nav-board",
+    "classes": [
+      "nav",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 12.0,
+    "y": 67.0,
+    "width": 224.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 24.0,
+    "y": 67.0,
+    "width": 200.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 24.0,
+    "y": 67.0,
+    "width": 18.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "nav-label",
+      "restyle-a"
+    ],
+    "text": "Board",
+    "x": 51.0,
+    "y": 67.0,
+    "width": 37.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "nav-skills",
+    "classes": [
+      "nav",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 12.0,
+    "y": 104.0,
+    "width": 224.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 24.0,
+    "y": 104.0,
+    "width": 200.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 24.0,
+    "y": 104.0,
+    "width": 18.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "nav-label",
+      "restyle-a"
+    ],
+    "text": "Skills",
+    "x": 51.0,
+    "y": 104.0,
+    "width": 34.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "nav-plugins",
+    "classes": [
+      "nav",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 12.0,
+    "y": 141.0,
+    "width": 224.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 24.0,
+    "y": 141.0,
+    "width": 200.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 24.0,
+    "y": 141.0,
+    "width": 18.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "nav-label",
+      "restyle-a"
+    ],
+    "text": "Plugins",
+    "x": 51.0,
+    "y": 141.0,
+    "width": 46.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "nav-notes",
+    "classes": [
+      "nav",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 12.0,
+    "y": 178.0,
+    "width": 224.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 24.0,
+    "y": 178.0,
+    "width": 200.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 24.0,
+    "y": 178.0,
+    "width": 18.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "nav-label",
+      "restyle-a"
+    ],
+    "text": "Notes",
+    "x": 51.0,
+    "y": 178.0,
+    "width": 36.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "workspace-heading",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 226.0,
+    "width": 248.0,
+    "height": 56.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "section-label",
+      "restyle-a"
+    ],
+    "text": "Workspaces",
+    "x": 20.0,
+    "y": 244.0,
+    "width": 186.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "GtkButton",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 206.0,
+    "y": 244.0,
+    "width": 30.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 207.0,
+    "y": 245.0,
+    "width": 28.0,
+    "height": 28.0
+  },
+  {
+    "type": "GtkScrolledWindow",
+    "name": "GtkScrolledWindow",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 282.0,
+    "width": 248.0,
+    "height": 440.0
+  },
+  {
+    "type": "GtkViewport",
+    "name": "GtkViewport",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 282.0,
+    "width": 248.0,
+    "height": 440.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "vertical",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 282.0,
+    "width": 248.0,
+    "height": 440.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "registry-workspace-1",
+    "classes": [
+      "horizontal",
+      "workspace-row"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 284.0,
+    "width": 248.0,
+    "height": 32.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "GtkButton",
+    "classes": [
+      "workspace-toggle"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 284.0,
+    "width": 188.0,
+    "height": 32.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal"
+    ],
+    "text": null,
+    "x": 14.0,
+    "y": 284.0,
+    "width": 170.0,
+    "height": 32.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "workspace-chevron"
+    ],
+    "text": null,
+    "x": 14.0,
+    "y": 284.0,
+    "width": 12.0,
+    "height": 32.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "workspace-name"
+    ],
+    "text": "workspace",
+    "x": 32.0,
+    "y": 284.0,
+    "width": 152.0,
+    "height": 32.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "workspace-tools"
+    ],
+    "text": null,
+    "x": 188.0,
+    "y": 284.0,
+    "width": 48.0,
+    "height": 32.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "workspace-add-1",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "small-key",
+      "add-project"
+    ],
+    "text": null,
+    "x": 188.0,
+    "y": 284.0,
+    "width": 24.0,
+    "height": 32.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [],
+    "text": null,
+    "x": 189.0,
+    "y": 285.0,
+    "width": 22.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkMenuButton",
+    "name": "GtkMenuButton",
+    "classes": [
+      "popup",
+      "small-key",
+      "manage"
+    ],
+    "text": null,
+    "x": 212.0,
+    "y": 284.0,
+    "width": 24.0,
+    "height": 32.0
+  },
+  {
+    "type": "GtkToggleButton",
+    "name": "GtkToggleButton",
+    "classes": [
+      "toggle"
+    ],
+    "text": null,
+    "x": 212.0,
+    "y": 284.0,
+    "width": 24.0,
+    "height": 32.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal"
+    ],
+    "text": null,
+    "x": 213.0,
+    "y": 285.0,
+    "width": 22.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkGizmo",
+    "name": "GtkGizmo",
+    "classes": [],
+    "text": null,
+    "x": 213.0,
+    "y": 285.0,
+    "width": 22.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [],
+    "text": null,
+    "x": 213.0,
+    "y": 285.0,
+    "width": 22.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkOverlay",
+    "name": "registry-project-1",
+    "classes": [
+      "selected",
+      "project-row"
+    ],
+    "text": null,
+    "x": 16.0,
+    "y": 317.0,
+    "width": 220.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "GtkButton",
+    "classes": [
+      "selected",
+      "project"
+    ],
+    "text": null,
+    "x": 16.0,
+    "y": 317.0,
+    "width": 220.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "project-content"
+    ],
+    "text": null,
+    "x": 28.0,
+    "y": 317.0,
+    "width": 200.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "lamp",
+      "live",
+      "small-lamp"
+    ],
+    "text": null,
+    "x": 28.0,
+    "y": 331.0,
+    "width": 6.0,
+    "height": 6.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "project-name"
+    ],
+    "text": "Native baseline project",
+    "x": 42.0,
+    "y": 317.0,
+    "width": 166.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "project-count"
+    ],
+    "text": "6",
+    "x": 216.0,
+    "y": 317.0,
+    "width": 12.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "right",
+      "horizontal",
+      "project-tools"
+    ],
+    "text": null,
+    "x": 178.0,
+    "y": 322.0,
+    "width": 54.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "GtkButton",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "small-key",
+      "manage"
+    ],
+    "text": null,
+    "x": 184.0,
+    "y": 322.0,
+    "width": 24.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [],
+    "text": null,
+    "x": 185.0,
+    "y": 323.0,
+    "width": 22.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkMenuButton",
+    "name": "GtkMenuButton",
+    "classes": [
+      "popup",
+      "small-key",
+      "manage"
+    ],
+    "text": null,
+    "x": 208.0,
+    "y": 322.0,
+    "width": 24.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkToggleButton",
+    "name": "GtkToggleButton",
+    "classes": [
+      "toggle"
+    ],
+    "text": null,
+    "x": 208.0,
+    "y": 322.0,
+    "width": 24.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal"
+    ],
+    "text": null,
+    "x": 209.0,
+    "y": 323.0,
+    "width": 22.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkGizmo",
+    "name": "GtkGizmo",
+    "classes": [],
+    "text": null,
+    "x": 209.0,
+    "y": 323.0,
+    "width": 22.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [],
+    "text": null,
+    "x": 209.0,
+    "y": 323.0,
+    "width": 22.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "vertical",
+      "sidebar-footer",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 722.0,
+    "width": 248.0,
+    "height": 147.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "sidebar-usage",
+    "classes": [
+      "vertical",
+      "usage-card",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 12.0,
+    "y": 732.0,
+    "width": 224.0,
+    "height": 75.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "usage-card-head",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 23.0,
+    "y": 741.0,
+    "width": 204.0,
+    "height": 28.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "usage-card-tabs",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 23.0,
+    "y": 741.0,
+    "width": 120.0,
+    "height": 28.0
+  },
+  {
+    "type": "GtkToggleButton",
+    "name": "sidebar-usage-claude",
+    "classes": [
+      "text-button",
+      "toggle",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 26.0,
+    "y": 744.0,
+    "width": 59.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": "Claude",
+    "x": 36.0,
+    "y": 744.0,
+    "width": 39.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkToggleButton",
+    "name": "sidebar-usage-codex",
+    "classes": [
+      "text-button",
+      "toggle",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 85.0,
+    "y": 744.0,
+    "width": 55.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": "Codex",
+    "x": 95.0,
+    "y": 744.0,
+    "width": 35.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "sidebar-usage-options",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 173.0,
+    "y": 742.0,
+    "width": 26.0,
+    "height": 26.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 174.0,
+    "y": 743.0,
+    "width": 24.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "sidebar-usage-fold",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 201.0,
+    "y": 742.0,
+    "width": 26.0,
+    "height": 26.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 202.0,
+    "y": 743.0,
+    "width": 24.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "vertical",
+      "usage-card-body",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 23.0,
+    "y": 769.0,
+    "width": 204.0,
+    "height": 27.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "usage-card-caption",
+      "restyle-a"
+    ],
+    "text": "Nothing reported yet",
+    "x": 23.0,
+    "y": 777.0,
+    "width": 202.0,
+    "height": 19.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "GtkButton",
+    "classes": [
+      "nav",
+      "settings-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 12.0,
+    "y": 817.0,
+    "width": 224.0,
+    "height": 40.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 18.0,
+    "y": 817.0,
+    "width": 208.0,
+    "height": 40.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "you-avatar",
+      "restyle-a"
+    ],
+    "text": "A",
+    "x": 18.0,
+    "y": 823.0,
+    "width": 28.0,
+    "height": 28.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "nav-label",
+      "restyle-a"
+    ],
+    "text": "Anthony",
+    "x": 56.0,
+    "y": 817.0,
+    "width": 144.0,
+    "height": 40.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 210.0,
+    "y": 817.0,
+    "width": 16.0,
+    "height": 40.0
+  },
+  {
+    "type": "GtkPanedHandle",
+    "name": "GtkPanedHandle",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 248.0,
+    "y": 53.0,
+    "width": 1.0,
+    "height": 816.0
+  },
+  {
+    "type": "GtkOverlay",
+    "name": "GtkOverlay",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 249.0,
+    "y": 53.0,
+    "width": 1191.0,
+    "height": 816.0
+  },
+  {
+    "type": "GtkStack",
+    "name": "GtkStack",
+    "classes": [
+      "page-stack",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 249.0,
+    "y": 53.0,
+    "width": 1191.0,
+    "height": 816.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "vertical",
+      "code-surface",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 249.0,
+    "y": 53.0,
+    "width": 1191.0,
+    "height": 816.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "page-layer",
+      "code-bar",
+      "workspace-strip",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 249.0,
+    "y": 53.0,
+    "width": 1191.0,
+    "height": 53.0
+  },
+  {
+    "type": "GtkMenuButton",
+    "name": "project-scope",
+    "classes": [
+      "popup",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 265.0,
+    "y": 61.0,
+    "width": 318.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkToggleButton",
+    "name": "GtkToggleButton",
+    "classes": [
+      "toggle",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 265.0,
+    "y": 61.0,
+    "width": 318.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 278.0,
+    "y": 62.0,
+    "width": 292.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkGizmo",
+    "name": "GtkGizmo",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 278.0,
+    "y": 62.0,
+    "width": 292.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 278.0,
+    "y": 62.0,
+    "width": 292.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 278.0,
+    "y": 62.0,
+    "width": 13.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "mono",
+      "restyle-a"
+    ],
+    "text": "workspace / Native baseline project · main",
+    "x": 297.0,
+    "y": 62.0,
+    "width": 255.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 558.0,
+    "y": 62.0,
+    "width": 12.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 589.0,
+    "y": 53.0,
+    "width": 650.0,
+    "height": 52.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "view-tabs",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1245.0,
+    "y": 60.0,
+    "width": 179.0,
+    "height": 38.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "project-agents",
+    "classes": [
+      "text-button",
+      "quiet",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1249.0,
+    "y": 64.0,
+    "width": 69.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": "Agents",
+    "x": 1262.0,
+    "y": 65.0,
+    "width": 43.0,
+    "height": 28.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "project-files",
+    "classes": [
+      "open",
+      "text-button",
+      "quiet",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1320.0,
+    "y": 64.0,
+    "width": 55.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": "Files",
+    "x": 1333.0,
+    "y": 65.0,
+    "width": 29.0,
+    "height": 28.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "project-git",
+    "classes": [
+      "text-button",
+      "quiet",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1377.0,
+    "y": 64.0,
+    "width": 43.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": "Git",
+    "x": 1390.0,
+    "y": 65.0,
+    "width": 17.0,
+    "height": 28.0
+  },
+  {
+    "type": "GtkPaned",
+    "name": "GtkPaned",
+    "classes": [
+      "horizontal",
+      "code-split",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 249.0,
+    "y": 106.0,
+    "width": 1191.0,
+    "height": 763.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "vertical",
+      "page-layer",
+      "code-files",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 249.0,
+    "y": 106.0,
+    "width": 260.0,
+    "height": 763.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "code-bar",
+      "explorer-head",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 249.0,
+    "y": 106.0,
+    "width": 260.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "section-label",
+      "restyle-a"
+    ],
+    "text": "EXPLORER",
+    "x": 261.0,
+    "y": 106.0,
+    "width": 86.0,
+    "height": 35.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "explorer-actions",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 349.0,
+    "y": 110.0,
+    "width": 156.0,
+    "height": 26.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "project-file.create",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "explorer-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 349.0,
+    "y": 110.0,
+    "width": 26.0,
+    "height": 26.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 350.0,
+    "y": 111.0,
+    "width": 24.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "project-file.rename",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "explorer-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 375.0,
+    "y": 110.0,
+    "width": 26.0,
+    "height": 26.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 376.0,
+    "y": 111.0,
+    "width": 24.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "project-file.delete",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "explorer-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 401.0,
+    "y": 110.0,
+    "width": 26.0,
+    "height": 26.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 402.0,
+    "y": 111.0,
+    "width": 24.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "project-files-refresh",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "explorer-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 427.0,
+    "y": 110.0,
+    "width": 26.0,
+    "height": 26.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 428.0,
+    "y": 111.0,
+    "width": 24.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "project-files-trash",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "explorer-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 453.0,
+    "y": 110.0,
+    "width": 26.0,
+    "height": 26.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 454.0,
+    "y": 111.0,
+    "width": 24.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "project-files-collapse",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "explorer-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 479.0,
+    "y": 110.0,
+    "width": 26.0,
+    "height": 26.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 480.0,
+    "y": 111.0,
+    "width": 24.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkSearchEntry",
+    "name": "GtkSearchEntry",
+    "classes": [
+      "search",
+      "code-search",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 257.0,
+    "y": 148.0,
+    "width": 244.0,
+    "height": 34.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 268.0,
+    "y": 149.0,
+    "width": 16.0,
+    "height": 32.0
+  },
+  {
+    "type": "GtkText",
+    "name": "GtkText",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 291.0,
+    "y": 149.0,
+    "width": 203.0,
+    "height": 32.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": "Search in worktree",
+    "x": 291.0,
+    "y": 149.0,
+    "width": 203.0,
+    "height": 32.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "vertical",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 249.0,
+    "y": 186.0,
+    "width": 260.0,
+    "height": 0.0
+  },
+  {
+    "type": "GtkScrolledWindow",
+    "name": "GtkScrolledWindow",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 249.0,
+    "y": 186.0,
+    "width": 260.0,
+    "height": 683.0
+  },
+  {
+    "type": "GtkViewport",
+    "name": "GtkViewport",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 249.0,
+    "y": 186.0,
+    "width": 260.0,
+    "height": 683.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "vertical",
+      "file-tree",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 249.0,
+    "y": 186.0,
+    "width": 260.0,
+    "height": 683.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "vertical"
+    ],
+    "text": null,
+    "x": 249.0,
+    "y": 188.0,
+    "width": 260.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "project-file:src",
+    "classes": [
+      "tree-row",
+      "code-folder"
+    ],
+    "text": null,
+    "x": 249.0,
+    "y": 188.0,
+    "width": 260.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal"
+    ],
+    "text": null,
+    "x": 253.0,
+    "y": 188.0,
+    "width": 248.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "tree-chevron"
+    ],
+    "text": null,
+    "x": 253.0,
+    "y": 188.0,
+    "width": 16.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [],
+    "text": null,
+    "x": 255.0,
+    "y": 188.0,
+    "width": 12.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "tree-glyph"
+    ],
+    "text": null,
+    "x": 269.0,
+    "y": 188.0,
+    "width": 16.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "file-icon",
+      "ft-folder"
+    ],
+    "text": null,
+    "x": 269.0,
+    "y": 188.0,
+    "width": 14.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "tree-name"
+    ],
+    "text": "src",
+    "x": 291.0,
+    "y": 188.0,
+    "width": 210.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "project-file:README.md",
+    "classes": [
+      "tree-row",
+      "code-file"
+    ],
+    "text": null,
+    "x": 249.0,
+    "y": 212.0,
+    "width": 260.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal"
+    ],
+    "text": null,
+    "x": 253.0,
+    "y": 212.0,
+    "width": 248.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "tree-chevron"
+    ],
+    "text": null,
+    "x": 253.0,
+    "y": 212.0,
+    "width": 16.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "tree-glyph"
+    ],
+    "text": null,
+    "x": 269.0,
+    "y": 212.0,
+    "width": 16.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "file-icon",
+      "ft-md"
+    ],
+    "text": null,
+    "x": 269.0,
+    "y": 216.0,
+    "width": 14.0,
+    "height": 14.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "tree-name"
+    ],
+    "text": "README.md",
+    "x": 291.0,
+    "y": 212.0,
+    "width": 210.0,
+    "height": 22.0
+  },
+  {
+    "type": "GtkPanedHandle",
+    "name": "GtkPanedHandle",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 509.0,
+    "y": 106.0,
+    "width": 9.0,
+    "height": 763.0
+  },
+  {
+    "type": "GtkPaned",
+    "name": "GtkPaned",
+    "classes": [
+      "horizontal",
+      "code-split",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 510.0,
+    "y": 106.0,
+    "width": 930.0,
+    "height": 763.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "vertical",
+      "page-layer",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 510.0,
+    "y": 106.0,
+    "width": 930.0,
+    "height": 763.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "toolbar",
+      "code-bar",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 510.0,
+    "y": 106.0,
+    "width": 930.0,
+    "height": 36.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "title",
+      "restyle-a"
+    ],
+    "text": "Open a file",
+    "x": 520.0,
+    "y": 113.0,
+    "width": 716.0,
+    "height": 20.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "project-discard",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1242.0,
+    "y": 110.0,
+    "width": 42.0,
+    "height": 26.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1249.0,
+    "y": 111.0,
+    "width": 28.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "project-save",
+    "classes": [
+      "text-button",
+      "primary",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1292.0,
+    "y": 110.0,
+    "width": 40.0,
+    "height": 26.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": "Save",
+    "x": 1299.0,
+    "y": 111.0,
+    "width": 26.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "GtkButton",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1340.0,
+    "y": 110.0,
+    "width": 42.0,
+    "height": 26.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1347.0,
+    "y": 111.0,
+    "width": 28.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "GtkButton",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1390.0,
+    "y": 110.0,
+    "width": 42.0,
+    "height": 26.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1397.0,
+    "y": 111.0,
+    "width": 28.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkStack",
+    "name": "GtkStack",
+    "classes": [
+      "agents-host",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 510.0,
+    "y": 142.0,
+    "width": 930.0,
+    "height": 703.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "vertical",
+      "code-empty",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 758.0,
+    "y": 180.0,
+    "width": 434.0,
+    "height": 121.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "faint",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 961.0,
+    "y": 180.0,
+    "width": 28.0,
+    "height": 28.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "title",
+      "restyle-a"
+    ],
+    "text": "Code, review, integrate",
+    "x": 758.0,
+    "y": 228.0,
+    "width": 434.0,
+    "height": 25.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "dim",
+      "restyle-a"
+    ],
+    "text": "Open a file from the tree, a change from the git panel, or a commit from a task. Saves go through the bus; guardrails apply to your edits too.",
+    "x": 758.0,
+    "y": 261.0,
+    "width": 434.0,
+    "height": 40.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "dim",
+      "code-position",
+      "restyle-a"
+    ],
+    "text": "Select a file to edit",
+    "x": 510.0,
+    "y": 845.0,
+    "width": 930.0,
+    "height": 24.0
+  },
+  {
+    "type": "GtkRevealer",
+    "name": "GtkRevealer",
+    "classes": [
+      "right",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 660.0,
+    "y": 53.0,
+    "width": 780.0,
+    "height": 816.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "guardrail-requests",
+    "classes": [
+      "bottom",
+      "right",
+      "vertical",
+      "guardrail-tray",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1004.0,
+    "y": 829.0,
+    "width": 420.0,
+    "height": 0.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "statusbar",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 0.0,
+    "y": 869.0,
+    "width": 1440.0,
+    "height": 31.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "status-project",
+      "restyle-a"
+    ],
+    "text": "Native baseline project",
+    "x": 16.0,
+    "y": 870.0,
+    "width": 161.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkSeparator",
+    "name": "GtkSeparator",
+    "classes": [
+      "vertical",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 187.0,
+    "y": 870.0,
+    "width": 0.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 197.0,
+    "y": 870.0,
+    "width": 11.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "mono",
+      "restyle-a"
+    ],
+    "text": "main",
+    "x": 216.0,
+    "y": 870.0,
+    "width": 28.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkSeparator",
+    "name": "GtkSeparator",
+    "classes": [
+      "vertical",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 254.0,
+    "y": 870.0,
+    "width": 0.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "status-platform",
+      "restyle-a"
+    ],
+    "text": "linux · local",
+    "x": 264.0,
+    "y": 870.0,
+    "width": 91.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 363.0,
+    "y": 870.0,
+    "width": 832.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": "",
+    "x": 1203.0,
+    "y": 870.0,
+    "width": 0.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkSeparator",
+    "name": "GtkSeparator",
+    "classes": [
+      "vertical",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1213.0,
+    "y": 870.0,
+    "width": 0.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "status-devices",
+    "classes": [
+      "quiet",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1223.0,
+    "y": 870.0,
+    "width": 95.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1230.0,
+    "y": 871.0,
+    "width": 81.0,
+    "height": 28.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1230.0,
+    "y": 871.0,
+    "width": 12.0,
+    "height": 28.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "mono",
+      "restyle-a"
+    ],
+    "text": "No device",
+    "x": 1248.0,
+    "y": 871.0,
+    "width": 63.0,
+    "height": 28.0
+  },
+  {
+    "type": "GtkSeparator",
+    "name": "GtkSeparator",
+    "classes": [
+      "vertical",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1328.0,
+    "y": 870.0,
+    "width": 0.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkButton",
+    "name": "status-resources",
+    "classes": [
+      "image-button",
+      "quiet",
+      "icon-key",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1338.0,
+    "y": 870.0,
+    "width": 86.0,
+    "height": 30.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1345.0,
+    "y": 871.0,
+    "width": 72.0,
+    "height": 28.0
+  },
+  {
+    "type": "GtkImage",
+    "name": "GtkImage",
+    "classes": [
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1345.0,
+    "y": 871.0,
+    "width": 12.0,
+    "height": 28.0
+  },
+  {
+    "type": "GtkBox",
+    "name": "GtkBox",
+    "classes": [
+      "horizontal",
+      "restyle-a"
+    ],
+    "text": null,
+    "x": 1363.0,
+    "y": 871.0,
+    "width": 54.0,
+    "height": 28.0
+  },
+  {
+    "type": "GtkDrawingArea",
+    "name": "GtkDrawingArea",
+    "classes": [],
+    "text": null,
+    "x": 1363.0,
+    "y": 882.0,
+    "width": 6.0,
+    "height": 6.0
+  },
+  {
+    "type": "GtkLabel",
+    "name": "GtkLabel",
+    "classes": [
+      "status-count"
+    ],
+    "text": "6 live",
+    "x": 1375.0,
+    "y": 871.0,
+    "width": 42.0,
+    "height": 28.0
+  }
+]

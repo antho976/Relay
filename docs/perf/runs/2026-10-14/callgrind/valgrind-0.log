@@ -1,0 +1,53 @@
+==2548560== Callgrind, a call-graph generating cache profiler
+==2548560== Copyright (C) 2002-2017, and GNU GPL'd, by Josef Weidendorfer et al.
+==2548560== Using Valgrind-3.25.1 and LibVEX; rerun with -h for copyright info
+==2548560== Command: /tmp/claude-1000/-home-anthony-dev3-RelayV4--relay-worktrees-spry-kestrel/5fc5db58-7763-4c2c-97b9-4fcb680bc85d/scratchpad/relay-main/target/debug/examples/perf run op.bus.ping op.bus.schema.whole op.bus.whoami op.app.status op.app.resources.watch op.app.log.tail op.app.backup.list op.app.first_run.state op.audit.list op.audit.undo op.workspace.discover op.workspace.update op.workspace.remove op.project.clone op.project.get op.project.reorder op.project.stats op.task.get op.task.list op.task.update op.task.delete op.task.link_commit op.task.attach op.task.parent.set op.task.label.add op.task.label.list op.task.unrelate op.task.approve op.module.create op.module.list op.module.complete op.module.delete op.module.stats op.notes.list op.notes.create op.notes.append op.notes.delete op.notes.standing op.mailbox.send.priority op.mailbox.outbox op.session.create op.session.resume op.session.park op.session.close op.session.close.keep_worktree op.session.intent op.session.release op.session.list op.session.peers op.session.bootstrap op.session.report op.session.detach op.session.input.paste_4k op.session.scrollback op.session.restorable op.overlap.list op.overlap.ack op.guardrail.gate op.guardrail.gate.hold op.guardrail.hold.get op.guardrail.reject op.guardrail.config.set op.guardrail.explain op.worktree.list.dirty op.worktree.remove op.git.status op.git.diff.staged op.git.log op.git.branches op.git.branch.switch op.git.stage op.git.commit op.git.push op.git.pr.open op.git.suggest_message op.integration.get op.integration.discard op.file.tree.deep op.file.read.1mib op.file.write.1mib op.file.rename op.file.delete op.file.restore_head op.file.search op.device.list op.device.mirror.start op.device.mirror.input op.device.build op.device.signing.create op.device.run.stop op.avd.list op.avd.create op.avd.stop op.provider.refresh op.usage.get op.skill.list op.skill.update op.skill.enable op.github.status op.github.repo.list op.notify.list op.notify.ack_all op.notify.settings.set op.settings.get.path op.settings.reset op.ui.state op.ui.pane.open op.ui.pane.focus op.ui.layout.list op.ui.layout.apply op.ui.window.popout op.ui.window.list op.os.reveal path.store.open_fresh path.engine.new path.recovery.run path.request.parse_8k path.socket.ping path.socket.bus.unsubscribe path.socket.task_list path.socket.connect path.pty.burst_1mib path.pty.time_to_first_output path.keystroke.during_overlap_scan path.session_list.during_overlap_scan path.session_list.during_git_status path.session_list.during_session_spawn path.session_list.during_session_close_keep path.worktree.dir_size path.guardrail.config_load --callgrind --iters-div 10 --warmup 1 --out /tmp/claude-1000/-home-anthony-dev3-RelayV4--relay-worktrees-spry-kestrel/5fc5db58-7763-4c2c-97b9-4fcb680bc85d/scratchpad/relay-main/docs/perf/runs/2026-10-14/callgrind/rows-0.jsonl
+==2548560== 
+==2548560== For interactive control, run 'callgrind_control -h'.
+vex amd64->IR: unhandled instruction bytes: 0x62 0xF1 0x7F 0x48 0x7F 0x84 0x24 0x30 0x0 0x0
+vex amd64->IR:   REX=0 REX.W=0 REX.R=0 REX.X=0 REX.B=0
+vex amd64->IR:   VEX=0 VEX.L=0 VEX.nVVVV=0x0 ESC=NONE
+vex amd64->IR:   PFX.66=0 PFX.F2=0 PFX.F3=0
+==2548560== valgrind: Unrecognised instruction at address 0x6890e8d.
+==2548560==    at 0x6890E8D: _dl_start (rtld.c:563)
+==2548560==    by 0x688FE87: ??? (in /usr/lib/ld-linux-x86-64.so.2)
+==2548560==    by 0x8A: ???
+==2548560==    by 0x1FFEFFF3E6: ???
+==2548560==    by 0x1FFEFFF486: ???
+==2548560==    by 0x1FFEFFF48A: ???
+==2548560==    by 0x1FFEFFF496: ???
+==2548560==    by 0x1FFEFFF4AA: ???
+==2548560==    by 0x1FFEFFF4B8: ???
+==2548560==    by 0x1FFEFFF4C6: ???
+==2548560==    by 0x1FFEFFF4DD: ???
+==2548560==    by 0x1FFEFFF4ED: ???
+==2548560== Your program just tried to execute an instruction that Valgrind
+==2548560== did not recognise.  There are two possible reasons for this.
+==2548560== 1. Your program has a bug and erroneously jumped to a non-code
+==2548560==    location.  If you are running Memcheck and you just saw a
+==2548560==    warning about a bad jump, it's probably your program's fault.
+==2548560== 2. The instruction is legitimate but Valgrind doesn't handle it,
+==2548560==    i.e. it's Valgrind's fault.  If you think this is the case or
+==2548560==    you are not sure, please let us know and we'll try to fix it.
+==2548560== Either way, Valgrind will now raise a SIGILL signal which will
+==2548560== probably kill your program.
+==2548560== 
+==2548560== Process terminating with default action of signal 4 (SIGILL): dumping core
+==2548560==  Illegal opcode at address 0x6890E8D
+==2548560==    at 0x6890E8D: _dl_start (rtld.c:563)
+==2548560==    by 0x688FE87: ??? (in /usr/lib/ld-linux-x86-64.so.2)
+==2548560==    by 0x8A: ???
+==2548560==    by 0x1FFEFFF3E6: ???
+==2548560==    by 0x1FFEFFF486: ???
+==2548560==    by 0x1FFEFFF48A: ???
+==2548560==    by 0x1FFEFFF496: ???
+==2548560==    by 0x1FFEFFF4AA: ???
+==2548560==    by 0x1FFEFFF4B8: ???
+==2548560==    by 0x1FFEFFF4C6: ???
+==2548560==    by 0x1FFEFFF4DD: ???
+==2548560==    by 0x1FFEFFF4ED: ???
+==2548560== 
+==2548560== Events    : Ir
+==2548560== Collected : 0
+==2548560== 
+==2548560== I   refs:      0

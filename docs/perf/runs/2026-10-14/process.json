@@ -1,0 +1,95 @@
+{
+  "window_seconds": 30,
+  "phases": {
+    "idle_six_quiet_sessions": {
+      "seconds": 30.0,
+      "cpu_percent": 0.0,
+      "cpu_ms_total": 0.0,
+      "wakeups_per_s": 3.0,
+      "preemptions_per_s": 0.2,
+      "rss_mb": 29.2,
+      "threads": 33
+    },
+    "idle_resources_watch_on": {
+      "seconds": 30.0,
+      "cpu_percent": 0.033,
+      "cpu_ms_total": 10.0,
+      "wakeups_per_s": 5.8,
+      "preemptions_per_s": 0.6,
+      "rss_mb": 29.9,
+      "threads": 34
+    },
+    "output_60_lines_per_s_unattached": {
+      "seconds": 30.0,
+      "cpu_percent": 0.033,
+      "cpu_ms_total": 10.0,
+      "wakeups_per_s": 63.6,
+      "preemptions_per_s": 2.3,
+      "rss_mb": 34.1,
+      "threads": 33
+    },
+    "output_60_lines_per_s_attached": {
+      "seconds": 30.0,
+      "cpu_percent": 0.2,
+      "cpu_ms_total": 60.0,
+      "wakeups_per_s": 197.7,
+      "preemptions_per_s": 6.1,
+      "rss_mb": 36.4,
+      "threads": 33,
+      "client_frames": 1875,
+      "client_bytes": 505108
+    },
+    "burst_50k_lines_attached": {
+      "seconds_until_stream_quiet": 1.077,
+      "engine_cpu_ms": 70.0,
+      "payload_bytes": 4900000,
+      "payload_bytes_received": 5075400,
+      "wire_bytes_received": 8461358,
+      "frames": 21568,
+      "frames_dropped": 0,
+      "mib_per_s_to_client": 7.5
+    }
+  },
+  "startup_s_fresh_store": 0.024,
+  "rss_mb_fresh": 21.1,
+  "rss_mb_six_sessions": 29.9,
+  "recovery_report": {
+    "at": "2026-10-14T18:48:11.866513110Z",
+    "reaped_pids": [],
+    "fsck_fixes": [
+      "session spry-osprey: running \u2192 restorable (pid 2309949 now belongs to another process; left alone)",
+      "session umber-ocelot: running \u2192 restorable (pid 2310020 now belongs to another process; left alone)",
+      "session witty-falcon: running \u2192 restorable (pid 2310087 now belongs to another process; left alone)",
+      "session amber-egret: running \u2192 restorable (pid 2310157 now belongs to another process; left alone)",
+      "session swift-gannet: running \u2192 restorable (pid 2310224 now belongs to another process; left alone)",
+      "session tidy-bison: running \u2192 restorable (pid 2310300 now belongs to another process; left alone)"
+    ],
+    "dirty_worktrees": [],
+    "tasks_reset_offered": []
+  },
+  "restart_s": {
+    "with_six_live_sessions": 0.011,
+    "clean": [
+      0.011,
+      0.011
+    ]
+  },
+  "cli": {
+    "ping": {
+      "min_ms": 1.23,
+      "p50_ms": 1.46,
+      "max_ms": 2.64
+    },
+    "q_session_list": {
+      "min_ms": 1.43,
+      "p50_ms": 1.57,
+      "max_ms": 1.93
+    },
+    "q_app_status": {
+      "min_ms": 1.39,
+      "p50_ms": 1.62,
+      "max_ms": 2.56
+    }
+  },
+  "engine_binary_bytes": 505175360
+}
