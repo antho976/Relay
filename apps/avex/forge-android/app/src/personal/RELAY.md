@@ -19,7 +19,10 @@ Everything lives in this source set, and nothing in `src/main` refers to it:
   and sends it once the phone is online. A change to a workout, its sets, cardio or coach goals
   schedules it 3 s later. A newer change replaces a send still waiting, and a send is skipped while
   a workout is in progress, because finishing the workout schedules the next one.
-- `relay/RelaySyncActivity.kt`: paste the pairing link, see the last send, send now, forget.
+- `relay/RelayConnect.kt`: asking Antho's server to let this phone in (`/api/connect`, kind
+  `avex`): the server DMs him Allow on Discord, and the phone collects its pairing link. The
+  server's address lives here and nowhere else.
+- `relay/RelaySyncActivity.kt`: Connect, see the last send, send now, forget.
 
 ## Building and pairing
 
@@ -32,8 +35,9 @@ keeps the release application id, so it installs over a sideloaded release build
 install over the Play Store install, which Play signs with its own key. To move from that, take a
 backup in Avex (Settings, Backup), install this build, and restore.
 
-On the server, in Render's Shell: `relay --instance stable remote pair --via-only`. In "Avex →
-Relay", paste the link it printed and tap Pair, then answer `y` on the server.
+In "Avex → Relay", tap Connect to my server, then Allow on the Discord message the server sends
+(it shows the same four-character code). That is all: the phone pairs with the cloud copy and
+sends the history from then on (antho976/Relay, docs/CLOUD.md, "Connecting through your server").
 
 ## Not built here
 
