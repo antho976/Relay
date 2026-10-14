@@ -543,11 +543,15 @@ pub(crate) struct Dirt {
     /// `local.properties`, a local database ([`crate::branch_cleanup::ignored_keepers`]). No
     /// status without `--ignored` shows them.
     ignored: Vec<String>,
+    /// Linked repositories (`.relay/linked/`) holding work their remote does not have
+    /// ([`crate::linked::unpushed`]). Git status of the checkout never sees them: `.relay/` is
+    /// excluded.
+    linked: Vec<(String, relay_bus::ops::session::LinkedRepoUnpushed)>,
 }
 
 impl Dirt {
-    fn unknown() -> Self { Dirt { changed: None, ignored: Vec::new() } }
-    fn any(&self) -> bool { self.changed != Some(0) || !self.ignored.is_empty() }
+    fn unknown() -> Self { Dirt { changed: None, ignored: Vec::new(), linked: Vec::new() } }
+    fn any(&self) -> bool { self.changed != Some(0) || !self.ignored.is_empty() || !self.linked.is_empty() }
 }
 
 /// The checkouts of `checkouts` a removal would lose work from: tracked edits, staged changes,
@@ -563,9 +567,10 @@ pub(crate) fn dirty_checkouts(checkouts: &[Checkout]) -> Vec<(&Checkout, Dirt)> 
         // that holds it: the primary's changes and ignored files are not this checkout's to lose.
         let Ok(files) = worktree::checkout_changes(wt, worktree::Untracked::Directories) else { return Dirt::unknown() };
         let ignored = if wt.join(".git").exists() { crate::branch_cleanup::ignored_keepers(wt) } else { Ok(Vec::new()) };
+        let linked = crate::linked::holding_work(wt);
         match ignored {
-            Ok(ignored) => Dirt { changed: Some(files.len()), ignored },
-            Err(_) => Dirt::unknown(),
+            Ok(ignored) => Dirt { changed: Some(files.len()), ignored, linked },
+            Err(_) => Dirt { linked, ..Dirt::unknown() },
         }
     };
     let per_worker = live.len().div_ceil(4).max(1);
@@ -598,6 +603,9 @@ pub(crate) fn refuse_dirty(checkouts: &[Checkout]) -> Result<(), BusError> {
             let named = dirt.ignored.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
             what.push(format!("{n} git-ignored file{} ({named}{})", plural(n), if n > 3 { ", …" } else { "" }));
         }
+        for (name, found) in &dirt.linked {
+            what.push(format!("linked repo {name} with {}", crate::linked::summary(found)));
+        }
         let whose = if sessions.is_empty() { String::new() } else { format!(" (session {})", sessions.join(", ")) };
         format!("{}{whose} has {}", wt.display(), what.join(" and "))
     };
@@ -608,11 +616,12 @@ pub(crate) fn refuse_dirty(checkouts: &[Checkout]) -> Result<(), BusError> {
     };
     let details: Vec<Value> = dirty.iter()
         .map(|((wt, sessions), dirt)| json!({"worktree": wt.display().to_string(), "sessions": sessions, "changed": dirt.changed,
-            "ignored": dirt.ignored.iter().take(20).collect::<Vec<_>>()}))
+            "ignored": dirt.ignored.iter().take(20).collect::<Vec<_>>(),
+            "linked": dirt.linked.iter().map(|(name, found)| json!({"name": name, "unpushed": found})).collect::<Vec<_>>()}))
         .collect();
     Err(BusError::conflict("worktree.dirty", message)
         .with_details(json!({"worktrees": details}))
-        .with_hint("commit or stash the changes (and move out any git-ignored files worth keeping) first, or pass discard_changes: true to delete them with the worktree"))
+        .with_hint("commit or stash the changes, push a linked repo's commits (and move out any git-ignored files worth keeping) first, or pass discard_changes: true to delete them with the worktree"))
 }
 
 /// Kill a PTY that is already out of the registry without making the caller wait for it.
@@ -2197,6 +2206,85 @@ pub fn register(e: &mut Engine) {
         };
         Ok(ScrollbackOut { text, epoch, seq, cols: size.map(|s| s.0), rows: size.map(|s| s.1) })
     });
+
+    // Linked repositories (crate::linked). The clone is network work and the status scans are
+    // git subprocesses, so both run before the transaction opens; the transaction only tells
+    // the agent and emits the event.
+    e.register_staged::<RepoAdd, _>(|ctx, p| {
+        let row = read_linkable(ctx, &p.session)?;
+        let url = crate::linked::clone_url(&p.url).map_err(|e| BusError::invalid("session.repo_url", e))?;
+        let name = crate::linked::name_for(&url, p.name.as_deref()).map_err(|e| BusError::invalid("session.repo_name", e))?;
+        let wt = Path::new(&row.session.worktree);
+        if crate::linked::dir(wt).join(&name).exists() {
+            return Err(BusError::conflict("session.repo_exists", format!("session {} already links a repository named {name}", row.session.name))
+                .with_hint("pass another name, or remove the one already linked"));
+        }
+        let path = crate::linked::clone(wt, &url, &name, p.branch.as_deref())
+            .map_err(|e| BusError::unavailable("session.repo_clone_failed", e))?;
+        Ok((row, crate::linked::describe(&name, &path)))
+    }, |ctx: &mut Ctx, _p, (row, repo): (Row_, LinkedRepo)| {
+        let s = &row.session;
+        // The agent learns of a repository someone else linked for it; one it linked itself
+        // has this answer.
+        if ctx.actor_session_id() != Some(s.id) {
+            let from = repo.url.as_deref().map(|url| format!(" from {url}")).unwrap_or_default();
+            let text = format!("The user linked repository {} to this session: cloned{from} at {}. Read and edit it there; push its own branches from inside it. It is deleted with this session's worktree.", repo.name, repo.path);
+            super::notes::send_system(ctx.tx(), s.project_id, &s.name, &text, None, &ctx.now)?;
+        }
+        ctx.emit("session.repo.changed", json!({"session": s.name, "project_id": s.project_id}));
+        Ok(repo)
+    });
+    e.register_unlocked::<RepoList>(|ctx, p| {
+        let row = read_own_or_pair(ctx, &p.session)?;
+        let repos = crate::linked::list(Path::new(&row.session.worktree)).into_iter().map(|(name, path)| {
+            let found = crate::linked::unpushed(&path);
+            let mut repo = crate::linked::describe(&name, &path);
+            repo.unpushed = crate::linked::holds_work(&found).then_some(found);
+            repo
+        }).collect();
+        Ok(RepoListOut { repos })
+    });
+    e.register_staged::<RepoRemove, _>(|ctx, p| {
+        let row = ctx.read(|conn| sessions::by_name(conn, &p.session))?;
+        let wt = PathBuf::from(&row.session.worktree);
+        let path = crate::linked::dir(&wt).join(&p.name);
+        if !crate::linked::list(&wt).iter().any(|(name, _)| *name == p.name) {
+            return Err(BusError::not_found("session.repo_not_found", format!("session {} links no repository named {}", row.session.name, p.name)));
+        }
+        if !p.discard_changes.unwrap_or(false) {
+            let found = crate::linked::unpushed(&path);
+            if crate::linked::holds_work(&found) {
+                return Err(BusError::conflict("session.repo_unpushed",
+                    format!("linked repo {} has {}; removing it would delete them", p.name, crate::linked::summary(&found)))
+                    .with_details(json!({"name": p.name, "path": path.display().to_string(), "unpushed": found}))
+                    .with_hint("commit and push them from inside the repository first, or pass discard_changes: true to delete them with it"));
+            }
+        }
+        let freed = crate::linked::remove(&wt, &p.name).map_err(|e| BusError::conflict("session.repo_remove_failed", e))?;
+        Ok((row, freed))
+    }, |ctx: &mut Ctx, p, (row, freed): (Row_, u64)| {
+        let s = &row.session;
+        if ctx.actor_session_id() != Some(s.id) && !matches!(s.state, SessionState::Closed) {
+            let text = format!("The user removed linked repository {} from this session; {} is gone.", p.name, crate::linked::dir(Path::new(&s.worktree)).join(&p.name).display());
+            super::notes::send_system(ctx.tx(), s.project_id, &s.name, &text, None, &ctx.now)?;
+        }
+        ctx.emit("session.repo.changed", json!({"session": s.name, "project_id": s.project_id}));
+        Ok(RepoRemoveOut { freed_mb: freed as f64 / 1_048_576.0 })
+    });
+}
+
+/// The session a repository is being linked to: the actor's own (or any, for the user), still
+/// open, its checkout on disk.
+fn read_linkable(ctx: &crate::engine::Unlocked, session: &str) -> Result<Row_, BusError> {
+    let row = ctx.read(|conn| sessions::by_name(conn, session))?;
+    owns(&ctx.actor, ctx.actor_session_id(), &row, false, |_| Ok(None))?;
+    if matches!(row.session.state, SessionState::Closed) {
+        return Err(BusError::conflict("session.state", format!("session {} is closed", row.session.name)));
+    }
+    if !Path::new(&row.session.worktree).is_dir() {
+        return Err(BusError::conflict("session.worktree_missing", format!("session {}'s worktree {} is not on disk", row.session.name, row.session.worktree)));
+    }
+    Ok(row)
 }
 
 /// For the socket door: resolve a session name to its PTY (after `session.attach` succeeded).

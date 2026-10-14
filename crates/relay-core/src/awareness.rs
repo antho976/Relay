@@ -267,6 +267,11 @@ pub fn brief(
     );
     state.push('\n');
     state.push_str(git);
+    // Repositories linked to this session (`session.repo.add`); one read_dir.
+    let worktree = std::path::Path::new(&session.worktree);
+    if !crate::linked::list(worktree).is_empty() {
+        state.push_str(&format!("\nlinked_repos: {}", crate::linked::brief_line(worktree)));
+    }
     if let Some(module) = &module_name {
         state.push_str(&format!("\nmodule: {module}"));
     }

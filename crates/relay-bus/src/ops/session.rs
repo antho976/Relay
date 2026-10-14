@@ -197,6 +197,59 @@ payload!(#[schemars(rename = "SessionDiscardRestorableIn")] DiscardRestorableIn 
 op!(DiscardRestorable, "session.discard_restorable", DiscardRestorableIn => Empty,
     OpMeta::mutation(Scope::Session, 6, "Decline resume: clean the session").actors(Actors::UserOnly).emits(&["session.changed"]));
 
+// Linked repositories: another repository cloned into one session's checkout, at
+// `.relay/linked/<name>`, for as long as that session needs it. It goes with the checkout.
+result!(#[schemars(rename = "LinkedRepoUnpushed")] LinkedRepoUnpushed {
+    /// Entries `git status` lists, untracked files included; `None` when the scan failed.
+    pub changed: Option<i64>,
+    /// Commits on a branch (or a detached HEAD) that no remote-tracking ref contains, as of the
+    /// clone's last fetch; `None` when git could not tell.
+    pub commits: Option<i64>,
+    /// The local branches holding those commits.
+    pub branches: Vec<String>,
+    /// Entries in `git stash list`.
+    pub stashes: i64,
+    /// Git-ignored files nothing could bring back: an `.env`, a keystore, a local database.
+    pub ignored: Vec<String>,
+});
+result!(#[schemars(rename = "LinkedRepo")] LinkedRepo {
+    /// The folder under `.relay/linked/`, which names it to `session.repo.remove`.
+    pub name: String,
+    /// Absolute path of the clone.
+    pub path: String,
+    /// Its `origin` remote; absent when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub url: Option<String>,
+    /// The branch checked out; absent on a detached HEAD.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub branch: Option<String>,
+    /// What removing it would lose; absent when nothing would be. `session.repo.add` does not
+    /// look: it has just cloned it.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub unpushed: Option<LinkedRepoUnpushed>,
+});
+payload!(#[schemars(rename = "SessionRepoAddIn")] RepoAddIn {
+    pub session: String,
+    /// Anything `git clone` takes: an https or ssh URL, or `owner/name` for a GitHub repository.
+    pub url: String,
+    /// The folder name under `.relay/linked/`; the repository's name when omitted.
+    pub name: Option<String>,
+    /// Check out this branch instead of the remote's default.
+    pub branch: Option<String>,
+});
+op!(RepoAdd, "session.repo.add", RepoAddIn => LinkedRepo,
+    OpMeta::mutation(Scope::Session, 6, "Clone another repository into this session's checkout (.relay/linked/<name>) for as long as the session needs it").emits(&["session.repo.changed"]));
+result!(#[schemars(rename = "SessionRepoListOut")] RepoListOut { pub repos: Vec<LinkedRepo> });
+op!(RepoList, "session.repo.list", NameIn => RepoListOut,
+    OpMeta::query(Scope::Session, 6, "A session's linked repositories, each with what removing it would lose"));
+payload!(#[schemars(rename = "SessionRepoRemoveIn")] RepoRemoveIn {
+    pub session: String,
+    pub name: String,
+    /// Delete it even with uncommitted changes, unpushed commits, stashes or ignored keepers.
+    /// Without it, such a repository is refused `session.repo_unpushed` and kept.
+    pub discard_changes: Option<bool>,
+});
+result!(#[schemars(rename = "SessionRepoRemoveOut")] RepoRemoveOut { pub freed_mb: f64 });
+op!(RepoRemove, "session.repo.remove", RepoRemoveIn => RepoRemoveOut,
+    OpMeta::mutation(Scope::Session, 6, "Delete a linked repository (refused if it holds unpushed work unless discard_changes)").actors(Actors::UserOnly).emits(&["session.repo.changed"]));
+
 entries!(
     Create,
     Spawn,
@@ -222,5 +275,8 @@ entries!(
     Resize,
     Scrollback,
     RestorableList,
-    DiscardRestorable
+    DiscardRestorable,
+    RepoAdd,
+    RepoList,
+    RepoRemove
 );

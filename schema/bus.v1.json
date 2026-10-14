@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 306,
+  "op_count": 309,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -2205,6 +2205,64 @@
       },
       "result": {
         "$ref": "#/$defs/Empty"
+      }
+    },
+    "session.repo.add": {
+      "summary": "Clone another repository into this session's checkout (.relay/linked/<name>) for as long as the session needs it",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "session",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "session.repo.changed"
+      ],
+      "since": "1.0",
+      "phase": 6,
+      "payload": {
+        "$ref": "#/$defs/SessionRepoAddIn"
+      },
+      "result": {
+        "$ref": "#/$defs/LinkedRepo"
+      }
+    },
+    "session.repo.list": {
+      "summary": "A session's linked repositories, each with what removing it would lose",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "session",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 6,
+      "payload": {
+        "$ref": "#/$defs/SessionNameIn"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionRepoListOut"
+      }
+    },
+    "session.repo.remove": {
+      "summary": "Delete a linked repository (refused if it holds unpushed work unless discard_changes)",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "session",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "session.repo.changed"
+      ],
+      "since": "1.0",
+      "phase": 6,
+      "payload": {
+        "$ref": "#/$defs/SessionRepoRemoveIn"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionRepoRemoveOut"
       }
     },
     "overlap.list": {
@@ -11600,6 +11658,173 @@
       },
       "required": [
         "session"
+      ]
+    },
+    "SessionRepoAddIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string",
+          "description": "Anything `git clone` takes: an https or ssh URL, or `owner/name` for a GitHub repository."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The folder name under `.relay/linked/`; the repository's name when omitted."
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Check out this branch instead of the remote's default."
+        }
+      },
+      "required": [
+        "session",
+        "url"
+      ]
+    },
+    "LinkedRepo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The folder under `.relay/linked/`, which names it to `session.repo.remove`."
+        },
+        "path": {
+          "type": "string",
+          "description": "Absolute path of the clone."
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Its `origin` remote; absent when it has none."
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The branch checked out; absent on a detached HEAD."
+        },
+        "unpushed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LinkedRepoUnpushed"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What removing it would lose; absent when nothing would be. `session.repo.add` does not\nlook: it has just cloned it."
+        }
+      },
+      "required": [
+        "name",
+        "path"
+      ]
+    },
+    "LinkedRepoUnpushed": {
+      "type": "object",
+      "properties": {
+        "changed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "Entries `git status` lists, untracked files included; `None` when the scan failed."
+        },
+        "commits": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "Commits on a branch (or a detached HEAD) that no remote-tracking ref contains, as of the\nclone's last fetch; `None` when git could not tell."
+        },
+        "branches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The local branches holding those commits."
+        },
+        "stashes": {
+          "type": "integer",
+          "format": "int64",
+          "description": "Entries in `git stash list`."
+        },
+        "ignored": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Git-ignored files nothing could bring back: an `.env`, a keystore, a local database."
+        }
+      },
+      "required": [
+        "branches",
+        "stashes",
+        "ignored"
+      ]
+    },
+    "SessionRepoListOut": {
+      "type": "object",
+      "properties": {
+        "repos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LinkedRepo"
+          }
+        }
+      },
+      "required": [
+        "repos"
+      ]
+    },
+    "SessionRepoRemoveIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "discard_changes": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Delete it even with uncommitted changes, unpushed commits, stashes or ignored keepers.\nWithout it, such a repository is refused `session.repo_unpushed` and kept."
+        }
+      },
+      "required": [
+        "session",
+        "name"
+      ]
+    },
+    "SessionRepoRemoveOut": {
+      "type": "object",
+      "properties": {
+        "freed_mb": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "freed_mb"
       ]
     },
     "OverlapProjectIn": {

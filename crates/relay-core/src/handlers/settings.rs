@@ -46,9 +46,9 @@ pub fn defaults() -> &'static Value {
                 "denied_commands": ["rm -rf", "git reset --hard", "git clean -fd", "git push --force"],
                 "allowed_write_roots": [],
                 "roles": {
-                    "builder": ["task.link_commit", "task.changelog.write", "task.comment", "task.update", "mailbox.*", "notes.append", "overlap.flag", "overlap.ack", "integration.request", "session.done", "session.report", "session.intent", "session.claim", "session.release", "device.claim", "device.release", "usage.report", "guardrail.gate"],
-                    "reviewer": ["mailbox.*", "notes.append", "overlap.flag", "task.changelog.write", "task.comment", "session.done", "session.report", "session.intent", "session.claim", "session.release", "device.claim", "device.release", "usage.report"],
-                    "docs": ["task.changelog.write", "task.comment", "task.update", "mailbox.*", "notes.append", "notes.create", "notes.update", "overlap.flag", "overlap.ack", "session.done", "session.report", "session.intent", "session.claim", "session.release", "device.claim", "device.release", "usage.report", "guardrail.gate"]
+                    "builder": ["task.link_commit", "task.changelog.write", "task.comment", "task.update", "mailbox.*", "notes.append", "overlap.flag", "overlap.ack", "integration.request", "session.done", "session.report", "session.intent", "session.claim", "session.release", "session.repo.add", "device.claim", "device.release", "usage.report", "guardrail.gate"],
+                    "reviewer": ["mailbox.*", "notes.append", "overlap.flag", "task.changelog.write", "task.comment", "session.done", "session.report", "session.intent", "session.claim", "session.release", "session.repo.add", "device.claim", "device.release", "usage.report"],
+                    "docs": ["task.changelog.write", "task.comment", "task.update", "mailbox.*", "notes.append", "notes.create", "notes.update", "overlap.flag", "overlap.ack", "session.done", "session.report", "session.intent", "session.claim", "session.release", "session.repo.add", "device.claim", "device.release", "usage.report", "guardrail.gate"]
                 },
                 "projects": {},
             },
