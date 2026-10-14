@@ -238,9 +238,21 @@ pub fn refresh_notes(ui: &Rc<Ui>) {
             if project == 0 {
                 break;
             }
-            match ui.call("notes.list", json!({"project_id":project})).await {
+            // Previews only: whole bodies made every refresh read and rebuild all the text in
+            // the project, and past 2 MiB the reply no longer fit the client's line limit.
+            match ui.call("notes.list", json!({"project_id":project,"summary":true})).await {
                 Ok(value) if project == window.project.get() => {
-                    super::note_pages::workspace(&ui, "notes", project, &rows(&value, "notes"))
+                    let notes = rows(&value, "notes");
+                    // What the render hands to an editor is read whole first.
+                    for id in super::note_pages::needs_full(project, &notes) {
+                        let _ = super::note_pages::fetch_full(&ui, id).await;
+                    }
+                    if project != window.project.get() {
+                        window.pending.set(true);
+                        continue;
+                    }
+                    super::note_pages::workspace(&ui, "notes", project, &notes);
+                    super::note_pages::fill(&ui);
                 }
                 Ok(_) => window.pending.set(true),
                 // The project was removed. Show the main window's project if that one still

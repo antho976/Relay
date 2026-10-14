@@ -46,12 +46,27 @@ pub fn install(window: &gtk4::ApplicationWindow) {
     let directory = glib::user_cache_dir().join("relay-v4/fonts");
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         std::fs::create_dir_all(&directory)?;
+        // The copies on disk are this executable's own when its stamp says so: they are then
+        // only checked for size, not read back (556 KB) and compared before the first frame.
+        let stamp_path = directory.join("stamp");
+        let stamp = build_stamp();
+        let stamped = stamp.is_some() && std::fs::read_to_string(&stamp_path).ok() == stamp;
+        let styles = directory.join("styles");
+        let current = |path: &std::path::Path, bytes: &[u8]| {
+            if stamped {
+                std::fs::metadata(path).is_ok_and(|m| m.len() == bytes.len() as u64)
+            } else {
+                std::fs::read(path).ok().as_deref() == Some(bytes)
+            }
+        };
+        let mut wrote = !stamped;
         macro_rules! register {
             ($($name:literal),+ $(,)?) => {$(
                 let bytes = include_bytes!(concat!("../resources/fonts/", $name));
                 let path = directory.join($name);
-                if std::fs::read(&path).ok().as_deref() != Some(bytes.as_slice()) {
+                if !current(&path, bytes.as_slice()) {
                     std::fs::write(&path, bytes)?;
+                    wrote = true;
                 }
                 map.add_font_file(&path)?;
             )+};
@@ -78,14 +93,21 @@ pub fn install(window: &gtk4::ApplicationWindow) {
         map.changed();
         window.pango_context().changed();
         window.set_font_map(Some(&map));
-        let styles = directory.join("styles");
         std::fs::create_dir_all(&styles)?;
         for (mode, colors) in PALETTES {
-            let scheme = editor_scheme(mode, colors);
             let path = styles.join(format!("relay-{mode}.xml"));
+            // Stamped, the schemes are this build's too: they need not even be written out.
+            if stamped && path.is_file() {
+                continue;
+            }
+            let scheme = editor_scheme(mode, colors);
             if std::fs::read_to_string(&path).ok().as_deref() != Some(&scheme) {
                 std::fs::write(path, scheme)?;
+                wrote = true;
             }
+        }
+        if let Some(stamp) = stamp.filter(|_| wrote) {
+            std::fs::write(&stamp_path, stamp)?;
         }
         use sourceview5::prelude::*;
         sourceview5::StyleSchemeManager::default().append_search_path(&styles.to_string_lossy());
@@ -94,6 +116,14 @@ pub fn install(window: &gtk4::ApplicationWindow) {
     if let Err(error) = result {
         tracing::warn!(%error, "Could not register bundled Relay fonts");
     }
+}
+
+/// The running executable's size and modification time. The fonts and schemes are built
+/// into it, so while it is unchanged the copies it wrote need no second look.
+fn build_stamp() -> Option<String> {
+    let meta = std::fs::metadata(std::env::current_exe().ok()?).ok()?;
+    let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(format!("{} {}.{:09}\n", meta.len(), modified.as_secs(), modified.subsec_nanos()))
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@ use relay_bus::error::BusError;
 use relay_bus::ops::notes::*;
 use relay_bus::types::{Id, Message, Note, SessionState};
 use relay_bus::Empty;
-use rusqlite::{params, OptionalExtension, Row, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 use serde_json::json;
 
 fn note_row(row: &Row) -> rusqlite::Result<Note> {
@@ -46,11 +46,16 @@ fn get_note(
 
 /// The project a bound session acts in; `None` for the person, who reaches every project.
 pub(crate) fn actor_project(ctx: &Ctx) -> Result<Option<Id>, BusError> {
-    if let Some(session_id) = ctx.actor_session_id() {
-        let row = sessions::by_id(ctx.tx(), session_id)?
+    session_project(ctx.tx(), ctx.actor_session_id(), ctx.actor.is_agent())
+}
+
+/// [`actor_project`] on a bare connection, for a handler that runs unlocked.
+fn session_project(conn: &Connection, session_id: Option<Id>, agent: bool) -> Result<Option<Id>, BusError> {
+    if let Some(session_id) = session_id {
+        let row = sessions::by_id(conn, session_id)?
             .ok_or_else(|| BusError::actor("bound session no longer exists"))?;
         Ok(Some(row.session.project_id))
-    } else if ctx.actor.is_agent() {
+    } else if agent {
         Err(BusError::actor(
             "agent actor is not bound to a live session",
         ))
@@ -60,8 +65,12 @@ pub(crate) fn actor_project(ctx: &Ctx) -> Result<Option<Id>, BusError> {
 }
 
 pub(crate) fn assert_actor_project(ctx: &Ctx, project_id: Id) -> Result<(), BusError> {
-    crate::handlers::workspace::get_project(ctx.tx(), project_id)?;
-    if actor_project(ctx)?.is_some_and(|own| own != project_id) {
+    check_project(ctx.tx(), project_id, ctx.actor_session_id(), ctx.actor.is_agent())
+}
+
+fn check_project(conn: &Connection, project_id: Id, session_id: Option<Id>, agent: bool) -> Result<(), BusError> {
+    crate::handlers::workspace::get_project(conn, project_id)?;
+    if session_project(conn, session_id, agent)?.is_some_and(|own| own != project_id) {
         return Err(BusError::not_own("project"));
     }
     Ok(())
@@ -401,8 +410,10 @@ fn send(
 }
 
 pub fn register(e: &mut Engine) {
-    e.register::<List>(|ctx, p| {
-        assert_actor_project(ctx, p.project_id)?;
+    // Unlocked (D149): a pure read, which the desktop's Notes library repeats on every
+    // `notes.changed`; it takes the store only for the one query, with no transaction around it.
+    e.register_unlocked::<List>(|ctx, p| {
+        let (session_id, agent) = (ctx.actor_session_id(), ctx.actor.is_agent());
         // `summary` cuts the body in SQL (substr counts characters), so a large note is never
         // read whole for a list that shows a line of it.
         let body = if p.summary.unwrap_or(false) { format!("substr(body, 1, {PREVIEW_CHARS}) AS body") } else { "body".into() };
@@ -416,9 +427,13 @@ pub fn register(e: &mut Engine) {
             "SELECT id, project_id, title, {body}, pinned, created_at, updated_at, deleted_at FROM notes
              WHERE project_id = ?1{deleted}{pinned} ORDER BY {order}"
         );
-        let mut stmt = ctx.tx().prepare_cached(&sql).bus()?;
-        let notes = stmt.query_map([p.project_id], note_row).bus()?
-            .collect::<rusqlite::Result<Vec<_>>>().bus()?;
+        let notes = ctx.read(|conn| {
+            check_project(conn, p.project_id, session_id, agent)?;
+            let mut stmt = conn.prepare_cached(&sql).bus()?;
+            let notes = stmt.query_map([p.project_id], note_row).bus()?
+                .collect::<rusqlite::Result<Vec<_>>>().bus()?;
+            Ok(notes)
+        })?;
         Ok(ListOut { notes })
     });
     e.register::<Get>(|ctx, p| {

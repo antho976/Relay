@@ -465,6 +465,25 @@ fn agent_suggestions_are_attributed_unpinned_and_not_standing_context() {
     );
 }
 
+/// `notes.list` runs unlocked (D149), as the desktop repeats it on every `notes.changed`, and
+/// still scopes a bound agent to its own project.
+#[test]
+fn notes_list_runs_unlocked_and_keeps_an_agent_in_its_project() {
+    let f = Fixture::new();
+    assert!(f.engine.runs_unlocked("notes.list"));
+    let other = f._root.path().join("ws/other");
+    committed_repo(&other, &[("README.md", "other\n")]);
+    ok(&f.engine, Actor::User, "project.add", json!({"workspace_id": 1, "path": other}));
+    ok(&f.engine, Actor::User, "notes.create", json!({"project_id": 2, "title": "Elsewhere", "body": "x"}));
+    ok(&f.engine, Actor::User, "notes.create", json!({"project_id": 1, "title": "Here", "body": "y"}));
+    let mine = ok(&f.engine, f.me(), "notes.list", json!({"summary": true}));
+    let titles: Vec<&str> = mine["notes"].as_array().unwrap().iter().filter_map(|n| n["title"].as_str()).collect();
+    assert_eq!(titles, ["Here"]);
+    assert_eq!(refusal(&f.engine, f.me(), "notes.list", json!({"project_id": 2})).code, "actor.scope");
+    assert_eq!(ok(&f.engine, Actor::User, "notes.list", json!({"project_id": 2}))["notes"][0]["title"], "Elsewhere");
+    assert_eq!(refusal(&f.engine, Actor::User, "notes.list", json!({"project_id": 9})).code, "project.not_found");
+}
+
 /// `bus.wait` is answered by the socket door, where blocking costs nothing that matters.
 #[test]
 fn wait_is_a_door_op_and_the_engine_says_so() {
