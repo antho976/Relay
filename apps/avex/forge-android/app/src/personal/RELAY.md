@@ -17,7 +17,7 @@ Everything lives in this source set, and nothing in `src/main` refers to it:
 - `relay/RelayUploadWorker.kt`: a WorkManager job that writes the export
   (`BackupRepository.exportFullDataJson`, the same file Settings, Export, Training history writes)
   and sends it once the phone is online. A change to a workout, its sets, cardio or coach goals
-  schedules it 30 s later. A newer change replaces a send still waiting, and a send is skipped while
+  schedules it 3 s later. A newer change replaces a send still waiting, and a send is skipped while
   a workout is in progress, because finishing the workout schedules the next one.
 - `relay/RelaySyncActivity.kt`: paste the pairing link, see the last send, send now, forget.
 
