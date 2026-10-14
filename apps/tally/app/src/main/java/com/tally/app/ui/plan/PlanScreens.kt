@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,7 +41,6 @@ import com.tally.app.ui.nav.AppNav
 import com.tally.app.ui.theme.Tally
 import com.tally.app.ui.theme.categoryColor
 import com.tally.core.Copy
-import com.tally.core.PaceStatus
 
 // ── Budgets ──────────────────────────────────────────────────────────────────
 
@@ -88,13 +88,18 @@ fun BudgetsScreen(s: PlanState, edit: (Long) -> Unit, applySuggestions: () -> Un
         val overall = b.overall
         Slab(Modifier.fillMaxWidth(), onClick = { edit(0) }, spacing = 8.dp, padding = PaddingValues(16.dp)) {
             if (overall != null) {
-                Eyebrow("Monthly budget")
+                val reached = limitReached(overall)
+                Eyebrow(if (reached) "Limit reached" else "Monthly budget", color = if (reached) c.heldText else c.ink3)
                 Row(verticalAlignment = Alignment.Bottom) {
-                    T(fmt.formatWhole(overall.remaining.coerceAtLeast(0)), Modifier.weight(1f), Tally.type.hero, if (overall.status == PaceStatus.OVER_BUDGET) c.heldText else c.ink, maxLines = 1)
-                    T("of " + fmt.formatWhole(overall.budget), style = Tally.type.ui, color = c.ink3)
+                    T(fmt.formatWhole(if (reached) overall.spent else overall.remaining), Modifier.weight(1f), Tally.type.hero, if (reached) c.heldText else c.ink, maxLines = 1)
+                    T((if (reached) "spent of " else "left of ") + fmt.formatWhole(overall.budget), Modifier.padding(bottom = 6.dp), Tally.type.ui, c.ink3)
                 }
                 PaceMeter(overall.spentFraction, overall.paceFraction, height = 8.dp)
-                T(Copy.daysLine(overall) + " · " + Copy.marginLine(overall, fmt), style = Tally.type.caption, color = paceTone(overall))
+                T(
+                    if (reached) budgetWords(overall, fmt) + " · " + Copy.plural(s.daysLeft, "day") + " to go" else Copy.daysLine(overall) + " · " + Copy.marginLine(overall, fmt),
+                    style = Tally.type.caption,
+                    color = paceTone(overall),
+                )
                 b.projected?.let { T("At this pace the month ends at " + fmt.formatWhole(it), style = Tally.type.caption, color = if (it > overall.budget) c.waiting else c.ink3) }
             } else {
                 Eyebrow("Monthly budget")

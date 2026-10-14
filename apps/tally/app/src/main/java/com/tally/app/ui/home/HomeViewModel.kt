@@ -87,6 +87,8 @@ data class HomeState(
     val lastPeriodIncomeSameDay: Long = 0,
     /** Up to [HomeViewModel.GOALS] goals, the ones that need attention first. */
     val goals: List<GoalLine> = emptyList(),
+    /** The month's spending by category, the largest few. */
+    val categories: List<CategoryShare> = emptyList(),
 ) {
     val todayInWeek: Int get() = ChronoUnit.DAYS.between(weekStart, today).toInt().coerceIn(0, 6)
     val weekSpent: Long get() = week.take(todayInWeek + 1).sum()
@@ -97,7 +99,8 @@ data class HomeState(
     /** An even day's share of the overall budget, the dashed line on the week bars. */
     val dailyBudget: Long? get() = reading?.let { it.budget / period.days }
     val daysLeft: Int get() = period.daysLeft(today)
-    val net: Long get() = accounts.filter { !it.archived }.sumOf { it.balance }
+    /** What today took, from the week's bars. */
+    val spentToday: Long get() = week.getOrElse(todayInWeek) { 0L }
 }
 
 /** Home's goals: the ones behind their pace first, then the ones still open, reached ones last. */
@@ -127,6 +130,8 @@ class HomeViewModel @Inject constructor(
 
     private data class Context(val period: BudgetPeriod, val day: LocalDate, val sample: Boolean, val weekStart: LocalDate)
 
+    private data class Money(val income: Long, val spent: Long, val overall: PaceReading?, val envelopes: List<Envelope>, val categories: List<CategoryShare>)
+
     private val context = combine(settings.settings, today) { s, d ->
         val first = if (s.weekStartsMonday) DayOfWeek.MONDAY else DayOfWeek.SUNDAY
         Context(s.periodFor(d), d, s.sampleLoaded, d.with(TemporalAdjusters.previousOrSame(first)))
@@ -135,7 +140,7 @@ class HomeViewModel @Inject constructor(
     val state: StateFlow<HomeState> = context.flatMapLatest { (period, day, sample, weekStart) ->
         val totals = ledger.typeTotals(period.start, period.endExclusive)
         val byCategory = ledger.byCategory(TxType.EXPENSE, period.start, period.endExclusive)
-        val money = combine(totals, byCategory, plan.budgets()) { t, cats, budgets ->
+        val money = combine(totals, byCategory, plan.budgets(), ledger.categories()) { t, cats, budgets, named ->
             val income = t.firstOrNull { it.type == TxType.INCOME }?.total ?: 0L
             val spent = t.firstOrNull { it.type == TxType.EXPENSE }?.total ?: 0L
             val spentBy = cats.associate { (it.categoryId ?: -1L) to it.total }
@@ -153,7 +158,7 @@ class HomeViewModel @Inject constructor(
                     )
                 }
             )
-            Triple(income to spent, overall, envelopes)
+            Money(income, spent, overall, envelopes, topCategories(cats, named))
         }
         val upcoming = plan.recurring().map { rows ->
             rows.asSequence()
@@ -194,10 +199,11 @@ class HomeViewModel @Inject constructor(
             HomeState(
                 today = day,
                 period = period,
-                income = m.first.first,
-                spent = m.first.second,
-                reading = m.second,
-                envelopes = m.third,
+                income = m.income,
+                spent = m.spent,
+                reading = m.overall,
+                envelopes = m.envelopes,
+                categories = m.categories,
                 upcoming = bills,
                 recent = recent,
                 accounts = accounts,

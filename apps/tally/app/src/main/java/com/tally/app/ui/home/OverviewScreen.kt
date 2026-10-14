@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -15,9 +16,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tally.app.ui.common.Dates
 import com.tally.app.ui.common.EntryRow
+import com.tally.app.ui.common.LineTone
 import com.tally.app.ui.common.LocalMoney
-import com.tally.app.ui.kit.AccountBadge
-import com.tally.app.ui.kit.Balance
+import com.tally.app.ui.common.toneColor
+import com.tally.app.ui.kit.CategoryBadge
 import com.tally.app.ui.kit.Empty
 import com.tally.app.ui.kit.Eyebrow
 import com.tally.app.ui.kit.Key
@@ -27,6 +29,7 @@ import com.tally.app.ui.kit.PaceMeter
 import com.tally.app.ui.kit.Panel
 import com.tally.app.ui.kit.Slab
 import com.tally.app.ui.kit.SpacePage
+import com.tally.app.ui.kit.StackBar
 import com.tally.app.ui.kit.Stat
 import com.tally.app.ui.kit.StatGrid
 import com.tally.app.ui.kit.T
@@ -35,10 +38,10 @@ import com.tally.app.ui.nav.AppNav
 import com.tally.app.ui.plan.BillRow
 import com.tally.app.ui.plan.BudgetRow
 import com.tally.app.ui.plan.GoalRow
-import com.tally.app.ui.plan.paceTone
+import com.tally.app.ui.plan.limitReached
 import com.tally.app.ui.theme.Tally
+import com.tally.app.ui.theme.categoryColor
 import com.tally.core.Copy
-import com.tally.core.PaceStatus
 import com.tally.core.TxType
 
 /** What Overview can ask for, as plain lambdas, so the page is drawn from state alone. */
@@ -58,6 +61,9 @@ data class OverviewActions(
     val addAccount: () -> Unit = {},
     val add: () -> Unit = {},
     val import: () -> Unit = {},
+    val insights: () -> Unit = {},
+    /** A category's entries. */
+    val category: (Long) -> Unit = {},
 )
 
 @Composable
@@ -83,14 +89,17 @@ fun OverviewRoute(nav: AppNav, deleteEntry: (Long) -> Unit) {
             addAccount = { nav.accountEdit() },
             add = { nav.entry() },
             import = { nav.import() },
+            insights = nav::insights,
+            category = { nav.transactions(categoryId = it) },
         ),
     )
 }
 
 /**
- * The month at a glance, as Relay draws a source: what is left with its pace in words and on the
- * meter, what each remaining day can take, the week, the budgets furthest over pace, the bills
- * coming up, goals, recent entries and the accounts.
+ * The month at a glance, as Relay draws a source: what is left of the limit with its pace in words
+ * and on the meter (or that the limit is reached), today against its share, what each remaining
+ * day can take, the week, the budgets furthest over pace, where the money went, the bills coming
+ * up, recent entries and goals. It reads spending, not what the accounts hold.
  */
 @Composable
 fun OverviewScreen(s: HomeState, a: OverviewActions) {
@@ -116,36 +125,58 @@ fun OverviewScreen(s: HomeState, a: OverviewActions) {
             return@SpacePage
         }
 
-        // The reading: what is left, its pace, and what each day can take.
-        Slab(Modifier.fillMaxWidth(), padding = PaddingValues(16.dp), spacing = 10.dp) {
+        // The reading: what is left of the month's limit, or that the limit is reached; never a negative.
+        Slab(Modifier.fillMaxWidth(), padding = PaddingValues(16.dp), spacing = 10.dp, onClick = a.budgets) {
             if (r != null) {
-                Eyebrow(if (r.status == PaceStatus.OVER_BUDGET) "Over budget" else "Left this month")
+                val reached = limitReached(r)
+                Eyebrow(if (reached) "Limit reached" else "Left this month", color = if (reached) c.heldText else c.ink3)
                 T(
-                    fmt.formatWhole(if (r.remaining < 0) -r.remaining else r.remaining),
+                    fmt.formatWhole(if (reached) r.spent else r.remaining),
                     style = Tally.type.hero,
-                    color = if (r.remaining < 0) c.heldText else c.ink,
+                    color = if (reached) c.heldText else c.ink,
                     maxLines = 1,
                 )
-                T(Copy.daysLine(r), style = Tally.type.uiMedium, color = paceTone(r).takeIf { r.status != PaceStatus.ON_PACE && r.status != PaceStatus.UNDER_PACE } ?: c.liveText)
+                val line = heroLine(r, fmt)
+                T(line.text, style = Tally.type.uiMedium, color = if (line.tone == LineTone.QUIET) c.liveText else toneColor(line.tone))
                 PaceMeter(r.spentFraction, r.paceFraction, height = 8.dp)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     T(Copy.ofBudget(r.spent, r.budget, fmt) + " spent", Modifier.weight(1f), Tally.type.caption, c.ink3, maxLines = 1)
-                    T(Copy.marginLine(r, fmt), style = Tally.type.caption, color = c.ink2, maxLines = 1)
+                    T(
+                        if (reached) Copy.plural(r.daysLeft, "day") + " to go" else Copy.marginLine(r, fmt),
+                        style = Tally.type.caption,
+                        color = c.ink2,
+                        maxLines = 1,
+                    )
                 }
             } else {
                 Eyebrow("Spent this month")
                 T(fmt.formatWhole(s.spent), style = Tally.type.hero, color = c.ink, maxLines = 1)
-                T("Set a monthly budget and Tally reads the month as a pace: how much is left, and what each day can take.", style = Tally.type.caption, color = c.ink3)
+                T("Set a monthly limit and Tally reads the month as a pace: how much is left, and what each day can take.", style = Tally.type.caption, color = c.ink3)
                 Key("Set a monthly budget", a.setBudget, glyph = "pie", compact = true)
             }
         }
 
         StatGrid(
             listOf(
-                { m -> Stat("Money in", fmt.formatWhole(s.income), m, glyph = "money-in", sub = versus(s.income, s.lastPeriodIncomeSameDay, fmt, "in")) },
+                { m ->
+                    val today = todayLine(s.spentToday, r, fmt)
+                    Stat("Today", fmt.formatWhole(s.spentToday), m, glyph = "receipt", sub = today.text, subColor = toneColor(today.tone), onClick = a.entries)
+                },
+                { m ->
+                    Stat(
+                        "Each day can take",
+                        if (r != null) fmt.formatWhole(r.dailyAllowance) else "–",
+                        m,
+                        glyph = "calendar",
+                        sub = when {
+                            r == null -> "with a monthly budget"
+                            limitReached(r) -> "Nothing left until " + Dates.short(s.period.endExclusive, s.today)
+                            else -> "for " + Copy.plural(r.daysLeft, "day")
+                        },
+                    )
+                },
                 { m -> Stat("Money out", fmt.formatWhole(s.spent), m, glyph = "money-out", sub = Copy.versusLastLine(s.spent, s.lastPeriodSameDay, fmt)) },
-                { m -> Stat("Net worth", fmt.formatWhole(s.net), m, glyph = "bank", figureColor = if (s.net < 0) c.heldText else c.ink, sub = Copy.plural(s.accounts.count { !it.archived }, "account"), onClick = a.accounts) },
-                { m -> Stat("Each day can take", if (r != null) fmt.formatWhole(r.dailyAllowance) else "–", m, glyph = "calendar", sub = if (r != null) "for " + Copy.plural(r.daysLeft, "day") else "with a monthly budget") },
+                { m -> Stat("Money in", fmt.formatWhole(s.income), m, glyph = "money-in", sub = versus(s.income, s.lastPeriodIncomeSameDay, fmt, "in")) },
             ),
         )
 
@@ -158,6 +189,22 @@ fun OverviewScreen(s: HomeState, a: OverviewActions) {
         if (s.envelopes.isNotEmpty()) {
             Panel("Budgets", glyph = "pie", action = "All", onAction = a.budgets) {
                 s.envelopes.take(4).forEach { e -> BudgetRow(e.name, e.icon, e.color, e.reading, onClick = { a.budget(e.categoryId) }) }
+            }
+        }
+
+        if (s.categories.isNotEmpty()) {
+            Panel("Where it went", glyph = "pie", action = "Insights", onAction = a.insights) {
+                StackBar(s.categories.map { categoryColor(it.color) to it.total }, Modifier.padding(start = 4.dp, end = 4.dp, top = 2.dp, bottom = 6.dp))
+                s.categories.forEach { share ->
+                    ListRow(onClick = share.categoryId?.let { id -> { a.category(id) } }, padding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
+                        CategoryBadge(share.icon, share.color)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            T(share.name, style = Tally.type.ui, color = c.ink, maxLines = 1)
+                            T(Copy.plural(share.count, "entry", "entries") + " · " + percentOf(share.total, s.spent) + "% of the month", style = Tally.type.caption, color = c.ink3, maxLines = 1)
+                        }
+                        T(fmt.formatWhole(share.total), style = Tally.type.amount, color = c.ink2)
+                    }
+                }
             }
         }
 
@@ -175,12 +222,6 @@ fun OverviewScreen(s: HomeState, a: OverviewActions) {
             }
         }
 
-        if (s.goals.isNotEmpty()) {
-            Panel("Goals", glyph = "target", action = "All", onAction = a.goals) {
-                s.goals.forEach { g -> GoalRow(g, s.today, onClick = { a.goal(g.id) }) }
-            }
-        }
-
         Panel("Recent", glyph = "list", action = "All", onAction = a.entries) {
             if (s.recent.isEmpty()) {
                 T("Nothing logged this month yet.", Modifier.padding4(), Tally.type.caption, c.ink3)
@@ -188,20 +229,16 @@ fun OverviewScreen(s: HomeState, a: OverviewActions) {
             s.recent.forEach { row -> EntryRow(row, onClick = { a.entry(row.id) }, onLongClick = { a.deleteEntry(row.id) }, today = s.today) }
         }
 
-        Panel("Accounts", glyph = "bank", action = "All", onAction = a.accounts) {
-            s.accounts.filter { !it.archived }.forEach { acc ->
-                ListRow(onClick = { a.account(acc.id) }, padding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
-                    AccountBadge(acc.type)
-                    Column(Modifier.weight(1f)) {
-                        T(acc.name, style = Tally.type.ui, color = c.ink, maxLines = 1)
-                        T(Copy.plural(acc.entryCount, "entry", "entries"), style = Tally.type.caption, color = c.ink3, maxLines = 1)
-                    }
-                    Balance(acc.balance)
-                }
+        if (s.goals.isNotEmpty()) {
+            Panel("Goals", glyph = "target", action = "All", onAction = a.goals) {
+                s.goals.forEach { g -> GoalRow(g, s.today, onClick = { a.goal(g.id) }) }
             }
         }
     }
 }
+
+/** A whole percent of [total], for a share line; zero of nothing is zero. */
+private fun percentOf(part: Long, total: Long): Int = if (total <= 0L) 0 else Math.round(part * 100.0 / total).toInt()
 
 private fun Modifier.padding4(): Modifier = this.then(Modifier.fillMaxWidth())
 

@@ -133,6 +133,13 @@ interface TransactionDao {
     )
     fun observeDailyExpense(start: LocalDate, end: LocalDate): Flow<List<DayTotal>>
 
+    /** What each account paid out over a stretch: Accounts leads with it. */
+    @Query(
+        """SELECT accountId, SUM(amount) AS total, COUNT(*) AS count FROM transactions
+           WHERE type = 'EXPENSE' AND date >= :start AND date < :end GROUP BY accountId"""
+    )
+    fun observeSpendByAccount(start: LocalDate, end: LocalDate): Flow<List<AccountTotal>>
+
     @Query(
         """SELECT type, SUM(amount) AS total FROM transactions
            WHERE type != 'TRANSFER' AND date >= :start AND date < :end GROUP BY type"""

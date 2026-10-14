@@ -35,17 +35,20 @@ The server address is built in (`https://antho-s-bot-8dve.onrender.com`; `-Ptall
 
 ## What it does
 
-- **Spend** (the top bar's switch): **Overview** (what is left with its pace, what each day can
-  take, money in and out, net worth, the week, budgets furthest over pace, bills coming up, goals,
-  recent entries, accounts), **Entries** by day month by month, **Insights** (the month's line
-  against the pace with scrubbing, where it went, payees, largest, six-month trend, a calendar of
-  days, net worth).
+- **Spend** (the top bar's switch): **Overview** (what is left of the month's limit with its pace,
+  or that the limit is reached; today against its share, what each day can take, money in and out,
+  the week, budgets furthest over pace, where it went, bills coming up, recent entries, goals),
+  **Entries** by day month by month, **Insights** (the month's line against the pace with
+  scrubbing, where it went, payees, largest, six-month trend, a calendar of days, net worth).
 - **Plan**: **Budgets** (the monthly budget with a projection, envelopes, what was spent without a
   budget, budgets suggested from three months of averages), **Bills** that post themselves,
-  **Goals** (pots, a balance by a date, a share of income invested or kept), **Accounts**,
-  **Investments** (Wealthsimple files, holdings, room).
-- **Add** from every page (and from the launcher icon's long-press): keypad, the usual entries one
-  tap away, categories most used first, account, day, note with suggestions, repeat.
+  **Goals** (pots, a balance by a date, a share of income invested or kept), **Accounts** (what
+  each paid out this month; a balance only where one was given), **Investments** (Wealthsimple
+  files, holdings, room).
+- **Add** from every page (and from the launcher icon's long-press): a keypad that folds away once
+  the amount is in, the usual entries one tap away, categories in an even grid most used first,
+  then one card for account, day, note with suggestions and repeat. Any entry can be made to repeat
+  later, and every save comes with Undo and where the month stands.
 - **Search** every entry ever, from the top bar or the launcher.
 - **Import** Desjardins, Wealthsimple or any bank's CSV; **Backup** weekly and to a folder;
   **Export** CSV; categories with over a hundred icons; three grounds (Relay's matte, dark,

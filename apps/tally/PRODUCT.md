@@ -26,6 +26,17 @@ automatically be synced with nothing for me to do while being on the same wifi o
   and the sync protocol RelayV4 defines (`docs/MONEY.md`, "Sync"), so the server, the PC and both
   Tallys read the same rows.
 
+## Spending, not balances (2026-10-13)
+
+Asked for by the owner: "it should track the spending not the total account money so no negative
+just says if you hit the limit". Tally reads spending against the month's limit; it does not
+keep what the accounts hold unless an account was given a balance to start from.
+
+- No reading is ever a negative figure. Past the limit, Tally says "Limit reached" and by how much
+  ("$120 past your $3,000 limit"); a tracked balance below zero reads in words ("owes $412.20").
+- Accounts are what you pay with. Overview, the editor and the status bar never show a balance;
+  Accounts leads with what each one paid out this month.
+
 ## Principles
 
 1. **Logging is free.** Add is one tap from every page and from the launcher, and finishes in three

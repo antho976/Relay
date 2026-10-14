@@ -119,6 +119,9 @@ class LedgerRepository @Inject constructor(
     fun dailyExpense(start: LocalDate, endExclusive: LocalDate): Flow<List<DayTotal>> =
         transactions.observeDailyExpense(start, endExclusive)
 
+    fun spendByAccount(start: LocalDate, endExclusive: LocalDate): Flow<List<com.tally.app.data.db.AccountTotal>> =
+        transactions.observeSpendByAccount(start, endExclusive)
+
     fun typeTotals(start: LocalDate, endExclusive: LocalDate): Flow<List<TypeTotal>> =
         transactions.observeTypeTotals(start, endExclusive)
 

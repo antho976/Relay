@@ -202,7 +202,10 @@ fun CountBadge(n: Int, color: Color = Tally.colors.ink) {
 
 // ---- Fields ----
 
-/** A field (DESIGN.md "Inputs"): raised fill, a strong stroke, line-focus when focused. */
+/**
+ * A field (DESIGN.md "Inputs"): raised fill, a strong stroke, line-focus when focused. [bare] drops
+ * the fill and stroke for a field that is one row of a card, so the card is the only box.
+ */
 @Composable
 fun Field(
     value: String,
@@ -218,10 +221,12 @@ fun Field(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    bare: Boolean = false,
+    interactionSource: MutableInteractionSource? = null,
     trailing: @Composable (RowScope.() -> Unit)? = null,
 ) {
     val c = Tally.colors
-    val source = remember { MutableInteractionSource() }
+    val source = interactionSource ?: remember { MutableInteractionSource() }
     val focused by source.collectIsFocusedAsState()
     BasicTextField(
         value = value,
@@ -241,8 +246,10 @@ fun Field(
                 Modifier
                     .heightIn(min = 44.dp)
                     .clip(Radii.key)
-                    .background(c.raised)
-                    .border(1.dp, if (error) c.held else if (focused) c.lineFocus else c.strong, Radii.key)
+                    .then(
+                        if (bare) Modifier
+                        else Modifier.background(c.raised).border(1.dp, if (error) c.held else if (focused) c.lineFocus else c.strong, Radii.key)
+                    )
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = if (singleLine) Alignment.CenterVertically else Alignment.Top,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),

@@ -57,6 +57,20 @@ internal fun freeTemplates(existing: List<String>): List<AccountTemplate> {
     return ACCOUNT_TEMPLATES.filter { it.name.lowercase() !in taken }
 }
 
+/**
+ * Whether Tally can say what an account holds: it was given somewhere to start, an opening balance
+ * or a recorded value. Otherwise it only knows what was spent from it, and a balance built from
+ * spending alone would read as a debt that is not there.
+ */
+fun tracksBalance(account: AccountBalance): Boolean = account.openingBalance != 0L || account.valuedOn != null
+
+/** A balance in words, never a negative figure: "holds $3,184.50", "owes $412.20" on a card, "$50.00 below zero". */
+internal fun balanceWords(type: AccountType, balance: Long, fmt: MoneyFormatter): String = when {
+    balance >= 0 -> "holds " + fmt.format(balance)
+    type == AccountType.CREDIT -> "owes " + fmt.format(-balance)
+    else -> fmt.format(-balance) + " below zero"
+}
+
 /** One account row: its balance, and the share it is of its side (what you hold, or what you owe). */
 @Immutable
 data class AccountLine(
@@ -64,7 +78,13 @@ data class AccountLine(
     /** 0..1 of the held total for a balance above zero, of the owed total below it. */
     val share: Float,
     val isDefault: Boolean,
-)
+    /** What was spent from it this period. */
+    val spent: Long = 0,
+    /** 0..1 of the period's spending across the active accounts. */
+    val spentShare: Float = 0f,
+) {
+    val tracked: Boolean get() = tracksBalance(account)
+}
 
 /** Everything the Accounts list draws, summed once here rather than in composition. */
 @Immutable
@@ -86,17 +106,29 @@ data class AccountsState(
     /** The active account with the most entries. */
     val busiest: AccountLine? = null,
     val defaultName: String? = null,
+    /** What the active accounts paid out this period: the page's lead. */
+    val monthSpent: Long = 0,
+    /** The active account most of it came from. */
+    val topSpender: AccountLine? = null,
+    /** [held] and [owed] over the accounts that track a balance only. */
+    val trackedHeld: Long = 0,
+    val trackedOwed: Long = 0,
     val loaded: Boolean = false,
 ) {
     /** A transfer needs two places for the money to move between. */
     val canTransfer: Boolean get() = active.size >= 2
+    /** Some account was given a balance to start from, so what is held means something. */
+    val anyTracked: Boolean get() = active.any { it.tracked }
 }
 
-internal fun buildAccountsState(balances: List<AccountBalance>, defaultAccountId: Long, entries: Int): AccountsState {
+/** [spent] is this period's spending by account id; accounts missing from it spent nothing. */
+internal fun buildAccountsState(balances: List<AccountBalance>, defaultAccountId: Long, entries: Int, spent: Map<Long, Long> = emptyMap()): AccountsState {
     val (archived, active) = balances.partition { it.archived }
     val held = active.filter { it.balance > 0 }.sumOf { it.balance }
     val owed = active.filter { it.balance < 0 }.sumOf { -it.balance }
+    val monthSpent = active.sumOf { spent[it.id] ?: 0L }
     val lines = active.map { a ->
+        val out = spent[a.id] ?: 0L
         AccountLine(
             account = a,
             share = when {
@@ -105,8 +137,11 @@ internal fun buildAccountsState(balances: List<AccountBalance>, defaultAccountId
                 else -> 0f
             },
             isDefault = a.id == defaultAccountId,
+            spent = out,
+            spentShare = if (monthSpent > 0) (out.toDouble() / monthSpent).toFloat() else 0f,
         )
     }
+    val tracked = active.filter { tracksBalance(it) }
     val net = active.sumOf { it.balance }
     return AccountsState(
         active = lines,
@@ -119,8 +154,23 @@ internal fun buildAccountsState(balances: List<AccountBalance>, defaultAccountId
         largest = lines.filter { it.account.balance > 0 }.maxByOrNull { it.account.balance },
         busiest = lines.filter { it.account.entryCount > 0 }.maxByOrNull { it.account.entryCount },
         defaultName = lines.firstOrNull { it.isDefault }?.account?.name,
+        monthSpent = monthSpent,
+        topSpender = lines.filter { it.spent > 0 }.maxByOrNull { it.spent },
+        trackedHeld = tracked.filter { it.balance > 0 }.sumOf { it.balance },
+        trackedOwed = tracked.filter { it.balance < 0 }.sumOf { -it.balance },
         loaded = true,
     )
+}
+
+/** The words under an account's name: its kind, default, the balance when it tracks one, its valuation day. */
+internal fun accountCaption(line: AccountLine, fmt: MoneyFormatter): String {
+    val a = line.account
+    return listOfNotNull(
+        typeLabel(a.type),
+        if (line.isDefault) "default" else null,
+        if (line.tracked) balanceWords(a.type, a.balance, fmt) else null,
+        a.valuedOn?.let { "valued " + com.tally.app.ui.common.Dates.monthShort(it) + " " + it.dayOfMonth },
+    ).joinToString(" · ")
 }
 
 /** What the share bar under a row says, as words. */
