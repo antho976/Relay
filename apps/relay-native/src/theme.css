@@ -180,9 +180,8 @@ notebook > header tabs tab { min-height: 29px; padding: 0 10px; border: 0; borde
 notebook > header tabs tab:checked { background: @slab; box-shadow: inset 0 -2px @ink; }
 notebook > stack { background: @console; }
 paned > separator { min-width: 4px; min-height: 2px; background: @edge; background-image: none; box-shadow: none; }
-/* The sidebar's drag handle: the sidebar's own 1px edge, with a wider grip that shows on hover. */
-/* One hairline that takes one pixel: transparent borders would widen the handle in the layout
-   and show the backdrop beside the line. GTK already grabs a few pixels either side of it. */
+/* The sidebar's drag handle: the sidebar's own 1px edge, taking one pixel of layout (transparent
+   borders would widen it and show the backdrop beside the line); GTK grabs a few pixels past it. */
 paned.sidebar-split > separator { min-width: 1px; margin: 0; padding: 0; border: 0; background-color: @edge; }
 paned.sidebar-split > separator:hover { background-color: @line_focus; }
 
