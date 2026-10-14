@@ -429,7 +429,7 @@ fn vouch(shared: &Shared, room: &str) -> bool {
     if known.len() >= shared.limits.max_rooms {
         let stale = known
             .iter()
-            .filter(|(r, _)| !all.get(*r).is_some_and(|x| x.host.is_some()))
+            .filter(|(r, _)| all.get(*r).is_none_or(|x| x.host.is_none()))
             .min_by(|a, b| a.1.cmp(b.1).then_with(|| a.0.cmp(b.0)))
             .map(|(r, _)| r.clone());
         let Some(stale) = stale else { return false };
