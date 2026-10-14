@@ -255,6 +255,44 @@ fn sub_tasks_roll_up_and_stay_real_cards() {
     assert_eq!(roots[0]["id"], parent["id"]);
 }
 
+/// A page's roll-ups and depths are walked over one read of the task tree; each must read
+/// exactly as `task.get` walks it for one task, with done, deleted and nested sub-tasks.
+#[test]
+fn listed_roll_ups_and_depths_match_each_task() {
+    let f = Fixture::new();
+    let e = &f.engine;
+    let a = f.task("A", json!({}));
+    let b = f.task("B", json!({"parent_id":a["id"]}));
+    let c = f.task("C", json!({"parent_id":b["id"]}));
+    let d = f.task("D", json!({"parent_id":a["id"]}));
+    let gone = f.task("Gone", json!({"parent_id":b["id"]}));
+    let other = f.task("Other", json!({}));
+    f.task("Other child", json!({"parent_id":other["id"]}));
+    f.task("Loose", json!({}));
+    ok(e, "task.move", json!({"task_id":c["id"],"column":"in_review"}));
+    ok(e, "task.approve", json!({"task_id":c["id"],"sha":"deadbeef"}));
+    ok(e, "task.move", json!({"task_id":d["id"],"column":"in_review"}));
+    ok(e, "task.approve", json!({"task_id":d["id"],"sha":"deadbeef"}));
+    ok(e, "task.delete", json!({"task_id":gone["id"]}));
+
+    let listed = ok(e, "task.list", json!({"project_id":1,"summary":true}))["tasks"].clone();
+    let listed = listed.as_array().unwrap();
+    assert_eq!(listed.len(), 7);
+    for task in listed {
+        let one = ok(e, "task.get", json!({"task_id":task["id"]}));
+        assert_eq!(task["rollup"], one["rollup"], "roll-up of #{}", task["id"]);
+        assert_eq!(task["depth"], one["depth"], "depth of #{}", task["id"]);
+        assert_eq!(task["children"], one["children"], "children of #{}", task["id"]);
+    }
+    let of = |id: &Value| listed.iter().find(|t| t["id"] == *id).unwrap().clone();
+    assert_eq!(of(&a["id"])["rollup"], json!({"total":3,"done":2}));
+    assert_eq!(of(&b["id"])["rollup"], json!({"total":1,"done":1}));
+    assert_eq!(of(&c["id"])["depth"], 2);
+    // A summary leaves out the essays and nothing else.
+    assert_eq!(of(&a["id"])["body"], "");
+    assert_eq!(of(&a["id"])["title"], "A");
+}
+
 #[test]
 fn nesting_is_capped_and_cycles_refused() {
     let f = Fixture::new();

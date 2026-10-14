@@ -727,9 +727,59 @@ impl Drop for Pty {
     }
 }
 
-/// Is anything left in process group `pgid`? (signal 0 to the group)
+/// Is anything left running in process group `pgid`? Signal 0 to the group also finds members
+/// that are dead and not yet reaped. Orphans go to the engine, a subreaper that reaps them on its
+/// own schedule (`peer::spawn_orphan_reaper`, up to a minute), so those zombies are looked past.
+/// The group is called gone only when the scan saw every member: a member it cannot read (another
+/// user's, under `hidepid`, like `sudo`) or a signal answered by none it found counts as alive.
 fn group_alive(pgid: u32) -> bool {
-    unsafe { libc::kill(-(pgid as i32), 0) == 0 }
+    if unsafe { libc::kill(-(pgid as i32), 0) } != 0 {
+        return false;
+    }
+    if proc_hides_pids() {
+        return true;
+    }
+    let Ok(entries) = std::fs::read_dir("/proc") else { return true };
+    let mut found = false;
+    for entry in entries.flatten() {
+        let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else { continue };
+        let Some((state, pgrp, threads)) = std::fs::read_to_string(entry.path().join("stat")).ok().as_deref().and_then(stat_fields) else {
+            // Unreadable, or gone since the listing: getpgid needs no access to /proc.
+            if unsafe { libc::getpgid(pid) } == pgid as i32 { return true; }
+            continue;
+        };
+        if pgrp != pgid { continue; }
+        found = true;
+        // A zombie leader whose other threads run (it called pthread_exit) is no zombie.
+        if state != 'Z' || threads > 1 { return true; }
+    }
+    !found
+}
+
+/// State, process group and thread count from `/proc/<pid>/stat`:
+/// `pid (comm) state ppid pgrp session tty tpgid flags … priority nice num_threads …`.
+/// comm may hold spaces and parentheses.
+fn stat_fields(stat: &str) -> Option<(char, u32, u32)> {
+    let (_, rest) = stat.rsplit_once(')')?;
+    let fields: Vec<&str> = rest.split_whitespace().take(18).collect();
+    let state = fields.first()?.chars().next()?;
+    Some((state, fields.get(2)?.parse().ok()?, fields.get(17)?.parse().ok()?))
+}
+
+/// Is /proc mounted with `hidepid`, so other users' processes (a `sudo`) may be missing from it?
+/// Then a scan cannot prove a group empty. Read once.
+fn proc_hides_pids() -> bool {
+    static HIDES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HIDES.get_or_init(|| {
+        std::fs::read_to_string("/proc/self/mountinfo").map(|text| mount_hides_pids(&text)).unwrap_or(false)
+    })
+}
+
+/// Whether the `/proc` line of `mountinfo` sets `hidepid` to anything but 0/off.
+fn mount_hides_pids(mountinfo: &str) -> bool {
+    mountinfo.lines().filter(|line| line.split_whitespace().nth(4) == Some("/proc")).any(|line| {
+        line.split([' ', ',']).filter_map(|option| option.strip_prefix("hidepid=")).any(|value| value != "0" && value != "off")
+    })
 }
 
 /// Is `pid` alive? (signal 0)
@@ -1112,5 +1162,41 @@ mod tests {
         // One at a time this is at least 3 s of grace; the shared deadline makes it about 1.
         assert!(started.elapsed() < Duration::from_millis(2500), "{:?}", started.elapsed());
         assert!(ptys.iter().all(|pty| pty.exited() && !group_alive(pty.pid())));
+    }
+
+    #[test]
+    fn a_zombie_leader_with_running_threads_reads_as_alive() {
+        // A main thread that called pthread_exit, its other thread still running.
+        let stat = "1961551 (pe (x) y) Z 1961549 1960822 1960822 0 -1 4227084 125 0 0 0 0 0 0 0 16 -4 2 0 8832968 0 0";
+        assert_eq!(stat_fields(stat), Some(('Z', 1960822, 2)));
+        assert_eq!(stat_fields("12 (sleep) S 1 12 12 34816 12 4194560 0 0 0 0 0 0 0 0 20 0 1 0 5"), Some(('S', 12, 1)));
+        assert_eq!(stat_fields("12 (sleep) S 1 12"), None);
+        assert!(!mount_hides_pids("49 40 0:24 / /proc rw,nosuid,nodev,noexec,relatime shared:11 - proc proc rw"));
+        assert!(!mount_hides_pids("49 40 0:24 / /proc rw,relatime - proc proc rw,hidepid=0"));
+        assert!(mount_hides_pids("49 40 0:24 / /proc rw,relatime - proc proc rw,hidepid=invisible"));
+        assert!(mount_hides_pids("49 40 0:24 / /proc rw,relatime - proc proc rw,hidepid=2,gid=10"));
+        assert!(!mount_hides_pids("50 40 0:25 / /mnt/proc rw - proc proc rw,hidepid=2"));
+    }
+
+    #[test]
+    fn kill_reaches_a_member_whose_main_thread_exited() {
+        // Built here when a C compiler is at hand; the parsing above is checked either way.
+        let dir = tempfile::tempdir().unwrap();
+        let (source, program) = (dir.path().join("pe.c"), dir.path().join("pe"));
+        // It ignores the hangup the leader's exit sends, as a provider's helper might.
+        std::fs::write(&source, "#include <pthread.h>\n#include <signal.h>\n#include <unistd.h>\n\
+            static void *run(void *a) { (void)a; sleep(30); return 0; }\n\
+            int main(void) { signal(SIGHUP, SIG_IGN); pthread_t t; pthread_create(&t, 0, run, 0); pthread_exit(0); }\n").unwrap();
+        let built = std::process::Command::new("cc").arg("-pthread").arg("-o").arg(&program).arg(&source)
+            .stderr(std::process::Stdio::null()).status();
+        if !built.is_ok_and(|status| status.success()) {
+            eprintln!("no C compiler; skipped");
+            return;
+        }
+        let pty = Pty::spawn(sh(&format!("{} & sleep 0.3; exit 0", program.display())), |_| {}).unwrap();
+        wait_for("the leader's exit", || pty.exited());
+        assert!(group_alive(pty.pid()), "a process whose main thread exited read as gone");
+        pty.kill(Duration::from_millis(100));
+        assert!(!group_alive(pty.pid()), "the process outlived kill");
     }
 }

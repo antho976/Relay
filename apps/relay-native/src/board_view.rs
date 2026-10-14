@@ -8,7 +8,7 @@ use super::*;
 use gtk::cairo;
 use gtk::gdk;
 use std::cell::Cell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use task_pages::{COLUMNS, COLUMN_TITLES, OPEN_COLUMNS, PRIORITIES, SIZES, TYPES};
 // The board's pure logic lives in relay-board, which builds without GTK so CI tests it.
@@ -26,6 +26,8 @@ const GROUPS: [(&str, &str); 7] = [
 
 /// Rendered lanes (or list sections) in order, each with its visible cards in order.
 type Lanes = Vec<(String, Vec<(i64, gtk::Widget)>)>;
+/// How long the search waits for the typing to pause before it filters the board.
+const SEARCH_PAUSE: std::time::Duration = std::time::Duration::from_millis(150);
 type Action = Box<dyn Fn(&Rc<Board>)>;
 /// What a View-menu pill does when toggled: on or off.
 type Toggle = Box<dyn Fn(&Rc<Board>, bool)>;
@@ -707,6 +709,113 @@ struct Board {
     deferred: Cell<bool>,
     /// Audit rows Ctrl+Z found stale or not undoable: the next press reaches past them.
     skipped: RefCell<BTreeSet<i64>>,
+    /// The lanes as drawn, kept while the view, the hidden columns and the empty board stay.
+    frame: RefCell<Option<Frame>>,
+    /// Every card (or list row) drawn, by task id, with [`card_key`] of what it shows: a render
+    /// builds only the cards whose key changed and moves the rest into place.
+    cards: RefCell<HashMap<i64, (String, gtk::Box)>>,
+    /// What the banner, stats, strip and View key last drew, by part: an unchanged part stays.
+    drawn: RefCell<BTreeMap<&'static str, String>>,
+    /// The search's pending filter while the typing has not paused.
+    search: RefCell<Option<glib::SourceId>>,
+    /// Task bodies by id with the `updated_at` they were read at: the board lists summaries,
+    /// and reads a body only to search it, peek at it or copy it.
+    bodies: RefCell<HashMap<i64, (String, String)>>,
+    bodies_loading: Cell<bool>,
+    /// What the last body read could not find: no read is started again for those alone.
+    bodies_missed: RefCell<BTreeSet<i64>>,
+    /// The peek waiting on its task's body.
+    peek_loading: Cell<Option<i64>>,
+}
+
+/// The lanes (or list sections) as drawn, with what each holds besides cards.
+struct Frame {
+    /// The view, the hidden columns and whether the board is empty, as [`Board::frame_key`].
+    key: String,
+    lanes: Vec<Lane>,
+}
+struct Lane {
+    column: &'static str,
+    /// Where the cards go: the lane's scrolled box, or the list section itself (its head first).
+    items: gtk::Box,
+    /// The head, and what it last showed: its count, total and estimate.
+    head: gtk::Box,
+    head_key: RefCell<String>,
+    /// The empty note, by whether a filter emptied the lane.
+    empty: RefCell<Option<(bool, gtk::Widget)>>,
+    /// Group headings by group.
+    headings: RefCell<HashMap<String, gtk::Widget>>,
+}
+
+/// Everything a card (or list row) shows of `task`, as text: the card is rebuilt only when this
+/// changes. Its board position and edit time are left out — a reorder moves the card and keeps it —
+/// and the row's age (`ago`) is put back in, since a row shows it.
+fn card_key(task: &Value, all: &BTreeMap<i64, &Value>, project: &str, list: bool, scoped: bool) -> String {
+    let mut shown = task.clone();
+    if let Some(fields) = shown.as_object_mut() {
+        for field in ["position", "updated_at", "body", "changelog"] {
+            fields.remove(field);
+        }
+    }
+    let blockers: Vec<Value> = open_blockers(task, all).iter().map(|t| json!([t["id"], text(t, "title")])).collect();
+    let duplicate = task["duplicate_of"].as_i64().and_then(|other| all.get(&other)).map(|t| text(t, "title"));
+    let age = if list { ago(text(task, "updated_at")) } else { String::new() };
+    json!([shown, blockers, duplicate, project, list, scoped, age]).to_string()
+}
+
+/// Puts exactly `wanted`, in order, into `items`: a widget already there is moved only when out
+/// of place, one from another lane is taken out of it, and what is no longer wanted leaves.
+fn place(items: &gtk::Box, wanted: &[gtk::Widget]) {
+    let keep: HashSet<&gtk::Widget> = wanted.iter().collect();
+    let mut child = items.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        if !keep.contains(&widget) {
+            items.remove(&widget);
+        }
+    }
+    let mut previous: Option<gtk::Widget> = None;
+    for widget in wanted {
+        if widget.parent().as_ref() != Some(items.upcast_ref()) {
+            detach(widget);
+            items.insert_child_after(widget, previous.as_ref());
+        } else if widget.prev_sibling() != previous {
+            items.reorder_child_after(widget, previous.as_ref());
+        }
+        previous = Some(widget.clone());
+    }
+}
+
+/// Removes what a card shows, leaving a menu open on it (a popover is the card's child too).
+fn empty_out(card: &gtk::Box) {
+    let mut child = card.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        if !widget.is::<gtk::Popover>() {
+            card.remove(&widget);
+        }
+    }
+}
+
+/// Takes a card out of whichever lane holds it.
+fn detach(widget: &impl IsA<gtk::Widget>) {
+    match widget.parent().and_downcast::<gtk::Box>() {
+        Some(parent) => parent.remove(widget),
+        None if widget.parent().is_some() => widget.unparent(),
+        None => {}
+    }
+}
+
+/// Copies a task as the card's copy key always has (`title`, body, `#id`), reading the body
+/// first: the board holds summaries.
+fn copy_task(ui: &std::rc::Weak<Ui>, id: i64, clipboard: gdk::Clipboard) {
+    let Some(ui) = ui.upgrade() else { return };
+    glib::spawn_future_local(async move {
+        match ui.call("task.get", json!({"task_id":id})).await {
+            Ok(task) => clipboard.set_text(&format!("{}\n\n{}\n\n#{id}", text(&task, "title"), text(&task, "body"))),
+            Err(error) => ui.show_error(&error.to_string()),
+        }
+    });
 }
 
 /// Mounts the board on `page` for `project` the first time, then re-renders it with `tasks`.
@@ -971,6 +1080,14 @@ impl Board {
             peek_shown: Cell::new(None),
             deferred: Cell::new(false),
             skipped: RefCell::new(BTreeSet::new()),
+            frame: RefCell::new(None),
+            cards: RefCell::new(HashMap::new()),
+            drawn: RefCell::new(BTreeMap::new()),
+            search: RefCell::new(None),
+            bodies: RefCell::new(HashMap::new()),
+            bodies_loading: Cell::new(false),
+            bodies_missed: RefCell::new(BTreeSet::new()),
+            peek_loading: Cell::new(None),
         });
 
         for (field, values) in [
@@ -1006,9 +1123,19 @@ impl Board {
             if let Some(key) = clear_key.upgrade() {
                 key.set_visible(!entry.text().is_empty());
             }
-            if let Some(board) = weak.upgrade() {
-                board.render();
+            // Filter once the typing pauses, not on every key.
+            let Some(board) = weak.upgrade() else { return };
+            if let Some(pending) = board.search.borrow_mut().take() {
+                pending.remove();
             }
+            let weak = Rc::downgrade(&board);
+            let pending = glib::timeout_add_local_once(SEARCH_PAUSE, move || {
+                if let Some(board) = weak.upgrade() {
+                    board.search.borrow_mut().take();
+                    board.render();
+                }
+            });
+            *board.search.borrow_mut() = Some(pending);
         });
         let escape = gtk::EventControllerKey::new();
         let weak = Rc::downgrade(&board);
@@ -1602,16 +1729,16 @@ impl Board {
         }
     }
 
+    /// Redraws the board from `tasks`. Only what changed is touched: the lanes stay while the
+    /// view, the hidden columns and the empty board do, each card is rebuilt only when what it
+    /// shows changed ([`card_key`]) and is otherwise moved into place, and the banner, stats and
+    /// chips are redrawn only when they read differently.
     fn render(self: &Rc<Self>) {
         let focus_inside = self
             .page
             .root()
             .and_then(|root| root.focus())
             .is_some_and(|focus| focus.is_ancestor(&self.content));
-        let saved: BTreeMap<String, f64> = self.scrolls.borrow().iter().map(|(role, a)| (role.clone(), a.value())).collect();
-        clear(&self.content);
-        self.layout.borrow_mut().clear();
-        self.scrolls.borrow_mut().clear();
         let everything = self.tasks.borrow().clone();
         let scope = scope();
         self.shown_scope.set(scope);
@@ -1630,10 +1757,28 @@ impl Board {
         }
         let filters = self.filters.borrow().clone();
         let query = self.query.text().trim().to_string();
-        let visible: Vec<&Value> = tasks
-            .iter()
-            .filter(|t| task_matches(t, &filters, "") && relay_board::query_matches(t, &query))
-            .collect();
+        let visible: Vec<&Value> = {
+            // The search reads bodies too; the board lists summaries, so a body read for the
+            // search stands in for the empty one.
+            let bodies = self.bodies.borrow();
+            tasks
+                .iter()
+                .filter(|t| {
+                    task_matches(t, &filters, "")
+                        && match Self::fresh(&bodies, t).filter(|_| !query.is_empty()) {
+                            Some(body) => {
+                                let mut whole = (*t).clone();
+                                whole["body"] = body.into();
+                                relay_board::query_matches(&whole, &query)
+                            }
+                            None => relay_board::query_matches(t, &query),
+                        }
+                })
+                .collect()
+        };
+        if !query.is_empty() {
+            self.read_bodies();
+        }
         let open = tasks.iter().filter(|t| text(t, "column") != "done").count();
         let mut summary = format!("{open} open · {} done", tasks.len() - open);
         if visible.len() != tasks.len() {
@@ -1641,10 +1786,12 @@ impl Board {
         }
         self.count.set_text(&summary);
         let active = filters.values().map(BTreeSet::len).sum::<usize>();
-        self.filter.set_child(Some(&icon_text(
-            crate::icons::image("sliders", 12).upcast_ref(),
-            &if active > 0 { format!("View · {active}") } else { "View".into() },
-        )));
+        if self.redraw("view", active.to_string()) {
+            self.filter.set_child(Some(&icon_text(
+                crate::icons::image("sliders", 12).upcast_ref(),
+                &if active > 0 { format!("View · {active}") } else { "View".into() },
+            )));
+        }
         if active > 0 {
             self.filter.add_css_class("active");
         } else {
@@ -1652,38 +1799,237 @@ impl Board {
         }
         self.render_stats(&tasks, &everything);
         self.render_strip(&tasks);
-        if everything.is_empty() {
-            self.render_empty();
-        } else {
+        let key = self.frame_key(everything.is_empty());
+        let rebuilt = self.frame.borrow().as_ref().is_none_or(|frame| frame.key != key);
+        if rebuilt {
+            let saved: BTreeMap<String, f64> = self.scrolls.borrow().iter().map(|(role, a)| (role.clone(), a.value())).collect();
+            self.build_frame(key, everything.is_empty());
+            // Keep each scroller where it was: restore once the new content has its size. A
+            // scroller the last frame did not have (another view, a column shown again) starts
+            // at the top.
+            for (role, adjustment) in self.scrolls.borrow().iter() {
+                let Some(value) = saved.get(role).copied().filter(|v| *v > 0.) else {
+                    continue;
+                };
+                let done = Cell::new(false);
+                adjustment.connect_changed(move |a| {
+                    if !done.get() && a.upper() - a.page_size() >= value {
+                        done.set(true);
+                        a.set_value(value);
+                    }
+                });
+            }
+        }
+        // The focused card and the lane it is in, to tell a card kept in place from one moved.
+        let focused_card = || {
+            let id = self.focused.get();
+            self.layout.borrow().iter().find_map(|(_, cards)| {
+                cards.iter().find(|(i, _)| Some(*i) == id).map(|(_, w)| w.clone())
+            })
+        };
+        let held = focused_card().map(|card| (card.parent(), card));
+        if !everything.is_empty() {
             self.render_lanes(&tasks, &everything, &visible);
         }
-        // Keep each scroller where it was: restore once the new content has its size. A scroller
-        // the last render did not have (another view, a column shown again) starts at the top.
-        for (role, adjustment) in self.scrolls.borrow().iter() {
-            let Some(value) = saved.get(role).copied().filter(|v| *v > 0.) else {
-                continue;
-            };
-            let done = Cell::new(false);
-            adjustment.connect_changed(move |a| {
-                if !done.get() && a.upper() - a.page_size() >= value {
-                    done.set(true);
-                    a.set_value(value);
-                }
-            });
-        }
         if focus_inside {
-            let id = self.focused.get();
-            let card = self.layout.borrow().iter().find_map(|(_, cards)| {
-                cards.iter().find(|(i, _)| Some(*i) == id).map(|(_, w)| w.clone())
-            });
-            match card {
+            let focus = self.page.root().and_then(|root| root.focus());
+            match focused_card() {
                 Some(card) => {
-                    card.grab_focus();
+                    let stayed = held.as_ref().is_some_and(|(parent, was)| *was == card && card.parent() == *parent);
+                    // A card kept in place keeps its focus, and a key inside it keeps its own.
+                    if !stayed || !focus.is_some_and(|f| f == card || f.is_ancestor(&card)) {
+                        if !stayed {
+                            // Taken out of its lane, the card still reads as the focus until
+                            // GTK moves it on: drop that first, or the grab below is a no-op.
+                            if let Some(root) = card.root() {
+                                root.set_focus(None::<&gtk::Widget>);
+                            }
+                        }
+                        card.grab_focus();
+                    }
                 }
+                None if focus.is_some_and(|f| f.is_ancestor(&self.content)) => {}
                 None => self.focus_board(),
             }
         }
         self.render_peek();
+    }
+
+    /// Whether the part `part` must be drawn again to read as `key`, noting it as drawn if so.
+    fn redraw(&self, part: &'static str, key: String) -> bool {
+        let mut drawn = self.drawn.borrow_mut();
+        if drawn.get(part) == Some(&key) {
+            return false;
+        }
+        drawn.insert(part, key);
+        true
+    }
+
+    /// What the lanes themselves depend on: the view, the hidden columns, an empty board.
+    fn frame_key(&self, empty: bool) -> String {
+        format!("{}|{:?}|{empty}", self.list.get(), self.hidden.borrow())
+    }
+
+    /// The lanes (or list sections) with their heads empty and no cards, or the empty board.
+    fn build_frame(self: &Rc<Self>, key: String, empty: bool) {
+        // The cards outlive the frame: the next render moves them into the new lanes.
+        for (_, card) in self.cards.borrow().values() {
+            detach(card);
+        }
+        clear(&self.content);
+        self.layout.borrow_mut().clear();
+        self.scrolls.borrow_mut().clear();
+        let mut lanes = Vec::new();
+        if empty {
+            self.render_empty();
+            *self.frame.borrow_mut() = Some(Frame { key, lanes });
+            return;
+        }
+        let list = self.list.get();
+        let outer = if list {
+            let rows = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            rows.add_css_class("board-list");
+            let scroll = crate::app::scrolled(&rows);
+            scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+            self.scrolls.borrow_mut().push(("list".into(), scroll.vadjustment()));
+            self.content.append(&scroll);
+            rows
+        } else {
+            let grid = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            grid.add_css_class("board-grid");
+            grid.set_homogeneous(true);
+            let scroller = gtk::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk::PolicyType::Automatic)
+                .vscrollbar_policy(gtk::PolicyType::Never)
+                .vexpand(true)
+                .hexpand(true)
+                .child(&grid)
+                .build();
+            self.scrolls.borrow_mut().push(("board".into(), scroller.hadjustment()));
+            self.content.append(&scroller);
+            grid
+        };
+        let hidden = self.hidden.borrow().clone();
+        if hidden.len() == COLUMNS.len() {
+            let all = label("Every column is hidden. Turn one back on under View.", "board-empty");
+            all.set_halign(gtk::Align::Center);
+            outer.append(&all);
+        }
+        for &column in COLUMNS {
+            if hidden.contains(column) {
+                continue;
+            }
+            let head = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            head.add_css_class(if list { "list-head" } else { "lane-head" });
+            // A list section holds its rows itself, its head first; a lane scrolls its cards
+            // under its head.
+            let (lane, items) = if list {
+                let section = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                section.add_css_class("list-section");
+                (section.clone(), section)
+            } else {
+                let lane = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                lane.add_css_class("board-lane");
+                lane.add_css_class(&format!("lane-{column}"));
+                lane.set_size_request(224, -1);
+                lane.append(&head);
+                let cards = gtk::Box::new(gtk::Orientation::Vertical, 6);
+                cards.add_css_class("board-cards");
+                let scroll = crate::app::scrolled(&cards);
+                scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+                scroll.set_vscrollbar_policy(gtk::PolicyType::External);
+                self.scrolls.borrow_mut().push((format!("lane:{column}"), scroll.vadjustment()));
+                lane.append(&scroll);
+                (lane, cards)
+            };
+            self.lane_drop(&lane, column);
+            outer.append(&lane);
+            lanes.push(Lane {
+                column,
+                items,
+                head,
+                head_key: RefCell::new(String::new()),
+                empty: RefCell::new(None),
+                headings: RefCell::new(HashMap::new()),
+            });
+        }
+        *self.frame.borrow_mut() = Some(Frame { key, lanes });
+    }
+
+    /// A body read at or after the task's own edit, as the search and the peek may use it.
+    fn fresh(bodies: &HashMap<i64, (String, String)>, task: &Value) -> Option<String> {
+        let (read_at, body) = bodies.get(&task["id"].as_i64()?)?;
+        (read_at.as_str() >= text(task, "updated_at")).then(|| body.clone())
+    }
+
+    /// Reads the bodies the search lacks, then filters again: a page of the list at a time
+    /// for many, `task.get` for a few.
+    fn read_bodies(self: &Rc<Self>) {
+        if self.bodies_loading.get() {
+            return;
+        }
+        let missing: BTreeSet<i64> = {
+            let bodies = self.bodies.borrow();
+            self.tasks
+                .borrow()
+                .iter()
+                .filter(|t| Self::fresh(&bodies, t).is_none())
+                .filter_map(|t| t["id"].as_i64())
+                .collect()
+        };
+        if missing.is_empty() || missing.is_subset(&self.bodies_missed.borrow()) {
+            return;
+        }
+        let Some(ui) = self.ui() else { return };
+        self.bodies_loading.set(true);
+        let (board, project) = (self.clone(), self.project);
+        let last = self.tasks.borrow().len() as u64 + 100;
+        glib::spawn_future_local(async move {
+            let mut read: Vec<Value> = Vec::new();
+            if missing.len() <= 20 {
+                for id in &missing {
+                    if let Ok(task) = ui.call("task.get", json!({"task_id":id})).await {
+                        read.push(task);
+                    }
+                }
+            } else {
+                // Pages small enough to stay under the client's line limit; a page that still
+                // is not is read again in halves.
+                let (mut offset, mut limit) = (0u64, 50u64);
+                loop {
+                    match ui.call("task.list", json!({"project_id":project,"limit":limit,"offset":offset})).await {
+                        Ok(page) => {
+                            read.extend(rows(&page, "tasks"));
+                            match page["next_offset"].as_u64() {
+                                Some(next) => offset = next,
+                                None => break,
+                            }
+                        }
+                        Err(_) if limit > 1 => limit /= 2,
+                        // One task too large to list: skip it (its body is read when peeked).
+                        Err(_) if offset < last => offset += 1,
+                        Err(_) => break,
+                    }
+                }
+            }
+            {
+                let mut bodies = board.bodies.borrow_mut();
+                for task in &read {
+                    if let Some(id) = task["id"].as_i64() {
+                        bodies.insert(id, (text(task, "updated_at").to_string(), text(task, "body").to_string()));
+                    }
+                }
+                let still: BTreeSet<i64> = {
+                    let tasks = board.tasks.borrow();
+                    missing.into_iter().filter(|id| !tasks.iter().any(|t| t["id"].as_i64() == Some(*id) && Self::fresh(&bodies, t).is_some())).collect()
+                };
+                *board.bodies_missed.borrow_mut() = still;
+            }
+            board.bodies_loading.set(false);
+            if !board.query.text().trim().is_empty() {
+                board.render_when_closed();
+            }
+        });
     }
 
     /// Fetches the module in scope (its name, priority and whether it is done) for the banner.
@@ -1710,6 +2056,10 @@ impl Board {
     /// A module's head over its board: back to every task, its name and priority, how far
     /// along it is, and adding tasks, marking it done, renaming and deleting it.
     fn render_banner(self: &Rc<Self>, tasks: &[Value]) {
+        let key = json!([scope(), *self.module.borrow(), tasks.is_empty()]).to_string();
+        if !self.redraw("banner", key) {
+            return;
+        }
         clear(&self.banner);
         let (Some(id), Some(module)) = (scope(), self.module.borrow().clone()) else {
             self.banner.set_visible(false);
@@ -1963,17 +2313,32 @@ impl Board {
     /// then what is open, in flight, waiting on review, blocked and recently shipped. It counts
     /// every task in scope, not only what the search shows: it describes the work, not the view.
     fn render_stats(self: &Rc<Self>, tasks: &[Value], everything: &[Value]) {
+        let in_column = |column: &str| tasks.iter().filter(|t| text(t, "column") == column).count();
+        let counts: Vec<(&'static str, usize)> = COLUMNS.iter().map(|c| (*c, in_column(c))).collect();
+        let done = in_column("done");
+        let open: Vec<&Value> = tasks.iter().filter(|t| text(t, "column") != "done").collect();
+        let left = relay_board::estimate(open.iter().copied());
+        let urgent = open.iter().filter(|t| matches!(text(t, "priority"), "high" | "urgent")).count();
+        let running = tasks.iter().filter(|t| text(t, "state") == "running").count();
+        let review = in_column("in_review");
+        let all = by_id(everything);
+        let blocked = open.iter().filter(|t| !open_blockers(t, &all).is_empty()).count();
+        let shipped = tasks
+            .iter()
+            .filter(|t| text(t, "column") == "done" && within_days(text(t, "updated_at"), 7))
+            .count();
+        // Narrow, the lanes need the height more than the numbers: the progress card stays.
+        let narrow = (1..980).contains(&self.page.width());
+        let key = format!("{counts:?} {left} {urgent} {running} {blocked} {shipped} {narrow} {:?}", scope().is_some());
+        if !self.redraw("stats", key) {
+            return;
+        }
         clear(&self.stats);
         self.stats.set_visible(!tasks.is_empty());
         if tasks.is_empty() {
             return;
         }
-        let in_column = |column: &str| tasks.iter().filter(|t| text(t, "column") == column).count();
-        let counts: Vec<(&'static str, usize)> = COLUMNS.iter().map(|c| (*c, in_column(c))).collect();
-        let done = in_column("done");
-        let open: Vec<&Value> = tasks.iter().filter(|t| text(t, "column") != "done").collect();
         let pct = done as f64 * 100. / tasks.len() as f64;
-        let left = relay_board::estimate(open.iter().copied());
 
         let progress = gtk::Box::new(gtk::Orientation::Vertical, 6);
         progress.add_css_class("stat-tile");
@@ -2004,18 +2369,8 @@ impl Board {
         progress.append(&legend);
         self.stats.append(&progress);
 
-        let urgent = open.iter().filter(|t| matches!(text(t, "priority"), "high" | "urgent")).count();
-        let running = tasks.iter().filter(|t| text(t, "state") == "running").count();
-        let review = in_column("in_review");
-        let all = by_id(everything);
-        let blocked = open.iter().filter(|t| !open_blockers(t, &all).is_empty()).count();
-        let shipped = tasks
-            .iter()
-            .filter(|t| text(t, "column") == "done" && within_days(text(t, "updated_at"), 7))
-            .count();
         let plural = |n: usize, one: &str, many: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {many}") };
-        // Narrow, the lanes need the height more than the numbers: the progress card stays.
-        if (1..980).contains(&self.page.width()) {
+        if narrow {
             return;
         }
         let tiles = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -2084,10 +2439,27 @@ impl Board {
     }
 
     fn render_strip(self: &Rc<Self>, tasks: &[Value]) {
-        clear(&self.strip);
         let filters = self.filters.borrow().clone();
         let group = self.group.borrow().clone();
         let hidden = self.hidden.borrow().clone();
+        // The chips name modules and parents by the tasks that carry them.
+        let named: Vec<String> = filters
+            .iter()
+            .filter(|(key, _)| matches!(key.as_str(), "module" | "parent"))
+            .flat_map(|(_, values)| values.iter())
+            .filter_map(|value| value.parse::<i64>().ok())
+            .flat_map(|id| {
+                tasks
+                    .iter()
+                    .filter(move |t| t["module_id"].as_i64() == Some(id) || t["id"].as_i64() == Some(id))
+                    .take(2)
+                    .map(|t| format!("{}{}", text(t, "module_name"), text(t, "title")))
+            })
+            .collect();
+        if !self.redraw("strip", format!("{filters:?} {group} {hidden:?} {named:?}")) {
+            return;
+        }
+        clear(&self.strip);
         if let Some(row) = self.strip.ancestor(gtk::ScrolledWindow::static_type()) {
             row.set_visible(filters.values().any(|v| !v.is_empty()) || !group.is_empty() || !hidden.is_empty());
         }
@@ -2295,9 +2667,10 @@ impl Board {
 
     /// GitHub's column head: status ring, name, count and the lane's estimate, then a menu and
     /// an add key; a lane (not a list section) adds the column's one-line meaning under it.
-    fn lane_head(self: &Rc<Self>, column: &'static str, shown: &[&Value], total: usize, class: &str) -> gtk::Box {
-        let outer = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        outer.add_css_class(class);
+    /// Drawn into `outer`, the lane's head box, replacing what it showed: the box keeps its
+    /// place in the lane.
+    fn lane_head(self: &Rc<Self>, outer: &gtk::Box, column: &'static str, shown: &[&Value], total: usize, class: &str) {
+        empty_out(outer);
         let head = gtk::Box::new(gtk::Orientation::Horizontal, 7);
         head.add_css_class("lane-head-row");
         head.append(&status_icon(column, 14));
@@ -2394,7 +2767,6 @@ impl Board {
             line.append(&estimate);
             outer.append(&line);
         }
-        outer
     }
 
     fn lane_drop(self: &Rc<Self>, widget: &impl IsA<gtk::Widget>, column: &'static str) {
@@ -2435,77 +2807,46 @@ impl Board {
         widget.add_controller(drop);
     }
 
-    /// The columns view, or the list view when `self.list` is set: one lane (or list section)
-    /// per shown column, each with its head, drop target, empty note, group headings and
-    /// cards (or rows).
+    /// The columns view, or the list view when `self.list` is set: into each lane (or list
+    /// section) of the frame, its head, empty note, group headings and cards (or rows), in
+    /// order. A card whose [`card_key`] is unchanged is the same widget, moved if it must be; a
+    /// filtered-out card leaves its lane but is kept for when it shows again.
     fn render_lanes(self: &Rc<Self>, tasks: &[Value], everything: &[Value], visible: &[&Value]) {
         let list = self.list.get();
-        let outer = if list {
-            let rows = gtk::Box::new(gtk::Orientation::Vertical, 0);
-            rows.add_css_class("board-list");
-            let scroll = crate::app::scrolled(&rows);
-            scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
-            self.scrolls.borrow_mut().push(("list".into(), scroll.vadjustment()));
-            self.content.append(&scroll);
-            rows
-        } else {
-            let grid = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            grid.add_css_class("board-grid");
-            grid.set_homogeneous(true);
-            let scroller = gtk::ScrolledWindow::builder()
-                .hscrollbar_policy(gtk::PolicyType::Automatic)
-                .vscrollbar_policy(gtk::PolicyType::Never)
-                .vexpand(true)
-                .hexpand(true)
-                .child(&grid)
-                .build();
-            self.scrolls.borrow_mut().push(("board".into(), scroller.hadjustment()));
-            self.content.append(&scroller);
-            grid
-        };
         let grouping = self.group.borrow().clone();
-        let hidden = self.hidden.borrow().clone();
         let all = by_id(everything);
         let project = self.project_name();
-        if hidden.len() == COLUMNS.len() {
-            let all = label("Every column is hidden. Turn one back on under View.", "board-empty");
-            all.set_halign(gtk::Align::Center);
-            outer.append(&all);
-        }
-        for &column in COLUMNS {
-            if hidden.contains(column) {
-                continue;
-            }
+        let scoped = scope().is_some();
+        let frame = self.frame.borrow();
+        let Some(frame) = frame.as_ref() else { return };
+        let mut cards = self.cards.borrow_mut();
+        let mut layout = Vec::new();
+        for lane in &frame.lanes {
+            let column = lane.column;
             let total = tasks.iter().filter(|t| text(t, "column") == column).count();
             let shown = self.sorted(visible, column);
-            // A list section holds its rows itself; a lane scrolls its cards under its head.
-            let (lane, items) = if list {
-                let section = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                section.add_css_class("list-section");
-                section.append(&self.lane_head(column, &shown, total, "list-head"));
-                (section.clone(), section)
-            } else {
-                let lane = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                lane.add_css_class("board-lane");
-                lane.add_css_class(&format!("lane-{column}"));
-                lane.set_size_request(224, -1);
-                lane.append(&self.lane_head(column, &shown, total, "lane-head"));
-                let cards = gtk::Box::new(gtk::Orientation::Vertical, 6);
-                cards.add_css_class("board-cards");
-                let scroll = crate::app::scrolled(&cards);
-                scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
-                scroll.set_vscrollbar_policy(gtk::PolicyType::External);
-                self.scrolls.borrow_mut().push((format!("lane:{column}"), scroll.vadjustment()));
-                lane.append(&scroll);
-                (lane, cards)
-            };
-            self.lane_drop(&lane, column);
+            let points = relay_board::estimate(shown.iter().copied());
+            let key = format!("{} {total} {points}", shown.len());
+            if *lane.head_key.borrow() != key {
+                self.lane_head(&lane.head, column, &shown, total, if list { "list-head" } else { "lane-head" });
+                *lane.head_key.borrow_mut() = key;
+            }
+            let mut wanted: Vec<gtk::Widget> = Vec::new();
+            if list {
+                wanted.push(lane.head.clone().upcast());
+            }
             if shown.is_empty() {
-                if list {
-                    items.append(&label(if total > 0 { "No matches" } else { "All quiet" }, "list-empty"));
-                } else {
-                    items.append(&self.empty_lane(column, total > 0));
+                let filtered = total > 0;
+                let mut slot = lane.empty.borrow_mut();
+                if slot.as_ref().is_none_or(|(was, _)| *was != filtered) {
+                    let note: gtk::Widget = if list {
+                        label(if filtered { "No matches" } else { "All quiet" }, "list-empty").upcast()
+                    } else {
+                        self.empty_lane(column, filtered).upcast()
+                    };
+                    *slot = Some((filtered, note));
                 }
+                wanted.extend(slot.as_ref().map(|(_, note)| note.clone()));
             }
             let heading = if list { "list-group-heading" } else { "board-group-heading" };
             let mut placed = Vec::new();
@@ -2514,17 +2855,66 @@ impl Board {
                 if !grouping.is_empty() {
                     let group = group_of(task, &grouping);
                     if previous.as_ref() != Some(&group) {
-                        items.append(&label(&group_title(&group), heading));
+                        let title = lane
+                            .headings
+                            .borrow_mut()
+                            .entry(group.clone())
+                            .or_insert_with(|| label(&group_title(&group), heading).upcast())
+                            .clone();
+                        wanted.push(title);
                         previous = Some(group);
                     }
                 }
-                let item = if list { self.row(task, &all) } else { self.card(task, &all, &project) };
-                items.append(&item);
-                placed.push((task["id"].as_i64().unwrap_or(0), item.upcast()));
+                let id = task["id"].as_i64().unwrap_or(0);
+                let key = card_key(task, &all, &project, list, scoped);
+                let kind = if list { "list-row" } else { "task-card" };
+                // A card that turns done (or a sub-task) is a new one, as it always was: its
+                // colours change at once rather than through the card's hover transition.
+                let looks = |item: &gtk::Box| {
+                    item.has_css_class(kind)
+                        && item.has_css_class("done") == (text(task, "column") == "done")
+                        && (list || item.has_css_class("task-child") == !task["parent_id"].is_null())
+                };
+                let item = match cards.get_mut(&id) {
+                    Some((drawn, item)) if *drawn == key => item.clone(),
+                    // Redrawn inside the same card: it keeps its place among the others.
+                    Some((drawn, item)) if looks(item) => {
+                        if list {
+                            self.fill_row(item, task, &all);
+                        } else {
+                            self.fill_card(item, task, &all, &project);
+                        }
+                        *drawn = key;
+                        item.clone()
+                    }
+                    _ => {
+                        let item = if list { self.row(id) } else { self.card(id) };
+                        if list {
+                            self.fill_row(&item, task, &all);
+                        } else {
+                            self.fill_card(&item, task, &all, &project);
+                        }
+                        if let Some((_, old)) = cards.insert(id, (key, item.clone())) {
+                            detach(&old);
+                        }
+                        item
+                    }
+                };
+                wanted.push(item.clone().upcast());
+                placed.push((id, item.upcast()));
             }
-            self.layout.borrow_mut().push((column.to_string(), placed));
-            outer.append(&lane);
+            place(&lane.items, &wanted);
+            layout.push((column.to_string(), placed));
         }
+        // A task gone from the board takes its card with it.
+        cards.retain(|id, (_, card)| {
+            let kept = all.contains_key(id);
+            if !kept {
+                detach(card);
+            }
+            kept
+        });
+        *self.layout.borrow_mut() = layout;
     }
 
     fn empty_lane(&self, column: &str, filtered: bool) -> gtk::Box {
@@ -2561,21 +2951,38 @@ impl Board {
             .unwrap_or_default()
     }
 
-    /// A GitHub project card: status ring and `Project #id`, the title, progress and links,
-    /// then pills for how urgent and how much work it is, its type, module and labels.
-    fn card(self: &Rc<Self>, task: &Value, all: &BTreeMap<i64, &Value>, project: &str) -> gtk::Box {
-        let id = task["id"].as_i64().unwrap_or(0);
-        let column = text(task, "column");
-        let done = column == "done";
+    /// A card for task `id`, empty: what it answers (focus, clicks, its menu, drag and drop,
+    /// files dropped on it). [`Self::fill_card`] draws the task into it.
+    fn card(self: &Rc<Self>, id: i64) -> gtk::Box {
         let card = gtk::Box::new(gtk::Orientation::Vertical, 5);
         card.add_css_class("task-card");
         card.set_widget_name("task-card");
         card.set_focusable(true);
+        self.wire(&card, id);
+        if let Some(ui) = self.ui() {
+            task_pages::attach_on_drop(&ui, &card, id);
+        }
+        card
+    }
+
+    /// A GitHub project card: status ring and `Project #id`, the title, progress and links,
+    /// then pills for how urgent and how much work it is, its type, module and labels. Drawn
+    /// into the card from [`Self::card`], replacing what it showed: the card itself (its place,
+    /// focus and handlers) stays.
+    fn fill_card(self: &Rc<Self>, card: &gtk::Box, task: &Value, all: &BTreeMap<i64, &Value>, project: &str) {
+        empty_out(card);
+        let id = task["id"].as_i64().unwrap_or(0);
+        let column = text(task, "column");
+        let done = column == "done";
         if done {
             card.add_css_class("done");
+        } else {
+            card.remove_css_class("done");
         }
         if !task["parent_id"].is_null() {
             card.add_css_class("task-child");
+        } else {
+            card.remove_css_class("task-child");
         }
         card.update_property(&[gtk::accessible::Property::Label(&format!(
             "#{id} {} · {} · {}",
@@ -2597,8 +3004,8 @@ impl Board {
         let tools = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         tools.add_css_class("card-tools");
         let copy = crate::app::icon_button("copy", "Copy title, body and id");
-        let contents = format!("{}\n\n{}\n\n#{id}", text(task, "title"), text(task, "body"));
-        copy.connect_clicked(move |key| key.clipboard().set_text(&contents));
+        let weak = self.ui.clone();
+        copy.connect_clicked(move |key| copy_task(&weak, id, key.clipboard()));
         let peek = crate::app::icon_button("sidebar", "Peek (Space)");
         let weak = Rc::downgrade(self);
         peek.connect_clicked(move |_| {
@@ -2762,21 +3169,25 @@ impl Board {
             strip.append(&caption);
             card.append(&strip);
         }
-        self.wire(&card, id);
-        if let Some(ui) = self.ui() {
-            task_pages::attach_on_drop(&ui, &card, id);
-        }
-        card
     }
 
-    fn row(self: &Rc<Self>, task: &Value, all: &BTreeMap<i64, &Value>) -> gtk::Box {
-        let id = task["id"].as_i64().unwrap_or(0);
+    fn row(self: &Rc<Self>, id: i64) -> gtk::Box {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 9);
         row.add_css_class("list-row");
         row.set_widget_name("task-card");
         row.set_focusable(true);
+        self.wire(&row, id);
+        row
+    }
+
+    /// Draws `task` into its list row from [`Self::row`], as [`Self::fill_card`] does a card.
+    fn fill_row(self: &Rc<Self>, row: &gtk::Box, task: &Value, all: &BTreeMap<i64, &Value>) {
+        empty_out(row);
+        let id = task["id"].as_i64().unwrap_or(0);
         if text(task, "column") == "done" {
             row.add_css_class("done");
+        } else {
+            row.remove_css_class("done");
         }
         row.append(&priority_icon(text(task, "priority")));
         let number = label(&format!("#{id}"), "card-id");
@@ -2843,8 +3254,6 @@ impl Board {
         when.set_width_chars(6);
         when.set_xalign(1.);
         row.append(&when);
-        self.wire(&row, id);
-        row
     }
 
     /// Click, keyboard focus, context menu, drag and drop — shared by cards and list rows.
@@ -3083,9 +3492,9 @@ impl Board {
         menu.append(&kinds);
         menu.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         let copy = item("copy", "Copy title, body and id", "");
-        let contents = format!("{}\n\n{}\n\n#{id}", text(&task, "title"), text(&task, "body"));
+        let weak = self.ui.clone();
         copy.connect_clicked(move |key| {
-            key.clipboard().set_text(&contents);
+            copy_task(&weak, id, key.clipboard());
             if let Some(pop) = key.ancestor(gtk::Popover::static_type()).and_downcast::<gtk::Popover>() {
                 pop.popdown();
             }
@@ -3186,6 +3595,18 @@ impl Board {
         if key.is_some() && *self.peek_key.borrow() == key && self.peek.first_child().is_some() {
             return;
         }
+        // The board holds summaries: the peek reads its task's body first, and until it has
+        // it the panel stays as it was.
+        let written = match self.peeked.get().and_then(|id| self.task(id)) {
+            Some(task) => match Self::fresh(&self.bodies.borrow(), &task) {
+                Some(body) => body,
+                None => {
+                    self.read_peeked(&task);
+                    return;
+                }
+            },
+            None => String::new(),
+        };
         // The same task redrawn keeps its place in a long description.
         let same = key.is_some() && self.peek_shown.replace(self.peeked.get()) == self.peeked.get();
         let kept = same
@@ -3312,7 +3733,7 @@ impl Board {
             body.append(&tags);
         }
         body.append(&label("DESCRIPTION", "board-menu-caption"));
-        let description = text(&task, "body").trim();
+        let description = written.trim();
         let about = paragraph(if description.is_empty() { "No description." } else { description });
         about.add_css_class(if description.is_empty() { "peek-muted" } else { "peek-description" });
         about.set_wrap_mode(gtk::pango::WrapMode::WordChar);
@@ -3375,6 +3796,31 @@ impl Board {
             });
         }
         self.peek.append(&scroll);
+    }
+
+    /// Reads the peeked task's body, then draws the peek.
+    fn read_peeked(self: &Rc<Self>, task: &Value) {
+        let Some(id) = task["id"].as_i64() else { return };
+        if self.peek_loading.replace(Some(id)) == Some(id) {
+            return;
+        }
+        let Some(ui) = self.ui() else { return };
+        let (board, listed) = (self.clone(), text(task, "updated_at").to_string());
+        glib::spawn_future_local(async move {
+            let read = ui.call("task.get", json!({"task_id":id})).await;
+            // Unreadable (deleted meanwhile): the peek reads as having no description.
+            let (at, body) = match &read {
+                Ok(task) => (text(task, "updated_at").to_string(), text(task, "body").to_string()),
+                Err(_) => (listed, String::new()),
+            };
+            board.bodies.borrow_mut().insert(id, (at, body));
+            if board.peek_loading.get() == Some(id) {
+                board.peek_loading.set(None);
+            }
+            if board.peeked.get() == Some(id) {
+                board.render_peek();
+            }
+        });
     }
 
     fn task_link(self: &Rc<Self>, task: &Value) -> gtk::Button {

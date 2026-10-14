@@ -2,6 +2,7 @@
 //! lives at `<repo>/.relay/worktrees/<name>` on branch `relay/<name>`; `.relay/` is added to
 //! `.git/info/exclude` so it never shows up in status.
 
+use crate::private::read_regular_through_links;
 use anyhow::{anyhow, Context, Result};
 use relay_bus::types::{FileStatus, Worktree};
 use std::path::{Path, PathBuf};
@@ -60,7 +61,14 @@ pub fn exclude_paths(repo: &Path, entries: &[&str]) -> Result<()> {
     let info = git_dir.join("info");
     std::fs::create_dir_all(&info)?;
     let exclude = info.join("exclude");
-    let cur = std::fs::read_to_string(&exclude).unwrap_or_default();
+    // Under the lock above, and `hooks::writes()` for the adapters: a FIFO planted here must
+    // not hang the read, nor the write after it. A file that cannot be read is not replaced
+    // by one holding only these entries.
+    let cur = match read_regular_through_links(&exclude) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", exclude.display())),
+    };
     let mut missing = Vec::new();
     for entry in entries.iter().copied() {
         if !cur.lines().any(|line| line.trim() == entry.trim_end_matches('/'))
@@ -109,7 +117,7 @@ static INDEX_REFRESHED: std::sync::Mutex<Option<std::collections::HashMap<PathBu
 pub(crate) fn checkout_git_dir(root: &Path) -> Option<PathBuf> {
     let dotgit = root.join(".git");
     if dotgit.is_dir() { return Some(dotgit); }
-    let pointer = std::fs::read_to_string(&dotgit).ok()?;
+    let pointer = read_regular_through_links(&dotgit).ok()?;
     let gitdir = PathBuf::from(pointer.trim().strip_prefix("gitdir:")?.trim());
     Some(if gitdir.is_absolute() { gitdir } else { root.join(gitdir) })
 }
@@ -172,6 +180,26 @@ pub fn status_files_with(root: &Path, untracked: Untracked) -> Result<Vec<FileSt
         return Err(anyhow!("Git status failed: {}", String::from_utf8_lossy(&output.stderr).trim()));
     }
     parse_status(&output.stdout)
+}
+
+/// [`status_files_with`] for a checkout about to be removed. One that lost its own `.git` (a
+/// removal or a crash half done) is not a checkout any more: `git status` there would walk up
+/// and answer for the primary that holds it. What is left in it is untracked, so its entries
+/// are listed as such, a directory as one, build output apart — never the primary's changes.
+pub fn checkout_changes(root: &Path, untracked: Untracked) -> Result<Vec<FileStatus>> {
+    if root.join(".git").exists() {
+        return status_files_with(root, untracked);
+    }
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if crate::watch::generated_name(&name) { continue; }
+        let dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+        files.push(FileStatus { path: if dir { format!("{name}/") } else { name }, index: String::new(), worktree: "?".into(), renamed_from: None });
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
 }
 
 fn parse_status(output: &[u8]) -> Result<Vec<FileStatus>> {
@@ -240,17 +268,19 @@ pub fn list_with_dirty(repo: &Path, include_dirty: bool) -> Result<Vec<Worktree>
 /// this checkout, which is what `git worktree list` reads. Without the second half a `cp -r` of
 /// a worktree passed, and git ops there ran against the original's index and HEAD (RA-346).
 /// A checkout moved by hand, whose slot still names the old place, is an error asking for
-/// `git worktree repair` rather than "not a worktree".
+/// `git worktree repair` rather than "not a worktree". Callers hold locks, so the pointer and
+/// slot files are read as regular files only: a FIFO at `<checkout>/.git` is no worktree, not a
+/// hang.
 pub fn contains(repo: &Path, candidate: &Path) -> Result<bool> {
     let want = canon(candidate);
     if canon(repo) == want { return Ok(true); }
-    let Ok(pointer) = std::fs::read_to_string(Path::new(&want).join(".git")) else { return Ok(false) };
+    let Ok(pointer) = read_regular_through_links(&Path::new(&want).join(".git")) else { return Ok(false) };
     let Some(gitdir) = pointer.trim().strip_prefix("gitdir:") else { return Ok(false) };
     let gitdir = PathBuf::from(gitdir.trim());
     let gitdir = if gitdir.is_absolute() { gitdir } else { Path::new(&want).join(gitdir) };
     let slots = canon(&common_dir(repo)?.join("worktrees"));
     if !canon(&gitdir).starts_with(&slots) { return Ok(false); }
-    let Ok(back) = std::fs::read_to_string(gitdir.join("gitdir")) else { return Ok(false) };
+    let Ok(back) = read_regular_through_links(&gitdir.join("gitdir")) else { return Ok(false) };
     // `<checkout>/.git`, absolute, or relative to the slot (`worktree.useRelativePaths`).
     let back = PathBuf::from(back.trim());
     let back = if back.is_absolute() { back } else { gitdir.join(back) };
@@ -258,7 +288,7 @@ pub fn contains(repo: &Path, candidate: &Path) -> Result<bool> {
     if named == want { return Ok(true); }
     // The checkout the slot names still points at the slot: this is a copy of it.
     let slot = canon(&gitdir);
-    let still_there = std::fs::read_to_string(&back).ok()
+    let still_there = read_regular_through_links(&back).ok()
         .and_then(|pointer| pointer.trim().strip_prefix("gitdir:").map(|p| PathBuf::from(p.trim())))
         .is_some_and(|p| canon(&if p.is_absolute() { p } else { Path::new(&named).join(p) }) == slot);
     if still_there { return Ok(false); }
@@ -270,11 +300,11 @@ pub fn contains(repo: &Path, candidate: &Path) -> Result<bool> {
 fn common_dir(repo: &Path) -> Result<PathBuf> {
     let dotgit = repo.join(".git");
     if dotgit.is_dir() { return Ok(dotgit); }
-    if let Ok(pointer) = std::fs::read_to_string(&dotgit) {
+    if let Ok(pointer) = read_regular_through_links(&dotgit) {
         if let Some(gitdir) = pointer.trim().strip_prefix("gitdir:") {
             let gitdir = PathBuf::from(gitdir.trim());
             let gitdir = if gitdir.is_absolute() { gitdir } else { repo.join(gitdir) };
-            if let Ok(common) = std::fs::read_to_string(gitdir.join("commondir")) {
+            if let Ok(common) = read_regular_through_links(&gitdir.join("commondir")) {
                 let common = PathBuf::from(common.trim());
                 return Ok(if common.is_absolute() { common } else { gitdir.join(common) });
             }
@@ -495,37 +525,39 @@ fn managed_dirs(repo: &Path) -> [PathBuf; 2] {
 }
 
 /// Remove a linked worktree (never the primary). Returns bytes freed. The branch is kept.
-///
-/// `path` must be a linked worktree git lists for `repo`, or a directory strictly inside one of
-/// Relay's own checkout areas (a pooled checkout half-deleted, whose admin entry may already be
-/// pruned). Anything else is refused before a byte is touched: this used to purge build
-/// directories under, and then `rm -rf`, whatever path it was handed (RA-017). The plain
-/// `rm -rf` fallback is likewise kept to Relay's own areas; a registered checkout elsewhere that
-/// git will not remove (locked, say) stays where it is.
+/// A rescue ref [`remove_rescuing`] had to make is logged.
 pub fn remove(repo: &Path, path: &Path, purge: bool) -> Result<u64> {
-    if !path.is_absolute() {
-        return Err(anyhow!("{} is not an absolute path", path.display()));
-    }
-    let repo_c = canon(repo);
-    let path_c = canon(path);
-    if repo_c == path_c {
-        return Err(anyhow!("refusing to remove the primary checkout"));
-    }
-    let managed = managed_dirs(repo).iter().any(|dir| {
-        let dir = PathBuf::from(canon(dir));
-        let path = Path::new(&path_c);
-        path != dir && path.starts_with(&dir)
-    });
-    let registered = list_with_dirty(repo, false)?.iter().skip(1).any(|wt| wt.path == path_c);
-    if !registered && !managed {
-        return Err(anyhow!("{path_c} is not a worktree of {repo_c}"));
-    }
-    // Relay never locks a worktree; someone did so to keep it. Refuse before purging anything.
-    if is_locked(Path::new(&path_c)) {
-        return Err(anyhow!("{path_c} is locked (git worktree unlock it first)"));
-    }
+    remove_rescuing(repo, path, purge).map(|removed| removed.freed)
+}
+
+/// What [`remove_rescuing`] did.
+pub struct Removed {
+    /// Bytes freed.
+    pub freed: u64,
+    /// The ref pinning a detached HEAD's commits that no branch or tag held.
+    pub rescued: Option<String>,
+}
+
+/// Remove a linked worktree (never the primary). The branch is kept, and so are the commits of
+/// a detached HEAD no branch or tag contains: they are pinned under `refs/relay/rescue/` first
+/// ([`rescue_detached`]), since the checkout's reflog goes with it.
+///
+/// `path` must be a linked worktree git lists for `repo`, or a direct child of one of Relay's
+/// own checkout areas (a pooled checkout half-deleted, whose admin entry may already be pruned).
+/// Anything else is refused before a byte is touched: this used to purge build directories
+/// under, and then `rm -rf`, whatever path it was handed (RA-017), and until the child rule a
+/// directory inside a live pooled checkout (`.relay/worktrees/<name>/src`) still passed. The
+/// plain `rm -rf` fallback is likewise kept to Relay's own areas; a registered checkout
+/// elsewhere that git will not remove (locked, say) stays where it is.
+pub fn remove_rescuing(repo: &Path, path: &Path, purge: bool) -> Result<Removed> {
+    let (path_c, managed) = removable(repo, path)?;
     let mut freed = 0;
+    let mut rescued = None;
     if path.exists() {
+        rescued = rescue_detached(repo, Path::new(&path_c))?;
+        if let Some(rescue) = &rescued {
+            tracing::warn!(worktree = %path_c, %rescue, "the checkout's detached HEAD was on no branch; pinned its commits before removing it");
+        }
         if purge { freed += purge_build(path); }
         freed += dir_size(path);
         git(repo, &["worktree", "remove", "--force", &path_c])
@@ -538,12 +570,64 @@ pub fn remove(repo: &Path, path: &Path, purge: bool) -> Result<u64> {
             })?;
     }
     let _ = git(repo, &["worktree", "prune"]);
-    Ok(freed)
+    Ok(Removed { freed, rescued })
+}
+
+/// Whether [`remove_rescuing`] would take `path` at all, without touching it: its canonical
+/// spelling, and whether it is in one of Relay's own areas. A caller with its own checks to
+/// make first (`worktree.remove`'s dirty check) refuses an unremovable path before them.
+pub fn removable(repo: &Path, path: &Path) -> Result<(String, bool)> {
+    if !path.is_absolute() {
+        return Err(anyhow!("{} is not an absolute path", path.display()));
+    }
+    let repo_c = canon(repo);
+    let path_c = canon(path);
+    if repo_c == path_c {
+        return Err(anyhow!("refusing to remove the primary checkout"));
+    }
+    let managed = managed_dirs(repo).iter().any(|dir| Path::new(&path_c).parent() == Some(Path::new(&canon(dir))));
+    let registered = list_with_dirty(repo, false)?.iter().skip(1).any(|wt| wt.path == path_c);
+    if !registered && !managed {
+        return Err(anyhow!("{path_c} is not a worktree of {repo_c}"));
+    }
+    // Relay never locks a worktree; someone did so to keep it. Refuse before purging anything.
+    if is_locked(Path::new(&path_c)) {
+        return Err(anyhow!("{path_c} is locked (git worktree unlock it first)"));
+    }
+    Ok((path_c, managed))
+}
+
+/// Pin a checkout's detached HEAD under `refs/relay/rescue/<checkout name>` when no branch, tag
+/// or earlier rescue contains it, and say which ref. A clean checkout passes every dirty check,
+/// yet commits made on a detached HEAD are reachable only from its HEAD and its reflog, and
+/// removing the checkout deletes both. A ref never blocks the removal and loses nothing; any
+/// `git` failure here refuses the removal instead. `git branch <name> <ref>` brings the work back.
+fn rescue_detached(repo: &Path, path: &Path) -> Result<Option<String>> {
+    // Without a `.git` of its own, git would answer for the primary checkout that holds it.
+    if !path.join(".git").exists() || git(path, &["symbolic-ref", "-q", "HEAD"]).is_ok() {
+        return Ok(None);
+    }
+    let Ok(head) = git(path, &["rev-parse", "--verify", "-q", "HEAD^{commit}"]) else { return Ok(None) };
+    let head = head.trim();
+    if !git(path, &["for-each-ref", "--count=1", "--contains", head, "refs/heads", "refs/tags", "refs/relay/rescue"])?.trim().is_empty() {
+        return Ok(None);
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let named = format!("refs/relay/rescue/{name}");
+    let named = if !name.is_empty() && git(repo, &["check-ref-format", &named]).is_ok() { named } else { "refs/relay/rescue/detached".to_string() };
+    // An empty old value creates the ref only if it is not there; a namesake from an earlier
+    // rescue holds other commits, so this one takes the commit's id as a suffix.
+    if git(repo, &["update-ref", &named, head, ""]).is_ok() {
+        return Ok(Some(named));
+    }
+    let suffixed = format!("{named}-{}", &head[..head.len().min(12)]);
+    git(repo, &["update-ref", &suffixed, head])?;
+    Ok(Some(suffixed))
 }
 
 /// Whether `git worktree lock` holds this checkout: its admin slot carries a `locked` file.
 fn is_locked(path: &Path) -> bool {
-    let Ok(pointer) = std::fs::read_to_string(path.join(".git")) else { return false };
+    let Ok(pointer) = read_regular_through_links(&path.join(".git")) else { return false };
     let Some(gitdir) = pointer.trim().strip_prefix("gitdir:") else { return false };
     let gitdir = PathBuf::from(gitdir.trim());
     let gitdir = if gitdir.is_absolute() { gitdir } else { path.join(gitdir) };
@@ -686,6 +770,59 @@ mod status_tests {
         assert!(error.contains("git worktree repair"), "{error}");
         git(&moved, &["worktree", "repair"]).unwrap();
         assert!(contains(root, &moved).unwrap());
+    }
+
+    /// A FIFO planted at a checkout's `.git`, at its slot's `gitdir` or `commondir`, or at the
+    /// shared `info/exclude` is refused at once: callers read them under the exclude lock,
+    /// `hooks::writes()` or the store mutex, and a plain read waits for a writer forever. A
+    /// `.git` pointer reached through a link is still read, as git reads it.
+    #[test]
+    fn planted_fifos_in_git_pointers_and_exclude_do_not_block() {
+        use std::os::unix::fs::FileTypeExt as _;
+        fn mkfifo(path: &Path) {
+            let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o644) }, 0, "mkfifo {}", path.display());
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(directory.path()).unwrap().join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "-q", "-b", "main"]).unwrap();
+        git(&root, &["-c", "user.name=F", "-c", "user.email=f@f", "commit", "-q", "--allow-empty", "-m", "a"]).unwrap();
+        let linked = root.parent().unwrap().join("linked");
+        git(&root, &["worktree", "add", "-q", "-b", "side", linked.to_str().unwrap()]).unwrap();
+        let pointer = root.parent().unwrap().join("pointer");
+        std::fs::rename(linked.join(".git"), &pointer).unwrap();
+        std::os::unix::fs::symlink(&pointer, linked.join(".git")).unwrap();
+        assert!(contains(&root, &linked).unwrap(), "a linked pointer is no longer read");
+        let planted = root.parent().unwrap().join("planted");
+        std::fs::create_dir_all(&planted).unwrap();
+        mkfifo(&planted.join(".git"));
+        let slot = root.join(".git/worktrees/linked");
+        std::fs::remove_file(slot.join("commondir")).unwrap();
+        mkfifo(&slot.join("commondir"));
+        let exclude = root.join(".git/info/exclude");
+        let _ = std::fs::remove_file(&exclude);
+        std::fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+        mkfifo(&exclude);
+
+        let (done, finished) = std::sync::mpsc::channel();
+        let (root2, linked2, planted2) = (root.clone(), linked.clone(), planted.clone());
+        std::thread::spawn(move || {
+            let planted = (contains(&root2, &planted2).ok(), checkout_git_dir(&planted2), is_locked(&planted2));
+            let common = common_dir(&linked2).ok();
+            let excluded = exclude_paths(&root2, &[".relay/"]).is_err();
+            std::fs::remove_file(root2.join(".git/worktrees/linked/gitdir")).unwrap();
+            mkfifo(&root2.join(".git/worktrees/linked/gitdir"));
+            let back = contains(&root2, &linked2).ok();
+            done.send((planted, common, excluded, back)).unwrap();
+        });
+        let (planted, common, excluded, back) = finished.recv_timeout(std::time::Duration::from_secs(10))
+            .expect("a read blocked on a planted FIFO");
+        assert_eq!(planted, (Some(false), None, false), "a FIFO at .git is no worktree");
+        assert_eq!(common, Some(slot), "an unreadable commondir leaves the slot itself");
+        assert!(excluded, "a FIFO at info/exclude was written over");
+        assert!(std::fs::symlink_metadata(&exclude).unwrap().file_type().is_fifo());
+        assert_eq!(back, Some(false), "a slot whose gitdir is a FIFO names no checkout");
     }
 
     /// RA-347: a build dir reached through a symlinked parent is someone else's: neither purged

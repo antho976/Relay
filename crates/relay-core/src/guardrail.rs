@@ -1207,25 +1207,55 @@ pub struct BranchWork {
     range: String,
     /// Each non-merge commit since the base, newest first, with its own numstat, renames found.
     commits: Vec<(String, String)>,
-    /// More commits than [`RECHECK_MAX_COMMITS`]; or git could not list them, and only the
-    /// net change is judged.
+    /// More commits than [`RECHECK_MAX_COMMITS`]: the older ones are judged only in the net
+    /// change.
     partial: bool,
     /// Each shape-gated file the branch changes, as it is at `HEAD`, or why it cannot be read.
     shaped: Vec<(String, Result<String, &'static str>)>,
+    /// Why git could not measure the branch. Such a branch is not taken as within limits: the
+    /// done is refused until it can be measured, or a person moves the task.
+    unmeasured: Option<String>,
+}
+
+/// Repository settings a measurement pins, so a checkout's own config cannot change what git
+/// reports (an agent writes that config). A value git cannot parse at all still fails the
+/// command — `-c` does not reach past a broken file — and that refuses the done instead.
+const MEASURE_CONFIG: &[&str] = &[
+    "-c", "core.quotePath=true", "-c", "core.fsmonitor=false", "-c", "color.ui=never", "-c", "diff.noprefix=false",
+    "-c", "diff.relative=false", "-c", "diff.ignoreSubmodules=none",
+];
+
+/// `git <MEASURE_CONFIG> <args>`, for [`git_output`] and [`git_with_input`].
+fn measuring<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    MEASURE_CONFIG.iter().copied().chain(args.iter().copied()).collect()
 }
 
 /// Read what [`recheck_branch`] judges: the branch's net numstat against `base`, each commit's
-/// numstat, and the shape-gated files it changes. `None` when git cannot measure the branch
-/// at all (no base, no history); a measurement Relay cannot take never blocks a done. Every
-/// call goes through [`crate::proc`] with a deadline, so it belongs before the store lock.
+/// numstat, and the shape-gated files it changes. Always `Some`; when git cannot measure the
+/// branch (no base, no shared history, a config git refuses to read) it says why, and the
+/// done is refused rather than waved through — an agent can break a measurement on purpose
+/// (`git config core.quotePath x`, an orphan branch). Every call goes through [`crate::proc`]
+/// with a deadline, so it belongs before the store lock.
+///
+/// `base` comes from the repository (its `HEAD` at clone) or the person, so it is never let
+/// near git's option parser: a base that starts with `-` is not measured at all, and every
+/// revision goes after `--end-of-options` — a remote whose default branch is
+/// `--output=/some/path` would otherwise have git truncate that file on every done.
 pub fn measure_branch(cfg: &GuardrailConfig, worktree: &Path, base: &str) -> Option<BranchWork> {
-    let note = |what: &str, error: &BusError| tracing::warn!(worktree = %worktree.display(), %what, error = %error.message, "measuring task work");
-    let range = git_output(worktree, &["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", &format!("{base}...HEAD"), "--"])
-        .map_err(|error| note("diff", &error))
-        .ok()?;
+    let unmeasured = |what: &str, why: String| {
+        tracing::warn!(worktree = %worktree.display(), %what, error = %why, "measuring task work");
+        Some(BranchWork { unmeasured: Some(format!("git {what}: {why}")), ..BranchWork::default() })
+    };
+    if base.starts_with('-') {
+        return unmeasured("diff", format!("the base branch {base:?} starts with '-'"));
+    }
+    let range = match git_output(worktree, &measuring(&["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--end-of-options", &format!("{base}...HEAD"), "--"])) {
+        Ok(range) => range,
+        Err(error) => return unmeasured("diff", error.message),
+    };
     let mut work = BranchWork { range, ..BranchWork::default() };
     let limit = format!("--max-count={}", RECHECK_MAX_COMMITS + 1);
-    let listed = git_output(worktree, &["rev-list", "--no-merges", &limit, &format!("{base}..HEAD"), "--"]);
+    let listed = git_output(worktree, &measuring(&["rev-list", "--no-merges", &limit, "--end-of-options", &format!("{base}..HEAD"), "--"]));
     match listed {
         Ok(listed) => {
             let mut shas: Vec<&str> = listed.lines().filter(|line| !line.is_empty()).collect();
@@ -1236,19 +1266,13 @@ pub fn measure_branch(cfg: &GuardrailConfig, worktree: &Path, base: &str) -> Opt
             }
             if !shas.is_empty() {
                 let input = shas.iter().map(|sha| format!("{sha}\n")).collect::<String>();
-                match git_with_input(worktree, &["diff-tree", "--stdin", "-r", "-z", "-M", "--numstat", "--root"], input.as_bytes()) {
+                match git_with_input(worktree, &measuring(&["diff-tree", "--stdin", "-r", "-z", "-M", "--numstat", "--root"]), input.as_bytes()) {
                     Ok(out) => work.commits = split_commits(&String::from_utf8_lossy(&out)),
-                    Err(error) => {
-                        note("diff-tree", &error);
-                        work.partial = true;
-                    }
+                    Err(error) => return unmeasured("diff-tree", error.message),
                 }
             }
         }
-        Err(error) => {
-            note("rev-list", &error);
-            work.partial = true;
-        }
+        Err(error) => return unmeasured("rev-list", error.message),
     }
     let shaped: Vec<String> = parse_numstat(&work.range)
         .into_iter()
@@ -1259,7 +1283,7 @@ pub fn measure_branch(cfg: &GuardrailConfig, worktree: &Path, base: &str) -> Opt
     if !shaped.is_empty() {
         match read_at_head(worktree, &shaped) {
             Some(texts) => work.shaped = shaped.into_iter().zip(texts).collect(),
-            None => tracing::warn!(worktree = %worktree.display(), "could not read shape-gated files at HEAD"),
+            None => return unmeasured("cat-file", "could not read the shape-gated files at HEAD".into()),
         }
     }
     Some(work)
@@ -1295,7 +1319,7 @@ fn split_commits(out: &str) -> Vec<(String, String)> {
 /// Each of `paths` as it is at `HEAD`, in one `git cat-file --batch`. `None` when git fails.
 fn read_at_head(worktree: &Path, paths: &[String]) -> Option<Vec<Result<String, &'static str>>> {
     let input: String = paths.iter().map(|path| format!("HEAD:{path}\n")).collect();
-    let out = git_with_input(worktree, &["cat-file", "--batch"], input.as_bytes()).ok()?;
+    let out = git_with_input(worktree, &measuring(&["cat-file", "--batch"]), input.as_bytes()).ok()?;
     let mut at = 0;
     let mut texts = Vec::with_capacity(paths.len());
     for _ in paths {
@@ -1336,6 +1360,18 @@ pub fn recheck_branch(
     session_id: Id,
     work: &BranchWork,
 ) -> Result<(), BusError> {
+    if let Some(why) = &work.unmeasured {
+        return Err(BusError::refused(
+            "guardrail.unmeasured",
+            format!("Relay could not measure this branch against the project's base ({why}), so it is not handed to review"),
+        )
+        .with_details(json!({"reason": why}))
+        .with_hint(
+            "Put the checkout back the way git can read it (a config value it rejects, a branch with no history in \
+             common with the base) and call session.done again; if you cannot, report the task blocked and say why, \
+             and the person moves it.",
+        ));
+    }
     let cfg = config(conn, Some(project_id))?;
     let grants = grants_given(conn, session_id)?;
     let judge = |diff: &str, skip_policy: Option<&str>| -> Result<Option<BusError>, BusError> {
@@ -1444,10 +1480,17 @@ fn evaluate_exec(cfg: &GuardrailConfig, request: &GateRequest<'_>) -> Result<Dec
             return Ok(Decision::Refuse(
                 BusError::refused(
                     "guardrail.self_approval",
-                    format!("{} would answer a guardrail as the user; only the user can do that", argv.join(" ")),
+                    format!(
+                        "{} would act as the user (answer a guardrail, or pair, approve or revoke a phone or a cloud \
+                         link); only the user can do that",
+                        argv.join(" ")
+                    ),
                 )
                 .with_details(json!({"command": command, "argv": argv}))
-                .with_hint("Ask with guardrail.request and wait for guardrail.request_resolved; the user answers it in Relay."),
+                .with_hint(
+                    "Ask with guardrail.request and wait for guardrail.request_resolved; the user answers it in Relay. \
+                     Pairing and cloud links the user sets up themselves: say what you need in your report.",
+                ),
             ));
         }
         // Nor this one: it would switch off the check a grant is an exception to.
@@ -1466,6 +1509,21 @@ fn evaluate_exec(cfg: &GuardrailConfig, request: &GateRequest<'_>) -> Result<Dec
                     "Commit with the hooks on (plain `git commit`, or git.commit). If the hook refuses, change what it \
                      names, or ask for that cap or path with guardrail.request. session.done checks every commit on \
                      the branch either way.",
+                ),
+            ));
+        }
+        // Nor this one: an upload to Google Play cannot be taken back, and it is the user's.
+        if let Some(DeniedMatch { words, .. }) = play_publish(&commands) {
+            let argv: Vec<&str> = words.iter().map(|word| word.text.as_str()).collect();
+            return Ok(Decision::Refuse(
+                BusError::refused(
+                    "guardrail.play_publish",
+                    format!("{} would publish to Google Play; only the user publishes a release", argv.join(" ")),
+                )
+                .with_details(json!({"command": command, "argv": argv}))
+                .with_hint(
+                    "Build the release without publishing (`./gradlew bundleRelease`, or assemble/bundle tasks), \
+                     and say in your report that it is ready: the user publishes it from Relay's Build panel.",
                 ),
             ));
         }
@@ -1496,6 +1554,16 @@ fn evaluate_exec(cfg: &GuardrailConfig, request: &GateRequest<'_>) -> Result<Dec
 /// socket does not authenticate `user`, so this closes the obvious door, not every door.
 const USER_ONLY_ANSWERS: &[&str] = &[
     "guardrail.confirm", "guardrail.reject", "guardrail.config.set", "guardrail.grant.revoke", "settings.set", "settings.reset",
+];
+
+/// The CLI's own commands that are the user's alone, as `(command, subcommands)`: they pair a
+/// phone or let one in, forget one, point the engine at a rendezvous, or link this PC to a cloud
+/// engine — each hands out (or takes away) a phone token or the room secret. They talk to the
+/// door and the data directory, not the bus, so no op check sees them. `relay remote serve`
+/// counts only with `--pair`, which opens a pairing window the agent could answer itself.
+const USER_ONLY_COMMANDS: &[(&str, &[&str])] = &[
+    ("remote", &["approve", "pair", "decline", "revoke", "via"]),
+    ("cloud", &["connect", "pair", "off"]),
 ];
 
 /// The environment the CLI takes its identity from (`actor_from_env`): without `RELAY_SESSION`
@@ -1539,6 +1607,9 @@ fn self_approval(line: &str) -> Option<Vec<String>> {
             return Some(argv());
         }
         for at in relay_at {
+            if user_only_command(&words, at) {
+                return Some(argv());
+            }
             let Some(op) = relay_call(&words, at) else { continue };
             let answers = match op {
                 // `q` with nothing after it takes the op from somewhere this line does not show.
@@ -1573,23 +1644,38 @@ fn is_relay(word: &str) -> bool {
 /// The op a Relay CLI call at `at` runs: `Some(Some(op))` for `relay [flags] q|cmd <op>`,
 /// `Some(None)` when `q`/`cmd` has no op after it, `None` when this is no bus call at all.
 fn relay_call<'w>(words: &[&'w str], at: usize) -> Option<Option<&'w str>> {
-    let skip_flags = |mut at: usize| {
-        while let Some(word) = words.get(at) {
-            if matches!(*word, "--instance" | "--actor") {
-                at += 2;
-            } else if word.starts_with('-') {
-                at += 1;
-            } else {
-                break;
-            }
-        }
-        at
-    };
-    let sub = skip_flags(at + 1);
+    let sub = skip_cli_flags(words, at + 1);
     if !matches!(words.get(sub), Some(&"q") | Some(&"cmd")) {
         return None;
     }
-    Some(words.get(skip_flags(sub + 1)).copied())
+    Some(words.get(skip_cli_flags(words, sub + 1)).copied())
+}
+
+/// Is the Relay CLI call at `at` one of [`USER_ONLY_COMMANDS`]: `relay [flags] remote approve`,
+/// `relay cloud off`, `relay remote serve --pair`?
+fn user_only_command(words: &[&str], at: usize) -> bool {
+    let command = skip_cli_flags(words, at + 1);
+    let Some(&name) = words.get(command) else { return false };
+    let sub = skip_cli_flags(words, command + 1);
+    let Some(&sub_name) = words.get(sub) else { return false };
+    if name == "remote" && sub_name == "serve" {
+        return words[sub + 1..].contains(&"--pair");
+    }
+    USER_ONLY_COMMANDS.iter().any(|(cli, subs)| *cli == name && subs.contains(&sub_name))
+}
+
+/// The first word from `at` on that is not one of the CLI's global options.
+fn skip_cli_flags(words: &[&str], mut at: usize) -> usize {
+    while let Some(word) = words.get(at) {
+        if matches!(*word, "--instance" | "--actor") {
+            at += 2;
+        } else if word.starts_with('-') {
+            at += 1;
+        } else {
+            break;
+        }
+    }
+    at
 }
 
 /// Clearing or overriding the session identity, which makes the CLI fall back to the user:
@@ -2187,7 +2273,7 @@ struct DeniedPattern {
 impl DeniedPattern {
     fn parse(pattern: &str) -> Option<Self> {
         let mut words = pattern.split_whitespace();
-        let program = shell::program(words.next()?).to_ascii_lowercase();
+        let program = canonical_program(words.next()?);
         let mut parsed = Self { program, subcommands: Vec::new(), flags: Vec::new(), operands: Vec::new() };
         for word in words {
             if word.starts_with('-') && word.len() > 1 {
@@ -2211,7 +2297,7 @@ impl DeniedPattern {
         let word = &command[at];
         // A quoted program still runs (`"rm" -rf`), but only as the command's own first word;
         // elsewhere a quoted word is an argument, which is data.
-        if word.quoted && at != 0 || shell::program(&word.text).to_ascii_lowercase() != self.program {
+        if word.quoted && at != 0 || canonical_program(&word.text) != self.program {
             return false;
         }
         // Quoted text with a space in it is a string, never a flag or a subcommand (D103).
@@ -2220,6 +2306,9 @@ impl DeniedPattern {
             .filter(|word| !(word.quoted && word.text.contains(char::is_whitespace)))
             .map(|word| word.text.as_str())
             .collect();
+        if self.program == "gradle" {
+            return self.runs_gradle(&rest);
+        }
         let mut next = 0;
         for wanted in &self.subcommands {
             while let Some(word) = rest.get(next).filter(|word| word.starts_with('-')) {
@@ -2241,13 +2330,106 @@ impl DeniedPattern {
             .filter(|word| !word.starts_with('-'))
             .map(|word| word.to_ascii_lowercase())
             .collect();
-        // `git push origin +main` is a force push spelled as a refspec.
-        let plus_refspec = self.program == "git"
+        // A forced push is any push that can destroy what the remote holds: `+main` and `:main`
+        // as refspecs, `--force-with-lease`, `--mirror`, `--delete`/`-d` and `--prune`.
+        let destroys_remote = self.program == "git"
             && self.subcommands.first().is_some_and(|sub| sub == "push")
-            && operands.iter().any(|word| word.len() > 1 && word.starts_with('+'));
-        self.flags.iter().all(|flag| flags.contains(flag) || flag == "-f" && plus_refspec)
+            && (operands.iter().any(|word| word.len() > 1 && (word.starts_with('+') || word.starts_with(':')))
+                || flags.iter().any(|flag| {
+                    matches!(flag.as_str(), "-d" | "--delete" | "--mirror" | "--prune" | "--force-with-lease" | "--force-if-includes")
+                }));
+        self.flags.iter().all(|flag| flags.contains(flag) || flag == "-f" && destroys_remote)
             && self.operands.iter().all(|operand| operands.contains(operand))
     }
+
+    /// Gradle reads every word that is not an option as a task, in any order and any number:
+    /// `gradle publish*` is any invocation that runs a task the glob names, whatever else it
+    /// runs beside it (`./gradlew assembleRelease :app:publishReleaseBundle`).
+    fn runs_gradle(&self, rest: &[&str]) -> bool {
+        let mut tasks = Vec::new();
+        let mut flags = Vec::new();
+        let mut words = rest.iter();
+        while let Some(word) = words.next() {
+            if word.starts_with('-') && word.len() > 1 {
+                flags.extend(expand_flags(&self.program, word));
+                // `-x publishBundle` excludes the task; `-p app` is a directory.
+                if gradle_takes_value(word) {
+                    words.next();
+                }
+            } else {
+                tasks.push(*word);
+            }
+        }
+        self.subcommands.iter().all(|glob| tasks.iter().any(|task| gradle_task_matches(glob, task)))
+            && self.flags.iter().all(|flag| flags.contains(flag))
+    }
+}
+
+/// A program word as a denied pattern names it: the basename, lower case, with the Gradle
+/// wrapper and Gradle itself one program (`./gradlew`, `gradlew.bat`, `/opt/gradle/bin/gradle`).
+fn canonical_program(word: &str) -> String {
+    let name = shell::program(word).to_ascii_lowercase();
+    match name.as_str() {
+        "gradlew" | "gradlew.bat" | "gradle.bat" => "gradle".into(),
+        _ => name,
+    }
+}
+
+/// Gradle options whose value is the next word, so it is not taken for a task.
+fn gradle_takes_value(word: &str) -> bool {
+    matches!(
+        word,
+        "-x" | "--exclude-task" | "-p" | "--project-dir" | "-b" | "--build-file" | "-c" | "--settings-file"
+            | "-I" | "--init-script" | "-g" | "--gradle-user-home" | "--project-cache-dir" | "-D" | "--system-prop"
+            | "-P" | "--project-prop" | "--console" | "--warning-mode" | "--include-build"
+    )
+}
+
+/// Does the task word `task` (`publishReleaseBundle`, `:app:publishReleaseBundle`) run a task
+/// `glob` names? Gradle matches a name without regard to case, and takes an abbreviation for
+/// the task it is short for (`pRB`, `pub-rel-bun`, `pub`): for a `prefix*` glob, a word whose
+/// first segment begins `prefix` counts too. Any task it could be short for is enough.
+fn gradle_task_matches(glob: &str, task: &str) -> bool {
+    let name = task.rsplit(':').next().unwrap_or(task);
+    if name.is_empty() || name.contains('=') {
+        return false;
+    }
+    if wildcard_matches(glob, &name.to_ascii_lowercase()) {
+        return true;
+    }
+    let Some(prefix) = glob.strip_suffix('*').filter(|prefix| !prefix.is_empty() && !prefix.contains('*')) else {
+        return false;
+    };
+    let mut chars = name.chars();
+    let first: String = chars.next().into_iter().chain(chars.take_while(char::is_ascii_lowercase)).collect();
+    prefix.starts_with(&first.to_ascii_lowercase())
+}
+
+/// `*` matches any run of characters, nothing else is special.
+fn wildcard_matches(glob: &str, text: &str) -> bool {
+    let mut parts = glob.split('*');
+    let Some(mut rest) = text.strip_prefix(parts.next().unwrap_or("")) else { return false };
+    let parts: Vec<&str> = parts.collect();
+    let Some((last, middle)) = parts.split_last() else { return rest.is_empty() };
+    for part in middle {
+        match rest.find(part) {
+            Some(at) => rest = &rest[at + part.len()..],
+            None => return false,
+        }
+    }
+    rest.len() >= last.len() && rest.ends_with(last)
+}
+
+/// Gradle Play Publisher's upload tasks (`publishReleaseBundle`, `publishListing`,
+/// `promoteReleaseArtifact`, …) and the `uploadToPlay` kind a build script adds. An agent never
+/// runs these: a release reaches Google Play only when the user asks for it (`device.build`
+/// with `publish`). Built in, not a default denied command, because a stored
+/// `denied_commands` list replaces the defaults whole and would leave it out.
+const PLAY_PUBLISH: &[&str] = &["gradle publish*", "gradle promote*", "gradle *toplay*"];
+
+fn play_publish(commands: &[Vec<Word>]) -> Option<DeniedMatch> {
+    let patterns: Vec<String> = PLAY_PUBLISH.iter().map(|pattern| pattern.to_string()).collect();
+    denied_matches_in(&patterns, commands).into_iter().next()
 }
 
 /// A flag word as the individual flags it sets, each spelled one way: `-rf` is `-r` and `-f`;
@@ -2999,6 +3181,8 @@ mod denied_tests {
             "git -C sub clean -fd",
             "git push --force", "git push -f origin main", "git push origin main --force",
             "git push origin +main", "git push --force=true origin main",
+            "git push --mirror origin", "git push origin :main", "git push --delete origin main", "git push -d origin main",
+            "git push --force-with-lease origin main", "git push --force-if-includes origin main", "git push --prune origin",
             "(git reset --hard)", "cd sub && (git clean -fd)", "(cd frontend && rm -rf node_modules)",
             "echo $(rm -rf build)", "echo `rm -rf build`", "echo \"$(rm -rf build)\"",
             "sh -c 'rm -rf build'", "bash -lc \"git reset --hard\"", "eval 'git push -f'",
@@ -3016,12 +3200,39 @@ mod denied_tests {
             "echo \"rm -rf /\"", "git commit -m \"git reset --hard was a mistake\"",
             "relay q guardrail.check '{\"command\":\"rm -rf /\"}'", "rm -r build", "rm -f build",
             "git reset --soft HEAD~1", "git clean -n", "git push origin main", "git push -u origin main",
+            "git push origin :", "git push --tags origin", "git push -o ci.skip origin relay/x", "git branch -d old",
             "git log --grep reset", "cargo test", "grep -rf patterns.txt src",
         ] {
             assert!(!denied(line), "{line:?} does not run a denied command");
         }
         // A dry run is exempt, and only the dry run.
         assert!(denied("relay q guardrail.check && rm -rf /tmp/x"));
+    }
+
+    /// An agent's Gradle invocation that would upload to Google Play, in every spelling Gradle
+    /// accepts: any position among several tasks, a project path, other case, an abbreviation.
+    #[test]
+    fn a_play_publish_is_seen_in_every_gradle_spelling() {
+        let publishes = |line: &str| super::play_publish(&shell_commands(line)).is_some();
+        for line in [
+            "./gradlew publishReleaseBundle", "./gradlew :app:publishReleaseBundle", "gradle publishBundle",
+            "./gradlew promoteReleaseArtifact", "./gradlew publishListing", "./gradlew publishApk --track internal",
+            "./gradlew assembleRelease publishReleaseBundle", "./gradlew --offline -q :app:bundleRelease :app:publishBundle",
+            "cd android && ./gradlew clean publishReleaseBundle", "sh ./gradlew publishReleaseBundle",
+            "/opt/gradle/bin/gradle publishBundle", "gradlew.bat publishBundle", "./gradlew PUBLISHRELEASEBUNDLE",
+            "./gradlew pRB", "./gradlew pub-rel-bun", "./gradlew :app:pRA", "./gradlew uploadToPlay",
+            "./gradlew -p app publishBundle", "bash -c './gradlew publishReleaseBundle'", "timeout 600 ./gradlew publishBundle",
+        ] {
+            assert!(publishes(line), "{line:?} publishes to Google Play");
+        }
+        for line in [
+            "./gradlew bundleRelease", "./gradlew assembleRelease test lint", "./gradlew :app:installDebug",
+            "./gradlew -x publishReleaseBundle build", "./gradlew -p publish assembleDebug", "./gradlew preBuild processDebugResources",
+            "./gradlew projects properties", "echo ./gradlew publishReleaseBundle", "rg publishReleaseBundle app/build.gradle.kts",
+            "git commit -m './gradlew publishBundle is not run here'", "./gradlew -Pplay.publish=true assembleRelease",
+        ] {
+            assert!(!publishes(line), "{line:?} does not publish");
+        }
     }
 
     #[test]
@@ -3243,5 +3454,49 @@ mod path_tests {
         assert_eq!(resolve(&root.join("link/../x")), root.join("real/x"));
         assert_eq!(resolve(&root.join("./a//b")), root.join("a/b"));
         assert_eq!(resolve(Path::new("/")), Path::new("/"));
+    }
+}
+
+#[cfg(test)]
+mod measure_tests {
+    use super::{config, measure_branch};
+    use std::path::Path;
+    use std::process::Command;
+
+    fn git(repo: &Path, args: &[&str]) {
+        let out = Command::new("git").arg("-C").arg(repo).args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// A base branch read from a cloned repository's `HEAD` can be named `--output=<path>`;
+    /// measuring a done against it never hands that to git as an option, so no file appears.
+    #[test]
+    fn a_base_that_looks_like_an_option_writes_no_file() {
+        let store = crate::Store::open_memory().unwrap();
+        let cfg = config(&store.lock(), None).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&repo, &["add", "a.txt"]);
+        git(&repo, &["commit", "-q", "-m", "work"]);
+        // Relative, so it lands in the worktree git runs in (a temp dir's `.tmp…` component is
+        // not a valid ref name); a cloned remote's HEAD can as well name an absolute path.
+        let base = "--output=pwned";
+        git(&repo, &["update-ref", &format!("refs/heads/{base}"), "HEAD~1"]);
+
+        let unmeasured = measure_branch(&cfg, &repo, base).unwrap().unmeasured;
+        assert!(unmeasured.is_some_and(|why| why.contains("starts with '-'")), "an option-like base is not measured");
+        let written: Vec<_> = std::fs::read_dir(&repo).unwrap().map(|entry| entry.unwrap().file_name()).filter(|name| name.to_string_lossy().starts_with("pwned")).collect();
+        assert!(written.is_empty(), "git wrote a file named by the base branch: {written:?}");
+
+        // An ordinary base still measures, revisions after `--end-of-options` and all.
+        let work = measure_branch(&cfg, &repo, "main~1").unwrap();
+        assert!(work.range.contains("a.txt"), "{:?}", work.range);
+        assert_eq!(work.commits.len(), 1);
+        assert!(!work.partial);
+        assert_eq!(work.unmeasured, None);
     }
 }

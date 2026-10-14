@@ -414,8 +414,8 @@ fn project_update_refuses_a_guardrail_pattern_the_config_would_reject() {
 }
 
 /// RA-110: a bus commit runs the user's prepare-commit-msg hook with git's arguments, before
-/// commit-msg, and keeps what it adds. Concluding a merge, `git commit --no-verify` runs it
-/// itself, so it runs exactly once there too, and so does commit-msg.
+/// commit-msg, and keeps what it adds. Concluding a merge it runs exactly once too, and so does
+/// commit-msg.
 #[test]
 fn prepare_commit_msg_hook_runs_once_on_every_bus_commit() {
     use std::os::unix::fs::PermissionsExt;
@@ -451,4 +451,315 @@ fn prepare_commit_msg_hook_runs_once_on_every_bus_commit() {
     assert_eq!(ran.lines().filter(|line| line.starts_with("prepare-commit-msg message")).count(), 1, "{ran}");
     assert_eq!(ran.lines().filter(|line| *line == "commit-msg").count(), 1, "{ran}");
     assert_eq!(git(root, &["log", "-1", "--format=%B"]).matches("Prepared-by: hook").count(), 1);
+}
+
+/// Concluding a merge is staged like any commit: the signature is made before the store is
+/// locked, so a signer waiting on its pinentry holds up nothing else, and the transaction only
+/// publishes the object and clears the merge's state as `git commit` would.
+#[test]
+fn concluding_a_merge_signs_with_the_store_free() {
+    use std::os::unix::fs::PermissionsExt;
+    let e = engine();
+    let (ws, repo) = project(&e);
+    let root = Path::new(&repo);
+    git(root, &["switch", "-q", "-c", "side"]);
+    std::fs::write(root.join("side.txt"), "side\n").unwrap();
+    git(root, &["add", "side.txt"]);
+    git(root, &["commit", "-q", "-m", "Side"]);
+    git(root, &["switch", "-q", "main"]);
+    let main = commit(root, "Main");
+    git(root, &["merge", "-q", "--no-commit", "--no-ff", "side"]);
+    // A signer that waits, as one on a pinentry does, until it is let go — or gives up and says so.
+    let dir = ws.path();
+    let signer = dir.join("signer.sh");
+    std::fs::write(&signer, format!(
+        "#!/bin/sh\ncat > /dev/null\ntouch '{d}/started'\ni=0\nwhile [ ! -e '{d}/release' ]; do\n  i=$((i+1)); if [ $i -gt 200 ]; then touch '{d}/timed-out'; break; fi\n  sleep 0.05\ndone\necho '[GNUPG:] SIG_CREATED ' >&2\nprintf -- '-----BEGIN PGP SIGNATURE-----\\n\\nfake\\n-----END PGP SIGNATURE-----\\n'\n",
+        d = dir.display(),
+    )).unwrap();
+    std::fs::set_permissions(&signer, std::fs::Permissions::from_mode(0o755)).unwrap();
+    git(root, &["config", "commit.gpgsign", "true"]);
+    git(root, &["config", "gpg.program", signer.to_str().unwrap()]);
+
+    let committing = {
+        let e = e.clone();
+        std::thread::spawn(move || call(&e, "git.commit", json!({"project_id":1,"message":"Merge side"})))
+    };
+    common::wait_until("the signer to start", || dir.join("started").exists());
+    ok(&e, "project.list", json!({}));
+    std::fs::write(dir.join("release"), "").unwrap();
+    let out = committing.join().unwrap().into_result().unwrap();
+    assert!(!dir.join("timed-out").exists(), "the store waited on the signer");
+
+    assert_eq!(out["sha"], git(root, &["rev-parse", "HEAD"]).as_str());
+    assert_eq!(git(root, &["rev-parse", "HEAD^1"]), main);
+    assert_eq!(git(root, &["rev-parse", "HEAD^2"]), git(root, &["rev-parse", "side"]));
+    assert!(git(root, &["cat-file", "commit", "HEAD"]).contains("gpgsig"), "the merge was signed");
+    assert_eq!(git(root, &["reflog", "-1", "--format=%gs"]), "commit (merge): Merge side");
+    for state in ["MERGE_HEAD", "MERGE_MSG", "MERGE_MODE"] {
+        assert!(!root.join(".git").join(state).exists(), "{state} was left behind");
+    }
+    assert!(git(root, &["status", "--porcelain"]).is_empty());
+}
+
+/// Concluding a cherry-pick keeps the picked commit's author, as `git commit` does, and clears
+/// the pick.
+#[test]
+fn concluding_a_cherry_pick_keeps_its_author() {
+    let e = engine();
+    let (_ws, repo) = project(&e);
+    let root = Path::new(&repo);
+    git(root, &["switch", "-q", "-c", "side"]);
+    std::fs::write(root.join("README.md"), "# Side\n").unwrap();
+    let out = git_command(root)
+        .env("GIT_AUTHOR_NAME", "Pat Picked")
+        .env("GIT_AUTHOR_EMAIL", "pat@example.test")
+        .env("GIT_AUTHOR_DATE", "1600000000 +0200")
+        .args(["commit", "-q", "-am", "Side"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    git(root, &["switch", "-q", "main"]);
+    std::fs::write(root.join("README.md"), "# Main\n").unwrap();
+    git(root, &["commit", "-q", "-am", "Main"]);
+    let main = git(root, &["rev-parse", "HEAD"]);
+    assert!(!git_command(root).args(["cherry-pick", "side"]).output().unwrap().status.success(), "the fixture must conflict");
+    std::fs::write(root.join("README.md"), "# Both\n").unwrap();
+    ok(&e, "git.stage", json!({"project_id":1,"paths":["README.md"]}));
+    ok(&e, "git.commit", json!({"project_id":1,"message":"Side, picked"}));
+
+    assert_eq!(git(root, &["log", "-1", "--format=%an|%ae|%at|%s"]), "Pat Picked|pat@example.test|1600000000|Side, picked");
+    assert_eq!(git(root, &["rev-parse", "HEAD^"]), main);
+    assert_eq!(git(root, &["reflog", "-1", "--format=%gs"]), "commit (cherry-pick): Side, picked");
+    assert!(!root.join(".git/CHERRY_PICK_HEAD").exists());
+}
+
+/// A repository like [`project`]'s, its refs stored in `format` (`files` or `reftable`).
+fn project_in(e: &Engine, format: &str) -> (tempfile::TempDir, String) {
+    let ws = tempfile::tempdir().unwrap();
+    let repo = ws.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main", &format!("--ref-format={format}")]);
+    for (key, value) in [("user.name", common::GIT_NAME), ("user.email", common::GIT_EMAIL), ("commit.gpgsign", "false")] {
+        git(&repo, &["config", key, value]);
+    }
+    std::fs::write(repo.join("README.md"), "# Relay\n").unwrap();
+    git(&repo, &["add", "README.md"]);
+    git(&repo, &["commit", "-q", "-m", "Initial"]);
+    let path = std::fs::canonicalize(&repo).unwrap().display().to_string();
+    ok(e, "workspace.create", json!({"path":std::fs::canonicalize(ws.path()).unwrap()}));
+    ok(e, "project.add", json!({"workspace_id":1,"path":path}));
+    (ws, path)
+}
+
+/// A `gpg.program` that signs anything and calls every signature good, and says so on stdout
+/// when verifying, as gpg does with log.showSignature.
+fn fake_signer(dir: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let signer = dir.join("signer.sh");
+    std::fs::write(&signer, "#!/bin/sh\ncat > /dev/null\ncase \"$*\" in\n  *--verify*) echo '[GNUPG:] GOODSIG 0 Signer <s@x>'; echo 'gpg: Good signature from Signer <s@x>' >&2 ;;\n  *) echo '[GNUPG:] SIG_CREATED ' >&2; printf -- '-----BEGIN PGP SIGNATURE-----\\n\\nfake\\n-----END PGP SIGNATURE-----\\n' ;;\nesac\n").unwrap();
+    std::fs::set_permissions(&signer, std::fs::Permissions::from_mode(0o755)).unwrap();
+    signer
+}
+
+/// Concluding the first, conflicted pick of `cherry-pick A B` through the bus, in either ref
+/// storage: A's author is kept even when log.showSignature would print a signature check into a
+/// log format, CHERRY_PICK_HEAD — a ref, which reftable keeps in its tables — is cleared with
+/// the commit, and `cherry-pick --continue` goes on to B.
+#[test]
+fn concluding_a_pick_of_a_sequence_clears_it_in_either_ref_storage() {
+    for format in ["files", "reftable"] {
+        let e = engine();
+        let (ws, repo) = project_in(&e, format);
+        let root = Path::new(&repo);
+        git(root, &["config", "gpg.program", fake_signer(ws.path()).to_str().unwrap()]);
+        git(root, &["switch", "-q", "-c", "side"]);
+        std::fs::write(root.join("README.md"), "# Side\n").unwrap();
+        let out = git_command(root)
+            .env("GIT_AUTHOR_NAME", "Pat Picked")
+            .env("GIT_AUTHOR_EMAIL", "pat@example.test")
+            .env("GIT_AUTHOR_DATE", "1600000000 +0200")
+            .args(["commit", "-q", "-S", "-am", "Side A"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        std::fs::write(root.join("b.txt"), "b\n").unwrap();
+        git(root, &["add", "b.txt"]);
+        git(root, &["commit", "-q", "-m", "Side B"]);
+        git(root, &["switch", "-q", "main"]);
+        std::fs::write(root.join("README.md"), "# Main\n").unwrap();
+        git(root, &["commit", "-q", "-am", "Main"]);
+        git(root, &["config", "log.showSignature", "true"]);
+        let picking = git_command(root).args(["cherry-pick", "side~1", "side"]).output().unwrap();
+        assert!(!picking.status.success(), "{format}: the first pick must conflict");
+        std::fs::write(root.join("README.md"), "# Both\n").unwrap();
+        ok(&e, "git.stage", json!({"project_id":1,"paths":["README.md"]}));
+        ok(&e, "git.commit", json!({"project_id":1,"message":"Side A, picked"}));
+
+        assert_eq!(git(root, &["log", "-1", "--no-show-signature", "--format=%an|%ae|%at"]), "Pat Picked|pat@example.test|1600000000", "{format}");
+        assert_eq!(git(root, &["reflog", "-1", "--format=%gs"]), "commit (cherry-pick): Side A, picked", "{format}");
+        let left = git_command(root).args(["rev-parse", "-q", "--verify", "CHERRY_PICK_HEAD"]).output().unwrap();
+        assert!(!left.status.success(), "{format}: CHERRY_PICK_HEAD was left behind");
+        assert!(root.join(".git/sequencer").is_dir(), "{format}: B is still to come");
+        git(root, &["cherry-pick", "--continue"]);
+        assert_eq!(git(root, &["log", "-2", "--no-show-signature", "--format=%s"]), "Side B\nSide A, picked", "{format}");
+        assert!(!root.join(".git/sequencer").exists(), "{format}");
+    }
+}
+
+/// `git commit -m` keeps a `# Conflicts:` block unless commit.cleanup is `strip`, and so does a
+/// bus commit concluding a merge.
+#[test]
+fn commit_cleanup_strips_comments_only_when_configured() {
+    for (cleanup, kept) in [(None, true), (Some("strip"), false)] {
+        let e = engine();
+        let (_ws, repo) = project(&e);
+        let root = Path::new(&repo);
+        if let Some(cleanup) = cleanup {
+            git(root, &["config", "commit.cleanup", cleanup]);
+        }
+        git(root, &["switch", "-q", "-c", "side"]);
+        std::fs::write(root.join("side.txt"), "side\n").unwrap();
+        git(root, &["add", "side.txt"]);
+        git(root, &["commit", "-q", "-m", "Side"]);
+        git(root, &["switch", "-q", "main"]);
+        commit(root, "Main");
+        git(root, &["merge", "-q", "--no-commit", "--no-ff", "side"]);
+        ok(&e, "git.commit", json!({"project_id":1,"message":"Merge side\n\n# Conflicts:\n#\tREADME.md\n"}));
+        let message = git(root, &["log", "-1", "--format=%B"]);
+        assert_eq!(message.contains("# Conflicts:"), kept, "{cleanup:?}: {message}");
+        assert!(message.starts_with("Merge side"), "{message}");
+    }
+}
+
+/// rerere records a resolution concluded through the bus even when no merge or pick head says a
+/// conflict was being resolved: a rebase stopped on one writes neither.
+#[test]
+fn rerere_records_a_rebase_resolution_committed_through_the_bus() {
+    let e = engine();
+    let (_ws, repo) = project(&e);
+    let root = Path::new(&repo);
+    git(root, &["config", "rerere.enabled", "true"]);
+    git(root, &["switch", "-q", "-c", "side"]);
+    std::fs::write(root.join("README.md"), "# Side\n").unwrap();
+    git(root, &["commit", "-q", "-am", "Side"]);
+    git(root, &["switch", "-q", "main"]);
+    std::fs::write(root.join("README.md"), "# Main\n").unwrap();
+    git(root, &["commit", "-q", "-am", "Main"]);
+    git(root, &["switch", "-q", "side"]);
+    assert!(!git_command(root).args(["rebase", "main"]).output().unwrap().status.success(), "the fixture must conflict");
+    assert!(git_command(root).args(["rev-parse", "-q", "--verify", "CHERRY_PICK_HEAD"]).output().unwrap().stdout.is_empty());
+    std::fs::write(root.join("README.md"), "# Both\n").unwrap();
+    ok(&e, "git.stage", json!({"project_id":1,"paths":["README.md"]}));
+    ok(&e, "git.commit", json!({"project_id":1,"message":"Side, rebased"}));
+    let postimage = || {
+        std::fs::read_dir(root.join(".git/rr-cache")).into_iter().flatten().flatten()
+            .any(|entry| entry.path().join("postimage").exists())
+    };
+    common::wait_until("rerere to record the resolution", postimage);
+}
+
+/// The stash `merge --squash --autostash` set aside — left for the commit when the squash
+/// conflicts — comes back once that is committed, though nothing was pending as a merge.
+#[test]
+fn a_squash_autostash_comes_back_after_the_commit() {
+    let e = engine();
+    let (_ws, repo) = project(&e);
+    let root = Path::new(&repo);
+    std::fs::write(root.join("notes.txt"), "notes\n").unwrap();
+    git(root, &["add", "notes.txt"]);
+    git(root, &["commit", "-q", "-m", "Notes"]);
+    git(root, &["switch", "-q", "-c", "side"]);
+    std::fs::write(root.join("README.md"), "# Side\n").unwrap();
+    git(root, &["commit", "-q", "-am", "Side"]);
+    git(root, &["switch", "-q", "main"]);
+    std::fs::write(root.join("README.md"), "# Main\n").unwrap();
+    git(root, &["commit", "-q", "-am", "Main"]);
+    std::fs::write(root.join("notes.txt"), "notes, being edited\n").unwrap();
+    assert!(!git_command(root).args(["merge", "-q", "--squash", "--autostash", "side"]).output().unwrap().status.success(), "the fixture must conflict");
+    assert!(!root.join(".git/MERGE_HEAD").exists());
+    assert_eq!(std::fs::read_to_string(root.join("notes.txt")).unwrap(), "notes\n", "the edit was stashed");
+    std::fs::write(root.join("README.md"), "# Both\n").unwrap();
+    ok(&e, "git.stage", json!({"project_id":1,"paths":["README.md"]}));
+    ok(&e, "git.commit", json!({"project_id":1,"message":"Squash side"}));
+    common::wait_until("the autostash to come back", || {
+        std::fs::read_to_string(root.join("notes.txt")).unwrap() == "notes, being edited\n"
+    });
+    common::wait_until("MERGE_AUTOSTASH to go", || {
+        !git_command(root).args(["rev-parse", "-q", "--verify", "MERGE_AUTOSTASH"]).output().unwrap().status.success()
+    });
+    assert!(!root.join(".git/SQUASH_MSG").exists());
+    assert_eq!(git(root, &["log", "-1", "--format=%p"]).split(' ').count(), 1, "a squash is not a merge");
+}
+
+/// Merging an annotated tag leaves the tag's own id in MERGE_HEAD; concluding it through the
+/// bus peels it as `git commit` does, merge or `--no-ff` alike, rather than dropping the merged
+/// commit or refusing a tag as a parent.
+#[test]
+fn concluding_a_merge_of_an_annotated_tag_peels_it() {
+    for no_ff in [false, true] {
+        let e = engine();
+        let (_ws, repo) = project(&e);
+        let root = Path::new(&repo);
+        git(root, &["switch", "-q", "-c", "side"]);
+        std::fs::write(root.join("README.md"), "# Side\n").unwrap();
+        git(root, &["commit", "-q", "-am", "Side"]);
+        git(root, &["tag", "-a", "v1", "-m", "release v1"]);
+        let tagged = git(root, &["rev-parse", "v1^{commit}"]);
+        git(root, &["switch", "-q", "main"]);
+        std::fs::write(root.join("README.md"), "# Main\n").unwrap();
+        git(root, &["commit", "-q", "-am", "Main"]);
+        let head = git(root, &["rev-parse", "HEAD"]);
+        let mut merge = vec!["merge", "-q"];
+        if no_ff {
+            merge.push("--no-ff");
+        }
+        merge.push("v1");
+        assert!(!git_command(root).args(&merge).output().unwrap().status.success(), "the fixture must conflict");
+        let merge_head = std::fs::read_to_string(root.join(".git/MERGE_HEAD")).unwrap();
+        assert_eq!(git(root, &["cat-file", "-t", merge_head.trim()]), "tag", "MERGE_HEAD holds the tag");
+        std::fs::write(root.join("README.md"), "# Both\n").unwrap();
+        ok(&e, "git.stage", json!({"project_id":1,"paths":["README.md"]}));
+        ok(&e, "git.commit", json!({"project_id":1,"message":"Merge v1"}));
+        assert_eq!(git(root, &["log", "-1", "--format=%P"]), format!("{head} {tagged}"), "no_ff={no_ff}");
+        assert_eq!(git(root, &["reflog", "-1", "--format=%gs"]), "commit (merge): Merge v1");
+        assert!(!root.join(".git/MERGE_HEAD").exists());
+    }
+}
+
+/// A branch an agent named `--mirror` or `+main` is never handed to `git push` where it would
+/// read as an option — mirroring the checkout over the remote, deleting its other branches —
+/// or as a forced push: the push is refused and the remote is as it was.
+#[test]
+fn push_refuses_a_branch_named_like_an_option_or_a_forced_refspec() {
+    let e = engine();
+    let (ws, repo) = project(&e);
+    let root = Path::new(&repo);
+    let remote = ws.path().join("remote.git");
+    git(ws.path(), &["init", "-q", "--bare", "-b", "main", remote.to_str().unwrap()]);
+    git(root, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    git(root, &["push", "-q", "origin", "main", "main:keep"]);
+    let before = git(&remote, &["for-each-ref", "--format=%(refname) %(objectname)"]);
+    // Behind the remote's main, so a forced push of it would rewind main.
+    git(root, &["commit", "-q", "--allow-empty", "-m", "Ahead"]);
+    git(root, &["push", "-q", "origin", "main"]);
+    let before_main = git(&remote, &["rev-parse", "main"]);
+    git(root, &["reset", "-q", "--hard", "HEAD~1"]);
+    for name in ["--mirror", "+main"] {
+        git(root, &["update-ref", &format!("refs/heads/{name}"), "HEAD"]);
+        git(root, &["symbolic-ref", "HEAD", &format!("refs/heads/{name}")]);
+        for set_upstream in [true, false] {
+            let refused = call(&e, "git.push", json!({"project_id":1,"set_upstream":set_upstream}));
+            assert_eq!(err(&refused).code, "git.branch_name", "{name}: {:?}", err(&refused));
+        }
+        git(root, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    }
+    assert_eq!(git(&remote, &["rev-parse", "main"]), before_main, "main was rewound");
+    let after = git(&remote, &["for-each-ref", "--format=%(refname) %(objectname)"]);
+    assert!(after.contains("refs/heads/keep"), "{before}\n=>\n{after}");
+    assert!(!after.contains("--mirror") && !after.contains("+main"), "{after}");
+    // A plain branch still goes, tracking its own name.
+    git(root, &["switch", "-q", "-c", "relay/plain"]);
+    ok(&e, "git.push", json!({"project_id":1}));
+    assert_eq!(git(&remote, &["rev-parse", "relay/plain"]), git(root, &["rev-parse", "HEAD"]));
+    assert_eq!(git(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/relay/plain");
 }

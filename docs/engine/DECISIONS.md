@@ -489,6 +489,9 @@ The *why* behind anything surprising. Append; never rewrite history. Reference a
   skipped before the subcommand, flags match as a set anywhere after it with clusters expanded
   (`-fdx` holds `-f` and `-d`), `--force`/`-f` and `-R`/`--recursive`/`-r` are one flag for `rm`
   and `git`, and `+ref` counts as a forced push. Quoted text containing a space is still data.
+  A later review found the other ways to destroy a remote branch untouched by the default
+  `git push --force`: `:ref`, `--delete`/`-d`, `--mirror`, `--prune`, `--force-with-lease` and
+  `--force-if-includes` now count as a forced push too.
 - **D104 One answer to "may I call this?", computed once.** Relay gates in three layers: registry
   `actors`, runtime row scope, and the per-role allowlist. `bus.ops` and the MCP tool list knew
   only the first, so `relay ops --mine` reported 133 callable ops when a builder's real write

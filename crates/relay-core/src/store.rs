@@ -557,7 +557,7 @@ impl Store {
     }
 
     /// Copy the live database (SQLite online backup) into `backups/`, keep the newest
-    /// [`KEEP_BACKUPS`]. Returns the new file. Takes the store lock one step at a time, so other
+    /// [`KEEP_BACKUPS`] (and what [`prune_backups`] keeps past them). Returns the new file. Takes the store lock one step at a time, so other
     /// requests run between steps rather than waiting out the whole copy — do not call from
     /// inside a handler, which already holds it; use [`Store::backup_with`] there.
     pub fn backup(&self, reason: &str) -> Result<PathBuf> {
@@ -601,7 +601,8 @@ impl Store {
             let _ = std::fs::remove_file(&dest);
             return Err(error);
         }
-        prune_backups(&dir)?;
+        let live = live_projects(&self.lock());
+        prune_backups(&dir, live.as_ref())?;
         Ok(dest)
     }
 
@@ -678,18 +679,53 @@ fn backup_dest(dir: &Path, reason: &str) -> Result<PathBuf> {
     Ok(dir.join(format!("store-{stamp}-{reason}.db")))
 }
 
+/// The reasons whose backups are what `project.restore` restores from.
+const REMOVAL_REASONS: &[&str] = &["project-remove", "workspace-remove"];
+
 /// Keep the newest [`KEEP_BACKUPS`] of each reason, so a run of removals or manual backups never
-/// pushes out the one taken before a schema upgrade.
-fn prune_backups(dir: &Path) -> Result<()> {
+/// pushes out the one taken before a schema upgrade — and, past those, every removal backup
+/// that holds the newest copy of a project still removed. A `project-remove` backup is the only
+/// copy of the project it was taken for: pruned by count alone, the sixth removal dropped the
+/// first project from `project.removed.list`, and the next launch's recovery swept its
+/// attachment files. `live` is the store's projects now; unknown, or a backup unreadable, no
+/// removal backup is pruned. A removal backup goes once the projects it alone held are
+/// restored. Removals are rare and asked for one at a time, so what this keeps grows slowly.
+fn prune_backups(dir: &Path, live: Option<&std::collections::HashSet<i64>>) -> Result<()> {
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    // Removed projects a newer removal backup already holds.
+    let mut held = std::collections::HashSet::new();
     for backup in list_backups(dir)? {
+        let only_copy = REMOVAL_REASONS.contains(&backup.reason.as_str()) && match (live, backup_projects(&backup.path)) {
+            (Some(live), Some(projects)) => {
+                let removed: Vec<i64> = projects.into_iter().filter(|id| !live.contains(id)).collect();
+                let only = removed.iter().any(|id| !held.contains(id));
+                held.extend(removed);
+                only
+            }
+            _ => true,
+        };
         let count = seen.entry(backup.reason.clone()).or_default();
         *count += 1;
-        if *count > KEEP_BACKUPS {
+        if *count > KEEP_BACKUPS && !only_copy {
             let _ = std::fs::remove_file(&backup.path);
         }
     }
     Ok(())
+}
+
+/// The ids of the projects the store holds; `None` when they cannot be read.
+fn live_projects(conn: &Connection) -> Option<std::collections::HashSet<i64>> {
+    let mut stmt = conn.prepare("SELECT id FROM projects").ok()?;
+    let ids = stmt.query_map([], |r| r.get(0)).ok()?.collect::<rusqlite::Result<_>>().ok();
+    ids
+}
+
+/// The ids of the projects a backup holds, read through a read-only connection of its own.
+fn backup_projects(path: &Path) -> Option<Vec<i64>> {
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).ok()?;
+    let mut stmt = conn.prepare("SELECT id FROM projects").ok()?;
+    let ids = stmt.query_map([], |r| r.get(0)).ok()?.collect::<rusqlite::Result<_>>().ok();
+    ids
 }
 
 fn backup_to(conn: &Connection, dir: &Path, reason: &str) -> Result<PathBuf> {
@@ -720,7 +756,7 @@ fn backup_to(conn: &Connection, dir: &Path, reason: &str) -> Result<PathBuf> {
         let _ = std::fs::remove_file(&dest);
         return Err(error);
     }
-    prune_backups(dir)?;
+    prune_backups(dir, live_projects(conn).as_ref())?;
     Ok(dest)
 }
 

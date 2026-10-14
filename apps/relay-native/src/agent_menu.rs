@@ -201,17 +201,30 @@ impl Ui {
                 // Removing the worktree would delete uncommitted work. The popover is gone by
                 // now, so the question is asked here; only a yes deletes it (RA-405).
                 Err(Error::Bus(error)) if error.code == "worktree.dirty" => {
-                    let dialog = gtk::AlertDialog::builder()
-                        .message(format!("Discard {name}'s uncommitted changes?"))
-                        .detail(format!(
-                            "{}. Closing with its worktree removed deletes them for good. To keep them, commit or stash them, or close it keeping the worktree.",
-                            error.message
-                        ))
-                        .buttons(["Keep the agent", "Discard changes and close"])
-                        .cancel_button(0)
-                        .default_button(0)
-                        .modal(true)
-                        .build();
+                    // The agent wrote after the close began: the engine stopped it and kept its
+                    // worktree, so there is no agent left to keep, only the worktree.
+                    let stopped = error.details.as_ref().and_then(|d| d["stopped"].as_bool()) == Some(true);
+                    let dialog = if stopped {
+                        gtk::AlertDialog::builder()
+                            .message(format!("{name} has already been stopped, and its uncommitted work kept"))
+                            .detail(format!(
+                                "{}. Discarding the changes removes the worktree and deletes them for good.",
+                                error.message
+                            ))
+                            .buttons(["Keep the worktree", "Discard changes"])
+                    } else {
+                        gtk::AlertDialog::builder()
+                            .message(format!("Discard {name}'s uncommitted changes?"))
+                            .detail(format!(
+                                "{}. Closing with its worktree removed deletes them for good. To keep them, commit or stash them, or close it keeping the worktree.",
+                                error.message
+                            ))
+                            .buttons(["Keep the agent", "Discard changes and close"])
+                    }
+                    .cancel_button(0)
+                    .default_button(0)
+                    .modal(true)
+                    .build();
                     if dialog.choose_future(Some(&ui.window)).await.ok() == Some(1) {
                         let mut payload = payload;
                         payload["discard_changes"] = json!(true);

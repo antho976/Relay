@@ -76,6 +76,9 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str, project: i64) {
         "modules" => json!({"project_id":project,"include_archived":true}),
         // mailbox.list answers a page, newest messages last; "Show older" widens it.
         "mailbox" => json!({"project_id":project,"limit":MAILBOX_LIMIT.with(|limit| limit.get())}),
+        // Cards show no body: a summary keeps hundreds of tasks well under the client's line
+        // limit. The board reads a body when it searches, peeks at or copies one.
+        "board" => json!({"project_id":project,"summary":true}),
         _ => json!({"project_id":project}),
     };
     // The board labels cards with each row's `module_name`, which task.list joins in itself

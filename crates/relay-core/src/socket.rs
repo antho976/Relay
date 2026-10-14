@@ -662,6 +662,15 @@ async fn dispatch_blocking(engine: &Arc<Engine>, req: Request) -> Result<Respons
     Ok(tokio::task::spawn_blocking(move || e.dispatch(req, Door::Socket)).await?)
 }
 
+/// The answer to an unlocked query run on the blocking pool. One that panicked is still
+/// answered, with an internal error: dropped, its caller waited for an answer forever.
+fn answered(id: uuid::Uuid, op: &str, joined: Result<Response, tokio::task::JoinError>) -> Response {
+    joined.unwrap_or_else(|error| {
+        tracing::error!(%op, %error, "an unlocked query did not finish");
+        Response::err(id, BusError::internal(format!("{op} failed inside Relay")))
+    })
+}
+
 /// A `logcat` or `mirror` frame (§7); `pty` frames have their own writer.
 fn stream_frame(stream: &str, run_id: Option<relay_bus::types::Id>, mirror_id: Option<relay_bus::types::Id>, seq: u64, data: serde_json::Value) -> Frame {
     Frame { v: ENVELOPE_V, stream: stream.into(), session: None, run_id, mirror_id, epoch: None, seq, data }
@@ -698,13 +707,23 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
         // attached session. Writing each of them separately is one syscall per frame; whatever
         // is already queued behind the first goes out with it instead.
         let mut batch: Vec<u8> = Vec::with_capacity(WRITE_BATCH_BYTES);
+        // RELAY_MIRROR_TRACE: the mirror frames in this batch, logged once it is written.
+        let trace = crate::mirror::trace_enabled();
+        let mut traced: Vec<(i64, u64)> = Vec::new();
         while let Some(line) = out_rx.recv().await {
             batch.clear();
+            if trace {
+                traced.clear();
+                traced.extend(crate::mirror::trace_frame_ids(&line));
+            }
             batch.extend_from_slice(line.as_bytes());
             batch.push(b'\n');
             while batch.len() < WRITE_BATCH_BYTES {
                 match out_rx.try_recv() {
                     Ok(next) => {
+                        if trace {
+                            traced.extend(crate::mirror::trace_frame_ids(&next));
+                        }
                         batch.extend_from_slice(next.as_bytes());
                         batch.push(b'\n');
                     }
@@ -713,6 +732,12 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             }
             if w.write_all(&batch).await.is_err() {
                 break;
+            }
+            if !traced.is_empty() {
+                let mono_ns = crate::mirror::monotonic_ns();
+                for &(mirror_id, seq) in &traced {
+                    tracing::info!(target: "mirror_trace", stage = "flush", mono_ns, mirror_id, seq, batch_bytes = batch.len());
+                }
             }
             // One oversized frame must not hold its buffer for the rest of the connection.
             if batch.capacity() > WRITE_BATCH_BYTES * 4 {
@@ -801,13 +826,13 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             // connection while it is spent.
             let permit = concurrent.clone().acquire_owned().await?;
             let (e, tx, recent) = (engine.clone(), out_tx.clone(), recent.clone());
+            let (id, op) = (req.id, req.op.clone());
             inflight.spawn(async move {
                 let resp = tokio::task::spawn_blocking(move || e.dispatch(req, Door::Socket)).await;
                 drop(permit);
-                if let Ok(resp) = &resp {
-                    recent.refused(arrival, resp);
-                }
-                if let Ok(line) = resp.map_err(anyhow::Error::from).and_then(|resp| Ok(serde_json::to_string(&resp)?)) {
+                let resp = answered(id, &op, resp);
+                recent.refused(arrival, &resp);
+                if let Ok(line) = serde_json::to_string(&resp) {
                     let _ = tx.send(line).await;
                 }
             });
@@ -1068,7 +1093,11 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                             let task = tokio::spawn(async move {
                                 use base64::Engine as _;
                                 let frame = |item: crate::device::MirrorChunk| {
-                                    serde_json::to_string(&stream_frame(
+                                    // RELAY_MIRROR_TRACE: when the packet left the broadcast
+                                    // queue, and what encoding it as a frame cost.
+                                    let recv_ns = crate::mirror::trace_enabled().then(crate::mirror::monotonic_ns);
+                                    let seq = item.seq;
+                                    let line = serde_json::to_string(&stream_frame(
                                         "mirror",
                                         None,
                                         Some(id),
@@ -1077,7 +1106,19 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
                                             base64::engine::general_purpose::STANDARD
                                                 .encode(&*item.data),
                                         ),
-                                    ))
+                                    ));
+                                    if let Some(recv_ns) = recv_ns {
+                                        tracing::info!(
+                                            target: "mirror_trace",
+                                            stage = "serialize",
+                                            mono_ns = crate::mirror::monotonic_ns(),
+                                            recv_ns,
+                                            mirror_id = id,
+                                            seq,
+                                            bytes = line.as_ref().map_or(0, String::len),
+                                        );
+                                    }
+                                    line
                                 };
                                 let first = status.borrow_and_update().clone();
                                 let Ok(line) = status_frame(&first) else { return };
@@ -1958,5 +1999,17 @@ mod frame_tests {
                 assert_eq!(&decoded, body);
             }
         }
+    }
+
+    /// An unlocked query that panics on the blocking pool is answered with an internal error
+    /// under its own id, not dropped.
+    #[tokio::test]
+    async fn a_panicked_unlocked_query_is_still_answered() {
+        let id = uuid::Uuid::new_v4();
+        let joined = tokio::task::spawn_blocking(|| -> Response { panic!("boom") }).await;
+        let resp = answered(id, "gym.summary", joined);
+        assert!(!resp.ok);
+        assert_eq!(resp.id, Some(id));
+        assert_eq!(resp.error.unwrap().kind, relay_bus::ErrorKind::Internal);
     }
 }

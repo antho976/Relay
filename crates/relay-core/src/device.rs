@@ -117,6 +117,9 @@ pub struct MirrorChunk {
 struct MirrorControl {
     socket: Option<TcpStream>,
     pending: VecDeque<Vec<u8>>,
+    /// Why the control channel died, once a write to it failed. Input has nowhere to go after
+    /// that: it is refused, never queued (the queue drains only when the socket is installed).
+    lost: Option<String>,
 }
 
 /// How long one control message may take to leave. A device that stops reading its control
@@ -181,6 +184,9 @@ pub struct MirrorRuntime {
     /// A clone of the control socket, under its own lock, so `stop()` can shut it down — and
     /// so fail a writer blocked inside `send_control` — without waiting for the control lock.
     control_shutdown: Mutex<Option<TcpStream>>,
+    /// The local `tcp:` port of the adb forward this mirror opened, until someone removes it:
+    /// the worker on its way out, or the engine's own shutdown when it goes first.
+    forward: Mutex<Option<u16>>,
     /// The last packet's number. Windows detect a lagged subscription by a gap in it. There is
     /// no catch-up ring: the one attach comes before the worker's first packet, and a late
     /// joiner recovers with RESET_VIDEO (fresh config + key frame), not a replay.
@@ -231,6 +237,7 @@ impl MirrorRuntime {
             video: Mutex::new(None),
             control: Mutex::new(MirrorControl::default()),
             control_shutdown: Mutex::new(None),
+            forward: Mutex::new(None),
             seq: AtomicU64::new(0),
             tx,
             size: AtomicU64::new(pack_size(width, height)),
@@ -318,16 +325,24 @@ impl MirrorRuntime {
         let mut control = self.control.lock().unwrap();
         if let Some(socket) = control.socket.as_mut() {
             let written = socket.write_all(&bytes);
-            if written.is_err() {
+            if let Err(error) = &written {
                 // A write that timed out may have left half a message on the wire; anything
-                // sent after it would be parsed from the middle. The control channel is done.
+                // sent after it would be parsed from the middle. The control channel is done,
+                // and a mirror nobody can touch is no mirror: the video goes too, which ends
+                // the worker's read and lets it report the loss (`control_lost`).
                 if let Some(socket) = control.socket.take() {
                     let _ = socket.shutdown(std::net::Shutdown::Both);
+                }
+                control.lost = Some(error.to_string());
+                if let Some(video) = self.video.lock().unwrap().take() {
+                    let _ = video.shutdown(std::net::Shutdown::Both);
                 }
             }
             written
         } else if self.stopped() {
             Err(io::Error::new(io::ErrorKind::NotConnected, "the mirror has stopped"))
+        } else if let Some(lost) = &control.lost {
+            Err(io::Error::new(io::ErrorKind::NotConnected, format!("the mirror's control channel was lost: {lost}")))
         } else {
             if control.pending.len() == 128 {
                 control.pending.pop_front();
@@ -335,6 +350,17 @@ impl MirrorRuntime {
             control.pending.push_back(bytes);
             Ok(())
         }
+    }
+    /// Why the control channel died, if a write to it failed (see `send_control`).
+    pub fn control_lost(&self) -> Option<String> {
+        self.control.lock().unwrap().lost.clone()
+    }
+    pub fn set_forward(&self, port: u16) {
+        *self.forward.lock().unwrap() = Some(port);
+    }
+    /// The forward's port, for whoever removes it; `None` once someone has.
+    pub fn take_forward(&self) -> Option<u16> {
+        self.forward.lock().unwrap().take()
     }
     pub fn push(&self, data: Vec<u8>) {
         if data.is_empty() || self.stopped() {
@@ -391,6 +417,9 @@ pub struct RunRuntime {
     /// shell (`fish -lc`) whose real work — the Gradle client, `adb install` — runs in its
     /// children, so stopping it has to reach the whole group, not just the shell.
     child: Mutex<Option<(Child, bool)>>,
+    /// The checkout this run is fast-forwarding to its upstream, from the moment `device.run`
+    /// records it until the sync is over. A build in that checkout waits for it (D152).
+    syncing: Mutex<Option<PathBuf>>,
     buffer: Mutex<LogBuffer>,
     tx: broadcast::Sender<LogLine>,
 }
@@ -402,6 +431,7 @@ impl RunRuntime {
             id,
             stop: AtomicBool::new(false),
             child: Mutex::new(None),
+            syncing: Mutex::new(None),
             buffer: Mutex::new(LogBuffer {
                 seq: 0,
                 lines: VecDeque::new(),
@@ -432,6 +462,13 @@ impl RunRuntime {
     }
     pub fn take_child(&self) -> Option<Child> {
         self.child.lock().unwrap().take().map(|(child, _)| child)
+    }
+    /// The run will (or does) sync `root`; `None` once it is done with it.
+    pub fn set_syncing(&self, root: Option<PathBuf>) {
+        *self.syncing.lock().unwrap() = root;
+    }
+    pub fn syncing(&self, root: &Path) -> bool {
+        self.syncing.lock().unwrap().as_deref() == Some(root)
     }
     pub fn push(&self, line: impl Into<String>) {
         if self.stopped() {
@@ -559,6 +596,37 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(1), "stop waited {:?} for the writer", started.elapsed());
         assert!(sending.join().unwrap().is_err());
         assert!(runtime.send_control(vec![1]).is_err(), "a stopped mirror takes no more input");
+    }
+
+    /// A failed control write ends the mirror instead of leaving it streaming with input that
+    /// goes nowhere: the video is shut so the worker reports it, and later input is refused.
+    #[test]
+    fn a_lost_control_channel_refuses_input_and_ends_the_stream() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (_server, _) = listener.accept().unwrap();
+        let video = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut video_peer, _) = listener.accept().unwrap();
+        let runtime = MirrorRuntime::new(MirrorRuntimeConfig {
+            id: 1, device: "S".into(), width: 1080, height: 2400,
+            max_size: 1600, bitrate: 8_000_000, scid: 1, adb: "adb".into(),
+        });
+        runtime.set_video(video.try_clone().unwrap());
+        let breaker = client.try_clone().unwrap();
+        runtime.install_control(client).unwrap();
+        assert!(runtime.send_control(vec![1]).is_ok());
+        breaker.shutdown(std::net::Shutdown::Write).unwrap();
+        assert!(runtime.send_control(vec![2]).is_err(), "a write after the socket broke fails");
+        assert!(runtime.control_lost().is_some());
+        let error = runtime.send_control(vec![3]).unwrap_err();
+        assert!(error.to_string().contains("control channel was lost"), "{error}");
+        assert!(runtime.control.lock().unwrap().pending.is_empty(), "nothing is queued for a socket that will never come");
+        // The worker's video read ends: the far side sees the stream closed.
+        video_peer.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let mut byte = [0u8; 1];
+        assert_eq!(std::io::Read::read(&mut video_peer, &mut byte).unwrap_or(0), 0);
+        let mut read_side = video;
+        assert_eq!(std::io::Read::read(&mut read_side, &mut byte).unwrap_or(0), 0, "the worker's video read ends");
     }
 
     #[test]

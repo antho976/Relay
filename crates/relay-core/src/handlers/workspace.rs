@@ -226,7 +226,7 @@ pub fn register(e: &mut Engine) {
         let mut sessions_closed = 0;
         for id in projects {
             let prepared = closes.iter().position(|(project, _)| *project == id).map(|i| closes.swap_remove(i).1).unwrap_or_default();
-            let out = remove_project(ctx, id, true, p.remove_worktrees.unwrap_or(false), &approved, prepared, None)?;
+            let out = remove_project(ctx, id, true, p.remove_worktrees.unwrap_or(false), p.discard_changes.unwrap_or(false), &approved, prepared, None)?;
             sessions_closed += out.sessions_closed;
         }
         // The workspace's own guardrail layer goes with it, or the next workspace given this
@@ -364,6 +364,10 @@ pub fn register(e: &mut Engine) {
         let build_cmd = p.build_cmd.clone().unwrap_or_else(|| b.build_cmd.clone());
         let run_cmd = p.run_cmd.clone().unwrap_or_else(|| b.run_cmd.clone());
         let base_branch = p.base_branch.clone().unwrap_or_else(|| b.base_branch.clone());
+        if p.base_branch.is_some() && !plausible_branch(&base_branch) {
+            return Err(BusError::invalid("project.base_branch", format!("{base_branch:?} is not a branch name"))
+                .with_hint("a branch name cannot start with '-' or hold spaces, '..', '~', '^', ':' or the like"));
+        }
         let protected = p.protected_paths.clone().unwrap_or_else(|| b.protected_paths.clone());
         let critical = p.critical_files.clone().unwrap_or_else(|| b.critical_files.clone());
         let ord = p.order.unwrap_or(b.order);
@@ -419,7 +423,7 @@ pub fn register(e: &mut Engine) {
         let backup = backup_before(ctx, "project-remove")?;
         Ok(ProjectRemoval { closes: prepare_closes(ctx, &open)?, backup, approved: doomed.into_iter().map(|(wt, _)| wt).collect() })
     }, |ctx: &mut Ctx, p, staged| {
-        remove_project(ctx, p.project_id, p.force.unwrap_or(false), p.remove_worktrees.unwrap_or(false), &staged.approved, staged.closes, staged.backup)
+        remove_project(ctx, p.project_id, p.force.unwrap_or(false), p.remove_worktrees.unwrap_or(false), p.discard_changes.unwrap_or(false), &staged.approved, staged.closes, staged.backup)
     });
     e.register::<ProjectRemovePreview>(|ctx, p| {
         let projects: Vec<Id> = match (p.project_id, p.workspace_id) {
@@ -876,7 +880,8 @@ fn backup_before(ctx: &Unlocked, reason: &str) -> Result<Option<String>, BusErro
 }
 
 /// `project.remove`'s transaction, also run once per project by `workspace.remove`.
-fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: bool, approved: &[PathBuf], mut closes: Vec<(String, Prepared)>, backup: Option<String>) -> Result<ProjectRemoveOut, BusError> {
+#[allow(clippy::too_many_arguments)]
+fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: bool, discard: bool, approved: &[PathBuf], mut closes: Vec<(String, Prepared)>, backup: Option<String>) -> Result<ProjectRemoveOut, BusError> {
     let (pr, open, live_runs) = removal_scope(ctx.tx(), project_id, force)?;
     // `force` closes through `session.close` itself, so every teardown rule holds: scrollback
     // saved, claims released, holds expired, hooks uninstalled. Each close keeps its worktree,
@@ -902,6 +907,8 @@ fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: 
     // and waits for it before deleting anything, as `session.close` does when it removes its
     // own checkout. Otherwise an agent mid-build writes into a tree being deleted (RA-423).
     let mut writers = Vec::new();
+    // The checkouts those agents were writing in, checked again once they have stopped.
+    let mut written: Vec<PathBuf> = Vec::new();
     if !doomed.is_empty() {
         let rows: Vec<(Id, String)> = {
             let mut stmt = ctx.tx().prepare_cached("SELECT id, worktree FROM sessions WHERE project_id=?1 AND state!='closed'").bus()?;
@@ -910,7 +917,10 @@ fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: 
         };
         for (id, wt) in rows {
             if doomed.iter().any(|d| d.as_path() == Path::new(&wt)) {
-                writers.extend(ctx.engine().take_pty(id));
+                if let Some(pty) = ctx.engine().take_pty(id) {
+                    writers.push(pty);
+                    written.push(PathBuf::from(wt));
+                }
             }
         }
     }
@@ -937,7 +947,23 @@ fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: 
                         scope.spawn(move || pty.kill(std::time::Duration::from_millis(150)));
                     }
                 });
+                // The unlocked half checked these while their agents could still write; what
+                // one wrote before its kill is found now. The project is gone by then, so such
+                // a checkout cannot refuse anything: it is kept, logged and named on the event.
+                let kept: Vec<PathBuf> = if discard {
+                    Vec::new()
+                } else {
+                    written.sort();
+                    written.dedup();
+                    let recheck: Vec<super::session::Checkout> = written.into_iter().map(|wt| (wt, Vec::new())).collect();
+                    super::session::dirty_checkouts(&recheck).into_iter().map(|((wt, _), _)| wt.clone()).collect()
+                };
                 for wt in &doomed {
+                    if kept.contains(wt) {
+                        tracing::warn!(worktree = %wt.display(), code = "worktree.dirty",
+                            "an agent wrote into a removed project's worktree after the dirty check; keeping it");
+                        continue;
+                    }
                     if let Err(error) = crate::worktree::remove(&repo, wt, true) {
                         tracing::warn!(worktree = %wt.display(), %error, "removing a removed project's worktree");
                     }
@@ -947,7 +973,7 @@ fn remove_project(ctx: &mut Ctx, project_id: Id, force: bool, remove_worktrees: 
                         tracing::warn!(worktree = %wt, %error, "removing a removed project's integration");
                     }
                 }
-                engine.emit_system("worktree.changed", json!({ "project_id": project_id }));
+                engine.emit_system("worktree.changed", json!({ "project_id": project_id, "kept_dirty": kept }));
             });
         }
     }
@@ -1067,14 +1093,43 @@ fn clone_destination(workspace: &str, url: &str, requested: Option<&str>) -> Res
 
 /// `main` unless the repo's HEAD says otherwise; no subprocess (SPEC §15: zero idle spawns,
 /// and this is a one-off anyway — but a file read is cheaper and enough).
+/// The branch the repository's HEAD names, or `main`. HEAD is the repository's to write, and a
+/// crafted one can name `refs/heads/--output=/some/path`: the base branch reaches git's command
+/// line in several places, where that would read as an option. So a name that is not a
+/// [`plausible_branch`] is not taken.
 fn detect_default_branch(repo: &Path) -> String {
     let head = std::fs::read_to_string(repo.join(".git").join("HEAD")).unwrap_or_default();
-    head.trim().strip_prefix("ref: refs/heads/").map(str::to_string).unwrap_or_else(|| "main".to_string())
+    head.trim().strip_prefix("ref: refs/heads/").filter(|name| plausible_branch(name)).map(str::to_string).unwrap_or_else(|| "main".to_string())
+}
+
+/// A branch name git would accept that cannot be read as an option: `git check-ref-format
+/// --branch`'s rules, checked in process since `project.add` and `project.update` run under the
+/// store lock, plus no leading `-`.
+fn plausible_branch(name: &str) -> bool {
+    !name.is_empty() && !name.starts_with(['-', '/', '.']) && !name.ends_with(['/', '.']) && !name.ends_with(".lock")
+        && !name.contains("..") && !name.contains("//") && !name.contains("@{") && !name.contains("/.") && name != "@"
+        && !name.chars().any(|c| c.is_ascii_control() || c == ' ' || "~^:?*[\\".contains(c))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_head_naming_an_option_is_not_taken_as_the_base_branch() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".git")).unwrap();
+        let head = |value: &str| {
+            std::fs::write(root.path().join(".git/HEAD"), value).unwrap();
+            detect_default_branch(root.path())
+        };
+        assert_eq!(head("ref: refs/heads/develop\n"), "develop");
+        assert_eq!(head("ref: refs/heads/feature/x\n"), "feature/x");
+        assert_eq!(head("ref: refs/heads/--output=/tmp/owned\n"), "main");
+        assert_eq!(head("ref: refs/heads/a..b\n"), "main");
+        assert_eq!(head("ref: refs/heads/has space\n"), "main");
+        assert_eq!(head("0123456789abcdef0123456789abcdef01234567\n"), "main");
+    }
 
     #[test]
     fn suggested_workspace_uses_the_parent_of_a_containing_repository() {

@@ -352,17 +352,20 @@ object Wealthsimple {
                 }
                 "optionexercise" -> null.also { skipped += WsSkipped(line, OPTIONS) }
                 "dividend" -> if (net < 0) null.also { skipped += WsSkipped(line, "A reversed dividend") } else ActivityType.DIVIDEND
-                "interest" -> ActivityType.INTEREST
+                // A negative interest line is a charge, not income.
+                "interest" -> if (net < 0) ActivityType.FEE else ActivityType.INTEREST
                 "moneymovement" -> if (net >= 0) ActivityType.DEPOSIT else ActivityType.WITHDRAWAL
                 "fxexchange" -> {
                     legs += Leg(line, number, date, currency, net)
                     noteAccount(accounts, number, "", registration)
                     null
                 }
-                "nonresidenttax" -> ActivityType.TAX
+                // A positive one is withholding given back: money in.
+                "nonresidenttax" -> if (net > 0) ActivityType.CREDIT else ActivityType.TAX
                 "fee" -> if (net > 0) ActivityType.CREDIT else ActivityType.FEE
                 "refund", "bonuspayment", "administrativepayment" -> if (net < 0) ActivityType.FEE else ActivityType.CREDIT
-                "returnofcapital" -> ActivityType.RETURN_OF_CAPITAL
+                "returnofcapital" ->
+                    if (net < 0) null.also { skipped += WsSkipped(line, "A reversed return of capital") } else ActivityType.RETURN_OF_CAPITAL
                 "noncashdistribution" -> ActivityType.NOTIONAL_DISTRIBUTION
                 "securitytransfer", "internalsecuritytransfer" -> if (units > 0) ActivityType.TRANSFER_IN else ActivityType.TRANSFER_OUT
                 "corporateaction" -> if (units > 0) ActivityType.SPLIT else null.also { skipped += WsSkipped(line, "Tally doesn't read $kind lines yet") }
@@ -442,11 +445,12 @@ object Wealthsimple {
             }
             val code = codeOf(row)
             val currency = currencyOrCad(at("currency"))
-            val amount = Invest.parseScaled(at("amount"), Invest.fractionDigits(currency))?.value?.let { abs(it) }
-            if (amount == null) {
+            val signed = Invest.parseScaled(at("amount"), Invest.fractionDigits(currency))?.value
+            if (signed == null) {
                 skipped += WsSkipped(line, "The amount \"${at("amount")}\" could not be read")
                 return@forEachIndexed
             }
+            val amount = abs(signed)
             val description = at("description")
             val beforeDash = description.substringBefore(" - ", "").trim().uppercase().ifEmpty { null }
             val activity = WsActivity(line, null, date, ActivityType.DEPOSIT, null, "", currency, 0, null, amount, 0, note = description)
@@ -468,9 +472,11 @@ object Wealthsimple {
                 }
                 "DIV" -> activity.copy(type = ActivityType.DIVIDEND, symbol = beforeDash)
                 "CONT" -> activity
-                "NRT" -> activity.copy(type = ActivityType.TAX)
-                "FPLINT", "INT" -> activity.copy(type = ActivityType.INTEREST)
-                "FEE" -> activity.copy(type = ActivityType.FEE)
+                // These three take their direction from the amount's sign: withholding given back is
+                // money in, negative interest a charge, a positive fee line a rebate.
+                "NRT" -> activity.copy(type = if (signed > 0) ActivityType.CREDIT else ActivityType.TAX)
+                "FPLINT", "INT" -> activity.copy(type = if (signed < 0) ActivityType.FEE else ActivityType.INTEREST)
+                "FEE" -> activity.copy(type = if (signed > 0) ActivityType.CREDIT else ActivityType.FEE)
                 "WD", "WDL" -> activity.copy(type = ActivityType.WITHDRAWAL)
                 "LOAN", "RECALL" -> {
                     skipped += WsSkipped(line, "Securities lending isn't tracked")

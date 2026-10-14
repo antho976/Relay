@@ -115,8 +115,189 @@ pub fn capture_size_for(px: u32) -> u32 {
 /// first place. Scales with the long edge, capped: the link is local (USB/adb), so the
 /// ceiling is the device encoder's comfort, not bandwidth.
 pub fn capture_bit_rate(max_size: u32) -> u32 {
-    let scaled = 8_000_000u64 * u64::from(capture_size_for(max_size)) / u64::from(CAPTURE_MIN);
+    let scaled = u64::from(MIN_BIT_RATE) * u64::from(capture_size_for(max_size)) / u64::from(CAPTURE_MIN);
     scaled.min(20_000_000) as u32
+}
+
+/// No rung, and no caller's `bitrate`, goes below this. Under it the encoder starves on busy
+/// content and the device queues frames rather than drop them: at 4 Mbps a scrolling list was
+/// measured arriving 0.7–1.3 s late (a lag, not a blur). The link is USB, so the floor costs
+/// nothing a mirror can feel.
+pub const MIN_BIT_RATE: u32 = 8_000_000;
+/// The most a caller can ask for; past it device encoders refuse or silently cap.
+pub const MAX_BIT_RATE: u32 = 50_000_000;
+
+/// A requested bit rate brought inside [`MIN_BIT_RATE`]..=[`MAX_BIT_RATE`].
+pub fn clamp_bit_rate(bps: u32) -> u32 {
+    bps.clamp(MIN_BIT_RATE, MAX_BIT_RATE)
+}
+
+/// The frame-rate cap when the device's refresh rate is unknown: what Relay always sent.
+pub const DEFAULT_MAX_FPS: u32 = 60;
+/// The highest `max_fps` Relay asks for. Phones top out at 120–144 Hz; past that a cap is
+/// only a way to make the encoder work for frames no host monitor here shows.
+pub const MAX_FPS_CAP: u32 = 144;
+
+/// The device's top refresh rate from `adb shell dumpsys display`, or `None` when the text
+/// says nothing usable. The highest of the display's modes, not the active one: an adaptive
+/// (LTPO) panel idling at 60 Hz reports a 60 Hz active mode while it can run at 120, and
+/// `max_fps` is only a ceiling — capping at the idle rate would halve the picture the moment
+/// something moves. A panel the user locked at 60 sends no more than 60 whatever the cap.
+///
+/// The format moves between releases and vendors, so this reads only the two spellings every
+/// version has used for a mode's rate — `fps=` in `{id=…, width=…, fps=…}` mode lists (Android
+/// 6 onward, AOSP and Samsung alike) and `refreshRate=` in SurfaceFlinger's `DisplayMode{…}`
+/// (Android 12+) — and narrows where it looks, best first: the lines describing logical display
+/// 0 (`DisplayInfo{…displayId 0…}`), then the built-in panel's `DisplayDeviceInfo`
+/// (`uniqueId="local:…"`), then anything. Other displays — a DeX monitor, another tool's virtual
+/// display — only count when nothing better is there.
+pub fn display_refresh_rate(dumpsys: &str) -> Option<f32> {
+    let best = |lines: &mut dyn Iterator<Item = &str>| {
+        lines.flat_map(mode_rates).fold(None, |max: Option<f32>, rate| Some(max.map_or(rate, |max| max.max(rate))))
+    };
+    // `displayId 0,` from Android 11 on; `"Built-in Screen, displayId 0"` (inside the name)
+    // before. Never `displayId 01`-style prefixes of another id.
+    let display_zero = |line: &str| {
+        line.match_indices("displayId 0").any(|(at, key)| !line[at + key.len()..].starts_with(|c: char| c.is_ascii_digit()))
+    };
+    best(&mut dumpsys.lines().filter(|line| line.contains("DisplayInfo{") && display_zero(line)))
+        .or_else(|| best(&mut dumpsys.lines().filter(|line| line.contains("DisplayDeviceInfo{") && line.contains("uniqueId=\"local:"))))
+        .or_else(|| best(&mut dumpsys.lines()))
+}
+
+/// Every `fps=<f>` / `refreshRate=<f>` on one line that is a plausible panel rate. The key must
+/// start a word, so `alternativeRefreshRates=` and `refreshRateRange` do not count.
+fn mode_rates(line: &str) -> impl Iterator<Item = f32> + '_ {
+    ["fps=", "refreshRate="].into_iter().flat_map(move |key| {
+        line.match_indices(key).filter_map(move |(at, _)| {
+            if line[..at].chars().next_back().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
+                return None;
+            }
+            let rest = &line[at + key.len()..];
+            let end = rest.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(rest.len());
+            rest[..end].parse::<f32>().ok().filter(|rate| rate.is_finite() && (1.0..=1000.0).contains(rate))
+        })
+    })
+}
+
+/// The `max_fps` for a device whose top refresh rate is `refresh`: that rate rounded (59.94 →
+/// 60, 120.00001 → 120), never under [`DEFAULT_MAX_FPS`] — today's value, so an odd reading can
+/// only ever raise the cap — and never over [`MAX_FPS_CAP`].
+pub fn max_fps_for(refresh: Option<f32>) -> u32 {
+    refresh.map_or(DEFAULT_MAX_FPS, |rate| (rate.round() as u32).clamp(DEFAULT_MAX_FPS, MAX_FPS_CAP))
+}
+
+/// `video_codec_options` Relay itself always sends; a user's options are merged over these.
+/// Empty: scrcpy v4.1 already asks the encoder for `priority=0` (realtime) and `latency=1`
+/// (no frame batching) on its own. Spelled out so a future default has one place to go.
+pub const BASE_CODEC_OPTIONS: &str = "";
+
+/// One `key[:type]=value` of scrcpy's `video_codec_options`, checked: the server throws on an
+/// unknown type or a value that does not parse, and the line reaches the device through
+/// `adb shell`, i.e. a shell — so keys and values are held to characters no shell treats
+/// specially, and anything else is refused rather than quoted.
+fn parse_codec_option(entry: &str) -> Result<(&str, &str), String> {
+    let (lhs, value) = entry.split_once('=').ok_or_else(|| format!("{entry:?} is not key[:type]=value"))?;
+    let (key, kind) = match lhs.split_once(':') {
+        Some((key, kind)) => (key, Some(kind)),
+        None => (lhs, None),
+    };
+    let word = |s: &str, extra: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || extra.contains(c));
+    if !word(key, "._-") {
+        return Err(format!("codec option key {key:?} must be letters, digits, '.', '_' or '-'"));
+    }
+    if !word(value, "._+-") {
+        return Err(format!("codec option {key:?} has a value with characters other than letters, digits, '.', '_', '+' or '-'"));
+    }
+    let typed = match kind {
+        None | Some("int") => value.parse::<i32>().is_ok(),
+        Some("long") => value.parse::<i64>().is_ok(),
+        Some("float") => value.parse::<f32>().is_ok(),
+        Some("string") => true,
+        Some(other) => return Err(format!("codec option {key:?} has unknown type {other:?} (int, long, float, string)")),
+    };
+    if !typed {
+        return Err(format!("codec option {key:?}: {value:?} is not a {}", kind.unwrap_or("int")));
+    }
+    Ok((key, entry))
+}
+
+/// `extra` merged over `base`, as one `video_codec_options` value: every entry checked, an
+/// entry of `extra` replacing `base`'s entry for the same key in place (scrcpy applies options
+/// in order, so a duplicate key would leave which one wins to the encoder), new keys appended
+/// in the order given. Empty entries (a trailing comma) are dropped. Any bad entry refuses the
+/// whole value: half an option set is a configuration nobody asked for.
+pub fn merge_codec_options(base: &str, extra: &str) -> Result<String, String> {
+    let mut merged: Vec<(&str, &str)> = Vec::new();
+    for entry in base.split(',').chain(extra.split(',')).map(str::trim).filter(|entry| !entry.is_empty()) {
+        let (key, entry) = parse_codec_option(entry)?;
+        match merged.iter_mut().find(|(have, _)| *have == key) {
+            Some(slot) => slot.1 = entry,
+            None => merged.push((key, entry)),
+        }
+    }
+    Ok(merged.iter().map(|(_, entry)| *entry).collect::<Vec<_>>().join(","))
+}
+
+/// What one server launch varies. Built by the mirror worker from the start request, the
+/// device's display and Settings; [`server_shell_args`] clamps and checks it again, so no
+/// caller can hand the server an off-ladder size, a starved bit rate or a shell metacharacter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerLaunch {
+    pub max_size: u32,
+    pub video_bit_rate: u32,
+    pub max_fps: u32,
+    /// The user's `video_codec_options` (Settings `device.mirror.video_codec_options`), merged
+    /// over [`BASE_CODEC_OPTIONS`]. Empty for none.
+    pub video_codec_options: String,
+}
+
+impl ServerLaunch {
+    /// A launch at one capture size and bit rate, everything else at its default.
+    pub fn new(max_size: u32, video_bit_rate: u32) -> Self {
+        Self { max_size, video_bit_rate, max_fps: DEFAULT_MAX_FPS, video_codec_options: String::new() }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// latency tracing (RELAY_MIRROR_TRACE)
+// ---------------------------------------------------------------------------
+
+/// Whether `RELAY_MIRROR_TRACE` is set (to anything but `0` or nothing). Read once; after that
+/// a trace point that is off costs one relaxed load. The events go to the `mirror_trace`
+/// tracing target at INFO, so the subscriber's filter has to let them through too (e.g.
+/// `RUST_LOG=mirror_trace=info` for the native client, `RELAY_LOG=info,mirror_trace=info` for
+/// `relay serve`).
+pub fn trace_enabled() -> bool {
+    static ON: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        std::env::var_os("RELAY_MIRROR_TRACE").is_some_and(|value| !value.is_empty() && value != "0")
+    });
+    *ON
+}
+
+/// `CLOCK_MONOTONIC` in nanoseconds — the clock every mirror trace point stamps with, engine and
+/// client alike, so lines from both (and from a probe on the same host) join on one axis.
+pub fn monotonic_ns() -> u64 {
+    let mut now = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: `now` is a valid, writable timespec; CLOCK_MONOTONIC always exists on Linux.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
+    now.tv_sec as u64 * 1_000_000_000 + now.tv_nsec as u64
+}
+
+/// `(mirror_id, seq)` of a serialized `mirror` video frame, read off the head of the line
+/// without parsing the base64 behind it; `None` for any other line and for status frames
+/// (seq 0). Only the trace's writer-side point calls it.
+pub fn trace_frame_ids(line: &str) -> Option<(i64, u64)> {
+    let head = &line[..line.len().min(160)];
+    if !head.contains("\"stream\":\"mirror\"") {
+        return None;
+    }
+    let number = |key: &str| {
+        let rest = &head[head.find(key)? + key.len()..];
+        rest[..rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len())].parse::<u64>().ok()
+    };
+    let seq = number("\"seq\":").filter(|&seq| seq > 0)?;
+    Some((number("\"mirror_id\":")? as i64, seq))
 }
 
 /// The stream size scrcpy will most likely pick for a `width`×`height` display capped at
@@ -135,22 +316,26 @@ pub fn fit_size(width: u32, height: u32, max_size: u32) -> (u32, u32) {
     if w >= h { (max_size, minor) } else { (minor, max_size) }
 }
 
-/// The full `adb shell … app_process` invocation that boots the server on-device at one
-/// capture size and bit rate — the only two values Relay varies. Everything else is a fixed
-/// key with a long-stable name, since the server hard-fails on any unknown key: no audio
-/// (the mirror decodes video only), stay awake while plugged in, info-level server logs (the
-/// only diagnostics when it dies). Meta preludes (dummy byte, device name, codec id) and
-/// frame meta stay on by default; the reader depends on them.
+/// The full `adb shell … app_process` invocation that boots the server on-device. Relay
+/// varies the capture size, bit rate, frame-rate cap and (opt-in) codec options; everything
+/// else is a fixed key with a long-stable name, since the server hard-fails on any unknown
+/// key: no audio (the mirror decodes video only), stay awake while plugged in, info-level
+/// server logs (the only diagnostics when it dies). Meta preludes (dummy byte, device name,
+/// codec id) and frame meta stay on by default; the reader depends on them.
 ///
-/// `max_size` is snapped to a [`CAPTURE_SIZES`] rung here, so no caller can hand the server
-/// an off-ladder value. Argument order is fixed and tested: the server parses the version
-/// positionally (right after the class name) and everything after it as `key=value`, so a
-/// stable order is what makes the launch line something you can diff against a log.
+/// `max_size` is snapped to a [`CAPTURE_SIZES`] rung, the bit rate held to
+/// [`MIN_BIT_RATE`]..=[`MAX_BIT_RATE`], `max_fps` to 1..=[`MAX_FPS_CAP`] (0 would mean
+/// "uncapped" to the server), and
+/// the codec options re-checked ([`merge_codec_options`]; a bad set is left out, not sent), so
+/// no caller can hand the server an off-ladder value or the device shell anything to
+/// interpret. Argument order is fixed and tested: the server parses the version positionally
+/// (right after the class name) and everything after it as `key=value`, so a stable order is
+/// what makes the launch line something you can diff against a log.
 ///
 /// Adding an option back: v4.1 spells an orientation lock `capture_orientation=@<angle>`;
 /// the pre-3.0 `lock_video_orientation` key is unknown to it and stops it booting.
-pub fn server_shell_args(serial: &str, scid: u32, max_size: u32, video_bit_rate: u32) -> Vec<String> {
-    vec![
+pub fn server_shell_args(serial: &str, scid: u32, launch: &ServerLaunch) -> Vec<String> {
+    let mut args = vec![
         "-s".into(),
         serial.into(),
         "shell".into(),
@@ -163,13 +348,19 @@ pub fn server_shell_args(serial: &str, scid: u32, max_size: u32, video_bit_rate:
         "log_level=info".into(),
         "audio=false".into(),
         "video_codec=h264".into(),
-        format!("max_size={}", capture_size_for(max_size)),
-        format!("video_bit_rate={video_bit_rate}"),
-        "max_fps=60".into(),
-        "stay_awake=true".into(),
-        // Last, always: the tunnel mode is what the shell's connect sequence assumes.
-        "tunnel_forward=true".into(),
-    ]
+        format!("max_size={}", capture_size_for(launch.max_size)),
+        format!("video_bit_rate={}", clamp_bit_rate(launch.video_bit_rate)),
+        format!("max_fps={}", launch.max_fps.clamp(1, MAX_FPS_CAP)),
+    ];
+    if let Ok(options) = merge_codec_options(BASE_CODEC_OPTIONS, &launch.video_codec_options) {
+        if !options.is_empty() {
+            args.push(format!("video_codec_options={options}"));
+        }
+    }
+    args.push("stay_awake=true".into());
+    // Last, always: the tunnel mode is what the shell's connect sequence assumes.
+    args.push("tunnel_forward=true".into());
+    args
 }
 
 // ---------------------------------------------------------------------------

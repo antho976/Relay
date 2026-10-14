@@ -315,9 +315,21 @@ struct AttachmentScan {
     root: std::path::PathBuf,
     /// Every file under `root/<task id>/`, plus staged copies older than [`STAGED_STALE`].
     files: Vec<std::path::PathBuf>,
-    /// Paths an `attachments` row in a project- or workspace-removal backup names:
-    /// `project.restore` brings those rows back and needs their files.
+    /// The [`attachment_key`] of every path an `attachments` row in a project- or
+    /// workspace-removal backup names: `project.restore` brings those rows back and needs their files.
     in_backups: std::collections::HashSet<String>,
+}
+
+/// `<task>/<file>`: what names an attachment within the attachments folder, whatever that folder
+/// was called when its row was written. Rows store the whole path, and the store's directory can
+/// be reached by more than one spelling (a moved or symlinked data directory, `/home` against
+/// `/var/home`, `relay serve --store`): compared whole, no row matched any file under the other
+/// spelling, and every attachment was swept. A file's own id prefix keeps two tasks' keys apart.
+fn attachment_key(path: &Path) -> Option<String> {
+    let mut parts = path.components().rev();
+    let file = parts.next()?.as_os_str().to_string_lossy().into_owned();
+    let task = parts.next()?.as_os_str().to_string_lossy().into_owned();
+    Some(format!("{task}/{file}"))
 }
 
 /// `None` when there is nothing to sweep, or when a removal backup cannot be read — then
@@ -363,7 +375,7 @@ fn scan_attachments(engine: &Engine) -> Option<AttachmentScan> {
             rows
         });
         match paths {
-            Ok(paths) => in_backups.extend(paths),
+            Ok(paths) => in_backups.extend(paths.iter().filter_map(|path| attachment_key(Path::new(path)))),
             Err(error) => {
                 tracing::warn!(backup = %backup.path.display(), %error, "unreadable removal backup; keeping every attachment file");
                 return None;
@@ -375,11 +387,20 @@ fn scan_attachments(engine: &Engine) -> Option<AttachmentScan> {
 
 /// The scanned files no `attachments` row names, live or detached, and no undoable audit row
 /// names either: a `task.detach` from before v24 recorded its undo as `task.attach {path}`.
+/// Compared by [`attachment_key`]. Nothing at all while a row names a file outside the folder
+/// that was scanned: the rows were written against another copy or spelling of it, and which
+/// files they mean is a guess no sweep should act on.
 fn orphaned_attachments(tx: &rusqlite::Transaction, scan: &AttachmentScan) -> Result<Vec<std::path::PathBuf>> {
-    let mut referenced: std::collections::HashSet<String> = tx
-        .prepare_cached("SELECT path FROM attachments")?
+    let rows: Vec<String> = tx
+        .prepare_cached("SELECT path FROM attachments WHERE path != ''")?
         .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
+    if let Some(elsewhere) = rows.iter().find(|path| !Path::new(path).starts_with(&scan.root)) {
+        tracing::warn!(row = %elsewhere, folder = %scan.root.display(),
+            "an attachment row names a file outside the attachments folder; keeping every attachment file");
+        return Ok(Vec::new());
+    }
+    let mut referenced: std::collections::HashSet<String> = rows.iter().filter_map(|path| attachment_key(Path::new(path))).collect();
     let undoable = tx
         .prepare_cached(
             "SELECT json_extract(undo_op, '$.payload.path') FROM audit
@@ -388,13 +409,12 @@ fn orphaned_attachments(tx: &rusqlite::Transaction, scan: &AttachmentScan) -> Re
         )?
         .query_map([], |r| r.get::<_, Option<String>>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    referenced.extend(undoable.into_iter().flatten());
+    referenced.extend(undoable.into_iter().flatten().filter_map(|path| attachment_key(Path::new(&path))));
     Ok(scan
         .files
         .iter()
         .filter(|path| {
-            let key = path.display().to_string();
-            !referenced.contains(&key) && !scan.in_backups.contains(&key)
+            attachment_key(path).is_some_and(|key| !referenced.contains(&key) && !scan.in_backups.contains(&key))
         })
         .cloned()
         .collect())

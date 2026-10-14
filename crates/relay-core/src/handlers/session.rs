@@ -535,33 +535,71 @@ fn run_teardown(repo: &Path, worktree: &Path, teardown: &Teardown) -> Result<(),
 /// A checkout a removal would delete, and the sessions on it.
 pub(crate) type Checkout = (PathBuf, Vec<String>);
 
-/// Refuse `worktree.dirty` when a checkout a removal is about to delete holds uncommitted
-/// work: tracked edits, staged changes or untracked files (RA-405). Each entry is a checkout
-/// and the sessions on it. One `git status` per checkout, each bounded by its 10 s timeout and
-/// run a few at a time as `session.restorable` does, so this runs with the store unlocked. A
-/// checkout already gone is skipped; one whose status fails counts as dirty, size unknown.
-pub(crate) fn refuse_dirty(checkouts: &[Checkout]) -> Result<(), BusError> {
+/// What removing one checkout would delete that git could not bring back.
+pub(crate) struct Dirt {
+    /// Entries `git status` lists; `None` when a scan failed, size unknown.
+    changed: Option<usize>,
+    /// Git-ignored secrets and local state nothing rebuilds: an `.env`, a keystore,
+    /// `local.properties`, a local database ([`crate::branch_cleanup::ignored_keepers`]). No
+    /// status without `--ignored` shows them.
+    ignored: Vec<String>,
+}
+
+impl Dirt {
+    fn unknown() -> Self { Dirt { changed: None, ignored: Vec::new() } }
+    fn any(&self) -> bool { self.changed != Some(0) || !self.ignored.is_empty() }
+}
+
+/// The checkouts of `checkouts` a removal would lose work from: tracked edits, staged changes,
+/// untracked files (RA-405) or git-ignored keepers ([`crate::branch_cleanup::ignored_keepers`]).
+/// Two `git status` per checkout, each bounded by its timeout and run a few checkouts at a time
+/// as `session.restorable` does, so this runs with the store unlocked. A checkout already gone
+/// is skipped; one whose scan fails counts as dirty, size unknown.
+pub(crate) fn dirty_checkouts(checkouts: &[Checkout]) -> Vec<(&Checkout, Dirt)> {
     let live: Vec<&Checkout> = checkouts.iter().filter(|(wt, _)| wt.exists()).collect();
-    if live.is_empty() { return Ok(()); }
-    let changed = |wt: &Path| worktree::status_files_with(wt, worktree::Untracked::Directories).ok().map(|files| files.len());
+    if live.is_empty() { return Vec::new(); }
+    let scan = |wt: &Path| {
+        // Without a `.git` of its own (half deleted) git would answer for the primary checkout
+        // that holds it: the primary's changes and ignored files are not this checkout's to lose.
+        let Ok(files) = worktree::checkout_changes(wt, worktree::Untracked::Directories) else { return Dirt::unknown() };
+        let ignored = if wt.join(".git").exists() { crate::branch_cleanup::ignored_keepers(wt) } else { Ok(Vec::new()) };
+        match ignored {
+            Ok(ignored) => Dirt { changed: Some(files.len()), ignored },
+            Err(_) => Dirt::unknown(),
+        }
+    };
     let per_worker = live.len().div_ceil(4).max(1);
-    let counts: Vec<Option<usize>> = std::thread::scope(|scope| {
+    let found: Vec<Dirt> = std::thread::scope(|scope| {
         let workers: Vec<_> = live.chunks(per_worker)
-            .map(|chunk| scope.spawn(move || chunk.iter().map(|(wt, _)| changed(wt)).collect::<Vec<_>>()))
+            .map(|chunk| scope.spawn(move || chunk.iter().map(|(wt, _)| scan(wt)).collect::<Vec<_>>()))
             .collect();
         workers.into_iter().zip(live.chunks(per_worker))
-            .flat_map(|(worker, chunk)| worker.join().unwrap_or_else(|_| vec![None; chunk.len()]))
+            .flat_map(|(worker, chunk)| worker.join().unwrap_or_else(|_| chunk.iter().map(|_| Dirt::unknown()).collect()))
             .collect()
     });
-    let dirty: Vec<(&Checkout, Option<usize>)> = live.into_iter().zip(counts).filter(|(_, n)| *n != Some(0)).collect();
+    live.into_iter().zip(found).filter(|(_, dirt)| dirt.any()).collect()
+}
+
+/// Refuse `worktree.dirty` when a checkout a removal is about to delete holds work
+/// [`dirty_checkouts`] finds. Each entry is a checkout and the sessions on it.
+pub(crate) fn refuse_dirty(checkouts: &[Checkout]) -> Result<(), BusError> {
+    let dirty = dirty_checkouts(checkouts);
     if dirty.is_empty() { return Ok(()); }
-    let describe = |((wt, sessions), n): &(&Checkout, Option<usize>)| {
-        let changes = match n {
-            Some(n) => format!("{n} uncommitted change{}", if *n == 1 { "" } else { "s" }),
-            None => "changes that could not be checked".to_string(),
-        };
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let describe = |((wt, sessions), dirt): &(&Checkout, Dirt)| {
+        let mut what = Vec::new();
+        match dirt.changed {
+            Some(0) => {}
+            Some(n) => what.push(format!("{n} uncommitted change{}", plural(n))),
+            None => what.push("changes that could not be checked".to_string()),
+        }
+        if !dirt.ignored.is_empty() {
+            let n = dirt.ignored.len();
+            let named = dirt.ignored.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+            what.push(format!("{n} git-ignored file{} ({named}{})", plural(n), if n > 3 { ", …" } else { "" }));
+        }
         let whose = if sessions.is_empty() { String::new() } else { format!(" (session {})", sessions.join(", ")) };
-        format!("{}{whose} has {changes}", wt.display())
+        format!("{}{whose} has {}", wt.display(), what.join(" and "))
     };
     let message = match dirty.as_slice() {
         [one] => format!("worktree {}; removing it would delete them", describe(one)),
@@ -569,11 +607,12 @@ pub(crate) fn refuse_dirty(checkouts: &[Checkout]) -> Result<(), BusError> {
             many.len(), many.iter().map(describe).collect::<Vec<_>>().join("; ")),
     };
     let details: Vec<Value> = dirty.iter()
-        .map(|((wt, sessions), n)| json!({"worktree": wt.display().to_string(), "sessions": sessions, "changed": n}))
+        .map(|((wt, sessions), dirt)| json!({"worktree": wt.display().to_string(), "sessions": sessions, "changed": dirt.changed,
+            "ignored": dirt.ignored.iter().take(20).collect::<Vec<_>>()}))
         .collect();
     Err(BusError::conflict("worktree.dirty", message)
         .with_details(json!({"worktrees": details}))
-        .with_hint("commit or stash the changes first, or pass discard_changes: true to delete them with the worktree"))
+        .with_hint("commit or stash the changes (and move out any git-ignored files worth keeping) first, or pass discard_changes: true to delete them with the worktree"))
 }
 
 /// Kill a PTY that is already out of the registry without making the caller wait for it.
@@ -746,6 +785,21 @@ fn prepare_launch(engine: &Engine, plan: LaunchPlan) -> Result<PreparedLaunch, B
             "session.worktree_missing",
             format!("worktree {} is gone", cwd.display()),
         ));
+    }
+    // A pooled checkout that lost its `.git` (a removal or a crash half done) is a plain folder
+    // inside the primary: git there answers for the primary, so the hooks would be installed
+    // on it and the agent would work on its branch. Only a checkout git calls its own is used.
+    if cwd.starts_with(worktree::pool_dir(&project_path)) {
+        let toplevel = cwd.join(".git").exists()
+            .then(|| worktree::git_mutate(&cwd, &["rev-parse", "--show-toplevel"]).ok())
+            .flatten()
+            .and_then(|top| std::fs::canonicalize(top.trim()).ok());
+        if toplevel.is_none() || toplevel != std::fs::canonicalize(&cwd).ok() {
+            return Err(BusError::conflict(
+                "session.worktree_missing",
+                format!("worktree {} is no longer a git checkout (its .git is gone); git there would act on the primary checkout instead", cwd.display()),
+            ).with_hint("discard the session (session.discard_restorable) and start a new one; move out anything in the folder worth keeping first"));
+        }
     }
     // Concurrent launches (two sessions of one repository, or a double-clicked Start) would
     // otherwise race on `.git/config` and the provider adapters' temp files.
@@ -2010,7 +2064,8 @@ pub fn register(e: &mut Engine) {
         let s = &row.session;
         let wt = Path::new(&s.worktree);
         // Before anything is stopped or undone: a refused close leaves the agent running.
-        if remove && wt.starts_with(worktree::pool_dir(&repo)) && !p.discard_changes.unwrap_or(false) {
+        let checked = remove && wt.starts_with(worktree::pool_dir(&repo)) && !p.discard_changes.unwrap_or(false);
+        if checked {
             refuse_dirty(&[(wt.to_path_buf(), vec![s.name.clone()])])?;
         }
         // Stop writers before undoing their hooks and deleting their checkout, with a bounded
@@ -2022,6 +2077,22 @@ pub fn register(e: &mut Engine) {
                 pty.silence_exit();
                 pty.kill(Duration::from_millis(150));
             });
+        // The check above ran while the agent could still write. What it wrote since is found
+        // here, now that it has stopped: the checkout and its hooks are kept, and the session,
+        // its agent gone, reads `exited` rather than `closed` — a later close or
+        // discard_restorable checks it again.
+        if checked && stopped.is_some() {
+            if let Err(mut error) = refuse_dirty(&[(wt.to_path_buf(), vec![s.name.clone()])]) {
+                mark_exited_detached(ctx.engine(), s.id, s.project_id);
+                error.message = format!("{}. The agent wrote it after the close began: it was stopped, the session is now exited, and the worktree was kept", error.message);
+                // There is no agent left to keep: a dialog offering "Keep the agent" reads
+                // this and offers keeping the worktree instead.
+                if let Some(details) = error.details.as_mut().and_then(Value::as_object_mut) {
+                    details.insert("stopped".into(), Value::Bool(true));
+                }
+                return Err(error);
+            }
+        }
         let cleaned = (|| {
             if let Some(teardown) = &teardown {
                 run_teardown(&repo, wt, teardown)?;

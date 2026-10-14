@@ -66,6 +66,12 @@ fn a_tally_backup_restores_and_exports_the_same_ledger() {
         v
     };
     assert_eq!(strip(&out), strip(&again));
+    // An export over an old one is renamed in whole, and only the user reads it.
+    std::fs::set_permissions(&out, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+    ok(&engine, "money.export", json!({"path": out}));
+    assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&out).unwrap().permissions()) & 0o777, 0o600);
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "a temporary file was left beside the export");
+    assert_eq!(strip(&out), strip(&again));
 }
 
 #[test]
@@ -107,6 +113,49 @@ fn a_phone_syncs_its_ledger_across_the_bus() {
     // A phone's credential is the person's; an agent cannot sync a ledger over it.
     let agent = call_as(&engine, Actor::agent("brisk-otter"), "money.sync", json!({"device": "x", "since": 0, "changes": []}));
     assert!(agent.error.is_some());
+}
+
+#[test]
+fn a_change_stamped_far_in_the_future_is_skipped_and_the_ledger_goes_on_syncing() {
+    let engine = engine();
+    let changes = json!([
+        {"table": "accounts", "uid": "a1", "updated_at": 100, "row": {"name": "Chequing", "type": "CHEQUING", "openingBalance": 50_000, "archived": false, "sortOrder": 0}},
+        {"table": "transactions", "uid": "t1", "updated_at": i64::MAX, "row": {"type": "INCOME", "amount": 210_000, "date": "2026-10-01", "account": "a1",
+            "toAccount": null, "category": null, "note": "Pay", "recurring": null, "createdAt": 100}}
+    ]);
+    let first = ok(&engine, "money.sync", json!({"device": "Avex (S21)", "replace": true, "since": 0, "changes": changes}));
+    assert_eq!((first["applied"].as_u64(), first["skipped"].as_u64()), (Some(1), Some(1)));
+    let home = ok(&engine, "money.summary", json!({"today": "2026-10-07"}));
+    ok(&engine, "money.tx.add", json!({"type": "EXPENSE", "amount": 1_500, "date": "2026-10-06", "account_id": home["accounts"][0]["id"]}));
+    let next = ok(&engine, "money.sync", json!({"device": "Pixel 9", "since": 0, "changes": []}));
+    assert!(next["changes"].as_array().unwrap().iter().all(|c| c["updated_at"].as_i64().unwrap() < i64::MAX / 2), "{next}");
+}
+
+#[test]
+fn a_sync_answer_comes_in_pages_when_asked_for_them() {
+    let engine = engine();
+    ok(&engine, "money.sample", json!({}));
+    let whole = ok(&engine, "money.sync", json!({"device": "Pixel 9", "since": 0, "changes": []}));
+    assert!(whole.get("more").is_none(), "an answer asked for whole reads as it always did");
+    let total = whole["changes"].as_array().unwrap().len();
+    let (mut since, mut generation, mut taken, mut pages) = (0, serde_json::Value::Null, 0, 0);
+    loop {
+        let page = ok(&engine, "money.sync", json!({"device": "Pixel 9", "since": since, "generation": generation, "changes": [], "limit": 50}));
+        let n = page["changes"].as_array().unwrap().len();
+        assert!(n <= 50);
+        taken += n;
+        pages += 1;
+        since = page["cursor"].as_i64().unwrap();
+        generation = page["generation"].clone();
+        if page.get("more").is_none() {
+            break;
+        }
+        assert_eq!(page["more"], true);
+    }
+    assert_eq!(taken, total);
+    assert!(pages > 1, "the sample is more than one page");
+    let zero = call_as(&engine, Actor::User, "money.sync", json!({"device": "Pixel 9", "since": 0, "changes": [], "limit": 0}));
+    assert_eq!(code(zero), "money.invalid");
 }
 
 #[test]
@@ -335,4 +384,73 @@ esac
     // The newest rate on or before today values Apple's US dollars: 1,000.00 USD at 1.3725.
     let apple = &ok(&engine, "money.invest.summary", json!({"today": "2026-10-09"}))["holdings"][0];
     assert_eq!((apple["symbol"].as_str(), apple["value"].as_i64(), apple["fx_estimated"].as_bool()), (Some("AAPL"), Some(137_250), Some(false)));
+}
+
+/// `money.import` and `money.export` touch the file before the store's transaction opens, and only
+/// a regular one: a FIFO blocked the read (or the write) for good with every request queued
+/// behind it, and `/dev/zero`, which says it is empty, read until memory ran out.
+#[test]
+fn a_backup_is_only_ever_a_regular_file() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("pipe.json");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let answering = engine.clone();
+    let pipe = fifo.clone();
+    let dir_path = dir.path().to_path_buf();
+    std::thread::spawn(move || {
+        let calls = [
+            ("money.import", json!({"path": pipe})),
+            ("money.import", json!({"path": "/dev/zero"})),
+            ("money.import", json!({"path": dir_path})),
+            ("money.export", json!({"path": pipe})),
+            ("money.export", json!({"path": dir_path})),
+        ];
+        let codes: Vec<String> = calls.into_iter().map(|(op, payload)| code(call_as(&answering, Actor::User, op, payload))).collect();
+        let _ = tx.send(codes);
+    });
+    let codes = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("a pipe or a device held the request open");
+    assert_eq!(codes, ["money.path"; 5]);
+    use std::os::unix::fs::FileTypeExt;
+    assert!(std::fs::metadata(&fifo).unwrap().file_type().is_fifo(), "the pipe was left as it was");
+    // The bus is still answering, and a real backup still round-trips.
+    let out = dir.path().join("backup.json");
+    ok(&engine, "money.sample", json!({}));
+    ok(&engine, "money.export", json!({"path": out}));
+    let not_text = dir.path().join("latin1.json");
+    std::fs::write(&not_text, b"{\"format\": \"caf\xe9\"}").unwrap();
+    assert_eq!(code(call_as(&engine, Actor::User, "money.import", json!({"path": not_text}))), "money.import");
+    assert_eq!(ok(&engine, "money.import", json!({"path": out}))["kind"], "backup");
+}
+
+/// A backup that is a symlink into a synced folder is written through the link: renamed over the
+/// link, it became a plain local file and the synced copy stopped updating.
+#[test]
+fn an_export_writes_through_a_symlink_and_keeps_it() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    let (sync, backups) = (dir.path().join("Sync"), dir.path().join("backups"));
+    std::fs::create_dir(&sync).unwrap();
+    std::fs::create_dir(&backups).unwrap();
+    let (real, link) = (sync.join("tally.json"), backups.join("tally.json"));
+    std::os::unix::fs::symlink("../Sync/tally.json", &link).unwrap();
+    ok(&engine, "money.sample", json!({}));
+    // A link to a file not made yet, then to last week's (0644).
+    for _ in 0..2 {
+        let exported = ok(&engine, "money.export", json!({"path": link}));
+        assert_eq!(exported["path"], link.display().to_string());
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "the link was replaced");
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&real).unwrap().permissions()) & 0o777, 0o600);
+        assert_eq!(ok(&engine, "money.import", json!({"path": real}))["kind"], "backup");
+        assert_eq!(std::fs::read_dir(&sync).unwrap().count(), 1, "a temporary file was left beside the export");
+        assert_eq!(std::fs::read_dir(&backups).unwrap().count(), 1);
+        std::fs::set_permissions(&real, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+    }
+    // A link to something that is not a file is still refused.
+    let fifo = sync.join("pipe.json");
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    let to_pipe = backups.join("pipe.json");
+    std::os::unix::fs::symlink(&fifo, &to_pipe).unwrap();
+    assert_eq!(code(call_as(&engine, Actor::User, "money.export", json!({"path": to_pipe}))), "money.path");
 }

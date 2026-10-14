@@ -10,10 +10,21 @@ op!(WorktreeList, "worktree.list", WorktreeListIn => WorktreeListOut, OpMeta::qu
 payload!(#[schemars(rename = "WorktreeCreateIn")] WorktreeCreateIn { pub project_id: Id, pub branch: String, pub from: Option<String> });
 op!(WorktreeCreate, "worktree.create", WorktreeCreateIn => Worktree,
     OpMeta::mutation(Scope::Project, 3, "Create a worktree on a branch").actors(Actors::UserOnly).emits(&["worktree.changed"]));
-payload!(#[schemars(rename = "WorktreeRemoveIn")] WorktreeRemoveIn { pub project_id: Id, pub path: String, pub purge_build: Option<bool> });
-result!(#[schemars(rename = "GitFreedOut")] FreedOut { pub freed_mb: f64 });
+payload!(#[schemars(rename = "WorktreeRemoveIn")] WorktreeRemoveIn {
+    pub project_id: Id, pub path: String, pub purge_build: Option<bool>,
+    /// Delete the worktree even with uncommitted changes or git-ignored files worth keeping.
+    /// Without it, removing a dirty worktree is refused `worktree.dirty`, as `session.close` is.
+    pub discard_changes: Option<bool>,
+});
+result!(#[schemars(rename = "GitFreedOut")] FreedOut {
+    pub freed_mb: f64,
+    /// The ref (`refs/relay/rescue/...`) now holding the commits of a detached HEAD that no
+    /// branch or tag contained; absent when there were none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rescued: Option<String>,
+});
 op!(WorktreeRemove, "worktree.remove", WorktreeRemoveIn => FreedOut,
-    OpMeta::mutation(Scope::Project, 3, "Remove a worktree; conflict if a session owns it").actors(Actors::UserOnly).emits(&["worktree.changed"]));
+    OpMeta::mutation(Scope::Project, 3, "Remove a worktree; conflict if a session owns it or it is dirty (unless discard_changes)").actors(Actors::UserOnly).emits(&["worktree.changed"]));
 result!(#[schemars(rename = "WorktreeDiskOut")] WorktreeDiskOut { pub worktrees: Vec<crate::ops::app::WorktreeDisk> });
 op!(WorktreeDisk, "worktree.disk", ProjectIn => WorktreeDiskOut, OpMeta::query(Scope::Project, 3, "Disk per worktree, build output separately"));
 
@@ -128,7 +139,7 @@ payload!(#[schemars(rename = "GitPrListIn")] PrListIn {
     /// dropped by `git.push` and `git.pr.open`). For an explicit refresh, not for every redraw.
     pub refresh: Option<bool>,
 });
-op!(PrList, "git.pr.list", PrListIn => PrListOut, OpMeta::query(Scope::Project, 8, "All pull request states for the project, across every page; cached for a minute unless refresh"));
+op!(PrList, "git.pr.list", PrListIn => PrListOut, OpMeta::query(Scope::Project, 8, "Open pull requests for the project, and the 100 most recently updated closed or merged ones; cached for a minute unless refresh, failures too"));
 payload!(#[schemars(rename = "GitPrOpenIn")] PrOpenIn { pub project_id: Id, pub worktree: Option<String>, pub title: Option<String>, pub body: Option<String> });
 result!(#[schemars(rename = "GitPrOpenOut")] PrOpenOut { pub url: String });
 op!(PrOpen, "git.pr.open", PrOpenIn => PrOpenOut, OpMeta::mutation(Scope::Project, 8, "Open a PR for the branch"));

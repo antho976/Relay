@@ -88,6 +88,20 @@ const DIAL_TIMEOUT: Duration = Duration::from_secs(15);
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+/// What `relay remote rendezvous` answers a host whose secret does not open its room
+/// (`rendezvous.rs`, `classify`), the same before the header and since.
+const WRONG_SECRET: &str = "room secret does not open this room";
+
+/// Whether a refused dial was a rendezvous from before the `Authorization` header, which reads
+/// the secret only from the URL. It says so the one way it can: refusing a secret that does open
+/// the room, with its own words. Any other 403 — a proxy, a WAF, a login page — is not it, and
+/// gets no retry that would put the secret in a URL it logs.
+fn predates_the_header(r: &Rendezvous, status: u16, body: Option<&[u8]>) -> bool {
+    status == 403
+        && crate::registry::room_for(&r.secret) == r.room
+        && body.is_some_and(|b| String::from_utf8_lossy(b).contains(WRONG_SECRET))
+}
+
 /// Open the host socket, with the room secret in an `Authorization` header. A server from
 /// before the header refuses that; it is dialed again the old way, secret in the query.
 async fn dial(r: &Rendezvous) -> Result<Ws> {
@@ -101,7 +115,7 @@ async fn dial(r: &Rendezvous) -> Result<Ws> {
         .insert(http::header::AUTHORIZATION, http::HeaderValue::from_str(&format!("Bearer {}", r.secret))?);
     match connect(request).await {
         Ok((ws, _)) => Ok(ws),
-        Err(Error::Http(resp)) if resp.status() == http::StatusCode::FORBIDDEN => {
+        Err(Error::Http(resp)) if predates_the_header(r, resp.status().as_u16(), resp.body().as_deref()) => {
             tracing::warn!(url = %r.url, "the rendezvous only reads the room secret from the URL, where its proxy logs record it; update `relay remote rendezvous` there");
             let legacy = format!("{}?secret={}", host_url(r), r.secret).into_client_request()?;
             Ok(connect(legacy).await?.0)
@@ -242,4 +256,74 @@ pub async fn connect_once(ctx: Arc<Ctx>, rendezvous: &Rendezvous, connected: &At
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    fn rendezvous(addr: std::net::SocketAddr) -> Rendezvous {
+        let secret = "s3cret".to_string();
+        Rendezvous { url: format!("ws://{addr}"), room: crate::registry::room_for(&secret), secret, public: None }
+    }
+
+    /// Answers each connection's request head with `answer`, and records the request line.
+    async fn refusing(answer: &'static str) -> (std::net::SocketAddr, mpsc::UnboundedReceiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (seen, heard) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut head = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !head.ends_with(b"\r\n\r\n") {
+                    match stream.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => head.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let _ = seen.send(String::from_utf8_lossy(&head).lines().next().unwrap_or_default().to_string());
+                let _ = stream.write_all(answer.as_bytes()).await;
+            }
+        });
+        (addr, heard)
+    }
+
+    #[test]
+    fn only_the_old_rendezvous_own_refusal_reads_as_old() {
+        let r = rendezvous("127.0.0.1:1".parse().unwrap());
+        let old = WRONG_SECRET;
+        assert!(predates_the_header(&r, 403, Some(old.as_bytes())));
+        assert!(predates_the_header(&r, 403, Some(format!("23\r\n{old}\r\n0\r\n\r\n").as_bytes())), "chunked by a proxy");
+        assert!(!predates_the_header(&r, 403, Some(b"<html>Access denied</html>")), "a proxy's 403");
+        assert!(!predates_the_header(&r, 403, None));
+        assert!(!predates_the_header(&r, 401, Some(old.as_bytes())));
+        let mismatched = Rendezvous { room: "0".repeat(32), ..r };
+        assert!(!predates_the_header(&mismatched, 403, Some(old.as_bytes())), "the URL would not open it either");
+    }
+
+    #[tokio::test]
+    async fn a_403_from_anything_else_never_puts_the_secret_in_a_url() {
+        let (addr, mut heard) = refusing("HTTP/1.1 403 Forbidden\r\nContent-Length: 13\r\nConnection: close\r\n\r\nAccess denied").await;
+        let r = rendezvous(addr);
+        assert!(dial(&r).await.is_err());
+        let first = heard.recv().await.unwrap();
+        assert!(first.starts_with(&format!("GET /host/{} ", r.room)), "{first}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(heard.try_recv().is_err(), "dialed once, and never with the secret in the URL");
+    }
+
+    #[tokio::test]
+    async fn the_old_rendezvous_is_dialed_again_the_old_way() {
+        let refusal = "HTTP/1.1 403 Forbidden\r\nContent-Length: 35\r\nConnection: close\r\n\r\nroom secret does not open this room";
+        let (addr, mut heard) = refusing(refusal).await;
+        let r = rendezvous(addr);
+        // The fake refuses the retry too; what matters is that it came, and how.
+        assert!(dial(&r).await.is_err());
+        assert!(!heard.recv().await.unwrap().contains(&r.secret));
+        let retry = heard.recv().await.unwrap();
+        assert!(retry.starts_with(&format!("GET /host/{}?secret={} ", r.room, r.secret)), "{retry}");
+    }
 }

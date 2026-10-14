@@ -6,11 +6,15 @@
 //! local ids never leave the device. A device's first sync replaces this ledger outright: the
 //! phone is where the ledger lives.
 
-use crate::ledger::{Ledger, LedgerError, Result};
+use crate::ledger::{now_ms, stamp_ok, Ledger, LedgerError, Result};
 use crate::views::{Change, SyncOut};
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
+use std::path::PathBuf;
+
+/// How many copies of the ledger a replace keeps in `money-backups/` beside `money.db`.
+pub const SNAPSHOTS_KEPT: usize = 10;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -107,6 +111,24 @@ const TABLES: &[(&str, &[Col])] = &[
 /// The settings that travel; the rest are this device's own.
 const SYNCED_SETTINGS: &[&str] = &["currency", "month_start_day", "week_starts_monday"];
 
+/// The prefixes of uids both devices derive the same way: a posted bill's, and what an import
+/// writes (docs/INVESTMENTS.md). Tally's `SyncTables.DERIVED`. Such a row is written only when its
+/// uid is neither present nor deleted, so its tombstone is kept through a replace.
+pub const DERIVED: &[&str] = &["bill:", "imp:", "sec:", "hold:", "px:", "fx:", "room:", "val:", "ws:"];
+
+pub fn is_derived(uid: &str) -> bool {
+    DERIVED.iter().any(|p| uid.starts_with(p))
+}
+
+/// The stamp of a tombstone a replace keeps: older than any edit, so a row the device sends
+/// (in this request or a later batch of the same first sync) always wins over it. It is there
+/// for its presence, which keeps an import or the poster from writing that uid again.
+const KEPT_STAMP: i64 = 1;
+
+/// What a budget tombstone keeps in `category` when the device did not say which budget it was:
+/// it is matched by uid, and goes out again with `row: {}`. Null is the overall budget.
+const UNSAID: &str = "";
+
 fn spec(table: &str) -> Option<&'static [Col]> {
     TABLES.iter().find(|(t, _)| *t == table).map(|(_, c)| *c)
 }
@@ -168,7 +190,11 @@ impl Ledger {
     }
 
     /// Applies `changes` from `device` and answers with this ledger's changes after `since`.
-    /// With `replace`, this ledger is erased first and becomes the device's (its first sync).
+    /// With `replace`, this ledger is erased first and becomes the device's (its first sync); a
+    /// ledger that holds anything is copied to `money-backups/` first ([`Ledger::snapshot`]).
+    ///
+    /// A change stamped outside [`stamp_ok`] (below 0, or more than a day ahead of this clock) is
+    /// not applied, and counts as skipped: the rest of the request goes on.
     ///
     /// `generation` is the one this ledger gave the device last time. A device whose ledger is not
     /// this one any more (restored, erased or replaced since, or a cursor this ledger never gave)
@@ -176,6 +202,25 @@ impl Ledger {
     /// `since: 0`, no generation and no changes, rather than merging into a ledger it no longer
     /// shares rows with.
     pub fn sync(&mut self, device: &str, replace: bool, since: i64, generation: Option<&str>, changes: &[Change], now: &str) -> Result<SyncOut> {
+        self.sync_page(device, replace, since, generation, changes, None, now)
+    }
+
+    /// [`Ledger::sync`], with the answer cut to at most `limit` changes. The changes go in the
+    /// order this ledger numbered them; when some are left, the answer says `more` and its
+    /// `cursor` is the number of the last one sent, which the device sends back as `since` to
+    /// ask for the rest. A page may refer to rows a later page holds: a device applies the pages
+    /// together once `more` is false. Without `limit`, the whole answer at once.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sync_page(
+        &mut self,
+        device: &str,
+        replace: bool,
+        since: i64,
+        generation: Option<&str>,
+        changes: &[Change],
+        limit: Option<usize>,
+        now: &str,
+    ) -> Result<SyncOut> {
         if !replace {
             let mine = self.generation()?;
             if generation.is_some_and(|g| g != mine) || since > self.cursor()? {
@@ -184,14 +229,23 @@ impl Ledger {
                 ));
             }
         }
+        // Whoever sends a replace (any paired device, a cloud copy's included) erases this ledger:
+        // what it held is kept on disk first, and a copy that cannot be kept stops the replace.
+        if replace && self.holds_anything()? {
+            self.snapshot()?;
+        }
+        let clock = now_ms();
         let tx = self.conn.transaction()?;
+        // A derived row deleted here stays deleted through the replace: the device's first sync
+        // sends no tombstones, and the next import of the same file would bring it back.
+        let kept = if replace { derived_buried(&tx)? } else { Vec::new() };
         if replace {
             Ledger::clear(&tx, true)?;
         }
-        let mut sorted: Vec<&Change> = changes.iter().collect();
+        let (mut sorted, out_of_range): (Vec<&Change>, Vec<&Change>) = changes.iter().partition(|c| stamp_ok(c.updated_at, clock));
         sorted.sort_by_key(|c| order(&c.table));
         let mut applied = HashSet::new();
-        let mut skipped = 0;
+        let mut skipped = out_of_range.len();
         for c in sorted {
             if apply(&tx, c)? {
                 applied.insert((c.table.clone(), c.uid.clone()));
@@ -199,12 +253,58 @@ impl Ledger {
                 skipped += 1;
             }
         }
-        let changes = if replace { Vec::new() } else { changed_since(&tx, since, &applied)? };
+        for (table, uid) in &kept {
+            let here = tx.prepare_cached(&format!("SELECT 1 FROM {table} WHERE uid = ?1"))?.exists([uid])?;
+            if !here {
+                tx.prepare_cached("INSERT OR IGNORE INTO tombstones (tbl, uid, updated_at) VALUES (?1, ?2, ?3)")?
+                    .execute(params![table, uid, KEPT_STAMP])?;
+            }
+        }
+        let (changes, page) = if replace { (Vec::new(), None) } else { changed_since(&tx, since, &applied, limit)? };
         tx.prepare_cached(
             "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, 0) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         )?.execute(params![format!("sync.device.{device}"), now])?;
         tx.commit()?;
-        Ok(SyncOut { cursor: self.cursor()?, generation: self.generation()?, changes, replaced: replace, applied: applied.len(), skipped })
+        let cursor = match page {
+            Some(last) => last,
+            None => self.cursor()?,
+        };
+        Ok(SyncOut { cursor, generation: self.generation()?, changes, replaced: replace, applied: applied.len(), skipped, more: page.is_some() })
+    }
+
+    /// Whether any row is live here but the categories, which every new ledger is given.
+    fn holds_anything(&self) -> Result<bool> {
+        for (table, _) in TABLES.iter().filter(|(t, _)| *t != "categories") {
+            if self.conn.prepare_cached(&format!("SELECT 1 FROM {table} WHERE deleted = 0 LIMIT 1"))?.exists([])? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Copies this ledger, whole, to `money-backups/money-<time>-<n>.db` beside its file (0700
+    /// folder, 0600 file), and keeps the newest [`SNAPSHOTS_KEPT`]. A copy is a `money.db` like any
+    /// other: put it in place of `money.db` while Relay is stopped to go back to it. `None` in memory.
+    pub fn snapshot(&self) -> Result<Option<PathBuf>> {
+        let Some(path) = &self.path else { return Ok(None) };
+        let failed = |e: std::io::Error| LedgerError::Invalid(format!("Could not keep a copy of the ledger before replacing it, so nothing was replaced: {e}"));
+        let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new(".")).join("money-backups");
+        private_dir(&dir).map_err(failed)?;
+        let name = format!("money-{}-{}.db", jiff::Timestamp::now().strftime("%Y%m%dT%H%M%SZ"), &crate::ledger::new_uid()[..8]);
+        let to = dir.join(name);
+        self.conn.execute("VACUUM INTO ?1", [to.to_string_lossy().into_owned()])?;
+        private_file(&to).map_err(failed)?;
+        // The newest stay: the names sort by time.
+        let mut kept: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .map_err(failed)?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("money-") && n.ends_with(".db")))
+            .collect();
+        kept.sort();
+        for old in kept.iter().rev().skip(SNAPSHOTS_KEPT) {
+            let _ = std::fs::remove_file(old);
+        }
+        Ok(Some(to))
     }
 
     /// Devices that have synced with this ledger and when they last did, newest first.
@@ -213,6 +313,29 @@ impl Ledger {
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
+}
+
+#[cfg(unix)]
+fn private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+}
+
+#[cfg(not(unix))]
+fn private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
+#[cfg(unix)]
+fn private_file(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn private_file(_path: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 /// Applies one change; false when it was older than what is here or could not be placed.
@@ -276,7 +399,12 @@ fn apply(tx: &Transaction, c: &Change) -> Result<bool> {
                 tx.prepare_cached(&format!("UPDATE {table} SET deleted = 1, updated_at = ?2 WHERE id = ?1"))?.execute(params![id, c.updated_at])?;
             }
             None => {
-                let category = c.row.get("category").and_then(Value::as_str);
+                // A budget's says which budget it was, or that it did not say: never the overall
+                // one by omission.
+                let category = match c.row.get("category") {
+                    None if table == "budgets" => Some(UNSAID),
+                    v => v.and_then(Value::as_str),
+                };
                 tx.prepare_cached("INSERT OR REPLACE INTO tombstones (tbl, uid, updated_at, category) VALUES (?1, ?2, ?3, ?4)")?
                     .execute(params![table, c.uid, c.updated_at, category])?;
             }
@@ -316,34 +444,54 @@ fn apply(tx: &Transaction, c: &Change) -> Result<bool> {
     Ok(true)
 }
 
-/// Every row and tombstone numbered above `since`, but the ones this sync just applied: the
-/// device already has those.
-fn changed_since(tx: &Transaction, since: i64, applied: &HashSet<(String, String)>) -> Result<Vec<Change>> {
+/// Every derived uid this ledger holds deleted, as `(table, uid)`: its tombstones and its
+/// deleted rows.
+fn derived_buried(tx: &Transaction) -> Result<Vec<(String, String)>> {
     let mut out = Vec::new();
-    let mut st = tx.prepare_cached("SELECT key, value, updated_at FROM settings WHERE seq > ?1")?;
-    let rows: Vec<(String, String, i64)> = st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<std::result::Result<_, _>>()?;
-    for (key, value, updated_at) in rows {
+    for (table, _) in TABLES {
+        let mut st = tx.prepare_cached(&format!("SELECT uid FROM {table} WHERE deleted = 1"))?;
+        let uids: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<std::result::Result<_, _>>()?;
+        out.extend(uids.into_iter().filter(|u| is_derived(u)).map(|u| (table.to_string(), u)));
+    }
+    let mut st = tx.prepare_cached("SELECT tbl, uid FROM tombstones")?;
+    let rows: Vec<(String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<std::result::Result<_, _>>()?;
+    // Only a synced table's: its name goes into SQL.
+    out.extend(rows.into_iter().filter(|(t, u)| spec(t).is_some() && is_derived(u)));
+    Ok(out)
+}
+
+/// Every row and tombstone numbered above `since`, but the ones this sync just applied: the
+/// device already has those. With `limit`, the first that many in the order they were numbered,
+/// and the number of the last one when more are left.
+fn changed_since(tx: &Transaction, since: i64, applied: &HashSet<(String, String)>, limit: Option<usize>) -> Result<(Vec<Change>, Option<i64>)> {
+    // Each table's first rows are enough for a page: the ones applied are skipped, and the rest
+    // of a page's rows are each table's earliest.
+    let per_table = limit.map_or(-1, |l| i64::try_from(l.saturating_add(applied.len()).saturating_add(1)).unwrap_or(i64::MAX));
+    let mut out: Vec<(i64, Change)> = Vec::new();
+    let mut st = tx.prepare_cached("SELECT key, value, updated_at, seq FROM settings WHERE seq > ?1")?;
+    let rows: Vec<(String, String, i64, i64)> = st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<std::result::Result<_, _>>()?;
+    for (key, value, updated_at, seq) in rows {
         if SYNCED_SETTINGS.contains(&key.as_str()) && !applied.contains(&("settings".to_string(), key.clone())) {
             let mut row = Map::new();
             row.insert("value".into(), Value::String(value));
-            out.push(Change { table: "settings".into(), uid: key, updated_at, deleted: false, row });
+            out.push((seq, Change { table: "settings".into(), uid: key, updated_at, deleted: false, row }));
         }
     }
     for (table, cols) in TABLES {
         let names: Vec<&str> = cols.iter().map(|c| c.sql).collect();
-        let sql = format!("SELECT uid, updated_at, deleted, {} FROM {table} WHERE seq > ?1 ORDER BY seq", names.join(", "));
-        let rows: Vec<(String, i64, bool, Vec<rusqlite::types::Value>)> = {
+        let sql = format!("SELECT uid, updated_at, deleted, seq, {} FROM {table} WHERE seq > ?1 ORDER BY seq LIMIT ?2", names.join(", "));
+        let rows: Vec<(String, i64, bool, i64, Vec<rusqlite::types::Value>)> = {
             let mut st = tx.prepare_cached(&sql)?;
-            let mapped = st.query_map([since], |r| {
+            let mapped = st.query_map(params![since, per_table], |r| {
                 let mut vals = Vec::with_capacity(cols.len());
                 for i in 0..cols.len() {
-                    vals.push(r.get::<_, rusqlite::types::Value>(i + 3)?);
+                    vals.push(r.get::<_, rusqlite::types::Value>(i + 4)?);
                 }
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, vals))
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, vals))
             })?;
             mapped.collect::<std::result::Result<_, _>>()?
         };
-        for (uid, updated_at, deleted, vals) in rows {
+        for (uid, updated_at, deleted, seq, vals) in rows {
             if applied.contains(&(table.to_string(), uid.clone())) {
                 continue;
             }
@@ -352,23 +500,32 @@ fn changed_since(tx: &Transaction, since: i64, applied: &HashSet<(String, String
                 // The overall budget's category 0 matches no row, so it travels as null.
                 row.insert(c.json.into(), to_json(tx, c, v)?);
             }
-            out.push(Change { table: table.to_string(), uid, updated_at, deleted, row });
+            out.push((seq, Change { table: table.to_string(), uid, updated_at, deleted, row }));
         }
     }
-    let mut st = tx.prepare_cached("SELECT tbl, uid, updated_at, category FROM tombstones WHERE seq > ?1 ORDER BY seq")?;
-    let rows: Vec<(String, String, i64, Option<String>)> =
-        st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<std::result::Result<_, _>>()?;
-    for (table, uid, updated_at, category) in rows {
+    let mut st = tx.prepare_cached("SELECT tbl, uid, updated_at, category, seq FROM tombstones WHERE seq > ?1 ORDER BY seq LIMIT ?2")?;
+    let rows: Vec<(String, String, i64, Option<String>, i64)> =
+        st.query_map(params![since, per_table], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<std::result::Result<_, _>>()?;
+    for (table, uid, updated_at, category, seq) in rows {
         if !applied.contains(&(table.clone(), uid.clone())) {
             let mut row = Map::new();
-            // A budget's tombstone says which budget: null is the overall one.
-            if table == "budgets" {
+            // A budget's tombstone says which budget: null is the overall one. One the device
+            // sent without saying goes out without saying, matched by its uid.
+            if table == "budgets" && category.as_deref() != Some(UNSAID) {
                 row.insert("category".into(), category.map_or(Value::Null, Value::String));
             }
-            out.push(Change { table, uid, updated_at, deleted: true, row });
+            out.push((seq, Change { table, uid, updated_at, deleted: true, row }));
         }
     }
-    Ok(out)
+    let Some(limit) = limit.filter(|&l| out.len() > l) else {
+        return Ok((out.into_iter().map(|(_, c)| c).collect(), None));
+    };
+    out.sort_by_key(|(seq, _)| *seq);
+    out.truncate(limit.max(1));
+    let last = out.last().map(|(seq, _)| *seq);
+    // In dependency order within the page, as a whole answer is.
+    out.sort_by_key(|(_, c)| order(&c.table));
+    Ok((out.into_iter().map(|(_, c)| c).collect(), last))
 }
 
 #[cfg(test)]
@@ -562,6 +719,214 @@ mod tests {
         assert!(budgets.iter().all(|c| c.deleted && c.row.contains_key("category")));
         assert!(budgets.iter().any(|c| c.row["category"] == "c1"));
         assert!(budgets.iter().any(|c| c.row["category"].is_null()), "the overall budget");
+    }
+
+    /// Every page of the answer to one request and the ones after it, as a device asks for them.
+    fn pages(l: &mut Ledger, since: i64, generation: Option<&str>, first: &[Change], limit: usize) -> (Vec<Vec<Change>>, SyncOut) {
+        let mut out = l.sync_page("Pixel", false, since, generation, first, Some(limit), "t").unwrap();
+        let mut all = vec![out.changes.clone()];
+        while out.more {
+            assert!(out.cursor > since);
+            let g = out.generation.clone();
+            out = l.sync_page("Pixel", false, out.cursor, Some(&g), &[], Some(limit), "t").unwrap();
+            all.push(out.changes.clone());
+        }
+        (all, out)
+    }
+
+    fn keys(changes: &[Change]) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = changes.iter().map(|c| (c.table.clone(), c.uid.clone())).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn a_long_answer_comes_in_pages_and_misses_nothing() {
+        let mut l = Ledger::open_in_memory().unwrap();
+        l.load_sample(date(2026, 10, 4), "CAD").unwrap();
+        let account = l.accounts().unwrap()[0].id;
+        l.tx_delete(l.tx_list(&TxQuery::default(), date(2026, 10, 7)).unwrap().transactions[0].id).unwrap();
+        let whole = l.sync("Pixel", false, 0, None, &[], "t").unwrap();
+        assert!(!whole.more);
+        assert!(!serde_json::to_string(&whole).unwrap().contains("more"), "an answer asked for whole reads as it always did");
+        let (paged, last) = pages(&mut l, 0, None, &[], 7);
+        assert!(paged.len() > 5);
+        assert!(paged.iter().all(|p| p.len() <= 7));
+        assert_eq!(keys(&paged.concat()), keys(&whole.changes), "every row, deleted ones included, exactly once");
+        assert_eq!((last.cursor, &last.generation), (l.cursor().unwrap(), &whole.generation));
+
+        // An edit made between two pages is in a later one.
+        let mut out = l.sync_page("Pixel", false, 0, None, &[], Some(3), "t").unwrap();
+        let added = l.tx_add(&TxInput { r#type: TxType::Expense, amount: 1_00, date: "2026-10-06".into(), account_id: account,
+            to_account_id: None, category_id: None, note: None }).unwrap();
+        let mut seen = out.changes.clone();
+        while out.more {
+            let g = out.generation.clone();
+            out = l.sync_page("Pixel", false, out.cursor, Some(&g), &[], Some(3), "t").unwrap();
+            seen.extend(out.changes.clone());
+        }
+        assert!(seen.iter().any(|c| c.uid == added.uid));
+        // A page's cursor is one this ledger gave: asking from it is not stale.
+        assert!(l.sync_page("Pixel", false, 0, None, &[], Some(1), "t").unwrap().more);
+    }
+
+    #[test]
+    fn a_paged_answer_does_not_send_back_what_its_request_brought() {
+        let mut pc = Ledger::open_in_memory().unwrap();
+        let first = pc.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        let account = pc.accounts().unwrap()[0].id;
+        for i in 0..5 {
+            pc.tx_add(&TxInput { r#type: TxType::Expense, amount: 1_00 + i, date: "2026-10-06".into(), account_id: account,
+                to_account_id: None, category_id: None, note: None }).unwrap();
+        }
+        let edit = change("transactions", "t1", 900, json!({"type": "EXPENSE", "amount": 50_00, "date": "2026-10-05", "account": "a1",
+            "toAccount": null, "category": "c1", "note": "Metro", "recurring": null, "createdAt": 100}));
+        let (paged, _) = pages(&mut pc, first.cursor, Some(&first.generation), &[edit], 2);
+        let back = paged.concat();
+        assert_eq!(paged[0].len(), 2);
+        assert_eq!(back.iter().filter(|c| c.table == "transactions" && c.uid != "t1").count(), 5, "the PC's five entries");
+        assert!(paged[0].iter().all(|c| c.uid != "t1"), "the page answering the edit leaves it out");
+        // A later page, asked for without it, may hand it back as it was sent: no news to the device.
+        assert!(back.iter().filter(|c| c.uid == "t1").all(|c| c.updated_at == 900));
+    }
+
+    #[test]
+    fn a_budget_tombstone_that_did_not_say_its_category_goes_on_without_one() {
+        let mut pc = Ledger::open_in_memory().unwrap();
+        let first = pc.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        // An older Tally deletes a budget this PC never had, and does not say which.
+        let out = pc.sync("Pixel", false, first.cursor, Some(&first.generation), &[tomb("budgets", "b-elsewhere", 500)], "t").unwrap();
+        let whole = pc.sync("Probe", false, 0, None, &[], "t").unwrap();
+        let sent = whole.changes.iter().find(|c| c.uid == "b-elsewhere").unwrap();
+        assert!(sent.deleted && sent.row.is_empty(), "not the overall budget's {:?}", sent.row);
+        // On to the cloud copy: its overall budget stays.
+        let mut cloud = Ledger::open_in_memory().unwrap();
+        let cf = cloud.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        cloud.sync("PC", false, cf.cursor, Some(&cf.generation), &whole.changes, "t").unwrap();
+        assert_eq!(cloud.summary(date(2026, 10, 7), &Locale::new("en-CA")).unwrap().pace.budget, 310_00);
+        // A tombstone that names its budget still does, the overall one as null.
+        pc.sync("Pixel", false, out.cursor, Some(&out.generation), &[Change { row: json!({"category": null}).as_object().unwrap().clone(), ..tomb("budgets", "b1", 600) }], "t").unwrap();
+        assert_eq!(pc.summary(date(2026, 10, 7), &Locale::new("en-CA")).unwrap().pace.budget, 0);
+    }
+
+    #[test]
+    fn a_derived_row_deleted_here_stays_deleted_through_a_replace() {
+        let mut pc = Ledger::open_in_memory().unwrap();
+        let first = pc.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        let line = change("transactions", "imp:9", 200, json!({"type": "EXPENSE", "amount": 5_00, "date": "2026-10-05", "account": "a1",
+            "toAccount": null, "category": "c1", "note": "Imported", "recurring": null, "createdAt": 200}));
+        let out = pc.sync("Pixel", false, first.cursor, Some(&first.generation), std::slice::from_ref(&line), "t").unwrap();
+        // The phone deletes the imported line and a posted bill it never sent; both reach the PC.
+        pc.sync("Pixel", false, out.cursor, Some(&out.generation), &[tomb("transactions", "imp:9", 300), tomb("transactions", "bill:r1:2026-10-01", 300)], "t").unwrap();
+        // The phone pairs again: its first sync sends its rows, never its tombstones.
+        let again = pc.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        let buried: Vec<(String, i64)> = pc.conn.prepare("SELECT uid, updated_at FROM tombstones ORDER BY uid").unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(|r| r.unwrap()).collect();
+        assert_eq!(buried, [("bill:r1:2026-10-01".to_string(), KEPT_STAMP), ("imp:9".to_string(), KEPT_STAMP)]);
+        // A device taking this ledger whole hears of them.
+        let whole = pc.sync("Other", false, 0, None, &[], "t").unwrap();
+        assert!(whole.changes.iter().any(|c| c.uid == "imp:9" && c.deleted));
+        assert!(whole.changes.iter().any(|c| c.uid == "bill:r1:2026-10-01" && c.deleted));
+        // A later batch of the same first sync that holds the row still wins over the kept tombstone.
+        pc.sync("Pixel", false, again.cursor, Some(&again.generation), &[line], "t").unwrap();
+        assert_eq!(spent(&pc), 42_50 + 5_00);
+        // A random uid's tombstone goes with the replace, as before.
+        pc.sync("Pixel", false, pc.cursor().unwrap(), None, &[tomb("transactions", "t1", 9_000)], "t").unwrap();
+        pc.sync("Pixel", true, 0, None, &[], "t").unwrap();
+        assert!(!pc.conn.prepare("SELECT 1 FROM tombstones WHERE uid = 't1'").unwrap().exists([]).unwrap());
+    }
+
+    #[test]
+    fn a_stamp_far_ahead_or_below_zero_is_not_taken_and_the_rest_is() {
+        let mut pc = Ledger::open_in_memory().unwrap();
+        let mut batch = phone();
+        let tx = |uid: &str, at: i64| change("transactions", uid, at, json!({"type": "EXPENSE", "amount": 1_00, "date": "2026-10-05",
+            "account": "a1", "toAccount": null, "category": null, "note": "", "recurring": null, "createdAt": 1}));
+        let now = crate::ledger::now_ms();
+        batch.extend([tx("max", i64::MAX), tx("days", now + 2 * crate::ledger::STAMP_AHEAD_MS), tx("neg", -5), tx("hours", now + 3 * 3_600_000)]);
+        let first = pc.sync("Evil", true, 0, None, &batch, "t").unwrap();
+        assert_eq!((first.applied, first.skipped), (6, 3), "the phone's five and the entry a few hours fast");
+        assert_eq!(spent(&pc), 42_50 + 1_00);
+        // Settings stamped 0, as an older ledger's are, still travel.
+        let zero = change("settings", "month_start_day", 0, json!({"value": "15"}));
+        assert_eq!(pc.sync("Evil", false, first.cursor, Some(&first.generation), &[zero], "t").unwrap().applied, 1);
+        // Edits and syncs go on.
+        let id = pc.tx_list(&TxQuery::default(), date(2026, 10, 7)).unwrap().transactions[0].id;
+        pc.tx_update(id, &crate::ledger::TxPatch { amount: Some(2_00), ..Default::default() }).unwrap();
+        assert!(pc.sync("Other", false, 0, None, &[], "t").is_ok());
+    }
+
+    #[test]
+    fn a_ledger_poisoned_by_a_stamp_at_the_end_of_i64_recovers_when_opened() {
+        let dir = std::env::temp_dir().join(format!("relay-money-{}", crate::ledger::new_uid()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("money.db");
+        {
+            let mut l = Ledger::open(&path).unwrap();
+            l.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+            // What a build without the bound let in, and an edit then made of it: a real.
+            l.conn.execute("UPDATE transactions SET updated_at = 9223372036854775807 WHERE uid = 't1'", []).unwrap();
+            l.conn.execute("UPDATE transactions SET updated_at = updated_at + 1 WHERE uid = 't1'", []).unwrap();
+            l.conn.execute("UPDATE accounts SET updated_at = 9223372036854775807", []).unwrap();
+            l.conn.execute("INSERT INTO tombstones (tbl, uid, updated_at) VALUES ('transactions', 'gone', 9.5e18)", []).unwrap();
+            assert!(l.sync("Other", false, 0, None, &[], "t").is_err(), "the poison as it was");
+        }
+        let mut l = Ledger::open(&path).unwrap();
+        let whole = l.sync("Other", false, 0, None, &[], "t").unwrap();
+        let ceiling = crate::ledger::now_ms() + crate::ledger::STAMP_AHEAD_MS;
+        assert!(whole.changes.iter().all(|c| c.updated_at <= ceiling), "{:?}", whole.changes);
+        // And an edit of the row stamps past the repaired stamp, as any edit does.
+        let id = l.tx_list(&TxQuery::default(), date(2026, 10, 7)).unwrap().transactions[0].id;
+        let before = whole.changes.iter().find(|c| c.uid == "t1").unwrap().updated_at;
+        l.tx_update(id, &crate::ledger::TxPatch { amount: Some(1_00), ..Default::default() }).unwrap();
+        let after = l.sync("Other", false, whole.cursor, Some(&whole.generation), &[], "t").unwrap();
+        assert!(after.changes.iter().find(|c| c.uid == "t1").unwrap().updated_at > before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_stamp_arithmetic_saturates_instead_of_overflowing() {
+        let mut l = Ledger::open_in_memory().unwrap();
+        l.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        l.conn.execute("UPDATE transactions SET updated_at = 9223372036854775807", []).unwrap();
+        let id = l.tx_list(&TxQuery::default(), date(2026, 10, 7)).unwrap().transactions[0].id;
+        l.tx_update(id, &crate::ledger::TxPatch { amount: Some(1_00), ..Default::default() }).unwrap();
+        let (kind, at): (String, i64) = l.conn.query_row("SELECT typeof(updated_at), updated_at FROM transactions", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((kind.as_str(), at), ("integer", crate::ledger::STAMP_CEILING + 1));
+        l.reset().unwrap();
+        assert!(l.sync("Other", false, 0, None, &[], "t").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_replace_keeps_a_private_copy_of_the_ledger_it_erases() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("relay-money-{}", crate::ledger::new_uid()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("money.db");
+        let backups = dir.join("money-backups");
+        let mut l = Ledger::open(&path).unwrap();
+        // Nothing to keep yet: a new ledger's categories are not the person's.
+        l.ensure_categories().unwrap();
+        l.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        assert!(!backups.exists());
+        // Any credential that may sync can send a replace with nothing in it.
+        l.sync("Avex (S21)", true, 0, None, &[], "t").unwrap();
+        assert!(l.accounts().unwrap().is_empty());
+        let copies: Vec<PathBuf> = std::fs::read_dir(&backups).unwrap().map(|e| e.unwrap().path()).collect();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(std::fs::metadata(&copies[0]).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(&backups).unwrap().permissions().mode() & 0o777, 0o700);
+        let kept = Ledger::open(&copies[0]).unwrap();
+        assert_eq!(kept.accounts().unwrap()[0].name, "Chequing", "the copy is the ledger as it was");
+        drop(kept);
+        // The newest ten stay.
+        for _ in 0..SNAPSHOTS_KEPT + 3 {
+            l.sync("Pixel", true, 0, None, &phone(), "t").unwrap();
+        }
+        let n = std::fs::read_dir(&backups).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".db")).count();
+        assert_eq!(n, SNAPSHOTS_KEPT);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

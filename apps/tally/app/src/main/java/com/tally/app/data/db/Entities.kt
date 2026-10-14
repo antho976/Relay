@@ -365,7 +365,8 @@ data class TombstoneEntity(
 /**
  * The sync's own flags. While the row "applying" is present, the triggers that stamp local edits
  * stand aside, so rows taken from the PC keep the PC's change time. Only ever set inside the
- * transaction that applies a sync.
+ * transaction that applies a sync. The row "floor" is the last sync's watermark: no local edit is
+ * stamped under it (SyncSchema, LedgerSync.mark).
  */
 @Entity(tableName = "sync_state")
 data class SyncStateEntity(

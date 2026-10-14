@@ -49,6 +49,15 @@ fn known(conn: &Connection, table: &str, uid: &str) -> Result<bool> {
     Ok(here || conn.prepare_cached("SELECT 1 FROM tombstones WHERE tbl = ?1 AND uid = ?2")?.exists(params![table, uid])?)
 }
 
+/// The stamp for a row written under a derived uid: past the tombstone that buried it, as Tally's
+/// insert trigger stamps it (`MAX(now, deletedAt + 1)`), or a device holding that tombstone would
+/// refuse the row as older than the delete.
+fn stamp_over(conn: &Connection, table: &str, uid: &str, now: i64) -> Result<i64> {
+    let buried: Option<i64> = conn.prepare_cached("SELECT updated_at FROM tombstones WHERE tbl = ?1 AND uid = ?2")?
+        .query_row(params![table, uid], |r| r.get(0)).optional()?;
+    Ok(buried.map_or(now, |t| now.max(t.saturating_add(1))))
+}
+
 /// A row written again under a derived uid stays: the erasure that buried it is over.
 fn unbury(conn: &Connection, table: &str, uid: &str) -> Result<()> {
     conn.prepare_cached("DELETE FROM tombstones WHERE tbl = ?1 AND uid = ?2")?.execute(params![table, uid])?;
@@ -283,15 +292,16 @@ impl Ledger {
             None => None,
             Some(symbol) => Some(match security_of(&tx, &symbol)? {
                 Some((id, uid)) => {
-                    tx.prepare_cached("UPDATE securities SET deleted = 0, updated_at = MAX(?2, updated_at + 1) WHERE id = ?1 AND deleted = 1")?
+                    tx.prepare_cached("UPDATE securities SET deleted = 0, updated_at = MAX(?2, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1 AND deleted = 1")?
                         .execute(params![id, now])?;
                     unbury(&tx, "securities", &uid)?;
                     id
                 }
                 None => {
                     let uid = wealthsimple::security_uid(&symbol);
+                    let at = stamp_over(&tx, "securities", &uid, now)?;
                     tx.prepare_cached("INSERT INTO securities (uid, symbol, currency, kind, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)")?
-                        .execute(params![uid, symbol, currency, name_of(&SecurityKind::Other), now])?;
+                        .execute(params![uid, symbol, currency, name_of(&SecurityKind::Other), at])?;
                     unbury(&tx, "securities", &uid)?;
                     tx.last_insert_rowid()
                 }
@@ -312,7 +322,7 @@ impl Ledger {
     /// Deletes are tombstones, so sync carries them, and an imported line deleted here is never
     /// imported again.
     pub fn invest_delete(&mut self, id: i64) -> Result<()> {
-        let n = self.conn.prepare_cached("UPDATE activities SET deleted = 1, updated_at = MAX(?2, updated_at + 1) WHERE id = ?1 AND deleted = 0")?
+        let n = self.conn.prepare_cached("UPDATE activities SET deleted = 1, updated_at = MAX(?2, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1 AND deleted = 0")?
             .execute(params![id, now_ms()])?;
         if n == 0 {
             return Err(LedgerError::NotFound(format!("No activity {id}")));
@@ -322,7 +332,7 @@ impl Ledger {
 
     /// Brings back a deleted activity: the Undo of [`Ledger::invest_delete`].
     pub fn invest_restore(&mut self, id: i64) -> Result<ActivityView> {
-        let n = self.conn.prepare_cached("UPDATE activities SET deleted = 0, updated_at = MAX(?2, updated_at + 1) WHERE id = ?1 AND deleted = 1")?
+        let n = self.conn.prepare_cached("UPDATE activities SET deleted = 0, updated_at = MAX(?2, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1 AND deleted = 1")?
             .execute(params![id, now_ms()])?;
         if n == 0 {
             return Err(LedgerError::NotFound(format!("No deleted activity {id}")));
@@ -436,7 +446,7 @@ impl Ledger {
         for (id, number, registration) in remember {
             tx.prepare_cached(
                 "UPDATE accounts SET external_ref = ?2, institution = CASE WHEN institution = '' THEN ?3 ELSE institution END,
-                        registration = COALESCE(registration, ?4), updated_at = MAX(?5, updated_at + 1)
+                        registration = COALESCE(registration, ?4), updated_at = MAX(?5, MIN(updated_at, 4000000000000000) + 1)
                  WHERE id = ?1 AND (external_ref != ?2 OR institution = '' OR registration IS NULL)",
             )?.execute(params![id, number, INSTITUTION, name_of(&registration), now])?;
         }
@@ -466,8 +476,8 @@ impl Ledger {
                  VALUES (?1, ?2, 'INVESTMENT', 0, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT(uid) DO UPDATE SET deleted = 0, type = 'INVESTMENT', registration = excluded.registration,
                      institution = excluded.institution, external_ref = excluded.external_ref,
-                     updated_at = MAX(excluded.updated_at, accounts.updated_at + 1)",
-            )?.execute(params![a.uid, a.name, order, name_of(&a.registration), a.institution, a.external_ref, now])?;
+                     updated_at = MAX(excluded.updated_at, MIN(accounts.updated_at, 4000000000000000) + 1)",
+            )?.execute(params![a.uid, a.name, order, name_of(&a.registration), a.institution, a.external_ref, stamp_over(tx, "accounts", &a.uid, now)?])?;
             unbury(tx, "accounts", &a.uid)?;
             result.accounts_created += usize::from(created);
         }
@@ -482,19 +492,19 @@ impl Ledger {
                 // A holdings report knows a security's name, kind and exchange; an activity does not.
                 Some(id) if kind == WsKind::Holdings => {
                     tx.prepare_cached(
-                        "UPDATE securities SET name = ?2, currency = ?3, kind = ?4, exchange = ?5, deleted = 0, updated_at = MAX(?6, updated_at + 1)
+                        "UPDATE securities SET name = ?2, currency = ?3, kind = ?4, exchange = ?5, deleted = 0, updated_at = MAX(?6, MIN(updated_at, 4000000000000000) + 1)
                          WHERE id = ?1 AND (name != ?2 OR currency != ?3 OR kind != ?4 OR exchange != ?5 OR deleted = 1)",
                     )?.execute(params![id, s.name, s.currency, name_of(&s.kind), s.exchange, now])?;
                     id
                 }
                 Some(id) => {
-                    tx.prepare_cached("UPDATE securities SET deleted = 0, updated_at = MAX(?2, updated_at + 1) WHERE id = ?1 AND deleted = 1")?
+                    tx.prepare_cached("UPDATE securities SET deleted = 0, updated_at = MAX(?2, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1 AND deleted = 1")?
                         .execute(params![id, now])?;
                     id
                 }
                 None => {
                     tx.prepare_cached("INSERT INTO securities (uid, symbol, name, currency, kind, exchange, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")?
-                        .execute(params![s.uid, s.symbol, s.name, s.currency, name_of(&s.kind), s.exchange, now])?;
+                        .execute(params![s.uid, s.symbol, s.name, s.currency, name_of(&s.kind), s.exchange, stamp_over(tx, "securities", &s.uid, now)?])?;
                     result.securities += 1;
                     tx.last_insert_rowid()
                 }
@@ -538,9 +548,9 @@ impl Ledger {
         let n = tx.prepare_cached(
             "INSERT INTO prices (uid, security_id, date, price, source, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(uid) DO UPDATE SET security_id = excluded.security_id, date = excluded.date, price = excluded.price,
-                 source = excluded.source, deleted = 0, updated_at = MAX(excluded.updated_at, prices.updated_at + 1)
+                 source = excluded.source, deleted = 0, updated_at = MAX(excluded.updated_at, MIN(prices.updated_at, 4000000000000000) + 1)
              WHERE prices.price != excluded.price OR prices.source != excluded.source OR prices.security_id != excluded.security_id OR prices.deleted = 1",
-        )?.execute(params![uid, security_id, date, price, source, now])?;
+        )?.execute(params![uid, security_id, date, price, source, stamp_over(tx, "prices", uid, now)?])?;
         unbury(tx, "prices", uid)?;
         Ok(n)
     }
@@ -551,12 +561,12 @@ impl Ledger {
         let n = tx.prepare_cached(
             "INSERT INTO account_values (uid, account_id, date, value, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(uid) DO UPDATE SET account_id = excluded.account_id, date = excluded.date, value = excluded.value, deleted = 0,
-                 updated_at = MAX(excluded.updated_at, account_values.updated_at + 1)
+                 updated_at = MAX(excluded.updated_at, MIN(account_values.updated_at, 4000000000000000) + 1)
              WHERE account_values.value != excluded.value OR account_values.account_id != excluded.account_id OR account_values.deleted = 1",
-        )?.execute(params![uid, account_id, date, value, now])?;
+        )?.execute(params![uid, account_id, date, value, stamp_over(tx, "account_values", uid, now)?])?;
         unbury(tx, "account_values", uid)?;
         tx.prepare_cached(
-            "UPDATE account_values SET deleted = 1, updated_at = MAX(?4, updated_at + 1) WHERE account_id = ?1 AND date = ?2 AND uid != ?3 AND deleted = 0",
+            "UPDATE account_values SET deleted = 1, updated_at = MAX(?4, MIN(updated_at, 4000000000000000) + 1) WHERE account_id = ?1 AND date = ?2 AND uid != ?3 AND deleted = 0",
         )?.execute(params![account_id, date, uid, now])?;
         Ok(n)
     }
@@ -572,14 +582,14 @@ impl Ledger {
         let uid = format!("room:{}:{year}", name_of(&registration));
         let now = now_ms();
         if amount <= 0 {
-            self.conn.prepare_cached("UPDATE room_facts SET deleted = 1, updated_at = MAX(?2, updated_at + 1) WHERE uid = ?1 AND deleted = 0")?
+            self.conn.prepare_cached("UPDATE room_facts SET deleted = 1, updated_at = MAX(?2, MIN(updated_at, 4000000000000000) + 1) WHERE uid = ?1 AND deleted = 0")?
                 .execute(params![uid, now])?;
             return Ok(());
         }
         self.conn.prepare_cached(
             "INSERT INTO room_facts (uid, registration, year, amount, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(uid) DO UPDATE SET amount = excluded.amount, deleted = 0, updated_at = MAX(excluded.updated_at, room_facts.updated_at + 1)",
-        )?.execute(params![uid, name_of(&registration), year, amount, now])?;
+             ON CONFLICT(uid) DO UPDATE SET amount = excluded.amount, deleted = 0, updated_at = MAX(excluded.updated_at, MIN(room_facts.updated_at, 4000000000000000) + 1)",
+        )?.execute(params![uid, name_of(&registration), year, amount, stamp_over(&self.conn, "room_facts", &uid, now)?])?;
         unbury(&self.conn, "room_facts", &uid)
     }
 
@@ -616,9 +626,9 @@ impl Ledger {
         self.conn.prepare_cached(
             "INSERT INTO fx_rates (uid, base, quote, date, rate, source, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(uid) DO UPDATE SET rate = excluded.rate, source = excluded.source, deleted = 0,
-                 updated_at = MAX(excluded.updated_at, fx_rates.updated_at + 1)
+                 updated_at = MAX(excluded.updated_at, MIN(fx_rates.updated_at, 4000000000000000) + 1)
              WHERE fx_rates.rate != excluded.rate OR fx_rates.source != excluded.source OR fx_rates.deleted = 1",
-        )?.execute(params![uid, base, quote, date, rate, source, now_ms()])?;
+        )?.execute(params![uid, base, quote, date, rate, source, stamp_over(&self.conn, "fx_rates", &uid, now_ms())?])?;
         unbury(&self.conn, "fx_rates", &uid)
     }
 
@@ -636,7 +646,7 @@ impl Ledger {
             .optional()?;
         match same {
             Some(id) => {
-                self.conn.prepare_cached("UPDATE account_values SET value = ?2, updated_at = MAX(?3, updated_at + 1) WHERE id = ?1 AND value != ?2")?
+                self.conn.prepare_cached("UPDATE account_values SET value = ?2, updated_at = MAX(?3, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1 AND value != ?2")?
                     .execute(params![id, value, now])?;
             }
             None => {
@@ -667,7 +677,7 @@ impl Ledger {
         let institution = patch.institution.as_deref().map_or(institution, |i| i.trim().to_string());
         let archived = patch.archived.unwrap_or(archived);
         self.conn.prepare_cached(
-            "UPDATE accounts SET name = ?2, registration = ?3, institution = ?4, archived = ?5, updated_at = MAX(?6, updated_at + 1) WHERE id = ?1",
+            "UPDATE accounts SET name = ?2, registration = ?3, institution = ?4, archived = ?5, updated_at = MAX(?6, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1",
         )?.execute(params![id, name, registration, institution, archived, now_ms()])?;
         self.account(id)
     }
@@ -905,6 +915,50 @@ mod tests {
         assert!(matches!(l.portfolio(date(9999, 6, 1)), Err(LedgerError::Invalid(_))));
         assert!(matches!(l.portfolio(date(-9999, 1, 5)), Err(LedgerError::Invalid(_))));
         assert_eq!(2, l.portfolio(date(9998, 6, 1)).unwrap().accounts.len());
+    }
+
+    #[test]
+    fn a_line_deleted_on_the_phone_is_not_imported_again_after_the_phone_pairs_again() {
+        let mut pc = ledger();
+        pc.invest_import(ACTIVITIES_EXPORT, &[], None).unwrap();
+        // The phone takes the PC's ledger, deletes an imported line, and syncs.
+        let whole = pc.sync("Pixel", false, 0, None, &[], "t").unwrap();
+        let line = whole.changes.iter().find(|c| c.table == "activities").unwrap().clone();
+        assert!(line.uid.starts_with("imp:"));
+        let deleted = Change { deleted: true, updated_at: line.updated_at.min(crate::ledger::STAMP_CEILING) + 1, row: Default::default(), ..line.clone() };
+        pc.sync("Pixel", false, whole.cursor, Some(&whole.generation), &[deleted], "t").unwrap();
+        // It pairs again: its first sync sends what it holds, never its tombstones.
+        let rows: Vec<Change> = whole.changes.iter().filter(|c| !c.deleted && c.uid != line.uid).cloned().collect();
+        pc.sync("Pixel", true, 0, None, &rows, "t").unwrap();
+        assert_eq!(4, pc.invest_list(&ActivityQuery::default()).unwrap().len());
+        // The same file imported here again leaves the deleted line out, as before the replace.
+        let again = pc.invest_import(ACTIVITIES_EXPORT, &[], None).unwrap();
+        assert_eq!((0, 5), (again.activities, again.duplicates));
+        assert_eq!(4, pc.invest_list(&ActivityQuery::default()).unwrap().len());
+    }
+
+    #[test]
+    fn a_derived_row_written_again_is_stamped_past_its_tombstone() {
+        let mut pc = ledger();
+        tfsa(&mut pc);
+        pc.invest_add(&ActivityInput { account_id: pc.accounts().unwrap()[0].id, r#type: ActivityType::Buy, date: "2026-10-01".into(),
+            symbol: Some("XEQT".into()), currency: Some("CAD".into()), quantity: Some(QTY_SCALE), amount: 40_00, fee: None, note: None,
+            to_amount: None, to_currency: None }).unwrap();
+        let first = pc.sync("Pixel", false, 0, None, &[], "t").unwrap();
+        // The phone, whose clock runs an hour ahead, deleted these.
+        let ahead = now_ms() + 60 * 60 * 1000;
+        let tomb = |table: &str, uid: &str| Change { table: table.into(), uid: uid.into(), updated_at: ahead, deleted: true, row: Default::default() };
+        pc.sync("Pixel", false, first.cursor, Some(&first.generation), &[
+            tomb("prices", "px:sec:XEQT:2026-10-02"), tomb("fx_rates", "fx:USD:CAD:2026-10-02"), tomb("room_facts", "room:TFSA:2026"),
+        ], "t").unwrap();
+        pc.price_set("XEQT", "2026-10-02", 40 * PRICE_SCALE).unwrap();
+        pc.fx_set("USD", "CAD", "2026-10-02", 137_000_000, SOURCE_MANUAL).unwrap();
+        pc.room_set(Registration::Tfsa, 2026, 7_000_00).unwrap();
+        for (table, uid) in [("prices", "px:sec:XEQT:2026-10-02"), ("fx_rates", "fx:USD:CAD:2026-10-02"), ("room_facts", "room:TFSA:2026")] {
+            let at: i64 = pc.conn.query_row(&format!("SELECT updated_at FROM {table} WHERE uid = ?1"), [uid], |r| r.get(0)).unwrap();
+            assert!(at > ahead, "{uid} at {at}, its tombstone at {ahead}: the phone would refuse it");
+        }
+        assert_eq!(0, count(&pc, "SELECT COUNT(*) FROM tombstones"));
     }
 
     #[test]

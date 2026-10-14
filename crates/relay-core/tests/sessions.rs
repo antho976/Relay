@@ -195,7 +195,12 @@ fn worktree_ops() {
     let d = ok(e, "worktree.disk", json!({"project_id": 1}));
     let mine = d["worktrees"].as_array().unwrap().iter().find(|w| w["path"] == path.display().to_string()).unwrap();
     assert!(mine["build_mb"].as_f64().unwrap() > 0.4, "{mine}");
-    let r = ok(e, "worktree.remove", json!({"project_id": 1, "path": path}));
+    // scratch.txt is uncommitted work, and `git worktree remove --force` would delete it: this
+    // used to go without a word. It is refused as `session.close` refuses it, until the caller
+    // says to discard it.
+    assert_eq!(code(call(e, "worktree.remove", json!({"project_id": 1, "path": path}))), "worktree.dirty");
+    assert!(path.join("scratch.txt").is_file());
+    let r = ok(e, "worktree.remove", json!({"project_id": 1, "path": path, "discard_changes": true}));
     assert!(r["freed_mb"].as_f64().unwrap() > 0.4);
     assert!(!path.exists());
     assert_eq!(ok(e, "worktree.list", json!({"project_id": 1}))["worktrees"].as_array().unwrap().len(), 1);
@@ -1637,4 +1642,154 @@ fn concurrent_spawns_start_exactly_one_child() {
     }
     assert_eq!(f.engine.live_pty_count(), 1);
     ok(&f.engine, "session.close", json!({"session":name,"remove_worktree":true}));
+}
+
+/// An agent that writes a file as it is stopped: what it wrote after `session.close` checked the
+/// checkout is found once it is gone, and the checkout is kept. The session reads `exited`.
+#[test]
+fn close_keeps_a_checkout_its_agent_wrote_into_after_the_dirty_check() {
+    let f = fixture();
+    let provider = fake_provider(&f.root, false);
+    std::fs::write(&provider, "#!/bin/sh\ntrap 'echo late > \"$PWD/late.txt\"; exit 0' TERM\necho ready\nwhile :; do sleep 0.05; done\n").unwrap();
+    ok(&f.engine, "settings.set", json!({"path":"providers.claude.path","value":provider}));
+    let session = ok(&f.engine, "session.create", json!({"project_id":1,"provider":"claude"}));
+    let name = session["name"].as_str().unwrap().to_string();
+    let wt = PathBuf::from(session["worktree"].as_str().unwrap());
+    ok(&f.engine, "session.spawn", json!({"session":name}));
+    wait_until("the agent to start", || ok(&f.engine,"session.scrollback",json!({"session":name}))["text"].as_str().unwrap().contains("ready"));
+    let error = common::refused(call(&f.engine, "session.close", json!({"session":name})));
+    assert_eq!(error.code, "worktree.dirty", "{}", error.message);
+    assert!(error.message.contains("stopped"), "{}", error.message);
+    // Nothing is left to "keep the agent" for: the refusal says it was stopped.
+    assert_eq!(error.details.as_ref().unwrap()["stopped"], true, "{:?}", error.details);
+    assert!(wt.join("late.txt").is_file(), "the late file was deleted with the checkout");
+    assert!(wt.join("README.md").is_file());
+    let state = || ok(&f.engine, "session.list", json!({"include_closed":true}))["sessions"].as_array().unwrap()
+        .iter().find(|s| s["name"] == name.as_str()).map(|s| s["state"].clone()).unwrap();
+    wait_until("the session to read exited", || state() == "exited");
+    // Asked again, it is refused again until the work is dealt with — before any stop now.
+    let again = common::refused(call(&f.engine, "session.close", json!({"session":name})));
+    assert_eq!(again.code, "worktree.dirty");
+    assert!(again.details.as_ref().unwrap().get("stopped").is_none(), "{:?}", again.details);
+    ok(&f.engine, "session.close", json!({"session":name, "discard_changes": true}));
+    assert!(!wt.exists());
+}
+
+/// A clean checkout on a detached HEAD can hold commits no branch has. Removing it pins them
+/// under `refs/relay/rescue/` rather than leaving them to a reflog that goes with the checkout.
+#[test]
+fn removing_a_detached_checkout_pins_commits_no_branch_holds() {
+    let f = fixture();
+    let e = &f.engine;
+    let session = ok(e, "session.create", json!({"project_id": 1, "provider": "claude"}));
+    let name = session["name"].as_str().unwrap().to_string();
+    let wt = PathBuf::from(session["worktree"].as_str().unwrap());
+    let commit_detached = |wt: &Path, file: &str| -> String {
+        git(wt, &["checkout", "-q", "--detach"]);
+        std::fs::write(wt.join(file), "work\n").unwrap();
+        git(wt, &["add", file]);
+        git(wt, &["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--no-verify", "-m", "detached work"]);
+        git(wt, &["rev-parse", "HEAD"])
+    };
+    let lost = commit_detached(&wt, "detached.txt");
+    ok(e, "session.close", json!({"session": name}));
+    assert!(!wt.exists());
+    assert_eq!(git(&f.repo, &["rev-parse", &format!("refs/relay/rescue/{name}")]), lost);
+
+    // `worktree.remove` names the ref it made; a detached HEAD a branch contains needs none.
+    let w = ok(e, "worktree.create", json!({"project_id": 1, "branch": "relay/loose"}));
+    let path = PathBuf::from(w["path"].as_str().unwrap());
+    let lost = commit_detached(&path, "loose.txt");
+    let r = ok(e, "worktree.remove", json!({"project_id": 1, "path": path}));
+    let rescued = r["rescued"].as_str().expect("a rescue ref").to_string();
+    assert!(rescued.starts_with("refs/relay/rescue/"), "{rescued}");
+    assert_eq!(git(&f.repo, &["rev-parse", &rescued]), lost);
+    let w = ok(e, "worktree.create", json!({"project_id": 1, "branch": "relay/held"}));
+    let path = PathBuf::from(w["path"].as_str().unwrap());
+    git(&path, &["checkout", "-q", "--detach"]);
+    let r = ok(e, "worktree.remove", json!({"project_id": 1, "path": path}));
+    assert!(r.get("rescued").is_none_or(|v| v.is_null()), "{r}");
+}
+
+/// Only a direct child of `.relay/worktrees` counts as one of Relay's own checkouts: a directory
+/// inside a live pooled checkout is not one, and is neither purged nor deleted.
+#[test]
+fn worktree_remove_refuses_a_directory_inside_a_pooled_checkout() {
+    let f = fixture();
+    let e = &f.engine;
+    let w = ok(e, "worktree.create", json!({"project_id": 1, "branch": "relay/inner"}));
+    let pooled = PathBuf::from(w["path"].as_str().unwrap());
+    let inner = pooled.join("src");
+    std::fs::create_dir_all(inner.join("build")).unwrap();
+    std::fs::write(inner.join("keep.txt"), "mine").unwrap();
+    std::fs::write(inner.join("build/out.bin"), "x").unwrap();
+    for discard in [false, true] {
+        let r = call(e, "worktree.remove", json!({"project_id": 1, "path": inner, "discard_changes": discard}));
+        assert_eq!(code(r), "worktree.remove_failed");
+        assert!(inner.join("keep.txt").is_file() && inner.join("build/out.bin").is_file());
+    }
+    assert!(pooled.join("README.md").is_file());
+}
+
+/// A pooled checkout half deleted — its `.git` file gone — is not judged by the primary's
+/// status, which git would walk up to: the primary's edits never refuse its removal, and only
+/// what is left in the folder itself is named.
+#[test]
+fn worktree_remove_judges_a_half_deleted_checkout_by_its_own_leftovers() {
+    let f = fixture();
+    let e = &f.engine;
+    std::fs::write(f.repo.join("README.md"), "edited in the primary\n").unwrap();
+    std::fs::write(f.repo.join("a.txt"), "x").unwrap();
+    std::fs::write(f.repo.join("b.txt"), "x").unwrap();
+    let leftover = |branch: &str| {
+        let w = ok(e, "worktree.create", json!({"project_id": 1, "branch": branch}));
+        let path = PathBuf::from(w["path"].as_str().unwrap());
+        for entry in std::fs::read_dir(&path).unwrap().flatten() {
+            if entry.file_type().unwrap().is_dir() {
+                std::fs::remove_dir_all(entry.path()).unwrap();
+            } else {
+                std::fs::remove_file(entry.path()).unwrap();
+            }
+        }
+        std::fs::create_dir_all(path.join("build")).unwrap();
+        std::fs::write(path.join("build/out.bin"), "x").unwrap();
+        path
+    };
+
+    // Build output alone: nothing to keep, whatever the primary holds.
+    let path = leftover("relay/half-a");
+    ok(e, "worktree.remove", json!({"project_id": 1, "path": path}));
+    assert!(!path.exists());
+
+    // A file of its own is named, and only it.
+    let path = leftover("relay/half-b");
+    std::fs::write(path.join("notes.txt"), "mine").unwrap();
+    let error = common::refused(call(e, "worktree.remove", json!({"project_id": 1, "path": path})));
+    assert_eq!(error.code, "worktree.dirty", "{}", error.message);
+    assert_eq!(error.details.as_ref().unwrap()["worktrees"][0]["changed"], 1, "{}", error.message);
+    assert!(path.join("notes.txt").is_file());
+    ok(e, "worktree.remove", json!({"project_id": 1, "path": path, "discard_changes": true}));
+    assert!(!path.exists());
+    assert_eq!(std::fs::read_to_string(f.repo.join("README.md")).unwrap(), "edited in the primary\n");
+}
+
+/// A pooled checkout that lost its `.git` is a plain folder in the primary: launching into it
+/// would install the session's hooks on the primary and set the agent to work on its branch.
+/// The launch is refused and the primary's config is left alone.
+#[test]
+fn launch_refuses_a_pooled_checkout_without_its_own_git() {
+    let f = fixture();
+    let provider = fake_provider(&f.root, false);
+    ok(&f.engine, "settings.set", json!({"path":"providers.claude.path","value":provider}));
+    let session = ok(&f.engine, "session.create", json!({"project_id":1,"provider":"claude"}));
+    let name = session["name"].as_str().unwrap().to_string();
+    let wt = PathBuf::from(session["worktree"].as_str().unwrap());
+    let hooks_path = || git_command(&f.repo).args(["config", "--get", "core.hooksPath"]).output().unwrap().stdout;
+    let before = hooks_path();
+    std::fs::remove_file(wt.join(".git")).unwrap();
+    let error = common::refused(call(&f.engine, "session.spawn", json!({"session":name})));
+    assert_eq!(error.code, "session.worktree_missing", "{}", error.message);
+    assert!(error.message.contains(".git"), "{}", error.message);
+    assert_eq!(hooks_path(), before, "the primary's hooks were rewired");
+    assert_eq!(f.engine.live_pty_count(), 0);
 }

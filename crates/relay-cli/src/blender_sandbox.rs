@@ -6,6 +6,9 @@
 //! whole file system read-only and may write only to the session's write roots (the guardrail's
 //! own list, `bus.whoami`), the job's folder and Blender's sandbox config/cache. The network is
 //! off: no tool, add-ons included, needs it. GPU devices stay reachable for EEVEE and Cycles.
+//! The user's runtime folder and the X socket folder are hidden (their sockets would reach the
+//! session bus and the service manager, which run commands outside the sandbox), the child gets
+//! a session of its own, and only an allowlist of the environment (`passed_env`).
 //!
 //! Outside a session (a standalone plugin) or without bwrap (macOS, Windows, a kernel without
 //! user namespaces) Blender runs as before, and every result says so in `sandbox`: the sandbox
@@ -72,9 +75,16 @@ impl Sandbox {
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
         let mut sandboxed = Command::new(bwrap);
-        sandboxed.args(["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-net", "--unshare-pid", "--die-with-parent"]);
+        // --new-session: no TIOCSTI into a terminal the server was started from.
+        sandboxed.args(["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-net", "--unshare-pid", "--die-with-parent", "--new-session"]);
         for device in gpu_devices() {
             sandboxed.arg("--dev-bind-try").arg(&device).arg(&device);
+        }
+        // A read-only file system still lets a child connect() to the sockets on it: the session
+        // bus and the systemd user manager (which starts any command, unconfined, on request), the
+        // Wayland and X servers, ssh and gpg agents. Empty folders go over those first.
+        for dir in hidden_socket_dirs() {
+            sandboxed.arg("--tmpfs").arg(&dir);
         }
         let mut bound = Vec::new();
         for dir in writable.iter().chain(extra).chain([&job.to_path_buf(), &state]) {
@@ -87,6 +97,14 @@ impl Sandbox {
         }
         if let Some(cwd) = command.get_current_dir() {
             sandboxed.arg("--chdir").arg(cwd);
+        }
+        // Not the server's environment: it names the session bus, agent sockets and Relay's own
+        // tokens. Only what Blender, its GPU drivers and the locale read is passed on.
+        sandboxed.env_clear();
+        for (key, value) in std::env::vars_os() {
+            if key.to_str().is_some_and(passed_env) {
+                sandboxed.env(key, value);
+            }
         }
         for (key, value) in command.get_envs() {
             match value {
@@ -138,6 +156,33 @@ fn bwrap() -> Result<PathBuf, String> {
     }).clone()
 }
 
+/// Environment variables a sandboxed Blender keeps: its executable search and libraries, the
+/// locale, Blender's own settings and the GPU drivers'. Nothing that names a socket or a secret.
+fn passed_env(key: &str) -> bool {
+    const EXACT: [&str; 11] = ["PATH", "HOME", "USER", "LOGNAME", "LANG", "LANGUAGE", "TZ", "TERM", "LD_LIBRARY_PATH", "OCIO", "DRI_PRIME"];
+    const PREFIXES: [&str; 14] = ["LC_", "BLENDER_", "__GL", "__EGL", "__NV", "__VK", "MESA_", "LIBGL_", "VK_", "EGL_", "GBM_", "CUDA_", "OPTIX_", "NVIDIA_"];
+    const NEVER: [&str; 6] = ["SOCK", "TOKEN", "SECRET", "PASSWORD", "AUTH", "KEY"];
+    let upper = key.to_ascii_uppercase();
+    (EXACT.contains(&key) || PREFIXES.iter().any(|p| key.starts_with(p))) && !NEVER.iter().any(|n| upper.contains(n))
+}
+
+/// The user's runtime folder (`/run/user/<uid>`, and `XDG_RUNTIME_DIR` where that differs) and
+/// the X server's socket folder: each one that exists, since bwrap cannot make a mount point on
+/// the read-only root.
+fn hidden_socket_dirs() -> Vec<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let mut dirs: Vec<PathBuf> = std::fs::metadata("/proc/self").map(|m| PathBuf::from(format!("/run/user/{}", m.uid()))).into_iter().collect();
+    dirs.extend(std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|p| p.is_absolute()));
+    dirs.push(PathBuf::from("/tmp/.X11-unix"));
+    let mut real: Vec<PathBuf> = Vec::new();
+    for dir in dirs.iter().filter_map(|dir| std::fs::canonicalize(dir).ok()) {
+        if dir.is_dir() && dir != Path::new("/") && !real.contains(&dir) {
+            real.push(dir);
+        }
+    }
+    real
+}
+
 /// Kept across runs, so shader caches survive; never the user's own Blender config.
 fn state_dir() -> Result<PathBuf> {
     let cache = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).filter(|p| p.is_absolute())
@@ -177,4 +222,20 @@ pub(crate) fn test_roots(roots: &[&Path]) -> impl Drop {
 #[cfg(test)]
 pub(crate) fn available() -> bool {
     bwrap().is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sandbox_passes_no_sockets_or_secrets_in_the_environment() {
+        for kept in ["PATH", "HOME", "LANG", "LC_ALL", "BLENDER_USER_SCRIPTS", "__GLX_VENDOR_LIBRARY_NAME", "MESA_LOADER_DRIVER_OVERRIDE", "CUDA_VISIBLE_DEVICES"] {
+            assert!(passed_env(kept), "{kept}");
+        }
+        for dropped in ["DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK", "GPG_AGENT_INFO", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY", "DISPLAY",
+            "RELAY_SOCKET", "RELAY_TOKEN", "RELAY_SESSION", "ANTHROPIC_API_KEY", "BLENDER_API_KEY", "LC_AUTH_TOKEN", "GITHUB_TOKEN"] {
+            assert!(!passed_env(dropped), "{dropped}");
+        }
+    }
 }

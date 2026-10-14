@@ -193,3 +193,107 @@ fn workspace_remove_refuses_a_dirty_checkout_it_would_delete() {
     ok(&f.engine, "workspace.remove", discard);
     wait_gone(&wt);
 }
+
+/// A git-ignored secret or piece of local state — an `.env`, a keystore, `local.properties` —
+/// is work a removal would delete too, though no plain `git status` lists it.
+#[test]
+fn close_refuses_a_checkout_holding_git_ignored_keepers() {
+    let f = fixture();
+    let ignore = |wt: &Path| {
+        std::fs::write(wt.join(".gitignore"), ".env\nbuild/\n__pycache__/\n.venv/\n").unwrap();
+        git(wt, &["add", ".gitignore"]);
+        git(wt, &["commit", "-q", "--no-verify", "-m", "ignore"]);
+        std::fs::create_dir_all(wt.join("build")).unwrap();
+        std::fs::write(wt.join("build/out.bin"), "x").unwrap();
+        // Caches and environments a tool rebuilds hold nothing back either.
+        std::fs::create_dir_all(wt.join("src/__pycache__")).unwrap();
+        std::fs::write(wt.join("src/__pycache__/m.pyc"), "x").unwrap();
+        std::fs::create_dir_all(wt.join(".venv/bin")).unwrap();
+        std::fs::write(wt.join(".venv/bin/python"), "x").unwrap();
+        std::fs::write(wt.join(".env"), "TOKEN=1\n").unwrap();
+    };
+    let (name, wt) = session(&f);
+    ignore(&wt);
+    let error = refused(&f.engine, "session.close", json!({"session": name}));
+    assert_dirty(&error, &wt, 0);
+    assert_eq!(error.details.as_ref().unwrap()["worktrees"][0]["ignored"], json!([".env"]));
+    assert!(error.message.contains(".env"), "{}", error.message);
+    assert!(wt.join(".env").is_file());
+    assert_eq!(state(&f, &name), "created");
+    // Build output and caches alone are no reason to keep a checkout.
+    std::fs::remove_file(wt.join(".env")).unwrap();
+    ok(&f.engine, "session.close", json!({"session": name}));
+    assert!(!wt.exists());
+
+    let (name, wt) = session(&f);
+    ignore(&wt);
+    ok(&f.engine, "session.close", json!({"session": name, "discard_changes": true}));
+    assert!(!wt.exists());
+}
+
+/// `project.remove` checks the checkouts it deletes while their agents still run, and kills
+/// them only after its commit. What an agent wrote in between is found after the kill: that
+/// checkout is kept, while a clean one beside it still goes.
+#[test]
+fn project_remove_keeps_a_checkout_its_agent_wrote_into_after_the_dirty_check() {
+    let f = fixture();
+    let provider = f._tmp.path().join("late-writer.sh");
+    std::fs::write(&provider, "#!/bin/sh\ntrap 'echo late > \"$PWD/late.txt\"; exit 0' TERM\necho ready\nwhile :; do sleep 0.05; done\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ok(&f.engine, "settings.set", json!({"path": "providers.claude.path", "value": provider}));
+    let (writer, writer_wt) = session(&f);
+    let (_, clean_wt) = session(&f);
+    ok(&f.engine, "session.spawn", json!({"session": writer}));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ok(&f.engine, "session.scrollback", json!({"session": writer}))["text"].as_str().unwrap().contains("ready") {
+        assert!(Instant::now() < deadline, "the agent never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    ok(&f.engine, "project.remove", json!({"project_id": 1, "force": true, "remove_worktrees": true}));
+    wait_gone(&clean_wt);
+    assert!(writer_wt.join("late.txt").is_file(), "the late file was deleted with the checkout");
+    assert!(writer_wt.join("README.md").is_file());
+}
+
+/// Only secrets and local state nothing rebuilds hold a close back: tool and IDE state, logs and
+/// review notes git ignores do not, wherever they are, while an `.env` or a keystore — loose or
+/// inside an ignored directory — still does. An `.env.example` is a template, not a secret.
+#[test]
+fn close_counts_only_ignored_secrets_and_local_state() {
+    let f = fixture();
+    let (name, wt) = session(&f);
+    std::fs::write(wt.join(".gitignore"), ".env*\n*.log\n.idea/\n.kotlin/\n.impeccable/\n.eslintcache\n*.tsbuildinfo\nsigning/\n*.keystore\n").unwrap();
+    git(&wt, &["add", ".gitignore"]);
+    git(&wt, &["commit", "-q", "--no-verify", "-m", "ignore"]);
+    for (file, text) in [
+        ("apps/phone/.kotlin/sessions/s.salive", "x"), ("apps/phone/.kotlin/errors/e.log", "x"),
+        (".idea/workspace.xml", "<x/>"), (".impeccable/review/notes.md", "notes"), ("debug.log", "x"),
+        (".eslintcache", "{}"), ("tsconfig.tsbuildinfo", "{}"), (".env.example", "TOKEN=\n"),
+    ] {
+        std::fs::create_dir_all(wt.join(file).parent().unwrap()).unwrap();
+        std::fs::write(wt.join(file), text).unwrap();
+    }
+    ok(&f.engine, "session.close", json!({"session": name}));
+    assert!(!wt.exists(), "nothing there is work a close would lose");
+
+    let (name, wt) = session(&f);
+    std::fs::write(wt.join(".gitignore"), ".env*\n*.log\nsigning/\n*.keystore\n").unwrap();
+    git(&wt, &["add", ".gitignore"]);
+    git(&wt, &["commit", "-q", "--no-verify", "-m", "ignore"]);
+    std::fs::write(wt.join("debug.log"), "x").unwrap();
+    std::fs::write(wt.join(".env"), "TOKEN=1\n").unwrap();
+    std::fs::create_dir_all(wt.join("signing/android")).unwrap();
+    std::fs::write(wt.join("signing/android/release.keystore"), "key").unwrap();
+    let error = refused(&f.engine, "session.close", json!({"session": name}));
+    assert_dirty(&error, &wt, 0);
+    let mut ignored: Vec<String> = serde_json::from_value(error.details.as_ref().unwrap()["worktrees"][0]["ignored"].clone()).unwrap();
+    ignored.sort();
+    assert_eq!(ignored, [".env", "signing/android/release.keystore"]);
+    assert_eq!(state(&f, &name), "created");
+    std::fs::remove_file(wt.join(".env")).unwrap();
+    let error = refused(&f.engine, "session.close", json!({"session": name}));
+    assert_eq!(error.details.as_ref().unwrap()["worktrees"][0]["ignored"], json!(["signing/android/release.keystore"]));
+    ok(&f.engine, "session.close", json!({"session": name, "discard_changes": true}));
+    assert!(!wt.exists());
+}

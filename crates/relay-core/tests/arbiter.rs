@@ -23,6 +23,10 @@ struct Fake {
     price: Mutex<f64>,
     can_transfer: Mutex<bool>,
     placed: Mutex<Vec<OrderRequest>>,
+    /// Live orders rest unfilled instead of filling at once.
+    rest: Mutex<bool>,
+    /// The exchange refuses every sell.
+    refuse_sells: Mutex<bool>,
 }
 
 impl Fake {
@@ -90,14 +94,23 @@ impl Account for Fake {
         Ok(Preview { preview_id: Some("pv".into()), commission: None, quote_size: None, base_size: None, errors: vec![], warnings: vec![] })
     }
     fn place(&self, o: &OrderRequest, _: Option<&str>) -> Result<ExchangeOrder> {
+        if o.side == Side::Sell && *self.refuse_sells.lock().unwrap() {
+            return Err(ExchangeError::Refused("INSUFFICIENT_FUND".into()));
+        }
         self.placed.lock().unwrap().push(o.clone());
         Ok(ExchangeOrder { order_id: format!("x-{}", o.client_order_id), client_order_id: o.client_order_id.clone(), status: OrderStatus::Pending, filled_size: Decimal::ZERO, average_filled_price: Decimal::ZERO, total_fees: Decimal::ZERO, reason: None })
     }
     fn order(&self, id: &str) -> Result<ExchangeOrder> {
         let p = Decimal::try_from(*self.price.lock().unwrap()).unwrap();
+        if *self.rest.lock().unwrap() {
+            return Ok(ExchangeOrder { order_id: id.into(), client_order_id: id.trim_start_matches("x-").into(), status: OrderStatus::Open, filled_size: Decimal::ZERO, average_filled_price: Decimal::ZERO, total_fees: Decimal::ZERO, reason: None });
+        }
         Ok(ExchangeOrder { order_id: id.into(), client_order_id: id.trim_start_matches("x-").into(), status: OrderStatus::Filled, filled_size: Decimal::new(5, 1), average_filled_price: p, total_fees: Decimal::new(3, 1), reason: None })
     }
     fn fills(&self, id: &str) -> Result<Vec<ExchangeFill>> {
+        if *self.rest.lock().unwrap() {
+            return Ok(vec![]);
+        }
         let p = Decimal::try_from(*self.price.lock().unwrap()).unwrap();
         Ok(vec![ExchangeFill { trade_id: format!("t-{id}"), order_id: id.into(), price: p, size: Decimal::new(5, 1), fee: Decimal::new(3, 1), at: Fake::now() }])
     }
@@ -256,4 +269,95 @@ fn a_backtest_reports_both_parts_and_counts_versions() {
     let r = ok(&engine, "arbiter.backtest", json!({"strategy_id": id, "draft": other, "days": 1}));
     assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().starts_with("2 versions")), "{r:#}");
     assert_eq!(ok(&engine, "arbiter.strategy.get", json!({"id": id}))["variants_tried"], 2);
+}
+
+/// Connects the fake exchange's key, as `arbiter.key.set` does.
+fn connect(engine: &relay_core::Engine) {
+    ok(engine, "arbiter.key.set", json!({"key_name": "organizations/o/apiKeys/k1234", "private_key": KEY}));
+}
+
+#[test]
+fn the_private_key_is_never_kept_in_the_audit_log() {
+    let (engine, _) = setup();
+    connect(&engine);
+    let rows = ok(&engine, "audit.list", json!({"op_prefix": "arbiter.key", "limit": 10}));
+    assert!(rows["rows"].as_array().unwrap().is_empty(), "{rows:#}");
+}
+
+#[test]
+fn a_card_asked_on_paper_is_not_placed_once_the_strategy_is_live() {
+    let (engine, fake) = setup();
+    let id = ok(&engine, "arbiter.strategy.save", json!({"draft": draft("Ask", "20")}))["row"]["id"].as_i64().unwrap();
+    let out = ok(&engine, "arbiter.order.place", json!({"strategy_id": id, "side": "buy", "quote": "20", "why": "RSI is low"}));
+    assert_eq!(out["outcome"], "proposed", "{out:#}");
+    connect(&engine);
+    ok(&engine, "arbiter.strategy.set", json!({"id": id, "venue": "live"}));
+    let p = ok(&engine, "arbiter.proposal.resolve", json!({"id": out["proposal"]["id"], "approve": true}));
+    assert_eq!(p["status"], "failed", "{p:#}");
+    assert!(fake.placed.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_strategy_with_an_order_resting_places_no_second_beside_it() {
+    let (engine, fake) = setup();
+    connect(&engine);
+    *fake.rest.lock().unwrap() = true;
+    let id = ok(&engine, "arbiter.strategy.save", json!({"draft": draft("Agent", "20")}))["row"]["id"].as_i64().unwrap();
+    ok(&engine, "arbiter.strategy.set", json!({"id": id, "mode": "agent", "venue": "live"}));
+    let out = ok(&engine, "arbiter.order.place", json!({"strategy_id": id, "side": "buy", "quote": "20", "why": "dip"}));
+    assert_eq!(out["outcome"], "placed", "{out:#}");
+    // The same call again is the same order; a different one waits for it.
+    assert_eq!(ok(&engine, "arbiter.order.place", json!({"strategy_id": id, "side": "buy", "quote": "20", "why": "dip"}))["outcome"], "placed");
+    let out = ok(&engine, "arbiter.order.place", json!({"strategy_id": id, "side": "buy", "quote": "30", "why": "more"}));
+    assert_eq!(out["refusal"]["code"], "arbiter.order_open", "{out:#}");
+    assert_eq!(fake.placed.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_refused_stop_is_recorded_and_waits_before_trying_again() {
+    let (engine, fake) = setup();
+    connect(&engine);
+    let id = ok(&engine, "arbiter.strategy.save", json!({"draft": draft("Live", "50")}))["row"]["id"].as_i64().unwrap();
+    ok(&engine, "arbiter.strategy.set", json!({"id": id, "venue": "live", "running": true}));
+    pass(&engine);
+    assert_eq!(ok(&engine, "arbiter.strategy.get", json!({"id": id}))["row"]["held_base"], "0.5");
+    // The stop fires and the exchange refuses the sell.
+    *fake.refuse_sells.lock().unwrap() = true;
+    fake.set(90.0);
+    pass(&engine);
+    let d = ok(&engine, "arbiter.strategy.get", json!({"id": id}));
+    let failed: Vec<&Value> = d["orders"].as_array().unwrap().iter().filter(|o| o["side"] == "sell").collect();
+    assert_eq!(failed.len(), 1, "{d:#}");
+    assert_eq!(failed[0]["status"], "failed");
+    // Straight after, it waits rather than hammering the exchange.
+    *fake.refuse_sells.lock().unwrap() = false;
+    pass(&engine);
+    assert_eq!(fake.placed.lock().unwrap().iter().filter(|o| o.side == Side::Sell).count(), 0);
+}
+
+#[test]
+fn an_edit_cannot_drop_the_limits_the_ai_or_live_trading_needs() {
+    let (engine, _) = setup();
+    let id = ok(&engine, "arbiter.strategy.save", json!({"draft": draft("Agent", "20")}))["row"]["id"].as_i64().unwrap();
+    ok(&engine, "arbiter.strategy.set", json!({"id": id, "mode": "agent"}));
+    let mut bare = draft("Agent", "20");
+    bare["limits"] = json!({});
+    assert_eq!(code(call(&engine, "arbiter.strategy.save", json!({"id": id, "draft": bare}))), "arbiter.invalid");
+    assert_eq!(ok(&engine, "arbiter.strategy.get", json!({"id": id}))["row"]["version"], 1);
+}
+
+#[test]
+fn a_fill_that_races_the_kill_switch_is_still_booked() {
+    let (engine, fake) = setup();
+    connect(&engine);
+    *fake.rest.lock().unwrap() = true;
+    let id = ok(&engine, "arbiter.strategy.save", json!({"draft": draft("Agent", "20")}))["row"]["id"].as_i64().unwrap();
+    ok(&engine, "arbiter.strategy.set", json!({"id": id, "mode": "agent", "venue": "live"}));
+    ok(&engine, "arbiter.order.place", json!({"strategy_id": id, "side": "buy", "quote": "20", "why": "dip"}));
+    // It fills on the exchange between passes, and then everything is halted.
+    *fake.rest.lock().unwrap() = false;
+    ok(&engine, "arbiter.halt", json!({"reason": "testing"}));
+    let d = ok(&engine, "arbiter.strategy.get", json!({"id": id}));
+    assert_eq!(d["row"]["held_base"], "0.5", "{d:#}");
+    assert_eq!(d["orders"][0]["status"], "filled");
 }

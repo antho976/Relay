@@ -46,6 +46,76 @@ impl Sequence {
 const TRACKED_MODES: [u16; 13] = [1, 25, 47, 1047, 1049, 1000, 1002, 1003, 1004, 1005, 1006, 1015, 2004];
 /// Cursor visible (mode 25) is the only one a fresh terminal starts with.
 const DEFAULT_MODES: u16 = 1 << 1;
+/// Output fed to one terminal per frame, to begin with. `feed` only queues: VTE parses all of
+/// it in its next frame tick, with no budget of its own, and every terminal's tick runs in the
+/// same frame. Fed as fast as the socket delivered, one busy pane made that frame as long as
+/// parsing everything it had been sent — tens of milliseconds, a quarter second under a flood —
+/// and every other pane's echo and every paint waited for it. A pane that produces more than
+/// its budget falls behind, and the engine's lag recovery skips it ahead (`Step::Gap`).
+const FRAME_BYTES: usize = 128 * 1024;
+/// The budget follows what the frames cost: never below this much a frame…
+const FRAME_BYTES_MIN: usize = 16 * 1024;
+/// …nor above this, which no screen shows anyway.
+const FRAME_BYTES_MAX: usize = 1024 * 1024;
+/// How long a paced pane waits for a frame that does not come (an unmapped pane, a covered
+/// window the compositor stopped drawing): VTE's own fallback cadence.
+const FRAME_FALLBACK: Duration = Duration::from_millis(100);
+
+/// How long a frame clock's last update phase took. Every terminal parses what it was fed in
+/// that phase, so this is what the panes' budgets are steered by: before-paint opens it, and
+/// whichever of layout, paint or after-paint comes next closes it.
+struct FramePace {
+    clock: gtk::gdk::FrameClock,
+    handlers: Vec<glib::SignalHandlerId>,
+    update_us: Rc<Cell<i64>>,
+}
+
+impl FramePace {
+    fn new(clock: &gtk::gdk::FrameClock) -> FramePace {
+        let start = Rc::new(Cell::new(None::<i64>));
+        let update_us = Rc::new(Cell::new(0));
+        let begin = start.clone();
+        let mut handlers = vec![clock.connect_before_paint(move |_| begin.set(Some(glib::monotonic_time())))];
+        let end = |start: Rc<Cell<Option<i64>>>, update: Rc<Cell<i64>>| {
+            move |_: &gtk::gdk::FrameClock| {
+                if let Some(at) = start.take() {
+                    update.set(glib::monotonic_time() - at);
+                }
+            }
+        };
+        handlers.push(clock.connect_layout(end(start.clone(), update_us.clone())));
+        handlers.push(clock.connect_paint(end(start.clone(), update_us.clone())));
+        handlers.push(clock.connect_after_paint(end(start, update_us.clone())));
+        FramePace { clock: clock.clone(), handlers, update_us }
+    }
+
+    fn steer(&self, budget: usize) -> usize {
+        let (refresh, _) = self.clock.refresh_info(self.clock.frame_time());
+        next_budget(budget, self.update_us.get(), refresh)
+    }
+}
+
+/// The budget after a frame whose update phase took `update_us` of a `refresh_us` interval:
+/// shrunk in proportion when it overran half the interval (at most halved), grown by a quarter
+/// while it fits. Half, so the frame keeps room to lay out and draw, and a keystroke's echo
+/// queued behind a busy pane's output waits at most about a frame.
+fn next_budget(budget: usize, update_us: i64, refresh_us: i64) -> usize {
+    let target = refresh_us.max(4_000) / 2;
+    let next = if update_us > target {
+        (budget as f64 * (target as f64 / update_us as f64).max(0.5)) as usize
+    } else {
+        budget + budget / 4
+    };
+    next.clamp(FRAME_BYTES_MIN, FRAME_BYTES_MAX)
+}
+
+impl Drop for FramePace {
+    fn drop(&mut self) {
+        for handler in self.handlers.drain(..) {
+            self.clock.disconnect(handler);
+        }
+    }
+}
 
 thread_local! {
     /// The modes each session's stream last left on, by name and epoch, so a pane built again
@@ -174,6 +244,9 @@ pub struct Pane {
     size: Cell<(u16, u16)>,
     resize_pending: Cell<bool>,
     active: Cell<bool>,
+    /// Output fed per frame (`FRAME_BYTES`) and what steers it.
+    budget: Cell<usize>,
+    pace: RefCell<Option<FramePace>>,
 }
 
 impl Pane {
@@ -318,6 +391,8 @@ impl Pane {
             size: Cell::new((0, 0)),
             resize_pending: Cell::new(false),
             active: Cell::new(false),
+            budget: Cell::new(FRAME_BYTES),
+            pace: RefCell::default(),
         });
 
         // Keystrokes are queued, never dropped: they do not depend on the output attachment,
@@ -580,9 +655,11 @@ impl Pane {
                     backoff = 1;
                 }
                 match result {
-                    Ok(()) => {
-                        p.status.set_text("Recovering output");
-                    }
+                    // A gap: the pane fell behind its output and the engine dropped what it
+                    // could not hold. Attaching again skips it ahead at once, so nothing is said:
+                    // the status line takes rows from the terminal while it shows, and the
+                    // resize sent on attaching could measure the terminal in between.
+                    Ok(()) => {}
                     // The engine refused the attachment (no live PTY, say). Mark the pane
                     // detached so the next reconcile attaches it again once there is one.
                     Err(e @ Error::Bus(_)) => {
@@ -617,7 +694,9 @@ impl Pane {
         self.size.set((0, 0));
         self.schedule_resize();
         self.status.set_text("");
+        // Bytes fed since the terminal's last frame, which is when VTE parsed what came before.
         let mut bytes = 0;
+        let mut since = None;
         while let Ok(notice) = rx.recv().await {
             match notice {
                 Notice::Frame(frame)
@@ -668,14 +747,16 @@ impl Pane {
                             MODES.with(|m| m.borrow_mut().insert(self.name.clone(), entry));
                         }
                     }
+                    let frame = self.terminal.frame_clock().map(|clock| clock.frame_counter());
+                    if frame != since {
+                        since = frame;
+                        bytes = 0;
+                    }
                     bytes += data.len();
-                    // Bound each GLib dispatch. This is output-driven, never an idle timer.
-                    if bytes >= 64 * 1024 {
-                        let (send, recv) = async_channel::bounded(1);
-                        glib::idle_add_local_once(move || {
-                            let _ = send.try_send(());
-                        });
-                        let _ = recv.recv().await;
+                    // A frame's worth at a time. This is output-driven, never an idle timer.
+                    if bytes >= self.budget.get() {
+                        self.next_frame().await;
+                        since = self.terminal.frame_clock().map(|clock| clock.frame_counter());
                         bytes = 0;
                     }
                 }
@@ -684,6 +765,36 @@ impl Pane {
             }
         }
         Err(Error::Disconnected)
+    }
+
+    /// Until the terminal's next frame, or [`FRAME_FALLBACK`] when no frame comes (the pane is
+    /// unmapped, or the compositor stopped sending frames to a covered window).
+    /// The frame's cost then steers this pane's budget.
+    async fn next_frame(&self) {
+        let (send, recv) = async_channel::bounded(1);
+        // Removed however this ends, the stream aborted mid-wait included: an unmapped pane's
+        // callback would otherwise wait for a frame that may never come. Once it has run and
+        // returned `Break`, removing it again does nothing.
+        struct Tick(Option<gtk::TickCallbackId>);
+        impl Drop for Tick {
+            fn drop(&mut self) {
+                if let Some(tick) = self.0.take() {
+                    tick.remove();
+                }
+            }
+        }
+        let _tick = Tick(Some(self.terminal.add_tick_callback(move |_, clock| {
+            let _ = send.try_send(clock.clone());
+            glib::ControlFlow::Break
+        })));
+        // Resumed after the whole frame, so its update phase has been measured.
+        if let Ok(Ok(clock)) = glib::future_with_timeout(FRAME_FALLBACK, recv.recv()).await {
+            let mut pace = self.pace.borrow_mut();
+            match pace.as_ref().filter(|pace| pace.clock == clock) {
+                Some(pace) => self.budget.set(pace.steer(self.budget.get())),
+                None => *pace = Some(FramePace::new(&clock)),
+            }
+        }
     }
 
     pub fn schedule_resize(self: &Rc<Self>) {
@@ -743,6 +854,22 @@ impl Pane {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn the_feed_budget_follows_the_frames_cost() {
+        let frame = 16_667;
+        // Frames with room to spare: a quarter more each time, up to the ceiling.
+        assert_eq!(next_budget(FRAME_BYTES, 2_000, frame), FRAME_BYTES + FRAME_BYTES / 4);
+        assert_eq!(next_budget(FRAME_BYTES_MAX, 0, frame), FRAME_BYTES_MAX);
+        // Parsing took three quarters of a frame where half was the aim: two thirds as much.
+        let shrunk = next_budget(FRAME_BYTES, frame * 3 / 4, frame);
+        assert!(shrunk > FRAME_BYTES * 66 / 100 && shrunk < FRAME_BYTES * 67 / 100, "{shrunk}");
+        // Far over: halved, never less, and never under the floor.
+        assert_eq!(next_budget(FRAME_BYTES, 250_000, frame), FRAME_BYTES / 2);
+        assert_eq!(next_budget(FRAME_BYTES_MIN, 250_000, frame), FRAME_BYTES_MIN);
+        // A clock that knows no refresh interval yet still steers.
+        assert!(next_budget(FRAME_BYTES, 1_000, 0) > FRAME_BYTES);
+    }
+
     #[test]
     fn catchup_duplicates_gaps_and_respawn_are_distinct() {
         let mut s = Sequence {

@@ -122,3 +122,164 @@ fn a_tree_lists_an_unreadable_folder_and_a_missing_file_is_not_found() {
     assert_eq!(err(&missing).kind, ErrorKind::NotFound);
     assert_eq!(err(&missing).code, "file.not_found");
 }
+
+/// `file.write` reads the file it replaces under the store lock, so it reads only a regular file:
+/// `fs::read_to_string` on a FIFO there never returned, and every request queued behind it.
+#[test]
+fn a_write_over_a_pipe_answers_instead_of_blocking_the_bus() {
+    let (e, _ws, repo) = project();
+    assert!(Command::new("mkfifo").arg(repo.join("pipe.txt")).status().unwrap().success());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let answering = e.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(call(&answering, "file.write", json!({
+            "project_id": 1, "path": "pipe.txt", "text": "draft\n",
+            "expected_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        })));
+    });
+    let answered = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("file.write blocked on the pipe");
+    assert_eq!(err(&answered).code, "file.edit_conflict");
+    assert_eq!(ok(&e, "file.read", json!({"project_id": 1, "path": "README.md"}))["text"], "# Relay\n");
+}
+
+/// Commit a 100-line `name` whose lines all start with `word`, and return its text.
+fn commit_lines(repo: &Path, name: &str, word: &str) -> String {
+    let text = lines(word);
+    std::fs::write(repo.join(name), &text).unwrap();
+    git(repo, &["add", name]);
+    git(repo, &["commit", "-m", name]);
+    text
+}
+fn lines(word: &str) -> String {
+    (1..=100).map(|n| format!("{word} {n}\n")).collect()
+}
+/// Make every `git status` in `repo` wait until the test says go: `core.fsmonitor` names a hook
+/// git runs before it looks at the worktree. It fails, so git then scans as it would without
+/// one. The returned directory holds the hook's `calls` log and its `go` flag.
+fn stall_git_status(repo: &Path) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let hook = dir.path().join("fsmonitor");
+    std::fs::write(&hook, format!(
+        "#!/bin/sh\necho call >> '{d}/calls'\ni=0\nwhile [ ! -e '{d}/go' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done\nexit 1\n",
+        d = dir.path().display(),
+    )).unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    git(repo, &["config", "core.fsmonitor", hook.to_str().unwrap()]);
+    dir
+}
+/// Whether `git status` has been entered `n` times within a few seconds.
+fn git_status_entered(hook: &Path, n: usize) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
+        let calls = std::fs::read_to_string(hook.join("calls")).unwrap_or_default();
+        if calls.lines().count() >= n {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+fn write_in_background(e: &Arc<Engine>, payload: Value) -> std::thread::JoinHandle<Response> {
+    let e = e.clone();
+    std::thread::spawn(move || call(&e, "file.write", payload))
+}
+
+/// A rewrite that removes most of a file asks git whether it could put the file back. That ran
+/// inside the transaction, so a slow `git status` (or a large old file) stalled every request,
+/// keystrokes included; it now runs before the transaction opens.
+#[test]
+fn a_large_rewrite_asks_git_with_the_store_released() {
+    let (e, _ws, repo) = project();
+    commit_lines(&repo, "big.txt", "line");
+    let hook = stall_git_status(&repo);
+    let writer = write_in_background(&e, json!({"project_id": 1, "path": "big.txt", "text": "short\n"}));
+    assert!(git_status_entered(hook.path(), 1), "the rewrite never asked git");
+    let started = std::time::Instant::now();
+    ok(&e, "file.create", json!({"project_id": 1, "path": "other.txt", "kind": "file", "text": "meanwhile\n"}));
+    let waited = started.elapsed();
+    std::fs::write(hook.path().join("go"), "").unwrap();
+    assert!(waited < std::time::Duration::from_secs(5), "another write waited {waited:?} behind git status");
+    let written = writer.join().unwrap().into_result().unwrap();
+    assert_eq!(written["removed_lines"], 100);
+    assert_eq!(std::fs::read_to_string(repo.join("big.txt")).unwrap(), "short\n");
+}
+
+/// Two drafts of the same file, both based on what is there now, are read and checked before
+/// either transaction opens. Only the first lands: the second's expectation is checked again in
+/// its transaction, against the file the first one wrote.
+#[test]
+fn two_drafts_from_the_same_base_cannot_both_land() {
+    use sha2::{Digest, Sha256};
+    let (e, _ws, repo) = project();
+    let base = commit_lines(&repo, "big.txt", "line");
+    let expected: String = Sha256::digest(base.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    let hook = stall_git_status(&repo);
+    let writers: Vec<_> = ["alpha", "beta"]
+        .into_iter()
+        .map(|word| (word, write_in_background(&e, json!({
+            "project_id": 1, "path": "big.txt", "text": lines(word), "expected_sha256": expected,
+        }))))
+        .collect();
+    let together = git_status_entered(hook.path(), 2);
+    std::fs::write(hook.path().join("go"), "").unwrap();
+    assert!(together, "both drafts are judged before either transaction opens");
+    let answers: Vec<_> = writers.into_iter().map(|(word, writer)| (word, writer.join().unwrap())).collect();
+    let landed: Vec<_> = answers.iter().filter(|(_, answer)| answer.error.is_none()).map(|(word, _)| *word).collect();
+    assert_eq!(landed.len(), 1, "{answers:?}");
+    let refused = answers.iter().find(|(_, answer)| answer.error.is_some()).unwrap();
+    assert_eq!(err(&refused.1).code, "file.edit_conflict");
+    assert_eq!(std::fs::read_to_string(repo.join("big.txt")).unwrap(), lines(landed[0]));
+}
+
+/// What the read phase learned about the old file — its lines, and that git could restore it —
+/// is about the file as it was. When another write replaced it before this one's transaction,
+/// the rewrite is judged again against the file it would really replace, which git cannot
+/// restore: held, not let through on the stale answer.
+#[test]
+fn a_rewrite_judged_on_a_file_since_replaced_is_judged_again() {
+    let (e, _ws, repo) = project();
+    commit_lines(&repo, "big.txt", "line");
+    let hook = stall_git_status(&repo);
+    let writers: Vec<_> = ["alpha", "beta"]
+        .into_iter()
+        .map(|word| (word, write_in_background(&e, json!({"project_id": 1, "path": "big.txt", "text": lines(word)}))))
+        .collect();
+    let together = git_status_entered(hook.path(), 2);
+    std::fs::write(hook.path().join("go"), "").unwrap();
+    assert!(together, "both rewrites are judged before either transaction opens");
+    let answers: Vec<_> = writers.into_iter().map(|(word, writer)| (word, writer.join().unwrap())).collect();
+    let landed: Vec<_> = answers.iter().filter(|(_, answer)| answer.error.is_none()).map(|(word, _)| *word).collect();
+    assert_eq!(landed.len(), 1, "{answers:?}");
+    let held = answers.iter().find(|(_, answer)| answer.error.is_some()).unwrap();
+    assert_eq!(err(&held.1).kind, ErrorKind::Held, "{held:?}");
+    assert_eq!(err(&held.1).code, "guardrail.user_bypass");
+    assert_eq!(std::fs::read_to_string(repo.join("big.txt")).unwrap(), lines(landed[0]));
+}
+
+/// The trash row is only durable once the delete commits. A commit that fails after the file
+/// was moved into `.relay/trash` puts it back where it was, rather than leaving it in a trash
+/// nothing lists or restores; a delete that then commits trashes it as before.
+#[test]
+fn a_delete_whose_commit_fails_leaves_the_file_in_place() {
+    let (e, _ws, repo) = project();
+    std::fs::write(repo.join("keep.txt"), "kept\n").unwrap();
+    // A deferred foreign key is checked at COMMIT, so the handler succeeds and the commit fails.
+    e.store.lock().execute_batch(
+        "CREATE TABLE test_parent(id INTEGER PRIMARY KEY);
+         CREATE TABLE test_child(parent INTEGER REFERENCES test_parent(id) DEFERRABLE INITIALLY DEFERRED);
+         CREATE TRIGGER test_fail_commit AFTER UPDATE OF trash_path ON file_trash
+         BEGIN INSERT INTO test_child(parent) VALUES (404); END;",
+    ).unwrap();
+    let failed = call(&e, "file.delete", json!({"project_id": 1, "path": "keep.txt"}));
+    assert!(failed.error.is_some(), "{failed:?}");
+    assert_eq!(std::fs::read_to_string(repo.join("keep.txt")).unwrap(), "kept\n");
+    assert!(!repo.join(".relay/trash/1").exists(), "the payload's slot is cleared");
+    assert_eq!(ok(&e, "file.trash.list", json!({"project_id": 1}))["entries"], json!([]));
+
+    e.store.lock().execute_batch("DROP TRIGGER test_fail_commit;").unwrap();
+    let trash_id = ok(&e, "file.delete", json!({"project_id": 1, "path": "keep.txt"}))["trash_id"].clone();
+    assert!(!repo.join("keep.txt").exists());
+    ok(&e, "file.restore", json!({"project_id": 1, "trash_id": trash_id}));
+    assert_eq!(std::fs::read_to_string(repo.join("keep.txt")).unwrap(), "kept\n");
+}

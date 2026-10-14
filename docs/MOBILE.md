@@ -116,7 +116,9 @@ relay remote rendezvous --bind 0.0.0.0:7430
 ```
 
 `deploy/rendezvous.Dockerfile` builds it as a container and `deploy/relay-rendezvous.service`
-runs the binary under systemd; both bind loopback and expect a TLS proxy in front. The PC
+runs the binary under systemd; both are reached on loopback, expect a TLS proxy in front that
+writes `X-Forwarded-For`, and so trust one proxy (`--trust-proxy 1`, under "Per address" below).
+The unit also keeps what the server remembers (`--state`) in its state directory. The PC
 pings the server every 30 s and redials after 90 s of silence, so a dropped NAT flow does not
 leave phones told "offline" for long.
 
@@ -141,8 +143,9 @@ relay remote pair
 
 `via` mints a room secret and stores it. The PC presents it to the server as
 `Authorization: Bearer <secret>`, so it stays out of URLs and proxy access logs; a server
-that predates the header refuses that, and the PC dials it once more with `?secret=` in the
-URL (and logs a warning to update the server). The process that carries the phone door
+that predates the header refuses that with its own "room secret does not open this room", and
+only then does the PC dial it once more with `?secret=` in the URL (and log a warning to update
+the server). Any other 403, from a proxy or a firewall, gets no retry. The process that carries the phone door
 dials the server only when it starts, so restart it: for the `./run.sh` engine (`relay serve --remote`),
 quit it and run `./run.sh` again. `force` stops live agents, whose sessions come back as
 restorable; without it the quit is refused while any is live. (`via` says to restart `relay
@@ -151,8 +154,55 @@ cannot run beside a `serve --remote` engine, which already holds the port.) Ever
 from then on carries the join address as well as the LAN ones. The phone tries the LAN first
 and the server second; a PC card in the app can pin either. `relay remote via off` clears it.
 
-The rendezvous keeps nothing on disk. A room is named by the digest of its secret, so only the
-PC that holds the secret can host it, and a restart forgets nothing worth keeping.
+A room is named by the digest of its secret, so only the PC that holds the secret can host it.
+But anyone can make up a secret and host a room of their own, and anyone who knows a room id can
+join it, so the server guards what strangers can hold:
+
+- **Rooms.** List the rooms your server is for, and it hosts and joins no others:
+
+  ```fish
+  relay remote rendezvous --bind 127.0.0.1:7430 --room <id> --room <id>
+  # or: set -x RELAY_RENDEZVOUS_ROOMS <id>,<id>
+  ```
+
+  A room's id is what `relay remote via` prints (`room:`), what `relay remote serve` prints when it
+  dials, `rendezvous.room` in that engine's `remote.json`, and `room=` in the server's own
+  `host joined` log line. A host for an unlisted room is refused with 403 ("this rendezvous does not
+  host that room"). Without a list the server warns at start and still works, less surely. Rooms
+  it does not remember are capped at 16 hosted at once. A room is remembered (up to 64) only once
+  a host has held it for five minutes, so rooms a stranger opens and closes are never remembered
+  and never crowd yours out; a remembered room is let in past the cap whenever its PC comes back.
+  With 64 remembered, a newly proven room takes the place of the one useful least recently that
+  has no host at the moment, never of one whose host is there. What a stranger can still do is
+  hold all 16 new-room places while your PC is a room the server does not remember: just after a
+  restart without `--state`, before your PC has held its room five minutes, or after strangers'
+  rooms, each held five minutes, took its place while it was off. Your PC is then refused until
+  they let go. Only the list makes sure your PC gets in. What the server remembers lasts until it
+  exits, or across restarts with `--state <file>` (`RELAY_RENDEZVOUS_STATE`), a small JSON map
+  of room ids to when each was last useful. The unit in `deploy/` keeps it in its state directory;
+  the container has none unless you mount a volume and point `RELAY_RENDEZVOUS_STATE` into it.
+- **Phones that never say hello.** A phone that joins has 15 s to send its first line (the app
+  answers the greeting at once), or its lane is closed.
+- **Per address.** One address may hold 16 connections still finishing their upgrade and 8
+  joined phones that have not said anything yet. Loopback, private (10/8, 172.16/12,
+  192.168/16, fc00::/7) and link-local addresses are never counted: such a peer is a proxy on the
+  same machine or network, which every phone comes through. Caddy on the host reaching the
+  container comes from the Docker bridge's gateway (172.17.0.1), for one. 100.64/10 is counted: on
+  a server it is a Tailscale peer, one device per address. So behind a proxy these caps count
+  phones only once you say how many proxies in front append to `X-Forwarded-For`, with
+  `--trust-proxy <n>` (`RELAY_RENDEZVOUS_TRUST_PROXY`). The server then counts the n-th address
+  from the right, the one the outermost proxy saw; whatever a phone wrote further left is never
+  read. 1 for a Caddy (or an nginx with `proxy_add_x_forwarded_for`) that phones reach directly:
+  the container image and the unit in `deploy/` ship with 1. 2 when that Caddy sits behind another
+  proxy *and* trusts it (Caddy's `trusted_proxies`): without that, Caddy drops the outer proxy's
+  header and writes only the outer proxy's own address, and 1 would count that one address for
+  every phone, so eight quiet joins from anyone would turn every phone away. A header with fewer
+  entries than n is counted by the connection's own peer instead (the server warns once). Set n
+  only when nothing reaches the server except through those proxies, since anyone else can write
+  the header: run the container with `-e RELAY_RENDEZVOUS_TRUST_PROXY=0` if you expose it without
+  a proxy. To check n, run with `RELAY_LOG=info,relay_remote::rendezvous=debug`: each join logs the
+  header it came with and the address counted.
+
 `GET /health` reports how many hosts and lanes are up.
 
 The server never waits on one phone. Each phone may have 8 MiB queued toward it; a phone that
@@ -224,6 +274,12 @@ stops that until you connect again.
   `ws://`. Anyone who captures the pairing reply holds the phone's credential for good.
 - The rendezvous server sees the same bytes the LAN would — encrypted by TLS in flight if
   you set it up as above, but readable by whoever runs the server. Run it yourself.
+- Before a phone has proved itself, the door says only what the handshake needs: the protocol
+  version, the instance, whether the engine is running, and the challenge. Through a rendezvous
+  that greeting goes to anyone who knows the room id, so the PC's name and id, its Relay version
+  and its network cards' MAC and broadcast addresses (for Wake-on-LAN) come in the welcome, once
+  the phone is admitted. The greeting still carries `host`, `host_id` and `version`, empty, for
+  older readers that require them.
 - **The channel is not authenticated after the handshake, and the PC never proves itself.**
   The proof shows the PC that the phone holds its token, once, at the start of the
   connection; nothing seals the lines that follow. Someone *on the path* — an active attacker

@@ -79,28 +79,42 @@ pub fn list_with_owners(
     worktrees_owned_by(&owners, repo, include_dirty)
 }
 
-/// How long the paginated GitHub lookup may take before Relay stops waiting on the network.
+/// How long the GitHub lookup may take before Relay stops waiting on the network.
 const PR_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// How long one listing answers `git.pr.list` for a repository. The Source Control panel asks
-/// on every refresh, which while agents work is about once a second; every page of every PR
-/// the repository ever had, each time, spends the user's GitHub REST quota (D130).
+/// on every refresh, which while agents work is about once a second; asking GitHub each time
+/// spends the user's GitHub REST quota (D130).
 const PR_LIST_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+/// A failed lookup answers for this long too: offline, `gh` waits out its whole timeout, and
+/// signed out it still costs a process and a round trip, on every refresh. `refresh` (the
+/// panel's Refresh key) asks again at once.
+const PR_LIST_FAILURE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+/// The closed and merged PRs listed beside every open one: the most recently updated, one
+/// page. Older ones are what a branch long merged or abandoned had; `branch_cleanup` asks
+/// GitHub about those branch by branch.
+const PR_LIST_RECENT: u32 = 100;
 /// `gh pr create` makes several GitHub round trips. Under the desktop client's 30 s request
 /// timeout, so the engine reports a timeout before the client gives up on its own.
 const PR_OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 
-type PrCache = std::collections::HashMap<PathBuf, (std::time::Instant, PrListOut)>;
+type PrListed = Result<PrListOut, BusError>;
+type PrCache = std::collections::HashMap<PathBuf, (std::time::Instant, PrListed)>;
 static PR_LISTS: std::sync::Mutex<Option<PrCache>> = std::sync::Mutex::new(None);
 
-fn cached_prs(repo: &Path) -> Option<PrListOut> {
-    let cache = PR_LISTS.lock().unwrap_or_else(|p| p.into_inner());
-    cache.as_ref()?.get(repo).filter(|(at, _)| at.elapsed() < PR_LIST_TTL).map(|(_, listed)| listed.clone())
+fn pr_ttl(listed: &PrListed) -> std::time::Duration {
+    if listed.is_ok() { PR_LIST_TTL } else { PR_LIST_FAILURE_TTL }
 }
 
-fn remember_prs(repo: &Path, listed: &PrListOut) {
+/// The listing, or the failure, this repository's last lookup answered within its TTL.
+fn cached_prs(repo: &Path) -> Option<PrListed> {
+    let cache = PR_LISTS.lock().unwrap_or_else(|p| p.into_inner());
+    cache.as_ref()?.get(repo).filter(|(at, listed)| at.elapsed() < pr_ttl(listed)).map(|(_, listed)| listed.clone())
+}
+
+fn remember_prs(repo: &Path, listed: &PrListed) {
     let mut cache = PR_LISTS.lock().unwrap_or_else(|p| p.into_inner());
     let cache = cache.get_or_insert_with(Default::default);
-    cache.retain(|_, (at, _)| at.elapsed() < PR_LIST_TTL);
+    cache.retain(|_, (at, listed)| at.elapsed() < pr_ttl(listed));
     cache.insert(repo.to_path_buf(), (std::time::Instant::now(), listed.clone()));
 }
 
@@ -152,6 +166,9 @@ pub fn register(e: &mut Engine) {
     );
     // The build purge, the size walk and `git worktree remove` are seconds of disk work for a
     // checkout with real build output: done before the transaction, which only announces it.
+    // `git worktree remove --force` deletes whatever the checkout holds, so a dirty one is
+    // refused first, as `session.close` refuses it (RA-405); a detached HEAD on no branch is
+    // pinned under `refs/relay/rescue/` and named in the answer.
     e.register_staged::<WorktreeRemove, _>(
         |ctx, p| {
             // A relative path would resolve against the engine's cwd ($HOME under `relay serve`).
@@ -169,14 +186,18 @@ pub fn register(e: &mut Engine) {
             if let Some(name) = owner {
                 return Err(BusError::conflict("worktree.owned", format!("session {name} owns {want}")).with_hint("session.close it first"));
             }
-            let freed = worktree::remove(Path::new(&project.path), Path::new(&want), p.purge_build.unwrap_or(true))
-                .map_err(|e| BusError::conflict("worktree.remove_failed", e.to_string()))?;
-            Ok((project.id, freed))
+            let refuse = |e: anyhow::Error| BusError::conflict("worktree.remove_failed", e.to_string());
+            worktree::removable(Path::new(&project.path), Path::new(&want)).map_err(refuse)?;
+            if !p.discard_changes.unwrap_or(false) {
+                super::session::refuse_dirty(&[(std::path::PathBuf::from(&want), Vec::new())])?;
+            }
+            let removed = worktree::remove_rescuing(Path::new(&project.path), Path::new(&want), p.purge_build.unwrap_or(true)).map_err(refuse)?;
+            Ok((project.id, removed.freed, removed.rescued))
         },
-        |ctx: &mut Ctx, _p, (project_id, freed): (relay_bus::types::Id, u64)| {
+        |ctx: &mut Ctx, _p, (project_id, freed, rescued): (relay_bus::types::Id, u64, Option<String>)| {
             ctx.set_project(project_id);
             ctx.emit("worktree.changed", json!({ "project_id": project_id }));
-            Ok(FreedOut { freed_mb: freed as f64 / (1024.0 * 1024.0) })
+            Ok(FreedOut { freed_mb: freed as f64 / (1024.0 * 1024.0), rescued })
         },
     );
     e.register_unlocked::<WorktreeDisk>(|ctx, p| {
@@ -407,7 +428,7 @@ pub fn register(e: &mut Engine) {
             vec!["branch", name.as_str()]
         };
         if let Some(revision) = start {
-            args.push(revision);
+            args.extend(["--end-of-options", revision]);
         }
         worktree::git_mutate(&root, &args).map_err(git_mutation("git.branch_create_failed"))?;
         // The new branch's tip: `git branch` leaves HEAD where it was (RA-371).
@@ -465,7 +486,7 @@ pub fn register(e: &mut Engine) {
                 ));
             }
             let args: Vec<&str> = match &target.remote {
-                Some(remote) => vec!["switch", "--no-overwrite-ignore", "--track", "-c", &target.local, remote],
+                Some(remote) => vec!["switch", "--no-overwrite-ignore", "--track", "-c", &target.local, "--end-of-options", remote],
                 None => vec!["switch", "--no-overwrite-ignore", "--", &target.local],
             };
             run_switch(&root, &args, &target.local)?;
@@ -608,23 +629,20 @@ pub fn register(e: &mut Engine) {
             crate::hooks::run_user_pre_commit(Path::new(&project.path), &root)
                 .map_err(|error| BusError::conflict("git.pre_commit_failed", error.to_string()))?;
             // The commit is made without git's own hooks, so the user's prepare-commit-msg and
-            // commit-msg hooks run here and may refuse or rewrite the message (RA-110). Concluding
-            // a merge or the like, `git commit --no-verify` runs prepare-commit-msg itself.
-            let message = if commit_in_progress(&root)? {
-                p.message.clone()
-            } else {
-                crate::hooks::run_user_prepare_commit_msg(Path::new(&project.path), &root, &p.message)
-                    .map_err(|error| BusError::conflict("git.prepare_commit_msg_failed", error.to_string()))?
-            };
+            // commit-msg hooks run here and may refuse or rewrite the message (RA-110), in git's
+            // order — concluding a merge or the like too, since `git commit` no longer does.
+            let message = crate::hooks::run_user_prepare_commit_msg(Path::new(&project.path), &root, &p.message)
+                .map_err(|error| BusError::conflict("git.prepare_commit_msg_failed", error.to_string()))?;
             let message = crate::hooks::run_user_commit_msg(Path::new(&project.path), &root, &message)
                 .map_err(|error| BusError::conflict("git.commit_msg_failed", error.to_string()))?;
             // The commit object itself — and a signing prompt, if commit.gpgSign asks for one —
-            // is made here too. The transaction gates exactly that object's tree and publishes
-            // it; the numstat is of that tree, not of an index read a moment earlier (RA-154).
+            // is made here too, a merge's or cherry-pick's included. The transaction gates exactly
+            // that object's tree and publishes it; the numstat is of that tree, not of an index
+            // read a moment earlier (RA-154).
             let (staged, numstat) = stage_commit(&root, &message)?;
-            Ok((project, root, numstat, staged, message))
+            Ok((project, root, numstat, staged))
         },
-        |ctx: &mut Ctx, _p, (project, root, numstat, staged, message)| {
+        |ctx: &mut Ctx, _p, (project, root, numstat, staged)| {
             super::guardrail::enforce(
                 ctx,
                 project.id,
@@ -635,40 +653,37 @@ pub fn register(e: &mut Engine) {
                 Some(&numstat),
                 None,
             )?;
-            match staged {
-                // A merge, cherry-pick, revert or rebase in progress has state only `git commit`
-                // knows how to finish; those stay the slow path they always were.
-                StagedCommit::InProgress { tree } => {
-                    // `git commit` reads the index again: it must still hold the tree the gate
-                    // judged, or this would commit something nobody checked (RA-154).
-                    let now = worktree::git_mutate(&root, &["write-tree"]).map_err(git_mutation("git.commit_failed"))?;
-                    if now.trim() != tree {
-                        return Err(BusError::conflict(
-                            "git.commit_raced",
-                            "the staged changes changed while this commit was being made; nothing was committed",
-                        ));
-                    }
-                    worktree::git_mutate(&root, &["commit", "--no-verify", "-m", &message])
-                        .map_err(git_mutation("git.commit_failed"))?;
-                }
-                StagedCommit::Object { sha, parent, subject } => {
-                    // Compare-and-swap: the gate and its grants judged this object against this
-                    // parent, so it lands only if the branch has not moved since.
-                    let reflog = match parent {
-                        Some(_) => format!("commit: {subject}"),
-                        None => format!("commit (initial): {subject}"),
-                    };
-                    worktree::git_mutate(&root, &["update-ref", "-m", &reflog, "HEAD", &sha, parent.as_deref().unwrap_or("")])
-                        .map_err(|error| BusError::conflict(
-                            "git.commit_raced",
-                            format!("the branch moved while this commit was being made; nothing was committed ({error})"),
-                        ))?;
-                    let hook_root = root.clone();
-                    ctx.after_commit(move |_| run_post_commit(hook_root));
+            // The object was made with the merge then pending as its parents; one started, ended
+            // or moved on since would publish it wrong.
+            let StagedCommit { sha, parent, reflog, git_dir, pending } = staged;
+            if read_merge_head(&git_dir) != pending.merge {
+                return Err(BusError::conflict(
+                    "git.commit_raced",
+                    "a merge started or ended while this commit was being made; nothing was committed",
+                ));
+            }
+            // Compare-and-swap, in one ref transaction: the gate and its grants judged this object
+            // against this parent and this pick or revert (its author, its sequencer), so it lands
+            // only if none of them has moved since, and the pick it concludes is cleared with it.
+            // Nothing here waits on a person: a signature, if any, was made before the store was
+            // locked (D144).
+            let zero = "0".repeat(sha.len());
+            let mut refs = format!("update HEAD {sha} {}\n", parent.as_deref().unwrap_or(&zero));
+            for (name, seen) in [("CHERRY_PICK_HEAD", &pending.pick), ("REVERT_HEAD", &pending.revert)] {
+                match seen {
+                    Some(oid) => refs.push_str(&format!("delete {name} {oid}\n")),
+                    None => refs.push_str(&format!("verify {name} {zero}\n")),
                 }
             }
-            let repo = gix::open(&root).map_err(gix_err("git.open_failed"))?;
-            let sha = repo.head_id().map_err(gix_err("git.head"))?.to_string();
+            refs.push_str("delete AUTO_MERGE\n");
+            git_with(&root, &["update-ref", "--stdin", "-m", &reflog], &[], Some(refs.as_bytes()), "git.commit_raced")
+                .map_err(|error| BusError::conflict(
+                    "git.commit_raced",
+                    format!("the branch, or the cherry-pick or revert in progress, moved while this commit was being made; nothing was committed ({})", error.message),
+                ))?;
+            clear_concluded(&git_dir, &pending);
+            let hook_root = root.clone();
+            ctx.after_commit(move |_| run_post_commit(hook_root));
             changed(ctx, project.id, &root);
             Ok(CommitOut { sha })
         },
@@ -704,10 +719,21 @@ pub fn register(e: &mut Engine) {
                 .flatten()
                 .map(|n| n.shorten().to_string())
                 .ok_or_else(|| BusError::conflict("git.detached", "cannot push a detached HEAD"))?;
+            // Anyone who can run git in the checkout names its branch, `--mirror` or `+main`
+            // included, and `git push origin <that>` would read it as an option or a forced
+            // push: refused, and pushed only ever as an explicit refspec after the options.
+            if branch.starts_with(['-', '+']) {
+                return Err(BusError::invalid(
+                    "git.branch_name",
+                    format!("refusing to push branch {branch:?}: git push would read a name starting with '-' or '+' as an option or a forced push. Rename the branch first."),
+                ));
+            }
+            let branch = validate_branch_name(&root, &branch)?;
             let has_upstream = upstream_metrics(&repo, &branch).0.is_some();
             let set_upstream = p.set_upstream.unwrap_or(!has_upstream);
+            let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
             let args = if set_upstream {
-                vec!["push", "-u", "origin", branch.as_str()]
+                vec!["push", "-u", "origin", "--end-of-options", refspec.as_str()]
             } else {
                 vec!["push"]
             };
@@ -725,12 +751,13 @@ pub fn register(e: &mut Engine) {
         let repo = Path::new(&project.path);
         if !p.refresh.unwrap_or(false) {
             if let Some(listed) = cached_prs(repo) {
-                return Ok(listed);
+                return listed;
             }
         }
         let gh = crate::github::gh_path()?;
-        let listed = list_pull_requests(&gh, repo)?;
+        let listed = list_pull_requests(&gh, repo);
         remember_prs(repo, &listed);
+        let listed = listed?;
         // A PR merged for a branch a closed session left behind: clean that branch up now
         // rather than at the next sweep (branch_cleanup).
         let merged: Vec<String> = listed.pull_requests.iter()
@@ -878,13 +905,44 @@ pub fn status_badges(root: &Path) -> Result<HashMap<String, String>, BusError> {
         .collect())
 }
 
-/// What `git.commit`'s unlocked phase prepared.
-enum StagedCommit {
-    /// A commit object for the staged tree, not yet on any branch.
-    Object { sha: String, parent: Option<String>, subject: String },
-    /// A merge, cherry-pick, revert or rebase is in progress: `git commit` must conclude it,
-    /// and must find `tree` still staged when it does.
-    InProgress { tree: String },
+/// What `git.commit`'s unlocked phase prepared: a commit object for the staged tree, not yet on
+/// any branch, and what publishing it needs.
+struct StagedCommit {
+    sha: String,
+    /// HEAD when the object was made: the compare-and-swap's expected value.
+    parent: Option<String>,
+    /// The reflog line `git commit` would write, `commit (merge): …` and the like.
+    reflog: String,
+    /// This checkout's own git dir, where a pending merge or pick keeps its state.
+    git_dir: PathBuf,
+    /// The merge, cherry-pick or revert the object concludes, as it stood then.
+    pending: Pending,
+}
+
+/// What says a merge, cherry-pick or revert is waiting for its commit: it decides the commit's
+/// parents and author, so the transaction checks it is unchanged before publishing.
+struct Pending {
+    /// `MERGE_HEAD`'s lines. Always a file, as git keeps it, reftable or not.
+    merge: Option<String>,
+    /// `CHERRY_PICK_HEAD` and `REVERT_HEAD`: refs, which a reftable repository keeps in its
+    /// tables rather than as files, so they are read and cleared through git.
+    pick: Option<String>,
+    revert: Option<String>,
+}
+
+impl Pending {
+    fn read(root: &Path, git_dir: &Path) -> Pending {
+        Pending { merge: read_merge_head(git_dir), pick: ref_oid(root, "CHERRY_PICK_HEAD"), revert: ref_oid(root, "REVERT_HEAD") }
+    }
+}
+
+fn read_merge_head(git_dir: &Path) -> Option<String> {
+    std::fs::read_to_string(git_dir.join("MERGE_HEAD")).ok()
+}
+
+/// What `name` (a ref such as `CHERRY_PICK_HEAD`) points at, if it exists.
+fn ref_oid(root: &Path, name: &str) -> Option<String> {
+    worktree::git_mutate(root, &["rev-parse", "-q", "--verify", name]).ok().map(|oid| oid.trim().to_string())
 }
 
 /// Refuse while the index still has unmerged entries: a conflict not yet marked resolved.
@@ -915,57 +973,163 @@ fn refuse_unmerged(root: &Path) -> Result<(), BusError> {
     ))
 }
 
-/// Whether a merge, cherry-pick, revert or rebase is in progress in `root`, so only `git commit`
-/// can conclude it.
-fn commit_in_progress(root: &Path) -> Result<bool, BusError> {
-    Ok(in_progress_in(&gix::open(root).map_err(gix_err("git.open_failed"))?))
-}
-
-fn in_progress_in(repo: &gix::Repository) -> bool {
-    // Per-worktree state: a linked checkout's own git dir, not the shared one.
-    let git_dir = repo.path();
-    ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "sequencer", "rebase-merge", "rebase-apply"]
-        .iter()
-        .any(|name| git_dir.join(name).exists())
-}
-
 /// Build the commit `git commit -m message` would make, without moving any ref, and the
-/// numstat of exactly its tree for the commit gate.
+/// numstat of exactly its tree for the commit gate. Concluding a merge, cherry-pick or revert,
+/// it is the commit `git commit` would make of that too — the merged heads as parents, a picked
+/// commit's author kept — so that publishing it is the transaction's one ref update, and a
+/// signing prompt never waits with the store locked.
 fn stage_commit(root: &Path, message: &str) -> Result<(StagedCommit, String), BusError> {
     let repo = gix::open(root).map_err(gix_err("git.open_failed"))?;
-    let in_progress = in_progress_in(&repo);
-    let message = clean_message(message);
-    if !in_progress && message.is_empty() {
+    // Per-worktree state: a linked checkout's own git dir, not the shared one.
+    let git_dir = repo.path().to_path_buf();
+    let pending = Pending::read(root, &git_dir);
+    let message = cleanup_message(root, message)?;
+    if message.is_empty() {
         return Err(BusError::invalid("git.message", "commit message cannot be empty"));
     }
     let tree = worktree::git_mutate(root, &["write-tree"]).map_err(git_mutation("git.commit_failed"))?.trim().to_string();
-    let parent = repo.head_id().ok().map(|id| id.to_string());
-    if in_progress {
-        let numstat = tree_numstat(root, &repo, parent.as_deref(), &tree)?;
-        return Ok((StagedCommit::InProgress { tree }, numstat));
-    }
-    if let Some(parent) = &parent {
-        let parent_tree = worktree::git_mutate(root, &["rev-parse", &format!("{parent}^{{tree}}")])
-            .map_err(git_mutation("git.commit_failed"))?;
-        if parent_tree.trim() == tree {
-            return Err(BusError::conflict("git.commit_failed", "nothing to commit: no staged changes"));
+    // Through git, not gix: a reftable repository's HEAD is in its tables.
+    let parent = ref_oid(root, "HEAD");
+    let mut parents: Vec<String> = parent.iter().cloned().collect();
+    let mut author = None;
+    // `git commit`'s own choices, in its order: an unborn branch takes no parents at all, a merge
+    // takes the heads it merges and may be as empty as it likes, anything else must change
+    // something, and a cherry-pick keeps the author of the commit it picked.
+    let kind = match (&parent, &pending.merge) {
+        (None, _) => "commit (initial)",
+        (Some(_), Some(merged)) => {
+            // `git merge v1` of an annotated tag writes the tag's own id; `git commit` peels it
+            // to the commit, and so must this, or commit-tree refuses a tag as a parent and
+            // `--independent` drops it for its commit, losing the merge.
+            for head in merged.split_whitespace() {
+                let peeled = worktree::git_mutate(root, &["rev-parse", "--verify", "--end-of-options", &format!("{head}^{{commit}}")])
+                    .map_err(git_mutation("git.commit_failed"))?;
+                parents.push(peeled.trim().to_string());
+            }
+            let mode = std::fs::read_to_string(git_dir.join("MERGE_MODE")).unwrap_or_default();
+            if mode.trim() != "no-ff" && parents.len() > 1 {
+                parents = independent(root, parents)?;
+            }
+            "commit (merge)"
         }
-    }
+        (Some(parent), None) => {
+            let parent_tree = worktree::git_mutate(root, &["rev-parse", &format!("{parent}^{{tree}}")])
+                .map_err(git_mutation("git.commit_failed"))?;
+            if parent_tree.trim() == tree {
+                return Err(BusError::conflict("git.commit_failed", "nothing to commit: no staged changes"));
+            }
+            match &pending.pick {
+                Some(picked) => {
+                    author = Some(author_of(root, picked)?);
+                    if git_dir.join("rebase-merge").is_dir() && ref_oid(root, "REBASE_HEAD").as_deref() == Some(picked.as_str()) {
+                        "commit (rebase)"
+                    } else {
+                        "commit (cherry-pick)"
+                    }
+                }
+                None => "commit",
+            }
+        }
+    };
     let numstat = tree_numstat(root, &repo, parent.as_deref(), &tree)?;
     // `commit-tree` ignores commit.gpgSign, so honour it here the way `git commit` would.
     let sign = worktree::git_mutate(root, &["config", "--bool", "--get", "commit.gpgsign"])
         .is_ok_and(|value| value.trim() == "true");
     let mut args = vec!["commit-tree", tree.as_str()];
-    if let Some(parent) = &parent {
+    for parent in &parents {
         args.extend(["-p", parent.as_str()]);
     }
     if sign {
         args.push("-S");
     }
     args.extend(["-m", message.as_str()]);
-    let sha = worktree::git_mutate(root, &args).map_err(git_mutation("git.commit_failed"))?.trim().to_string();
-    let subject = message.lines().next().unwrap_or_default().to_string();
-    Ok((StagedCommit::Object { sha, parent, subject }, numstat))
+    let sha = commit_tree(root, &args, author)?;
+    let reflog = format!("{kind}: {}", message.lines().next().unwrap_or_default());
+    Ok((StagedCommit { sha, parent, reflog, git_dir, pending }, numstat))
+}
+
+/// `git commit`'s `reduce_heads` for a merge that may fast-forward: drop every parent another
+/// one already contains, keeping the rest in order.
+fn independent(root: &Path, parents: Vec<String>) -> Result<Vec<String>, BusError> {
+    let mut args = vec!["merge-base", "--independent"];
+    args.extend(parents.iter().map(String::as_str));
+    let keep = worktree::git_mutate(root, &args).map_err(git_mutation("git.commit_failed"))?;
+    let keep: Vec<&str> = keep.split_whitespace().collect();
+    let mut out: Vec<String> = Vec::new();
+    for parent in parents {
+        if keep.contains(&parent.as_str()) && !out.contains(&parent) {
+            out.push(parent);
+        }
+    }
+    Ok(out)
+}
+
+/// The author of commit `oid` as `GIT_AUTHOR_NAME`, `_EMAIL` and `_DATE` take it, read from the
+/// commit's own header: nothing a log format or log.showSignature adds can get into it.
+fn author_of(root: &Path, oid: &str) -> Result<[String; 3], BusError> {
+    let raw = worktree::git_mutate(root, &["cat-file", "commit", oid]).map_err(git_mutation("git.commit_failed"))?;
+    let author = raw.lines().take_while(|line| !line.is_empty()).find_map(|line| line.strip_prefix("author "));
+    // `Name <email> 1600000000 +0200`
+    author
+        .and_then(|line| {
+            let (ident, date) = line.rsplit_once('>')?;
+            let (name, email) = ident.rsplit_once('<')?;
+            Some([name.trim_end().to_string(), email.to_string(), date.trim().to_string()])
+        })
+        .ok_or_else(|| BusError::internal(format!("reading the author of {oid}")))
+}
+
+/// `git commit-tree args`, as `author` when one is given.
+fn commit_tree(root: &Path, args: &[&str], author: Option<[String; 3]>) -> Result<String, BusError> {
+    let sha = match &author {
+        Some([name, email, date]) => {
+            let env = [("GIT_AUTHOR_NAME", name.as_str()), ("GIT_AUTHOR_EMAIL", email.as_str()), ("GIT_AUTHOR_DATE", date.as_str())];
+            git_with(root, args, &env, None, "git.commit_failed")?
+        }
+        None => worktree::git_mutate(root, args).map_err(git_mutation("git.commit_failed"))?,
+    };
+    Ok(sha.trim().to_string())
+}
+
+/// Git with what `worktree::git_mutate` cannot pass — `env`, and `input` on stdin — and the same
+/// bound as every other git call here: a signing prompt may be behind it. Its stdout, or a
+/// conflict under `code` naming what failed.
+fn git_with(root: &Path, args: &[&str], env: &[(&str, &str)], input: Option<&[u8]>, code: &'static str) -> Result<String, BusError> {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+    let mut command = std::process::Command::new("git");
+    command.arg("-C").arg(root).args(args).envs(env.iter().copied());
+    let out = match input {
+        Some(input) => crate::proc::output_with_input(&mut command, input, TIMEOUT),
+        None => crate::proc::output_with_timeout(&mut command, TIMEOUT),
+    }
+    .map_err(|error| BusError::conflict(code, format!("running git {}: {error}", args.join(" "))))?
+    .ok_or_else(|| BusError::conflict(code, format!("git {} did not finish within {} s", args.join(" "), TIMEOUT.as_secs())))?;
+    if !out.status.success() {
+        return Err(BusError::conflict(
+            code,
+            format!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// The files `git commit` clears once its commit lands, a few unlinks in the transaction: a
+/// concluded merge's and a squash's always, and — once the last pick of a sequence is concluded
+/// — the sequencer. These are files whatever the ref storage; CHERRY_PICK_HEAD, REVERT_HEAD and
+/// AUTO_MERGE are refs, cleared in the commit's own ref transaction.
+fn clear_concluded(git_dir: &Path, pending: &Pending) {
+    for name in ["MERGE_HEAD", "MERGE_MSG", "MERGE_MODE", "SQUASH_MSG"] {
+        let _ = std::fs::remove_file(git_dir.join(name));
+    }
+    if pending.pick.is_none() && pending.revert.is_none() {
+        return;
+    }
+    // git's `have_finished_the_last_pick`: the todo's one remaining line was this commit's.
+    let sequencer = git_dir.join("sequencer");
+    let Ok(todo) = std::fs::read_to_string(sequencer.join("todo")) else { return };
+    if todo.find('\n').is_none_or(|eol| eol + 1 == todo.len()) {
+        let _ = std::fs::remove_dir_all(&sequencer);
+    }
 }
 
 /// The commit gate's numstat for `tree` against `parent` (or nothing), as git's own
@@ -1004,6 +1168,22 @@ fn numstat_lines(raw: &str) -> String {
     out
 }
 
+/// The message as `git commit -m` leaves it under commit.cleanup, which with no editor open is
+/// `whitespace` for the default and for `scissors`; `strip` drops comment lines as well, as
+/// `git stripspace` does with core.commentChar, and `verbatim` changes nothing.
+fn cleanup_message(root: &Path, message: &str) -> Result<String, BusError> {
+    let mode = worktree::git_mutate(root, &["config", "--get", "commit.cleanup"]).unwrap_or_default();
+    match mode.trim() {
+        "" | "default" | "whitespace" | "scissors" => Ok(clean_message(message)),
+        "verbatim" => Ok(message.to_string()),
+        "strip" => {
+            let stripped = git_with(root, &["stripspace", "--strip-comments"], &[], Some(message.as_bytes()), "git.commit_failed")?;
+            Ok(stripped.trim_end_matches('\n').to_string())
+        }
+        other => Err(BusError::conflict("git.commit_failed", format!("invalid commit.cleanup mode {other}"))),
+    }
+}
+
 /// `git commit -m`'s default cleanup: trailing whitespace off every line, runs of blank lines
 /// collapsed to one, and none at either end.
 fn clean_message(message: &str) -> String {
@@ -1021,14 +1201,37 @@ fn clean_message(message: &str) -> String {
 }
 
 /// `git commit` runs post-commit itself; a commit published with `update-ref` runs it here,
-/// after the store is unlocked and on its own thread.
+/// after the store is unlocked and on its own thread, with the rest of what `git commit` does
+/// after every commit, in its order: rerere records conflict resolutions (a no-op unless it is
+/// enabled), and a stash a `merge --autostash` set aside comes back last.
 fn run_post_commit(root: PathBuf) {
     let _ = std::thread::Builder::new().name("post-commit".into()).spawn(move || {
-        let mut command = std::process::Command::new("git");
-        command.arg("-C").arg(&root).args(["hook", "run", "--ignore-missing", "post-commit"]);
-        if let Err(error) = crate::proc::output_with_timeout(&mut command, std::time::Duration::from_secs(120)) {
+        let run = |args: &[&str]| {
+            let mut command = std::process::Command::new("git");
+            command.arg("-C").arg(&root).args(args);
+            match crate::proc::output_with_timeout(&mut command, std::time::Duration::from_secs(120)) {
+                Ok(Some(out)) if out.status.success() => Ok(String::from_utf8_lossy(&out.stdout).trim().to_string()),
+                Ok(Some(out)) => Err(String::from_utf8_lossy(&out.stderr).trim().to_string()),
+                Ok(None) => Err("did not finish within 120 s".to_string()),
+                Err(error) => Err(error.to_string()),
+            }
+        };
+        if let Err(error) = run(&["rerere"]) {
+            tracing::warn!(root = %root.display(), %error, "recording conflict resolutions after a commit");
+        }
+        if let Err(error) = run(&["hook", "run", "--ignore-missing", "post-commit"]) {
             tracing::warn!(root = %root.display(), %error, "running the post-commit hook");
         }
+        // git's `apply_autostash_ref`: apply it, or keep it in the stash list if it conflicts.
+        let Ok(stash) = run(&["rev-parse", "-q", "--verify", "MERGE_AUTOSTASH"]) else { return };
+        if run(&["stash", "apply", &stash]).is_err() {
+            if let Err(error) = run(&["stash", "store", "-m", "autostash", &stash]) {
+                tracing::warn!(root = %root.display(), %error, "keeping a merge's autostash");
+                return;
+            }
+            tracing::warn!(root = %root.display(), "a merge's autostash conflicted; it is kept in the stash list");
+        }
+        let _ = run(&["update-ref", "-d", "MERGE_AUTOSTASH"]);
     });
 }
 
@@ -1543,14 +1746,28 @@ struct GhRepo {
     full_name: String,
 }
 
+/// Every open PR (each page), and one page of the most recently updated closed and merged
+/// ones: the two asked of GitHub at once, so the lookup costs one round trip. Every PR the
+/// repository ever had, page by page, grew with its history and made a slow network slower.
 fn list_pull_requests(gh: &Path, root: &Path) -> Result<PrListOut, BusError> {
+    let recent = format!("repos/{{owner}}/{{repo}}/pulls?state=closed&per_page={PR_LIST_RECENT}&sort=updated&direction=desc");
+    let (open, closed) = std::thread::scope(|scope| {
+        let closed = scope.spawn(|| gh_api(gh, root, &[recent.as_str()]));
+        let open = gh_api(gh, root, &["--paginate", "--slurp", "repos/{owner}/{repo}/pulls?state=open&per_page=100"]);
+        (open, closed.join().unwrap_or_else(|_| Err(BusError::internal("gh lookup thread panicked"))))
+    });
+    let mut pull_requests = decode_pull_requests(&open?)?;
+    // Without the closed page the open list still stands; `complete` says what is missing.
+    let closed = closed.and_then(|bytes| decode_page(&bytes));
+    let complete = closed.is_ok();
+    pull_requests.extend(closed.unwrap_or_default());
+    Ok(PrListOut { pull_requests, complete })
+}
+
+/// One `gh api` call's output, bounded by [`PR_LIST_TIMEOUT`].
+fn gh_api(gh: &Path, root: &Path, args: &[&str]) -> Result<Vec<u8>, BusError> {
     let mut command = std::process::Command::new(gh);
-    command.current_dir(root).env("GH_PROMPT_DISABLED", "1").args([
-        "api",
-        "--paginate",
-        "--slurp",
-        "repos/{owner}/{repo}/pulls?state=all&per_page=100&sort=updated&direction=desc",
-    ]);
+    command.current_dir(root).env("GH_PROMPT_DISABLED", "1").arg("api").args(args);
     // `gh` talks to github.com. An unbounded wait on a flaky network used to be an unbounded
     // wait for every other bus op behind it; the lock is gone now, but the caller still gets
     // an answer either way (D144).
@@ -1568,40 +1785,42 @@ fn list_pull_requests(gh: &Path, root: &Path) -> Result<PrListOut, BusError> {
             String::from_utf8_lossy(&out.stderr).trim().to_string(),
         ));
     }
-    Ok(PrListOut {
-        pull_requests: decode_pull_requests(&out.stdout)?,
-        complete: true,
-    })
+    Ok(out.stdout)
+}
+
+/// One page of `gh api`'s pull requests, as GitHub returns it without `--slurp`.
+fn decode_page(bytes: &[u8]) -> Result<Vec<PullRequest>, BusError> {
+    let page: Vec<GhPullRequest> = serde_json::from_slice(bytes)
+        .map_err(|error| BusError::internal(format!("decoding GitHub pull requests: {error}")))?;
+    Ok(page.into_iter().map(pull_request).collect())
 }
 
 fn decode_pull_requests(bytes: &[u8]) -> Result<Vec<PullRequest>, BusError> {
     let pages: Vec<Vec<GhPullRequest>> = serde_json::from_slice(bytes)
         .map_err(|error| BusError::internal(format!("decoding GitHub pull requests: {error}")))?;
-    Ok(pages
-        .into_iter()
-        .flatten()
-        .map(|row| {
-            let same_repository = row
-                .head
-                .repo
-                .as_ref()
-                .zip(row.base.repo.as_ref())
-                .is_some_and(|(head, base)| head.full_name == base.full_name);
-            PullRequest {
-                number: row.number,
-                branch: row.head.branch,
-                draft: row.draft,
-                url: row.html_url,
-                title: row.title,
-                state: if row.merged_at.is_some() {
-                    "merged".into()
-                } else {
-                    row.state
-                },
-                same_repository,
-            }
-        })
-        .collect())
+    Ok(pages.into_iter().flatten().map(pull_request).collect())
+}
+
+fn pull_request(row: GhPullRequest) -> PullRequest {
+    let same_repository = row
+        .head
+        .repo
+        .as_ref()
+        .zip(row.base.repo.as_ref())
+        .is_some_and(|(head, base)| head.full_name == base.full_name);
+    PullRequest {
+        number: row.number,
+        branch: row.head.branch,
+        draft: row.draft,
+        url: row.html_url,
+        title: row.title,
+        state: if row.merged_at.is_some() {
+            "merged".into()
+        } else {
+            row.state
+        },
+        same_repository,
+    }
 }
 
 fn commit_diff_files(
@@ -2080,15 +2299,37 @@ mod tests {
     }
 
     #[test]
-    fn github_cli_paginates_and_failure_is_not_an_empty_list() {
+    fn github_cli_lists_every_open_pr_and_one_page_of_closed_ones() {
         let dir = tempfile::tempdir().unwrap();
+        let pr = |number: u64, state: &str, merged: bool| {
+            format!(
+                r#"{{"number":{number},"head":{{"ref":"b{number}","repo":{{"full_name":"o/r"}}}},"base":{{"ref":"main","repo":{{"full_name":"o/r"}}}},"html_url":"u","title":"t","state":"{state}","merged_at":{}}}"#,
+                if merged { "\"2026-09-05T00:00:00Z\"" } else { "null" }
+            )
+        };
         let gh = dir.path().join("gh");
-        write_script(&gh, "#!/usr/bin/env python3\nimport sys\nassert sys.argv[1:4] == ['api','--paginate','--slurp']\nassert 'state=all' in sys.argv[4]\nprint('[[], []]')\n");
+        write_script(&gh, &format!(
+            "#!/usr/bin/env python3\nimport sys\nargs = sys.argv[1:]\nif args == ['--probe']: sys.exit(0)\nassert args[0] == 'api' and 'state=all' not in args[-1]\nif '--paginate' in args:\n    assert args[1:3] == ['--paginate','--slurp'] and 'state=open' in args[3]\n    print('[[{}], []]')\nelse:\n    assert len(args) == 2 and 'state=closed' in args[1] and 'per_page=100' in args[1] and 'sort=updated' in args[1]\n    print('[{}, {}]')\n",
+            pr(1, "open", false), pr(2, "closed", true), pr(3, "closed", false)
+        ));
         let result = list_pull_requests(&gh, dir.path()).unwrap();
-        assert!(result.complete && result.pull_requests.is_empty());
+        assert!(result.complete);
+        assert_eq!(
+            result.pull_requests.iter().map(|pr| (pr.number, pr.state.as_str())).collect::<Vec<_>>(),
+            [(1, "open"), (2, "merged"), (3, "closed")]
+        );
         let failing = dir.path().join("gh-failing");
         write_script(&failing, "#!/usr/bin/env python3\nimport sys\nprint('[[]]')\nsys.exit(1)\n");
-        assert!(list_pull_requests(&failing, dir.path()).is_err());
+        assert!(list_pull_requests(&failing, dir.path()).is_err(), "a failure is not an empty list");
+        // The open PRs stand without the closed page; the listing says it is not complete.
+        let partial = dir.path().join("gh-partial");
+        write_script(&partial, &format!(
+            "#!/usr/bin/env python3\nimport sys\nif '--paginate' in sys.argv: print('[[{}]]')\nelse: sys.exit(1)\n",
+            pr(1, "open", false)
+        ));
+        let result = list_pull_requests(&partial, dir.path()).unwrap();
+        assert!(!result.complete);
+        assert_eq!(result.pull_requests.len(), 1);
     }
 
     /// Writes an executable script and waits until it can be run. A test thread that forks while
@@ -2122,10 +2363,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path();
         assert!(cached_prs(repo).is_none());
-        let listed = PrListOut { pull_requests: Vec::new(), complete: true };
+        let listed = Ok(PrListOut { pull_requests: Vec::new(), complete: true });
         remember_prs(repo, &listed);
         assert_eq!(cached_prs(repo), Some(listed));
         assert!(cached_prs(&repo.join("other")).is_none(), "a listing answers only its own repository");
+        forget_prs(repo);
+        assert!(cached_prs(repo).is_none());
+        // Offline, gh waits out its timeout: the failure answers the next refreshes too, rather
+        // than every one of them waiting again.
+        let failed = Err(BusError::unavailable("git.pr_list_timeout", "gh did not answer within 10s"));
+        remember_prs(repo, &failed);
+        assert_eq!(cached_prs(repo), Some(failed));
         forget_prs(repo);
         assert!(cached_prs(repo).is_none());
     }

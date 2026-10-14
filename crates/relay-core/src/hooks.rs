@@ -2,6 +2,10 @@
 //! they translate the host hook into a `guardrail.gate` call on the same bus as every other
 //! client.
 
+// Every file read here sits where an agent can write — its checkout, `<repo>/.relay/hooks` —
+// and is read under `writes()` or, by the launch sweep, under the store mutex; a FIFO planted
+// there would block every launch, close and commit, or Relay's start.
+use crate::private::read_regular;
 use crate::Instance;
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
@@ -104,7 +108,7 @@ fn inherited_hooks_dir(worktree: &Path) -> Option<PathBuf> {
 }
 
 fn read_record(dir: &Path) -> Option<String> {
-    fs::read_to_string(dir.join(PREVIOUS_HOOKS_PATH))
+    read_regular(&dir.join(PREVIOUS_HOOKS_PATH))
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -180,7 +184,7 @@ fn write_replacing(path: &Path, contents: &str, mode: u32) -> Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
     if fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o7777 == mode)
-        && fs::read(path).is_ok_and(|current| current == contents.as_bytes())
+        && read_regular(path).is_ok_and(|current| current == contents)
     {
         return Ok(());
     }
@@ -388,7 +392,7 @@ fn run_user_message_hook(repo: &Path, worktree: &Path, name: &str, message: &str
     let mut all = vec![file.as_os_str()];
     all.extend_from_slice(args);
     run_user_hook(&hook, worktree, &all)?;
-    fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))
+    read_regular(&file).with_context(|| format!("reading {}", file.display()))
 }
 
 fn run_user_hook(hook: &Path, worktree: &Path, args: &[&std::ffi::OsStr]) -> Result<()> {
@@ -513,7 +517,7 @@ pub fn sweep_hook_dirs(repo: &Path, live: &[String], instance: Instance) -> usiz
         if live.iter().any(|session| session == &name) {
             continue;
         }
-        let owner = fs::read_to_string(entry.path().join(HOOK_OWNER)).unwrap_or_default();
+        let owner = read_regular(&entry.path().join(HOOK_OWNER)).unwrap_or_default();
         if owner.trim() != instance.as_str() {
             continue;
         }
@@ -528,7 +532,7 @@ pub fn sweep_hook_dirs(repo: &Path, live: &[String], instance: Instance) -> usiz
 pub fn install_claude(worktree: &Path, instance: Instance, relay: &Path) -> Result<()> {
     let dir = real_dir(worktree, ".claude")?;
     let path = dir.join("settings.local.json");
-    let mut root: Value = match fs::read_to_string(&path) {
+    let mut root: Value = match read_regular(&path) {
         Ok(raw) => serde_json::from_str(&raw)
             .with_context(|| format!("parsing {}", path.display()))?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
@@ -605,7 +609,7 @@ pub fn add_claude_mcp_servers(
         return Ok(());
     }
     let mcp_path = worktree.join(MCP_CONFIG_RELATIVE);
-    let raw = fs::read_to_string(&mcp_path).with_context(|| format!("reading {}", mcp_path.display()))?;
+    let raw = read_regular(&mcp_path).with_context(|| format!("reading {}", mcp_path.display()))?;
     let mut config: Value = serde_json::from_str(&raw).with_context(|| format!("parsing {}", mcp_path.display()))?;
     let Some(entries) = config.get_mut("mcpServers").and_then(Value::as_object_mut) else {
         anyhow::bail!("{} has no mcpServers", mcp_path.display());
@@ -632,7 +636,7 @@ pub fn uninstall_claude(worktree: &Path) -> Result<()> {
     let _ = fs::remove_file(worktree.join(LEGACY_CLAUDE_STATUSLINE_RELATIVE));
     let dir = worktree.join(".claude");
     let path = dir.join("settings.local.json");
-    let raw = match fs::read_to_string(&path) {
+    let raw = match read_regular(&path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
@@ -681,7 +685,7 @@ pub fn install_codex(worktree: &Path, instance: Instance, relay: &Path) -> Resul
         return Err(CodexHooksTracked(worktree.to_path_buf()).into());
     }
     let path = real_dir(worktree, ".codex")?.join("hooks.json");
-    let mut root: Value = match fs::read_to_string(&path) {
+    let mut root: Value = match read_regular(&path) {
         Ok(raw) => serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({
             "description": "Workspace hooks, including Relay guardrails. Review once with /hooks."
@@ -731,7 +735,7 @@ pub fn install_codex(worktree: &Path, instance: Instance, relay: &Path) -> Resul
 /// equivalent as JSON values.
 pub fn uninstall_codex(worktree: &Path) -> Result<()> {
     let path = worktree.join(CODEX_HOOKS_RELATIVE);
-    let raw = match fs::read_to_string(&path) {
+    let raw = match read_regular(&path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
@@ -1194,5 +1198,50 @@ mod tests {
         assert!(repo.join(".claude/settings.local.json").is_file());
         let mode = std::fs::metadata(repo.join(".relay/hooks/calm-otter/pre-commit")).unwrap().permissions().mode();
         assert_eq!(mode & 0o111, 0o111, "the hook is not executable");
+    }
+
+    /// A FIFO, a link or an oversized file planted where Relay reads a record or an adapter is
+    /// refused at once, never waited on: the sweep runs under the store mutex before the socket
+    /// binds, and the adapters under the global hook-writes lock.
+    #[test]
+    fn planted_fifos_links_and_huge_files_are_refused_without_blocking() {
+        fn mkfifo(path: &Path) {
+            let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o644) }, 0, "mkfifo {}", path.display());
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().to_path_buf();
+        let stale = repo.join(".relay/hooks/dead-koala");
+        std::fs::create_dir_all(&stale).unwrap();
+        mkfifo(&stale.join(super::HOOK_OWNER));
+        mkfifo(&stale.join(super::PREVIOUS_HOOKS_PATH));
+        let linked = repo.join(".relay/hooks/linked-mole");
+        std::fs::create_dir_all(&linked).unwrap();
+        std::fs::write(repo.join("elsewhere"), "test\n").unwrap();
+        std::os::unix::fs::symlink(repo.join("elsewhere"), linked.join(super::HOOK_OWNER)).unwrap();
+        std::os::unix::fs::symlink(repo.join("elsewhere"), linked.join(super::PREVIOUS_HOOKS_PATH)).unwrap();
+        std::fs::create_dir_all(repo.join(".claude")).unwrap();
+        mkfifo(&repo.join(".claude/settings.local.json"));
+        std::fs::create_dir_all(repo.join(".codex")).unwrap();
+        std::fs::write(repo.join(".codex/hooks.json"), vec![b' '; (crate::private::MAX_READ + 1) as usize]).unwrap();
+
+        let (done, finished) = std::sync::mpsc::channel();
+        let worker = repo.clone();
+        std::thread::spawn(move || {
+            let swept = sweep_hook_dirs(&worker, &[], Instance::Test);
+            let records = (super::read_record(&worker.join(".relay/hooks/dead-koala")),
+                super::read_record(&worker.join(".relay/hooks/linked-mole")));
+            let claude = (install_claude(&worker, Instance::Test, Path::new("/opt/relay")).is_err(),
+                super::uninstall_claude(&worker).is_err());
+            let codex = super::uninstall_codex(&worker).is_err();
+            done.send((swept, records, claude, codex)).unwrap();
+        });
+        let (swept, records, claude, codex) = finished.recv_timeout(std::time::Duration::from_secs(10))
+            .expect("a read blocked on a planted FIFO");
+        assert_eq!(swept, 0, "an unreadable owner is not this instance's");
+        assert!(stale.is_dir() && linked.is_dir());
+        assert_eq!(records, (None, None));
+        assert_eq!(claude, (true, true), "a FIFO is not Claude's settings");
+        assert!(codex, "a file past the cap was parsed");
     }
 }

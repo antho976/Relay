@@ -63,21 +63,66 @@ A round:
    goes on to the cloud, for up to four passes; past that, the PC's cursor stays put and the next
    round asks again (what is sent twice, the other side already has: an equal stamp is ignored).
 4. Ask the cloud for `gym.raw` with the digest last taken; a newer export is `gym.upload`ed here.
+   The export this PC's training history last came from (its own `gym.raw`) is first kept in
+   `cloud-gym/avex-<time>-<n>.json` beside `cloud.json` (0700 folder, 0600 files, the newest five):
+   `gym.import` of that file puts it back. A history imported from a file has no such text on the
+   PC; the file is wherever it was imported from.
 
 The link keeps no ledger of its own, only a cursor and a generation for each side. Newest edit wins
 per row on each side, as with Tally, so the two converge. The wholesale acts keep their meaning:
 
 - **The cloud's ledger was replaced** (Tally's first sync with the cloud, which makes the cloud's
   ledger the phone's; or a restore there): the cloud answers `money.sync_stale`, and its whole
-  ledger replaces this PC's.
+  ledger replaces this PC's, unless it is held (below).
 - **This PC's ledger was restored, erased or replaced**: this PC answers `money.sync_stale`, and
   its whole ledger replaces the cloud's, and from there Tally's on its next sync.
 
+Either way the ledger being replaced is copied first, on its own machine: every `money.sync` with
+`replace: true` that erases a ledger holding anything writes `money-backups/money-<time>-<n>.db`
+beside that `money.db` (0700 folder, 0600 file, the newest ten; docs/MONEY.md, "Sync"). To go back
+to one, stop Relay and put it in place of `money.db`.
+
+**A replace from the cloud may be held.** Any device the cloud copy lets sync can replace its
+ledger (`money.sync` is in `CLOUD_OPS`, so Avex's credential can too), and the replace would reach
+this PC and every phone after it. So when the cloud's new ledger has no accounts and entries, or
+fewer than half of this PC's, while this PC's has some, the link does not copy it over this PC's:
+it records `held` in `cloud.json` (the cloud's generation and both counts), and every round fails
+with `cloud.replace_held` until the person chooses; `relay cloud status` shows it, with
+`last error`. `relay cloud accept cloud` takes the cloud's ledger here; `relay cloud accept pc`
+sends this PC's to the cloud in its place (the choice is written to `cloud.json`, so a running
+engine's next round carries it out as well). While held, a round looks at the cloud's generation
+with a one-row `money.sync` and reads neither ledger whole; a later wholesale act on the cloud
+(Tally pairing again with its whole ledger) is looked at afresh. An agent session cannot run
+`relay cloud accept`.
+
+Before a replace clears either side, `cloud.json` records which side is going over (`replacing`).
+Once the first batch has landed, it also records where the side being filled then stood
+(`landed`: its new generation and cursor), and both sides' cursors move there. A round that stops
+partway (a batch failed, the engine shut down) leaves the other side holding part of the ledger,
+which would read as stale next time; the next round instead finishes the same replace from the
+same side, before anything else, and clears the mark. It finishes by sending the source's whole
+ledger again with `replace: false` under the generation in `landed`, so the newest edit wins per
+row: what was edited on the half-filled side since (on this PC while the cloud was out of reach,
+or by Tally on the cloud's partial ledger) stays, and goes on to the source. If either side's
+ledger was replaced again since, the mark is dropped and the round goes on as any other: the
+latest wholesale act wins by the rules above. A mark with no `landed` (the first batch never
+landed, or a build from before wrote it) runs the replace again whole, as it always did.
+
+Rows the side being filled answers with during a replace are edits made there between two batches:
+they go to the source in the same round. Otherwise a side's cursor moves only once the other side
+has taken its changes: a round that fails partway is asked again.
+
 Each side lists the link as a device (`PC (<name>)` on the cloud, `Cloud (<name>)` here), so
-neither posts bills: Tally alone does, as when it syncs with the PC directly.
+neither posts bills: Tally alone does, as when it syncs with the PC directly. A long name is cut to
+the 64 characters `money.sync` takes.
 
 Large merges go in batches of 2,000 rows, in dependency order across batches, under the 8 MiB a
-device may send the rendezvous in one message.
+device may send the rendezvous in one message. Answers come back in pages of 2,000 rows
+(`money.sync`'s `limit` and `more`, docs/MONEY.md), so the cloud's whole ledger never has to fit
+the 15 MiB line the rendezvous carries to a device; the link reads every page before it hands the
+rows on, keeps the newest of each, drops what the other side handed back unchanged, and moves a
+cursor only as it did before. A cloud engine from before pages refuses `limit` (`bus.schema`) and
+is asked whole, as before.
 
 ## Setting it up
 
@@ -130,6 +175,10 @@ working, and `relay cloud off` forgets the link here.
 - The server ends TLS: whoever runs it (Antho, and Render) can read the ledger and the training
   history in flight and on its disk. The phone link is not sealed after the handshake
   (docs/MOBILE.md §6); here the reach of an injected line is `CLOUD_OPS`: the data, never the PC.
+- `CLOUD_OPS` is one list for every device the cloud copy admits: Avex's credential may send
+  `money.sync`, a replace included. The PC's link holds a replace that would empty or shrink its
+  ledger (above), and every replace leaves a copy of what it erased on that machine, but the
+  cloud's own ledger is still replaced. Narrowing ops per device is not done yet.
 - The link's credential on the PC is good for the cloud copy alone. Revoke it there with `relay
   remote revoke <id>` (`relay remote devices` lists it).
 - Connecting through the server: the bot sees the PC's pairing link for a Relay phone, code
@@ -139,10 +188,36 @@ working, and `relay cloud off` forgets the link here.
   PC ask for waiting phones and hand them links.
 - `relay remote rendezvous --queue-mib` caps what the server queues toward phones; the default
   (512 MiB) is more than a 512 MB container holds.
+- The rendezvous hosts any room whose secret is presented unless it is given a list (docs/MOBILE.md
+  §4). On this server, list the two rooms it is for: the PC's and the cloud engine's
+  (`RELAY_RENDEZVOUS_ROOMS=<pc room>,<cloud room>`; each is the `room:` that `relay remote via`
+  printed, or `rendezvous.room` in that engine's `remote.json`). Without the list it still works and
+  warns at start, but every deploy or spin-down restarts it remembering nothing (`start.sh` passes
+  no `--state`), and a room is remembered only once its host has held it five minutes. Until the
+  PC and the cloud engine have, a stranger holding the 16 new-room places keeps them out. The list
+  closes that; `RELAY_RENDEZVOUS_STATE=<a file on the service's disk>` only narrows it.
+- Per address, on Render: Render's proxy hands the connection to Caddy in the same container,
+  which hands it to the rendezvous on loopback. The rendezvous's peer is always Caddy on
+  127.0.0.1, which is never counted, so with `RELAY_RENDEZVOUS_TRUST_PROXY` unset (0, what runs
+  now) the per-address caps count nothing here; the 15 s hello deadline, the room caps and the
+  connection cap still apply. Leave it unset with the bot's Caddyfile as it is. That Caddyfile
+  sets no `trusted_proxies`, so Caddy drops the `X-Forwarded-For` Render's proxy sent and writes
+  only its own peer, Render's proxy: 1 would count that one address for every phone, and eight
+  quiet joins from anyone would turn every phone away (2 or more finds a single entry, fewer than
+  it trusts, and counts the loopback peer, which does nothing). To count phones here, add
+  `servers { trusted_proxies static 0.0.0.0/0 ::/0 }` to the Caddyfile's global options (nothing
+  but Render's proxy, and the account's own services on its private network, reaches `$PORT`).
+  Caddy then appends Render's proxy to the header Render wrote, and the phone's address is 2 from
+  the right if the last entry Render's proxy writes is the address it saw (a CDN hop in front of
+  it, appending its own, would make it 3). Confirm that once with
+  `RELAY_LOG=info,relay_remote::rendezvous=debug` (each join logs its header and the address
+  counted) before setting `RELAY_RENDEZVOUS_TRUST_PROXY=2`. A phone that joins and never says
+  hello is cut after 15 s either way.
 
 ## Verifying
 
-`cargo test -p relay-remote` runs the round against two ledgers (`cloud.rs`), and end to end
+`cargo test -p relay-remote` runs the round against two ledgers (`cloud.rs`: replaces cut short
+and finished, edits between batches, a held replace and both answers to it), and end to end
 (`tests/remote.rs`, `a_cloud_copy_takes_the_phones_data_and_the_pc_link_brings_it_home`): a cloud
 engine behind a real rendezvous takes a phone's ledger and an Avex export, refuses a terminal, and a
 PC engine's link brings both home and sends its own entry back. `crates/relay-core/tests/gym.rs`

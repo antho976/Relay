@@ -2602,7 +2602,7 @@
       }
     },
     "worktree.remove": {
-      "summary": "Remove a worktree; conflict if a session owns it",
+      "summary": "Remove a worktree; conflict if a session owns it or it is dirty (unless discard_changes)",
       "kind": "mutation",
       "audit": "always",
       "undo": "none",
@@ -2904,7 +2904,7 @@
       }
     },
     "git.pr.list": {
-      "summary": "All pull request states for the project, across every page; cached for a minute unless refresh",
+      "summary": "Open pull requests for the project, and the 100 most recently updated closed or merged ones; cached for a minute unless refresh, failures too",
       "kind": "query",
       "audit": "never",
       "undo": "none",
@@ -5432,7 +5432,7 @@
     "arbiter.key.set": {
       "summary": "Check a Coinbase key with Coinbase and keep it in the system keyring. A key that can transfer money out is refused",
       "kind": "mutation",
-      "audit": "always",
+      "audit": "never",
       "undo": "none",
       "scope": "global",
       "actors": "user_only",
@@ -12894,6 +12894,13 @@
             "boolean",
             "null"
           ]
+        },
+        "discard_changes": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Delete the worktree even with uncommitted changes or git-ignored files worth keeping.\nWithout it, removing a dirty worktree is refused `worktree.dirty`, as `session.close` is."
         }
       },
       "required": [
@@ -12907,6 +12914,13 @@
         "freed_mb": {
           "type": "number",
           "format": "double"
+        },
+        "rescued": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The ref (`refs/relay/rescue/...`) now holding the commits of a detached HEAD that no\nbranch or tag contained; absent when there were none."
         }
       },
       "required": [
@@ -18122,6 +18136,15 @@
             "$ref": "#/$defs/MoneyChange"
           },
           "description": "The phone's rows changed since its last sync, and its tombstones."
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "At most this many changes in the answer (1 or more). When more are left, the answer says\n`more: true` and its `cursor` is where this page ended: ask again from there, and apply\nthe pages together once `more` is false. Absent, the whole answer at once."
         }
       },
       "required": [
@@ -18193,6 +18216,10 @@
           "type": "integer",
           "format": "uint",
           "minimum": 0
+        },
+        "more": {
+          "type": "boolean",
+          "description": "Only when the device asked with a `limit`: `changes` is one page and more are left. Ask\nagain with `since` set to `cursor` (and the same generation), and apply the pages together\nonce this is false. Left out when false."
         }
       },
       "required": [

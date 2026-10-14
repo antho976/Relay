@@ -585,3 +585,96 @@ fn a_task_made_from_a_note_keeps_the_link() {
     assert!(after["note_id"].is_null(), "{after}");
     assert!(after["deleted_at"].is_null());
 }
+
+/// Rows store an attachment's whole path, and the store's directory can be reached by more than
+/// one spelling (a moved or symlinked data directory). Under another one no row matched any
+/// file, and recovery deleted every attachment. A row outside the folder scanned now stops the
+/// sweep; under the folder's own spelling, files are matched by `<task>/<file>`.
+#[test]
+fn recovery_keeps_attachments_whose_rows_spell_the_store_directory_differently() {
+    let f = Fixture::new();
+    let e = &f.engine;
+    let task = f.task("Shots", json!({}));
+    let live = ok(e, "task.attach", json!({"task_id":task["id"],"name":"live.png","mime":"image/png","bytes_b64":b64(b"live")}));
+    let path = PathBuf::from(live["path"].as_str().unwrap());
+    let orphan = path.parent().unwrap().join("99-orphan.png");
+    std::fs::write(&orphan, b"orphan").unwrap();
+    let alias = f.root.path().join("alias");
+    std::os::unix::fs::symlink(f.root.path().join("store"), &alias).unwrap();
+    let elsewhere = alias.join("attachments").join(path.strip_prefix(f.attachments()).unwrap());
+    let set_path = |to: &Path| {
+        e.store.lock().execute("UPDATE attachments SET path=?1 WHERE id=?2", rusqlite::params![to.display().to_string(), live["id"].as_i64().unwrap()]).unwrap();
+    };
+    set_path(&elsewhere);
+    let report = relay_core::recovery::run(e).unwrap();
+    assert!(!report.fsck_fixes.iter().any(|x| x.contains("attachment")), "{:?}", report.fsck_fixes);
+    assert!(path.is_file() && orphan.is_file(), "a row under another spelling had its files swept");
+
+    set_path(&path);
+    let report = relay_core::recovery::run(e).unwrap();
+    assert!(report.fsck_fixes.iter().any(|x| x == "removed 1 orphaned attachment file(s)"), "{:?}", report.fsck_fixes);
+    assert!(path.is_file() && !orphan.exists());
+}
+
+/// A fanned dispatch whose transaction fails after its prepare made the sessions — here a
+/// sub-task deleted in between — closes them and their checkouts, as a failed prepare does.
+/// The deletion lands on the first session's event, while the prepare still makes the other
+/// two; should the dispatch win that race anyway, the round is run again.
+#[test]
+fn a_dispatch_that_fails_to_commit_closes_the_sessions_it_made() {
+    let mut failed = false;
+    for _ in 0..5 {
+        let f = Fixture::new();
+        let e = &f.engine;
+        let parent = f.task("Body of work", json!({}));
+        f.task("First half", json!({"parent_id":parent["id"]}));
+        let second = f.task("Second half", json!({"parent_id":parent["id"]}));
+        let mut rx = e.subscribe();
+        let engine = e.clone();
+        let second_id = second["id"].as_i64().unwrap();
+        let deleter = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while std::time::Instant::now() < deadline {
+                match rx.try_recv() {
+                    Ok(event) if event.ev == "session.changed" => {
+                        engine.store.lock().execute("UPDATE tasks SET deleted_at='2026-01-01T00:00:00Z' WHERE id=?1", [second_id]).unwrap();
+                        return;
+                    }
+                    Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
+                }
+            }
+        });
+        let out = call(e, Actor::User, "task.dispatch", json!({"task_id":parent["id"],"fanout":true,"start":false,
+            "create":{"project_id":1,"provider":"claude","role":"builder"}}));
+        deleter.join().unwrap();
+        let open = || -> Vec<(String, String)> {
+            let conn = e.store.lock();
+            let mut stmt = conn.prepare("SELECT name, worktree FROM sessions WHERE state != 'closed'").unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<Result<_, _>>().unwrap()
+        };
+        if out.ok {
+            // The dispatch read its sub-tasks before the deletion: every session it made has a task.
+            assert_eq!(open().len(), 3);
+            continue;
+        }
+        failed = true;
+        let made: i64 = e.store.lock().query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0)).unwrap();
+        assert_eq!(made, 3, "the prepare made all three before the transaction failed");
+        let worktrees: Vec<String> = e.store.lock().prepare("SELECT worktree FROM sessions").unwrap()
+            .query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+        let gone = || open().is_empty() && worktrees.iter().all(|worktree| !Path::new(worktree).exists());
+        // Closed on a thread of their own, once the failed transaction lets go of the store.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !gone() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(open(), vec![], "no session outlives the dispatch that made it");
+        for worktree in &worktrees {
+            assert!(!Path::new(worktree).exists(), "{worktree} goes with its session");
+        }
+        assert_eq!(ok(e, "task.get", json!({"task_id":parent["id"]}))["column"], "backlog");
+        break;
+    }
+    assert!(failed, "the deletion never landed between the prepare and the transaction");
+}

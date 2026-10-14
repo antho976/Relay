@@ -97,6 +97,12 @@ pub(crate) fn formatter() -> MoneyFormatter {
     MoneyFormatter::new(if currency.is_empty() { "CAD" } else { &currency }, Locale::from_env())
 }
 
+/// The ledger's currency as the last read reported it (empty before one did): what [`formatter`]
+/// formats in.
+pub(crate) fn currency() -> String {
+    STATE.with(|s| s.currency.borrow().clone())
+}
+
 pub(crate) fn remember_currency(v: &Value) {
     if let Some(code) = v["currency"].as_str().filter(|c| !c.is_empty()) {
         STATE.with(|s| *s.currency.borrow_mut() = code.to_string());
@@ -502,8 +508,9 @@ pub async fn refresh(ui: &Rc<Ui>, page: &str) {
     if page == threads::PAGE {
         threads::refresh(ui).await;
     } else {
-        // The sidebar's thread list shows over Tally's pages too.
-        threads::refresh_list(ui);
+        // The sidebar's thread list shows over Tally's pages too. A read that changed nothing
+        // changes no row (`threads::draw_list`).
+        threads::refresh_list_shown(ui);
         if page.starts_with("arbiter-") {
             arbiter::refresh(ui, page).await;
         } else if page.starts_with("avex-") {
@@ -516,6 +523,7 @@ pub async fn refresh(ui: &Rc<Ui>, page: &str) {
 
 /// `money.changed`: the ledger moved, here or elsewhere.
 pub fn changed(ui: &Rc<Ui>) {
+    pages::forget_lists();
     let page = ui.page.borrow().clone();
     // A thread's charts read again in view; out of it, with another page showing, they wait to
     // read when they show again (`chart::load_stale`).

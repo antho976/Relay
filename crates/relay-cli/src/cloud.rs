@@ -26,6 +26,12 @@ pub enum CloudCommand {
     Sync,
     /// Where the link points and how its last round went
     Status,
+    /// Settle a replace the link held (`relay cloud status` says when): `cloud` takes the cloud
+    /// copy's ledger here, `pc` sends this PC's to the cloud in its place. Then merges
+    Accept {
+        #[arg(value_enum)]
+        ledger: Keep,
+    },
     /// Forget the cloud engine: this PC stops merging with it (revoke it there with `relay remote revoke`)
     Off,
 }
@@ -33,7 +39,7 @@ pub enum CloudCommand {
 /// How the cloud engine lists this PC.
 pub fn pc_name(instance: Instance) -> String {
     let host = Registry::load(&Registry::path_for(instance)).map(|r| r.host_name).unwrap_or_else(|_| "Relay".into());
-    format!("PC ({host})")
+    cloud::device_name("PC", &host)
 }
 
 /// Runs a blocking call to the server off the async runtime.
@@ -71,7 +77,69 @@ async fn ask_and_wait(api: &Server, name: &str) -> Result<(String, Option<String
     }
 }
 
+/// Whose ledger stays when the link held a replace from the cloud (`relay cloud accept`).
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum Keep {
+    /// The cloud copy's ledger replaces this PC's
+    Cloud,
+    /// This PC's ledger replaces the cloud copy's
+    Pc,
+}
+
+/// `relay cloud accept`: writes the choice into `cloud.json` (a running engine's next round would
+/// carry it out too), then merges now.
+async fn accept(instance: Instance, path: &std::path::Path, ledger: Keep) -> Result<u8> {
+    let choice = match ledger {
+        Keep::Cloud => cloud::Whole::Cloud,
+        Keep::Pc => cloud::Whole::Pc,
+    };
+    if !cloud::decide(path, choice).await? {
+        println!("Nothing is held: the link has no replace waiting on you.");
+        return Ok(0);
+    }
+    let report = cloud::round(&instance.socket_path(), path, &pc_name(instance)).await?;
+    match report.replaced_by {
+        Some("pc") => println!("This PC's ledger replaced the cloud copy's ({} rows); what the cloud's held is kept in money-backups/ on the server.", report.to_cloud),
+        _ => println!("The cloud copy's ledger replaced this PC's ({} rows); this PC's is kept in money-backups/ beside money.db.", report.to_pc),
+    }
+    Ok(0)
+}
+
+/// The replace the link holds, if it holds one, and how to settle it.
+fn print_held(link: &Link) {
+    if let Some(held) = &link.held {
+        let chosen = match held.accept {
+            Some(cloud::Whole::Cloud) => " (taking the cloud's on the next round)",
+            Some(cloud::Whole::Pc) => " (sending this PC's on the next round)",
+            None => "",
+        };
+        println!(
+            "held:      the cloud's ledger was replaced by one with {} accounts and entries, against {} here{chosen}: `relay cloud accept cloud` takes it, `relay cloud accept pc` keeps this PC's",
+            held.cloud_rows, held.pc_rows
+        );
+    }
+}
+
+/// Connecting, pairing and forgetting the link are the person's: each one hands this PC's data
+/// to a cloud engine or cuts it off. An agent's shell carries `RELAY_SESSION` (providers.rs);
+/// its exec gate refuses these too, and this is the same rule for a command it reaches some
+/// other way. A seatbelt, not a boundary (BUS.md §9.5).
+fn refuse_in_agent_session(cmd: &CloudCommand, session: Option<&str>) -> Result<()> {
+    let what = match cmd {
+        CloudCommand::Connect { .. } => "connect",
+        CloudCommand::Pair { .. } => "pair",
+        CloudCommand::Off => "off",
+        CloudCommand::Accept { .. } => "accept",
+        CloudCommand::Sync | CloudCommand::Status => return Ok(()),
+    };
+    match session.filter(|s| !s.is_empty()) {
+        Some(session) => Err(anyhow!("`relay cloud {what}` is the user's to run, not an agent's (this shell is session {session})")),
+        None => Ok(()),
+    }
+}
+
 pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
+    refuse_in_agent_session(&cmd, std::env::var("RELAY_SESSION").ok().as_deref())?;
     let path = Link::path_for(instance);
     match cmd {
         CloudCommand::Connect { server } => {
@@ -91,13 +159,16 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
             let name = Registry::load(&Registry::path_for(instance)).map(|r| r.host_name).unwrap_or_else(|_| "this PC".into());
             println!("Asking {} to let {name} in…", api.base());
             let (pair_link, token) = ask_and_wait(&api, &name).await?;
-            let mut link = match existing {
-                // Linked with the cloud copy already (`relay cloud pair`): this only adds the server.
-                Some(link) => link,
-                None => {
-                    println!("Allowed. Pairing with the cloud copy…");
-                    cloud::pair(&path, &pair_link, &pc_name(instance)).await?
-                }
+            // Linked with the cloud copy already (`relay cloud pair`), this only adds the server.
+            // Looked at again: `relay cloud off` may have run while this waited.
+            if Link::load(&path)?.is_none() {
+                println!("Allowed. Pairing with the cloud copy…");
+                cloud::pair(&path, &pair_link, &pc_name(instance)).await?;
+            }
+            // The link as it is now, under the round lock: a round may have moved it on meanwhile.
+            let _lock = cloud::lock(&path).await?;
+            let Some(mut link) = Link::load(&path)? else {
+                return Err(anyhow!("the cloud link was removed while this ran: run `relay cloud connect` again"));
             };
             link.server = Some(api.base().to_string());
             link.server_token = token;
@@ -139,6 +210,7 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
             if let Some(error) = &link.last_error {
                 println!("last error: {error}");
             }
+            print_held(&link);
             println!("avex:      {}", if link.gym_digest.is_some() { "an export came home" } else { "nothing yet" });
             match (&link.server, &link.server_token) {
                 (Some(server), Some(_)) => println!("server:    {server} (the Relay app can pair through it)"),
@@ -146,13 +218,35 @@ pub async fn run(instance: Instance, cmd: CloudCommand) -> Result<u8> {
             }
             Ok(0)
         }
+        CloudCommand::Accept { ledger } => accept(instance, &path, ledger).await,
         CloudCommand::Off => {
+            // After any round under way, which would otherwise write the link back.
+            let _lock = cloud::lock(&path).await?;
             match std::fs::remove_file(&path) {
                 Ok(()) => println!("cloud link forgotten; revoke this PC on the server with `relay remote revoke <id>` (`relay remote devices` lists it)"),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => println!("no cloud link"),
                 Err(e) => return Err(e.into()),
             }
             Ok(0)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{refuse_in_agent_session, CloudCommand};
+
+    #[test]
+    fn an_agent_session_cannot_connect_pair_or_forget_the_link() {
+        let session = Some("steady-badger");
+        for cmd in [CloudCommand::Connect { server: "x.test".into() }, CloudCommand::Pair { link: "x".into() }, CloudCommand::Off] {
+            let refused = refuse_in_agent_session(&cmd, session).unwrap_err().to_string();
+            assert!(refused.contains("the user's to run") && refused.contains("steady-badger"), "{refused}");
+            refuse_in_agent_session(&cmd, None).expect("the person runs it");
+            refuse_in_agent_session(&cmd, Some("")).expect("an empty RELAY_SESSION is no session");
+        }
+        for cmd in [CloudCommand::Sync, CloudCommand::Status] {
+            refuse_in_agent_session(&cmd, session).expect("reading and merging are not the person's alone");
         }
     }
 }

@@ -20,12 +20,16 @@ pub struct Served {
 impl Served {
     /// Stop: no new requests, the socket door closed and its connections ended, then every
     /// child killed and marked restorable. The door goes first, so nothing a client sends can
-    /// land after [`Engine::shutdown`] has drained the PTYs (RA-333).
+    /// land after [`Engine::shutdown`] has drained the PTYs (RA-333). A mirror still open has
+    /// its adb forward removed before this returns: its worker would do it on the way out, but
+    /// the process exits without waiting for it, and adb would keep the port until it restarts.
     pub fn stop(self) {
         let Served { engine, socket } = self;
         engine.request_quit();
         drop(socket);
+        let mirrors: Vec<_> = engine.mirrors.lock().unwrap().values().cloned().collect();
         engine.shutdown();
+        crate::handlers::device::remove_mirror_forwards(&engine, &mirrors);
     }
 }
 
@@ -41,6 +45,12 @@ pub async fn start(instance: Instance, store_path: Option<PathBuf>) -> Result<Se
     if !subreaper {
         tracing::warn!(error = %std::io::Error::last_os_error(), "could not become a child subreaper; a session's orphans can claim the user actor");
     }
+    // The instance's folder holds the store and the databases beside it (threads, money,
+    // arbiter, gym); older installs made it 0755. A store path chosen by the caller keeps its
+    // folder as it is.
+    if store_path.is_none() {
+        crate::private::private_data_dir(&instance.data_dir());
+    }
     let path = store_path.unwrap_or_else(|| instance.store_path());
     let store = Store::open(&path, true).map_err(BindError::Other)?;
     let engine = Engine::new(instance, store);
@@ -50,6 +60,8 @@ pub async fn start(instance: Instance, store_path: Option<PathBuf>) -> Result<Se
     if let Err(e) = crate::recovery::run_with(&engine, crate::recovery::DirtyScan::Deferred) {
         tracing::warn!(error = %e, "crash recovery failed; continuing");
     }
+    // Mirror forwards the last run of this engine left open (it crashed, or quit before adb).
+    crate::handlers::device::clear_stale_forwards(&engine);
     // Every checkout picks up the app-wide skill folders once at start, so a workspace that
     // already existed when a skill was installed does not wait for its next launch (D147).
     // One shot on a worker, not a timer: nothing here repeats.

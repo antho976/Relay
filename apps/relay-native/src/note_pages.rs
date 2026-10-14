@@ -16,7 +16,7 @@ use super::*;
 use doc::Doc;
 use glyphs::{glyph, tool_glyph};
 use std::cell::{Cell, OnceCell};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// View and editing preferences, persisted with the window in `native.notes.window`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -129,11 +129,22 @@ struct ToolKey {
     caption: gtk::Label,
 }
 
+/// One library row. `note` is the listed copy (`notes.list {summary}`: the body cut to a
+/// preview); the name, preview and search text come from the whole note once it is at hand.
 struct Row {
     row: gtk::ListBoxRow,
     note: Value,
+    /// Title and body, lowercased once when the row is built: the search filter reads it on
+    /// every keystroke, for every row.
     haystack: String,
     dot: gtk::Box,
+    heading: gtk::Label,
+    date: gtk::Label,
+    shown: gtk::Label,
+    name: String,
+    preview: String,
+    /// Built from the whole note, not just its preview.
+    whole: bool,
 }
 
 struct Shell {
@@ -182,6 +193,179 @@ thread_local! {
     static FONT: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
     static TASKS_TIMER: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
     static SCHEME: OnceCell<Option<sourceview5::StyleScheme>> = const { OnceCell::new() };
+    /// Whole notes by id, as `notes.get` returned them: the library lists only previews. A
+    /// copy is current while its `updated_at` matches the listed one, as every change sets it.
+    static FULL: RefCell<HashMap<i64, Value>> = RefCell::new(HashMap::new());
+    /// The library is fetching whole notes in the background; `FILL_AGAIN` asks it to look
+    /// again once it is done.
+    static FILLING: Cell<bool> = const { Cell::new(false) };
+    static FILL_AGAIN: Cell<bool> = const { Cell::new(false) };
+    /// A whole note changed a row's search text while a search was shown.
+    static REFILTER: Cell<bool> = const { Cell::new(false) };
+    /// The day the row dates were last written for ("14:02" today, "Oct 5" after).
+    static DATED: Cell<(i32, i32)> = const { Cell::new((0, 0)) };
+}
+
+/// `notes.list {summary}` cuts each body to this many characters (relay-core's
+/// `PREVIEW_CHARS`); a shorter one is the whole body.
+const PREVIEW_CHARS: usize = 240;
+
+fn note_id(note: &Value) -> i64 {
+    note["id"].as_i64().unwrap_or(0)
+}
+
+/// The listed copy is the whole note: its body was not cut.
+fn complete(listed: &Value) -> bool {
+    text(listed, "body").chars().count() < PREVIEW_CHARS
+}
+
+/// The whole of the listed note is at hand, without asking the engine.
+fn has_full(listed: &Value) -> bool {
+    complete(listed)
+        || FULL.with(|full| {
+            full.borrow()
+                .get(&note_id(listed))
+                .is_some_and(|f| f["updated_at"] == listed["updated_at"])
+        })
+}
+
+/// The whole stored note behind a listed one, if it is at hand.
+fn full_note(listed: &Value) -> Option<Value> {
+    if complete(listed) {
+        return Some(listed.clone());
+    }
+    FULL.with(|full| {
+        full.borrow()
+            .get(&note_id(listed))
+            .filter(|f| f["updated_at"] == listed["updated_at"])
+            .cloned()
+    })
+}
+
+/// Call `f` with the listed note's title and the best body at hand (the whole one when known),
+/// and whether that body is whole.
+fn with_display<R>(listed: &Value, f: impl FnOnce(&str, &str, bool) -> R) -> R {
+    if complete(listed) {
+        return f(text(listed, "title"), text(listed, "body"), true);
+    }
+    FULL.with(|full| {
+        let full = full.borrow();
+        match full.get(&note_id(listed)).filter(|n| n["updated_at"] == listed["updated_at"]) {
+            Some(whole) => f(text(listed, "title"), text(whole, "body"), true),
+            None => f(text(listed, "title"), text(listed, "body"), false),
+        }
+    })
+}
+
+/// Read note `id` whole and keep it for the library.
+pub(super) async fn fetch_full(ui: &Rc<Ui>, id: i64) -> Result<Value, crate::client::Error> {
+    let note = ui.call("notes.get", json!({"note_id":id})).await?;
+    FULL.with(|full| full.borrow_mut().insert(id, note.clone()));
+    Ok(note)
+}
+
+/// The listed notes `workspace` will hand to an editor when it renders `notes` for `project`
+/// (open tabs it reconciles, remembered tabs it restores), whose whole text is not at hand.
+pub(super) fn needs_full(project: i64, notes: &[Value]) -> Vec<i64> {
+    let missing = |id: i64| notes.iter().find(|n| note_id(n) == id).filter(|n| !has_full(n)).map(|_| id);
+    let mine: Vec<i64> = docs().iter().filter(|d| d.project == project).map(|d| d.id).collect();
+    let mut ids: Vec<i64> = mine.iter().copied().filter_map(missing).collect();
+    if !RESTORED.with(|r| r.borrow().contains(&project)) {
+        match SESSION.with(|s| s.borrow().get(&project.to_string()).cloned()) {
+            Some(entry) => ids.extend(
+                rows(&entry, "open")
+                    .iter()
+                    .filter_map(Value::as_i64)
+                    .filter(|id| doc_by_id(*id).is_none())
+                    .filter_map(missing),
+            ),
+            None if mine.is_empty() => ids.extend(notes.first().and_then(|n| missing(note_id(n)))),
+            None => {}
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// Run `then` with note `id`'s whole stored copy: at once when it is at hand, else once
+/// `notes.get` has read it.
+fn with_full(ui: &Rc<Ui>, id: i64, then: impl FnOnce(&Rc<Ui>, Value) + 'static) {
+    let Some(listed) = listed(id) else { return };
+    if let Some(note) = full_note(&listed) {
+        then(ui, note);
+        return;
+    }
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        match fetch_full(&ui, id).await {
+            Ok(note) => then(&ui, note),
+            Err(error) => shell_error(&ui, &format!("Could not read the note: {error}")),
+        }
+    });
+}
+
+/// Read, in the background, every listed note whose whole text is not at hand, so the
+/// search finds words past each preview and every row names and previews its note in full.
+pub(super) fn fill(ui: &Rc<Ui>) {
+    if FILLING.with(|f| f.replace(true)) {
+        FILL_AGAIN.with(|a| a.set(true));
+        return;
+    }
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        loop {
+            FILL_AGAIN.with(|a| a.set(false));
+            let wanted: Vec<i64> = shell_if_built().map_or_else(Vec::new, |shell| {
+                shell.notes.borrow().iter().filter(|n| !has_full(n)).map(note_id).collect()
+            });
+            for id in wanted {
+                // Listed still, and still not whole: the library may have moved on.
+                if !listed(id).is_some_and(|n| !has_full(&n)) {
+                    continue;
+                }
+                match fetch_full(&ui, id).await {
+                    Ok(_) => full_arrived(&ui, id),
+                    Err(crate::client::Error::Disconnected) => break,
+                    Err(_) => {}
+                }
+            }
+            if !FILL_AGAIN.with(Cell::get) {
+                break;
+            }
+        }
+        FILLING.with(|f| f.set(false));
+        if REFILTER.with(|r| r.replace(false)) {
+            if let Some(shell) = shell_if_built() {
+                shell.list.invalidate_filter();
+                update_placeholder(&shell);
+            }
+        }
+    });
+}
+
+/// Note `id`'s whole text arrived: its row searches all of it, and shows what it changed.
+fn full_arrived(ui: &Rc<Ui>, id: i64) {
+    let Some(shell) = shell_if_built() else { return };
+    let Some(index) = shell.rows.borrow().iter().position(|r| note_id(&r.note) == id) else { return };
+    let listed = shell.rows.borrow()[index].note.clone();
+    if shell.rows.borrow()[index].whole || !has_full(&listed) {
+        return;
+    }
+    let searching = !shell.search.text().trim().is_empty();
+    let renamed = {
+        let mut rows = shell.rows.borrow_mut();
+        let name = rows[index].name.clone();
+        rebind(&mut rows[index], &listed);
+        rows[index].name != name
+    };
+    // The name sorts the list.
+    if renamed && prefs().sort_title {
+        render_rows(ui, &shell);
+    }
+    if searching {
+        REFILTER.with(|r| r.set(true));
+    }
 }
 
 /// The Notes paper, `@notes_paper` in css/notes.css, which paints it behind the text view at
@@ -967,22 +1151,28 @@ fn shell(ui: &Rc<Ui>) -> Rc<Shell> {
         let this = pinned(row);
         let show = shell.any_pinned.get()
             && before.is_none_or(|before| pinned(before) != this);
-        if show {
-            row.set_header(Some(&label(if this { "PINNED" } else { "NOTES" }, "notes-list-header")));
-        } else {
-            row.set_header(gtk::Widget::NONE);
+        // A header already saying the same is kept: a new one restyles and remeasures.
+        let wanted = show.then_some(if this { "PINNED" } else { "NOTES" });
+        let shown = row.header().and_downcast::<gtk::Label>().map(|l| l.text());
+        if shown.as_deref() != wanted {
+            match wanted {
+                Some(text) => row.set_header(Some(&label(text, "notes-list-header"))),
+                None => row.set_header(gtk::Widget::NONE),
+            }
         }
     });
     let target = weak_ui.clone();
     let rows = weak.clone();
     shell.list.connect_row_activated(move |_, row| {
         let (Some(ui), Some(shell)) = (target.upgrade(), rows.upgrade()) else { return };
-        let note = shell.rows.borrow().get(row.index() as usize).map(|r| r.note.clone());
-        if let Some(note) = note {
-            edit(&ui, note);
-            if let Some(doc) = current_doc(&ui) {
-                doc.view.grab_focus();
-            }
+        let id = shell.rows.borrow().get(row.index() as usize).map(|r| note_id(&r.note));
+        if let Some(id) = id {
+            with_full(&ui, id, |ui, note| {
+                edit(ui, note);
+                if let Some(doc) = current_doc(ui) {
+                    doc.view.grab_focus();
+                }
+            });
         }
     });
     let context = gtk::GestureClick::new();
@@ -1115,7 +1305,11 @@ pub(super) fn load_error(ui: &Rc<Ui>, message: &str) {
 }
 
 fn build_row(note: &Value) -> Row {
-    let (title, body) = (text::clean(text(note, "title")), text::clean(text(note, "body")));
+    with_display(note, |title, body, whole| build_row_from(note, title, body, whole))
+}
+
+fn build_row_from(note: &Value, title: &str, body: &str, whole: bool) -> Row {
+    let (title, body) = (text::clean(title), text::clean(body));
     let (title, body) = (title.as_ref(), body.as_ref());
     let id = note["id"].as_i64().unwrap_or(0);
     let row = gtk::ListBoxRow::new();
@@ -1141,46 +1335,179 @@ fn build_row(note: &Value) -> Row {
     }
     content.append(&top);
     let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 7);
-    bottom.append(&label(&fmt_date(text(note, "updated_at")), "notes-row-date"));
+    let date = label(&fmt_date(text(note, "updated_at")), "notes-row-date");
+    bottom.append(&date);
     let preview = text::preview(title, body);
-    let preview = label(if preview.is_empty() { "No additional text" } else { &preview }, "notes-row-preview");
-    preview.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    preview.set_hexpand(true);
-    bottom.append(&preview);
+    let shown = label(if preview.is_empty() { "No additional text" } else { &preview }, "notes-row-preview");
+    shown.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    shown.set_hexpand(true);
+    bottom.append(&shown);
     content.append(&bottom);
     row.set_child(Some(&content));
     row.update_property(&[gtk::accessible::Property::Label(&name)]);
-    Row { row, note: note.clone(), haystack: format!("{title}\n{body}").to_lowercase(), dot }
+    Row { row, note: note.clone(), haystack: format!("{title}\n{body}").to_lowercase(), dot, heading, date, shown, name, preview, whole }
 }
 
+/// What a row shows of one note, and its search text.
+struct Content {
+    note: Value,
+    haystack: String,
+    name: String,
+    preview: String,
+    whole: bool,
+}
+
+fn content(note: &Value) -> Content {
+    with_display(note, |title, body, whole| {
+        let (title, body) = (text::clean(title), text::clean(body));
+        Content {
+            note: note.clone(),
+            haystack: format!("{title}\n{body}").to_lowercase(),
+            name: text::display_title(&title, &body),
+            preview: text::preview(&title, &body),
+            whole,
+        }
+    })
+}
+
+/// Show `content` in `row`'s widgets, setting only the text that differs: new text in a row
+/// costs that row, where a row added to or taken from the list restyles all its siblings.
+fn show(row: &mut Row, content: Content, redate: bool) {
+    if content.name != row.name {
+        row.heading.set_text(&content.name);
+        row.row.update_property(&[gtk::accessible::Property::Label(&content.name)]);
+    }
+    if content.preview != row.preview {
+        row.shown.set_text(if content.preview.is_empty() { "No additional text" } else { &content.preview });
+    }
+    if redate || row.note["updated_at"] != content.note["updated_at"] {
+        row.date.set_text(&fmt_date(text(&content.note, "updated_at")));
+    }
+    let id = note_id(&content.note);
+    if note_id(&row.note) != id {
+        row.dot.set_visible(doc_by_id(id).is_some_and(|d| d.shown_dirty()));
+    }
+    row.note = content.note;
+    row.haystack = content.haystack;
+    row.name = content.name;
+    row.preview = content.preview;
+    row.whole = content.whole;
+}
+
+/// The row is current for `note`: the same listed copy, and the whole text if it is known.
+fn current_for(row_note: &Value, whole: bool, note: &Value) -> bool {
+    row_note == note && (whole || !has_full(note))
+}
+
+/// Show `note` in `row`, which showed an older copy of it. `false` when the pin changed,
+/// which `build_row` lays out.
+fn rebind(row: &mut Row, note: &Value) -> bool {
+    if (row.note["pinned"] == true) != (note["pinned"] == true) {
+        return false;
+    }
+    show(row, content(note), false);
+    true
+}
+
+/// Show `shell.notes` in the list. A row whose note did not change is kept as it is (its
+/// widgets, its search text), so a change to one note costs one row, not the library.
 fn render_rows(ui: &Rc<Ui>, shell: &Shell) {
     let adjustment = shell.list_scroll.vadjustment();
     let keep = adjustment.value();
-    // Rows only: `remove_all` would also try the row menu parented to the list and, in GTK
-    // 4.22, retry it forever ("Tried to remove non-child").
-    while let Some(row) = shell.list.row_at_index(0) {
-        shell.list.remove(&row);
-    }
     let mut notes = shell.notes.borrow().clone();
     if prefs().sort_title {
         notes.sort_by_cached_key(|n| {
-            (n["pinned"] != true, text::display_title(text(n, "title"), text(n, "body")).to_lowercase())
+            (n["pinned"] != true, with_display(n, |title, body, _| text::display_title(title, body).to_lowercase()))
         });
     }
-    let rows: Vec<Row> = notes.iter().map(build_row).collect();
-    let widgets: Vec<gtk::ListBoxRow> = rows.iter().map(|r| r.row.clone()).collect();
-    *shell.rows.borrow_mut() = rows;
-    for row in &widgets {
-        shell.list.append(row);
+    // A kept row's date was written for the day it was built: "14:02" reads "Oct 5" tomorrow.
+    let today = glib::DateTime::now_local().map_or((0, 0), |now| (now.year(), now.day_of_year()));
+    let redate = DATED.with(|d| d.replace(today)) != today;
+    let mut rows: Vec<Row> = shell.rows.borrow_mut().drain(..).collect();
+    // The same rows with the same pins in the same places (one note edited, or moved up the
+    // list by its edit): each row takes the note now in its place, carrying what was worked
+    // out for it, and the list itself does not change.
+    let fits = rows.len() == notes.len()
+        && rows.iter().zip(&notes).all(|(row, n)| (row.note["pinned"] == true) == (n["pinned"] == true));
+    if fits {
+        let mut carried: HashMap<i64, Content> = rows
+            .iter_mut()
+            .map(|row| {
+                let content = Content {
+                    note: row.note.clone(),
+                    haystack: std::mem::take(&mut row.haystack),
+                    name: row.name.clone(),
+                    preview: row.preview.clone(),
+                    whole: row.whole,
+                };
+                (note_id(&row.note), content)
+            })
+            .collect();
+        for (row, n) in rows.iter_mut().zip(&notes) {
+            let content = match carried.remove(&note_id(n)) {
+                Some(c) if current_for(&c.note, c.whole, n) => c,
+                _ => content(n),
+            };
+            show(row, content, redate);
+        }
+        *shell.rows.borrow_mut() = rows;
+    } else {
+        let mut old: HashMap<i64, Row> = rows.drain(..).map(|r| (note_id(&r.note), r)).collect();
+        let mut stale = Vec::new();
+        let rows: Vec<Row> = notes
+            .iter()
+            .map(|n| match old.remove(&note_id(n)) {
+                Some(row) if current_for(&row.note, row.whole, n) => {
+                    if redate {
+                        row.date.set_text(&fmt_date(text(n, "updated_at")));
+                    }
+                    row
+                }
+                Some(mut row) => {
+                    if rebind(&mut row, n) {
+                        if redate {
+                            row.date.set_text(&fmt_date(text(n, "updated_at")));
+                        }
+                        row
+                    } else {
+                        stale.push(row.row);
+                        build_row(n)
+                    }
+                }
+                None => build_row(n),
+            })
+            .collect();
+        stale.extend(old.into_values().map(|r| r.row));
+        let widgets: Vec<gtk::ListBoxRow> = rows.iter().map(|r| r.row.clone()).collect();
+        *shell.rows.borrow_mut() = rows;
+        // Rows only: `remove_all` would also try the row menu parented to the list and, in GTK
+        // 4.22, retry it forever ("Tried to remove non-child").
+        for row in &stale {
+            shell.list.remove(row);
+        }
+        for (index, row) in widgets.iter().enumerate() {
+            if shell.list.row_at_index(index as i32).as_ref() != Some(row) {
+                if row.parent().is_some() {
+                    shell.list.remove(row);
+                }
+                shell.list.insert(row, index as i32);
+            }
+        }
     }
-    shell.search.set_placeholder_text(Some(&match notes.len() {
+    let hint = match notes.len() {
         0 => "Search notes".to_string(),
         1 => "Search 1 note".to_string(),
         n => format!("Search {n} notes"),
-    }));
+    };
+    if shell.search.placeholder_text().as_deref() != Some(hint.as_str()) {
+        shell.search.set_placeholder_text(Some(&hint));
+    }
     shell.any_pinned.set(notes.iter().any(|n| n["pinned"] == true));
     update_placeholder(shell);
-    shell.list.invalidate_filter();
+    // Each inserted row was filtered as it went in, and a kept row's text did not change.
+    if !shell.search.text().trim().is_empty() {
+        shell.list.invalidate_filter();
+    }
     shell.list.invalidate_headers();
     select_active_row(ui, shell);
     glib::idle_add_local_once(move || adjustment.set_value(keep));
@@ -1564,17 +1891,29 @@ fn listed(id: i64) -> Option<Value> {
 }
 
 pub(super) fn open_id(ui: &Rc<Ui>, id: i64, rename: bool) {
-    let Some(note) = doc_by_id(id).map(|d| d.draft.base.borrow().clone()).or_else(|| listed(id)) else {
-        return;
-    };
-    edit(ui, note);
-    if let Some(doc) = doc_by_id(id) {
-        if rename {
-            doc.title.grab_focus();
-            doc.title.select_region(0, -1);
-        } else {
-            doc.view.grab_focus();
+    open_then(ui, id, rename, |_, _| {});
+}
+
+/// Open note `id` (reading it whole first when it is not at hand), focus it, then `then`.
+fn open_then(ui: &Rc<Ui>, id: i64, rename: bool, then: impl FnOnce(&Rc<Ui>, i64) + 'static) {
+    let shown = move |ui: &Rc<Ui>, note: Value| {
+        edit(ui, note);
+        if let Some(doc) = doc_by_id(id) {
+            if rename {
+                doc.title.grab_focus();
+                doc.title.select_region(0, -1);
+            } else {
+                doc.view.grab_focus();
+            }
         }
+        then(ui, id);
+    };
+    match doc_by_id(id) {
+        Some(doc) => {
+            let note = doc.draft.base.borrow().clone();
+            shown(ui, note);
+        }
+        None => with_full(ui, id, shown),
     }
 }
 
@@ -1595,48 +1934,47 @@ pub(super) fn pin_id(ui: &Rc<Ui>, id: i64) {
 }
 
 pub(super) fn duplicate_id(ui: &Rc<Ui>, id: i64) {
-    let (title, body) = match doc_by_id(id) {
-        Some(doc) => (doc.title.text().to_string(), doc.body()),
-        None => match listed(id) {
-            Some(note) => (text(&note, "title").to_string(), text(&note, "body").to_string()),
-            None => return,
-        },
-    };
-    new_note(ui, text::copy_title(&title), body);
+    match doc_by_id(id) {
+        Some(doc) => new_note(ui, text::copy_title(&doc.title.text()), doc.body()),
+        None => with_full(ui, id, |ui, note| {
+            new_note(ui, text::copy_title(text(&note, "title")), text(&note, "body").to_string())
+        }),
+    }
 }
 
 /// The library's "Create task from note": open the note, then file it as a task.
 pub(super) fn task_id(ui: &Rc<Ui>, id: i64) {
-    open_id(ui, id, false);
-    if let Some(doc) = doc_by_id(id) {
-        doc::to_task(ui, &doc);
-    }
+    open_then(ui, id, false, |ui, id| {
+        if let Some(doc) = doc_by_id(id) {
+            doc::to_task(ui, &doc);
+        }
+    });
 }
 
 pub(super) fn copy_id(ui: &Rc<Ui>, id: i64) {
-    let body = match doc_by_id(id) {
-        Some(doc) => doc.body(),
-        None => match listed(id) {
-            Some(note) => text(&note, "body").to_string(),
-            None => return,
-        },
+    let copy = |ui: &Rc<Ui>, body: &str| {
+        if let Some(shell) = shell_if_built() {
+            shell.list.clipboard().set_text(body);
+        }
+        if let Some(doc) = current_doc(ui) {
+            doc.flash("Note text copied");
+        }
     };
-    if let Some(shell) = shell_if_built() {
-        shell.list.clipboard().set_text(&body);
-    }
-    if let Some(doc) = current_doc(ui) {
-        doc.flash("Note text copied");
+    match doc_by_id(id) {
+        Some(doc) => copy(ui, &doc.body()),
+        None => with_full(ui, id, move |ui, note| copy(ui, text(&note, "body"))),
     }
 }
 
 pub(super) fn delete_id(ui: &Rc<Ui>, id: i64) {
-    let name = match doc_by_id(id) {
-        Some(doc) => doc.name(),
-        None => listed(id).map_or_else(|| "this note".into(), |n| {
-            text::display_title(&text::clean(text(&n, "title")), &text::clean(text(&n, "body")))
+    match doc_by_id(id) {
+        Some(doc) => confirm_delete(ui, id, doc.name()),
+        None if listed(id).is_none() => confirm_delete(ui, id, "this note".into()),
+        None => with_full(ui, id, move |ui, n| {
+            let name = text::display_title(&text::clean(text(&n, "title")), &text::clean(text(&n, "body")));
+            confirm_delete(ui, id, name);
         }),
-    };
-    confirm_delete(ui, id, name);
+    }
 }
 
 pub(super) fn confirm_delete(ui: &Rc<Ui>, id: i64, name: String) {
@@ -1693,12 +2031,24 @@ pub fn workspace(ui: &Rc<Ui>, _name: &str, project: i64, notes: &[Value]) {
     let fresh = changed || shell.notes.borrow().as_slice() != notes;
     if fresh {
         *shell.notes.borrow_mut() = notes.to_vec();
+        // Whole copies are kept for what the library lists and what is open, no more.
+        let listed: HashSet<i64> = notes.iter().map(note_id).collect();
+        FULL.with(|full| full.borrow_mut().retain(|id, _| listed.contains(id) || doc_by_id(*id).is_some()));
     }
     for doc in docs() {
         let mine = doc.project == project;
         doc.draft.layout.set_visible(mine || doc.orphan.get());
         if mine {
-            doc::reconcile(ui, &doc, notes.iter().find(|n| n["id"].as_i64() == Some(doc.id)));
+            // The list holds previews: an open note is reconciled with its whole stored copy,
+            // which the refresh read first. One it could not read waits for the next refresh.
+            match notes.iter().find(|n| n["id"].as_i64() == Some(doc.id)) {
+                Some(listed) => {
+                    if let Some(latest) = full_note(listed) {
+                        doc::reconcile(ui, &doc, Some(&latest));
+                    }
+                }
+                None => doc::reconcile(ui, &doc, None),
+            }
         }
     }
     if changed {
@@ -1715,16 +2065,16 @@ pub fn workspace(ui: &Rc<Ui>, _name: &str, project: i64, notes: &[Value]) {
             Some(entry) => {
                 for id in rows(entry, "open").iter().filter_map(Value::as_i64) {
                     if doc_by_id(id).is_none() {
-                        if let Some(note) = notes.iter().find(|n| n["id"].as_i64() == Some(id)) {
-                            open_doc(ui, note.clone(), None);
+                        if let Some(note) = notes.iter().find(|n| n["id"].as_i64() == Some(id)).and_then(full_note) {
+                            open_doc(ui, note, None);
                         }
                     }
                 }
             }
             None => {
                 if !docs().iter().any(|d| d.project == project) {
-                    if let Some(note) = notes.first() {
-                        open_doc(ui, note.clone(), None);
+                    if let Some(note) = notes.first().and_then(full_note) {
+                        open_doc(ui, note, None);
                     }
                 }
             }

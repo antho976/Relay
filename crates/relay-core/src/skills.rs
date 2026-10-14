@@ -296,6 +296,10 @@ pub fn apply(plan: &Plan, store: &crate::Store) -> Result<()> {
     let owner = owner_line(store);
     let mut written: Vec<String> = Vec::new();
     for (base, plugins) in &plan.bases {
+        if let Some(repo) = plan.repo.as_ref().filter(|repo| !inside_checkout(repo, base)) {
+            tracing::warn!(repo = %repo.display(), base = %base.display(), "a skills folder in this checkout is a symlink; not writing skills through it");
+            continue;
+        }
         let rows: Vec<&Row> = plan.rows.iter().filter(|row| *plugins || !matches!(row.source, Source::Plugin(_))).collect();
         prune(base, &rows, &owner);
         for row in rows {
@@ -381,6 +385,25 @@ pub fn refresh_all(engine: &crate::engine::Engine) {
     }
 }
 
+/// Whether `base` lies under `repo` through real directories only (those not made yet count, and
+/// are made as directories). A checkout is the agent's or a cloned repository's: a `.claude` or
+/// `skills` committed as a symlink would send Relay's writes and prunes outside it. The same
+/// check as `hooks::real_dir`, which replaces the link instead; a skills folder is the
+/// repository's to keep, so here nothing is written.
+fn inside_checkout(repo: &Path, base: &Path) -> bool {
+    let Ok(relative) = base.strip_prefix(repo) else { return false };
+    let mut dir = repo.to_path_buf();
+    for part in relative.components() {
+        let std::path::Component::Normal(part) = part else { return false };
+        dir.push(part);
+        match fs::symlink_metadata(&dir) {
+            Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
 /// The first line of every marker this store writes. Two instances (dev and stable) share the
 /// machine-wide folders and often the same checkouts; each prunes only what it wrote.
 fn owner_line(store: &crate::Store) -> String {
@@ -388,21 +411,28 @@ fn owner_line(store: &crate::Store) -> String {
 }
 
 /// Whether a folder's marker says this store wrote it. A marker from before owners were
-/// recorded counts as anyone's, which is how every store treated it then.
+/// recorded counts as anyone's, which is how every store treated it then. Markers sit in the
+/// agent's checkout and are read under [`apply`]'s lock: a FIFO, a link or a huge file there
+/// is no marker, and is not waited on.
 fn owned(marker: &Path, owner: &str) -> bool {
-    fs::read_to_string(marker).is_ok_and(|text| !text.starts_with("owner ") || text.starts_with(owner))
+    crate::private::read_regular(marker).is_ok_and(|text| !text.starts_with("owner ") || text.starts_with(owner))
 }
 
 /// Returns whether the folder is Relay's to write (a checked-in skill of the same name wins).
 /// A folder another store wrote is rewritten when this one has a skill there too, and from
 /// then on it is this store's to prune.
 fn write_skill(store: &crate::Store, row: &Row, dest: &Path, owner: &str) -> Result<bool> {
+    // A symlink of the skill's name is someone else's, like a checked-in folder; writing would
+    // follow it.
+    if fs::symlink_metadata(dest).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Ok(false);
+    }
     let marker = dest.join(MARKER);
     if dest.exists() && !marker.is_file() {
         return Ok(false);
     }
     let stamp = format!("{owner}{}assets {}\n", row.stamp, assets_version(store, &row.source));
-    if fs::read_to_string(&marker).is_ok_and(|current| current == stamp) {
+    if crate::private::read_regular(&marker).is_ok_and(|current| current == stamp) {
         return Ok(true);
     }
     // A half-written folder must not survive: without its marker the next pass would read it
@@ -444,7 +474,8 @@ fn prune(base: &Path, rows: &[&Row], owner: &str) {
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if !owned(&path.join(MARKER), owner) || rows.iter().any(|row| row.dir == name) {
+        // Only real folders: a link's marker would be read from wherever it points.
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) || !owned(&path.join(MARKER), owner) || rows.iter().any(|row| row.dir == name) {
             continue;
         }
         let _ = fs::remove_dir_all(&path);
@@ -460,6 +491,20 @@ mod tests {
         assert_eq!(folder_name("  Impeccable  "), "impeccable");
         assert_eq!(folder_name("Review Carefully!"), "review-carefully");
         assert_eq!(folder_name("///"), "skill");
+    }
+
+    /// A marker in the checkout is read under `apply`'s lock: a FIFO there is no marker, and a
+    /// prune or a rewrite never waits on it.
+    #[test]
+    fn a_planted_fifo_marker_is_not_waited_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join(MARKER);
+        let name = std::ffi::CString::new(marker.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o644) }, 0);
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || done.send(owned(&marker, "owner x\n")).unwrap());
+        let owned = finished.recv_timeout(std::time::Duration::from_secs(10)).expect("a read blocked on a planted FIFO");
+        assert!(!owned, "a FIFO counted as a marker");
     }
 
     #[test]
@@ -608,6 +653,38 @@ mod tests {
         assert!(base.join("other-instance").is_dir(), "pruned a folder another Relay store wrote");
         assert!(!base.join("before-owners").exists());
         assert!(!base.join("mine").exists());
+    }
+
+    /// A crafted repository's `.claude` (or `.agents/skills`) symlinked elsewhere does not carry
+    /// Relay's writes and prunes there, and neither does a skill folder that is a link.
+    #[test]
+    fn symlinks_in_a_checkout_do_not_redirect_skill_folders() {
+        let (store, root) = store_with(&["Polish"]);
+        let checkout = root.path().join("checkout");
+        let outside = root.path().join("outside");
+        fs::create_dir_all(outside.join("skills/victim")).unwrap();
+        fs::write(outside.join("skills/victim").join(MARKER), format!("{}1 t \n", owner_line(&store))).unwrap();
+        fs::create_dir_all(checkout.join(".agents")).unwrap();
+        std::os::unix::fs::symlink(&outside, checkout.join(".claude")).unwrap();
+        std::os::unix::fs::symlink(outside.join("skills"), checkout.join(".agents/skills")).unwrap();
+        let plan = plan(&store.lock(), &checkout, 1).unwrap();
+        apply(&plan, &store).unwrap();
+        assert!(outside.join("skills/victim").is_dir(), "a prune followed a symlink out of the checkout");
+        assert!(!outside.join("skills/polish").exists(), "a skill was written through a symlink");
+
+        // Real folders, but the skill's own folder and a stale one are links.
+        let (store, root) = store_with(&["Polish"]);
+        let base = root.path().join("checkout/.claude/skills");
+        let outside = root.path().join("outside");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(outside.join("stale")).unwrap();
+        fs::write(outside.join("stale").join(MARKER), format!("{}1 t \n", owner_line(&store))).unwrap();
+        fs::write(outside.join("stale/work.md"), "keep").unwrap();
+        std::os::unix::fs::symlink(outside.join("stale"), base.join("stale")).unwrap();
+        std::os::unix::fs::symlink(&outside, base.join("polish")).unwrap();
+        apply_project(&store, root.path());
+        assert!(outside.join("stale/work.md").is_file());
+        assert!(!outside.join("SKILL.md").exists(), "a skill was written through its folder's link");
     }
 
     #[test]

@@ -68,5 +68,11 @@ else is answered by the door (`bus.actor` for a wrong actor, `refused` / `remote
 op outside the list). A line that passes is written to the Unix socket unchanged; every line
 back is forwarded as-is, `pty` frames included. The door adds pairing and a per-connection
 proof of the device token; it adds no ops. The PC dials the rendezvous with the room secret
-in an `Authorization: Bearer` header, retrying once with `?secret=` for an older server. See
+in an `Authorization: Bearer` header, retrying once with `?secret=` only when an older server
+refuses it in its own words. The greeting before the proof carries only the challenge and what
+the handshake needs; the PC's name, id, version and Wake-on-LAN targets come in the welcome. The
+rendezvous hosts only the rooms its operator lists, or without a list caps the rooms it does not
+remember and remembers a room only once a host has held it a few minutes (when full, forgetting
+the one useful least recently that has no host now). It caps per address what has not yet said
+hello, never counting a loopback, private or link-local peer: that is a proxy. See
 `docs/MOBILE.md`.

@@ -13,6 +13,7 @@ use relay_bus::Empty;
 use rusqlite::{params, OptionalExtension, Row, Transaction};
 use serde_json::json;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub(crate) fn column_str(value: Column) -> &'static str {
     match value {
@@ -290,9 +291,9 @@ pub(crate) fn row_task(tx: &rusqlite::Connection, row: &Row) -> Result<Task, rus
 
 /// Fill in what lives beside the task rows — sessions, commits, attachments, labels, relations
 /// and children — with one statement each for the whole batch, the ids passed as one JSON
-/// array, then the roll-up and depth, which walk the tree per task. `task.list` ran each of
-/// those per task, seven statements a row (RA-412); `task.get` goes through here with one id,
-/// so a task reads the same either way. The ids must be distinct. Every statement is
+/// array, then the roll-up and depth, walked over the projects' task tree read once ([`Tree`]).
+/// `task.list` ran each of those per task, seven statements a row (RA-412); `task.get` goes
+/// through here with one id, so a task reads the same either way. The ids must be distinct. Every statement is
 /// `prepare_cached` (PERF §1.2).
 pub(crate) fn hydrate(tx: &rusqlite::Connection, tasks: &mut [Task]) -> rusqlite::Result<()> {
     if tasks.is_empty() {
@@ -341,11 +342,90 @@ pub(crate) fn hydrate(tx: &rusqlite::Connection, tasks: &mut [Task]) -> rusqlite
             tasks[at[&id]].module_name.get_or_insert(name);
         }
     }
-    for task in tasks.iter_mut() {
+    if tasks.len() == 1 {
+        let task = &mut tasks[0];
         task.rollup = rollup_of(tx, task.id, &task.children)?;
         task.depth = depth_of(tx, task.id)?;
+        return Ok(());
+    }
+    // A page reads its projects' task tree once and walks it in memory: per task, the walks
+    // below cost a statement for every ancestor and two for every descendant.
+    let projects = serde_json::to_string(&tasks.iter().map(|t| t.project_id).collect::<std::collections::BTreeSet<_>>())
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let tree = Tree::read(tx, &projects)?;
+    for task in tasks.iter_mut() {
+        task.rollup = tree.rollup(task.id, &task.children);
+        task.depth = tree.depth(tx, task.id)?;
     }
     Ok(())
+}
+
+/// Every task of some projects, deleted ones included, as `parent_id`, `col` and the live
+/// children in board order: what [`rollup_of`] and [`depth_of`] read row by row. A sub-task stays
+/// in its parent's project (`assert_parent`), so a project's rows hold every subtree in it.
+struct Tree {
+    rows: std::collections::HashMap<Id, (Option<Id>, bool)>,
+    children: std::collections::HashMap<Id, Vec<Id>>,
+}
+
+impl Tree {
+    fn read(tx: &rusqlite::Connection, projects: &str) -> rusqlite::Result<Self> {
+        let mut stmt = tx.prepare_cached(
+            "SELECT id, parent_id, col='done', deleted_at IS NULL FROM tasks WHERE project_id IN (SELECT value FROM json_each(?1)) ORDER BY position,id",
+        )?;
+        let mut rows = std::collections::HashMap::new();
+        let mut children: std::collections::HashMap<Id, Vec<Id>> = std::collections::HashMap::new();
+        let mut query = stmt.query([projects])?;
+        while let Some(row) = query.next()? {
+            let (id, parent, done, live): (Id, Option<Id>, bool, bool) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?);
+            rows.insert(id, (parent, done));
+            if let (Some(parent), true) = (parent, live) {
+                children.entry(parent).or_default().push(id);
+            }
+        }
+        Ok(Self { rows, children })
+    }
+
+    /// [`rollup_of`] over the tree read once.
+    fn rollup(&self, id: Id, children: &[Id]) -> TaskRollup {
+        let mut rollup = TaskRollup::default();
+        let mut counted: std::collections::HashSet<Id> = std::collections::HashSet::from([id]);
+        let mut frontier = children.to_vec();
+        while let Some(current) = frontier.pop() {
+            if !counted.insert(current) {
+                continue;
+            }
+            rollup.total += 1;
+            if self.rows.get(&current).is_some_and(|(_, done)| *done) {
+                rollup.done += 1;
+            }
+            frontier.extend(self.children.get(&current).into_iter().flatten().copied());
+        }
+        rollup
+    }
+
+    /// [`depth_of`] over the tree read once; a parent outside it is read from the store.
+    fn depth(&self, tx: &rusqlite::Connection, task_id: Id) -> rusqlite::Result<i64> {
+        let mut depth = 0;
+        let mut cursor = task_id;
+        loop {
+            let parent = match self.rows.get(&cursor) {
+                Some((parent, _)) => *parent,
+                None => tx
+                    .prepare_cached("SELECT parent_id FROM tasks WHERE id=?1")?
+                    .query_row([cursor], |r| r.get::<_, Option<Id>>(0))
+                    .optional()?
+                    .flatten(),
+            };
+            let Some(parent) = parent else { break };
+            depth += 1;
+            cursor = parent;
+            if depth > TASK_DEPTH_MAX {
+                break;
+            }
+        }
+        Ok(depth)
+    }
 }
 
 /// Roll-up walks the subtree here rather than in a recursive CTE so it counts exactly the
@@ -567,42 +647,8 @@ fn safe_name(name: &str) -> Result<String, BusError> {
     Ok(name.to_string())
 }
 
-fn attach_bytes(
-    ctx: &mut Ctx,
-    task: &Task,
-    name: &str,
-    mime: &str,
-    bytes: &[u8],
-) -> Result<Attachment, BusError> {
-    let name = safe_name(name)?;
-    if bytes.is_empty() {
-        return Err(BusError::invalid(
-            "task.attachment_empty",
-            "attachment cannot be empty",
-        ));
-    }
-    ctx.tx().execute("INSERT INTO attachments(task_id,name,mime,bytes,path,created_at) VALUES (?1,?2,?3,?4,'',?5)", params![task.id, name, mime, bytes.len() as i64, ctx.now]).bus()?;
-    let id = ctx.tx().last_insert_rowid();
-    let dir = attachment_root(ctx.engine()).join(task.id.to_string());
-    std::fs::create_dir_all(&dir).bus()?;
-    let path = dir.join(format!("{id}-{name}"));
-    let recorded = std::fs::write(&path, bytes).bus().and_then(|()| {
-        ctx.tx()
-            .execute(
-                "UPDATE attachments SET path=?1 WHERE id=?2",
-                params![path.display().to_string(), id],
-            )
-            .and_then(|_| ctx.tx().query_row("SELECT * FROM attachments WHERE id=?1", [id], attachment_row))
-            .bus()
-    });
-    if recorded.is_err() {
-        let _ = std::fs::remove_file(&path);
-    }
-    recorded
-}
-
-/// An attachment copied into `attachments/.staging` by `task.attach`'s read phase. Removed on
-/// drop unless [`attach_staged`] has already renamed it into place.
+/// An attachment copied into `attachments/.staging` by `task.attach`'s or `task.create`'s read
+/// phase. Removed on drop unless [`attach_staged`] has already renamed it into place.
 struct StagedFile(PathBuf);
 
 impl Drop for StagedFile {
@@ -618,7 +664,7 @@ struct PreparedAttach {
     bytes: u64,
 }
 
-/// [`attach_bytes`] for a file already staged: the row, and a rename instead of a write.
+/// Record a staged attachment on `task` and rename its copy into place.
 fn attach_staged(ctx: &mut Ctx, task: &Task, prepared: PreparedAttach) -> Result<Attachment, BusError> {
     let PreparedAttach { staged, name, mime, bytes } = prepared;
     ctx.tx().execute("INSERT INTO attachments(task_id,name,mime,bytes,path,created_at) VALUES (?1,?2,?3,?4,'',?5)", params![task.id, name, mime, bytes as i64, ctx.now]).bus()?;
@@ -818,7 +864,41 @@ fn launch_op(name: &str, state: relay_bus::types::SessionState) -> Result<Option
 /// so the fetch and checkout never run under the store lock).
 struct PreparedDispatch {
     children: Vec<Id>,
-    created: Vec<String>,
+    created: Created,
+}
+
+/// The sessions a dispatch created, until its commit lands. Dropped unkept — the transaction
+/// failed (a sub-task deleted while it prepared) or never committed — they are closed with their
+/// checkouts, like a failed prepare's (RA-405). The transaction hands this to
+/// [`Ctx::after_commit`], which keeps it; a failure drops it unrun, perhaps with the store
+/// lock still held, so the closing runs on a thread of its own, which waits for the lock.
+struct Created {
+    engine: Option<Arc<Engine>>,
+    names: Vec<String>,
+    kept: bool,
+}
+
+impl Created {
+    fn keep(mut self) {
+        self.kept = true;
+    }
+}
+
+impl Drop for Created {
+    fn drop(&mut self) {
+        if self.kept || self.names.is_empty() {
+            return;
+        }
+        let names = std::mem::take(&mut self.names);
+        let Some(engine) = self.engine.take() else {
+            tracing::error!(sessions = ?names, "a dispatch that did not commit could not close the sessions it created");
+            return;
+        };
+        let spawned = std::thread::Builder::new().name("dispatch-discard".into()).spawn(move || discard_created(&engine, &names));
+        if let Err(error) = spawned {
+            tracing::error!(%error, "a dispatch that did not commit could not close the sessions it created");
+        }
+    }
 }
 
 /// Close sessions this dispatch created when it cannot go on; their checkouts go with them.
@@ -880,7 +960,26 @@ const TASK_PAGE: u32 = 1000;
 const TASK_PAGE_MAX: u32 = 2000;
 
 pub fn register(e: &mut Engine) {
-    e.register::<Create>(|ctx: &mut Ctx, p| {
+    // Staged (D149, RA-190) like task.attach: inline attachments, up to the bus's line limit,
+    // are decoded and written into the attachment store's staging area with the lock released;
+    // the transaction records them and renames each copy into place.
+    e.register_staged::<Create, Vec<PreparedAttach>>(|ctx, p| {
+        let Some(inputs) = p.attachments.as_ref().filter(|inputs| !inputs.is_empty()) else { return Ok(Vec::new()) };
+        // What the transaction would refuse first is refused before anything is decoded.
+        ctx.read(|conn| crate::handlers::workspace::get_project(conn, p.project_id))?;
+        if p.title.trim().is_empty() { return Err(BusError::invalid("task.title", "task title cannot be empty")) }
+        let staging = attachment_root(ctx.engine()).join(".staging");
+        std::fs::create_dir_all(&staging).bus()?;
+        inputs.iter().map(|input| {
+            let bytes = base64::engine::general_purpose::STANDARD.decode(&input.bytes_b64)
+                .map_err(|_| BusError::invalid("task.attachment_base64", "attachment bytes_b64 is invalid"))?;
+            let name = safe_name(&input.name)?;
+            if bytes.is_empty() { return Err(BusError::invalid("task.attachment_empty", "attachment cannot be empty")) }
+            let staged = StagedFile(staging.join(uuid::Uuid::new_v4().to_string()));
+            std::fs::write(&staged.0, &bytes).bus()?;
+            Ok(PreparedAttach { staged, name, mime: input.mime.clone(), bytes: bytes.len() as u64 })
+        }).collect()
+    }, |ctx: &mut Ctx, p, staged| {
         crate::handlers::workspace::get_project(ctx.tx(), p.project_id)?;
         let title = p.title.trim();
         if title.is_empty() { return Err(BusError::invalid("task.title", "task title cannot be empty")) }
@@ -902,14 +1001,12 @@ pub fn register(e: &mut Engine) {
         let id = ctx.tx().last_insert_rowid();
         let mut task = get_task(ctx.tx(), id, false)?;
         if let Some(labels) = p.labels.as_ref() { set_labels(ctx, &task, labels)?; }
-        // The files are written before the transaction commits: one this request wrote is
-        // removed again when a later attachment refuses and the rows roll back (RA-409).
+        // The copies are renamed into place before the transaction commits: one this request
+        // placed is removed again when a later one fails and the rows roll back (RA-409); those
+        // not yet placed go with their staging.
         let mut written = Vec::new();
-        for input in p.attachments.unwrap_or_default() {
-            let stored = base64::engine::general_purpose::STANDARD.decode(&input.bytes_b64)
-                .map_err(|_| BusError::invalid("task.attachment_base64", "attachment bytes_b64 is invalid"))
-                .and_then(|bytes| attach_bytes(ctx, &task, &input.name, &input.mime, &bytes));
-            match stored {
+        for prepared in staged {
+            match attach_staged(ctx, &task, prepared) {
                 Ok(attachment) => written.push(PathBuf::from(attachment.path)),
                 Err(error) => {
                     for path in &written { let _ = std::fs::remove_file(path); }
@@ -1109,7 +1206,13 @@ pub fn register(e: &mut Engine) {
 
     e.register::<Move>(|ctx: &mut Ctx,p| {
         let before=get_task(ctx.tx(),p.task_id,false)?;
-        if ctx.actor.is_agent() && !(before.column==Column::Active && p.column==Column::InReview) { return Err(BusError::conflict("task.column_transition","agents may only move their active task to in_review")) }
+        // An agent hands its task to review with session.done, which judges the branch first
+        // (BUS.md §9.2), waits for the task's other builders and tells the reviewer. A move
+        // straight to in_review skipped all three, so the board is the person's alone.
+        if ctx.actor.is_agent() {
+            return Err(BusError::conflict("task.column_transition", "agents do not move tasks; hand yours to review with session.done")
+                .with_hint("Call session.done {summary}: it checks the branch against the guardrails and moves the task to in_review."));
+        }
         // Done means a commit is linked, and task.approve is what links one. A task that already
         // has one — it left Done, and this is that move undone — may go straight back; refusing
         // it made every move out of Done un-undoable and jammed the board's Ctrl+Z (RA-189).
@@ -1370,7 +1473,7 @@ pub fn register(e: &mut Engine) {
             }
             Ok(children)
         })?;
-        let mut created = Vec::new();
+        let mut created = Created { engine: ctx.engine().arc(), names: Vec::new(), kept: false };
         if let Some(template) = &p.create {
             for at in 0..=children.len() {
                 let mut create = template.clone();
@@ -1388,9 +1491,10 @@ pub fn register(e: &mut Engine) {
                     crate::engine::Door::InProcess,
                 );
                 match out.into_result() {
-                    Ok(session) => created.push(session["name"].as_str().unwrap_or_default().to_string()),
+                    Ok(session) => created.names.push(session["name"].as_str().unwrap_or_default().to_string()),
                     Err(error) => {
-                        discard_created(ctx.engine(), &created);
+                        // Unlocked here, so closed before the refusal answers.
+                        discard_created(ctx.engine(), &std::mem::take(&mut created.names));
                         return Err(error);
                     }
                 }
@@ -1400,7 +1504,7 @@ pub fn register(e: &mut Engine) {
     }, |ctx: &mut Ctx, p, prepared| {
         let start = p.start.unwrap_or(true);
         let PreparedDispatch { children, created } = prepared;
-        let mut names = created.iter().cloned();
+        let mut names = created.names.clone().into_iter();
         let main = match p.session.clone() {
             Some(name) => name,
             None => names.next().ok_or_else(|| BusError::internal("dispatch created no session"))?,
@@ -1420,6 +1524,13 @@ pub fn register(e: &mut Engine) {
             launches.extend(launch.map(|op| (op, name.clone())));
             fanned.push(Dispatched { task, session });
         }
+        // Committed, the sessions are the tasks' — but one made for a sub-task that was done
+        // by then has no task, and goes. Not committed, every one goes ([`Created`]).
+        let unused: Vec<String> = names.collect();
+        ctx.after_commit(move |engine| {
+            created.keep();
+            discard_created(&engine, &unused);
+        });
         // Each launch is its own request, after the commit and before the reply, so a client
         // that attaches as soon as the dispatch answers finds the PTY. A launch that fails then
         // has nobody to answer: it is audited, and said in a notification.

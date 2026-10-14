@@ -258,3 +258,76 @@ fn restore_head_takes_a_bracketed_name_literally() {
         assert_eq!(std::fs::read_to_string(f.repo.join(name)).unwrap(), "edited\n", "{name} was discarded");
     }
 }
+
+/// `audit.undo` of a directory delete restores it through `file.restore`'s staged path — the
+/// checkout check and the walk of the trashed tree before the transaction — and a second undo of
+/// the same row is refused.
+#[test]
+fn undoing_a_directory_delete_restores_it_once() {
+    let f = Fixture::new();
+    let e = &f.engine;
+    ok(e, "file.create", json!({"project_id": 1, "path": "docs/a.txt", "kind": "file", "text": "a\n"}));
+    ok(e, "file.create", json!({"project_id": 1, "path": "docs/inner/b.txt", "kind": "file", "text": "b\n"}));
+    ok(e, "file.delete", json!({"project_id": 1, "path": "docs"}));
+    assert!(!f.repo.join("docs").exists());
+    let row = ok(e, "audit.list", json!({"op_prefix": "file.delete", "limit": 1}))["rows"][0].clone();
+    let undone = ok(e, "audit.undo", json!({"audit_id": row["id"]}));
+    assert_eq!(undone["undone"], row["id"]);
+    assert_eq!(std::fs::read_to_string(f.repo.join("docs/a.txt")).unwrap(), "a\n");
+    assert_eq!(std::fs::read_to_string(f.repo.join("docs/inner/b.txt")).unwrap(), "b\n");
+    assert_eq!(refused(e, Actor::User, "audit.undo", json!({"audit_id": row["id"]})).code, "audit.not_undoable");
+}
+
+/// An inverse's read/external phase runs only for an undo that will happen: undoing a branch
+/// rename whose branch was renamed again since is stale, and renames nothing.
+#[test]
+fn a_stale_undo_runs_nothing_of_its_inverse() {
+    let f = Fixture::new();
+    let e = &f.engine;
+    let session = ok(e, "session.create", json!({"project_id": 1, "provider": "claude"}));
+    let name = session["name"].as_str().unwrap();
+    let worktree = PathBuf::from(session["worktree"].as_str().unwrap());
+    ok(e, "session.update", json!({"session": name, "branch": "relay/first"}));
+    let row = ok(e, "audit.list", json!({"op_prefix": "session.update", "limit": 1}))["rows"][0].clone();
+    ok(e, "session.update", json!({"session": name, "branch": "relay/second"}));
+    assert_eq!(refused(e, Actor::User, "audit.undo", json!({"audit_id": row["id"]})).code, "audit.stale");
+    assert_eq!(git(&worktree, &["branch", "--show-current"]), "relay/second");
+    assert_eq!(ok(e, "session.get", json!({"session": name}))["branch"], "relay/second");
+}
+
+/// RA-190 for `task.create`: inline attachments are decoded and staged before the transaction,
+/// which only renames them into place; a create refused inside it leaves no copy behind.
+#[test]
+fn create_with_inline_attachments_stages_them_and_cleans_up() {
+    use base64::Engine as _;
+    let f = Fixture::new();
+    let e = &f.engine;
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let attachments = f.root.path().join("store/attachments");
+    let staging = attachments.join(".staging");
+    let task = ok(e, "task.create", json!({"project_id": 1, "title": "With files", "attachments": [
+        {"name": "one.txt", "mime": "text/plain", "bytes_b64": b64(b"one")},
+        {"name": "dir/two.bin", "mime": "application/octet-stream", "bytes_b64": b64(&[7u8; 4096])},
+    ]}));
+    let stored = task["attachments"].as_array().unwrap();
+    assert_eq!(stored.len(), 2);
+    assert_eq!((stored[0]["name"].as_str(), stored[0]["bytes"].as_u64()), (Some("one.txt"), Some(3)));
+    assert_eq!((stored[1]["name"].as_str(), stored[1]["bytes"].as_u64()), (Some("two.bin"), Some(4096)));
+    assert_eq!(std::fs::read(stored[0]["path"].as_str().unwrap()).unwrap(), b"one");
+    assert_eq!(std::fs::read(stored[1]["path"].as_str().unwrap()).unwrap(), vec![7u8; 4096]);
+    assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0, "a staged copy was left behind");
+
+    // Refused in the transaction, after its attachments were staged.
+    let error = refused(e, Actor::User, "task.create", json!({"project_id": 1, "title": "No module", "module_id": 999,
+        "attachments": [{"name": "three.txt", "mime": "text/plain", "bytes_b64": b64(b"three")}]}));
+    assert_eq!(error.kind, relay_bus::ErrorKind::NotFound, "{error:?}");
+    assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0, "a refused create left its copy");
+    let dirs: Vec<_> = std::fs::read_dir(&attachments).unwrap().flatten().map(|d| d.file_name()).collect();
+    assert_eq!(dirs.len(), 2, "only the first task's directory and the staging area: {dirs:?}");
+    // Refused before anything is staged: an empty one, and bytes that are not base64.
+    for (name, bytes) in [("empty.txt", String::new()), ("bad.txt", "not base64!".to_string())] {
+        refused(e, Actor::User, "task.create", json!({"project_id": 1, "title": "Bad",
+            "attachments": [{"name": name, "mime": "text/plain", "bytes_b64": bytes}]}));
+    }
+    assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0);
+}

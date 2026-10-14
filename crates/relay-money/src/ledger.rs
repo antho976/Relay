@@ -24,7 +24,7 @@ use jiff::ToSpan;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Bumped with every entry appended to [`MIGRATIONS`]; every earlier version must stay openable.
 pub const SCHEMA_VERSION: i64 = 4;
@@ -261,6 +261,22 @@ pub(crate) fn now_ms() -> i64 {
     jiff::Timestamp::now().as_millisecond()
 }
 
+/// How far ahead of this clock a device's stamp may be (docs/MONEY.md, "Sync"). A phone a few
+/// hours fast is ordinary; a stamp days ahead, or near the end of i64, is a broken clock or a
+/// forged change: no edit here could outrank it, and an edit's `+ 1` past i64 turned the column
+/// into a real that every later sync failed to read.
+pub const STAMP_AHEAD_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// Where the stamp arithmetic saturates, written out in the SQL as `MIN(updated_at,
+/// 4000000000000000) + 1`: the year 128,000, far past any clock and far from an overflow.
+pub const STAMP_CEILING: i64 = 4_000_000_000_000_000;
+
+/// A stamp this ledger takes from a device: 0 (what an older ledger's settings carry) to a day
+/// ahead of `now`. Tally's `SyncTables.stampOk`.
+pub fn stamp_ok(at: i64, now: i64) -> bool {
+    (0..=now.saturating_add(STAMP_AHEAD_MS)).contains(&at)
+}
+
 pub(crate) fn new_uid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -281,25 +297,52 @@ pub fn parse_date(s: &str) -> Option<Date> {
 /// interval, anchor, next date, end date.
 type DueRow = (i64, String, String, i64, i64, Option<i64>, Option<i64>, String, i64, String, String, Option<String>);
 
+/// A reminder whose day is over: id, frequency, interval, anchor, end date.
+type ReminderRow = (i64, String, i64, String, Option<String>);
+
+/// The most dates one bill posts in one pass, as Tally's `RecurringPoster.CATCH_UP_LIMIT`: a weekly
+/// bill a year overdue. A longer backlog is paid over the passes that follow, never dropped.
+pub const CATCH_UP_LIMIT: usize = 60;
+
 pub struct Ledger {
     pub(crate) conn: Connection,
+    /// The file, for the snapshot a replace keeps beside it (`sync.rs`); `None` in memory.
+    pub(crate) path: Option<PathBuf>,
 }
+
+/// 0600 on the ledger and its `-wal` and `-shm` files: every account, balance and payee, which
+/// other local users must not read where the folder lets them in. Run once the ledger is in WAL
+/// mode; later side files take the ledger's mode. A file someone else owns stays as it is.
+#[cfg(unix)]
+fn private(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    for side in ["", "-wal", "-shm"] {
+        let mut name = path.as_os_str().to_owned();
+        name.push(side);
+        let _ = std::fs::set_permissions(Path::new(&name), std::fs::Permissions::from_mode(0o600));
+    }
+}
+
+#[cfg(not(unix))]
+fn private(_path: &Path) {}
 
 impl Ledger {
     pub fn open(path: &Path) -> Result<Ledger> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        private(path);
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        Ledger::init(conn)
+        Ledger::init(conn, Some(path.to_path_buf()))
     }
 
     pub fn open_in_memory() -> Result<Ledger> {
-        Ledger::init(Connection::open_in_memory()?)
+        Ledger::init(Connection::open_in_memory()?, None)
     }
 
-    fn init(conn: Connection) -> Result<Ledger> {
-        let mut ledger = Ledger { conn };
+    fn init(conn: Connection, path: Option<PathBuf>) -> Result<Ledger> {
+        let mut ledger = Ledger { conn, path };
         ledger.migrate()?;
+        ledger.repair_stamps()?;
         Ok(ledger)
     }
 
@@ -317,6 +360,25 @@ impl Ledger {
         Ok(())
     }
 
+    /// Brings back a ledger a device stamped out of range before [`stamp_ok`] was checked: a stamp
+    /// more than a day ahead, or one an edit's `+ 1` overflowed into a real, becomes now. Such a row
+    /// could not be edited again, and every sync failed reading it. Renumbered by the change,
+    /// the rows go out again with their new stamps. Run on every open; it finds nothing after the
+    /// first.
+    fn repair_stamps(&mut self) -> Result<usize> {
+        let now = now_ms();
+        let tx = self.conn.transaction()?;
+        let mut n = 0;
+        for t in TABLES.iter().copied().chain(["tombstones", "settings"]) {
+            n += tx.execute(
+                &format!("UPDATE {t} SET updated_at = ?1 WHERE typeof(updated_at) <> 'integer' OR updated_at > ?2"),
+                params![now, now.saturating_add(STAMP_AHEAD_MS)],
+            )?;
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
     fn setting(&self, key: &str) -> Result<Option<String>> {
         Ok(self.conn.prepare_cached("SELECT value FROM settings WHERE key = ?1")?.query_row([key], |r| r.get(0)).optional()?)
     }
@@ -324,7 +386,7 @@ impl Ledger {
     fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
         conn.prepare_cached(
             "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = MAX(excluded.updated_at, settings.updated_at + 1)",
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = MAX(excluded.updated_at, MIN(settings.updated_at, 4000000000000000) + 1)",
         )?.execute(params![key, value, now_ms()])?;
         Ok(())
     }
@@ -590,14 +652,14 @@ impl Ledger {
         let note = p.note.as_deref().map(str::trim).unwrap_or(&cur.note).to_string();
         self.conn.prepare_cached(
             "UPDATE transactions SET type = ?2, amount = ?3, date = ?4, account_id = ?5, to_account_id = ?6,
-                    category_id = ?7, note = ?8, updated_at = MAX(?9, updated_at + 1) WHERE id = ?1",
+                    category_id = ?7, note = ?8, updated_at = MAX(?9, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1",
         )?.execute(params![id, name_of(&ty), amount, date, account, to, category, note, now_ms()])?;
         self.tx(id)
     }
 
     /// Deletes are tombstones, so sync can carry them to the other device.
     pub fn tx_delete(&mut self, id: i64) -> Result<()> {
-        let n = self.conn.prepare_cached("UPDATE transactions SET deleted = 1, updated_at = MAX(?2, updated_at + 1) WHERE id = ?1 AND deleted = 0")?
+        let n = self.conn.prepare_cached("UPDATE transactions SET deleted = 1, updated_at = MAX(?2, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1 AND deleted = 0")?
             .execute(params![id, now_ms()])?;
         if n == 0 {
             return Err(LedgerError::NotFound(format!("No entry {id}")));
@@ -607,7 +669,7 @@ impl Ledger {
 
     /// Brings back a deleted entry: the Undo of [`Ledger::tx_delete`].
     pub fn tx_restore(&mut self, id: i64) -> Result<Tx> {
-        let n = self.conn.prepare_cached("UPDATE transactions SET deleted = 0, updated_at = MAX(?2, updated_at + 1) WHERE id = ?1 AND deleted = 1")?
+        let n = self.conn.prepare_cached("UPDATE transactions SET deleted = 0, updated_at = MAX(?2, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1 AND deleted = 1")?
             .execute(params![id, now_ms()])?;
         if n == 0 {
             return Err(LedgerError::NotFound(format!("No deleted entry {id}")));
@@ -634,11 +696,11 @@ impl Ledger {
         }
         let now = now_ms();
         if amount <= 0 {
-            self.conn.prepare_cached("UPDATE budgets SET deleted = 1, updated_at = MAX(?2, updated_at + 1) WHERE category_id = ?1")?.execute(params![key, now])?;
+            self.conn.prepare_cached("UPDATE budgets SET deleted = 1, updated_at = MAX(?2, MIN(updated_at, 4000000000000000) + 1) WHERE category_id = ?1")?.execute(params![key, now])?;
         } else {
             self.conn.prepare_cached(
                 "INSERT INTO budgets (uid, category_id, amount, updated_at) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(category_id) DO UPDATE SET amount = excluded.amount, deleted = 0, updated_at = MAX(excluded.updated_at, budgets.updated_at + 1)",
+                 ON CONFLICT(category_id) DO UPDATE SET amount = excluded.amount, deleted = 0, updated_at = MAX(excluded.updated_at, MIN(budgets.updated_at, 4000000000000000) + 1)",
             )?.execute(params![new_uid(), key, amount, now])?;
         }
         Ok(())
@@ -657,10 +719,22 @@ impl Ledger {
     /// Once a phone syncs with this ledger, the phone posts bills and this ledger leaves them be:
     /// two devices posting the same bill at different times would each stamp it with their own
     /// time, and the later post would undo an edit or a delete made on the other side between.
+    ///
+    /// It also moves reminders on, as Tally's poster does: a reminder never posts, and nothing can
+    /// tell whether it was paid, so once its day is over it moves to its next date. Left in place
+    /// it would read as overdue for good. Reminders moved on are not counted: they post nothing.
     pub fn post_due(&mut self, today: Date) -> Result<usize> {
         if !self.synced_devices()?.is_empty() {
             return Ok(0);
         }
+        let reminders: Vec<ReminderRow> = {
+            let mut st = self.conn.prepare_cached(
+                "SELECT id, frequency, interval, anchor_date, end_date
+                 FROM recurring WHERE deleted = 0 AND active = 1 AND auto_post = 0 AND next_date < ?1",
+            )?;
+            let rows = st.query_map([today.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+            rows.collect::<std::result::Result<_, _>>()?
+        };
         let due: Vec<DueRow> = {
             let mut st = self.conn.prepare_cached(
                 "SELECT id, uid, type, amount, account_id, to_account_id, category_id, frequency, interval, anchor_date, next_date, end_date
@@ -674,6 +748,15 @@ impl Ledger {
         let mut posted = 0;
         let now = now_ms();
         let tx = self.conn.transaction()?;
+        for (id, freq, interval, anchor, end) in reminders {
+            let (Some(anchor), Some(freq)) = (parse_date(&anchor), parse_name::<Frequency>(&freq)) else {
+                continue;
+            };
+            let following = Recurrence::new(anchor, freq, interval.clamp(1, 52) as i32).on_or_after(today);
+            let active = end.as_deref().and_then(parse_date).is_none_or(|e| following <= e);
+            tx.prepare_cached("UPDATE recurring SET next_date = ?2, active = ?3, updated_at = MAX(?4, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1")?
+                .execute(params![id, following.to_string(), active, now])?;
+        }
         for (id, uid, ty, amount, account, to, category, freq, interval, anchor, next, end) in due {
             let (Some(anchor), Some(next), Some(freq)) = (parse_date(&anchor), parse_date(&next), parse_name::<Frequency>(&freq)) else {
                 continue;
@@ -681,16 +764,22 @@ impl Ledger {
             let rule = Recurrence::new(anchor, freq, interval.clamp(1, 52) as i32);
             let end = end.as_deref().and_then(parse_date);
             let through = end.map_or(today, |e| e.min(today));
-            for date in rule.between(next, through) {
+            // A category on a transfer bill, or a receiving account on any other, is a data slip
+            // the entry must not carry (Tally's poster drops them the same way).
+            let transfer = parse_name::<TxType>(&ty) == Some(TxType::Transfer);
+            let (to, category) = (to.filter(|_| transfer), category.filter(|_| !transfer));
+            let dates = rule.between_limited(next, through, CATCH_UP_LIMIT);
+            for date in &dates {
                 posted += tx.prepare_cached(
                     "INSERT OR IGNORE INTO transactions (uid, type, amount, date, account_id, to_account_id, category_id, note, recurring_id, created_at, updated_at)
                      SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, name, id, ?8, ?8 FROM recurring WHERE id = ?9
                        AND NOT EXISTS (SELECT 1 FROM tombstones WHERE tbl = 'transactions' AND uid = ?1)",
                 )?.execute(params![format!("bill:{uid}:{date}"), ty, amount, date.to_string(), account, to, category, now, id])?;
             }
-            let following = rule.after(today);
+            // After the last date posted, not after today: a capped catch-up resumes there next pass.
+            let following = rule.after(dates.last().copied().unwrap_or(today));
             let active = end.is_none_or(|e| following <= e);
-            tx.prepare_cached("UPDATE recurring SET next_date = ?2, active = ?3, updated_at = MAX(?4, updated_at + 1) WHERE id = ?1")?
+            tx.prepare_cached("UPDATE recurring SET next_date = ?2, active = ?3, updated_at = MAX(?4, MIN(updated_at, 4000000000000000) + 1) WHERE id = ?1")?
                 .execute(params![id, following.to_string(), active, now])?;
         }
         tx.commit()?;
@@ -814,33 +903,41 @@ impl Ledger {
                 r.get::<_, Option<String>>(4)?, r.get::<_, Option<i64>>(5)?, r.get::<_, i64>(6)?, r.get::<_, i64>(7)?, r.get::<_, i64>(8)?,
             ))
         })?;
-        // Money moved into investment accounts this period, for INVEST goals.
-        let invested: i64 = self.conn.prepare_cached(
-            "SELECT COALESCE(SUM(t.amount), 0) FROM transactions t JOIN accounts a ON a.id = t.to_account_id
-             WHERE t.deleted = 0 AND t.type = 'TRANSFER' AND a.type = 'INVESTMENT' AND t.date >= ?1 AND t.date < ?2",
-        )?.query_row([period.start.to_string(), period.end_exclusive.to_string()], |r| r.get(0))?;
+        // This period's transfers, for INVEST goals: each reads what moved into its own accounts.
+        let transfers: Vec<(i64, i64, i64)> = self.conn.prepare_cached(
+            "SELECT t.account_id, t.to_account_id, t.amount FROM transactions t
+             WHERE t.deleted = 0 AND t.type = 'TRANSFER' AND t.to_account_id IS NOT NULL AND t.date >= ?1 AND t.date < ?2",
+        )?.query_map([period.start.to_string(), period.end_exclusive.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let investments: Vec<i64> = accounts.iter().filter(|a| a.r#type == AccountType::Investment).map(|a| a.id).collect();
         let mut out = Vec::new();
         for row in rows {
             let (id, name, kind, target, target_date, account, percent, start_amount, contributed) = row?;
             let kind = parse_name(&kind).unwrap_or(GoalKind::Savings);
-            let (saved, target, months_left) = match kind {
-                GoalKind::Savings | GoalKind::Balance => {
-                    let saved = if kind == GoalKind::Savings {
-                        start_amount + contributed
-                    } else {
-                        account.and_then(|a| accounts.iter().find(|x| x.id == a)).map_or(net_worth, |a| a.balance)
-                    };
-                    let months_left = target_date.as_deref().and_then(parse_date).map(|d| months_until(today, d));
-                    (saved, target, months_left)
+            let months_left = || target_date.as_deref().and_then(parse_date).map(|d| months_until(today, d));
+            let (saved, target, line) = match kind {
+                GoalKind::Savings => {
+                    let saved = start_amount + contributed;
+                    (saved, target, copy::goal_line(saved, target, months_left(), fmt))
+                }
+                GoalKind::Balance => {
+                    let saved = account.and_then(|a| accounts.iter().find(|x| x.id == a)).map_or(net_worth, |a| a.balance);
+                    (saved, target, copy::balance_goal_line(saved, target, start_amount, months_left(), fmt))
                 }
                 // Monthly goals read this period: a share of what came in, or a set amount.
                 GoalKind::Invest | GoalKind::Save => {
-                    let saved = if kind == GoalKind::Invest { invested } else { (income - spent).max(0) };
+                    let saved = if kind == GoalKind::Invest {
+                        // Its own account, or every investment account when it names none.
+                        let into = account.map_or_else(|| investments.clone(), |a| vec![a]);
+                        moved_into(&into, &transfers)
+                    } else {
+                        (income - spent).max(0)
+                    };
                     let target = if percent > 0 { income * percent / 100 } else { target };
-                    (saved, target, None)
+                    (saved, target, copy::goal_line(saved, target, None, fmt))
                 }
             };
-            out.push(GoalView { id, name, kind, target, saved, line: copy::goal_line(saved, target, months_left, fmt) });
+            out.push(GoalView { id, name, kind, target, saved, line });
         }
         Ok(out)
     }
@@ -859,7 +956,7 @@ impl Ledger {
             tx.execute(
                 &format!(
                     "INSERT OR REPLACE INTO tombstones (tbl, uid, updated_at, category)
-                     SELECT '{t}', uid, MAX(?1, updated_at + 1), {category} FROM {t} WHERE deleted = 0"
+                     SELECT '{t}', uid, MAX(?1, MIN(updated_at, 4000000000000000) + 1), {category} FROM {t} WHERE deleted = 0"
                 ),
                 [now],
             )?;
@@ -1157,14 +1254,33 @@ impl Ledger {
     }
 }
 
-/// Whole months from `today` to `date`, counting the month `date` falls in: a goal due later
-/// this month has one month left. Zero once the date has passed.
+/// Whole months from `today` to `date`, rounded up: at least 1 until the date passes, then 0.
+/// Port of `monthsUntil` (PlanLogic.kt): Java's `ChronoUnit.MONTHS.between`, plus one when `today`
+/// that many months on still falls short of `date`.
 fn months_until(today: Date, date: Date) -> i64 {
     if date < today {
         return 0;
     }
-    let months = (i64::from(date.year()) - i64::from(today.year())) * 12 + i64::from(date.month()) - i64::from(today.month());
-    months + 1
+    let mut months = (i64::from(date.year()) - i64::from(today.year())) * 12 + i64::from(date.month()) - i64::from(today.month());
+    if months > 0 && date.day() < today.day() {
+        months -= 1;
+    }
+    // `checked_add` clamps the day to the month's last, as `plusMonths` does.
+    if today.checked_add(months.months()).is_ok_and(|d| d < date) {
+        months += 1;
+    }
+    months.max(1)
+}
+
+/// What the period's `transfers` (from, to, amount) moved into `into` from the other accounts, less
+/// what they moved back out. A move between two of `into` (TFSA to RRSP) is neither. Port of
+/// `movedInto` (PlanLogic.kt).
+fn moved_into(into: &[i64], transfers: &[(i64, i64, i64)]) -> i64 {
+    transfers.iter().map(|&(from, to, amount)| match (into.contains(&from), into.contains(&to)) {
+        (false, true) => amount,
+        (true, false) => -amount,
+        _ => 0,
+    }).sum()
 }
 
 #[cfg(test)]
@@ -1228,6 +1344,72 @@ mod tests {
         assert_eq!(s.spent, 0);
         assert_eq!(s.net_worth, 1_000_00);
         assert_eq!(s.accounts.iter().find(|a| a.id == savings).unwrap().balance, 200_00);
+    }
+
+    fn goal(l: &Ledger, name: &str, kind: GoalKind, target: i64, target_date: Option<&str>, account: Option<i64>, start_amount: i64) {
+        l.conn.execute(
+            "INSERT INTO goals (uid, name, target, target_date, kind, account_id, start_amount, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,0)",
+            params![new_uid(), name, target, target_date, name_of(&kind), account, start_amount],
+        ).unwrap();
+    }
+
+    fn transfer(l: &mut Ledger, from: i64, to: i64, amount: i64, day: &str) {
+        l.tx_add(&TxInput { r#type: TxType::Transfer, amount, date: day.into(), account_id: from, to_account_id: Some(to), category_id: None, note: None }).unwrap();
+    }
+
+    fn goal_line(s: &Summary, name: &str) -> String {
+        s.goals.iter().find(|g| g.name == name).unwrap().line.clone()
+    }
+
+    #[test]
+    fn months_until_rounds_whole_months_up_as_tally_does() {
+        let today = date(2026, 10, 13);
+        assert_eq!(2, months_until(today, date(2026, 12, 13)));
+        assert_eq!(3, months_until(today, date(2026, 12, 14)));
+        assert_eq!(2, months_until(today, date(2026, 12, 12)));
+        assert_eq!(1, months_until(today, today), "at least one until the date passes");
+        assert_eq!(1, months_until(today, date(2026, 10, 31)));
+        assert_eq!(0, months_until(today, date(2026, 10, 12)));
+        // A month on from the 31st is the last of a shorter month, as `plusMonths` has it.
+        assert_eq!(1, months_until(date(2026, 1, 31), date(2026, 2, 28)));
+        assert_eq!(2, months_until(date(2026, 1, 31), date(2026, 3, 1)));
+    }
+
+    #[test]
+    fn a_savings_goal_divides_what_is_left_over_whole_months_rounded_up() {
+        let (l, _) = with_account();
+        goal(&l, "Trip", GoalKind::Savings, 1_200_00, Some("2026-12-13"), None, 0);
+        let s = l.summary(date(2026, 10, 13), &en()).unwrap();
+        assert_eq!("$600 a month for 2 months", goal_line(&s, "Trip"));
+    }
+
+    #[test]
+    fn an_invest_goal_reads_what_moved_into_its_own_accounts_less_what_moved_out() {
+        let (mut l, cheq) = with_account();
+        let tfsa = l.account_add("TFSA", AccountType::Investment, 0, Some(Registration::Tfsa), "").unwrap().id;
+        let rrsp = l.account_add("RRSP", AccountType::Investment, 0, Some(Registration::Rrsp), "").unwrap().id;
+        transfer(&mut l, cheq, tfsa, 500_00, "2026-10-02");
+        transfer(&mut l, tfsa, rrsp, 200_00, "2026-10-03");
+        transfer(&mut l, rrsp, cheq, 50_00, "2026-10-04");
+        goal(&l, "Into the TFSA", GoalKind::Invest, 300_00, None, Some(tfsa), 0);
+        goal(&l, "Invest", GoalKind::Invest, 1_000_00, None, None, 0);
+        let s = l.summary(date(2026, 10, 13), &en()).unwrap();
+        let saved = |name: &str| s.goals.iter().find(|g| g.name == name).unwrap().saved;
+        // The TFSA: 500 in, 200 out to the RRSP.
+        assert_eq!(300_00, saved("Into the TFSA"));
+        assert_eq!("Reached", goal_line(&s, "Into the TFSA"));
+        // Every investment account: 500 in, the TFSA to RRSP move is neither, 50 back out.
+        assert_eq!(450_00, saved("Invest"));
+        assert_eq!("$550 to go", goal_line(&s, "Invest"));
+    }
+
+    #[test]
+    fn a_balance_goal_heading_down_is_not_reached_from_day_one() {
+        let (l, cheq) = with_account();
+        // The chequing account reads 1,000 and is to come down to 200.
+        goal(&l, "Spend down", GoalKind::Balance, 200_00, Some("2026-12-13"), Some(cheq), 1_000_00);
+        let s = l.summary(date(2026, 10, 13), &en()).unwrap();
+        assert_eq!("$400 a month for 2 months", goal_line(&s, "Spend down"));
     }
 
     #[test]
@@ -1391,6 +1573,138 @@ mod tests {
         assert_eq!(l.post_due(date(2026, 10, 7)).unwrap(), 0);
     }
 
+    // Twins of Tally's `RecurringPosterTest` (apps/tally/app) for what the PC's poster shares
+    // with it: reminders moving on, a capped catch-up resumed, transfer bills' references.
+
+    /// Rent as `RecurringPosterTest.bill()` writes it: monthly from Jan 31, next due on the anchor.
+    fn rent(id: i64, account: i64, category: i64) -> RecurringDto {
+        RecurringDto {
+            id, name: "Rent".into(), r#type: TxType::Expense, amount: 1_350_00, account_id: account, to_account_id: None,
+            category_id: Some(category), frequency: Frequency::Monthly, interval: 1, anchor_date: "2026-01-31".into(),
+            next_date: "2026-01-31".into(), end_date: None, auto_post: true, active: true,
+        }
+    }
+
+    fn with_bills(l: &mut Ledger, bills: Vec<RecurringDto>) {
+        let mut file = l.export_backup("x").unwrap();
+        file.recurring.extend(bills);
+        l.import_backup(&file).unwrap();
+    }
+
+    /// A bill's next date and whether it still runs.
+    fn bill_state(l: &Ledger, id: i64) -> (String, bool) {
+        l.conn.query_row("SELECT next_date, active FROM recurring WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
+    }
+
+    /// The entries bill `id` posted: date, to-account, category.
+    fn posted(l: &Ledger, id: i64) -> Vec<(String, Option<i64>, Option<i64>)> {
+        let mut st = l.conn.prepare("SELECT date, to_account_id, category_id FROM transactions WHERE deleted = 0 AND recurring_id = ?1 ORDER BY date").unwrap();
+        st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().collect::<std::result::Result<_, _>>().unwrap()
+    }
+
+    fn entries(l: &Ledger) -> i64 {
+        l.conn.query_row("SELECT COUNT(*) FROM transactions WHERE deleted = 0", [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn paused_bills_and_reminders_never_post() {
+        let (mut l, acct) = with_account();
+        let housing = category(&l, "Housing");
+        with_bills(&mut l, vec![
+            RecurringDto { name: "Paused".into(), active: false, ..rent(1, acct, housing) },
+            RecurringDto { name: "Reminder".into(), auto_post: false, ..rent(2, acct, housing) },
+        ]);
+        assert_eq!(l.post_due(date(2026, 5, 15)).unwrap(), 0);
+        assert_eq!(entries(&l), 0);
+        assert_eq!(bill_state(&l, 1), ("2026-01-31".into(), false), "a paused bill keeps its date");
+        assert_eq!(bill_state(&l, 2), ("2026-05-31".into(), true), "a reminder moves on to its next date");
+    }
+
+    #[test]
+    fn a_reminder_stays_on_its_day_and_moves_on_once_the_day_is_over() {
+        let (mut l, acct) = with_account();
+        let housing = category(&l, "Housing");
+        with_bills(&mut l, vec![RecurringDto {
+            name: "Phone".into(), amount: 45_00, anchor_date: "2026-01-15".into(), next_date: "2026-05-15".into(), auto_post: false,
+            ..rent(1, acct, housing)
+        }]);
+        assert_eq!(l.post_due(date(2026, 5, 15)).unwrap(), 0);
+        assert_eq!(bill_state(&l, 1).0, "2026-05-15", "due today stays due today");
+        assert_eq!(l.post_due(date(2026, 5, 16)).unwrap(), 0);
+        assert_eq!(bill_state(&l, 1).0, "2026-06-15");
+        assert_eq!(entries(&l), 0);
+    }
+
+    #[test]
+    fn a_reminder_left_for_months_is_not_overdue_once_the_poster_runs() {
+        let (mut l, acct) = with_account();
+        let housing = category(&l, "Housing");
+        // Due Jul 1 and paid by hand each month since; nothing ever marked it paid.
+        with_bills(&mut l, vec![RecurringDto { anchor_date: "2026-07-01".into(), next_date: "2026-07-01".into(), auto_post: false, ..rent(1, acct, housing) }]);
+        let today = date(2026, 10, 4);
+        assert_eq!(l.post_due(today).unwrap(), 0);
+        assert_eq!(bill_state(&l, 1).0, "2026-11-01");
+        assert_eq!(entries(&l), 0);
+        assert_eq!(l.summary(today, &en()).unwrap().bills[0].due_line, "Due in 28 days");
+    }
+
+    #[test]
+    fn a_reminder_past_its_end_date_ends() {
+        let (mut l, acct) = with_account();
+        let housing = category(&l, "Housing");
+        with_bills(&mut l, vec![RecurringDto { name: "Lease".into(), end_date: Some("2026-04-30".into()), auto_post: false, ..rent(1, acct, housing) }]);
+        l.post_due(date(2026, 5, 15)).unwrap();
+        assert!(!bill_state(&l, 1).1);
+        assert_eq!(entries(&l), 0);
+    }
+
+    #[test]
+    fn transfer_bills_post_to_the_receiving_account_with_no_category() {
+        let (mut l, acct) = with_account();
+        let housing = category(&l, "Housing");
+        let savings = l.account_add("Savings", AccountType::Savings, 0, None, "").unwrap().id;
+        // A category on a transfer bill is a data slip; the ledger entry must not carry it.
+        with_bills(&mut l, vec![RecurringDto {
+            name: "To savings".into(), r#type: TxType::Transfer, amount: 250_00, anchor_date: "2026-04-06".into(),
+            next_date: "2026-04-06".into(), to_account_id: Some(savings), ..rent(1, acct, housing)
+        }]);
+        assert_eq!(l.post_due(date(2026, 5, 15)).unwrap(), 2);
+        assert_eq!(posted(&l, 1), vec![("2026-04-06".into(), Some(savings), None), ("2026-05-06".into(), Some(savings), None)]);
+    }
+
+    #[test]
+    fn an_expense_bill_never_posts_a_receiving_account() {
+        let (mut l, acct) = with_account();
+        let housing = category(&l, "Housing");
+        let savings = l.account_add("Savings", AccountType::Savings, 0, None, "").unwrap().id;
+        with_bills(&mut l, vec![RecurringDto { anchor_date: "2026-05-01".into(), next_date: "2026-05-01".into(), to_account_id: Some(savings), ..rent(1, acct, housing) }]);
+        assert_eq!(l.post_due(date(2026, 5, 15)).unwrap(), 1);
+        assert_eq!(posted(&l, 1), vec![("2026-05-01".into(), None, Some(housing))]);
+    }
+
+    #[test]
+    fn a_long_backlog_is_paid_over_several_runs_and_never_twice() {
+        let (mut l, acct) = with_account();
+        let housing = category(&l, "Housing");
+        let today = date(2026, 5, 15);
+        let anchor = today.checked_sub(100.weeks()).unwrap();
+        with_bills(&mut l, vec![RecurringDto {
+            name: "Lessons".into(), amount: 20_00, frequency: Frequency::Weekly, anchor_date: anchor.to_string(), next_date: anchor.to_string(),
+            ..rent(1, acct, housing)
+        }]);
+        let first = l.post_due(today).unwrap();
+        assert_eq!(first, CATCH_UP_LIMIT);
+        let resume = anchor.checked_add((CATCH_UP_LIMIT as i64).weeks()).unwrap();
+        assert_eq!(bill_state(&l, 1).0, resume.to_string(), "the dates past the cap are still owed");
+        let second = l.post_due(today).unwrap();
+        assert_eq!(first + second, 101, "weeks 0 through 100 inclusive");
+        assert_eq!(l.post_due(today).unwrap(), 0);
+        let dates: Vec<String> = posted(&l, 1).into_iter().map(|p| p.0).collect();
+        assert_eq!(dates.iter().collect::<HashSet<_>>().len(), 101);
+        assert_eq!(dates.last().unwrap(), &today.to_string());
+        assert_eq!(bill_state(&l, 1).0, today.checked_add(1.weeks()).unwrap().to_string());
+    }
+
     #[test]
     fn every_migration_has_its_version() {
         assert_eq!(SCHEMA_VERSION as usize, MIGRATIONS.len());
@@ -1412,7 +1726,7 @@ mod tests {
              INSERT INTO account_values (uid, account_id, date, value, updated_at) VALUES ('v1', 2, '2026-10-01', 600000, 1);",
         )
         .unwrap();
-        let mut l = Ledger::init(conn).unwrap();
+        let mut l = Ledger::init(conn, None).unwrap();
         assert_eq!(4i64, l.conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)).unwrap());
         let accounts = l.accounts().unwrap();
         let tfsa = accounts.iter().find(|a| a.name == "TFSA").unwrap();
@@ -1439,8 +1753,14 @@ mod tests {
             let c = category(&l, "Dining");
             spend(&mut l, a, c, 4_00, "2026-10-02");
         }
+        // Only the user reads it, nor its side files, whatever mode an older install left.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         let l = Ledger::open(&path).unwrap();
         assert_eq!(l.tx_list(&TxQuery::default(), date(2026, 10, 3)).unwrap().spent, 4_00);
+        for file in ["money.db", "money.db-wal", "money.db-shm"] {
+            assert_eq!(std::fs::metadata(dir.join(file)).unwrap().permissions().mode() & 0o777, 0o600, "{file}");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

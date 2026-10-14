@@ -16,7 +16,7 @@
 //!
 //! A branch with commits that neither covers is kept, and the reason is recorded. A worktree
 //! still holding the branch is removed first only when it is a pooled checkout that no live
-//! session owns, with no uncommitted changes and no git-ignored files outside build output —
+//! session owns, with no uncommitted changes and no git-ignored secrets or local state —
 //! and never by the cleanup that follows a close, since a checkout still there then is one the
 //! user just chose to keep (RA-087). The remote branch is deleted only when a merged PR proves
 //! it, and only while it still points at that PR's head.
@@ -236,22 +236,89 @@ struct Merged { reason: String, pr: Option<GhPr> }
 /// What Relay itself writes into a checkout, kept out of git through `info/exclude`.
 const RELAY_WRITTEN: &[&str] = &[".claude/settings.local.json", ".codex/hooks.json", ".claude/skills/", ".agents/skills/"];
 
-/// Git-ignored paths in a checkout that are neither build output nor Relay's own files: an
-/// `.env`, local settings, notes. Removing the checkout would delete them, and nothing in git
-/// could bring them back.
-fn ignored_keepers(path: &Path) -> Result<Vec<String>, String> {
+/// Whether a git-ignored file named `name` holds what nothing can bring back: a secret, a
+/// signing key, local settings, a local database or infrastructure state. Every other ignored
+/// file — build output, caches, IDE and tool state, logs — is something a build, an install
+/// or the next run makes again, and holding a checkout back for it only teaches people to
+/// discard.
+fn is_keeper(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let ext = |exts: &[&str]| exts.iter().any(|ext| name.ends_with(ext));
+    match name.strip_prefix(".env") {
+        Some("") => return true,
+        Some(rest) if rest.starts_with('.') => return !matches!(rest, ".example" | ".sample" | ".template"),
+        _ => {}
+    }
+    ext(&[".keystore", ".jks", ".p12", ".pfx", ".pem", ".key", ".db", ".sqlite", ".sqlite3"])
+        || name.starts_with("id_rsa") || name.starts_with("id_ed25519")
+        || matches!(name.as_str(), "local.properties" | "keystore.properties")
+        || name.starts_with("secrets.") || name.starts_with("credentials")
+        || name.contains(".tfstate")
+}
+
+/// Ignored directories a walk for keepers does not enter: caches and environments a tool
+/// rebuilds wholesale, where a stray `*.pem` or `*.db` is a fixture or an index of its own.
+fn rebuilt_dir(name: &str) -> bool {
+    crate::watch::generated_name(name)
+        || matches!(name, "__pycache__" | ".venv" | "venv" | ".pytest_cache" | ".mypy_cache" | ".ruff_cache" | ".tox" | ".nox"
+            | ".cache" | ".parcel-cache" | ".turbo" | ".dart_tool" | ".kotlin" | ".idea" | ".git")
+}
+
+/// How far the walk inside an ignored directory goes: an unrecognised cache can be huge, and
+/// this runs once per checkout a close or a cleanup is about to remove.
+const KEEPER_WALK_ENTRIES: usize = 5_000;
+const KEEPER_WALK_DEPTH: usize = 6;
+
+/// Git-ignored files in a checkout that [`is_keeper`] says nothing could bring back, Relay's own
+/// files apart: removing the checkout would delete them for good.
+pub(crate) fn ignored_keepers(path: &Path) -> Result<Vec<String>, String> {
     // `matching` names an ignored directory once and the files Relay writes one by one, where
     // the default would fold `.claude/settings.local.json` into an opaque `.claude/`.
     let ran = Git { repo: path }.run(&["status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all"], GIT_TIMEOUT)?;
     if !ran.ok {
         return Err(ran.err);
     }
-    Ok(ran.out.split('\0')
-        .filter_map(|record| record.strip_prefix("!! "))
-        .filter(|ignored| !RELAY_WRITTEN.iter().any(|ours| ignored.starts_with(ours)))
-        .filter(|ignored| !crate::watch::is_generated_path(path, &path.join(ignored)))
-        .map(str::to_string)
-        .collect())
+    let mut keepers = Vec::new();
+    let mut budget = KEEPER_WALK_ENTRIES;
+    for ignored in ran.out.split('\0').filter_map(|record| record.strip_prefix("!! ")) {
+        if RELAY_WRITTEN.iter().any(|ours| ignored.starts_with(ours))
+            || Path::new(ignored.trim_end_matches('/')).components().any(|c| rebuilt_dir(&c.as_os_str().to_string_lossy()))
+        {
+            continue;
+        }
+        match ignored.strip_suffix('/') {
+            // A whole ignored directory: what is in it decides.
+            Some(dir) => keepers_in(&path.join(dir), dir, 0, &mut budget, &mut keepers),
+            None => {
+                let name = Path::new(ignored).file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
+                if is_keeper(&name) {
+                    keepers.push(ignored.to_string());
+                }
+            }
+        }
+    }
+    Ok(keepers)
+}
+
+/// The keepers under `dir` (shown as `shown`), never following a link and never entering a
+/// [`rebuilt_dir`], until `budget` entries have been looked at.
+fn keepers_in(dir: &Path, shown: &str, depth: usize, budget: &mut usize, keepers: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Ok(kind) = entry.file_type() else { continue };
+        if kind.is_dir() {
+            if depth + 1 < KEEPER_WALK_DEPTH && !rebuilt_dir(&name) {
+                keepers_in(&entry.path(), &format!("{shown}/{name}"), depth + 1, budget, keepers);
+            }
+        } else if is_keeper(&name) {
+            keepers.push(format!("{shown}/{name}"));
+        }
+    }
 }
 
 /// Decide one candidate and, unless `dry_run`, act on it.

@@ -77,7 +77,7 @@ jobs:
 # Covering it needs a runner image that actually carries those versions — a container with a
 # current GNOME stack, or a self-hosted runner. Whoever adds that job should confirm the
 # image's `pkg-config --modversion gtk4 pango vte-2.91-gtk4 gtksourceview-5` before wiring it
-# up, and can then add `cargo clippy -p relay-native --all-targets -- -D warnings -A deprecated`.
+# up (the mirror's decoder also needs FFmpeg's libavcodec headers and libclang to build), and can then add `cargo clippy -p relay-native --all-targets -- -D warnings -A deprecated`.
 #
 # `cargo fmt --check` is absent, for relay-native as for every other crate, for a different
 # reason: the workspace is not rustfmt-clean and deliberately so in places (~900 hunks differ

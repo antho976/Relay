@@ -91,6 +91,21 @@ pub fn goal_line(saved: i64, target: i64, months_left: Option<i64>, fmt: &MoneyF
     }
 }
 
+/// A balance goal's pace, from `start` (what the balance read when the goal was set) toward
+/// `target`. One heading down (a card to pay off, a debt to clear) counts what is left down to the
+/// target, and is reached at or below it. Port of the BALANCE head of `goalRowLine` (PlanLogic.kt).
+pub fn balance_goal_line(saved: i64, target: i64, start: i64, months_left: Option<i64>, fmt: &MoneyFormatter) -> String {
+    let falling = target < start;
+    let reached = if falling { saved <= target } else { saved >= target && target != start };
+    let left = if falling { saved - target } else { target - saved }.max(0);
+    match months_left {
+        _ if reached => "Reached".to_string(),
+        None => format!("{} to go", fmt.format_whole(left)),
+        Some(m) if m <= 0 => format!("{} to go, date passed", fmt.format_whole(left)),
+        Some(m) => format!("{} a month for {}", fmt.format_whole((left + m - 1) / m), plural(m, "month")),
+    }
+}
+
 /// Characters and words the app never renders. The doctrine test scans every string with it.
 pub const BANNED: &[&str] = &["!", "—", "awesome", "crush", "amazing", "great job", "oops"];
 
@@ -133,6 +148,20 @@ mod tests {
     fn goal_line_divides_what_is_left_over_the_months() {
         assert_eq!(goal_line(700_00, 1_000_00, Some(3), &fmt()), "$100 a month for 3 months");
         assert_eq!(goal_line(1_000_00, 1_000_00, Some(3), &fmt()), "Reached");
+    }
+
+    #[test]
+    fn a_balance_goal_heading_down_counts_down_to_its_target() {
+        // A card owing $2,000 (-2,000) to be cleared (0): rising, from -2,000 toward 0.
+        assert_eq!(balance_goal_line(-1_400_00, 0, -2_000_00, Some(2), &fmt()), "$700 a month for 2 months");
+        // A balance of $5,000 to bring down to $1,000: falling. Not reached on day one.
+        assert_eq!(balance_goal_line(5_000_00, 1_000_00, 5_000_00, Some(4), &fmt()), "$1,000 a month for 4 months");
+        assert_eq!(balance_goal_line(2_200_00, 1_000_00, 5_000_00, None, &fmt()), "$1,200 to go");
+        assert_eq!(balance_goal_line(1_000_00, 1_000_00, 5_000_00, Some(4), &fmt()), "Reached");
+        assert_eq!(balance_goal_line(900_00, 1_000_00, 5_000_00, Some(0), &fmt()), "Reached");
+        // Heading up, as before.
+        assert_eq!(balance_goal_line(3_000_00, 5_000_00, 1_000_00, Some(0), &fmt()), "$2,000 to go, date passed");
+        assert_eq!(balance_goal_line(5_000_00, 5_000_00, 1_000_00, Some(1), &fmt()), "Reached");
     }
 
     #[test]

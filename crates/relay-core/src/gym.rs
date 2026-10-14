@@ -36,7 +36,10 @@ fn opened(engine: &Engine) -> Result<MutexGuard<'_, Option<Opened>>, BusError> {
     if slot.is_none() {
         let store = engine.store.path();
         let in_memory = store == Path::new(":memory:");
-        let gym = if in_memory { Gym::open_in_memory() } else { Gym::open(&store.with_file_name("gym.db")) }.map_err(bus)?;
+        let gym = if in_memory { Gym::open_in_memory() } else {
+            let path = store.with_file_name("gym.db");
+            Gym::open(&path).inspect(|_| crate::private::private_db(&path))
+        }.map_err(bus)?;
         let history = Arc::new(gym.load().map_err(bus)?);
         let imported = gym.imported().map_err(bus)?;
         let raw_path = (!in_memory).then(|| store.with_file_name("gym-upload.json"));
@@ -74,9 +77,8 @@ pub fn replace_uploaded(engine: &Engine, h: History, text: &str) -> Result<(), B
     let o = slot.as_mut().expect("opened above");
     match &o.raw_path {
         Some(path) => {
-            // Renamed in, so a reader never finds half a file.
-            let part = path.with_extension("json.part");
-            std::fs::write(&part, text).and_then(|()| std::fs::rename(&part, path))
+            // Renamed in, so a reader never finds half a file; the user's alone, like gym.db.
+            crate::private::write_private_replace(path, text.as_bytes())
                 .map_err(|e| BusError::internal(format!("{}: {e}", path.display())))?;
         }
         None => o.raw_memory = Some(text.to_string()),

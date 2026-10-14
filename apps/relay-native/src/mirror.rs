@@ -1,4 +1,4 @@
-//! Native device mirror: an engine-owned scrcpy transport, one FFmpeg decode, GTK textures.
+//! Native device mirror: an engine-owned scrcpy transport, libavcodec in process, YUV textures.
 //!
 //! One [`MirrorView`] per device. It is a self-contained widget tree that lives either in its
 //! own window or docked to the right of the wall, and moves between the two without restarting
@@ -12,11 +12,14 @@
 //! code and reason, or lost when the device went away — so the stage always says what is
 //! happening and offers the next step. A lost device is watched for, and the mirror resumes on
 //! its own when it comes back.
+mod avcodec;
 mod decode;
 mod glyphs;
 mod input;
+pub(crate) mod trace;
 
 use crate::app::{label, Ui};
+use trace::trace;
 use crate::client::{Client, Error, Notice};
 use crate::panel::Dock;
 use gtk::prelude::*;
@@ -162,7 +165,9 @@ struct MirrorView {
     phase: Cell<Phase>,
     /// The picture size in device pixels: the last decoded frame, else the engine's status.
     dims: Cell<(i32, i32)>,
-    texture: RefCell<Option<gtk::gdk::MemoryTexture>>,
+    texture: RefCell<Option<gtk::gdk::Texture>>,
+    /// The color state of the stream's pictures, built once per change of VUI.
+    color: RefCell<Option<(relay_client::mirror::decode::Color, gtk::gdk::ColorState)>>,
     display_on: Cell<bool>,
     /// The last failure, for "Copy details".
     problem: RefCell<String>,
@@ -371,6 +376,7 @@ impl MirrorView {
             phase: Cell::new(Phase::Connecting),
             dims: Cell::new((0, 0)),
             texture: RefCell::default(),
+            color: RefCell::default(),
             display_on: Cell::new(true),
             problem: RefCell::default(),
             input: RefCell::default(),
@@ -552,7 +558,15 @@ impl MirrorView {
                 glib::spawn_future_local(async move {
                     if let Ok(Some(text)) = clipboard.read_text_future().await {
                         if let Some(view) = weak.upgrade() {
-                            view.send(input::paste(text.as_str()));
+                            // relay_core::mirror::SET_CLIPBOARD_MAX_LENGTH: the engine refuses a
+                            // longer one, and input is sent unanswered, so the paste would
+                            // otherwise just not happen.
+                            const PASTE_MAX: usize = (1 << 18) - 14;
+                            if text.len() > PASTE_MAX {
+                                view.flash(&format!("Too long to paste: {} KB, the most is 255 KB.", text.len() / 1024));
+                            } else {
+                                view.send(input::paste(text.as_str()));
+                            }
                         }
                     }
                 });
@@ -1043,15 +1057,51 @@ impl MirrorView {
         }
     }
 
-    fn paint(&self, frame: decode::Pixels) {
-        let bytes = glib::Bytes::from_owned(frame.rgb);
-        let texture = gtk::gdk::MemoryTexture::new(frame.width, frame.height, gtk::gdk::MemoryFormat::R8g8b8, &bytes, frame.width as usize * 3);
+    /// Show a decoded picture. GTK takes the YUV planes as they are and converts them on the GPU,
+    /// in the color state the stream's VUI asks for (`relay_client::mirror::decode::color`).
+    fn paint(&self, frame: decode::Picture) {
+        let (width, height) = frame.texture_size();
+        let color = self.color_state(frame.color);
+        let bytes = glib::Bytes::from_owned(frame.bytes);
+        let mut builder = gtk::gdk::MemoryTextureBuilder::new()
+            .set_bytes(Some(&bytes))
+            .set_width(width)
+            .set_height(height)
+            .set_format(frame.format)
+            .set_color_state(&color);
+        for (plane, &(offset, stride)) in frame.planes.iter().enumerate() {
+            builder = builder.set_offset(plane as u32, offset).set_stride_for_plane(plane as u32, stride);
+        }
+        let texture = builder.build();
         self.picture.set_paintable(Some(&texture));
         *self.texture.borrow_mut() = Some(texture);
         self.set_dims((frame.width, frame.height));
         if self.phase.get() == Phase::Connecting {
             self.live();
         }
+    }
+
+    fn color_state(&self, color: relay_client::mirror::decode::Color) -> gtk::gdk::ColorState {
+        if let Some((cached, state)) = &*self.color.borrow() {
+            if *cached == color {
+                return state.clone();
+            }
+        }
+        let build = |color: relay_client::mirror::decode::Color| {
+            let cicp = gtk::gdk::CicpParams::new();
+            cicp.set_color_primaries(color.primaries);
+            cicp.set_transfer_function(color.transfer);
+            cicp.set_matrix_coefficients(color.matrix);
+            cicp.set_range(if color.full_range { gtk::gdk::CicpRange::Full } else { gtk::gdk::CicpRange::Narrow });
+            cicp.build_color_state().ok()
+        };
+        // A combination this GTK cannot convert falls back to the matrix every Android encoder
+        // can be read with.
+        let state = build(color)
+            .or_else(|| build(relay_client::mirror::decode::color(relay_client::mirror::decode::BT601, if color.full_range { relay_client::mirror::decode::RANGE_FULL } else { 1 })))
+            .unwrap_or_else(gtk::gdk::ColorState::srgb);
+        *self.color.borrow_mut() = Some((color, state.clone()));
+        state
     }
 
     /// Show `message` over the foot of the screen for a few seconds.
@@ -1154,7 +1204,7 @@ enum End {
 }
 
 /// One mirror session: connect, start, stream, then explain the end. Runs on the GTK thread;
-/// FFmpeg and the socket reads run on the tokio runtime.
+/// the socket reads and the packet gate run on the tokio runtime, the decoder on its own thread.
 async fn session(
     weak: Weak<MirrorView>,
     generation: u64,
@@ -1202,7 +1252,7 @@ async fn session(
             }
         }
         End::Broken(message) => {
-            let title = if message.starts_with("FFmpeg") { "FFmpeg is needed to show the screen" } else { "The mirror stopped" };
+            let title = if message.starts_with(avcodec::MISSING) { "The video decoder is missing" } else { "The mirror stopped" };
             view.ended(title, &message, None, Some("Copy details"));
             false
         }
@@ -1255,7 +1305,7 @@ async fn stream(
     }
 
     // One slot: a picture waiting for the paint is replaced by a newer one, never queued behind.
-    let (frames, pictures) = async_channel::bounded::<decode::Pixels>(1);
+    let (frames, pictures) = async_channel::bounded::<decode::Picture>(1);
     let (control, controls) = async_channel::unbounded::<Control>();
     let worker = rt.spawn(decode::run(notices, frames, pictures.clone(), control));
     struct AbortOnDrop(tokio::task::AbortHandle);
@@ -1268,11 +1318,18 @@ async fn stream(
     // Resync requests share the input path, so they queue behind nothing but input.
     let (resync, resyncs) = async_channel::unbounded::<()>();
 
+    let shown = trace::on().then(|| alive().map(|view| trace::Frames::watch(&view.picture))).flatten();
     let paint = async {
         while let Ok(picture) = pictures.recv().await {
+            let got = trace::now();
+            let (mirror, seq) = (picture.mirror, picture.seq);
             match alive() {
                 Some(view) => view.paint(picture),
                 None => break,
+            }
+            if let Some(shown) = &shown {
+                trace!(stage = "paint", mono_ns = trace::monotonic(), mirror_id = mirror, seq, got_ns = got);
+                shown.painted(mirror, seq);
             }
         }
         std::future::pending::<()>().await;

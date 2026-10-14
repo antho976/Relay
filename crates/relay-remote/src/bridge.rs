@@ -239,19 +239,26 @@ fn still_admitted(ctx: &Ctx, device_id: &str, token: &str) -> bool {
     Registry::load(&ctx.registry_path).is_ok_and(|r| r.device(device_id).is_some_and(|d| d.token == token))
 }
 
-pub fn greeting(ctx: &Ctx, registry: &Registry, challenge: &str, engine_up: bool) -> Greeting {
+/// What the door says before anything is proved: through a rendezvous, anyone who knows the room
+/// id reads it. Who this PC is goes in the welcome (`welcome_for`).
+pub fn greeting(ctx: &Ctx, challenge: &str, engine_up: bool) -> Greeting {
     Greeting {
         v: WIRE_V,
         relay: "remote".into(),
-        host: registry.host_name.clone(),
-        host_id: registry.host_id.clone(),
+        host: String::new(),
+        host_id: String::new(),
         instance: ctx.instance.as_str().into(),
-        version: ctx.version.clone(),
+        version: String::new(),
         challenge: challenge.into(),
         // Only a door that can start the engine says it is stopped: the phone then waits for it.
         engine: Some(if engine_up || ctx.start_engine.is_none() { "running" } else { "stopped" }.into()),
-        wake: crate::wake::targets(),
     }
+}
+
+/// An admitted phone's welcome, with who it reached: the PC's name and id, the Relay version, and
+/// the network cards it can wake from the same network.
+pub fn welcome_for(ctx: &Ctx, registry: &Registry, welcome: Welcome) -> Welcome {
+    welcome.with_host(&registry.host_name, &registry.host_id, &ctx.version, crate::wake::targets())
 }
 
 /// How long a door that started the engine waits for its socket to answer.
@@ -330,7 +337,7 @@ pub async fn run(
     let registry = Registry::load(&ctx.registry_path).map_err(BridgeEnd::Other)?;
     let challenge = crate::registry::random_hex(16);
     let engine_up = ctx.start_engine.is_none() || relay_core::socket::probe(&ctx.socket_path).await;
-    let greet = greeting(&ctx, &registry, &challenge, engine_up);
+    let greet = greeting(&ctx, &challenge, engine_up);
     outbound
         .send(serde_json::to_string(&greet).context("greeting")?)
         .await
@@ -348,6 +355,10 @@ pub async fn run(
             return Err(BridgeEnd::BadHello(e.to_string()));
         }
     };
+    // Taken before the registry is read to admit: a revoke at any point after that — while the
+    // engine starts, which can take 30 s — changes the file from this, and the first recheck
+    // (an interval ticks at once) sees it. Admitting writes the file too; that costs one load.
+    let mut seen = stamp(&ctx.registry_path);
     // A pairing can wait on a person at the PC; a phone that leaves meanwhile ends it.
     let admission = tokio::select! {
         admission = admit(&ctx, &challenge, &hello, &origin) => admission,
@@ -365,8 +376,9 @@ pub async fn run(
             return Err(end);
         }
     };
+    let welcome = welcome_for(&ctx, &registry, admitted.welcome.clone());
     outbound
-        .send(serde_json::to_string(&admitted.welcome).context("welcome")?)
+        .send(serde_json::to_string(&welcome).context("welcome")?)
         .await
         .map_err(|_| BridgeEnd::ClosedEarly)?;
     tracing::info!(device = %admitted.device_id, instance = %ctx.instance, "remote device admitted");
@@ -392,7 +404,6 @@ pub async fn run(
     let (instance, profile) = (ctx.instance, ctx.ops);
     let mut recheck = tokio::time::interval(RECHECK_EVERY);
     recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut seen = stamp(&ctx.registry_path);
     let mut revoked = false;
     let result: Result<()> = async {
         loop {
@@ -560,5 +571,51 @@ mod tests {
         let reg = Registry::load(&ctx.registry_path).unwrap();
         assert!(reg.pending.is_empty());
         assert_eq!(reg.devices.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_revoke_while_the_engine_starts_still_closes_the_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        // "Starting" the engine does nothing; the test brings its socket up itself, late.
+        let ctx = Arc::new(Ctx { start_engine: Some("/bin/true".into()), ..ctx(&dir) });
+        let device = Registry::update(&ctx.registry_path, |r| {
+            let code = r.begin_pair(false).code;
+            match r.present(&code, "Pixel", "test") {
+                Presented::Paired(device) => Ok::<_, anyhow::Error>(device),
+                other => panic!("a first-come code pairs: {other:?}"),
+            }
+        })
+        .unwrap();
+        let (to_bridge, inbound) = mpsc::channel(8);
+        let (outbound, mut from_bridge) = mpsc::channel(8);
+        let bridge = tokio::spawn(run(ctx.clone(), inbound, outbound, (), "test".into()));
+        let greeting: Greeting = serde_json::from_str(&from_bridge.recv().await.unwrap()).unwrap();
+        let hello = Hello { v: 1, device: Some(device.id.clone()), proof: Some(wire::proof(&greeting.challenge, &device.token)), ..Default::default() };
+        to_bridge.send(serde_json::to_string(&hello).unwrap()).await.unwrap();
+        let welcome: Welcome = serde_json::from_str(&from_bridge.recv().await.unwrap()).unwrap();
+        assert!(welcome.ok);
+
+        // Admitted, and waiting for an engine: the phone is revoked before one answers.
+        assert!(Registry::update(&ctx.registry_path, |r| Ok::<_, anyhow::Error>(r.revoke(&device.id))).unwrap());
+        let listener = tokio::net::UnixListener::bind(&ctx.socket_path).unwrap();
+        let _engine = AbortOnDrop(
+            tokio::spawn(async move {
+                // Answers every request ok, which is all `probe` asks.
+                while let Ok((stream, _)) = listener.accept().await {
+                    tokio::spawn(async move {
+                        let (reader, mut writer) = stream.into_split();
+                        let mut lines = BufReader::new(reader).lines();
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            let request: relay_bus::envelope::Request = serde_json::from_str(&line).unwrap();
+                            let response = relay_bus::envelope::Response::ok(request.id, serde_json::json!({}));
+                            let _ = writer.write_all(format!("{}\n", serde_json::to_string(&response).unwrap()).as_bytes()).await;
+                        }
+                    });
+                }
+            })
+            .abort_handle(),
+        );
+        let end = tokio::time::timeout(Duration::from_secs(10), bridge).await.expect("a revoked phone is cut off").unwrap();
+        assert!(matches!(end, Err(BridgeEnd::Revoked)), "{end:?}");
     }
 }

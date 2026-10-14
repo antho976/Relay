@@ -557,9 +557,14 @@ allow-sets, straight from SPEC §3's agent action list plus reads:
 
 | role | may call |
 |---|---|
-| `builder` | all queries · `task.move` (own, `active → in_review`) · `task.link_commit` · `task.changelog.write` (own) · `task.comment` (own) · `task.update` (own; body/changelog only) · `mailbox.*` · `notes.append` · `overlap.flag/ack` · `integration.request` · `session.done/report/intent/claim/release` (self) · `device.claim/release` · `usage.report` · `guardrail.gate/check` |
+| `builder` | all queries · `task.link_commit` · `task.changelog.write` (own) · `task.comment` (own) · `task.update` (own; body/changelog only) · `mailbox.*` · `notes.append` · `overlap.flag/ack` · `integration.request` · `session.done/report/intent/claim/release` (self) · `device.claim/release` · `usage.report` · `guardrail.gate/check` |
 | `reviewer` | all queries · `mailbox.*` · `notes.append` · `overlap.flag` · `task.changelog.write` / `task.comment` on the reviewed task · `session.done/report/intent/claim/release` (self) · `device.claim/release` · `usage.report` · `guardrail.check` — **nothing** that writes files, commits, or moves the task |
 | `docs` | builder's set minus `task.link_commit`/`integration.request`, plus `notes.create/update` |
+
+No role moves a task on the board: an agent hands its task to review with `session.done`, which
+judges the branch first (§9.2), waits for the task's other builders and tells the reviewer. A
+`task.move` from an agent is `conflict` / `task.column_transition` even where a configured
+allowlist still lists it.
 
 Session options widen a role deliberately, per session, never by default:
 - `bus_writes: true` — adds `file.*` and `git.stage/unstage/commit` mutations for agents that
@@ -591,10 +596,10 @@ instead: `session.peers` with neither means "my project, minus me".
 | destructive write (> N lines removed, or > P% of a file of at least `min_file_lines`) | `gate {kind: write}`, `file.write` | `held` / `guardrail.destructive_write`; `confirm: guardrail.confirm {hold_id}`; notification. The old size is read from the file on disk, for a `new_text` and a `diff` alike; the percentage is skipped for short files, where a share measures nothing (D112) |
 | shape gates (registered validators for critical files) | `gate {kind: write}`, `file.write` | `held` / `guardrail.shape_gate` with `details.validator`, `details.reason` |
 | per-task caps (files, lines) | `gate {kind: commit}`, `git.commit`, `session.done` | `refused` / `guardrail.cap` with the numbers |
-| branch re-check | `session.done {status: completed}` from an agent on a task | every commit since base (newest 200) against protected paths, the net diff against caps and protected paths, and each shape-gated file the branch changes as it is at `HEAD`; uses the session's grants without spending them; `refused` with the policy's code (a per-commit refusal names `details.commit`). A hook can be skipped, so this is the check a skipped hook cannot dodge (RA-109). If git cannot measure, the done is allowed and logged |
+| branch re-check | `session.done {status: completed}` from an agent on a task | every commit since base (newest 200) against protected paths, the net diff against caps and protected paths, and each shape-gated file the branch changes as it is at `HEAD`; uses the session's grants without spending them; `refused` with the policy's code (a per-commit refusal names `details.commit`). A hook can be skipped, so this is the check a skipped hook cannot dodge (RA-109). git runs with the settings that change its output pinned (`-c core.quotePath=true`, `color.ui=never`, `diff.noprefix=false`, …). If git still cannot measure — no base, no history in common with it, a config value git refuses to read — the done is `refused` / `guardrail.unmeasured`, never taken as within limits; `blocked`/`partial` stay sayable, and the person moves the task |
 | hook bypass | `gate {kind: exec}` from an agent | `git commit -n`/`--no-verify` (also in flag clusters and abbreviations), any `core.hooksPath` override (`-c`, `--config-env`, `GIT_CONFIG_*`) and `git config` writes to it: `refused` / `guardrail.hook_bypass`, not grantable |
 | write roots | `gate {kind: write}` with a path outside the worktree | allowed inside `guardrails.allowed_write_roots` or the process temp directory (scratch space is not a repo-integrity concern); otherwise `refused` / `guardrail.write_root`, naming the roots that would have worked (D102) |
-| denied commands | `gate {kind: exec}` | matched against the **parsed argv** of each command in the line, never a raw substring, so quoted data naming a pattern is not a match; a `relay … guardrail.check` command is exempt so the dry run is always askable (D103) |
+| denied commands | `gate {kind: exec}` | matched against the **parsed argv** of each command in the line, never a raw substring, so quoted data naming a pattern is not a match; a `relay … guardrail.check` command is exempt so the dry run is always askable (D103). The defaults are `rm -rf`, `git reset --hard`, `git clean -fd` and `git push --force`, and a `git push … -f` pattern covers every push that can destroy what the remote holds: `--force`, `-f`, `+ref`, `:ref`, `--force-with-lease`, `--force-if-includes`, `--mirror`, `--delete`/`-d` and `--prune`. `git push` and `git push -u origin <branch>` are not |
 | user bypass | any of the above when actor is `user` | `held` / `guardrail.user_bypass` — you confirm, it proceeds, audit says you did |
 
 ### 9.3 Enforcement doors — how a policy actually binds an agent
@@ -701,8 +706,10 @@ naming the request to make:
   {project_id?, session?, state?: open|active|all}` lists them.
 - **No self-approval.** The answers are user-only on the bus. An agent's `exec` gate also refuses,
   with the ungrantable `guardrail.self_approval`, any `relay q|cmd` invocation whose op (or
-  `cmd` envelope) is a user-only guardrail/settings answer, any call claiming `--actor
-  user|test`, any envelope claiming `"actor":"user"`, and any line that sheds `RELAY_SESSION`
+  `cmd` envelope) is a user-only guardrail/settings answer, the CLI commands that pair a phone
+  or link the PC to a cloud engine (`relay remote approve|pair|decline|revoke|via`, `relay remote
+  serve --pair`, `relay cloud connect|pair|off`, which also refuse to run with `RELAY_SESSION`
+  set), any call claiming `--actor user|test`, any envelope claiming `"actor":"user"`, and any line that sheds `RELAY_SESSION`
   (`unset`, `env -u`, `env -i`, `sudo`, …) or sets `RELAY_ACTOR`. Commands inside `sh -c`,
   heredocs fed to a shell, scripts piped into one and interpreter `-c`/`-e` code are read too;
   searching for the names (`rg guardrail.confirm`) is not an invocation. Behind that, the socket
@@ -803,7 +810,7 @@ unique; nothing else is.
 | `task.get` | query | `{ task_id }` → `Task` (with attachments, commits) |
 | `task.list` | query | `{ project_id?, column?, state?, module_id?, priority?, include_deleted?, sort?: "column"\|"priority"\|"updated", type?, label?, session?, note_id?, parent_id?: Id\|null, limit? (1000, ≤2000), offset?, summary? }` → `{ tasks: Task[], next_offset? }` — a page; `summary` leaves `body` and `changelog` empty. `project_id` optional so the Dashboard can ask "in review, everywhere"; `parent_id: null` is roots only, `session` is "every card this agent was ever sent", `note_id` the tasks made from that note. Each page reads its sessions, commits, attachments, labels, relations and children in one statement per table, and every task in it equals its `task.get` (RA-412) Every task names its module (`module_name`, completed modules included), so a board labels cards without `module.list` |
 | `task.update` | mutation · always · inverse | `{ task_id, title?, body?, priority?, size?, module_id?: Id\|null, state?, changelog?, type? }` → `Task` |
-| `task.move` | mutation · always · inverse | `{ task_id, column: Column, position?: number }` → `Task` — transitions table in §11.1; `position` is the 0-based index the task ends at in the column (the others shift around it, clamped to the end), omitted means last; agents may only move their own task and only `active → in_review` |
+| `task.move` | mutation · always · inverse | `{ task_id, column: Column, position?: number }` → `Task` — transitions table in §11.1; `position` is the 0-based index the task ends at in the column (the others shift around it, clamped to the end), omitted means last; agents may not move tasks (`conflict` / `task.column_transition`): `session.done` hands theirs to review |
 | `task.delete` | mutation · always · inverse (restore) | `{ task_id }` → `{}` |
 | `task.restore` | mutation · always · inverse (delete) | `{ task_id }` → `Task` |
 | `task.link_commit` | mutation · always | `{ task_id, sha, branch? }` → `Task` |
@@ -817,7 +824,7 @@ unique; nothing else is.
 | `task.label.add` / `task.label.remove` | mutation · always · inverse | `{ task_id, label }` → `Task` — `add` creates the project label if the name is new; names are matched case-insensitively and the stored spelling wins |
 | `task.label.list` | query | `{ project_id }` → `{ labels: Label[] }` |
 | `task.relate` / `task.unrelate` | mutation · always · inverse | `{ task_id, relation: "blocked_by"\|"duplicate_of", other_id }` → `Task` — stored and rendered, never enforced; `duplicate_of` is single-valued, so a second `relate` replaces the first |
-| `task.dispatch` | mutation · always · project · user | `{ task_id, session?: string, create?: SessionCreateIn, fanout?, start?: bool }` → `{ task: Task, session: Session, fanned: { task, session }[] }` — one of `session`/`create`; moves the task to `active`, sets `state: dispatched`, and appends it to the session queue. `start` defaults true; false stages assignments before the provider starts. `fanout` also dispatches every not-done descendant, one fresh session each, and therefore requires `create` (`task.fanout_target`) |
+| `task.dispatch` | mutation · always · project · user | `{ task_id, session?: string, create?: SessionCreateIn, fanout?, start?: bool }` → `{ task: Task, session: Session, fanned: { task, session }[] }` — one of `session`/`create`; moves the task to `active`, sets `state: dispatched`, and appends it to the session queue. `start` defaults true; false stages assignments before the provider starts. `fanout` also dispatches every not-done descendant, one fresh session each, and therefore requires `create` (`task.fanout_target`). The sessions are created before the transaction; if it fails, they are closed with their checkouts, and one made for a sub-task finished meanwhile is closed after it |
 | `task.approve` | mutation · always · inverse (unapprove) · project · user | `{ task_id, sha? }` → `Task` — any open column → `done`, links sha (defaults to the recorded session branch head, or the project checkout HEAD without a session) |
 | `task.unapprove` | mutation · always · inverse (approve) · project · user | `{ task_id, column: Column, position: number, state: TaskState, sha? }` → `Task` — `task.approve`'s inverse: a `done` task goes back to `column` (not `done`) at index `position`, as `task.move` places it, with run state `state`, and the commit link `sha` is removed. The approval records `sha` only when it created that link, so a commit linked before it stays (RA-416). Refuses `task.column_transition` when the task is not done |
 | `task.copy_text` | query | `{ task_id }` → `{ text }` — a task as plain text: `#id title`, then the body when it has one. Agents' copy; the desktop board's copy button still builds its own string (title, body, `#id`) and does not call it |
@@ -967,7 +974,7 @@ Provider-neutral Markdown; the same for both providers.
 | `git.commit` | mutation · always | `{ project_id, worktree?, message, all?: bool }` → `{ sha }` — caps and protected paths apply |
 | `git.fetch` | mutation · agent_only | `{ project_id }` → `{ ahead, behind }` |
 | `git.push` | mutation · always | `{ project_id, worktree?, set_upstream? = auto }` → `{}` — a branch without an upstream is first-pushed as `git push -u origin <branch>`; explicit `false` keeps plain-push behavior |
-| `git.pr.list` | query | `{ project_id, refresh? }` → `{ pull_requests: { number, branch, draft, url, title }[] }` — GitHub PRs reported by the authenticated `gh` CLI. One listing answers for a minute per repository (D130: redraws must not repeat the network request); `refresh` asks GitHub now, and `git.push` / `git.pr.open` drop the cached one |
+| `git.pr.list` | query | `{ project_id, refresh? }` → `{ pull_requests: { number, branch, draft, url, title }[] }` — GitHub PRs reported by the authenticated `gh` CLI: every open one, and the 100 most recently updated closed or merged ones (`complete: false` when that page failed). One listing, or one failure, answers for a minute per repository (D130: redraws must not repeat the network request); `refresh` asks GitHub now, and `git.push` / `git.pr.open` drop the cached one |
 | `git.pr.open` | mutation · always | `{ project_id, worktree?, title?, body? }` → `{ url }` — `gh pr create` runs before the store lock, with a 25 s deadline; `git.pr_timeout` means the outcome is unknown |
 | `git.branch.clean_merged` | mutation · always · user | `{ project_id, dry_run? }` → `{ deleted: string[], failed: {branch, reason}[] }` — an alias of `git.branch.cleanup` (same rules, same staged pass), answering with the branches deleted, or on a dry run that would be, and in `failed` the merged ones it could not delete (a dirty or held checkout, a rebase in progress, a failed delete) with why; unmerged work is in neither. It used to delete any merged local branch by rules of its own, which had drifted from cleanup's |
 | `git.branch.cleanup` | mutation · always · user | `{ project_id, dry_run? }` → `{ branches: {branch, session?, outcome, reason, pr?, removed_worktree, deleted_remote, merged}[] }` — closed sessions' `relay/*` branches whose work is merged (an ancestor of the base, every commit already upstream by patch id, or a merged GitHub PR containing the tip) are deleted; anything else is `kept` with the reason (`merged` tells a merged branch that could not go from unmerged work). A branch checked out in the primary, by an open session or outside the pool, or being rebased or bisected, stays; a clean, unowned pooled checkout holding it is removed first. The remote branch is deleted only for a merged PR, leased on the sha just seen. The same pass runs after `session.close`, when `git.pr.list` sees a closed session's PR merged, and as a background sweep 90 s after start and every 20 min (a kept, unchanged branch is looked at again ever less often, up to weekly). Each deletion writes a `system` audit row and emits `git.changed` |
@@ -1005,7 +1012,7 @@ at it; one moved by hand without `git worktree move` is refused until `git workt
 |---|---|---|
 | `device.list` | query | `{}` → `{ devices: Device[] }` (adb + AVDs later) |
 | `device.watch` | mutation · never · user | `{ on: bool }` → `{}`; while device control is visible, `adb track-devices` emits `device.changed`; off tears it down |
-| `device.mirror.start` | mutation · always | `{ device, max_size?, bitrate? }` → `{ mirror_id, width, height }` + `mirror` stream; the scrcpy server jar is taken from `$RELAY_SCRCPY_SERVER`, else `~/.local/share/relay-v4/scrcpy-server-v4.1`, else the checkout the engine was built from, and checked against its pinned SHA-256 before every push (`device.mirror_server_missing`, `device.mirror_server_mismatch`) |
+| `device.mirror.start` | mutation · always | `{ device, max_size?, bitrate? }` → `{ mirror_id, width, height }` + `mirror` stream; the scrcpy server jar is taken from `$RELAY_SCRCPY_SERVER`, else `~/.local/share/relay-v4/scrcpy-server-v4.1`, else the checkout the engine was built from, and checked against its pinned SHA-256 before every push (`device.mirror_server_missing`, `device.mirror_server_mismatch`). `bitrate` (and the size ladder's own rate) is held to 8–50 Mbps; see *Mirror launch* below |
 | `device.mirror.stop` | mutation · always | `{ mirror_id }` → `{}` |
 | `device.mirror.input` | mutation · never | `{ mirror_id, event }` → `{}`; `event` is `{type: "tap", x, y}`, `{type: "swipe", x1, y1, x2, y2}` (stream coordinates) or one of scrcpy's input messages (`touch`, `scroll`, `key`, `keypress`, `text`, `setclipboard`, `back`, `home`, …). A `swipe` is instant — DOWN, one MOVE, UP in one write, so it lands as a fling — and refuses any other field (`duration_ms`); send `touch` events for a timed drag. `setclipboard` text is at most 262,130 bytes (one message, never split); longer is `device.input` — use `text`, which is split |
 | `device.run` | mutation · always | `{ project_id, worktree?, device, variant?, integration_id? }` → `Run` (state `building`) + `logcat` stream; crashes surface as `run.crash` events |
@@ -1020,6 +1027,31 @@ at it; one moved by hand without `git worktree move` is refused until `git workt
 | `avd.create` | mutation · always | `{ name, package, device? }` → `Avd` |
 | `avd.boot` | mutation · always | `{ name, cold? }` → `{}`; boots headless (`-no-window`) — Relay's mirror is its screen. The emulator then appears through `device.list` and uses the normal deploy pipeline. An AVD adb already lists as running is refused `conflict`/`avd.already_running`. `avd.changed {name, state, message?}` follows it: `booting`, then `started`, or `failed` / `stopped` with the emulator's `message` when it exits early (RA-349) |
 | `avd.stop` | mutation · always | `{ name }` → `{}`; `adb emu kill` on the running AVD (`avd.not_running` otherwise), since a headless emulator has no window to close |
+
+**Mirror launch.** Each mirror start reads the device's display once (`adb shell dumpsys
+display`, alongside the jar push) and boots the scrcpy server with `max_fps` at the panel's top
+refresh rate — the highest of display 0's modes, rounded, at least 60 and at most 144; 60 when
+the output says nothing usable. A 120 Hz phone capped at 60 showed every other frame and added
+~4 ms on average. `video_bit_rate` follows the capture-size ladder (8 Mbps at 1024, up to 20 Mbps)
+and never goes under 8 Mbps: at 4 Mbps busy content was measured arriving 0.7–1.3 s late, the
+device queueing frames it could not encode in budget. The whole launch line is logged at INFO
+(`mirror server launch`). Settings, all read at each start:
+
+| setting | default | effect |
+|---|---|---|
+| `device.mirror.max_fps` | `null` | a fixed cap (1–144) instead of the device's refresh rate |
+| `device.mirror.video_codec_options` | `null` | extra encoder keys passed as scrcpy's `video_codec_options`, `key[:type]=value` comma-separated (`type` is `int`, `long`, `float` or `string`), merged over Relay's own (none today; a key given here wins). Meant for vendor low-latency keys such as `vendor.qti-ext-enc-low-latency.enable:int=1` (Qualcomm); unverified on real hardware, and a key the encoder does not know is ignored by it. Keys and values are limited to letters, digits and `._-` (`+` in values) because the line goes through the device's shell; a bad entry drops the whole value with a warning, and the mirror starts without it |
+| `device.mirror.pin_refresh_rate` | `false` | while a mirror runs, `settings put system min_refresh_rate <top rate>` so an adaptive (LTPO / Samsung "Adaptive") panel does not idle at a low rate and delay the first frame after a tap. The previous value is written to `mirror-refresh` beside the store *before* anything changes, and put back (`settings delete` when it was unset) when the device's last mirror ends, when the engine shuts down, at the next engine start, or at the next mirror start on that device — whichever first finds it connected. With no record file (an in-memory store) or a previous value that cannot be written back verbatim, nothing is pinned. `peak_refresh_rate` is never touched. A device that never comes back while Relay runs keeps the pin until it does: `adb shell settings delete system min_refresh_rate` (or the value the file names) undoes it by hand |
+
+**Mirror trace.** `RELAY_MIRROR_TRACE=1` (read once at first use; off costs one load per
+packet) logs each video packet at the `mirror_trace` tracing target, INFO, so the subscriber
+must let it through (`RUST_LOG=mirror_trace=info` for the native client, `RELAY_LOG` for
+`relay serve`). Stamps are `CLOCK_MONOTONIC` nanoseconds (`mono_ns`); `seq` is the packet's
+frame `seq`, the key that joins the engine's lines to the client's:
+`stage="read"` (worker, payload read off the scrcpy socket; also `header_ns`, `pts_us` — the
+device's presentation time — `len`, `key`, `config`), `stage="serialize"` (socket door, frame
+encoded; `recv_ns` when it left the broadcast queue, `bytes`), `stage="flush"` (socket door, the
+write holding it returned; `batch_bytes`).
 
 ### 10.15 provider / usage / skill / plugin
 
@@ -1139,7 +1171,7 @@ Column transitions by actor (anything else is `conflict` / `task.column_transiti
 | from → to | user | agent (own task) |
 |---|---|---|
 | any → any (drag) | ✓ | ✗ |
-| `active → in_review` | ✓ | ✓ (also implicit on `session.done`) |
+| `active → in_review` | ✓ | only through `session.done`, which judges the branch first |
 | `* → done` | via `task.approve` (links sha) | ✗ |
 | `* → active` | via `task.dispatch` or drag | ✗ |
 

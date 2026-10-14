@@ -1226,6 +1226,26 @@ impl Ui {
         });
     }
     pub(crate) fn load_appearance(self: &Rc<Self>) {
+        /// What the last reload applied. Each runs 150 ms after any appearance or font-size
+        /// save, slider drags included, and repeats only what changed: a stylesheet reload
+        /// restyles every widget in both windows, and a wallpaper decode is a 4K JPEG.
+        #[derive(Default)]
+        struct Applied {
+            /// The provider below was loaded into; another `Ui` starts over.
+            provider: usize,
+            css: String,
+            /// The wallpaper value shown (or being decoded), `None` before the first.
+            wallpaper: Option<Value>,
+            /// Counts decodes, so only the newest one lands.
+            decode: u64,
+            /// Counts reloads, so one that waited on a decode does not undo a newer one.
+            reload: u64,
+            /// The mode and font size the editor and every pane last took.
+            panes: Option<(String, f64)>,
+        }
+        thread_local! {
+            static APPLIED: RefCell<Applied> = RefCell::new(Applied::default());
+        }
         let ui = self.clone();
         glib::spawn_future_local(async move {
             let generation = ui.generation.get();
@@ -1243,6 +1263,15 @@ impl Ui {
             if generation != ui.generation.get() {
                 return;
             }
+            let provider = ui.appearance.as_ptr() as usize;
+            let reload = APPLIED.with(|a| {
+                let mut a = a.borrow_mut();
+                if a.provider != provider {
+                    *a = Applied { provider, ..Applied::default() };
+                }
+                a.reload += 1;
+                a.reload
+            });
             if let Ok(value) = mode {
                 *ui.palette.borrow_mut() = value["value"].as_str().unwrap_or("matte").into();
             }
@@ -1291,40 +1320,80 @@ impl Ui {
             };
             css += &format!("\n@define-color plate alpha({},{plate:.3});", colors[crate::fonts::SCREEN]);
             css += &format!("\n@define-color backbox_chrome alpha({},{});", colors[1], alpha.max(0.84));
-            ui.appearance.load_from_string(&css);
-            ui.wallpaper_dim.set_opacity(
-                dim.ok()
-                    .and_then(|v| v["value"].as_f64())
-                    .unwrap_or(0.28)
-                    .clamp(0., 0.85),
-            );
+            let dim = dim.ok().and_then(|v| v["value"].as_f64()).unwrap_or(0.28).clamp(0., 0.85);
+            // The picture, decoded off the GTK thread (base64 and a full-size JPEG or PNG) and
+            // only when it changed. `None`: keep what is shown; `Some(Err)`: it would not decode.
+            let mut picture: Option<Result<Option<gtk::gdk::Texture>, ()>> = None;
             if let Ok(v) = image {
                 // Settings keeps showing the saved choice; a rotation only paints this window.
                 crate::tools::settings::sync_wallpaper(&ui, &v["value"]);
                 let image = crate::wallpaper_rotation::shown(&ui, &v["value"]);
-                use base64::Engine;
-                if let Some(data) = image.as_str().and_then(|s| {
-                    s.strip_prefix("data:image/jpeg;base64,")
-                        .or_else(|| s.strip_prefix("data:image/png;base64,"))
-                }) {
-                    match base64::engine::general_purpose::STANDARD
-                        .decode(data)
-                        .ok()
-                        .and_then(|bytes| {
-                            gtk::gdk::Texture::from_bytes(&glib::Bytes::from_owned(bytes)).ok()
-                        }) {
-                        Some(texture) => ui.wallpaper.set_paintable(Some(&texture)),
-                        None => ui.show_error("The saved wallpaper could not be decoded."),
+                let decode = APPLIED.with(|a| {
+                    let mut a = a.borrow_mut();
+                    if a.wallpaper.as_ref() == Some(&image) {
+                        return None;
                     }
-                } else {
-                    ui.wallpaper.set_paintable(gtk::gdk::Paintable::NONE);
+                    a.wallpaper = Some(image.clone());
+                    a.decode += 1;
+                    Some(a.decode)
+                });
+                if let Some(decode) = decode {
+                    let data = image.as_str().and_then(|s| {
+                        s.strip_prefix("data:image/jpeg;base64,")
+                            .or_else(|| s.strip_prefix("data:image/png;base64,"))
+                    });
+                    let decoded = match data {
+                        Some(data) => {
+                            let data = data.to_owned();
+                            ui.rt
+                                .spawn_blocking(move || {
+                                    use base64::Engine;
+                                    base64::engine::general_purpose::STANDARD.decode(data).ok().and_then(|bytes| {
+                                        gtk::gdk::Texture::from_bytes(&glib::Bytes::from_owned(bytes)).ok()
+                                    })
+                                })
+                                .await
+                                .ok()
+                                .flatten()
+                                .map(Some)
+                                .ok_or(())
+                        }
+                        None => Ok(None),
+                    };
+                    // A newer reload chose another picture meanwhile.
+                    if APPLIED.with(|a| a.borrow().decode) == decode {
+                        picture = Some(decoded);
+                    }
                 }
             }
-
-            ui.editor.set_palette(&ui.palette.borrow());
-            for p in ui.panes.borrow().values() {
-                p.apply_appearance(&ui.palette.borrow(), ui.font_size.get());
-                p.schedule_resize();
+            // The look lands in one go, picture included, as it did when the decode held the
+            // thread; a reload that started while this one decoded has applied its own.
+            if APPLIED.with(|a| a.borrow().reload) == reload {
+                // The font size is not in it: a size change leaves the stylesheet alone.
+                if APPLIED.with(|a| a.borrow().css != css) {
+                    ui.appearance.load_from_string(&css);
+                    APPLIED.with(|a| a.borrow_mut().css = css);
+                }
+                ui.wallpaper_dim.set_opacity(dim);
+            }
+            match picture {
+                Some(Ok(texture)) => ui.wallpaper.set_paintable(texture.as_ref()),
+                Some(Err(())) => {
+                    // Not remembered as shown, so the next reload says so again.
+                    APPLIED.with(|a| a.borrow_mut().wallpaper = None);
+                    ui.show_error("The saved wallpaper could not be decoded.");
+                }
+                None => {}
+            }
+            // The editor and the terminals: only a mode or font size they have not taken.
+            let applied = (ui.palette.borrow().clone(), ui.font_size.get());
+            if APPLIED.with(|a| a.borrow().panes.as_ref() != Some(&applied)) {
+                ui.editor.set_palette(&ui.palette.borrow());
+                for p in ui.panes.borrow().values() {
+                    p.apply_appearance(&ui.palette.borrow(), ui.font_size.get());
+                    p.schedule_resize();
+                }
+                APPLIED.with(|a| a.borrow_mut().panes = Some(applied));
             }
         });
     }

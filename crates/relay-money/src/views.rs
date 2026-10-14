@@ -400,4 +400,9 @@ pub struct SyncOut {
     /// The device's changes taken, and those older than what is here or not placeable.
     pub applied: usize,
     pub skipped: usize,
+    /// Only when the device asked with a `limit`: `changes` is one page and more are left. Ask
+    /// again with `since` set to `cursor` (and the same generation), and apply the pages together
+    /// once this is false. Left out when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub more: bool,
 }

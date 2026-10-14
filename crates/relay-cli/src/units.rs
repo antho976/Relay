@@ -18,9 +18,10 @@
 use relay_money::csv::major_string;
 use serde_json::{Map, Value};
 
-/// Decimal places of `code`; two for a code the ledger does not know.
+/// Decimal places of `code`, read the way the ledger reads a code ("jpy" is JPY); two for a code
+/// the ledger does not know.
 pub fn digits(code: &str) -> u32 {
-    relay_money::money::fraction_digits(code).unwrap_or(2)
+    relay_money::money::fraction_digits(&code.trim().to_ascii_uppercase()).unwrap_or(2)
 }
 
 /// Whether anything in `schema` carries a unit.
@@ -399,6 +400,19 @@ mod tests {
         let mut args = json!({"account_id": 3, "type": "FX", "date": "2026-10-10", "currency": "JPY", "amount": "10000", "to_currency": "CAD", "to_amount": "90.5"});
         to_engine(&mut args, payload, 2).unwrap();
         assert_eq!((args["amount"].clone(), args["to_amount"].clone()), (json!(10000), json!(9050)));
+    }
+
+    #[test]
+    fn a_currency_in_lower_case_counts_its_own_places() {
+        // The ledger takes " jpy" as JPY, so its places are JPY's, not the two of an unknown code.
+        assert_eq!((digits("jpy"), digits(" kwd "), digits("cad")), (0, 3, 2));
+        let payload = &schema("money.invest.add")["payload"];
+        let mut args = json!({"account_id": 3, "type": "FX", "date": "2026-10-10", "currency": "jpy", "amount": "5000", "to_currency": " kwd", "to_amount": "1.5"});
+        to_engine(&mut args, payload, 2).unwrap();
+        assert_eq!((args["amount"].clone(), args["to_amount"].clone()), (json!(5000), json!(1500)));
+        let mut page = json!({"currency": "jpy", "income": 1500, "spent": 0, "budgets": [], "accounts": []});
+        to_agent(&mut page, &schema("money.summary")["result"], 2);
+        assert_eq!(page["income"], "1500");
     }
 
     #[test]
