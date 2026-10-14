@@ -1,5 +1,5 @@
 [versions]
-# Toolchain: the same generation as apps/tally, so one machine and one CI image serve both.
+# Toolchain: the same generation as Tally (antho976/Tally), so one machine and one CI image serve both.
 agp = "9.2.1"
 kotlin = "2.2.10"
 ksp = "2.3.2"

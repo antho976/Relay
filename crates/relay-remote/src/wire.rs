@@ -151,7 +151,7 @@ pub const PHONE_OPS: &[&str] = &[
     "mailbox.list", "mailbox.outbox", "mailbox.send",
     "module.changelog.draft", "module.complete", "module.create", "module.delete", "module.get",
     "module.list", "module.reopen", "module.restore", "module.update",
-    // Tally's sync (apps/tally), and for the Threads space on the phone (apps/relay-android)
+    // Tally's sync (antho976/Tally), and for the Threads space on the phone (apps/relay-android)
     // the ledger's reads and the Undo of an entry a thread added.
     "money.invest.delete", "money.invest.list", "money.invest.restore", "money.invest.summary",
     "money.lists", "money.series", "money.summary", "money.sync", "money.tx.delete",

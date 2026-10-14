@@ -2,8 +2,8 @@
 //! budget period, over one or more budget periods.
 //!
 //! A reading of the ledger for the PC's charts, not a money rule: the phone has no counterpart, so
-//! nothing here needs mirroring in `apps/tally/core`. Amounts stay minor units; transfers count as
-//! neither income nor spending, as everywhere else.
+//! nothing here needs mirroring in Tally's `core/` (antho976/Tally). Amounts stay minor units;
+//! transfers count as neither income nor spending, as everywhere else.
 
 use crate::model::TxType;
 use crate::period::{days_between, BudgetPeriod};
