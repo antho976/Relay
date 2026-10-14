@@ -178,6 +178,34 @@ result!(#[schemars(rename = "SessionScrollbackOut")] ScrollbackOut {
     #[serde(default, skip_serializing_if = "Option::is_none")] pub rows: Option<u16>,
 });
 op!(Scrollback, "session.scrollback", ScrollbackIn => ScrollbackOut, OpMeta::query(Scope::Session, 3, "Scrollback text, the (epoch, seq) it ends at, and the PTY's size"));
+payload!(#[schemars(rename = "SessionTranscriptIn")] TranscriptIn {
+    pub session: String,
+    /// The `cursor` of the previous answer: only what the agent wrote since. Absent, the
+    /// conversation's last `limit` messages.
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub after: Option<u64>,
+    /// At most this many messages, the newest kept (default 200, at most 1000).
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub limit: Option<u32>,
+});
+result!(#[schemars(rename = "SessionTranscriptMessage")] TranscriptMessage {
+    /// Stable across reads: the provider's own id for the record, or its byte offset.
+    pub id: String,
+    /// `user`, `assistant` (`blocks` of `text` and `tool_use {id, name, summary}`), or `tool`
+    /// (`{tool_use_id, is_error, text}`) — a thread message's shape (`thread.get`).
+    pub role: String,
+    pub body: Value,
+    pub created_at: String,
+});
+result!(#[schemars(rename = "SessionTranscriptOut")] TranscriptOut {
+    pub messages: Vec<TranscriptMessage>,
+    /// Pass it back as `after` for what comes next.
+    pub cursor: u64,
+    /// The messages replace everything read before: the conversation moved to another file
+    /// (a resume, a new conversation) or `after` was past its end.
+    pub reset: bool,
+    /// Whether the provider's conversation was found; false before its first hook names it.
+    pub found: bool,
+});
+op!(Transcript, "session.transcript", TranscriptIn => TranscriptOut, OpMeta::query(Scope::Session, 3, "The agent's conversation as messages, read from the provider's own log, from a cursor"));
 result!(#[schemars(rename = "SessionRestorable")] Restorable { pub session: Session, pub reason: String, pub worktree_dirty: bool });
 result!(#[schemars(rename = "SessionRestorableOut")] RestorableOut { pub sessions: Vec<Restorable> });
 payload!(#[schemars(rename = "SessionRestorableIn")] RestorableIn {
@@ -274,6 +302,7 @@ entries!(
     Input,
     Resize,
     Scrollback,
+    Transcript,
     RestorableList,
     DiscardRestorable,
     RepoAdd,

@@ -39,6 +39,7 @@ pub mod socket;
 pub mod store;
 pub mod threads;
 pub mod time;
+pub mod transcript;
 pub mod usage;
 pub mod watch;
 pub mod worktree;

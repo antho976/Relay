@@ -2206,6 +2206,20 @@ pub fn register(e: &mut Engine) {
         };
         Ok(ScrollbackOut { text, epoch, seq, cols: size.map(|s| s.0), rows: size.map(|s| s.1) })
     });
+    // A file read of up to 8 MiB, and for Codex a walk to find the file: never under the lock.
+    e.register_unlocked::<Transcript>(|ctx, p| {
+        let row = read_own_or_pair(ctx, &p.session)?;
+        let s = &row.session;
+        let worktree = Path::new(&s.worktree);
+        let path = s.provider_ref.as_deref().filter(|reference| crate::providers::is_provider_ref(reference))
+            .and_then(|reference| crate::transcript::locate(s.provider, reference, worktree));
+        let Some(path) = path else {
+            return Ok(TranscriptOut { messages: Vec::new(), cursor: 0, reset: false, found: false });
+        };
+        let limit = p.limit.unwrap_or(200).clamp(1, 1000) as usize;
+        crate::transcript::read(s.provider, &path, worktree, p.after, limit)
+            .map_err(|e| BusError::unavailable("session.transcript_unreadable", format!("{}: {e}", path.display())))
+    });
 
     // Linked repositories (crate::linked). The clone is network work and the status scans are
     // git subprocesses, so both run before the transaction opens; the transaction only tells
