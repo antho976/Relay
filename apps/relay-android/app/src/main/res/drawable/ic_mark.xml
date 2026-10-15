@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The mark (apps/relay-native/src/start.rs): a lowercase r in one ink stroke and the signal
-     that has left the end of it, on Relay's 120-unit grid, inset for the splash screen's circle. -->
+<!-- The mark (apps/relay-native/src/start.rs): three ink lanes staggered like a relay's start and
+     the signal broken away ahead of the front one, on Relay's 120-unit grid, inset for the
+     adaptive icon's safe circle. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group android:scaleX="0.5" android:scaleY="0.5" android:translateX="24" android:translateY="24">
-        <path android:pathData="M29,91 V58 A29,29 0 0,1 66.96,30.42" android:strokeColor="@color/ink" android:strokeWidth="17" android:strokeLineCap="round" android:strokeLineJoin="round" />
-        <path android:pathData="M80.08,41.66 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0z" android:fillColor="@color/signal" />
+        <path android:pathData="M23,87 H77 M37,61 H91 M51,35 H71" android:strokeColor="@color/ink" android:strokeWidth="16" android:strokeLineCap="round" />
+        <path android:pathData="M85,35 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0z" android:fillColor="@color/signal" />
     </group>
 </vector>

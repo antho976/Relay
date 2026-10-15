@@ -2,14 +2,15 @@
 //! space, opened with one animation and kept alive by a quiet pulse. What a card does and what its
 //! live line says is `money.rs`'s.
 //!
-//! The mark is a lowercase r written in one stroke on a 120 grid: a stem rising into a shoulder
-//! (centre (58, 58), r29, from 180° to 288°), stroke 17 with round caps and joins, in ink; the
-//! signal, r10, has left the end of the stroke and rests a little ahead of it, at 333° and 36 out.
+//! The mark is three lanes staggered like a relay's start, on a 120 grid, stroke 16 with round
+//! caps, in ink: (y, from x, to x) = (87, 23, 77), (61, 37, 91), (35, 51, 71), back to front. The
+//! signal, r10, has broken away ahead of the front lane and rests at (95, 35).
 //! The wordmark is Sora 600.
 //!
 //! The opening runs once when the screen opens, about 1.9 s, all from one frame-clock tick: the
-//! r writes itself, stem then shoulder, with the signal as the pen's lit tip; at the end of the
-//! stroke the signal leaves it for its place, and on landing it sends a wave across the field.
+//! lanes draw in one after another from the back, each with a lit tip that cools as it lands; the
+//! front lane's tip is the signal, which breaks away to its place with a short streak, and on
+//! landing it kicks back through the lanes and sends a wave across the field.
 //! The wordmark spells itself in, then the greeting, then the cards one after the other. After
 //! that the signal beats and sends a fainter wave every few seconds, until a card is picked; the
 //! screen then fades out. With animations off (GTK's setting) it opens at its last frame and
@@ -35,8 +36,13 @@ const DIM: (f64, f64, f64) = (0x63 as f64 / 255.0, 0x66 as f64 / 255.0, 0x6B as 
 const SIGNAL: (f64, f64, f64) = (0xC6 as f64 / 255.0, 0xF2 as f64 / 255.0, 0x4E as f64 / 255.0);
 
 /// Where each part's motion sits on the 0..1 timeline: (from, to).
-const WRITE: (f64, f64) = (0.02, 0.40);
-const SIGNAL_IN: (f64, f64) = (0.40, 0.54);
+/// The lanes, back to front: each draws in from its start, overshoots a little and settles.
+const LANES: [(f64, f64); 3] = [(0.02, 0.30), (0.07, 0.35), (0.12, 0.40)];
+/// The signal breaking away from the front lane's tip.
+const SIGNAL_IN: (f64, f64) = (0.40, 0.56);
+/// The kick back through the lanes as the signal lands, front lane first, each `RECOIL_STEP` later.
+const RECOIL: (f64, f64) = (0.50, 0.64);
+const RECOIL_STEP: f64 = 0.03;
 /// The dots coming up, from the mark outward.
 const WAVE: (f64, f64) = (0.0, 0.7);
 /// The wave the signal sends across the field as it lands.
@@ -48,17 +54,15 @@ const CARD_DEV: (f64, f64) = (0.62, 0.92);
 const CARD_THREADS: (f64, f64) = (0.70, 1.0);
 const HINT: (f64, f64) = (0.84, 1.0);
 
-/// The r on its 120 grid: the shoulder's centre and radius, the stem's length below that
-/// centre, where the shoulder ends (degrees, clockwise from three o'clock) and the stroke.
-const CENTRE: (f64, f64) = (58.0, 58.0);
-const RADIUS: f64 = 29.0;
-const STEM: f64 = 33.0;
-const SHOULDER_END: f64 = 288.0;
-const STROKE: f64 = 17.0;
-/// The signal at rest, in polar terms around the shoulder's centre, and its radius.
-const SIGNAL_ANGLE: f64 = 333.0;
-const SIGNAL_RADIUS: f64 = 36.0;
+/// The mark on its 120 grid: each lane (y, from x, to x), back to front, and the stroke.
+const LANE: [(f64, f64, f64); 3] = [(87.0, 23.0, 77.0), (61.0, 37.0, 91.0), (35.0, 51.0, 71.0)];
+const STROKE: f64 = 16.0;
+/// The signal at rest, ahead of the front lane, and its radius.
+const SIGNAL_AT: (f64, f64) = (95.0, 35.0);
 const SIGNAL_DOT: f64 = 10.0;
+/// The lit trail behind a moving lane's head, and how far the landing kicks the lanes back.
+const TRAIL: f64 = 24.0;
+const RECOIL_UNITS: f64 = 3.0;
 /// Field dots: one every `DOT_STEP` pixels.
 const DOT_STEP: f64 = 26.0;
 /// A settled dot's alpha, at the mark; it dims toward the far corners.
@@ -87,12 +91,6 @@ fn phase(t: f64, (from, to): (f64, f64)) -> f64 {
     1.0 - (1.0 - x).powi(3)
 }
 
-/// `t` (0..1) within `span`, eased in and out: for travel between two rests.
-fn phase_smooth(t: f64, (from, to): (f64, f64)) -> f64 {
-    let x = ((t - from) / (to - from)).clamp(0.0, 1.0);
-    if x < 0.5 { 4.0 * x * x * x } else { 1.0 - (-2.0 * x + 2.0).powi(3) / 2.0 }
-}
-
 /// Like `phase`, with a small overshoot: the signal arrives and settles.
 fn phase_back(t: f64, (from, to): (f64, f64)) -> f64 {
     let x = ((t - from) / (to - from)).clamp(0.0, 1.0);
@@ -105,41 +103,47 @@ pub(crate) fn draw_mark(cr: &gtk::cairo::Context, size: f64, t: f64) {
     draw_mark_beat(cr, size, t, 0.0);
 }
 
-/// The stroke's length: the stem, then the shoulder.
-fn stroke_length() -> f64 {
-    STEM + RADIUS * (SHOULDER_END - 180.0).to_radians()
-}
-
 /// Where the signal rests, on the 120 grid.
 fn signal_rest() -> (f64, f64) {
-    let a = SIGNAL_ANGLE.to_radians();
-    (CENTRE.0 + SIGNAL_RADIUS * a.cos(), CENTRE.1 + SIGNAL_RADIUS * a.sin())
+    SIGNAL_AT
 }
 
-/// The point `along` the stroke, from the foot of the stem.
-fn stroke_point(along: f64) -> (f64, f64) {
-    if along <= STEM {
-        return (CENTRE.0 - RADIUS, CENTRE.1 + STEM - along);
+/// How far lane `order` (0 is the front) is kicked back at `t`, 0..1: out and home again.
+fn recoil(t: f64, order: usize) -> f64 {
+    let from = RECOIL.0 + RECOIL_STEP * order as f64;
+    let x = ((t - from) / (RECOIL.1 - RECOIL.0)).clamp(0.0, 1.0);
+    (PI * x).sin() * (1.0 - x)
+}
+
+/// One lane drawn from its start to `reach` of its length, `shift` units back, with a lit trail
+/// behind its head while `lit` (0..1).
+fn draw_lane(cr: &gtk::cairo::Context, (y, from, to): (f64, f64, f64), reach: f64, lit: f64, shift: f64) {
+    let (a, b) = (from - shift, from + (to - from) * reach - shift);
+    if b - a < 0.5 {
+        return;
     }
-    let a = PI + (along - STEM) / RADIUS;
-    (CENTRE.0 + RADIUS * a.cos(), CENTRE.1 + RADIUS * a.sin())
-}
-
-/// Adds the stretch of the stroke from `from` to `to` (lengths from the foot) as one sub-path.
-fn trace(cr: &gtk::cairo::Context, from: f64, to: f64) {
-    let to = to.min(stroke_length());
-    cr.new_sub_path();
-    if from < STEM {
-        let (x, y) = stroke_point(from);
+    let (ir, ig, ib) = INK;
+    let (red, green, blue) = SIGNAL;
+    cr.set_line_cap(gtk::cairo::LineCap::Round);
+    cr.set_source_rgb(ir, ig, ib);
+    cr.move_to(a, y);
+    cr.line_to(b, y);
+    let _ = cr.stroke();
+    if lit <= 0.0 {
+        return;
+    }
+    let tail = (b - a).min(TRAIL);
+    cr.set_line_cap(gtk::cairo::LineCap::Butt);
+    for step in 0..8 {
+        let x = b - tail * f64::from(8 - step) / 8.0;
+        cr.set_source_rgba(red, green, blue, lit * (0.12 + 0.11 * f64::from(step)));
         cr.move_to(x, y);
-        let (x, y) = stroke_point(to.min(STEM));
-        cr.line_to(x, y);
+        cr.line_to(x + tail / 8.0 + 0.6, y);
+        let _ = cr.stroke();
     }
-    if to > STEM {
-        let a0 = PI + (from.max(STEM) - STEM) / RADIUS;
-        let a1 = PI + (to - STEM) / RADIUS;
-        cr.arc(CENTRE.0, CENTRE.1, RADIUS, a0, a1);
-    }
+    cr.set_source_rgba(red, green, blue, lit);
+    cr.arc(b, y, STROKE / 2.0, 0.0, 2.0 * PI);
+    let _ = cr.fill();
 }
 
 /// The mark at `t`, its signal swollen by `beat` (0..1, the ambient pulse's heartbeat).
@@ -147,41 +151,38 @@ fn draw_mark_beat(cr: &gtk::cairo::Context, size: f64, t: f64, beat: f64) {
     let s = size / 120.0;
     cr.scale(s, s);
     cr.set_line_width(STROKE);
-    cr.set_line_join(gtk::cairo::LineJoin::Round);
-    let (ir, ig, ib) = INK;
+    let front = LANE.len() - 1;
+    // The lanes come in from the back, each lit at its head until it lands; the front lane's
+    // lit head is the signal, so it stays lit until the signal leaves it.
+    for (k, (&lane, &span)) in LANE.iter().zip(LANES.iter()).enumerate() {
+        let lit = if k == front {
+            if t < SIGNAL_IN.0 { 1.0 } else { 0.0 }
+        } else {
+            1.0 - phase(t, (span.1 - 0.06, span.1 + 0.08))
+        };
+        draw_lane(cr, lane, phase_back(t, span), lit, RECOIL_UNITS * recoil(t, front - k));
+    }
+    if t < SIGNAL_IN.0 {
+        return;
+    }
+    // The signal breaks away from the front lane's tip, a streak behind it, and settles ahead.
     let (red, green, blue) = SIGNAL;
-    // The r writes itself, stem first, at a pen's even pace.
-    let drawn = stroke_length() * phase_smooth(t, WRITE);
-    if drawn > 0.5 {
-        cr.set_line_cap(gtk::cairo::LineCap::Round);
-        cr.set_source_rgb(ir, ig, ib);
-        trace(cr, 0.0, drawn);
+    let (y, _, end) = LANE[front];
+    let travel = phase_back(t, SIGNAL_IN);
+    let x = end + (SIGNAL_AT.0 - end) * travel;
+    let r = STROKE / 2.0 + (SIGNAL_DOT - STROKE / 2.0) * travel + 1.6 * beat;
+    let streak = 1.0 - phase(t, SIGNAL_IN);
+    if streak > 0.01 {
+        cr.set_line_cap(gtk::cairo::LineCap::Butt);
+        cr.set_line_width(r * 1.2);
+        cr.set_source_rgba(red, green, blue, 0.55 * streak);
+        cr.move_to((x - 30.0 * streak).max(end), y);
+        cr.line_to(x, y);
         let _ = cr.stroke();
     }
-    let travel = phase_smooth(t, SIGNAL_IN);
-    if drawn > 0.5 && travel <= 0.0 {
-        // While it writes, the signal is the pen's tip, with a short fading tail behind it.
-        let tail = drawn.min(30.0);
-        cr.set_line_cap(gtk::cairo::LineCap::Butt);
-        for step in 0..8 {
-            let from = drawn - tail * f64::from(8 - step) / 8.0;
-            cr.set_source_rgba(red, green, blue, 0.12 + 0.11 * f64::from(step));
-            trace(cr, from, from + tail / 8.0 + 0.6);
-            let _ = cr.stroke();
-        }
-        let (x, y) = stroke_point(drawn);
-        cr.set_source_rgb(red, green, blue);
-        cr.arc(x, y, STROKE / 2.0, 0.0, 2.0 * PI);
-        let _ = cr.fill();
-    } else if travel > 0.0 {
-        // Then it leaves the end of the stroke, carrying on round, and lands a little outside.
-        let angle = (SHOULDER_END + (SIGNAL_ANGLE - SHOULDER_END) * travel).to_radians();
-        let reach = RADIUS + (SIGNAL_RADIUS - RADIUS) * travel;
-        let r = STROKE / 2.0 + (SIGNAL_DOT - STROKE / 2.0) * phase_back(t, SIGNAL_IN) + 1.6 * beat;
-        cr.set_source_rgb(red, green, blue);
-        cr.arc(CENTRE.0 + reach * angle.cos(), CENTRE.1 + reach * angle.sin(), r, 0.0, 2.0 * PI);
-        let _ = cr.fill();
-    }
+    cr.set_source_rgb(red, green, blue);
+    cr.arc(x, y, r, 0.0, 2.0 * PI);
+    let _ = cr.fill();
 }
 
 /// One wave over the field: from the signal, `progress` (0..1) of the way out, at `strength`.
@@ -688,50 +689,55 @@ mod tests {
 
     #[test]
     fn every_part_starts_hidden_and_ends_in_place() {
-        for span in [WRITE, WAVE, PING, WORDMARK, GREETING, QUESTION, CARD_DEV, CARD_THREADS, HINT] {
+        for span in [WAVE, PING, WORDMARK, GREETING, QUESTION, CARD_DEV, CARD_THREADS, HINT] {
             assert_eq!(phase(0.0, span), 0.0);
             assert!((phase(1.0, span) - 1.0).abs() < 1e-9);
         }
-        for span in [WRITE, SIGNAL_IN] {
-            assert!(phase_smooth(0.0, span).abs() < 1e-9);
-            assert!((phase_smooth(1.0, span) - 1.0).abs() < 1e-9);
+        for span in LANES.into_iter().chain([SIGNAL_IN]) {
+            assert!(phase_back(0.0, span).abs() < 1e-9);
+            assert!((phase_back(1.0, span) - 1.0).abs() < 1e-9);
         }
-        assert!(phase_back(0.0, SIGNAL_IN).abs() < 1e-9);
-        assert!((phase_back(1.0, SIGNAL_IN) - 1.0).abs() < 1e-9);
+        // The kick back is over, for every lane, before the opening ends.
+        for order in 0..LANE.len() {
+            assert_eq!(recoil(0.0, order), 0.0);
+            assert!(recoil(1.0, order).abs() < 1e-9);
+        }
     }
 
     #[test]
-    fn the_stroke_is_one_line_from_the_foot_of_the_stem_to_the_end_of_the_shoulder() {
-        let (x, y) = stroke_point(0.0);
-        assert!((x - 29.0).abs() < 1e-9 && (y - 91.0).abs() < 1e-9);
-        // The stem meets the shoulder where the shoulder starts: no step at the join.
-        let (x, y) = stroke_point(STEM);
-        assert!((x - (CENTRE.0 - RADIUS)).abs() < 1e-9 && (y - CENTRE.1).abs() < 1e-9);
-        let end = SHOULDER_END.to_radians();
-        let (x, y) = stroke_point(stroke_length());
-        assert!((x - (CENTRE.0 + RADIUS * end.cos())).abs() < 1e-9);
-        assert!((y - (CENTRE.1 + RADIUS * end.sin())).abs() < 1e-9);
+    fn the_lanes_come_in_back_to_front_and_stagger_like_a_start() {
+        for pair in LANES.windows(2) {
+            assert!(pair[1].0 > pair[0].0 && pair[1].1 > pair[0].1);
+        }
+        let step = LANE[1].1 - LANE[0].1;
+        for pair in LANE.windows(2) {
+            // Each lane is above the one behind it and starts the same step further on.
+            assert!(pair[1].0 < pair[0].0);
+            assert!((pair[1].1 - pair[0].1 - step).abs() < 1e-9);
+        }
     }
 
     #[test]
-    fn the_signal_leaves_as_the_stroke_ends_and_rests_clear_of_it_inside_the_grid() {
-        assert!((SIGNAL_IN.0 - WRITE.1).abs() < 1e-9);
-        let (x, y) = signal_rest();
-        let (ex, ey) = stroke_point(stroke_length());
-        // A visible gap between the end of the stroke's cap and the dot.
-        assert!((x - ex).hypot(y - ey) > STROKE / 2.0 + SIGNAL_DOT + 2.0);
-        assert!(x + SIGNAL_DOT < 120.0 && y - SIGNAL_DOT > 0.0);
+    fn the_signal_leaves_the_front_lane_as_it_lands_and_rests_clear_of_it_inside_the_grid() {
+        let (y, _, end) = LANE[LANE.len() - 1];
+        assert!((SIGNAL_IN.0 - LANES[LANES.len() - 1].1).abs() < 1e-9);
+        assert_eq!(signal_rest().1, y);
+        // A visible gap between the end of the front lane's cap and the dot.
+        assert!(SIGNAL_AT.0 - SIGNAL_DOT - (end + STROKE / 2.0) > 4.0);
         // The whole mark sits about the grid's middle.
-        let left = CENTRE.0 - RADIUS - STROKE / 2.0;
-        let (top, bottom) = (CENTRE.1 - RADIUS - STROKE / 2.0, CENTRE.1 + STEM + STROKE / 2.0);
-        assert!(((left + x + SIGNAL_DOT) / 2.0 - 60.0).abs() < 2.0);
+        let left = LANE.iter().map(|l| l.1).fold(f64::MAX, f64::min) - STROKE / 2.0;
+        let right = (SIGNAL_AT.0 + SIGNAL_DOT).max(LANE.iter().map(|l| l.2).fold(0.0, f64::max) + STROKE / 2.0);
+        let top = SIGNAL_AT.1 - SIGNAL_DOT.max(STROKE / 2.0);
+        let bottom = LANE[0].0 + STROKE / 2.0;
+        assert!(((left + right) / 2.0 - 60.0).abs() < 2.0);
         assert!(((top + bottom) / 2.0 - 60.0).abs() < 2.0);
     }
 
     #[test]
     fn the_words_follow_the_mark_and_the_cards_come_one_after_the_other() {
-        assert!(WORDMARK.0 >= WRITE.0 && GREETING.0 > WORDMARK.0 && QUESTION.0 > GREETING.0);
+        assert!(WORDMARK.0 >= LANES[0].0 && GREETING.0 > WORDMARK.0 && QUESTION.0 > GREETING.0);
         assert!(CARD_DEV.0 > QUESTION.0 - 0.1 && CARD_THREADS.0 > CARD_DEV.0);
         assert!(CARD_THREADS.1 <= 1.0 && HINT.1 <= 1.0 && PING.0 < SIGNAL_IN.1);
+        assert!(RECOIL.0 >= PING.0 - 0.05 && RECOIL.1 + RECOIL_STEP * 2.0 <= 1.0);
     }
 }

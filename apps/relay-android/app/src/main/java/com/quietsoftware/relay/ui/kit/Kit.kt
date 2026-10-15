@@ -41,7 +41,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -50,7 +49,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.quietsoftware.relay.core.model.Lamp
-import com.quietsoftware.relay.ui.theme.Palette
 import com.quietsoftware.relay.ui.theme.Relay
 
 /** The PC's radii (DESIGN.md "Shapes"). */
@@ -429,27 +427,6 @@ fun Meter(fraction: Float, modifier: Modifier = Modifier, color: Color? = null, 
         val r = androidx.compose.ui.geometry.CornerRadius(size.height / 2)
         drawRoundRect(c.track, cornerRadius = r)
         if (f > 0f) drawRoundRect(fill, size = Size(size.width * f, size.height), cornerRadius = r)
-    }
-}
-
-/** The mark (start.rs): a lowercase r in one ink stroke, stem into shoulder, and the signal
- *  that has left the end of it, on Relay's 120-unit grid. */
-@Composable
-fun RelayMark(size: Dp, modifier: Modifier = Modifier, ink: Color = Relay.colors.ink, signal: Color = Palette.SIGNAL) {
-    Canvas(modifier.size(size)) {
-        val u = this.size.minDimension / 120f
-        val stroke = Stroke(
-            width = 17f * u,
-            cap = androidx.compose.ui.graphics.StrokeCap.Round,
-            join = androidx.compose.ui.graphics.StrokeJoin.Round,
-        )
-        val r = androidx.compose.ui.graphics.Path().apply {
-            moveTo(29f * u, 91f * u)
-            lineTo(29f * u, 58f * u)
-            arcTo(androidx.compose.ui.geometry.Rect(29f * u, 29f * u, 87f * u, 87f * u), 180f, 108f, false)
-        }
-        drawPath(r, ink, style = stroke)
-        drawCircle(signal, 10f * u, Offset(90.08f * u, 41.66f * u))
     }
 }
 
