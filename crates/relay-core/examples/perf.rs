@@ -10,7 +10,9 @@
 //! Every measured region runs inside [`perf_measured`]. Under `valgrind --tool=callgrind
 //! --instr-atstart=no`, `--callgrind` switches instrumentation on around exactly that call and
 //! dumps one profile per scenario, so instructions are attributed to the work and not to the
-//! fixture, on every thread the work touches.
+//! fixture, on every thread the work touches. `--counters` counts the same instructions with the
+//! CPU's own counters instead ([`Counters`]), where Valgrind cannot run, and `--marks` records
+//! each region's bounds so a `perf record` sampling pass can keep only the samples inside them.
 //! `scripts/perf/baseline.py` drives this binary and turns its JSON lines into the report under
 //! `docs/perf/`. Nothing here is compiled into the engine; it is an example target, so it builds
 //! and lints with `--all-targets` and is otherwise inert.
@@ -1610,6 +1612,12 @@ fn percentile(sorted: &[u64], p: f64) -> u64 {
     sorted[idx.min(sorted.len() - 1)]
 }
 
+fn monotonic_ns() -> u64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+}
+
 fn callgrind(args: &[&str]) {
     let pid = std::process::id().to_string();
     let _ = Command::new("callgrind_control").args(args).arg(&pid).output();
@@ -1723,6 +1731,148 @@ fn strace_stop(mut s: Strace, iters: usize) -> Value {
     json!({"total": total, "regions": regions, "top": top.iter().take(8).map(|(n, s)| json!({"syscall": s, "calls": n})).collect::<Vec<_>>()})
 }
 
+// ------------------------------------------------------------------ hardware counters
+
+/// `struct perf_event_attr` up to `config1` (`PERF_ATTR_SIZE_VER0`, 64 bytes): every field this
+/// harness sets. The kernel reads the rest as zero.
+#[repr(C)]
+#[derive(Default)]
+struct PerfEventAttr {
+    kind: u32,
+    size: u32,
+    config: u64,
+    sample_period: u64,
+    sample_type: u64,
+    read_format: u64,
+    flags: u64,
+    wakeup_events: u32,
+    bp_type: u32,
+    config1: u64,
+}
+
+const PERF_TYPE_HARDWARE: u32 = 0;
+const PERF_COUNT_HW_INSTRUCTIONS: u64 = 1;
+const PERF_FORMAT_TOTAL_TIME_ENABLED: u64 = 1;
+const PERF_FORMAT_TOTAL_TIME_RUNNING: u64 = 2;
+const ATTR_DISABLED: u64 = 1;
+const ATTR_INHERIT: u64 = 1 << 1;
+const ATTR_EXCLUDE_USER: u64 = 1 << 4;
+const ATTR_EXCLUDE_KERNEL: u64 = 1 << 5;
+const ATTR_EXCLUDE_HV: u64 = 1 << 6;
+/// `inherit` to new threads only, not to child processes (Linux 5.13).
+const ATTR_INHERIT_THREAD: u64 = 1 << 35;
+const PERF_FLAG_FD_CLOEXEC: libc::c_ulong = 8;
+
+/// Instructions retired, counted by the CPU, on every thread of this process, switched on around
+/// exactly the measured call. What callgrind's Ir was, without the emulator: Valgrind cannot run
+/// where the loader itself uses AVX-512, and this costs nothing while the counters are off. Two
+/// more counts beside it: the instructions of child processes the call started (a `git` the
+/// handler forked; callgrind never saw those), and this process's instructions in the kernel.
+///
+/// One counter per thread (a counter follows one task), opened disabled with `inherit`, so a
+/// thread or process started later is counted on the counter of the thread that started it. The
+/// main thread owns them all, and `PR_TASK_PERF_EVENTS_ENABLE`/`_DISABLE` switch every counter it
+/// owns in one call, so the switch is two syscalls however many threads there are.
+struct Counters {
+    /// User-space instructions of this process's threads.
+    user: Vec<std::os::fd::OwnedFd>,
+    /// The same, plus every child process: the children are the difference.
+    with_children: Vec<std::os::fd::OwnedFd>,
+    /// Empty when `perf_event_paranoid` is 2 or more: kernel instructions need 1 or less.
+    kernel: Vec<std::os::fd::OwnedFd>,
+    last: [u64; 3],
+    multiplexed: bool,
+}
+
+fn perf_event_open(tid: i32, exclude: u64) -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    let attr = PerfEventAttr {
+        kind: PERF_TYPE_HARDWARE,
+        size: std::mem::size_of::<PerfEventAttr>() as u32,
+        config: PERF_COUNT_HW_INSTRUCTIONS,
+        read_format: PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_TOTAL_TIME_RUNNING,
+        flags: ATTR_DISABLED | ATTR_INHERIT | ATTR_EXCLUDE_HV | exclude,
+        ..Default::default()
+    };
+    let fd = unsafe { libc::syscall(libc::SYS_perf_event_open, &attr as *const PerfEventAttr, tid, -1, -1, PERF_FLAG_FD_CLOEXEC) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as i32) })
+}
+
+impl Counters {
+    fn open() -> Result<Counters, String> {
+        let tids: Vec<i32> = std::fs::read_dir("/proc/self/task")
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .filter_map(|t| t.file_name().to_str()?.parse().ok())
+            .collect();
+        let mut c = Counters { user: Vec::new(), with_children: Vec::new(), kernel: Vec::new(), last: [0; 3], multiplexed: false };
+        let mut kernel = true;
+        for tid in tids {
+            match perf_event_open(tid, ATTR_EXCLUDE_KERNEL | ATTR_INHERIT_THREAD) {
+                Ok(fd) => c.user.push(fd),
+                // A thread that ended since the listing.
+                Err(e) if e.raw_os_error() == Some(libc::ESRCH) => continue,
+                Err(e) => return Err(format!("perf_event_open: {e} (perf_event_paranoid is {})", std::fs::read_to_string("/proc/sys/kernel/perf_event_paranoid").unwrap_or_default().trim())),
+            }
+            c.with_children.push(perf_event_open(tid, ATTR_EXCLUDE_KERNEL).map_err(|e| format!("perf_event_open: {e}"))?);
+            if kernel {
+                match perf_event_open(tid, ATTR_EXCLUDE_USER | ATTR_INHERIT_THREAD) {
+                    Ok(fd) => c.kernel.push(fd),
+                    Err(_) => {
+                        kernel = false;
+                        c.kernel.clear();
+                    }
+                }
+            }
+        }
+        Ok(c)
+    }
+
+    fn sum(fds: &[std::os::fd::OwnedFd], multiplexed: &mut bool) -> u64 {
+        use std::os::fd::AsRawFd;
+        let mut total = 0;
+        for fd in fds {
+            let mut v = [0u64; 3];
+            let n = unsafe { libc::read(fd.as_raw_fd(), v.as_mut_ptr().cast(), std::mem::size_of_val(&v)) };
+            if n == std::mem::size_of_val(&v) as isize {
+                total += v[0];
+                // The PMU had more counters asked of it than it holds and took turns: the count
+                // is an estimate. Flagged, not scaled.
+                *multiplexed |= v[2] < v[1];
+            }
+        }
+        total
+    }
+
+    fn on() {
+        unsafe { libc::prctl(libc::PR_TASK_PERF_EVENTS_ENABLE, 0, 0, 0, 0) };
+    }
+
+    fn off() {
+        unsafe { libc::prctl(libc::PR_TASK_PERF_EVENTS_DISABLE, 0, 0, 0, 0) };
+    }
+
+    /// This process's user instructions, its children's, and its kernel instructions, since the
+    /// last call. Read only while the counters are off.
+    fn delta(&mut self) -> [u64; 3] {
+        let mut m = self.multiplexed;
+        let now = [Self::sum(&self.user, &mut m), Self::sum(&self.with_children, &mut m), Self::sum(&self.kernel, &mut m)];
+        self.multiplexed = m;
+        let d = [now[0] - self.last[0], (now[1] - self.last[1]).saturating_sub(now[0] - self.last[0]), now[2] - self.last[2]];
+        self.last = now;
+        d
+    }
+}
+
+fn counter_summary(mut per_iter: Vec<u64>) -> Value {
+    per_iter.sort_unstable();
+    let n = per_iter.len().max(1) as u64;
+    json!({"min": per_iter.first().copied().unwrap_or(0), "p50": percentile(&per_iter, 0.5), "mean": per_iter.iter().sum::<u64>() / n, "max": per_iter.last().copied().unwrap_or(0)})
+}
+
 fn run_case(fx: &Arc<Fixture>, case: &Case, iters: usize, warmup: usize, opts: &Opts) -> Value {
     for _ in 0..warmup {
         fx.drain_cleanup();
@@ -1737,6 +1887,17 @@ fn run_case(fx: &Arc<Fixture>, case: &Case, iters: usize, warmup: usize, opts: &
         callgrind(&["-z"]);
     }
     let strace = if opts.strace { strace_start(&case.name) } else { None };
+    let mut counters = if opts.counters {
+        Counters::open().map_err(|e| eprint!("(counters: {e}) ")).ok()
+    } else {
+        None
+    };
+    let mut counted: [Vec<u64>; 3] = Default::default();
+    let mut marks = opts.marks.as_ref().map(|_| Vec::with_capacity(iters));
+    // The last pid handed out before the loop: a process with a higher one was started by the
+    // case, and a lower one (a provider stand-in, a straggler from the case before) was not.
+    let last_pid = std::fs::read_to_string("/proc/sys/kernel/ns_last_pid").ok().and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(0);
+    perf_ctl(&opts.perf_ctl, "enable");
     let started = Instant::now();
     for _ in 0..iters {
         fx.drain_cleanup();
@@ -1750,9 +1911,25 @@ fn run_case(fx: &Arc<Fixture>, case: &Case, iters: usize, warmup: usize, opts: &
         if strace.is_some() {
             strace_mark(STRACE_BEGIN);
         }
+        if counters.is_some() {
+            Counters::on();
+        }
+        let m0 = monotonic_ns();
         let t0 = Instant::now();
         let out = perf_measured(work);
         let wall = t0.elapsed();
+        let m1 = monotonic_ns();
+        if counters.is_some() {
+            Counters::off();
+        }
+        if let Some(c) = &mut counters {
+            for (v, d) in counted.iter_mut().zip(c.delta()) {
+                v.push(d);
+            }
+        }
+        if let Some(marks) = &mut marks {
+            marks.push((m0, m1));
+        }
         if strace.is_some() {
             strace_mark(STRACE_END);
         }
@@ -1776,7 +1953,25 @@ fn run_case(fx: &Arc<Fixture>, case: &Case, iters: usize, warmup: usize, opts: &
         }
     }
     let elapsed = started.elapsed();
+    perf_ctl(&opts.perf_ctl, "disable");
     let strace = strace.map(|s| strace_stop(s, iters));
+    let counters = counters.map(|c| {
+        let [user, children, kernel] = counted;
+        json!({
+            "instructions": counter_summary(user),
+            "child_instructions": counter_summary(children),
+            "kernel_instructions": if c.kernel.is_empty() { Value::Null } else { counter_summary(kernel) },
+            "threads": c.user.len(),
+            "multiplexed": c.multiplexed,
+        })
+    });
+    if let (Some(path), Some(marks)) = (&opts.marks, marks) {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();
+        for (a, b) in marks {
+            writeln!(f, "{} {a} {b} {} {last_pid}", case.name, std::process::id()).unwrap();
+        }
+    }
     if opts.callgrind {
         callgrind(&[&format!("--dump={}", case.name)]);
     }
@@ -1806,6 +2001,7 @@ fn run_case(fx: &Arc<Fixture>, case: &Case, iters: usize, warmup: usize, opts: &
         "loop_wall_ms": elapsed.as_millis() as u64,
         "rows": rows,
         "strace": strace,
+        "counters": counters,
     })
 }
 
@@ -1852,10 +2048,31 @@ fn soak(fx: &Arc<Fixture>, ops: usize) -> Value {
 struct Opts {
     callgrind: bool,
     strace: bool,
+    counters: bool,
+    /// Where to append each measured region's CLOCK_MONOTONIC bounds, `name start_ns end_ns pid
+    /// last_pid` per line: `perf record -k CLOCK_MONOTONIC` stamps its samples on the same clock,
+    /// so `scripts/perf/baseline.py` keeps only the samples taken inside a region, tells this
+    /// process's samples from its children's by the pid, and drops processes older than the case.
+    marks: Option<PathBuf>,
+    /// `perf record --control fifo:CTL,ACK -D -1`'s two fifos: recording is switched on for each
+    /// scenario's measured loop only, so the fixture build and the warmup leave no samples.
+    perf_ctl: Option<(PathBuf, PathBuf)>,
+}
+
+/// Tell a `perf record` started with `--control fifo:CTL,ACK` to `enable` or `disable`, and wait
+/// for its `ack`, so the samples start and stop where the loop does.
+fn perf_ctl(ctl: &Option<(PathBuf, PathBuf)>, cmd: &str) {
+    use std::io::{Read, Write};
+    let Some((ctl, ack)) = ctl else { return };
+    let sent = std::fs::OpenOptions::new().write(true).open(ctl).and_then(|mut f| f.write_all(cmd.as_bytes()));
+    if sent.is_ok() {
+        let mut buf = [0u8; 8];
+        let _ = std::fs::File::open(ack).and_then(|mut f| f.read(&mut buf));
+    }
 }
 
 fn usage() -> ! {
-    eprintln!("usage: perf list\n       perf run [FILTER...] [--iters N] [--warmup N] [--iters-div N] [--scale N] [--out FILE] [--callgrind] [--strace] [--keep]\n       perf soak [--ops N] [--scale N] [--out FILE]");
+    eprintln!("usage: perf list\n       perf run [FILTER...] [--iters N] [--warmup N] [--iters-div N] [--scale N] [--out FILE] [--callgrind] [--strace] [--counters] [--marks FILE] [--perf-ctl CTL,ACK] [--iters-file FILE] [--keep]\n       perf soak [--ops N] [--scale N] [--out FILE]");
     std::process::exit(2)
 }
 
@@ -1870,7 +2087,8 @@ fn main() {
     let mut out: Option<PathBuf> = None;
     let mut ops = 20_000usize;
     let mut keep = false;
-    let mut opts = Opts { callgrind: false, strace: false };
+    let mut iters_for = std::collections::HashMap::new();
+    let mut opts = Opts { callgrind: false, strace: false, counters: false, marks: None, perf_ctl: None };
     let mut it = args[1..].iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -1882,7 +2100,16 @@ fn main() {
             "--out" => out = it.next().map(PathBuf::from),
             "--callgrind" => opts.callgrind = true,
             "--strace" => opts.strace = true,
+            "--counters" => opts.counters = true,
+            "--marks" => opts.marks = it.next().map(PathBuf::from),
+            "--perf-ctl" => opts.perf_ctl = it.next().and_then(|v| v.split_once(',')).map(|(c, a)| (PathBuf::from(c), PathBuf::from(a))),
             "--keep" => keep = true,
+            // `name iters` per line: a count per scenario, for a sampling pass that wants about
+            // the same number of samples from a 5 µs op as from a 50 ms one.
+            "--iters-file" => {
+                let text = it.next().map(std::fs::read_to_string).unwrap_or_else(|| usage()).unwrap();
+                iters_for = text.lines().filter_map(|l| l.split_once(' ')).filter_map(|(n, i)| Some((n.to_string(), i.trim().parse::<usize>().ok()?))).collect();
+            }
             other if other.starts_with("--") => usage(),
             other => filters.push(other.to_string()),
         }
@@ -1912,7 +2139,7 @@ fn main() {
             };
             let suffix = if scale > 1 { format!("@x{scale}") } else { String::new() };
             for case in selected {
-                let n = iters.unwrap_or(case.cost.iters()) / iters_div;
+                let n = iters_for.get(&case.name).copied().or(iters).unwrap_or(case.cost.iters()) / iters_div;
                 let n = n.max(1);
                 eprint!("{:<40} ", case.name);
                 fx.reset();
@@ -1944,6 +2171,28 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::Counters;
+
+    // Hardware counters are often absent in a VM (CI runners included) or refused by
+    // `perf_event_paranoid`; there is nothing to check without them.
+    #[test]
+    fn counters_count_only_while_on_and_on_every_thread() {
+        let Ok(mut c) = Counters::open() else { return };
+        let spin = |n: u64| (0..n).fold(0u64, |a, i| std::hint::black_box(a ^ i));
+        spin(1_000_000);
+        assert_eq!(c.delta()[0], 0, "counted while off");
+        Counters::on();
+        spin(1_000_000);
+        // A thread started while the counters are on is counted on the starting thread's counter.
+        std::thread::spawn(move || spin(1_000_000)).join().unwrap();
+        Counters::off();
+        let [user, children, _] = c.delta();
+        assert!((2_000_000..20_000_000).contains(&user), "{user} instructions for two million-step loops");
+        assert!(children < 100_000, "{children} instructions in child processes, and none was started");
+        spin(1_000_000);
+        assert_eq!(c.delta()[0], 0, "counted after off");
+    }
+
     // `cargo test -p relay-core --example perf`: the strace pass cannot run where strace is not
     // installed, so its parser is checked against a trace of the shape `strace -f -o` writes.
     #[test]

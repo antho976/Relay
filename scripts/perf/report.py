@@ -49,6 +49,16 @@ def ir(n):
     return f"{n / 1_000_000_000:.2f} G"
 
 
+def counted(counters, profiles, name):
+    """Instructions per iteration: the CPU's count where the run has one, else callgrind's, with
+    the instructions of child processes the op started (`git`) beside it."""
+    c = (counters.get(name) or {}).get("counters") or {}
+    if c.get("instructions"):
+        child = (c.get("child_instructions") or {}).get("p50", 0)
+        return ir(c["instructions"]["p50"]) + (f" + {ir(child)} child" if child > 1000 else "")
+    return ir(profiles.get(name, {}).get("ir_per_iter"))
+
+
 def outcome(row):
     # A "during" case: in how many iterations the other op was still running when the measured
     # request went out. Fewer than all means some iterations measured an uncontended request.
@@ -92,6 +102,8 @@ def main():
         strace_note = "every scenario came back with no syscalls at all, so strace did not attach; the column is empty"
         strace = {}
     profiles = json.loads((run / "profiles.json").read_text()) if (run / "profiles.json").exists() else {}
+    counters = {r["name"]: r for r in read_jsonl(run / "counters.jsonl")}
+    sampled = any(pr.get("method", "").startswith("perf") for pr in profiles.values())
     soak = json.loads((run / "soak.json").read_text()) if (run / "soak.json").exists() else None
     process = json.loads((run / "process.json").read_text()) if (run / "process.json").exists() else None
 
@@ -104,7 +116,7 @@ def main():
     p("")
     p("## Environment")
     p("")
-    for k in ("date", "git_sha", "git_branch", "rustc", "profile", "kernel", "cpu", "cores", "mem_gib", "valgrind", "strace", "load_at_start", "container"):
+    for k in ("date", "git_sha", "git_branch", "rustc", "profile", "kernel", "cpu", "cores", "mem_gib", "valgrind", "perf", "perf_event_paranoid", "attribution", "strace", "load_at_start", "container"):
         if k in env:
             p(f"- {k}: `{env[k]}`")
     p("")
@@ -116,7 +128,15 @@ def main():
     p("- **syscalls**: from a separate strace pass with fewer iterations; per iteration, every thread, counted between marks around the measured region, so not the iteration's setup or cleanup.")
     if strace_note:
         p(f"  Not measured in this run: {strace_note}.")
-    p("- **Ir**: instructions retired per iteration under callgrind, deterministic. The breakdown is self cost by subsystem.")
+    if counters:
+        p("- **Ir**: user-space instructions retired per iteration, every thread of the process, counted by the CPU (`perf run --counters`): the p50 over the iterations, repeatable to about 0.1 %. `+ N child` is the instructions of processes the op started, such as `git`, which callgrind never counted.")
+    else:
+        p("- **Ir**: instructions retired per iteration under callgrind, deterministic.")
+    if sampled:
+        period = next(iter(profiles.values())).get("period", 400_009)
+        p(f"- **Where the instructions go** is sampled: `perf record` took one sample per {period:,} user-space instructions inside the measured regions. Two runs put a large bucket within 1–3 points of each other: read a difference under 5 points as noise.".replace(",", " "))
+    elif profiles:
+        p("- **Where the instructions go** is callgrind's: every instruction, attributed exactly.")
     p("- **result**: size of the JSON result the op returned, which is what crosses the socket to a client.")
     p("- A row whose outcome is an error code measured that refusal path; the note beside the group says why.")
     p("")
@@ -148,8 +168,7 @@ def main():
         r = by_name.get(name)
         if not r:
             continue
-        pr = profiles.get(name, {})
-        p(f"| `{name}` | {what} | {us(r['wall_ns']['p50'])} | {us(r['wall_ns']['p95'])} | {us(r['cpu_ns_per_iter'])} | {r['allocs_per_iter']} | {ir(pr.get('ir_per_iter'))} |")
+        p(f"| `{name}` | {what} | {us(r['wall_ns']['p50'])} | {us(r['wall_ns']['p95'])} | {us(r['cpu_ns_per_iter'])} | {r['allocs_per_iter']} | {counted(counters, profiles, name)} |")
     p("")
 
     groups = {}
@@ -165,8 +184,7 @@ def main():
         for r in rows:
             st = strace.get(r["name"], {}).get("strace") or {}
             sc = round(st["total"] / strace[r["name"]]["iters"], 1) if st.get("total") is not None and strace[r["name"]]["iters"] else "–"
-            pr = profiles.get(r["name"], {})
-            p(f"| `{r['name']}` | {us(r['wall_ns']['p50'])} | {us(r['wall_ns']['p95'])} | {us(r['cpu_ns_per_iter'])} | {r['allocs_per_iter']} | {kb(r['alloc_bytes_per_iter'])} | {sc} | {kb(r['result_bytes'])} | {ir(pr.get('ir_per_iter'))} | {outcome(r)} |")
+            p(f"| `{r['name']}` | {us(r['wall_ns']['p50'])} | {us(r['wall_ns']['p95'])} | {us(r['cpu_ns_per_iter'])} | {r['allocs_per_iter']} | {kb(r['alloc_bytes_per_iter'])} | {sc} | {kb(r['result_bytes'])} | {counted(counters, profiles, r['name'])} | {outcome(r)} |")
         p("")
 
     if scale:
@@ -187,17 +205,28 @@ def main():
     if profiles:
         p("## Where the instructions go")
         p("")
-        p("Per scenario, under callgrind: instructions per iteration, self cost by subsystem (every bucket at or above 0.5 %), the inclusive share of a few known entry points, and the Relay functions with the largest inclusive cost below the pipeline. Inclusive figures overlap; they answer \"how much of this op is X\".")
+        how = ("sampled by `perf record` (inside the measured regions only)" if sampled else "under callgrind")
+        p(f"Per scenario, {how}: instructions per iteration, self cost by subsystem (every bucket at or above 0.5 %), the inclusive share of a few known entry points, and the Relay functions with the largest inclusive cost below the pipeline. Inclusive figures overlap; they answer \"how much of this op is X\".")
+        if sampled:
+            p("")
+            p("`child processes` is time in a process the op started; `sampled/folded/<scenario>.folded.gz` holds every sampled stack for a flame graph (inferno, speedscope, flamegraph.pl).")
         p("")
         for name, pr in profiles.items():
             r = by_name.get(name)
-            p(f"### `{name}` — {ir(pr['ir_per_iter'])} instructions/iteration" + (f", {us(r['wall_ns']['p50'])} native p50" if r else ""))
+            n = f", {pr['samples']} samples" if pr.get("samples") else ""
+            cov = pr.get("coverage")
+            if cov is not None and cov < 0.75:
+                n += f" (the samples cover {cov:.0%} of the counted instructions: the kernel throttled the sampling, so the shares rest on fewer samples)"
+            elif cov is not None and cov > 1.33:
+                n += f" (the samples cover {cov:.1f}× the counted instructions: the op grew over the sampling pass's extra iterations, so the shares describe a bigger fixture than the counts)"
+            p(f"### `{name}` — {ir(pr['ir_per_iter'])} instructions/iteration" + (f", {us(r['wall_ns']['p50'])} native p50" if r else "") + n)
             p("")
             p("- by subsystem: " + " · ".join(f"{k} **{v}%**" for k, v in pr["buckets"].items()))
             if pr.get("markers"):
                 p("- inclusive: " + " · ".join(f"{k} {v}%" for k, v in sorted(pr["markers"].items(), key=lambda kv: -kv[1])))
             if pr.get("top_inclusive_relay"):
-                p("- Relay functions: " + " · ".join(f"`{t['fn'].split('::')[-1] if '::' in t['fn'] else t['fn']}` {t['pct']}%" for t in pr["top_inclusive_relay"][:6]))
+                name_of = (lambda f: f) if pr.get("method", "").startswith("perf") else (lambda f: f.split("::")[-1] if "::" in f else f)
+                p("- Relay functions: " + " · ".join(f"`{name_of(t['fn'])}` {t['pct']}%" for t in pr["top_inclusive_relay"][:6]))
             if pr.get("top_self"):
                 p("- hottest self: " + " · ".join(f"`{t['fn'][:60]}` {t['pct']}%" for t in pr["top_self"][:5]))
             p("")

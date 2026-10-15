@@ -1,0 +1,27 @@
+op.app.status                                  27.0 µs  200 ok  {}
+op.audit.list                                 364.2 µs  200 ok  {}
+op.project.stats                                0.3 µs  0 ok  {"bus.not_implemented":200}
+op.task.get                                    17.7 µs  200 ok  {}
+op.task.activity                              398.1 µs  200 ok  {}
+op.task.list                                 2618.1 µs  200 ok  {}
+op.task.list.filtered                         655.3 µs  200 ok  {}
+op.task.children                               33.2 µs  200 ok  {}
+op.task.label.list                              7.1 µs  200 ok  {}
+op.module.list                                129.1 µs  200 ok  {}
+op.module.stats                                62.6 µs  200 ok  {}
+op.module.changelog.draft                    5874.2 µs  200 ok  {}
+op.notes.list                                 144.3 µs  200 ok  {}
+op.mailbox.list                               185.7 µs  200 ok  {}
+op.mailbox.outbox                             287.2 µs  200 ok  {}
+op.session.list                                14.0 µs  200 ok  {}
+op.session.brief                              396.2 µs  200 ok  {}
+op.session.bootstrap                          204.0 µs  200 ok  {}
+op.overlap.list                                 3.1 µs  200 ok  {}
+op.guardrail.holds.list                        14.7 µs  200 ok  {}
+op.notify.list                                  9.6 µs  200 ok  {}
+op.settings.get                                18.4 µs  200 ok  {}
+op.dashboard.get                              745.2 µs  200 ok  {}
+path.response.serialize.session_list            2.7 µs  200 ok  {}
+path.socket.session_list                       42.6 µs  200 ok  {}
+path.socket.task_list                        5479.1 µs  200 ok  {}
+host tool calls answered by the fixture's stand-ins: {}

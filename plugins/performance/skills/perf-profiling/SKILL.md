@@ -74,6 +74,27 @@ named entry points** (SQL compile vs execute, auth, validation, the VCS call). I
 overlap by construction — say so. Callgrind cannot see waiting, I/O time, or page-fault cost:
 pair it with a native wall/CPU number.
 
+**Where Valgrind cannot run** — a distribution that ships x86-64-v4 packages (CachyOS) builds the
+dynamic loader with AVX-512, and every program dies with SIGILL under Valgrind — get the same
+two answers from the CPU:
+
+- **Counts**: `perf_event_open` a `PERF_COUNT_HW_INSTRUCTIONS` counter per thread (user space
+  only, `inherit` for threads started later, opened disabled), and switch them all with
+  `prctl(PR_TASK_PERF_EVENTS_ENABLE/DISABLE)` around the measured call. That is two syscalls per
+  iteration, native speed, and repeatable to about 0.1 %. A second set with `inherit` to child
+  processes counts the subprocesses the call started. `perf stat -e instructions:u` gives the
+  whole-process figure.
+- **Attribution**: `perf record -e instructions:u -c <prime> --call-graph fp -k CLOCK_MONOTONIC`
+  on a build with `-C force-frame-pointers=yes` (and `CFLAGS=-fno-omit-frame-pointer` for C
+  dependencies). DWARF unwinding copies kilobytes of stack per sample and still stops short in
+  Rust code. Start it with `-D -1 --control fifo:ctl,ack` and enable it only around the loop,
+  write each measured region's monotonic bounds from the program, and keep only the samples
+  inside a region. `perf script --no-inline` names real functions, as callgrind does. About
+  1 200 samples per scenario puts a large share within a few points run to run. Keep the sample
+  rate under `perf_event_max_sample_rate` (a fast core retires 15 G instructions/s, so a period
+  of 400 000 rather than 20 000), or the kernel throttles and samples go missing; compare the
+  sampled total with the counted one to catch it.
+
 ## 5. Off-CPU and locks
 
 If wall ≫ user + sys, the thread is blocked. Find on what:

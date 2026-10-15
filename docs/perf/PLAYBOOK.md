@@ -11,10 +11,10 @@ each half, and where the next audit should look first.
 | Thing | Where | Notes |
 |---|---|---|
 | Engine harness | `crates/relay-core/examples/perf.rs` | one disposable fixture (1 500-file repo, store on disk, fake providers, two live PTYs, a populated board); every bus op plus the non-op paths |
-| Runner | `scripts/perf/baseline.py` (`--quick` ≈ 5 min; full ≈ 55 min with callgrind) | native wall/CPU/allocs, callgrind attribution, strace counts, ×10 rows, soak, the real `relay serve` process |
+| Runner | `scripts/perf/baseline.py` (`--quick` ≈ 5 min; full ≈ 55 min with callgrind, less with perf sampling) | native wall/CPU/allocs, instruction counts from the CPU's counters, attribution (callgrind, or `perf record` where Valgrind cannot run), strace counts, ×10 rows, soak, the real `relay serve` process |
 | Compare | `scripts/perf/compare.py <old run> <new run>` | trusts instruction counts and breakdowns over absolute times |
 | Native client | `scripts/perf/native-baseline.py` | every page against a disposable engine: CPU at startup and at rest, wakeups, RSS, `perf` profile per page, `GDK_DEBUG=frames` log |
-| Readings | `BASELINE-<date>.md`, `FIXES-<date>.md`, `runs/<date>/` | the format every new reading follows (see the plugin's `perf-audit` templates) |
+| Readings | `BASELINE-<date>.md`, `FIXES-<date>.md`, `runs/<date>/` | the format every new reading follows (see the plugin's `perf-audit` templates); `ATTRIBUTION-2026-10-14.md` is the first with CPU counts and sampled attribution, and holds six leads not yet fixed |
 | In-process lock budget | `engine.rs`: a handler holding the store lock ≥ 16 ms logs "store lock over budget" | read the log after any scenario run |
 
 **Tools the full run wants** on the measuring machine: `valgrind` (callgrind pass; the 2026-10-07
@@ -25,8 +25,28 @@ profiling needs `sysctl kernel.perf_event_paranoid=1`.
 
 **Valgrind cannot run on CachyOS.** Its x86-64-v4 glibc builds the dynamic loader with AVX-512,
 which Valgrind does not decode, so every dynamically linked program dies with SIGILL before its
-first instruction. On such a machine skip the callgrind pass (`--skip-callgrind`) and attribute
-with `perf record` / `perf stat -e instructions:u`; instruction counts for a ratchet come from CI.
+first instruction. The runner notices and uses the CPU instead, with nothing to pass:
+
+- **Instruction counts** come from the hardware counters (`perf run --counters`, `Counters` in
+  `perf.rs`): one counter per thread, switched on around exactly the measured call, so the count
+  is callgrind's Ir without the emulator, repeatable to about 0.1 % on every scenario that does
+  not wait on a timer. It also counts the instructions of child processes the op starts
+  (`git`), which callgrind never saw: `op.git.status` is 1.3 M in Relay and 4.7 M in `git`.
+  This pass runs wherever `perf_event_paranoid` ≤ 2, Valgrind or not, and `compare.py` prefers
+  it.
+- **Attribution** comes from `perf record`: one sample per 400 009 user-space instructions with
+  a frame-pointer call stack, from a frame-pointer copy of the harness (`target/perf-fp`, built
+  by the runner), recording only while a scenario's loop runs and keeping only samples inside
+  a measured region (the harness writes each region's `CLOCK_MONOTONIC` bounds with
+  `--marks`), and only samples of this process or of processes the scenario started. Each
+  scenario gets about 1 200 samples, as many iterations as that takes within what its setup can
+  afford; two runs put a large bucket within 1–3 points of each other, so read a difference
+  under 5 points as noise. Each profile's `coverage` (sampled ÷ counted instructions) checks the
+  pass against the counters: about 1.0 for most scenarios; the report flags the few outside
+  0.75–1.33 (some `git` ops, which start short-lived children, and ops that grow with what
+  earlier iterations left behind).
+  `profiles.json` has callgrind's shape, and `sampled/folded/` holds every sampled stack for a
+  flame graph (`zcat sampled/folded/op.task.list.folded.gz | inferno-flamegraph > task-list.svg`). `--attribution callgrind|perf|none` overrides the choice.
 
 **Profiles.** The harness measures the **dev** profile (`opt-level = 1` for the workspace, `3` for
 dependencies), which is what `run.sh` launches — say so in every number. `[profile.release]` strips
