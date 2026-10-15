@@ -96,17 +96,37 @@ that speaks the same stream-json.
 
 - **The sidebar** keeps Dev's frame and footer. Its keys are New thread (Ctrl N) and Tally, then
   the threads grouped Today, Yesterday, This week and Earlier, a green lamp on one at work.
-- **The middle** is a new thread (greeting, the month in a line, the message box, four questions to
-  start) or the open one: the person's messages as bubbles, the agent's Markdown drawn natively
+- **The middle** is a new thread (greeting, a line from the panel's source, the message box, four
+  questions to start) or the open one: the person's messages as bubbles, the agent's Markdown drawn natively
   (`relay_client::thread_view`: paragraphs, headings, lists, tables, code), each tool call as a
   quiet line saying what it did, and an entry the agent added as a card with Undo
   (`money.tx.delete`). Enter sends, Shift+Enter breaks the line; while the agent works the send key
   stops it.
 - **The Tally panel** (the strip's right key shows or hides it): Overview (what is left, budgets,
-  recent entries), Entries (this month), Budgets and Invest (below). Meters take the category's hue;
-  amber is ahead of pace, red over budget. On a page narrower than about 1000 pixels the panel hides
-  itself unless the person opened it with that key, which then holds their choice
-  (`threads_view.rs`, `PANEL_FROM`).
+  bills, recent entries), Entries (this month) and Invest (below). Overview shows the five budgets
+  furthest ahead of pace, and a "Show all 8" key for the rest. Meters take the category's hue; amber is
+  ahead of pace, red over budget. On a page narrower than about 1000 pixels the panel hides itself
+  unless the person opened it with that key, which then holds their choice (`threads_view.rs`,
+  `PANEL_FROM`).
+- **The panel's rows keep the person in the thread.** A budget opens a small editor beside it: the
+  amount (empty is no budget), last month's spending and the average of the last three whole
+  months (`money.series`; a month with nothing in the whole ledger came before it was kept and is
+  left out), and Save (`money.budget.set`). The panel holds still while it is open and reads what
+  changed once it closes. An entry opens its editor. A bill to pay, an investment account and a
+  holding draft a question ("Can I cover Rent on Sun 1 Nov?", "How is XEQT doing?") into the open
+  thread's message box with `threads::draft`, to finish or send; with no thread open they ask it in
+  a new one. Only the panel's own "Open …" keys leave for a page.
+- **One source switch.** Tally, Arbiter or Avex is chosen once, on the switch above the panel; the
+  message box no longer repeats it. What follows the source: the panel, the message box's line on
+  what the agent may do ("Edits with Undo", "Proposes, you approve", "Reads only"), an open thread's
+  placeholder ("Ask about your money, or tell it what to change", "Ask about your training"), and a
+  new thread's line and questions. Tally's line is the month ("October so far: $2,425 spent, $475
+  left"); Avex's is read from `gym.summary`: this week while the export reaches it ("This week so
+  far: 2 of 4 workouts, 18,450 lb lifted"), else the export's own week and its age ("Your Avex copy
+  is from Thu 8 Oct, 7 days ago. That week: 3 of 4 workouts, 46,405 lb lifted"), so a stale copy
+  never reads as a week without training. Avex's questions name the lift done most and the workout
+  done last ("How is my Bench Press trending?", "Plan my next Legs A"). Arbiter's new thread keeps
+  Tally's line and questions.
 - **Tally's pages** (Overview, Entries, Plan, Data) open from the sidebar's Tally key with their own
   tabs, in Dev's tokens (`css/money.css`); the Money space's warm palette is gone.
 
@@ -196,9 +216,12 @@ the Wealthsimple files and the ops. This is what the PC's engine and the agent d
     `money_invest::import_flow`, the flow the Investments page's Import key uses (preview, map the
     accounts, import). When it is done the card says what came in, offers "Open Investments", and
     sends a message in the person's name naming the kind of file, so the agent carries on.
-  - The Tally panel's fourth tab, **Invest**: the portfolio's value and gain, the allocation, the
+  - The Tally panel's third tab, **Invest**: the portfolio's value and gain, the allocation, the
     accounts, the room and the top holdings; with no investment account, "Connect Wealthsimple".
-  - `threads::ask(ui, text)` starts a new thread with the person's own words and sends them.
+  - `threads::ask(ui, text)` starts a new thread with the person's own words and sends them; it is
+    for a page's keys. Inside the Threads page, `threads::draft(ui, text)` puts the words in the
+    open thread's message box and focuses it without sending, and asks like `ask` when no thread
+    is open.
     "Connect Wealthsimple", on the Invest tab and on the Investments page, asks "Help me connect my
     Wealthsimple accounts"; a new thread suggests "Connect my Wealthsimple accounts" while the
     ledger has no investment account, and "How are my investments doing?" once it has one.
@@ -210,8 +233,8 @@ imported activity from the phone through `money.sync`.
 
 ## Avex (2026-10-09)
 
-Avex, the gym app, is the panel's third source, beside Tally and Arbiter: a chip in the message box,
-a switch above the panel (Overview, Workouts, Lifts), a sidebar key and its own pages. It has no
+Avex, the gym app, is the panel's third source, beside Tally and Arbiter: a place on the switch
+above the panel, its own view there, a sidebar key and its own pages. It has no
 internet, so Relay reads the training history it exports and keeps it read only; an agent reads
 `gym.*` and charts with a `gym` question instead of `query`. `docs/GYM.md` is the contract.
 

@@ -77,7 +77,7 @@ button.threads-undo { min-height: 28px; }
 button.threads-card-key { min-height: 30px; }
 .threads-import:drop(active) { border-color: @line_focus; background: @wash; }
 
-/* The message box: the column's width, its text set in line with the chips under it. */
+/* The message box: the column's width, its text set in line with the pickers under it. */
 .threads-dock { padding: 0 0 18px; }
 .threads-composer { padding: 12px 12px 10px 16px; border: 1px solid @strong; border-radius: 14px; background: @raised; }
 .threads-composer:focus-within { border-color: @line_focus; box-shadow: 0 0 0 3px alpha(@ink, 0.06); }
@@ -85,7 +85,6 @@ textview.threads-input, textview.threads-input text { background: transparent; c
 textview.threads-input { padding: 4px 0; }
 .threads-hint { padding-top: 4px; font-size: 14px; line-height: 1; color: @faint; }
 .threads-composer scrolledwindow { background: transparent; min-height: 44px; }
-.threads-chip { min-height: 26px; padding: 0 10px; border: 1px solid @strong; border-radius: 999px; background: @slab; color: @secondary; font-size: 12px; font-weight: 500; }
 .threads-limits { padding: 0 4px; font-size: 12px; color: @faint; }
 .threads-dot, .threads-lamp { min-width: 6px; min-height: 6px; border-radius: 3px; background: @live; }
 button.primary.threads-send { min-width: 34px; min-height: 34px; padding: 0; border-radius: 10px; }
@@ -109,8 +108,9 @@ paned.threads-split > separator:hover { background-color: @line_focus; }
 .threads-caption { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: @faint; margin-bottom: 2px; }
 .threads-entry { padding: 8px 0; border-top: 1px solid @line_subtle; }
 
-/* The panel's rows are keys: an entry opens its editor, a budget the plan, an investment its page.
-   An entry this thread added keeps a wash. */
+/* The panel's rows are keys that keep the person in the thread: an entry opens its editor, a
+   budget its own, a bill or an investment drafts a question. An entry this thread added keeps a
+   wash. */
 button.threads-row-key { min-height: 0; padding: 0 8px; margin: 0 -8px; border: 0; border-radius: 10px; background: transparent; box-shadow: none; color: @ink; font-weight: 400; }
 button.threads-row-key:hover, button.threads-row-key.from-thread { background: @wash; }
 button.threads-row-key:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: -2px; }
@@ -144,13 +144,21 @@ button.threads-row { min-height: 34px; }
 .threads-block > box:first-child { margin-bottom: 6px; }
 .threads-panel-aside { font-family: "Geist Mono", monospace; font-size: 11px; color: @faint; }
 .threads-budget { padding: 7px 0; }
+/* "Show all 9" under Overview's budgets: a quiet key aligned with the rows' text. */
+button.quiet.threads-more { min-height: 26px; padding: 0 8px; margin: 2px 0 0 -8px; font-size: 12px; font-weight: 500; color: @faint; }
+button.quiet.threads-more:hover { color: @ink; }
+/* A budget's editor, beside its row: the amount in figures, what the last months spent, Save. */
+.threads-budget-edit { padding: 14px; }
+.threads-budget-edit entry.threads-budget-field { min-height: 34px; font-family: "Geist Mono", monospace; font-size: 13px; font-feature-settings: "tnum"; }
+.threads-budget-edit entry.threads-budget-field.error { border-color: @held; }
+.threads-budget-edit .threads-error { font-size: 12px; line-height: 17px; }
 .threads-legend { margin-top: 2px; }
 .threads-legend flowboxchild { padding: 0; min-height: 0; }
 .threads-symbol { min-width: 40px; min-height: 24px; border-radius: 8px; background: @wash; }
 .threads-symbol label { color: @secondary; font-family: "Geist Mono", monospace; font-size: 10.5px; }
 .threads-issue { padding: 4px 0; }
 
-/* The model and effort pickers: chips like the source chip, with a menu that checks the choice. */
+/* The model and effort pickers: chips, with a menu that checks the choice. */
 menubutton.threads-picker > button { min-height: 26px; padding: 0 10px; border: 1px solid @strong; border-radius: 999px; background: @slab; color: @secondary; font-size: 12px; font-weight: 500; }
 menubutton.threads-picker > button:hover { background: @wash; color: @ink; }
 menubutton.threads-picker image { color: @faint; }
