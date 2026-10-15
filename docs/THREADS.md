@@ -289,6 +289,38 @@ Not yet: ticking rows to approve part of a batch, an amber dot on the thread's s
 - **The sidebar and the Tally panel can be dragged** wider or narrower (sidebar 200 to 420 pixels;
   the panel opens at 340).
 
+## Tally's pages, distilled (2026-10-15)
+
+Easier to do things, each figure said once, one way to ask per page.
+
+- **Overview** leads with Left to spend, large (amber ahead of pace, red over), and one line on
+  how it got there: spent of budget, a day's allowance, against last month. Income sits beside it;
+  Spent and Net worth left the strip (the line says the first, the Accounts card totals the
+  second). Budgets beside Recent, then Accounts, Upcoming bills (three, and how many more) and
+  Goals side by side: about 1,090 pixels, from 1,582. An account opens this period's Entries
+  filtered to it; an investment account opens Investments.
+- **Entries** says its figures in the context line ("27 entries · in $2,150 · out $2,425 · net
+  −$275") instead of a strip. A row's badge opens the category list and moves the entry; its menu
+  (right click, the Menu key) holds Edit, Change category, Ask about this entry and Delete.
+  Delete deletes the focused row, Enter edits, Ctrl F finds. Each change has Undo on the toast.
+- **Plan** takes the monthly budget in its strip, beside what categories hold of it. Beside each
+  budget field: last month's spending and the average of the last three months, or as many as the
+  ledger reaches (one `money.series` read per category, kept until `money.changed`). Categories
+  with no budget and nothing spent fold under one key.
+- **The entry sheet** starts with no category chosen, so nothing is filed under the list's first
+  row; the category list finds as you type. The account starts where that kind was last saved.
+  Save and add another (Ctrl Enter) keeps the day, account and category. Ctrl E opens the sheet
+  anywhere in Threads. A save says what it did, with Undo.
+- **Asking** is one key per page, in the person's words: the Budgets card on Overview (its
+  question follows the month: over budget, ahead of pace), By day on Entries, Suggest budgets on
+  Plan ("Suggest monthly budgets from my last 3 months of spending"), the head of Investments
+  (and Needs a look, about what it lists). An entry's menu asks about that entry: "Tell me about
+  this entry: Burger night, Dining, $14.98 on Thu 8 Oct".
+- **Glass:** Tally's cards, strips, tiles, fields and keys at rest are glass veils (DESIGN.md, the
+  Glass Rule), and Avex's and Arbiter's pages, which share them, follow. The sheets, menus and
+  the toast float, and stay opaque. Meters draw their track in the page's ink, not a fixed grey,
+  and one squeezed under 2 pixels draws nothing instead of aborting the client.
+
 ## Investments (phase 5)
 
 `docs/INVESTMENTS.md` is the contract: the ledger's new tables, the rules both devices read them by,
