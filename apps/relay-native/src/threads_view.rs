@@ -493,7 +493,7 @@ pub fn page() -> gtk::Box {
     let effort = picker("threads-effort", "How hard the agent thinks before answering", &EFFORTS, |value| choose(None, Some(value)));
     row.append(&effort.key);
     // What the agent may do, said plainly: words, not a key.
-    let limits = label("Edits with Undo", "threads-limits");
+    let limits = label("Edits with Undo · asks first", "threads-limits");
     limits.set_valign(gtk::Align::Center);
     limits.set_tooltip_text(Some("It adds and changes entries and investment activity, each with an Undo. Before deleting, changing many at once, budgets or accounts, it asks you on a card."));
     row.append(&limits);
@@ -730,7 +730,7 @@ fn show_source(v: &View) {
         v.limits.set_text("Reads only");
         v.limits.set_tooltip_text(Some("It reads your training as last exported from Avex. It cannot change anything in Avex."));
     } else {
-        v.limits.set_text("Edits with Undo");
+        v.limits.set_text("Edits with Undo · asks first");
         v.limits.set_tooltip_text(Some("It adds and changes entries and investment activity, each with an Undo. Before deleting, changing many at once, budgets or accounts, it asks you on a card."));
     }
 }

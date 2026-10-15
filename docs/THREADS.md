@@ -120,7 +120,7 @@ that speaks the same stream-json.
   a new one. Only the panel's own "Open …" keys leave for a page.
 - **One source switch.** Tally, Arbiter or Avex is chosen once, on the switch above the panel; the
   message box no longer repeats it. What follows the source: the panel, the message box's line on
-  what the agent may do ("Edits with Undo", "Proposes, you approve", "Reads only"), an open thread's
+  what the agent may do ("Edits with Undo · asks first", "Proposes, you approve", "Reads only"), an open thread's
   placeholder ("Ask about your money, or tell it what to change", "Ask about your training"), and a
   new thread's line and questions. Tally's line is the month ("October so far: $2,425 spent, $475
   left"); Avex's is read from `gym.summary`: this week while the export reaches it ("This week so
