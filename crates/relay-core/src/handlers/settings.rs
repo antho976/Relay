@@ -163,6 +163,29 @@ pub fn tree(tx: &Transaction) -> Result<Value, BusError> {
     Ok(root)
 }
 
+/// The defaults on the way to `path` and no others: each ancestor object keeps only the key
+/// that leads down, and the value at `path` is whole. [`set_at`] and [`get_at`] only touch the
+/// nodes on their own path, and [`subtree`] only applies rows on `path`'s, so reading `path`
+/// back from this gives what the full tree would, without cloning every default to read one
+/// (`settings.set` reads twice, before and after, and that clone was half its cost).
+fn defaults_along(path: &str) -> Value {
+    fn walk(default: &Value, segs: &[&str]) -> Value {
+        match (segs.split_first(), default) {
+            (Some((seg, rest)), Value::Object(map)) => {
+                let mut out = Map::new();
+                if let Some(child) = map.get(*seg) {
+                    out.insert(seg.to_string(), walk(child, rest));
+                }
+                Value::Object(out)
+            }
+            // A scalar on the way down: `get_at` stops at it and `set_at` replaces it, as in the
+            // full tree.
+            _ => default.clone(),
+        }
+    }
+    walk(defaults(), &path.split('.').collect::<Vec<_>>())
+}
+
 /// The rows that can affect the value at `path`: the subtree under it, plus its ancestors —
 /// a stored scalar at `appearance` replaces the whole default object below it, so it has to be
 /// applied before `appearance.mode` is read back out.
@@ -172,7 +195,7 @@ pub fn tree(tx: &Transaction) -> Result<Value, BusError> {
 /// past. Ordering by path keeps the ancestor-then-descendant application order [`tree`] relies on
 /// (a prefix always sorts before the paths it prefixes).
 fn subtree(tx: &Transaction, path: &str) -> Result<Value, BusError> {
-    let mut root = defaults().clone();
+    let mut root = defaults_along(path);
     let ancestors: Vec<String> = path
         .match_indices('.')
         .map(|(i, _)| path[..i].to_string())
@@ -356,6 +379,46 @@ pub fn register(e: &mut Engine) {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{json, Value};
+
+    /// A path read starts from the defaults on its own path only; it must still read what the
+    /// full tree holds there, for every default path and for stored rows that replace an
+    /// ancestor with a scalar or an object, reach below a default scalar, or add a new branch.
+    #[test]
+    fn a_path_read_matches_the_full_tree() {
+        fn paths(v: &Value, prefix: &str, out: &mut Vec<String>) {
+            out.push(prefix.to_string());
+            if let Value::Object(m) = v {
+                for (k, child) in m {
+                    paths(child, &if prefix.is_empty() { k.clone() } else { format!("{prefix}.{k}") }, out);
+                }
+            }
+        }
+        let mut all = Vec::new();
+        paths(super::defaults(), "", &mut all);
+        all.retain(|p| !p.is_empty());
+        all.extend(["appearance.mode.deeper", "nowhere", "nowhere.at.all", "notifications.categories.task", "usage.claude.weekly.x"].map(String::from));
+        let stored: [&[(&str, Value)]; 4] = [
+            &[],
+            &[("appearance", json!("flat")), ("notifications.volume", json!(0.2))],
+            &[("appearance", json!({"mode": "light"})), ("appearance.panel_alpha", json!(0.5)), ("usage.claude.weekly", json!({"x": 1}))],
+            &[("notifications.categories.task", json!(false)), ("nowhere.at", json!({"all": [1, 2]})), ("appearance.mode.deeper", json!(3))],
+        ];
+        for rows in stored {
+            let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+            conn.execute_batch("CREATE TABLE settings (path TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)").unwrap();
+            let tx = conn.transaction().unwrap();
+            for (path, value) in rows {
+                tx.execute("INSERT INTO settings VALUES (?1, ?2, 'now')", [*path, &value.to_string()]).unwrap();
+            }
+            let tree = super::tree(&tx).unwrap();
+            for path in &all {
+                let full = super::get_at(&tree, path).cloned().unwrap_or(Value::Null);
+                assert_eq!(super::subtree(&tx, path).unwrap(), full, "{path} with {rows:?}");
+            }
+        }
+    }
+
     /// RA-647: a subtree delete and read take exactly the subtree, case-sensitively — not a
     /// sibling spelled in another case, not a sibling that merely shares the prefix.
     #[test]

@@ -43,20 +43,23 @@ What the passes got wrong first, and what changed:
 
 ## What the attribution shows
 
-New leads, none of them fixed here; each is worth an estimate before it is worth a change.
+New leads; 1 and 3 are fixed (below), the rest are open. Each is worth an estimate before it is worth a change.
 
 1. **`settings.set` spends 53 % of its 391 k instructions in `settings::get`**, which it calls
    twice (before, for undo; after, for the event). `subtree` starts every read with
    `defaults().clone()`, the whole defaults tree, to read back one path, and allocation is 47 %
    of the op. Cloning only the default subtree on the path would leave the get at a fraction
    of its cost. `settings.set` is every audited setting change and every `perf.soak` round.
+   **Fixed**: 397 k → 230 k instructions.
 2. **`app.status` spends 51 % in `providers::spawn_profile`** (27 % in `Codex::args` alone) and
    19.5 % compiling SQL (`sqlite3_prepare`). It builds every provider's launch profile to report
    status, and somewhere a statement is not cached. The shell calls it on connect and on
    changes; 436 k instructions.
 3. **`audit.list` is 53 % allocation and 26 % `serde_json::from_str`.** It parses each stored
-   payload back into a `Value` to serialize it again (`AuditRow::serialize` 40 %). Writing the
-   stored JSON through as raw text would skip both; 8.8 M instructions per page.
+   payload into a `Value`, and the engine's `to_value` of the typed result copies that `Value`
+   node by node (`AuditRow::serialize` 40 %); 8.8 M instructions per page. Passing the stored
+   text through untouched is not possible while bus results are `Value`s, so one parse stays.
+   **Fixed** (the copy): 8.8 M → 6.5 M instructions.
 4. **`task.list` (4.6 M) and `dashboard.get` (2.0 M) spend 29 % in `task::hydrate`** and 25 %
    / 16 % building `serde_json::Value` maps (`IndexMap::push_entry` is the hottest Relay-side
    self frame). That is typed structs serialized through `Value` instead of directly.
@@ -70,6 +73,48 @@ New leads, none of them fixed here; each is worth an estimate before it is worth
 The `git` ops are mostly `git`: `session.create` is 66 M instructions, 91 % of them in child
 processes, and `file.tree`'s one level is 0.7 M in Relay and 4.7 M in `git status` for the
 badges (PLAYBOOK lead 6).
+
+## Fixed since
+
+Same machine and build; each column is two runs of the harness (`--counters` for instructions,
+the native pass for the rest), raw rows and the script that prints them in
+`runs/2026-10-14-attribution/fixes/`.
+
+| scenario | instructions before → after | p50 before → after | allocations before → after |
+|---|---:|---:|---:|
+| `op.settings.set` | 397 k → 230 k (−42 %) | 37.0 µs → 21.6 µs | 419 → 67 |
+| `op.settings.reset` | 379 k → 202 k (−47 %) | 34.9 µs → 20.3 µs | 408 → 54 |
+| `op.settings.get.path` | 121 k → 54.6 k (−55 %) | 9.9 µs → 4.0 µs | 200 → 31 |
+| `op.notify.settings.get` | 106 k → 39.7 k (−63 %) | 9.1 µs → 3.2 µs | 195 → 26 |
+| `op.notify.settings.set` | 361 k → 277 k (−23 %) | 33.2 µs → 26.3 µs | 266 → 97 |
+| `path.event.roundtrip` (a `settings.set` to its event) | 501 k → 326 k (−35 %) | 59.0 µs → 41.4 µs | 484 → 132 |
+| `op.audit.list` (200 rows) | 8.78 M → 6.52 M (−26 %) | 578 µs → 410 µs | 10 228 → 7 552 |
+| `op.audit.get` | 57.5 k → 52.1 k (−9 %) | 4.2 µs → 3.9 µs | 72 → 61 |
+| `op.settings.get` (whole tree, unchanged path) | 242 k → 240 k | 18.3 µs → 18.3 µs | 440 → 440 |
+| `op.audit.undo` (unchanged path) | 1.28 M → 1.29 M | 114 µs → 117 µs | 505 → 505 |
+
+The two-run spread is under 0.3 % on every instruction count. The last two rows are paths the
+changes do not touch, read as controls.
+
+- **`handlers/settings.rs`**: `subtree` starts from `defaults_along(path)`, the defaults on the way
+  to `path` and nothing else, instead of a clone of every default. `set_at` and `get_at` only
+  touch nodes on their own path, so the read is the same; `a_path_read_matches_the_full_tree`
+  checks every default path, and paths below and beside them, against the full tree, with
+  stored rows that replace an ancestor with a scalar or an object.
+- **`engine.rs`**: `register_unlocked_json`, `register_unlocked` for a query that builds its result
+  as JSON itself. The handler promises the shape of `O::Result`, and keeps a test that holds it
+  to that.
+- **`audit.rs`, `handlers/audit.rs`**: `RawAudit::into_json` serializes the typed row with its
+  payload, result and inverse empty, then moves the parsed values into their places.
+  `audit.list` and `audit.get` answer with it. `into_json_is_the_typed_row_exactly` compares it
+  with the typed row byte for byte (key order included), for full and empty columns, text that
+  no longer parses, and inverses with and without `expect`.
+
+A first version came out *slower* (11.6 M instructions): `json!({ "rows": rows })` serializes
+its argument, so it copied every row once more. The rows object is now built directly.
+
+What is left in `audit.list`: parsing the stored text (35 %), the rows' own small maps with
+their owned keys (24 %), and copying the text out of SQLite (17 %).
 
 ## Rerun
 
