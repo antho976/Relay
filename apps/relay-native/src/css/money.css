@@ -2,7 +2,10 @@
    space's own tokens (DESIGN.md): the two spaces are one app, so nothing here restyles the bars,
    the sidebar or the switcher. Colour is kept for what it means: a category's or a
    registration's hue (data, never text), money in, over budget. The start screen has its own
-   look, css/start.css. */
+   look, css/start.css.
+   The Glass Rule (DESIGN.md): what sits on a page (cards, strips, tiles, fields, keys at rest) is
+   a veil of ink (theme.css @glass_*), never @slab, @wash or @raised, which read as solid blocks
+   over the wallpaper. What floats over the page (the sheets, menus, the toast) stays opaque. */
 
 /* Space switcher, beside the brand: the app's segmented well (Board | Modules, Agents | Files |
    Git) in glass, as tall as the title bar's search and keys (34px) so it sits on their line. */
@@ -61,19 +64,28 @@ button.money-row-delete:hover { color: @held_text; background: alpha(@held_text,
 
 /* Actions: Dev's keys. The hero action is Dev's primary key. */
 button.money-text-action { background: transparent; border: 0; box-shadow: none; color: @secondary; font-size: 12px; font-weight: 500; padding: 2px 8px; min-height: 26px; }
-button.money-text-action:hover { background: @wash; color: @ink; border-radius: 8px; }
+button.money-text-action:hover { background: @glass_hover; color: @ink; border-radius: 8px; }
 /* Ask about this: the quietest key on a card, until it is wanted. */
 button.money-text-action.money-ask { color: @faint; }
 button.money-text-action.money-ask:hover, button.money-text-action.money-ask:focus-visible { color: @ink; }
 .money-root button.primary.money-hero-action, .money-sheet button.primary.money-hero-action { min-height: 36px; padding: 0 16px; }
 button.money-secondary, button.money-destructive { min-height: 34px; padding: 0 14px; }
 button.money-destructive { color: @held_text; }
-button.money-destructive.confirm-armed { background: @held; border-color: @held; color: @wall; }
 button.money-chrome { border-radius: 10px; min-width: 32px; min-height: 32px; }
+/* Keys at rest on a page are glass controls: the head's (Import…, the Entries filters), a settings
+   row's, the empty state's, and the secondary and destructive keys. */
+.money-root .money-head button:not(.quiet):not(.primary):not(.money-text-action), .money-root .tally-setting > button:not(.primary),
+.money-root .money-empty button:not(.primary), .money-root button.money-secondary, .money-root button.money-destructive { background: @glass_control; border-color: @glass_line; }
+.money-root .money-head button:not(.quiet):not(.primary):not(.money-text-action):hover, .money-root .tally-setting > button:not(.primary):hover,
+.money-root .money-empty button:not(.primary):hover, .money-root button.money-secondary:hover, .money-root button.money-destructive:hover { background: @glass_hover; border-color: @glass_line_hover; }
+button.money-destructive.confirm-armed, .money-root button.money-destructive.confirm-armed { background: @held; border-color: @held; color: @wall; }
 
-/* Fields: Dev's raised fields. */
-.money-root entry.money-field, .money-root entry.money-search, .money-sheet entry, .money-sheet spinbutton, .money-root spinbutton.money-field { background: @raised; color: @ink; border: 1px solid @strong; border-radius: 10px; min-height: 34px; padding: 0 10px; }
-.money-root entry.money-field:focus-within, .money-root entry.money-search:focus-within, .money-sheet entry:focus-within, .money-root spinbutton.money-field:focus-within { border-color: @line_focus; }
+/* Fields: on a page, glass; in a sheet, which floats, Dev's raised fields. */
+.money-root entry.money-field, .money-root entry.money-search, .money-root spinbutton.money-field { background: @glass_card; color: @ink; border: 1px solid @glass_line; border-radius: 10px; min-height: 34px; padding: 0 10px; }
+.money-root entry.money-field:hover, .money-root entry.money-search:hover, .money-root spinbutton.money-field:hover { border-color: @glass_line_hover; }
+.money-sheet entry, .money-sheet spinbutton { background: @raised; color: @ink; border: 1px solid @strong; border-radius: 10px; min-height: 34px; padding: 0 10px; }
+.money-root entry.money-field:focus-within, .money-root entry.money-search:focus-within, .money-root spinbutton.money-field:focus-within { border-color: alpha(@ink, 0.42); }
+.money-sheet entry:focus-within { border-color: @line_focus; }
 .money-root entry.money-field.error, .money-sheet entry.error { border-color: @held; }
 .money-root entry.money-field, .money-root spinbutton.money-field { font-feature-settings: "tnum"; }
 .money-suffix { font-family: "Geist Mono", monospace; font-size: 12px; color: @faint; }
@@ -114,7 +126,7 @@ button.money-menu-item.destructive label, button.money-menu-item.destructive ima
 menubutton.money-picker > button { padding: 0 10px; }
 
 /* The Undo toast. */
-.money-toast { background: @slab; border: 1px solid @strong; color: @ink; border-radius: 12px; padding: 6px 8px 6px 16px; box-shadow: 0 6px 18px alpha(black, 0.45); font-size: 13px; }
+.money-toast { background: @slab_solid; border: 1px solid @strong; color: @ink; border-radius: 12px; padding: 6px 8px 6px 16px; box-shadow: 0 6px 18px alpha(black, 0.45); font-size: 13px; }
 
 /* Empty state. */
 .money-empty { padding: 24px; }
@@ -123,10 +135,10 @@ menubutton.money-picker > button { padding: 0 10px; }
 
 /* Cards, strips and rows (money_pages.rs): one card per subject, its rows inside it, a strip of
    figures at the top of each page. Rows carry their own inner padding, so nothing meets an edge. */
-.tally-card { background: @slab; border: 1px solid @edge; border-radius: 14px; padding: 2px 0 6px; }
+.tally-card { background: @glass_card; border: 1px solid @glass_edge; border-radius: 14px; padding: 2px 0 6px; }
 .tally-card-head { padding: 10px 16px 4px; min-height: 28px; }
 .tally-card-title { font-size: 13px; font-weight: 600; color: @ink; }
-.tally-rows > .tally-row, .tally-rows > box.tally-row { padding: 8px 16px; min-height: 34px; border-top: 1px solid @line_subtle; }
+.tally-rows > .tally-row, .tally-rows > box.tally-row { padding: 8px 16px; min-height: 34px; border-top: 1px solid @glass_edge; }
 .tally-rows > .tally-row:first-child, .tally-rows > .tally-day + .tally-row, .tally-rows > .tally-th + .tally-row { border-top: 0; }
 .tally-rows > box.tally-entry { padding: 0; }
 .tally-entry > button.money-row-key { padding: 7px 8px 7px 16px; min-height: 34px; border-radius: 0; }
@@ -138,11 +150,11 @@ menubutton.money-picker > button { padding: 0 10px; }
 button.money-badge-key { min-width: 0; min-height: 0; padding: 0; border: 0; border-radius: 9px; background: transparent; box-shadow: none; }
 button.money-badge-key:hover { background: transparent; }
 button.money-badge-key:hover .money-badge, button.money-badge-key:focus-visible .money-badge { box-shadow: inset 0 0 0 1px currentColor; }
-.tally-entry:hover { background: @wash; }
+.tally-entry:hover { background: @glass_card; }
 .tally-rows > .tally-entry:last-child { border-bottom-left-radius: 13px; border-bottom-right-radius: 13px; }
 .tally-entry button.money-row-delete { opacity: 0; margin-right: 10px; }
 .tally-entry:hover button.money-row-delete, .tally-entry button.money-row-delete:focus-visible { opacity: 1; }
-.tally-day { padding: 12px 46px 4px 16px; border-top: 1px solid @line_subtle; }
+.tally-day { padding: 12px 46px 4px 16px; border-top: 1px solid @glass_edge; }
 .tally-rows > .tally-day:first-child { border-top: 0; padding-top: 4px; }
 .tally-day-name { font-size: 12px; font-weight: 600; color: @secondary; }
 .tally-day-total { font-family: "Geist Mono", monospace; font-size: 11.5px; color: @secondary; min-width: 84px; }
@@ -150,24 +162,24 @@ button.money-badge-key:hover .money-badge, button.money-badge-key:focus-visible 
 .tally-th-text { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: @faint; }
 .tally-setting { padding: 10px 16px; }
 button.tally-save { margin: 8px 16px 4px; }
-.tally-total { padding: 10px 16px 4px; border-top: 1px solid @edge; }
+.tally-total { padding: 10px 16px 4px; border-top: 1px solid @glass_line; }
 .tally-total-figure { font-family: "Geist Mono", monospace; font-size: 13px; font-weight: 600; color: @ink; font-feature-settings: "tnum"; }
 .tally-soon .money-row-detail { color: @waiting; }
-.tally-tile { min-width: 28px; min-height: 28px; border-radius: 8px; background: @wash; color: @secondary; }
+.tally-tile { min-width: 28px; min-height: 28px; border-radius: 8px; background: @glass_control; color: @secondary; }
 .money-badge-small { min-width: 28px; min-height: 28px; border-radius: 8px; }
-.tally-rows > .tally-note { padding: 10px 16px 6px; border-top: 1px solid @line_subtle; }
+.tally-rows > .tally-note { padding: 10px 16px 6px; border-top: 1px solid @glass_edge; }
 .tally-rows > .tally-bars { padding: 10px 16px 6px; }
 
-.tally-strip { background: @slab; border: 1px solid @edge; border-radius: 14px; padding: 16px 0; }
+.tally-strip { background: @glass_card; border: 1px solid @glass_edge; border-radius: 14px; padding: 16px 0; }
 .tally-cell { padding: 0 20px; }
 /* A narrow page stacks the strip's figures (pages::fit): each its own short row. */
 .tally-cells.narrow > .tally-cell { padding: 6px 20px; }
-.tally-rule { background: @line_subtle; min-width: 1px; margin: 2px 0; }
+.tally-rule { background: @glass_edge; min-width: 1px; margin: 2px 0; }
 .tally-cell-icon { color: @faint; }
 .tally-cell-caption { font-size: 12px; color: @faint; }
 .tally-cell-figure { margin-top: 2px; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; color: @ink; font-feature-settings: "tnum"; }
 .tally-cell-sub { font-size: 12px; color: @faint; }
-.tally-pace { margin: 0 20px; padding-top: 14px; border-top: 1px solid @line_subtle; }
+.tally-pace { margin: 0 20px; padding-top: 14px; border-top: 1px solid @glass_edge; }
 /* A figure or line that carries a state keeps its colour over the strip's own ink. */
 .tally-cell-figure.money-in, .tally-cell-sub.money-in { color: @live; }
 .tally-cell-figure.money-over, .tally-cell-sub.money-over { color: @held_text; }
@@ -187,7 +199,7 @@ button.tally-save { margin: 8px 16px 4px; }
 
 /* Investments (money_invest.rs): a holding's symbol, in the tile's place; the allocation's legend,
    which wraps on a narrow page. */
-.invest-symbol { min-width: 48px; min-height: 28px; border-radius: 8px; background: @wash; color: @secondary; font-family: "Geist Mono", monospace; font-size: 10.5px; font-weight: 600; }
+.invest-symbol { min-width: 48px; min-height: 28px; border-radius: 8px; background: @glass_control; color: @secondary; font-family: "Geist Mono", monospace; font-size: 10.5px; font-weight: 600; }
 .tally-legend flowboxchild { padding: 0; min-height: 0; }
 /* An activity is no key, so it keeps its row's padding; its trash key shows on hover, as an entry's. */
 .invest-activity button.money-row-delete { opacity: 0; margin: 0 -8px 0 0; }
