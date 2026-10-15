@@ -253,7 +253,8 @@ chosen segment, row, count or track. Edges go `@glass_edge` (7%) for wells and
 cards, `@glass_line` (11%) for controls, `@glass_line_hover` (18%). Only what
 floats over content — menus, popovers, the board's quick-create sheet and drag
 rail — is opaque, in the `_solid` twins. Board, Modules, task pages, Skills,
-Plugins, the agents view's crumb and tabs, and the Dev | Threads switch follow it.
+Plugins, the agents view's crumb and tabs, the Dev | Threads switch and Tally's pages (with
+Avex's and Arbiter's, which share their cards) follow it.
 
 The status bar's usage meters show, per enabled provider, the 5-hour, weekly
 and Fable windows chosen in the limits popup, with amber at 70% and red at 90%,
