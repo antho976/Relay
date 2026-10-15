@@ -403,6 +403,33 @@ mod tests {
     }
 
     #[test]
+    fn a_proposal_is_written_in_dollars_too() {
+        // Each payload in a batch is its op's own, and converts as that op's would.
+        let payload = &schema("thread.propose")["payload"];
+        let mut args = json!({"why": "Last three months", "action": {"money.budget.set": [{"category_id": 7, "amount": "380"}, {"amount": "3000.50"}]}});
+        to_engine(&mut args, payload, 2).unwrap();
+        assert_eq!(args["action"]["money.budget.set"], json!([{"category_id": 7, "amount": 38000}, {"amount": 300050}]));
+        let mut args = json!({"why": "Typo", "action": {"money.tx.update": [{"id": 4, "amount": "12.5"}, {"id": 5, "category_id": 3}]}});
+        to_engine(&mut args, payload, 2).unwrap();
+        assert_eq!(args["action"]["money.tx.update"], json!([{"id": 4, "amount": 1250}, {"id": 5, "category_id": 3}]));
+        let mut ids = json!({"why": "Twice", "action": {"money.tx.delete": [{"id": 4}]}});
+        to_engine(&mut ids, payload, 2).unwrap();
+        assert_eq!(ids["action"]["money.tx.delete"], json!([{"id": 4}]));
+        // And reads back so: the budgets it acts on, and an edit's entry before and after.
+        let mut view = json!({"id": 1, "currency": "CAD", "action": {"money.budget.set": [{"category_id": 7, "amount": 38000}]},
+            "items": [{"state": "same", "budget": 32000, "budget_after": 38000, "entry": {"id": 4, "amount": 1599}}]});
+        to_agent(&mut view, &schema("thread.propose")["result"], 2);
+        assert_eq!(view["action"]["money.budget.set"][0]["amount"], "380.00");
+        assert_eq!((view["items"][0]["budget"].clone(), view["items"][0]["budget_after"].clone()), (json!("320.00"), json!("380.00")));
+        assert_eq!(view["items"][0]["entry"]["amount"], "15.99");
+        let mut changed = json!({"id": 4, "amount": 2100, "previous": {"id": 4, "amount": 1200}});
+        to_agent(&mut changed, &schema("money.tx.update")["result"], 2);
+        assert_eq!((changed["amount"].clone(), changed["previous"]["amount"].clone()), (json!("21.00"), json!("12.00")));
+        let shown = agent_schema(payload).to_string();
+        assert!(shown.contains("not cents") && !shown.contains("x-unit"), "{shown}");
+    }
+
+    #[test]
     fn a_currency_in_lower_case_counts_its_own_places() {
         // The ledger takes " jpy" as JPY, so its places are JPY's, not the two of an unknown code.
         assert_eq!((digits("jpy"), digits(" kwd "), digits("cad")), (0, 3, 2));

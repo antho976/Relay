@@ -706,6 +706,38 @@ impl Ledger {
         Ok(())
     }
 
+    /// The monthly limit set for a category (`None`: the overall budget), if one is.
+    pub fn budget(&self, category_id: Option<i64>) -> Result<Option<i64>> {
+        Ok(self.conn.prepare_cached("SELECT amount FROM budgets WHERE category_id = ?1 AND deleted = 0")?
+            .query_row([category_id.unwrap_or(0)], |r| r.get(0))
+            .optional()?)
+    }
+
+    /// Runs `f` as one change to the ledger: all it writes, or none of it when it fails. For the
+    /// PC's batches (a thread's proposal approved at once); `f` must not open a transaction itself.
+    pub fn atomically<T>(&mut self, f: impl FnOnce(&mut Ledger) -> Result<T>) -> Result<T> {
+        self.conn.execute_batch("SAVEPOINT atomically")?;
+        match f(self) {
+            Ok(out) => {
+                self.conn.execute_batch("RELEASE atomically")?;
+                Ok(out)
+            }
+            Err(e) => {
+                self.conn.execute_batch("ROLLBACK TO atomically; RELEASE atomically")?;
+                Err(e)
+            }
+        }
+    }
+
+    /// Runs `f` and puts back everything it wrote: what a change would do, by the ledger's own
+    /// rules, without doing it.
+    pub fn trial<T>(&mut self, f: impl FnOnce(&mut Ledger) -> Result<T>) -> Result<T> {
+        self.conn.execute_batch("SAVEPOINT trial")?;
+        let out = f(self);
+        self.conn.execute_batch("ROLLBACK TO trial; RELEASE trial")?;
+        out
+    }
+
     fn budgets(&self) -> Result<Vec<(i64, i64)>> {
         let mut st = self.conn.prepare_cached("SELECT category_id, amount FROM budgets WHERE deleted = 0")?;
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
@@ -1455,6 +1487,36 @@ mod tests {
         assert!(matches!(l.tx_delete(t.id), Err(LedgerError::NotFound(_))));
         assert_eq!(l.tx_restore(t.id).unwrap().amount, 35_00, "Undo brings it back as it was");
         assert_eq!(l.tx_list(&TxQuery::default(), date(2026, 10, 3)).unwrap().spent, 35_00);
+    }
+
+    #[test]
+    fn a_batch_applies_whole_or_not_at_all() {
+        let (mut l, acct) = with_account();
+        let dining = category(&l, "Dining");
+        let (a, b) = (spend(&mut l, acct, dining, 20_00, "2026-10-02"), spend(&mut l, acct, dining, 5_00, "2026-10-03"));
+        let failed = l.atomically(|l| {
+            l.tx_delete(a.id)?;
+            l.budget_set(Some(dining), 300_00)?;
+            l.tx_delete(b.id + 100)
+        });
+        assert!(matches!(failed, Err(LedgerError::NotFound(_))));
+        assert!(l.tx(a.id).is_ok(), "the first delete went back with the failure");
+        assert_eq!(l.budget(Some(dining)).unwrap(), None);
+        l.atomically(|l| {
+            l.tx_delete(a.id)?;
+            l.tx_delete(b.id)?;
+            l.budget_set(None, 2_000_00)
+        })
+        .unwrap();
+        assert!(l.tx(a.id).is_err() && l.tx(b.id).is_err());
+        assert_eq!(l.budget(None).unwrap(), Some(2_000_00));
+        l.budget_set(None, 0).unwrap();
+        assert_eq!(l.budget(None).unwrap(), None, "a removed budget reads as none");
+        // A trial says what a change would do and leaves the ledger as it was.
+        let restored = l.trial(|l| l.tx_restore(a.id)).unwrap();
+        assert_eq!(restored.amount, 20_00);
+        assert!(l.tx(a.id).is_err());
+        assert!(matches!(l.trial(|l| l.budget_set(Some(category(l, "Salary")), 1_00)), Err(LedgerError::Invalid(_))));
     }
 
     #[test]

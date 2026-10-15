@@ -77,6 +77,15 @@ button.threads-undo { min-height: 28px; }
 button.threads-card-key { min-height: 30px; }
 .threads-import:drop(active) { border-color: @line_focus; background: @wash; }
 
+/* What the agent asked first (threads_ask.rs): Arbiter's asking card, Tally's rows in it, the
+   agent's reason quoted under them. A row that moved since it asked says so in amber; one gone,
+   in red. */
+.threads-ask-rows > .tally-row { padding: 6px 0; min-height: 30px; }
+.threads-ask-rows > .tally-row + .tally-row { border-top: 1px solid @line_subtle; }
+.threads-ask-why { font-size: 13px; color: @secondary; }
+.threads-ask-changed { font-size: 12px; color: @waiting; }
+.threads-ask-gone { font-size: 12px; color: @held_text; }
+
 /* The message box: the column's width, its text set in line with the chips under it. */
 .threads-dock { padding: 0 0 18px; }
 .threads-composer { padding: 12px 12px 10px 16px; border: 1px solid @strong; border-radius: 14px; background: @raised; }

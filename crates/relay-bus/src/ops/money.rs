@@ -51,7 +51,14 @@ payload!(#[schemars(rename = "MoneyTxUpdateIn")] TxUpdateIn {
     pub id: i64, pub r#type: Option<TxType>, #[schemars(extend("x-unit" = "minor"))] pub amount: Option<i64>, pub date: Option<String>,
     pub account_id: Option<i64>, pub to_account_id: Option<i64>, pub category_id: Option<i64>, pub note: Option<String>,
 });
-op!(TxUpdate, "money.tx.update", TxUpdateIn => Tx, OpMeta::mutation(Scope::Global, 12, "Change an entry; absent fields keep their value").emits(&["money.changed"]));
+result!(#[schemars(rename = "MoneyTxChanged")] TxChanged {
+    #[serde(flatten)]
+    pub tx: Tx,
+    /// The entry as it was before this change: a card shows before → after, and its Undo puts
+    /// it back.
+    pub previous: Tx,
+});
+op!(TxUpdate, "money.tx.update", TxUpdateIn => TxChanged, OpMeta::mutation(Scope::Global, 12, "Change an entry; absent fields keep their value. Answers with the entry and how it was before").emits(&["money.changed"]));
 payload!(#[schemars(rename = "MoneyIdIn")] IdIn { pub id: i64 });
 op!(TxDelete, "money.tx.delete", IdIn => Empty, OpMeta::mutation(Scope::Global, 12, "Delete an entry (kept as a tombstone for sync)").emits(&["money.changed"]));
 op!(TxRestore, "money.tx.restore", IdIn => Tx, OpMeta::mutation(Scope::Global, 12, "Bring back a deleted entry: the Undo of money.tx.delete").emits(&["money.changed"]));

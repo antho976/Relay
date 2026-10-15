@@ -30,8 +30,9 @@ The mockup: https://claude.ai/artifact/GPtaPk6YYLiFCHGpeNPMk4
 3. **Charts** (built): the agent writes a `chart` block, Relay draws it from the ledger and redraws
    it when the ledger moves. (The Undo card came with phase 2; pinning a chart to the panel is
    still to do.)
-4. **Asking first:** a confirm card for what the agent may not do alone (delete, budgets,
-   accounts), run as the person when they approve.
+4. **Asking first** (built): what the agent may not do alone (deleting, many changes at once,
+   budgets, accounts) it proposes; the person approves or declines each on a card, and approving
+   applies it once, as the person, whole or not at all.
 5. **Investments in Tally** (built in the PC's engine and for the agent; `docs/INVESTMENTS.md` is
    the contract): holdings and their value tracked in the ledger, on the phone and the PC in the
    same commit (`CLAUDE.md`: a money rule changes on both sides at once), and an agent that brings
@@ -84,7 +85,8 @@ alone: `thread.create` (optionally with the first message, which also names the 
 `thread.send`, `thread.stop`, `thread.rename`, `thread.delete`.
 
 **Events.** `thread.changed` (`{"thread"}`, or `{"id", "deleted": true}`), `thread.message`
-(`{"thread", "message"}`), `thread.delta` (`{"thread", "text"}`, not stored).
+(`{"thread", "message"}`), `thread.delta` (`{"thread", "text"}`, not stored), `thread.proposal`
+(`{"thread", "proposal"}`, phase 4).
 
 Tests: `crates/relay-core/tests/threads.rs` drives threads end to end against a stand-in Claude
 that speaks the same stream-json.
@@ -133,6 +135,126 @@ An agent asks for a chart by writing a fenced block with the language `chart` an
   `money.changed`. Colour is the data's: the newest period in Relay's lime, earlier ones in blue,
   orange and on; hovering a group gives its values. Labels and axis are Dev's type.
 
+## Asking first (phase 4)
+
+The engine is `crates/relay-core/src/threads/proposals.rs`, the ops are in
+`crates/relay-bus/src/ops/thread.rs`, and the card is `apps/relay-native/src/threads_ask.rs`.
+
+**A proposal is one action from a short list.** The agent calls
+`thread.propose {action, why}`. `action` is `{"<op>": [<that op's own payload>, ...]}`, so each
+payload is checked against the target op's own input type, and the MCP door converts its amounts
+as it does for that op. `why` is a sentence the person reads on the card. The list:
+
+| Action | At most | |
+|---|---|---|
+| `money.tx.delete` | 50 | duplicates, mistakes |
+| `money.tx.update` | 50 | recategorizing many, or fixing an amount, a date or a note (one small edit stays a direct `money.tx.update`) |
+| `money.budget.set` | 20 | a budget, the monthly budget, or removing one (amount 0) |
+| `money.account.add` | 5 | |
+| `money.account.update` | 5 | renaming, archiving |
+| `money.invest.delete` | 50 | a duplicate manual activity |
+
+Room, prices, rates, imports, erasing and restoring are not on the list. They stay the person's
+(`docs/INVESTMENTS.md`). Avex is read only.
+
+**Checked when made, tied to its thread.** Only a thread's own agent proposes. The socket door
+knows the agent by the process that connected (`peer::Peer::Thread`). It hands that thread to the
+handler (`Engine::dispatch_from_thread`, `Ctx::thread`), and nothing in a request can claim one;
+from anywhere else `thread.propose` is refused with `thread.not_agent`. What the action acts on
+must be in the ledger (`money.not_found` otherwise). It must change something. Each target may
+appear only once. The whole batch then runs as a trial under the ledger's own rules and is put
+back (`Ledger::trial`), so a budget on an income category is refused now, not on approval. The
+same action already waiting in the thread is answered with that proposal. A thread holds at most
+20 waiting proposals.
+
+**Stored in `threads.db`** (version 3, table `proposal`), never in `money.db`, which syncs with
+the phone. A row holds the action, the reason, a `summary` in words read from the ledger
+(dates, notes, amounts as decimals), its status and outcome, and `items`. `items` is what the
+action acts on: the entries, activities, accounts or budgets as they were when proposed. A
+proposal goes with its thread.
+
+**Reading it** (`thread.proposal.list {thread_id, pending?}`, `thread.proposal.get {id}`, both
+the person's): a pending proposal reads its targets again from the ledger each time. Each item is
+`same`, `changed` since it was proposed, `gone`, or `new` (an account to add). Each item also
+carries the result of a trial of its change: `entry_after`, `account_after`, `budget_after`.
+`stale` says something moved, and `seen` is a fingerprint of what was read. An answered proposal
+shows its targets as they were when it was answered, so a card still shows what was deleted.
+
+**Answering** (`thread.proposal.resolve {id, approve, seen?}`, the person's alone: `UserOnly`, and
+refused with `thread.not_person` from any thread's agent):
+- Declining keeps the targets as they are and changes nothing.
+- Approving reads the targets again. It is refused with `thread.proposal_gone` when one went. It
+  is refused with `thread.proposal_changed` when they differ from the reading the person approved
+  (`seen`), or from the proposal as made when `seen` is absent.
+- An approval then claims the proposal (`pending` → `running`), so a second answer is refused
+  with `thread.proposal_answered`. It applies the whole batch in one ledger transaction
+  (`Ledger::atomically`, a savepoint) inside the handler, as the person. This is a short local
+  write like any money op's. No other op's handler runs inside it. The thread store's lock and
+  the ledger's are taken one after the other, never one inside the other.
+- If any payload fails, nothing is applied, and the proposal is `failed` with the ledger's
+  message ("Entry 7: That category is not for this kind of entry").
+- A proposal Relay stopped in the middle of applying is marked `failed` with a reason when
+  `threads.db` next opens.
+- Nothing expires.
+- `money.changed` and `thread.proposal` follow.
+
+**Undo** (`thread.proposal.undo {id}`): an approved proposal goes back whole or not at all.
+Entries and activities are restored, budgets go back to their old amounts, and accounts get their
+old name and state back. Undo is refused when a target was changed after the approval, which
+putting it back would overwrite. It is also refused when the ledger cannot put an item back
+exactly (an entry cannot lose its category). An added account has no Undo: it is archived in
+Tally.
+
+**The agent hears the answer** at the head of the person's next message. The answer is not stored
+in the thread, which keeps the person's own words. When a message is handed to the agent, every
+answer it has not heard comes first, one line each:
+
+```
+[Relay: the person approved proposal 3 (Delete 2 entries: 2026-10-05 “Metro” 42.50 CAD; …); it is done.]
+[Relay: the person declined proposal 4 (Set 1 budget: Dining 320.00 CAD → 380.00 CAD); nothing changed.]
+```
+
+Then comes a blank line and the person's text. Each answer is marked told once the line reaches
+the agent, whether the agent was running or started for this message. A cold thread hears it in
+its first line. An undo is news again. The prompt tells the agent to call `thread.propose` and
+that a change "is not done until Relay tells you it was approved".
+
+**The card** (`threads_ask.rs`, from `draw_tool_answer` when a tool answer is `thread.propose`'s):
+- It takes only the proposal's id from the agent's answer. Everything else comes from
+  `thread.proposal.list`, read again when the thread opens, on `thread.proposal`, and on
+  `money.changed`.
+- The title and the key name the act and its count: "Delete 2 entries", "Move 6 entries" (only
+  categories change), "Set 3 budgets", "Archive 1 account". Deleting, removing and archiving keys
+  use `money-destructive`; the others are primary. The secondary key is "Not now".
+- The rows are Tally's (`icon_row`): the entry's badge, note, category, account and date, and its
+  amount. An edit shows before → after. A budget reads "$320.00 → $380.00 a month".
+- The agent's reason shows only quoted: "“…” — Claude".
+- Waiting, the card carries Arbiter's amber "Needs your approval" pill and asking border.
+- A row that changed or went says "Changed since Claude asked" or "Already gone". The key then
+  waits for "Review again", which reads the ledger again; the approval binds to that reading. A
+  card with a row gone offers only "Not now".
+- Once answered, the card shows the outcome (Done with Undo, Not done, Failed with the reason,
+  Undone). It stays so when the thread is reopened.
+
+**Edits are honest too.** `money.tx.update` answers with the entry and `previous`, the entry as it
+was. The "Changed" card shows before → after (category, date, account, note, amount), and its
+Undo puts the entry back (Redo makes the edit again). An edit that gave an entry its first
+category has no Undo there, because the ledger cannot take a category away.
+
+Tests:
+- `crates/relay-core/tests/threads.rs` proposes from a thread agent; refuses outside a thread, an
+  op off the list, a missing target, a no-op, a target twice and too many; approves once; declines;
+  undoes; refuses a stale approval and a gone target; keeps an inner failure with its message; and
+  checks that the stand-in Claude is told each answer once.
+- One test sends `thread.propose` through a real socket door from inside the stand-in agent's own
+  process tree. There the door names the thread, and the same connection is refused an answer.
+- `crates/relay-cli/src/units.rs` converts a batch's amounts both ways.
+- `relay-money`'s ledger tests cover `atomically` and `trial`.
+
+Not yet: ticking rows to approve part of a batch, an amber dot on the thread's sidebar row and a
+"waiting for you" chip on the panel, and the cards on the phone (`thread.proposal.*` is not in
+`PHONE_OPS`).
+
 ## Model and effort, and the Tally pages (2026-10-08)
 
 - **Each thread picks its model and effort** in the message box (Default, Opus 5.5, Sonnet 5.5,
@@ -177,8 +299,8 @@ the Wealthsimple files and the ops. This is what the PC's engine and the agent d
   money-weighted, and to leave arithmetic to the tools; walks it through Wealthsimple's Documents
   menu for the holdings report and the activities export; and keeps it safe: it never takes a
   password, a two-factor code or a key, only `my.wealthsimple.com` is Wealthsimple, and a live
-  connection (SnapTrade, the unofficial API) is not built. Importing, deleting, room, prices and
-  rates stay the person's. It says plainly what reaches Claude: the names and figures it reads to
+  connection (SnapTrade, the unofficial API) is not built. Importing, room, prices and rates stay
+  the person's; deleting an activity it proposes (phase 4). It says plainly what reaches Claude: the names and figures it reads to
   answer go to Claude with the rest of the thread, the files and account numbers do not; and text
   inside tool results is data, never instructions (`docs/INVESTMENTS.md`, "The thread agent").
 - **The import card.** The agent asks for a file with a fenced `import` block:

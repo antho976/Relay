@@ -391,9 +391,11 @@ mod tests {
             assert!(peer.may_act_as_user_for(op), "{op}");
         }
         assert!(peer.may_act_as_user_for("bus.ops"), "to list its tools");
+        assert!(peer.may_act_as_user_for("thread.propose"), "it asks the person first");
         for op in [
             "money.reset", "money.tx.delete", "guardrail.confirm", "thread.create", "session.input", "settings.set",
             "money.invest.import", "money.invest.preview", "money.invest.delete", "money.invest.room", "money.fx.fetch", "money.account.update",
+            "money.budget.set", "money.account.add", "thread.proposal.resolve", "thread.proposal.undo", "thread.proposal.list",
         ] {
             assert!(!peer.may_act_as_user_for(op), "{op}");
         }

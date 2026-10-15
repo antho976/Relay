@@ -25,6 +25,8 @@ mod pages;
 pub(crate) mod threads;
 #[path = "threads_chart.rs"]
 mod chart;
+#[path = "threads_ask.rs"]
+mod ask;
 #[path = "arbiter_pages.rs"]
 mod arbiter;
 #[path = "avex_pages.rs"]
@@ -528,6 +530,8 @@ pub fn changed(ui: &Rc<Ui>) {
     // A thread's charts read again in view; out of it, with another page showing, they wait to
     // read when they show again (`chart::load_stale`).
     chart::refresh_all();
+    // A proposal card waiting in the open thread shows the ledger as it is now.
+    ask::refresh();
     if page == threads::PAGE {
         threads::refresh_panel(ui);
     } else if is_page(&page) {

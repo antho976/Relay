@@ -4,10 +4,11 @@
 //! and the mutations only store a row while the store's transaction is open. Starting the agent
 //! and handing it a message happen after the handler returns.
 
-use crate::engine::Engine;
+use crate::engine::{Ctx, Engine};
+use crate::threads::proposals;
 use crate::{local_models, threads};
 use relay_bus::ops::thread::*;
-use relay_bus::Empty;
+use relay_bus::{BusError, Empty};
 use serde_json::json;
 
 pub fn register(e: &mut Engine) {
@@ -84,4 +85,53 @@ pub fn register(e: &mut Engine) {
         ctx.emit("thread.changed", json!({"id": p.id, "deleted": true}));
         Ok(Empty {})
     });
+    register_proposals(e);
+}
+
+/// Asking first (`threads::proposals`). Proposing reads the ledger and stores a row, and an
+/// answer applies the batch in one short ledger transaction: local work like any money op's, so
+/// all run in the request's transaction. The thread store's lock and the ledger's are never held
+/// together, and no other op's handler runs inside these.
+fn register_proposals(e: &mut Engine) {
+    e.register::<Propose>(|ctx, p| {
+        // Only an agent's own thread: the door names it from the process that connected.
+        let Some(thread) = ctx.thread() else {
+            return Err(BusError::refused("thread.not_agent", "Only a thread's agent proposes, for its own thread")
+                .with_hint("the person changes the ledger directly; a session has no thread"));
+        };
+        let now = ctx.now.clone();
+        let proposal = proposals::propose(ctx.engine(), thread, p.action, &p.why, &now)?;
+        ctx.emit("thread.proposal", json!({"thread": thread, "proposal": proposal}));
+        Ok(proposal)
+    });
+    e.register_unlocked::<ProposalList>(|ctx, p| Ok(ProposalsOut { proposals: proposals::list(ctx.engine(), p.thread_id, p.pending.unwrap_or(false))? }));
+    e.register_unlocked::<ProposalGet>(|ctx, p| proposals::get(ctx.engine(), p.id));
+    e.register::<ProposalResolve>(|ctx, p| {
+        person(ctx)?;
+        let proposal = proposals::resolve(ctx.engine(), p.id, p.approve, p.seen.as_deref())?;
+        answered(ctx, &proposal);
+        Ok(proposal)
+    });
+    e.register::<ProposalUndo>(|ctx, p| {
+        person(ctx)?;
+        let proposal = proposals::undo(ctx.engine(), p.id)?;
+        answered(ctx, &proposal);
+        Ok(proposal)
+    });
+}
+
+/// An answer is the person's: a thread's agent never answers a proposal, its own or another's,
+/// whatever its door lets through.
+fn person(ctx: &Ctx) -> Result<(), BusError> {
+    match ctx.thread() {
+        Some(thread) => Err(BusError::refused("thread.not_person", format!("Thread {thread}'s agent cannot answer a proposal: the person does"))),
+        None => Ok(()),
+    }
+}
+
+fn answered(ctx: &mut Ctx, proposal: &ProposalView) {
+    if matches!(proposal.status.as_str(), "approved" | "undone") {
+        ctx.emit("money.changed", json!({"proposal": proposal.id}));
+    }
+    ctx.emit("thread.proposal", json!({"thread": proposal.thread_id, "proposal": proposal}));
 }

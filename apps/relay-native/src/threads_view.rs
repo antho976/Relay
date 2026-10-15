@@ -457,7 +457,7 @@ pub fn page() -> gtk::Box {
     // What the agent may do, said plainly: words, not a key.
     let limits = label("Edits with Undo", "threads-limits");
     limits.set_valign(gtk::Align::Center);
-    limits.set_tooltip_text(Some("It adds and changes entries and investment activity, each with an Undo. Deleting, budgets and accounts stay yours."));
+    limits.set_tooltip_text(Some("It adds and changes entries and investment activity, each with an Undo. Before deleting, changing many at once, budgets or accounts, it asks you on a card."));
     row.append(&limits);
     let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     gap.set_hexpand(true);
@@ -688,7 +688,7 @@ fn show_source(v: &View) {
         v.limits.set_tooltip_text(Some("It reads your training as last exported from Avex. It cannot change anything in Avex."));
     } else {
         v.limits.set_text("Edits with Undo");
-        v.limits.set_tooltip_text(Some("It adds and changes entries and investment activity, each with an Undo. Deleting, budgets and accounts stay yours."));
+        v.limits.set_tooltip_text(Some("It adds and changes entries and investment activity, each with an Undo. Before deleting, changing many at once, budgets or accounts, it asks you on a card."));
     }
 }
 
@@ -1858,6 +1858,7 @@ fn doing(name: &str) -> &'static str {
         Some("money.invest.summary") => "Reading your investments…",
         Some("money.invest.list") => "Reading investment activity…",
         Some("money.invest.add") => "Recording investment activity…",
+        Some("thread.propose") => "Asking you first…",
         Some("bus.schema") => "Checking how a tool works…",
         _ => "Working…",
     }
@@ -1884,7 +1885,7 @@ fn show_step(mark: &gtk::Box, step: Step, writes: bool) {
 fn draw_tool(v: &View, parent: &gtk::Box, block: &Value) {
     let name = block["name"].as_str().unwrap_or("").to_string();
     let op = tool_op(&name).unwrap_or_default();
-    let writes = tool_writes(&name) || super::arbiter::tool_writes(&op);
+    let writes = tool_writes(&name) || super::arbiter::tool_writes(&op) || op == "thread.propose";
     let id = block["id"].as_str().map(str::to_string);
     let slot = gtk::Box::new(gtk::Orientation::Vertical, 2);
     let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -2042,7 +2043,7 @@ fn draw_tool_answer(v: &View, body: &Value) {
     });
     let Some((slot, mark, name, group)) = found else { return };
     let op = tool_op(&name).unwrap_or_default();
-    let writes = tool_writes(&name) || super::arbiter::tool_writes(&op);
+    let writes = tool_writes(&name) || super::arbiter::tool_writes(&op) || op == "thread.propose";
     show_step(&mark, step, writes);
     if let Some(g) = &group {
         refresh_group(g);
@@ -2068,6 +2069,14 @@ fn draw_tool_answer(v: &View, body: &Value) {
         } else {
             slot.append(&why);
         }
+        return;
+    }
+    if op == "thread.propose" {
+        // What the agent asked for becomes a card drawn from the ledger, never from its words:
+        // only the proposal's id is taken from its answer.
+        let Some(id) = serde_json::from_str::<Value>(body["text"].as_str().unwrap_or("")).ok().and_then(|a| a["id"].as_i64()) else { return };
+        clear(&slot);
+        slot.append(&super::ask::card(id));
         return;
     }
     if op.starts_with("arbiter.") {
@@ -2166,21 +2175,29 @@ fn entry_card(tx: &Value, op: &str) -> gtk::Box {
     let title = label(&format!("{verb} {kind}: {what}"), "threads-card-title");
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
     words.append(&title);
-    let mut detail = Vec::new();
-    if let Some(category) = tx["category"].as_str().filter(|_| !transfer) {
-        detail.push(category.to_string());
-    }
-    if let Some(date) = tx["date"].as_str() {
-        detail.push(human_date(date));
-    }
-    if let Some(account) = tx["account"].as_str().filter(|_| !transfer) {
-        detail.push(account.to_string());
+    // An edit answers with the entry as it was: the card says what it changed, before → after.
+    let was = &tx["previous"];
+    let edited = op == "money.tx.update" && was.is_object();
+    let mut detail = if edited { changes(was, tx) } else { Vec::new() };
+    if detail.is_empty() {
+        if let Some(category) = tx["category"].as_str().filter(|_| !transfer) {
+            detail.push(category.to_string());
+        }
+        if let Some(date) = tx["date"].as_str() {
+            detail.push(human_date(date));
+        }
+        if let Some(account) = tx["account"].as_str().filter(|_| !transfer) {
+            detail.push(account.to_string());
+        }
     }
     let about = label(&detail.join(" · "), "threads-card-detail");
     about.set_ellipsize(gtk::pango::EllipsizeMode::End);
     words.append(&about);
     card.append(&words);
-    let figure = label(&amount_text(tx), "money-amount");
+    let places = super::formatter().fraction_digits;
+    let amount_moved = edited && (minor(&was["amount"], places) != minor(&tx["amount"], places) || was["type"] != tx["type"]);
+    let shown = if amount_moved { format!("{} → {}", amount_text(was), amount_text(tx)) } else { amount_text(tx) };
+    let figure = label(&shown, "money-amount");
     figure.set_valign(gtk::Align::Center);
     if kind == "income" {
         figure.add_css_class("money-in");
@@ -2190,7 +2207,80 @@ fn entry_card(tx: &Value, op: &str) -> gtk::Box {
         STATE.with(|s| s.added.borrow_mut().insert(id));
         card.append(&undoable(&card, &title, &what, ("money.tx.delete", "money.tx.restore"), id));
     }
+    if let Some(key) = edited.then(|| edit_undo(&card, &title, &what, tx)).flatten() {
+        card.append(&key);
+    }
     card
+}
+
+/// What an edit changed, before → after; what it left alone (and the amount, which the figure
+/// shows) is not said.
+fn changes(was: &Value, now: &Value) -> Vec<String> {
+    let text = |v: &Value, key: &str| v[key].as_str().unwrap_or("").to_string();
+    let mut out = Vec::new();
+    if was["category"] != now["category"] {
+        out.push(format!("{} → {}", was["category"].as_str().unwrap_or("No category"), now["category"].as_str().unwrap_or("No category")));
+    }
+    if was["date"] != now["date"] {
+        out.push(format!("{} → {}", human_date(&text(was, "date")), human_date(&text(now, "date"))));
+    }
+    if was["account"] != now["account"] || was["to_account"] != now["to_account"] {
+        out.push(format!("{} → {}", text(was, "account"), text(now, "account")));
+    }
+    if was["note"] != now["note"] {
+        out.push(format!("\u{201c}{}\u{201d} → \u{201c}{}\u{201d}", text(was, "note"), text(now, "note")));
+    }
+    out
+}
+
+/// Undo on a card for an edit the agent made: the entry goes back as it was (`previous`), and
+/// Redo makes the edit again. An edit that gave an entry its first category has none: the ledger
+/// cannot take a category away (Tally's entry sheet can).
+fn edit_undo(card: &gtk::Box, title: &gtk::Label, what: &str, tx: &Value) -> Option<gtk::Button> {
+    let (was, id) = (&tx["previous"], tx["id"].as_i64()?);
+    if was["category_id"].is_null() && !tx["category_id"].is_null() {
+        return None;
+    }
+    let places = super::formatter().fraction_digits;
+    let patch = |t: &Value| json!({
+        "id": id, "type": t["type"], "amount": minor(&t["amount"], places), "date": t["date"], "account_id": t["account_id"],
+        "to_account_id": t["to_account_id"], "category_id": t["category_id"], "note": t["note"],
+    });
+    let (back, again) = (patch(was), patch(tx));
+    let key = button("Undo", "quiet");
+    key.add_css_class("threads-undo");
+    key.set_valign(gtk::Align::Center);
+    let changed = title.text().to_string();
+    let put_back = format!("Put back: {what}");
+    let undone = Rc::new(Cell::new(false));
+    let (card, title) = (card.downgrade(), title.downgrade());
+    key.connect_clicked(move |key| {
+        let Some(ui) = the_ui() else { return };
+        key.set_sensitive(false);
+        let undoing = !undone.get();
+        let payload = if undoing { back.clone() } else { again.clone() };
+        let (key, card, title, undone, changed, put_back) = (key.clone(), card.clone(), title.clone(), undone.clone(), changed.clone(), put_back.clone());
+        glib::spawn_future_local(async move {
+            let result = ui.call("money.tx.update", payload).await;
+            key.set_sensitive(true);
+            if let Err(e) = result {
+                ui.show_error(&e.to_string());
+                return;
+            }
+            undone.set(undoing);
+            key.set_label(if undoing { "Redo" } else { "Undo" });
+            if let (Some(card), Some(title)) = (card.upgrade(), title.upgrade()) {
+                if undoing {
+                    card.add_css_class("threads-card-undone");
+                    title.set_text(&put_back);
+                } else {
+                    card.remove_css_class("threads-card-undone");
+                    title.set_text(&changed);
+                }
+            }
+        });
+    });
+    Some(key)
 }
 
 fn amount_text(tx: &Value) -> String {
@@ -2582,6 +2672,7 @@ pub fn event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
             draw_message(&v, &payload["message"]);
             stick_to_bottom(&v, false);
         }
+        "thread.proposal" => super::ask::changed(&payload["proposal"]),
         "thread.local" => {
             let (model, state) = (payload["model"].as_str().unwrap_or(""), payload["state"].as_str().unwrap_or(""));
             STATE.with(|s| *s.local_state.borrow_mut() = (model.to_string(), state.to_string()));
