@@ -13,9 +13,10 @@
 //! landing it kicks back through the lanes and sends a wave across the field.
 //! The wordmark spells itself in, then the greeting, then the cards one after the other. After
 //! that the signal beats and sends a fainter wave every few seconds, until a card is picked; the
-//! screen then fades out. With animations off (GTK's setting) it opens at its last frame and
-//! holds still. `RELAY_NATIVE_START_T=<0..1>` holds it at one point of the opening, for
-//! screenshots.
+//! screen then fades out. The field answers the pointer throughout: the dots under it light lime
+//! and lean away from it, and a click on the field sends a ripple out from where it landed. With
+//! animations off (GTK's setting) it opens at its last frame and holds still, pointer or not.
+//! `RELAY_NATIVE_START_T=<0..1>` holds it at one point of the opening, for screenshots.
 use crate::app::{button, label};
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -185,39 +186,79 @@ fn draw_mark_beat(cr: &gtk::cairo::Context, size: f64, t: f64, beat: f64) {
     let _ = cr.fill();
 }
 
-/// One wave over the field: from the signal, `progress` (0..1) of the way out, at `strength`.
+/// One wave over the field: from `from` (the signal when `None`), `progress` (0..1) of the way
+/// out, at `strength`.
 #[derive(Clone, Copy)]
 struct Wave {
+    from: Option<(f64, f64)>,
     progress: f64,
     strength: f64,
 }
 
+/// The pointer over the field, in its pixels, and how present it is (0..1: it fades in on
+/// entering and out on leaving).
+#[derive(Clone, Copy, Default)]
+struct Pointer {
+    at: (f64, f64),
+    strength: f64,
+}
+
+/// How far the pointer's light and push reach, the push at its strongest, and how long a click's
+/// ripple takes to cross the field.
+const POINTER_REACH: f64 = 120.0;
+const POINTER_PUSH: f64 = 12.0;
+const RIPPLE_US: f64 = 1_800_000.0;
+/// A click on the field: where, and the frame-clock time it landed.
+type Tap = ((f64, f64), i64);
+
+/// The farthest corner of a `w`×`h` field from `p`.
+fn farthest((w, h): (f64, f64), p: (f64, f64)) -> f64 {
+    [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)].iter().map(|&(x, y)| (x - p.0).hypot(y - p.1)).fold(1.0, f64::max)
+}
+
 /// The field behind the lockup: a lime glow around the mark and a grid of dots that the
 /// opening wave uncovers, dimming toward the edges. `signal` is where waves start, `glow` the
-/// mark's centre, both in the field's pixels.
-fn draw_field(cr: &gtk::cairo::Context, (w, h): (f64, f64), signal: (f64, f64), glow: (f64, f64), t: f64, pulses: &[Wave]) {
+/// mark's centre, both in the field's pixels. Near the pointer the dots light lime and lean
+/// away from it; a click's ripple runs out from where it landed.
+fn draw_field(cr: &gtk::cairo::Context, (w, h): (f64, f64), signal: (f64, f64), glow: (f64, f64), t: f64, pulses: &[Wave], pointer: Pointer) {
     let (red, green, blue) = SIGNAL;
     // The landing's wave runs at an even speed, stronger than the pulses after it.
     let mut waves = pulses.to_vec();
     let landing = ((t - PING.0) / (PING.1 - PING.0)).clamp(0.0, 1.0);
     if landing > 0.0 && landing < 1.0 {
-        waves.push(Wave { progress: landing, strength: 0.9 });
+        waves.push(Wave { from: None, progress: landing, strength: 0.9 });
     }
     let lit = phase(t, WAVE);
-    let far = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)]
+    let far = farthest((w, h), signal);
+    // Each wave's origin and how far it has to go.
+    let reach: Vec<((f64, f64), f64)> = waves
         .iter()
-        .map(|&(x, y)| (x - signal.0).hypot(y - signal.1))
-        .fold(1.0, f64::max);
+        .map(|wave| wave.from.map_or((signal, far), |o| (o, farthest((w, h), o))))
+        .collect();
 
     // The glow: soft, wide, and only as strong as the opening has come.
-    let pulse = waves.iter().map(|wave| (1.0 - wave.progress) * wave.strength).fold(0.0, f64::max);
+    let pulse = waves.iter().filter(|w| w.from.is_none()).map(|wave| (1.0 - wave.progress) * wave.strength).fold(0.0, f64::max);
     let glow_alpha = 0.085 * lit + 0.03 * pulse;
     let gradient = gtk::cairo::RadialGradient::new(glow.0, glow.1, 0.0, glow.0, glow.1, 460.0);
     gradient.add_color_stop_rgba(0.0, red, green, blue, glow_alpha);
     gradient.add_color_stop_rgba(0.45, red, green, blue, glow_alpha * 0.32);
     gradient.add_color_stop_rgba(1.0, red, green, blue, 0.0);
     let _ = cr.set_source(&gradient);
-    let _ = cr.paint();
+    // Only the gradient's own square: past its radius it is clear, and painting the whole field
+    // with it cost most of a frame.
+    cr.rectangle(glow.0 - 460.0, glow.1 - 460.0, 920.0, 920.0);
+    let _ = cr.fill();
+    // A faint light of its own under the pointer.
+    if pointer.strength > 0.01 {
+        let (px, py) = pointer.at;
+        let r = POINTER_REACH * 1.6;
+        let light = gtk::cairo::RadialGradient::new(px, py, 0.0, px, py, r);
+        light.add_color_stop_rgba(0.0, red, green, blue, 0.07 * pointer.strength);
+        light.add_color_stop_rgba(1.0, red, green, blue, 0.0);
+        let _ = cr.set_source(&light);
+        cr.rectangle(px - r, py - r, 2.0 * r, 2.0 * r);
+        let _ = cr.fill();
+    }
 
     // Dots, bucketed by alpha so each layer is a single fill.
     const LEVELS: usize = 20;
@@ -232,18 +273,32 @@ fn draw_field(cr: &gtk::cairo::Context, (w, h): (f64, f64), signal: (f64, f64), 
             let d = (x - signal.0).hypot(y - signal.1);
             let fade = (1.0 - (d / far).powf(1.15)).max(0.0);
             let shown = ((front - d) / 110.0).clamp(0.0, 1.0);
-            let a = BASE_DOT * shown * fade;
-            if a > 0.004 {
-                base[((a / BASE_DOT) * (LEVELS - 1) as f64).round() as usize].push((x, y));
-            }
             let mut heat: f64 = 0.0;
-            for wave in &waves {
-                let at = wave.progress * far * 0.85;
-                heat = heat.max(wave.strength * (1.0 - wave.progress) * (-((d - at) / 70.0).powi(2)).exp());
+            for (wave, &(origin, span)) in waves.iter().zip(&reach) {
+                let dw = (x - origin.0).hypot(y - origin.1);
+                let at = wave.progress * span * 0.85;
+                heat = heat.max(wave.strength * (1.0 - wave.progress) * (-((dw - at) / 70.0).powi(2)).exp());
             }
             let heat = heat * (0.35 + 0.65 * fade);
+            // The pointer: lime under it, and each dot leaning away along the line from it.
+            let (mut dx, mut dy) = (x, y);
+            let mut near = 0.0;
+            if pointer.strength > 0.01 {
+                let (vx, vy) = (x - pointer.at.0, y - pointer.at.1);
+                let dp = vx.hypot(vy);
+                near = pointer.strength * (-(dp / POINTER_REACH).powi(2)).exp();
+                if dp > 0.5 {
+                    dx += vx / dp * POINTER_PUSH * near;
+                    dy += vy / dp * POINTER_PUSH * near;
+                }
+            }
+            let a = BASE_DOT * shown * fade.max(near);
+            if a > 0.004 {
+                base[((a / BASE_DOT) * (LEVELS - 1) as f64).round() as usize].push((dx, dy));
+            }
+            let heat = heat.max(near * shown.max(0.3));
             if heat > 0.02 {
-                hot[((heat.min(1.0)) * (LEVELS - 1) as f64).round() as usize].push((x, y));
+                hot[((heat.min(1.0)) * (LEVELS - 1) as f64).round() as usize].push((dx, dy));
             }
             x += DOT_STEP;
         }
@@ -270,8 +325,8 @@ fn draw_field(cr: &gtk::cairo::Context, (w, h): (f64, f64), signal: (f64, f64), 
         let _ = cr.fill();
     }
 
-    // Each wave starts as a ring around the signal.
-    for wave in &waves {
+    // Each wave starts as a ring around where it began.
+    for (wave, &(origin, _)) in waves.iter().zip(&reach) {
         let p = (wave.progress * 2.2).min(1.0);
         if p >= 1.0 {
             continue;
@@ -281,7 +336,7 @@ fn draw_field(cr: &gtk::cairo::Context, (w, h): (f64, f64), signal: (f64, f64), 
         cr.set_source_rgba(red, green, blue, 0.6 * (1.0 - p) * strength);
         cr.set_line_width(1.5);
         cr.new_sub_path();
-        cr.arc(signal.0, signal.1, 6.0 + 40.0 * p, 0.0, 2.0 * PI);
+        cr.arc(origin.0, origin.1, 6.0 + 40.0 * p, 0.0, 2.0 * PI);
         let _ = cr.stroke();
     }
 }
@@ -398,6 +453,7 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
     let t = Rc::new(Cell::new(fixed_point().unwrap_or(0.0)));
     let beat = Rc::new(Cell::new(0.0));
     let waves: Rc<std::cell::RefCell<Vec<Wave>>> = Rc::default();
+    let pointer: Rc<Cell<Pointer>> = Rc::default();
     let mark = gtk::DrawingArea::new();
     // On the brand's lockup the ring stands a little taller than the wordmark's ascenders.
     mark.set_content_width(88);
@@ -414,7 +470,7 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
     column.append(&lockup);
 
     {
-        let (at, mark, waves) = (t.clone(), mark.clone(), waves.clone());
+        let (at, mark, waves, pointer) = (t.clone(), mark.clone(), waves.clone(), pointer.clone());
         field.set_draw_func(move |field, cr, w, h| {
             let size = (f64::from(w), f64::from(h));
             // Where the mark sits in the field; its centre before the first layout.
@@ -429,7 +485,7 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
             };
             // Faded in from the top, so the glow meets the title bar without a seam.
             cr.push_group();
-            draw_field(cr, size, signal, glow, at.get(), &waves.borrow());
+            draw_field(cr, size, signal, glow, at.get(), &waves.borrow(), pointer.get());
             let _ = cr.pop_group_to_source();
             let edge = gtk::cairo::LinearGradient::new(0.0, 0.0, 0.0, (glow.1 * 0.9).max(1.0));
             edge.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.0);
@@ -555,14 +611,67 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
     };
     apply(t.get());
     if fixed_point().is_none() {
+        // The field follows the pointer, and a click on it (not on a card) sends a ripple from
+        // there. Where the pointer is, and each ripple with the frame it started on.
+        let aim: Rc<Cell<Option<(f64, f64)>>> = Rc::default();
+        let taps: Rc<std::cell::RefCell<Vec<Tap>>> = Rc::default();
+        let motion = gtk::EventControllerMotion::new();
+        {
+            let aim = aim.clone();
+            motion.connect_enter(move |_, x, y| aim.set(Some((x, y))));
+        }
+        {
+            let aim = aim.clone();
+            motion.connect_motion(move |_, x, y| aim.set(Some((x, y))));
+        }
+        {
+            let aim = aim.clone();
+            motion.connect_leave(move |_| aim.set(None));
+        }
+        stage.add_controller(motion);
+        let click = gtk::GestureClick::new();
+        {
+            let taps = taps.clone();
+            click.connect_pressed(move |gesture, _, x, y| {
+                if let Some(clock) = gesture.widget().and_then(|w| w.frame_clock()) {
+                    taps.borrow_mut().push(((x, y), clock.frame_time()));
+                }
+            });
+        }
+        stage.add_controller(click);
+
         let start = Cell::new(None::<i64>);
+        let last = Cell::new(None::<i64>);
         let (field, mark) = (field.clone(), mark.clone());
         screen.add_tick_callback(move |_, clock| {
             let now = clock.frame_time();
             let began = start.get().unwrap_or(now);
             start.set(Some(began));
             let elapsed = (now - began) as f64;
+            let dt = (now - last.replace(Some(now)).unwrap_or(now)) as f64;
+            // The pointer's light eases after it and fades in and out, rather than snapping.
+            let was = pointer.get();
+            let k = 1.0 - (-dt / 70_000.0).exp();
+            let mut next = was;
+            next.strength += (if aim.get().is_some() { 1.0 } else { 0.0 } - was.strength) * k;
+            if let Some(to) = aim.get() {
+                next.at = if was.strength < 0.01 { to } else { (was.at.0 + (to.0 - was.at.0) * k, was.at.1 + (to.1 - was.at.1) * k) };
+            }
+            if next.strength < 0.005 && aim.get().is_none() {
+                next.strength = 0.0;
+            }
+            pointer.set(next);
+            let moved = (next.at.0 - was.at.0).hypot(next.at.1 - was.at.1) > 0.2 || (next.strength - was.strength).abs() > 0.002;
+
+            let mut list = waves.borrow_mut();
+            let before = !list.is_empty() || beat.get() > 0.0;
+            list.clear();
+            taps.borrow_mut().retain(|&(_, at)| ((now - at) as f64) < RIPPLE_US);
+            for &(from, at) in taps.borrow().iter() {
+                list.push(Wave { from: Some(from), progress: (now - at) as f64 / RIPPLE_US, strength: 0.7 });
+            }
             if t.get() < 1.0 {
+                drop(list);
                 let p = (elapsed / DURATION_US).clamp(0.0, 1.0);
                 t.set(p);
                 apply(p);
@@ -570,19 +679,16 @@ pub fn build(greeting: &str, remembered: bool, pick: Rc<dyn Fn(bool)>) -> Built 
             }
             // Settled: a pulse every few seconds, the first one shortly after the opening.
             let since = elapsed - DURATION_US - 900_000.0;
-            let mut list = waves.borrow_mut();
-            let before = !list.is_empty() || beat.get() > 0.0;
-            list.clear();
             if since >= 0.0 {
                 let into = since.rem_euclid(PULSE_EVERY_US);
                 if into < PULSE_US {
-                    list.push(Wave { progress: into / PULSE_US, strength: 0.55 });
+                    list.push(Wave { from: None, progress: into / PULSE_US, strength: 0.55 });
                 }
                 // The signal swells and eases back as the wave leaves it.
                 let b = (into / 420_000.0).min(1.0);
                 beat.set(if into < 420_000.0 { (b * PI).sin() } else { 0.0 });
             }
-            if !list.is_empty() || before {
+            if !list.is_empty() || before || moved {
                 field.queue_draw();
             }
             if beat.get() > 0.0 || before {
