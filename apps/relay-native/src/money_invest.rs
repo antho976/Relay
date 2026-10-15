@@ -135,8 +135,9 @@ thread_local! {
 
 const HOLDINGS_SHOWN: usize = 15;
 
-/// Builds the page's head: the title with its keys (Update rates, Ask in a thread, Import…), and
-/// the context line under it.
+/// Builds the page's head: the title with its keys (Update rates, Ask about this, Import…), and
+/// the context line under it. Ask about this is the page's one way to ask; only Needs a look adds
+/// its own, about what it lists.
 pub(super) fn head(ui: &Rc<Ui>, page: &Page) {
     clear(&page.head);
     let top = gtk::Box::new(gtk::Orientation::Horizontal, 12);
@@ -159,10 +160,10 @@ pub(super) fn head(ui: &Rc<Ui>, page: &Page) {
     let mark = crate::icons::image("claude", 14);
     mark.set_valign(gtk::Align::Center);
     row.append(&mark);
-    row.append(&label("Ask in a thread", ""));
+    row.append(&label("Ask about this", ""));
     ask.set_child(Some(&row));
-    ask.set_tooltip_text(Some("Start a thread: \u{201c}How are my investments doing?\u{201d}"));
-    ask.update_property(&[gtk::accessible::Property::Label("Ask in a thread how my investments are doing")]);
+    ask.set_tooltip_text(Some("Ask in a thread: \u{201c}How are my investments doing?\u{201d}"));
+    ask.update_property(&[gtk::accessible::Property::Label("Ask in a thread: How are my investments doing?")]);
     keys.append(&ask);
     let import = button("Import…", "");
     import.set_widget_name("money-invest-import-key");
@@ -365,12 +366,11 @@ pub(super) fn draw(ui: &Rc<Ui>, page: &Page, p: &Value, activity: Option<&Value>
             }
         })
     };
-    let list = card_asking(&pair[0], "Accounts", Some(("Add an account", add)), Some((ui, "How has each of my investment accounts done, and what has it returned?")));
+    let list = card(&pair[0], "Accounts", Some(("Add an account", add)));
     for account in &accounts {
         list.append(&account_row(ui, account, balance(account)));
     }
-    let question = "How much contribution room do I have left this year, and where should my next contribution go?";
-    let list = card_asking(&pair[1], &format!("Contribution room · {year}"), None, Some((ui, question)));
+    let list = card(&pair[1], &format!("Contribution room · {year}"), None);
     if room.is_empty() {
         list.append(&icon_row(&tile("plan"), "No TFSA, RRSP or FHSA yet", "Give an investment account its registration to follow its room", "", ""));
     }
@@ -389,8 +389,7 @@ pub(super) fn draw(ui: &Rc<Ui>, page: &Page, p: &Value, activity: Option<&Value>
     list.append(&note);
 
     // Holdings, largest first.
-    let ask = (!holdings.is_empty()).then_some((ui, "How are my holdings doing, and is any of them too large a share?"));
-    let list = card_asking(&page.body, "Holdings", None, ask);
+    let list = card(&page.body, "Holdings", None);
     if holdings.is_empty() {
         list.append(&icon_row(&tile("chart"), "No holdings yet", "They come in with a Wealthsimple holdings report: Import… above", "", ""));
     } else {
@@ -420,8 +419,7 @@ pub(super) fn draw(ui: &Rc<Ui>, page: &Page, p: &Value, activity: Option<&Value>
     let pair = columns(&page.body, 2);
     let income = rows(p, "income");
     let paid = n(p, "income_12m");
-    let ask = (paid > 0).then_some((ui, "What have my investments paid me this year, and from which holdings?"));
-    let list = card_asking(&pair[0], "Income · 12 months", None, ask);
+    let list = card(&pair[0], "Income · 12 months", None);
     let months = rows(p, "income_by_month");
     if paid > 0 && !months.is_empty() {
         list.append(&income_bars(&months));
