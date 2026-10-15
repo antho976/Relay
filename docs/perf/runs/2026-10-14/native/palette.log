@@ -1,0 +1,638 @@
+Gdk-Message: 14:58:35.173:     0: layout_start=0.4  paint_start=4.2  frame_end=5.5  present=18.3 predicted=25.0 refresh_interval=16.7
+Gdk-Message: 14:58:35.173:     1: interval=31.8 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=19.8
+Gdk-Message: 14:58:35.185:     0: layout_start=4.6  paint_start=18.8 frame_end=22.3 present=29.4 predicted=25.0 refresh_interval=16.7
+Gdk-Message: 14:58:35.228:     3: interval=14.5 layout_start=0.6  paint_start=0.6  frame_end=0.6  predicted=19.9
+Gdk-Message: 14:58:35.241:     2: interval=35.4 layout_start=0.7  paint_start=0.7  frame_end=0.9  present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:35.241:     1: interval=33.9 layout_start=17.2 paint_start=23.5 frame_end=25.8 present=45.5 predicted=28.8 refresh_interval=16.7
+Gdk-Message: 14:58:35.289:     2: interval=42.9 layout_start=8.3  paint_start=12.1 frame_end=13.7 present=19.3 predicted=36.0 refresh_interval=16.7
+Gdk-Message: 14:58:35.313:     4: interval=66.7 layout_start=1.1  paint_start=6.6  frame_end=9.7  present=19.9 predicted=19.9 refresh_interval=16.7
+Gdk-Message: 14:58:35.315:     5: interval=17.9 layout_start=3.3  paint_start=3.3  frame_end=3.3  predicted=18.7
+Gdk-Message: 14:58:35.330:     6: interval=16.7 layout_start=1.2  paint_start=1.3  frame_end=1.3  predicted=18.7
+Gdk-Message: 14:58:35.331:     3: interval=75.7 layout_start=6.3  paint_start=8.6  frame_end=9.8  present=26.9 predicted=26.9 refresh_interval=16.7
+Gdk-Message: 14:58:35.344:     5: interval=16.7 layout_start=0.3  paint_start=0.6  frame_end=0.8  predicted=20.2
+Gdk-Message: 14:58:35.346:     4: interval=23.4 layout_start=0.4  paint_start=2.0  frame_end=2.8  present=20.2 predicted=36.9 refresh_interval=16.7
+Gdk-Message: 14:58:35.360:     6: interval=16.7 layout_start=0.1  paint_start=0.1  frame_end=0.1  predicted=20.1
+Gdk-Message: 14:58:35.377:     7: interval=16.7 layout_start=0.1  paint_start=0.1  frame_end=0.1  predicted=20.1
+Gdk-Message: 14:58:37.164:     8: interval=1771.1 layout_start=7.3  paint_start=10.3 frame_end=11.6 present=15.7 predicted=32.3 refresh_interval=16.7
+Gdk-Message: 14:58:37.180:     9: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=15.7 predicted=15.7 refresh_interval=16.7
+Gdk-Message: 14:58:37.197:    10: interval=16.1 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=16.2 predicted=16.2 refresh_interval=16.7
+Gdk-Message: 14:58:37.214:    11: interval=16.5 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=16.4 predicted=16.4 refresh_interval=16.7
+Gdk-Message: 14:58:37.231:    12: interval=16.3 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=16.7 predicted=16.7 refresh_interval=16.7
+Gdk-Message: 14:58:37.247:    13: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=16.8 predicted=16.8 refresh_interval=16.7
+Gdk-Message: 14:58:37.263:    14: interval=16.5 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=16.9 predicted=16.9 refresh_interval=16.7
+Gdk-Message: 14:58:37.281:    15: interval=16.5 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.1 predicted=17.1 refresh_interval=16.7
+Gdk-Message: 14:58:37.293:    17: interval=16.5 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.3
+Gdk-Message: 14:58:37.297:    16: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.2 predicted=17.2 refresh_interval=16.7
+Gdk-Message: 14:58:37.311:    18: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.3
+Gdk-Message: 14:58:37.328:    19: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.3
+Gdk-Message: 14:58:37.344:    20: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.3
+Gdk-Message: 14:58:37.361:    21: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.3
+Gdk-Message: 14:58:37.378:    22: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.3
+Gdk-Message: 14:58:37.394:    23: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.3
+Gdk-Message: 14:58:37.414:    24: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=0.6  predicted=17.3 refresh_interval=16.7
+Gdk-Message: 14:58:37.430:    25: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.1 predicted=17.1 refresh_interval=16.7
+Gdk-Message: 14:58:37.447:    26: interval=16.5 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.3 predicted=17.3 refresh_interval=16.7
+Gdk-Message: 14:58:37.463:    27: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.3 predicted=17.3 refresh_interval=16.7
+Gdk-Message: 14:58:37.481:    28: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.4 predicted=17.4 refresh_interval=16.7
+Gdk-Message: 14:58:37.497:    29: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.5 predicted=17.5 refresh_interval=16.7
+Gdk-Message: 14:58:37.514:    30: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.5 predicted=17.5 refresh_interval=16.7
+Gdk-Message: 14:58:37.531:    31: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.6 predicted=17.6 refresh_interval=16.7
+Gdk-Message: 14:58:37.547:    32: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.6 predicted=17.6 refresh_interval=16.7
+Gdk-Message: 14:58:37.563:    33: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:37.580:    34: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:37.598:    35: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:37.614:    36: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:37.631:    37: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:37.647:    38: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:37.664:    39: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:37.676:    41: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:37.679:    40: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:37.694:    42: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:37.710:    43: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:37.727:    44: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:37.744:    45: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:37.761:    46: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:37.777:    47: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:37.794:    48: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:37.810:    49: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:37.827:    50: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:37.844:    51: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:37.860:    52: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:37.877:    53: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:37.894:    54: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:37.913:    55: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.1  predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:37.930:    56: interval=0.1  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.6 predicted=17.6 refresh_interval=16.7
+Gdk-Message: 14:58:37.948:    57: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:37.964:    58: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:37.981:    59: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:37.997:    60: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:38.014:    61: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.029:    62: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.048:    63: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.064:    64: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.081:    65: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.097:    66: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.114:    67: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.130:    68: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.146:    69: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:38.164:    70: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:38.177:    72: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:38.180:    71: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:38.194:    73: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:38.210:    74: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:38.227:    75: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:38.244:    76: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:38.260:    77: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:38.277:    78: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:38.294:    79: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:38.310:    80: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:38.327:    81: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:38.344:    82: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:38.360:    83: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:38.377:    84: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:38.394:    85: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:38.413:    86: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.2  predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:38.430:    87: interval=0.1  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:38.447:    88: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.464:    89: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.481:    90: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.497:    91: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.514:    92: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.530:    93: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.547:    94: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:38.565:    95: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:38.581:    96: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:38.598:    97: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:38.614:    98: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:38.631:    99: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:38.647:   100: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:38.664:   101: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:38.676:   103: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:38.679:   102: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:38.694:   104: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:38.710:   105: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:38.727:   106: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:38.744:   107: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:38.760:   108: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:38.777:   109: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:38.794:   110: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:38.810:   111: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:38.827:   112: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:38.844:   113: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:38.860:   114: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:38.877:   115: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:38.894:   116: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:38.913:   117: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.3  predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:38.930:   118: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.947:   119: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.964:   120: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:38.981:   121: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:38.997:   122: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.014:   123: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.031:   124: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.047:   125: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.064:   126: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.080:   127: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.098:   128: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.114:   129: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.131:   130: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.147:   131: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.164:   132: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.176:   134: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.179:   133: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.194:   135: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.210:   136: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.227:   137: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.244:   138: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.260:   139: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.277:   140: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.294:   141: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.310:   142: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.327:   143: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.344:   144: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.360:   145: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.377:   146: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.394:   147: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.413:   148: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.3  predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:39.430:   149: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:39.447:   150: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:39.464:   151: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:39.481:   152: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.497:   153: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.514:   154: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.530:   155: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.547:   156: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.564:   157: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.581:   158: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:39.597:   159: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:39.614:   160: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:39.630:   161: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:39.647:   162: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:39.664:   163: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:39.677:   165: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.680:   164: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:39.694:   166: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.710:   167: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.727:   168: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.744:   169: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.760:   170: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.777:   171: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.794:   172: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.810:   173: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.827:   174: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.844:   175: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.860:   176: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.877:   177: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.894:   178: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:39.913:   179: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.3  predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:39.930:   180: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:39.947:   181: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.964:   182: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.981:   183: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:39.997:   184: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.014:   185: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.030:   186: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.047:   187: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.064:   188: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.080:   189: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.098:   190: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.114:   191: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.131:   192: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.147:   193: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.164:   194: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.176:   196: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.179:   195: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.194:   197: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.210:   198: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.227:   199: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.244:   200: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.260:   201: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.277:   202: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.294:   203: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.310:   204: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.327:   205: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.344:   206: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.360:   207: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.377:   208: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.394:   209: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.413:   210: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.3  predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.430:   211: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:40.447:   212: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.464:   213: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.481:   214: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.497:   215: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.514:   216: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.530:   217: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.547:   218: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.564:   219: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.580:   220: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.598:   221: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.614:   222: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.631:   223: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.647:   224: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.664:   225: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.676:   227: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.679:   226: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.694:   228: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.710:   229: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.727:   230: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.744:   231: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.760:   232: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.777:   233: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.794:   234: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.810:   235: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.827:   236: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.844:   237: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.860:   238: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.877:   239: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.894:   240: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:40.913:   241: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.3  predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:40.930:   242: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:40.947:   243: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.964:   244: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.981:   245: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:40.997:   246: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.014:   247: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.030:   248: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.047:   249: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.063:   250: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.081:   251: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.097:   252: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.114:   253: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:41.131:   254: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:41.147:   255: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:41.164:   256: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:41.177:   258: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:41.179:   257: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=18.0 predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:41.194:   259: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:41.210:   260: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:41.227:   261: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:41.244:   262: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:41.260:   263: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:41.277:   264: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:41.294:   265: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:41.310:   266: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:41.327:   267: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:41.344:   268: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:41.360:   269: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:41.377:   270: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:41.394:   271: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=18.0
+Gdk-Message: 14:58:41.413:   272: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.3  predicted=18.0 refresh_interval=16.7
+Gdk-Message: 14:58:41.430:   273: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:41.447:   274: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:41.463:   275: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:41.481:   276: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.497:   277: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.514:   278: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.530:   279: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.547:   280: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.564:   281: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.580:   282: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.597:   283: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.614:   284: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.631:   285: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.647:   286: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.664:   287: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.676:   289: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:41.679:   288: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.694:   290: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:41.710:   291: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:41.727:   292: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:41.744:   293: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:41.760:   294: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:41.777:   295: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:41.794:   296: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:41.810:   297: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:41.827:   298: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:41.844:   299: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:41.860:   300: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:41.877:   301: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:41.894:   302: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:41.913:   303: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.3  predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:41.930:   304: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:41.947:   305: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:41.963:   306: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:41.981:   307: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:41.997:   308: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:42.014:   309: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.030:   310: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.047:   311: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.063:   312: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.081:   313: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.097:   314: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.114:   315: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.130:   316: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.147:   317: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.164:   318: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.177:   320: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.180:   319: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.194:   321: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.210:   322: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.227:   323: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.244:   324: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.260:   325: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.277:   326: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.294:   327: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.310:   328: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.327:   329: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.344:   330: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.360:   331: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.377:   332: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.394:   333: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.413:   334: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.2  predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.430:   335: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:42.447:   336: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:42.464:   337: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:42.481:   338: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:42.497:   339: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:42.514:   340: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:42.530:   341: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:42.547:   342: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:42.564:   343: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:42.581:   344: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:42.597:   345: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:42.614:   346: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:42.630:   347: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:42.647:   348: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.663:   349: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.677:   351: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.680:   350: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.694:   352: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.710:   353: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.727:   354: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.744:   355: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.760:   356: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.777:   357: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.794:   358: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.810:   359: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.827:   360: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.844:   361: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.860:   362: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.877:   363: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.894:   364: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:42.913:   365: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.2  predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:42.930:   366: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:42.948:   367: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:42.964:   368: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:42.981:   369: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:42.997:   370: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.014:   371: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.030:   372: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.047:   373: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.064:   374: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.081:   375: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.097:   376: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.114:   377: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:43.130:   378: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:43.147:   379: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:43.164:   380: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:43.177:   382: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:43.180:   381: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.9 predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:43.194:   383: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:43.210:   384: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:43.227:   385: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:43.244:   386: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:43.260:   387: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:43.277:   388: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:43.294:   389: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:43.310:   390: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:43.327:   391: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:43.344:   392: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:43.360:   393: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:43.377:   394: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:43.394:   395: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.9
+Gdk-Message: 14:58:43.413:   396: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.2  predicted=17.9 refresh_interval=16.7
+Gdk-Message: 14:58:43.430:   397: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:43.447:   398: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:43.464:   399: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:43.481:   400: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:43.497:   401: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:43.514:   402: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.530:   403: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.547:   404: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.563:   405: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.581:   406: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.597:   407: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.614:   408: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.630:   409: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.647:   410: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.664:   411: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.677:   413: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:43.680:   412: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.694:   414: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:43.710:   415: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:43.727:   416: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:43.744:   417: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:43.760:   418: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:43.777:   419: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:43.794:   420: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:43.810:   421: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:43.827:   422: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:43.844:   423: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:43.860:   424: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:43.877:   425: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:43.894:   426: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:43.913:   427: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.2  predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.930:   428: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:43.947:   429: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:43.963:   430: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:43.981:   431: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:43.997:   432: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.014:   433: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.030:   434: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.047:   435: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.063:   436: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.081:   437: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.097:   438: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.114:   439: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.130:   440: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.147:   441: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.164:   442: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.177:   444: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.180:   443: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.194:   445: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.210:   446: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.227:   447: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.244:   448: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.260:   449: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.277:   450: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.294:   451: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.310:   452: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.327:   453: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.344:   454: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.360:   455: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.377:   456: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.394:   457: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.413:   458: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.1  predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.430:   459: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:44.447:   460: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:44.463:   461: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:44.481:   462: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:44.497:   463: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:44.514:   464: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:44.530:   465: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:44.547:   466: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.563:   467: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.581:   468: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.597:   469: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.614:   470: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.630:   471: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.647:   472: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.664:   473: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.677:   475: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.680:   474: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.694:   476: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.710:   477: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.727:   478: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.744:   479: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.760:   480: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.777:   481: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.794:   482: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.810:   483: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.827:   484: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.844:   485: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.860:   486: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.877:   487: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.894:   488: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:44.913:   489: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.2  predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:44.930:   490: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:44.947:   491: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:44.964:   492: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:44.981:   493: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:44.997:   494: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.014:   495: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.030:   496: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.048:   497: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.063:   498: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.081:   499: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.097:   500: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.114:   501: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.130:   502: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.147:   503: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.164:   504: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.177:   506: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.180:   505: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.194:   507: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.210:   508: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.227:   509: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.244:   510: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.260:   511: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.277:   512: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.294:   513: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.310:   514: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.327:   515: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.344:   516: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.360:   517: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.377:   518: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.394:   519: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.413:   520: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.2  predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.431:   521: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.448:   522: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.464:   523: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.481:   524: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.497:   525: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.514:   526: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.530:   527: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.547:   528: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.564:   529: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.580:   530: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.597:   531: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.614:   532: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.630:   533: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.647:   534: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.664:   535: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.677:   537: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.680:   536: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.694:   538: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.710:   539: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.727:   540: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.744:   541: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.760:   542: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.777:   543: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.794:   544: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.810:   545: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.827:   546: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.844:   547: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.860:   548: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.877:   549: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.894:   550: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:45.913:   551: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.2  predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:45.930:   552: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.948:   553: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.963:   554: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.981:   555: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:45.997:   556: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:46.014:   557: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.030:   558: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.047:   559: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.064:   560: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.081:   561: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.097:   562: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.114:   563: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.130:   564: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.147:   565: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.164:   566: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.177:   568: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.180:   567: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.194:   569: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.210:   570: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.227:   571: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.244:   572: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.260:   573: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.277:   574: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.294:   575: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.310:   576: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.327:   577: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.344:   578: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.360:   579: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.377:   580: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.394:   581: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.413:   582: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.2  predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.430:   583: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.6 predicted=17.6 refresh_interval=16.7
+Gdk-Message: 14:58:46.447:   584: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:46.464:   585: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:46.481:   586: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:46.497:   587: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:46.514:   588: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:46.530:   589: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:46.548:   590: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:46.563:   591: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:46.581:   592: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:46.597:   593: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:46.614:   594: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:46.630:   595: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:46.647:   596: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.664:   597: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.677:   599: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.680:   598: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.694:   600: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.710:   601: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.727:   602: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.744:   603: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.760:   604: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.777:   605: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.794:   606: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.810:   607: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.827:   608: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.844:   609: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.860:   610: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.877:   611: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.894:   612: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=17.8
+Gdk-Message: 14:58:46.913:   613: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=1.1  predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:46.931:   614: interval=0.2  layout_start=18446744073709552.0 paint_start=18446744073709552.0 frame_end=18446744073709552.0 present=17.6 predicted=17.6 refresh_interval=16.7
+Gdk-Message: 14:58:46.947:   615: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.6 predicted=17.6 refresh_interval=16.7
+Gdk-Message: 14:58:46.964:   616: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.6 predicted=17.6 refresh_interval=16.7
+Gdk-Message: 14:58:46.980:   617: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.6 predicted=17.6 refresh_interval=16.7
+Gdk-Message: 14:58:46.997:   618: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.6 predicted=17.6 refresh_interval=16.7
+Gdk-Message: 14:58:47.014:   619: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.6 predicted=17.6 refresh_interval=16.7
+Gdk-Message: 14:58:47.030:   620: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.6 predicted=17.6 refresh_interval=16.7
+Gdk-Message: 14:58:47.048:   621: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:47.063:   622: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:47.081:   623: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:47.097:   624: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:47.114:   625: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:47.130:   626: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.7 predicted=17.7 refresh_interval=16.7
+Gdk-Message: 14:58:47.147:   627: interval=16.6 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:47.164:   628: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Gdk-Message: 14:58:47.180:   629: interval=16.7 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 present=17.8 predicted=17.8 refresh_interval=16.7
+Screenshot saved: /tmp/claude-1000/-home-anthony-dev3-RelayV4--relay-worktrees-spry-kestrel/5fc5db58-7763-4c2c-97b9-4fcb680bc85d/scratchpad/relay-main/docs/perf/runs/2026-10-14/native/palette.png

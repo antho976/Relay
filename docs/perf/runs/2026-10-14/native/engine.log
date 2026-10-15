@@ -1,0 +1,3 @@
+2026-10-14T18:54:42.968558Z  INFO relay_core::socket: socket door open socket=/tmp/relay-native-perf-8hte8jej/runtime/relay-v4/test.sock instance=test
+2026-10-14T18:54:42.968581Z  INFO relay_core::serve: engine up instance=test store=/tmp/relay-native-perf-8hte8jej/data/relay-v4/test/store.db
+2026-10-14T19:01:49.974252Z  INFO relay_core::serve: SIGTERM

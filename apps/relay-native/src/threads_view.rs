@@ -405,9 +405,7 @@ pub fn page() -> gtk::Box {
     pending.append(&pending_label());
     let working = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     working.add_css_class("threads-working");
-    let spinner = gtk::Spinner::new();
-    spinner.start();
-    working.append(&spinner);
+    working.append(&crate::app::spinner());
     let working_text = label("Working…", "threads-working-text");
     working.append(&working_text);
 
@@ -1871,9 +1869,8 @@ fn show_step(mark: &gtk::Box, step: Step, writes: bool) {
     clear(mark);
     match step {
         Step::Running => {
-            let spinner = gtk::Spinner::new();
+            let spinner = crate::app::spinner();
             spinner.set_size_request(13, 13);
-            spinner.start();
             mark.append(&spinner);
         }
         Step::Done => mark.append(&crate::icons::image(if writes { "check" } else { "search" }, 13)),

@@ -209,6 +209,16 @@ impl Unlocked<'_> {
     pub fn actor_session_id(&self) -> Option<Id> {
         self.session_id
     }
+    /// Back the whole store up into `backups/`. Unlocked, the copy takes the store lock one
+    /// batch of pages at a time ([`crate::store::Store::backup`]), so other requests run between
+    /// batches instead of waiting out a copy of the whole file; nested inside a handler that
+    /// already holds the lock it copies through that transaction.
+    pub fn backup_store(&self, reason: &str) -> anyhow::Result<std::path::PathBuf> {
+        match self.held {
+            Some(conn) => self.engine.store.backup_with(conn, reason),
+            None => self.engine.store.backup(reason),
+        }
+    }
     /// Take the store for one short read. Keep the closure to plain queries: whatever runs in
     /// here is back on the one global lock, which is the thing this context exists to avoid.
     pub fn read<T>(

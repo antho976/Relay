@@ -360,9 +360,7 @@ impl Ui {
         if let Some(pane) = self.panes.borrow().get(name) {
             pane.show_progress(step);
             clear(&pane.slate_actions);
-            let spinner = gtk::Spinner::new();
-            spinner.set_spinning(true);
-            pane.slate_actions.append(&spinner);
+            pane.slate_actions.append(&spinner());
         }
     }
 

@@ -1,0 +1,319 @@
+{
+  "date": "2026-10-14",
+  "size": "1440,900",
+  "seconds": 8,
+  "perf": false,
+  "gtk": "4.24.1",
+  "pages": {
+    "agents": {
+      "page": "agents",
+      "startup": {
+        "cpu_ms_first_2s": 600.0,
+        "rss_mb_at_2s": 221.1,
+        "threads": 15
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.4,
+        "rss_mb": 221.1,
+        "threads": 14
+      },
+      "exit_code": 0,
+      "total_wall_s": 24.37,
+      "gdk_frame_log_lines": 10,
+      "screenshot": true
+    },
+    "board": {
+      "page": "board",
+      "startup": {
+        "cpu_ms_first_2s": 340.0,
+        "rss_mb_at_2s": 177.4,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.2,
+        "rss_mb": 180.6,
+        "threads": 12
+      },
+      "exit_code": 0,
+      "total_wall_s": 24.37,
+      "gdk_frame_log_lines": 19,
+      "screenshot": true
+    },
+    "code": {
+      "page": "code",
+      "startup": {
+        "cpu_ms_first_2s": 340.0,
+        "rss_mb_at_2s": 179.7,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.1,
+        "rss_mb": 179.9,
+        "threads": 12
+      },
+      "exit_code": 0,
+      "total_wall_s": 24.37,
+      "gdk_frame_log_lines": 22,
+      "screenshot": true
+    },
+    "notes": {
+      "page": "notes",
+      "startup": {
+        "cpu_ms_first_2s": 330.0,
+        "rss_mb_at_2s": 176.7,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.1,
+        "rss_mb": 176.8,
+        "threads": 12
+      },
+      "exit_code": 0,
+      "total_wall_s": 24.37,
+      "gdk_frame_log_lines": 16,
+      "screenshot": true
+    },
+    "modules": {
+      "page": "modules",
+      "startup": {
+        "cpu_ms_first_2s": 370.0,
+        "rss_mb_at_2s": 177.4,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.1,
+        "rss_mb": 177.5,
+        "threads": 12
+      },
+      "exit_code": 0,
+      "total_wall_s": 24.37,
+      "gdk_frame_log_lines": 21,
+      "screenshot": true
+    },
+    "settings": {
+      "page": "settings",
+      "startup": {
+        "cpu_ms_first_2s": 320.0,
+        "rss_mb_at_2s": 176.8,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.5,
+        "rss_mb": 193.8,
+        "threads": 13
+      },
+      "exit_code": 0,
+      "total_wall_s": 24.37,
+      "gdk_frame_log_lines": 19,
+      "screenshot": true
+    },
+    "skills": {
+      "page": "skills",
+      "startup": {
+        "cpu_ms_first_2s": 360.0,
+        "rss_mb_at_2s": 183.7,
+        "threads": 26
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.4,
+        "rss_mb": 183.8,
+        "threads": 12
+      },
+      "exit_code": 0,
+      "total_wall_s": 24.37,
+      "gdk_frame_log_lines": 21,
+      "screenshot": true
+    },
+    "dashboard": {
+      "page": "dashboard",
+      "startup": {
+        "cpu_ms_first_2s": 340.0,
+        "rss_mb_at_2s": 178.3,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.1,
+        "rss_mb": 178.3,
+        "threads": 12
+      },
+      "exit_code": 0,
+      "total_wall_s": 24.37,
+      "gdk_frame_log_lines": 14,
+      "screenshot": true
+    },
+    "notifications": {
+      "page": "notifications",
+      "startup": {
+        "cpu_ms_first_2s": 330.0,
+        "rss_mb_at_2s": 178.1,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.1,
+        "rss_mb": 178.6,
+        "threads": 12
+      },
+      "exit_code": 0,
+      "total_wall_s": 24.37,
+      "gdk_frame_log_lines": 21,
+      "screenshot": true
+    },
+    "devices": {
+      "page": "devices",
+      "startup": {
+        "cpu_ms_first_2s": 330.0,
+        "rss_mb_at_2s": 178.2,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.1,
+        "rss_mb": 179.3,
+        "threads": 12
+      },
+      "exit_code": 0,
+      "total_wall_s": 24.37,
+      "gdk_frame_log_lines": 21,
+      "screenshot": true
+    },
+    "launch-preview": {
+      "page": "launch-preview",
+      "startup": {
+        "cpu_ms_first_2s": 350.0,
+        "rss_mb_at_2s": 179.3,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.1,
+        "rss_mb": 183.5,
+        "threads": 12
+      },
+      "exit_code": 0,
+      "total_wall_s": 24.37,
+      "gdk_frame_log_lines": 20,
+      "screenshot": true
+    },
+    "palette": {
+      "page": "palette",
+      "startup": {
+        "cpu_ms_first_2s": 330.0,
+        "rss_mb_at_2s": 178.1,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 0.25,
+        "cpu_ms": 20.0,
+        "wakeups_per_s": 21.7,
+        "rss_mb": 179.0,
+        "threads": 12
+      },
+      "exit_code": 0,
+      "total_wall_s": 24.37,
+      "gdk_frame_log_lines": 634,
+      "screenshot": true
+    },
+    "layouts": {
+      "page": "layouts",
+      "startup": {
+        "cpu_ms_first_2s": 340.0,
+        "rss_mb_at_2s": 177.6,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.4,
+        "rss_mb": 209.6,
+        "threads": 12
+      },
+      "exit_code": 0,
+      "total_wall_s": 24.37,
+      "gdk_frame_log_lines": 18,
+      "screenshot": true
+    },
+    "agents-streaming": {
+      "page": "agents",
+      "startup": {
+        "cpu_ms_first_2s": 360.0,
+        "rss_mb_at_2s": 178.8,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 1.25,
+        "cpu_ms": 100.0,
+        "wakeups_per_s": 104.1,
+        "rss_mb": 180.1,
+        "threads": 13
+      },
+      "exit_code": 0,
+      "total_wall_s": 15.37,
+      "gdk_frame_log_lines": 240,
+      "screenshot": true
+    },
+    "agents-burst": {
+      "page": "agents",
+      "startup": {
+        "cpu_ms_first_2s": 340.0,
+        "rss_mb_at_2s": 178.7,
+        "threads": 13
+      },
+      "steady": {
+        "seconds": 8.0,
+        "cpu_percent": 0.0,
+        "cpu_ms": 0.0,
+        "wakeups_per_s": 0.1,
+        "rss_mb": 180.7,
+        "threads": 12
+      },
+      "exit_code": 0,
+      "total_wall_s": 24.37,
+      "gdk_frame_log_lines": 25,
+      "screenshot": true
+    }
+  },
+  "notes": [
+    "Hidden-window detach (PR #13) needs a compositor and is not measured by this script."
+  ],
+  "engine_rss_mb_six_sessions": 27.5,
+  "display": {
+    "GDK_BACKEND": "wayland",
+    "WAYLAND_DISPLAY": "relay-headless-46701",
+    "DISPLAY": "",
+    "XDG_SESSION_TYPE": "wayland"
+  }
+}

@@ -1,0 +1,12 @@
+Gdk-Message: 14:54:43.730:     0: layout_start=0.4  paint_start=5.0  frame_end=158.7 present=179.6 predicted=25.0 refresh_interval=16.7
+Gdk-Message: 14:54:43.730:     1: interval=249.0 layout_start=18446744073709548.0 paint_start=18446744073709548.0 frame_end=18446744073709548.0 predicted=80.7
+Gdk-Message: 14:54:43.831:     0: layout_start=5.8  paint_start=28.9 frame_end=86.6 present=104.3 predicted=25.0 refresh_interval=16.7
+Gdk-Message: 14:54:43.880:     2: interval=99.8 layout_start=0.7  paint_start=0.8  frame_end=1.1  present=30.8 predicted=80.8 refresh_interval=16.7
+Gdk-Message: 14:54:43.880:     1: interval=100.9 layout_start=16.6 paint_start=22.8 frame_end=87.4 present=120.0 predicted=25.0 refresh_interval=16.7
+Gdk-Message: 14:54:43.901:     4: interval=16.9 layout_start=1.6  paint_start=1.6  frame_end=1.6  predicted=64.0
+Gdk-Message: 14:54:43.913:     3: interval=50.0 layout_start=1.7  paint_start=8.4  frame_end=10.4 present=30.8 predicted=64.2 refresh_interval=16.7
+Gdk-Message: 14:54:43.916:     5: interval=16.7 layout_start=0.1  paint_start=0.1  frame_end=0.2  predicted=47.3
+Gdk-Message: 14:54:43.918:     3: interval=33.3 layout_start=18446744073709544.0 paint_start=18446744073709544.0 frame_end=18446744073709544.0 predicted=70.4
+Gdk-Message: 14:54:43.930:     2: interval=149.6 layout_start=5.7  paint_start=6.7  frame_end=8.0  present=37.1 predicted=87.1 refresh_interval=16.7
+Gdk-Message: 14:54:43.934:     4: interval=16.7 layout_start=18446744073709544.0 paint_start=18446744073709544.0 frame_end=18446744073709544.0 predicted=53.8
+Screenshot saved: /tmp/claude-1000/-home-anthony-dev3-RelayV4--relay-worktrees-spry-kestrel/5fc5db58-7763-4c2c-97b9-4fcb680bc85d/scratchpad/relay-main/docs/perf/runs/2026-10-14/native/agents.png

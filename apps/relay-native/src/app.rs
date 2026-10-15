@@ -68,6 +68,15 @@ pub fn nav_button(caption: &str, icon: &str) -> gtk::Button {
     b.set_child(Some(&row));
     b
 }
+/// A spinner that spins only while it is on screen. A spinning spinner keeps the frame clock at
+/// the display rate for as long as it stays realized, hidden or not — a loading state the stack
+/// had moved past held Skills and Plugins at 60 frames/s at rest (BASELINE-2026-10-14).
+pub fn spinner() -> gtk::Spinner {
+    let spinner = gtk::Spinner::new();
+    spinner.connect_map(|spinner| spinner.start());
+    spinner.connect_unmap(|spinner| spinner.stop());
+    spinner
+}
 pub fn clear(container: &gtk::Box) {
     while let Some(w) = container.first_child() {
         container.remove(&w);

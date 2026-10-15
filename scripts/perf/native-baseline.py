@@ -69,17 +69,18 @@ def log(msg):
 
 def counters(pid):
     stat = Path(f"/proc/{pid}/stat").read_text().split(") ", 1)[1].split()
-    vol = 0
-    threads = 0
+    # Per thread: a thread that exits inside a window takes its switches with it, so a plain sum
+    # went negative when the client's worker threads wound down (2026-10-14). `delta` counts only
+    # threads alive at both ends.
+    vol = {}
     for task in Path(f"/proc/{pid}/task").iterdir():
-        threads += 1
         try:
             for line in (task / "status").read_text().splitlines():
                 if line.startswith("voluntary_ctxt_switches"):
-                    vol += int(line.split()[1])
+                    vol[task.name] = int(line.split()[1])
         except OSError:
             pass
-    return {"cpu_ticks": int(stat[11]) + int(stat[12]), "rss": int(stat[21]) * PAGE, "vol": vol, "threads": threads}
+    return {"cpu_ticks": int(stat[11]) + int(stat[12]), "rss": int(stat[21]) * PAGE, "vol": vol, "threads": len(vol)}
 
 
 def window(pid, seconds):
@@ -92,7 +93,7 @@ def window(pid, seconds):
 
 def delta(a, b, el):
     return {"seconds": round(el, 2), "cpu_percent": round((b["cpu_ticks"] - a["cpu_ticks"]) / CLK_TCK / el * 100, 2),
-            "cpu_ms": round((b["cpu_ticks"] - a["cpu_ticks"]) / CLK_TCK * 1000, 1), "wakeups_per_s": round((b["vol"] - a["vol"]) / el, 1),
+            "cpu_ms": round((b["cpu_ticks"] - a["cpu_ticks"]) / CLK_TCK * 1000, 1), "wakeups_per_s": round(sum(b["vol"][t] - a["vol"][t] for t in a["vol"].keys() & b["vol"].keys()) / el, 1),
             "rss_mb": round(b["rss"] / 1024 / 1024, 1), "threads": b["threads"]}
 
 
@@ -134,6 +135,11 @@ def main():
     ap.add_argument("--seconds", type=int, default=8, help="how long each page sits open after the 2 s settle")
     ap.add_argument("--size", default="1440,900")
     ap.add_argument("--pages", default=",".join(PAGES))
+    # GTK 4's text cursor fades at the frame rate until `gtk-cursor-blink-timeout` (10 s) after the
+    # last input; a page that focuses an entry read as 30-126 wakeups/s "at rest" in an 8 s window
+    # that started at 2 s (2026-10-14). The desktop's settings portal overrides a settings.ini, so
+    # the window waits the blink out instead.
+    ap.add_argument("--quiet-after", type=float, default=10.5, help="seconds to wait after the startup sample before the at-rest window (cursor blink)")
     ap.add_argument("--skip-build", action="store_true")
     ap.add_argument("--no-perf", action="store_true", help="skip perf record even if perf is installed")
     args = ap.parse_args()
@@ -236,7 +242,7 @@ def main():
                 shot = out_dir / f"{label}.png"
                 shot.unlink(missing_ok=True)
                 penv = dict(desktop_env, RELAY_NATIVE_SCREENSHOT=str(shot), RELAY_NATIVE_SIZE=args.size, RELAY_NATIVE_PAGE=page,
-                            RELAY_NATIVE_SMOKE_SECONDS=str(seconds + 2 + EXIT_MARGIN), GDK_DEBUG="frames", **extra_env)
+                            RELAY_NATIVE_SMOKE_SECONDS=str(seconds + 2 + (0 if streaming else int(args.quiet_after + 0.999)) + EXIT_MARGIN), GDK_DEBUG="frames", **extra_env)
                 row = {"page": page}
                 with open(out_dir / f"{label}.log", "w") as plog:
                     t0 = time.monotonic()
@@ -246,6 +252,8 @@ def main():
                         time.sleep(2.0)
                         c = counters(native.pid)
                         row["startup"] = {"cpu_ms_first_2s": round(c["cpu_ticks"] / CLK_TCK * 1000, 1), "rss_mb_at_2s": round(c["rss"] / 1024 / 1024, 1), "threads": c["threads"]}
+                        if not streaming:
+                            time.sleep(args.quiet_after)
                         if streaming:
                             for name in sessions:
                                 call("session.input", {"session": name, "data": streaming + "\n"})

@@ -1523,6 +1523,32 @@ fn cases() -> Vec<Case> {
     during_session(&mut c, "session_list.during_session_spawn", "session.spawn", |fx| json!({"session": fresh_session(fx)}));
     during_session(&mut c, "session_list.during_session_close", "session.close", |fx| json!({"session": spawned_session(fx)}));
     during_session(&mut c, "session_list.during_session_close_keep", "session.close", |fx| json!({"session": spawned_session(fx), "remove_worktree": false}));
+    // `project.remove` backs the whole store up first. The fixture's store is 0.6 MB, over in a
+    // millisecond, so 64 MB of ballast stands in for a real store's audit history (260 MB on the
+    // 2026-10-14 machine): copied under the lock, that stalled every request for the whole copy.
+    path_case(&mut c, "session_list.during_project_remove", Heavy, move |fx| {
+        {
+            let conn = fx.engine.store.lock();
+            conn.execute_batch("CREATE TABLE IF NOT EXISTS perf_ballast(b BLOB)").unwrap();
+            let rows: i64 = conn.query_row("SELECT COUNT(*) FROM perf_ballast", [], |r| r.get(0)).unwrap();
+            if rows == 0 {
+                conn.execute_batch("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1024) INSERT INTO perf_ballast SELECT randomblob(65536) FROM n").unwrap();
+            }
+        }
+        let doomed = Fixture::id(&fx.user("project.add", json!({"workspace_id": 1, "path": small_repo(fx)})));
+        let runner = fx.clone();
+        let (span, running) = beside(Duration::from_micros(500), move || {
+            runner.call(Actor::User, "project.remove", json!({"project_id": doomed}));
+        });
+        let fx = fx.clone();
+        Box::new(move || {
+            let issued = Instant::now();
+            let mut out = Outcome::of(fx.call(Actor::User, "session.list", json!({"project_id": 1})));
+            out.overlap = Some(Overlap { other: span, issued });
+            fx.join_later(running);
+            out
+        })
+    });
     path_case(&mut c, "keystroke.during_busy_thread", Mid, |fx| {
         // The control: a thread that only burns CPU for 30 ms, no engine involved.
         let fx = fx.clone();
