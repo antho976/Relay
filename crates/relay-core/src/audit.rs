@@ -254,6 +254,31 @@ impl RawAudit {
             undone_by: self.undone_by,
         }
     }
+
+    /// What `serde_json::to_value(self.parse())` gives, without copying the parsed JSON. The
+    /// payload, result and inverse are most of a row and are already `Value`s once parsed: the
+    /// typed row's fields are serialized with those three empty, and the parsed values are moved
+    /// into their places, which keep their order. `audit.list` was half allocation, copying them.
+    pub fn into_json(mut self) -> Value {
+        let payload = self.payload.take().and_then(|s| serde_json::from_str::<Value>(&s).ok());
+        let result = self.result_summary.take().and_then(|s| serde_json::from_str::<Value>(&s).ok());
+        let undo = self.undo_op.take().and_then(|s| serde_json::from_str::<UndoOp>(&s).ok());
+        let mut row = serde_json::to_value(self.parse()).unwrap_or_default();
+        if let Value::Object(map) = &mut row {
+            map.insert("payload".into(), payload.unwrap_or(Value::Null));
+            map.insert("result_summary".into(), result.unwrap_or(Value::Null));
+            map.insert("undo_op".into(), undo.map_or(Value::Null, |u| {
+                let mut out = serde_json::Map::new();
+                out.insert("op".into(), Value::String(u.op));
+                out.insert("payload".into(), u.payload);
+                if let Some(expect) = u.expect {
+                    out.insert("expect".into(), expect);
+                }
+                Value::Object(out)
+            }));
+        }
+        row
+    }
 }
 
 pub struct ListFilter<'a> {
@@ -338,5 +363,45 @@ mod hook_tests {
         let other = serde_json::json!({"path": "appearance.mode", "value": "dark"});
         let (payload, _) = write(&tx, "settings.set", &other, &Ok(Value::Null));
         assert_eq!(serde_json::from_str::<Value>(&payload).unwrap(), other, "other ops are not slimmed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `audit.list` and `audit.get` answer with `into_json`, not the typed row, so it must be the
+    /// typed row exactly, key order included: for every column empty or full, a payload or result
+    /// that no longer parses, and an inverse with and without `expect` or of the wrong shape.
+    #[test]
+    fn into_json_is_the_typed_row_exactly() {
+        let store = crate::Store::open_memory().unwrap();
+        let rows = [
+            ("ok", Some(r#"{"path":"a.b","value":{"x":[1,2,{"é":null}],"y":"s"}}"#), Some(r#"{"value":3}"#), Some(r#"{"op":"settings.set","payload":{"path":"a.b","value":1}}"#), None),
+            ("ok", Some("[]"), Some("null"), Some(r#"{"op":"task.update","payload":{"task_id":4},"expect":{"updated_at":"t"}}"#), Some("builder:7")),
+            ("held", None, None, None, None),
+            ("refused", Some("not json"), Some("{truncated"), Some(r#"{"no":"op"}"#), None),
+            ("error", Some("1.5e3"), Some(r#"{"code":"x.y","message":"m"}"#), None, Some("nonsense")),
+        ];
+        store.with_tx(|tx| {
+            for (i, (kind, payload, result, undo, on_behalf)) in rows.iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO audit (ts, req_id, parent_req, actor, on_behalf_of, session_id, op, project_id, kind, code, hold_id, payload_hash, payload, result_summary, undo_op)
+                     VALUES ('2026-10-14T00:00:00Z', ?1, NULL, 'user', ?2, NULL, 'settings.set', NULL, ?3, NULL, NULL, 'h', ?4, ?5, ?6)",
+                    params![format!("r{i}"), on_behalf, kind, payload, result, undo],
+                )?;
+            }
+            Ok(())
+        }).unwrap();
+        store.with_tx(|tx| {
+            let f = ListFilter { project_id: None, actor: None, session_id: None, op_prefix: None, parent_req: None, since: None, until: None, limit: 100 };
+            let typed: Vec<Value> = list_raw(tx, &f)?.into_iter().map(|r| serde_json::to_value(r.parse()).unwrap()).collect();
+            let direct: Vec<Value> = list_raw(tx, &f)?.into_iter().map(RawAudit::into_json).collect();
+            assert_eq!(typed.len(), rows.len());
+            for (t, d) in typed.iter().zip(&direct) {
+                assert_eq!(serde_json::to_string(d).unwrap(), serde_json::to_string(t).unwrap());
+            }
+            Ok(())
+        }).unwrap();
     }
 }

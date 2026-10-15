@@ -13,14 +13,18 @@ method itself is the bundled Performance plugin's (`plugins/performance/`).
 ## Rerun
 
 ```fish
-python3 scripts/perf/baseline.py            # ~55 min: native, ×10 rows, strace, soak, process, callgrind
-python3 scripts/perf/baseline.py --quick    # ~5 min: fewer iterations, no callgrind
+python3 scripts/perf/baseline.py            # native, counters, ×10 rows, strace, soak, process, attribution
+python3 scripts/perf/baseline.py --quick    # ~5 min: fewer iterations, no attribution pass
 python3 scripts/perf/compare.py docs/perf/runs/<old> docs/perf/runs/<new>
 ```
 
-The engine half needs `valgrind` and `strace` on PATH for the attribution and syscall passes
-(both are skipped, with a note, when absent), and builds the `perf` example of `relay-core`
-plus the CLI in the dev profile, which is the profile `run.sh` launches. The callgrind pass
+The engine half wants `perf` (instruction counts from the CPU's counters, and attribution
+where Valgrind cannot run), `valgrind` (callgrind attribution) and `strace` on PATH; each pass
+is skipped, with a note, when its tool is absent or cannot run. It builds the `perf` example of
+`relay-core` plus the CLI in the dev profile, which is the profile `run.sh` launches, and, for
+`perf record` attribution, a frame-pointer copy of the example under `target/perf-fp`. The
+attribution pass is callgrind where Valgrind runs and `perf record` sampling where it does not
+(PLAYBOOK §1 has why and how). The callgrind pass
 runs `--jobs` processes (default: cores minus one, at most four), each holding a few GB by the
 end of its list; on a machine with a memory limit under 6 GB per process, pass `--jobs 2` or
 rerun any scenario the pass missed with `--only` and merge its `profiles.json` by hand.
@@ -47,10 +51,11 @@ a populated board — and measures:
   materialization, request parse, response serialize, socket connect and round trip, event
   fan-out to a subscriber, PTY spawn to first output, a 1 MiB burst through the ring,
   reconnect catch-up, disk walks and status through the library;
-- **each of those four ways**: native wall time and process CPU per iteration with allocation
-  counts, instruction attribution under callgrind (one dump per scenario, instrumentation
-  switched on only around the measured call), syscall counts under strace, and the list
-  queries again at ten times the rows;
+- **each of those five ways**: native wall time and process CPU per iteration with allocation
+  counts, instructions per iteration from the CPU's counters (switched on only around the
+  measured call, child processes counted apart), instruction attribution under callgrind (one
+  dump per scenario) or sampled by `perf record` (only samples inside a measured region kept),
+  syscall counts under strace, and the list queries again at ten times the rows;
 - **memory** over 20 000 mixed operations, with live heap bytes from the allocator wrapper;
 - **the real `relay serve` process**: idle CPU and wakeups with six quiet sessions, with the
   resources panel watching, with sixty lines per second of output unattached and attached, a
@@ -67,7 +72,7 @@ syscalls, the size of the returned JSON, instructions, and the outcome. A row th
 error code measured that refusal path; a fixture without an Android SDK or `gh` cannot reach
 the success path of `device.*`, `avd.*` and `github.*`, and says so.
 
-The callgrind section gives, per scenario, the share of instructions by subsystem (SQLite,
+The attribution section gives, per scenario, the share of instructions by subsystem (SQLite,
 JSON, allocation, handler logic, and so on), the inclusive share of known entry points (SQL
 compile against SQL execute, audit, guardrail, git), and the Relay functions below the
 pipeline with the most inclusive cost. Those inclusive shares overlap by construction.
