@@ -172,6 +172,11 @@ button.tally-save { margin: 8px 16px 4px; }
 .tally-cell-figure.money-in, .tally-cell-sub.money-in { color: @live; }
 .tally-cell-figure.money-over, .tally-cell-sub.money-over { color: @held_text; }
 .tally-cell-figure.money-ahead, .tally-cell-sub.money-ahead { color: @waiting; }
+/* Plan's monthly budget, typed where the strip reads it: a field at a figure's size. */
+.tally-cell-symbol { font-size: 22px; font-weight: 600; color: @faint; }
+.money-root entry.money-field.tally-cell-field { min-height: 40px; padding: 0 10px; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+/* What a category spent before, beside its budget field. */
+.tally-past { min-width: 112px; }
 /* Overview's hero: what is left to spend, the page's one large figure, beside a narrow cell. */
 .tally-hero .tally-cell-figure { font-size: 30px; letter-spacing: -0.025em; }
 .tally-side { min-width: 200px; }

@@ -1382,9 +1382,11 @@ thread_local! {
     static TX_READ: RefCell<Option<TxRead>> = const { RefCell::new(None) };
 }
 
-/// The ledger moved (`money.changed`): Entries reads its accounts and categories again.
+/// The ledger moved (`money.changed`): Entries reads its accounts and categories again, and Plan
+/// what each category spent before.
 pub fn forget_lists() {
     TX_READ.with(|r| *r.borrow_mut() = None);
+    PAST.with(|p| *p.borrow_mut() = None);
 }
 
 pub async fn refresh(ui: &Rc<Ui>, name: &str) {
@@ -1464,7 +1466,12 @@ pub async fn refresh(ui: &Rc<Ui>, name: &str) {
                 return;
             }
             match (summary, lists) {
-                (Ok(s), Ok(l)) => plan(ui, &page, &s, &l),
+                (Ok(s), Ok(l)) => {
+                    let past = past(ui, &s, &l).await;
+                    if *ui.page.borrow() == name {
+                        plan(ui, &page, &s, &l, &past);
+                    }
+                }
                 (Err(e), _) | (_, Err(e)) => failed(ui, &page, "Plan", &e),
             }
         }
@@ -1911,13 +1918,126 @@ fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str
     TX_DRAWN.with(|d| *d.borrow_mut() = Some(TxDrawn { card, rows: rows_box, question, parts }));
 }
 
-/// Plan: the monthly budget and its split, then every expense category in one table with what it
-/// has spent and its budget field.
-fn plan(ui: &Rc<Ui>, page: &Page, s: &Value, lists: &Value) {
+/// What each expense category spent in the three budget periods before this one, oldest first,
+/// and how many of those periods the ledger has entries in (a ledger two months old averages
+/// two).
+pub(super) struct Past {
+    by: std::collections::HashMap<i64, Vec<i64>>,
+    months: usize,
+}
+
+impl Past {
+    /// "last month $298" and "3-mo avg $310" for `category`, when the ledger reaches back.
+    fn lines(&self, category: i64) -> Vec<String> {
+        let fmt = formatter();
+        let Some(values) = self.by.get(&category).filter(|_| self.months > 0) else { return Vec::new() };
+        let mut lines = vec![format!("last month {}", fmt.format_whole(values[2]))];
+        if self.months > 1 {
+            let counted = &values[3 - self.months..];
+            let average = counted.iter().sum::<i64>() / counted.len() as i64;
+            lines.push(format!("{}-mo avg {}", self.months, fmt.format_whole(average)));
+        }
+        lines
+    }
+}
+
+thread_local! {
+    /// Plan's [`Past`], with the start of the period it was read in: kept until the ledger moves
+    /// (`forget_lists`) or the period turns.
+    static PAST: RefCell<Option<(String, Rc<Past>)>> = const { RefCell::new(None) };
+    /// Whether Plan shows the categories with no budget and nothing spent.
+    static PLAN_ALL: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Awaits every future together and returns their outputs in order.
+async fn join_all<F: std::future::Future>(futures: Vec<F>) -> Vec<F::Output> {
+    let mut futures: Vec<_> = futures.into_iter().map(Box::pin).collect();
+    let mut outputs: Vec<Option<F::Output>> = futures.iter().map(|_| None).collect();
+    std::future::poll_fn(|cx| {
+        let mut waiting = false;
+        for (future, output) in futures.iter_mut().zip(outputs.iter_mut()) {
+            if output.is_none() {
+                match future.as_mut().poll(cx) {
+                    std::task::Poll::Ready(value) => *output = Some(value),
+                    std::task::Poll::Pending => waiting = true,
+                }
+            }
+        }
+        if waiting { std::task::Poll::Pending } else { std::task::Poll::Ready(()) }
+    })
+    .await;
+    outputs.into_iter().map(|output| output.expect("every future finished")).collect()
+}
+
+/// Plan's [`Past`]: the cached one while it stands, else one `money.series` read per expense
+/// category, all at once. A category whose read fails shows no history.
+async fn past(ui: &Rc<Ui>, s: &Value, lists: &Value) -> Rc<Past> {
+    let start = text(&s["period"], "start").to_string();
+    if let Some(past) = PAST.with(|p| p.borrow().as_ref().filter(|(at, _)| *at == start).map(|(_, past)| past.clone())) {
+        return past;
+    }
+    let categories: Vec<(i64, String)> = rows(lists, "categories")
+        .iter()
+        .filter(|c| text(c, "kind") == "EXPENSE" && c["archived"] != true)
+        .map(|c| (n(c, "id"), text(c, "name").to_string()))
+        .collect();
+    // This period and the three before it, oldest first.
+    let reads = join_all(categories.iter().map(|(_, name)| ui.call("money.series", json!({"measure":"spending","by":"period","periods":4,"category":name}))).collect()).await;
+    let mut by = std::collections::HashMap::new();
+    for ((id, _), read) in categories.iter().zip(reads) {
+        let Ok(read) = read else { continue };
+        let values: Vec<i64> = read["series"][0]["values"].as_array().map(|v| v.iter().map(|x| x.as_i64().unwrap_or(0)).collect()).unwrap_or_default();
+        if values.len() == 4 {
+            by.insert(*id, values[..3].to_vec());
+        }
+    }
+    let first = (0..3).find(|i| by.values().any(|values: &Vec<i64>| values[*i] > 0));
+    let past = Rc::new(Past { months: first.map_or(0, |i| 3 - i), by });
+    PAST.with(|p| *p.borrow_mut() = Some((start, past.clone())));
+    past
+}
+
+/// Plan's head: the title with Suggest budgets, which asks in a thread, and its context line.
+fn plan_head(ui: &Rc<Ui>, head: &gtk::Box) {
+    clear(head);
+    let top = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let name = label("Plan", "money-title");
+    name.set_hexpand(true);
+    top.append(&name);
+    let question = "Suggest monthly budgets from my last 3 months of spending";
+    let suggest = bare("quiet");
+    suggest.set_widget_name("money-plan-suggest");
+    suggest.set_valign(gtk::Align::Center);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let mark = crate::icons::image("claude", 14);
+    mark.set_valign(gtk::Align::Center);
+    row.append(&mark);
+    row.append(&label("Suggest budgets", ""));
+    suggest.set_child(Some(&row));
+    let said = format!("Ask in a thread: \u{201c}{question}\u{201d}");
+    suggest.set_tooltip_text(Some(&said));
+    suggest.update_property(&[gtk::accessible::Property::Label(&said)]);
+    let weak = Rc::downgrade(ui);
+    suggest.connect_clicked(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            super::threads::ask(&ui, question);
+        }
+    });
+    top.append(&suggest);
+    head.append(&top);
+    let context = label("Changes save as you leave a field.", "money-context");
+    context.set_wrap(true);
+    head.append(&context);
+}
+
+/// Plan: the monthly budget, typed in the strip beside how much of it categories hold; then every
+/// expense category with this period's spending, what it spent before, and its budget field.
+/// Categories with no budget and nothing spent fold under one key.
+fn plan(ui: &Rc<Ui>, page: &Page, s: &Value, lists: &Value, past: &Past) {
     remember_currency(s);
     let fmt = formatter();
     let typed = typing(ui, "money-budget");
-    title(&page.head, "Plan", &format!("Budgets for {}. Leave a field empty for no budget; changes save as you leave it.", period_name(&s["period"])));
+    plan_head(ui, &page.head);
     clear_rebuilding(&page.body);
     let pace = &s["pace"];
     let status = text(pace, "status");
@@ -1926,7 +2046,16 @@ fn plan(ui: &Rc<Ui>, page: &Page, s: &Value, lists: &Value) {
     let assigned: i64 = spent.values().map(|b| n(b, "budget").max(0)).sum();
 
     let (_, cells) = strip(&page.body);
-    cell(&cells, "plan", "Monthly budget", &if budget > 0 { fmt.format_whole(budget) } else { String::from("None") }, "everything, every month", None);
+    let figure = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    let symbol = label(&fmt.symbol, "tally-cell-symbol");
+    symbol.set_valign(gtk::Align::Center);
+    figure.append(&symbol);
+    let field = budget_field(ui, None, "everything", budget);
+    field.add_css_class("tally-cell-field");
+    field.set_halign(gtk::Align::Start);
+    gtk::prelude::EntryExt::set_alignment(&field, 0.0);
+    figure.append(&field);
+    cell_with(&cells, "plan", "Monthly budget", &figure, "everything, every month");
     cell(&cells, "list", "Given to categories", &fmt.format_whole(assigned), &copy::plural(spent.values().filter(|b| n(b, "budget") > 0).count() as i64, "budget"), None);
     let free = budget - assigned;
     let (free_text, free_sub, free_class) = if budget == 0 {
@@ -1937,14 +2066,8 @@ fn plan(ui: &Rc<Ui>, page: &Page, s: &Value, lists: &Value) {
         (fmt.format_whole(free), String::from("not given to a category"), None)
     };
     cell(&cells, "coins", if free < 0 { "Over by" } else { "Unassigned" }, &free_text, &free_sub, free_class);
-    cell(&cells, "spend", "Spent so far", &fmt.format_whole(n(pace, "spent")), &period_name(&s["period"]), None);
 
-    let overall = card(&page.body, "Monthly budget", None);
-    let detail = if budget > 0 { copy::of_budget(n(pace, "spent"), budget, &fmt) } else { String::from("No budget: Overview shows what you spent") };
-    let fraction = if budget > 0 { n(pace, "spent") as f64 / budget as f64 } else { 0.0 };
-    overall.append(&budget_row(ui, None, "Everything", &detail, budget, tone_class(status), Some(tile("plan")), (budget > 0).then(|| (fraction, tone(status, None)))));
-
-    let list = card_asking(&page.body, "By category", None, Some((ui, "Are my budgets realistic, given what I have been spending?")));
+    let list = card(&page.body, "By category", None);
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     head.add_css_class("tally-th");
     let caption = label("Category", "tally-th-text");
@@ -1958,6 +2081,8 @@ fn plan(ui: &Rc<Ui>, page: &Page, s: &Value, lists: &Value) {
     if categories.is_empty() {
         list.append(&icon_row(&tile("list"), "No expense categories yet", "Import a backup or load sample data", "", ""));
     }
+    let all = PLAN_ALL.with(Cell::get);
+    let mut folded: Vec<gtk::Box> = Vec::new();
     for category in &categories {
         let id = n(category, "id");
         let reading = spent.get(&id);
@@ -1971,7 +2096,34 @@ fn plan(ui: &Rc<Ui>, page: &Page, s: &Value, lists: &Value) {
         let status = reading.map_or("", |b| text(b, "status"));
         let meter = (amount > 0).then(|| (used as f64 / amount as f64, tone(status, category["color"].as_i64())));
         let lead = badge_sized(text(category, "icon"), n(category, "color"), 28);
-        list.append(&budget_row(ui, Some(id), text(category, "name"), &detail, amount, tone_class(status), Some(lead), meter));
+        let row = budget_row(ui, Some(id), text(category, "name"), &detail, amount, tone_class(status), Some(lead), meter, &past.lines(id));
+        if amount <= 0 && used <= 0 {
+            row.set_visible(all);
+            folded.push(row.clone());
+        }
+        list.append(&row);
+    }
+    if !folded.is_empty() {
+        let count = folded.len();
+        let caption = move |all: bool| match (all, count) {
+            (true, _) => format!("Hide the {count} with no budget"),
+            (false, 1) => String::from("Show 1 more category"),
+            (false, _) => format!("Show {count} more categories"),
+        };
+        let more = button(&caption(all), "money-text-action");
+        more.set_widget_name("money-plan-more");
+        more.set_tooltip_text(Some("Categories with no budget and nothing spent this period"));
+        more.set_halign(gtk::Align::Start);
+        more.add_css_class("tally-save");
+        more.connect_clicked(move |key| {
+            let all = !PLAN_ALL.with(Cell::get);
+            PLAN_ALL.with(|a| a.set(all));
+            for row in &folded {
+                row.set_visible(all);
+            }
+            key.set_label(&caption(all));
+        });
+        list.append(&more);
     }
     retype(&page.body, typed);
 }
@@ -2026,8 +2178,8 @@ fn named(root: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
     None
 }
 
-/// A budget line: its mark and name over its reading, a meter of what it has used, and the
-/// amount field that saves on Enter or on leaving it.
+/// A budget line: its mark and name over its reading, a meter of what it has used, what it spent
+/// before (`past`, from [`Past::lines`]), and the amount field that saves on Enter or on leaving.
 #[allow(clippy::too_many_arguments)]
 fn budget_row(
     ui: &Rc<Ui>,
@@ -2038,6 +2190,7 @@ fn budget_row(
     detail_class: Option<&str>,
     lead: Option<gtk::Box>,
     meter: Option<(f64, Tone)>,
+    past: &[String],
 ) -> gtk::Box {
     let fmt = formatter();
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
@@ -2065,6 +2218,32 @@ fn budget_row(
         track.append(&meter_in(fraction, None, tone, 6));
     }
     row.append(&track);
+    // What it spent before, beside the field it helps decide.
+    if !past.is_empty() {
+        let history = gtk::Box::new(gtk::Orientation::Vertical, 1);
+        history.add_css_class("tally-past");
+        history.set_valign(gtk::Align::Center);
+        for line in past {
+            let l = label(line, "tally-left");
+            l.set_xalign(1.0);
+            history.append(&l);
+        }
+        history.update_property(&[gtk::accessible::Property::Label(&format!("{name}: {}", past.join(", ")))]);
+        row.append(&history);
+    }
+    let symbol = label(&fmt.symbol, "money-suffix");
+    symbol.set_valign(gtk::Align::Center);
+    row.append(&symbol);
+    let field = budget_field(ui, category, name, amount);
+    field.set_valign(gtk::Align::Center);
+    row.append(&field);
+    row
+}
+
+/// The amount field of a budget (`category`, or the monthly budget for `None`): it saves on Enter
+/// or on leaving it (`money.budget.set`); empty is no budget.
+fn budget_field(ui: &Rc<Ui>, category: Option<i64>, name: &str, amount: i64) -> gtk::Entry {
+    let fmt = formatter();
     let field = gtk::Entry::new();
     field.add_css_class("money-field");
     field.set_widget_name(&match category {
@@ -2073,16 +2252,11 @@ fn budget_row(
     });
     field.set_width_chars(9);
     gtk::prelude::EntryExt::set_alignment(&field, 1.0);
-    field.set_valign(gtk::Align::Center);
     field.set_placeholder_text(Some("None"));
     if amount > 0 {
         field.set_text(&fmt.format_input(amount));
     }
     field.update_property(&[gtk::accessible::Property::Label(&format!("Budget for {name}"))]);
-    let symbol = label(&fmt.symbol, "money-suffix");
-    symbol.set_valign(gtk::Align::Center);
-    row.append(&symbol);
-    row.append(&field);
     let saved = Rc::new(std::cell::Cell::new(amount));
     let commit = {
         let weak = Rc::downgrade(ui);
@@ -2126,7 +2300,7 @@ fn budget_row(
         }
     });
     field.add_controller(focus);
-    row
+    field
 }
 
 /// A settings row: a mark, what it is over a line about it, and its control at the end.
