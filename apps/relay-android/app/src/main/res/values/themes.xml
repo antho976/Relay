@@ -9,8 +9,8 @@
     </style>
 
     <style name="Theme.Relay.Starting" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">@color/ground</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_mark</item>
+        <item name="windowSplashScreenBackground">@color/start_ground</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_blank</item>
         <item name="postSplashScreenTheme">@style/Theme.Relay</item>
     </style>
 </resources>

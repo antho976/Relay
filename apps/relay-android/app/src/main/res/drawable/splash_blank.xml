@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The splash shows only the ground: the start screen's opening (ui/start) draws the mark in, as
+     on the PC, so a still mark here would only appear twice. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@android:color/transparent" />
+</shape>

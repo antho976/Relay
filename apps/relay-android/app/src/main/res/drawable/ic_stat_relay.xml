@@ -5,6 +5,6 @@
     android:height="24dp"
     android:viewportWidth="120"
     android:viewportHeight="120">
-    <path android:pathData="M29,91 V58 A29,29 0 0,1 66.96,30.42" android:strokeColor="#FFFFFFFF" android:strokeWidth="17" android:strokeLineCap="round" android:strokeLineJoin="round" />
-    <path android:pathData="M80.08,41.66 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0z" android:fillColor="#FFFFFFFF" />
+    <path android:pathData="M23,87 H77 M37,61 H91 M51,35 H71" android:strokeColor="#FFFFFFFF" android:strokeWidth="16" android:strokeLineCap="round" />
+    <path android:pathData="M85,35 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0z" android:fillColor="#FFFFFFFF" />
 </vector>

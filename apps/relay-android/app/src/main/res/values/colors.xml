@@ -4,4 +4,6 @@
     <color name="ink">#FFEDE9E2</color>
     <color name="dimmed">#FF63666B</color>
     <color name="signal">#FFC6F24E</color>
+    <!-- The start screen's own ground (Palette.START_GROUND); the splash hands over to it. -->
+    <color name="start_ground">#FF0F1114</color>
 </resources>
