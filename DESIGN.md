@@ -153,6 +153,7 @@ through `fonts::PALETTES`, Dark being the sheet itself, Matte a step lighter, OL
 - **Ground** `@wall`/`@console`: app background, bars, sidebar. **Surface** `@slab`: keys,
   cards, pills, popovers. **Selected** `@wash`: hover and selected rows. **Raised** `@raised`:
   fields and the search key. **Track** `@track`: bar tracks, the lit segment, the avatar.
+  On a page these give way to glass (Elevation & Depth, The Glass Rule).
 - **Lines**: `@line_subtle`, `@edge` (line), `@strong` (line-strong), `@line_emphasis` (keycaps),
   `@line_focus` (focused fields).
 - **Inks**: `@ink`, `@secondary` (ink-2), `@faint` (ink-3), `@ink_dim`.
@@ -237,9 +238,22 @@ plate tops up the agents view's wall layer with `@plate`, and every other page
 (Board, Skills, Plugins, Files, Git, the Notes paper, full-page panels) paints
 one `@page_fill` layer of the same coverage, with nothing nested repainting.
 VTE's own ground is clear, and a parked session's slate hides its stale screen.
-Cards, text-entry grounds and the code editor stay a step denser for
-legibility. The Matte default uses fully opaque panels, which keeps the
-screen-black plates.
+The code editor stays a step denser for legibility. The Matte default uses
+fully opaque panels, which keeps the screen-black plates.
+
+**The Glass Rule.** What sits on a page is glass: a veil of `@ink` over the
+page's one layer, never a colour token (`@slab`, `@wash` and `@raised` are near
+or fully opaque, and over `@page_fill` read as solid blocks). One scale by role
+(`theme.css`, the Skills page's Instructions | Projects tabs its reference):
+`@glass_well` (3%) groups controls — a segmented trough, a board lane;
+`@glass_card` (4%) is a card — stat tiles, facts, a list of rows, a field;
+`@glass_control` (5.5%) is a control at rest — a key, a dropdown, a task card;
+`@glass_hover` (7.5%) and `@glass_selected` (9%) answer the pointer and mark the
+chosen segment, row, count or track. Edges go `@glass_edge` (7%) for wells and
+cards, `@glass_line` (11%) for controls, `@glass_line_hover` (18%). Only what
+floats over content — menus, popovers, the board's quick-create sheet and drag
+rail — is opaque, in the `_solid` twins. Board, Modules, task pages, Skills,
+Plugins, the agents view's crumb and tabs, and the Dev | Threads switch follow it.
 
 The status bar's usage meters show, per enabled provider, the 5-hour, weekly
 and Fable windows chosen in the limits popup, with amber at 70% and red at 90%,

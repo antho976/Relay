@@ -575,7 +575,8 @@ pub(super) fn flow_bar(counts: &[(&'static str, usize)], height: i32) -> gtk::Dr
             cr.arc(x + r, r, r, std::f64::consts::PI, 1.5 * std::f64::consts::PI);
             cr.close_path();
         };
-        cr.set_source_rgba(0.55, 0.53, 0.5, 0.18);
+        // Glass, as the tile it sits on (theme.css @glass_selected): an ink veil, not a grey bar.
+        cr.set_source_rgba(0.93, 0.914, 0.886, 0.09);
         round(cr, 0., w);
         let _ = cr.fill();
         if total == 0 {
@@ -591,7 +592,7 @@ pub(super) fn flow_bar(counts: &[(&'static str, usize)], height: i32) -> gtk::Dr
             }
             let width = w * *n as f64 / total as f64;
             let (red, green, blue) = column_rgb(column);
-            cr.set_source_rgba(red, green, blue, if *column == "backlog" { 0.55 } else { 0.9 });
+            cr.set_source_rgba(red, green, blue, if *column == "backlog" { 0.32 } else { 0.9 });
             cr.rectangle(x, 0., (width - 2.).max(1.), h);
             let _ = cr.fill();
             x += width;

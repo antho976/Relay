@@ -1,55 +1,55 @@
 /* board area styles: loaded after theme.css, so rules here override it. */
 
-/* Surfaces. Panel opacity makes @wall, @slab and @wash translucent. The page paints @page_fill once
-   (theme.css .page-stack) and nothing between it and the lanes repaints. Lanes are an ink tint
-   on it, so the board stays as see-through as every other page; cards are real surfaces,
-   opaque @raised, as Settings' cards sit on its column. Radii follow the app: 14px cards, 10px
-   rows and controls, 12px tab wells. */
+/* Surfaces. The page paints @page_fill once (theme.css .page-stack) and nothing between it and
+   the lanes repaints. Everything on it is glass (theme.css @glass_*): lanes are wells, stat tiles
+   cards, task cards and keys controls, so the board stays as see-through as every other page.
+   Only the menus, the quick-create sheet and the drag rail float, and they are opaque. Radii
+   follow the app: 14px cards, 10px rows and controls, 12px tab wells. */
 
 /* ── Header ─────────────────────────────────────────────────────────────── */
 .board-head { min-height: 56px; padding: 0 20px; background: transparent; }
 .board-count { margin-left: 4px; color: @faint; font-size: 12.5px; }
 entry.board-search, .board-search { min-height: 30px; }
 .board-head > button, .board-head > menubutton > button, .board-view-toggle button {
-  min-height: 34px; padding: 0 12px; border: 1px solid @strong; border-radius: 10px; background: @slab; color: @secondary; font-size: 13px; font-weight: 500;
+  min-height: 34px; padding: 0 12px; border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; color: @secondary; font-size: 13px; font-weight: 500;
 }
-.board-head > button:hover, .board-head > menubutton > button:hover { background: @wash; border-color: @line_emphasis; color: @ink; }
+.board-head > button:hover, .board-head > menubutton > button:hover { background: @glass_hover; border-color: @glass_line_hover; color: @ink; }
 .board-head > button.primary, .modules-head > button.primary { min-height: 34px; padding: 0 14px; border-radius: 10px; background: @ink; border-color: @ink; color: @wall_solid; font-weight: 600; }
 .board-head > button.primary label, .modules-head > button.primary label, .board-head > button.primary image, .modules-head > button.primary image { color: @wall_solid; }
 .board-head > button.primary:hover, .modules-head > button.primary:hover { background: white; border-color: white; }
-.board-head > button.icon-key { min-height: 34px; min-width: 34px; padding: 0; border: 1px solid @strong; border-radius: 10px; background: @slab; color: @secondary; }
-.board-head > button.icon-key:hover { background: @wash; border-color: @line_emphasis; color: @ink; }
-.board-head .workspace-picker > button { min-height: 34px; padding: 0 12px; border: 1px solid @edge; border-radius: 10px; background: @slab; color: @ink; }
-.board-head .workspace-picker > button:hover { background: @wash; border-color: @line_emphasis; }
+.board-head > button.icon-key { min-height: 34px; min-width: 34px; padding: 0; border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; color: @secondary; }
+.board-head > button.icon-key:hover { background: @glass_hover; border-color: @glass_line_hover; color: @ink; }
+.board-head .workspace-picker > button { min-height: 34px; padding: 0 12px; border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; color: @ink; }
+.board-head .workspace-picker > button:hover { background: @glass_hover; border-color: @glass_line_hover; }
 .board-head .workspace-picker-label { font-size: 13px; }
 
 /* Board / Modules: the same tab well as the title bar's Agents / Code / Git. */
-.board-switcher { margin-right: 4px; padding: 3px; border: 1px solid @edge; border-radius: 12px; background: @slab; }
+.board-switcher { margin-right: 4px; padding: 3px; border: 1px solid @glass_edge; border-radius: 12px; background: @glass_well; }
 .board-switcher button, .board-switcher button.quiet { min-height: 28px; padding: 0 14px; border: 0; border-radius: 9px; background: transparent; color: @faint; font-family: 'Geist', sans-serif; font-size: 13px; font-weight: 500; letter-spacing: 0; }
 .board-switcher button label { color: inherit; }
 .board-switcher button:hover { background: transparent; color: @ink; }
-.board-switcher button.selected, .board-switcher button.selected:hover { background: @track; color: @ink; }
-.board-head > menubutton.active > button { border-color: @line_focus; color: @ink; background: @wash; }
+.board-switcher button.selected, .board-switcher button.selected:hover { background: @glass_selected; color: @ink; }
+.board-head > menubutton.active > button { border-color: @glass_line_hover; color: @ink; background: @glass_selected; }
 
 /* The filter bar: one search field that also takes key:value filters, the View menu and
    the layout toggle beside it. */
 .board-filterbar { padding: 0 20px 14px; }
-.board-searchbar { min-height: 36px; padding: 0 4px 0 12px; border: 1px solid @strong; border-radius: 10px; background: @raised; color: @faint; transition: border-color 120ms ease-out, box-shadow 120ms ease-out; }
-.board-searchbar:hover { border-color: @line_emphasis; }
+.board-searchbar { min-height: 36px; padding: 0 4px 0 12px; border: 1px solid @glass_line; border-radius: 10px; background: @glass_card; color: @faint; transition: border-color 120ms ease-out, box-shadow 120ms ease-out; }
+.board-searchbar:hover { border-color: @glass_line_hover; }
 .board-searchbar:focus-within { border-color: alpha(@ink, 0.42); box-shadow: 0 0 0 3px alpha(@ink, 0.07); color: @secondary; }
 .board-searchbar entry.board-search, .board-searchbar entry.board-search:focus, .board-searchbar entry.board-search:focus-within { min-height: 34px; padding: 0; border: 0; box-shadow: none; outline: 0; background: transparent; color: @ink; font-size: 13px; }
 .board-searchbar button.board-search-clear { min-height: 26px; min-width: 26px; border-radius: 99px; }
-.board-filterbar > menubutton > button { min-height: 36px; padding: 0 14px; border: 1px solid @strong; border-radius: 10px; background: @slab; color: @secondary; font-size: 13px; font-weight: 500; }
-.board-filterbar > menubutton > button:hover { background: @wash; border-color: @line_emphasis; color: @ink; }
-.board-filterbar > menubutton.active > button { border-color: @line_focus; color: @ink; background: @wash; }
-.board-view-toggle { padding: 3px; border: 1px solid @edge; border-radius: 12px; background: @slab; }
+.board-filterbar > menubutton > button { min-height: 36px; padding: 0 14px; border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; color: @secondary; font-size: 13px; font-weight: 500; }
+.board-filterbar > menubutton > button:hover { background: @glass_hover; border-color: @glass_line_hover; color: @ink; }
+.board-filterbar > menubutton.active > button { border-color: @glass_line_hover; color: @ink; background: @glass_selected; }
+.board-view-toggle { padding: 3px; border: 1px solid @glass_edge; border-radius: 12px; background: @glass_well; }
 .board-view-toggle button { min-height: 28px; min-width: 32px; padding: 0 8px; border: 0; border-radius: 9px; background: transparent; color: @faint; }
 .board-view-toggle button:hover { background: transparent; color: @ink; }
-.board-view-toggle button:checked { background: @track; color: @ink; }
+.board-view-toggle button:checked { background: @glass_selected; color: @ink; }
 
 /* ── Stats band: progress across the columns, then the numbers that need a look ── */
 .board-stats { margin: 0 20px 14px; }
-.stat-tile { min-height: 58px; padding: 12px 16px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.stat-tile { min-height: 58px; padding: 12px 16px; border: 1px solid @glass_edge; border-radius: 14px; background: @glass_card; }
 .stat-progress { padding: 12px 18px; }
 .stat-caption { color: @faint; font-size: 12px; font-weight: 500; }
 .stat-value { color: @ink; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; font-feature-settings: "tnum"; }
@@ -66,8 +66,8 @@ entry.board-search, .board-search { min-height: 30px; }
 
 /* ── Columns strip and active filters ──────────────────────────────────── */
 .board-strip { min-height: 32px; padding: 0 20px 10px; background: transparent; }
-button.filter-chip { min-height: 26px; padding: 0 6px 0 11px; border: 1px solid @strong; border-radius: 99px; background: @slab; color: @ink; font-size: 12px; font-weight: 500; }
-button.filter-chip:hover { border-color: @line_emphasis; background: @wash; }
+button.filter-chip { min-height: 26px; padding: 0 6px 0 11px; border: 1px solid @glass_line; border-radius: 99px; background: @glass_control; color: @ink; font-size: 12px; font-weight: 500; }
+button.filter-chip:hover { border-color: @glass_line_hover; background: @glass_hover; }
 
 /* ── Quick create and drop rail ────────────────────────────────────────── */
 .board-quick { margin: 0 20px 12px; padding: 8px; border: 1px solid @strong; border-radius: 14px; background: @slab_solid; box-shadow: 0 10px 28px alpha(black, 0.35); }
@@ -82,38 +82,38 @@ button.filter-chip:hover { border-color: @line_emphasis; background: @wash; }
 
 /* ── Lanes ─────────────────────────────────────────────────────────────── */
 .board-grid { padding: 0 20px 16px; }
-.board-lane { border: 1px solid @edge; border-radius: 14px; background: alpha(@ink, 0.03); }
-.board-lane.drop-lane, .list-section.drop-lane { border-color: @line_focus; background: alpha(@ink, 0.07); }
-.lane-head { padding: 12px 10px 10px 14px; border-bottom: 1px solid @line_subtle; }
-.list-head { padding: 8px 10px 8px 14px; border-bottom: 1px solid @edge; }
+.board-lane { border: 1px solid @glass_edge; border-radius: 14px; background: @glass_well; }
+.board-lane.drop-lane, .list-section.drop-lane { border-color: @glass_line_hover; background: @glass_hover; }
+.lane-head { padding: 12px 10px 10px 14px; border-bottom: 1px solid @glass_edge; }
+.list-head { padding: 8px 10px 8px 14px; border-bottom: 1px solid @glass_edge; }
 .lane-head-row { min-height: 26px; }
 .lane-title { color: @ink; font-size: 13.5px; font-weight: 600; }
-.lane-count { min-width: 12px; padding: 1px 7px; border-radius: 99px; background: @track; color: @secondary; font-family: 'Geist Mono'; font-size: 10.5px; }
+.lane-count { min-width: 12px; padding: 1px 7px; border-radius: 99px; background: @glass_selected; color: @secondary; font-family: 'Geist Mono'; font-size: 10.5px; }
 .lane-estimate { color: @faint; font-family: 'Geist Mono'; font-size: 10.5px; }
 .lane-meaning { margin-left: 21px; color: @faint; font-size: 11.5px; }
 button.lane-key, menubutton.lane-key > button { min-height: 26px; min-width: 26px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: @faint; }
-button.lane-key:hover, menubutton.lane-key > button:hover { background: @wash; color: @ink; }
+button.lane-key:hover, menubutton.lane-key > button:hover { background: @glass_hover; color: @ink; }
 .board-cards { padding: 10px 10px 12px; }
 /* An empty lane is a soft well that reads as somewhere to drop. */
-.board-empty { min-height: 104px; padding: 18px 12px; border: 1px dashed @line_emphasis; border-radius: 10px; background: alpha(@ink, 0.015); }
+.board-empty { min-height: 104px; padding: 18px 12px; border: 1px dashed @glass_line; border-radius: 10px; background: transparent; }
 .board-empty-title { color: @secondary; font-size: 12.5px; font-weight: 500; letter-spacing: 0; }
 .board-empty-hint { color: @faint; font-size: 11.5px; letter-spacing: 0; }
 .board-group-heading { margin: 8px 4px 0; color: @faint; font-family: 'Geist'; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; }
 
 /* ── Cards ──────────────────────────────────────────────────────────────── */
-.task-card { margin: 0; padding: 10px 12px 11px; border: 1px solid @line_emphasis; border-radius: 10px; background: mix(@slab_solid, @ink, 0.045); box-shadow: 0 1px 2px alpha(black, 0.28); transition: border-color 120ms ease-out, background 120ms ease-out; }
-.task-card:hover { border-color: @line_focus; background: mix(@slab_solid, @ink, 0.07); }
+.task-card { margin: 0; padding: 10px 12px 11px; border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; box-shadow: 0 1px 2px alpha(black, 0.18); transition: border-color 120ms ease-out, background 120ms ease-out; }
+.task-card:hover { border-color: @glass_line_hover; background: @glass_hover; }
 .task-card:focus, .list-row:focus { outline: 0; box-shadow: 0 0 0 2px alpha(@ink, 0.28); border-color: alpha(@ink, 0.4); }
 .task-card:focus-visible, .list-row:focus-visible { outline: 0; }
-.task-card.task-child { border-left: 3px solid @line_focus; }
+.task-card.task-child { border-left: 3px solid @glass_line_hover; }
 .task-card.dragging, .list-row.dragging { opacity: 0.4; }
 .task-card.drop-before, .list-row.drop-before { box-shadow: inset 0 2px 0 @ink; }
 .task-card.drop-after, .list-row.drop-after { box-shadow: inset 0 -2px 0 @ink; }
-.task-card.drop-into, .list-row.drop-into { border-color: @ink; background: mix(@slab_solid, @ink, 0.09); }
+.task-card.drop-into, .list-row.drop-into { border-color: @ink; background: @glass_selected; }
 .card-id { color: @faint; font-size: 11px; }
 .card-title { color: @ink; font-size: 13.5px; font-weight: 500; line-height: 1.3; }
 .task-card.done .card-title, .list-row.done .list-title { color: @secondary; }
-.task-card.done { border-color: @line_subtle; background: mix(@slab_solid, @ink, 0.02); box-shadow: none; }
+.task-card.done { border-color: @glass_edge; background: @glass_well; box-shadow: none; }
 .card-tools { opacity: 0; }
 .task-card:hover .card-tools, .task-card:focus-within .card-tools { opacity: 1; }
 button.card-key { min-height: 22px; min-width: 22px; padding: 0; border-radius: 6px; }
@@ -122,14 +122,14 @@ button.card-key { min-height: 22px; min-width: 22px; padding: 0; border-radius: 
 .task-rollup { margin-top: 2px; }
 .rollup-count { color: @secondary; font-family: 'Geist Mono'; font-size: 10.5px; }
 .task-rollup progressbar trough, .task-rollup progressbar progress, progressbar.issue-progress trough, progressbar.issue-progress progress { min-height: 6px; border-radius: 99px; border: 0; }
-.task-rollup progressbar trough, progressbar.issue-progress trough { background: @track; }
+.task-rollup progressbar trough, progressbar.issue-progress trough { background: @glass_selected; }
 .task-rollup progressbar progress, progressbar.issue-progress progress { background: #8957e5; }
 .card-blocked-caption { color: @held_text; font-size: 11px; }
 .blocked-lamp { color: @held; }
 .card-fields { margin-top: 3px; }
 .card-extras { margin-top: 2px; color: @faint; }
 .card-extra-count { color: @faint; font-family: 'Geist Mono'; font-size: 10.5px; }
-.field-pill { padding: 2px 8px; border: 1px solid @edge; border-radius: 6px; background: alpha(@ink, 0.035); }
+.field-pill { padding: 2px 8px; border: 1px solid @glass_line; border-radius: 6px; background: @glass_well; }
 .field-pill-name { color: @secondary; font-size: 11px; }
 .pill-priority-high { border-color: alpha(@waiting, 0.4); background: alpha(@waiting, 0.07); }
 .pill-priority-high .field-pill-name { color: @waiting; }
@@ -141,14 +141,14 @@ button.card-key { min-height: 22px; min-width: 22px; padding: 0; border-radius: 
 .task-chip { font-family: 'Geist Mono'; font-size: 10px; padding: 0 5px; border: 1px solid @edge; border-radius: 6px; color: @secondary; }
 .card-sha { font-family: 'Geist Mono'; font-size: 10px; color: @faint; }
 .card-ago { color: @faint; font-family: 'Geist Mono'; font-size: 10.5px; }
-.task-agent { min-height: 22px; margin-top: 3px; padding-top: 7px; border-top: 1px solid @line_subtle; color: @secondary; font-size: 11px; }
+.task-agent { min-height: 22px; margin-top: 3px; padding-top: 7px; border-top: 1px solid @glass_edge; color: @secondary; font-size: 11px; }
 .board-lamp { color: @faint; }
 .board-lamp.live-lamp { color: @live; }
 /* A file dragged over a card attaches to its task. */
 .task-card.drop-attach { border-color: alpha(@ink, 0.5); box-shadow: 0 0 0 2px alpha(@ink, 0.18); }
 
 /* Labels: an edge-outlined chip with a muted swatch, so tags read without shouting. */
-.label-chip { padding: 2px 8px 2px 7px; border: 1px solid @edge; border-radius: 6px; }
+.label-chip { padding: 2px 8px 2px 7px; border: 1px solid @glass_line; border-radius: 6px; }
 .label-chip-name { color: @secondary; font-size: 10.5px; }
 .label-more { color: @faint; font-size: 10.5px; }
 .label-hue-0 { color: #8fa3bf; }
@@ -183,31 +183,31 @@ button.card-key { min-height: 22px; min-width: 22px; padding: 0; border-radius: 
 
 /* ── List view ──────────────────────────────────────────────────────────── */
 .board-list { padding: 0 20px 16px; }
-.list-section { margin-bottom: 12px; border: 1px solid @edge; border-radius: 14px; background: alpha(@ink, 0.03); }
-.list-row { min-height: 40px; padding: 0 14px; border-bottom: 1px solid @line_subtle; background: transparent; }
-.list-row:hover { background: alpha(@ink, 0.035); }
+.list-section { margin-bottom: 12px; border: 1px solid @glass_edge; border-radius: 14px; background: @glass_well; }
+.list-row { min-height: 40px; padding: 0 14px; border-bottom: 1px solid @glass_edge; background: transparent; }
+.list-row:hover { background: @glass_card; }
 .list-row:last-child { border-bottom: 0; border-radius: 0 0 14px 14px; }
 .list-title { color: @ink; font-size: 13px; }
 .list-lineage { color: @faint; font-size: 11px; }
 .list-meta, .list-agent { color: @secondary; font-size: 11px; }
 .list-empty { padding: 12px 14px; color: @faint; font-size: 12px; }
-.list-group-heading { padding: 8px 14px 4px; color: @faint; font-family: 'Geist'; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; border-bottom: 1px solid @line_subtle; }
+.list-group-heading { padding: 8px 14px 4px; color: @faint; font-family: 'Geist'; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; border-bottom: 1px solid @glass_edge; }
 
 /* ── Peek panel ─────────────────────────────────────────────────────────── */
-.board-peek { margin: 0 20px 16px 0; border: 1px solid @edge; border-radius: 14px; background: @slab; }
-.peek-head { min-height: 44px; padding: 0 8px 0 16px; border-bottom: 1px solid @edge; }
+.board-peek { margin: 0 20px 16px 0; border: 1px solid @glass_edge; border-radius: 14px; background: @glass_card; }
+.peek-head { min-height: 44px; padding: 0 8px 0 16px; border-bottom: 1px solid @glass_edge; }
 .peek-body { padding: 16px 18px 20px; }
 .peek-title { color: @ink; font-size: 17px; font-weight: 600; }
-.peek-props { padding: 8px 0; border-top: 1px solid @edge; border-bottom: 1px solid @edge; }
+.peek-props { padding: 8px 0; border-top: 1px solid @glass_edge; border-bottom: 1px solid @glass_edge; }
 .peek-key { min-width: 70px; color: @faint; font-size: 12px; }
 .peek-value > button { min-height: 28px; padding: 0 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: @ink; font-size: 12.5px; }
-.peek-value > button:hover { border-color: @edge; background: @wash; }
+.peek-value > button:hover { border-color: @glass_line; background: @glass_hover; }
 .peek-text { min-height: 28px; padding-left: 9px; color: @ink; font-size: 12.5px; }
 .peek-description { color: @ink; font-size: 13px; }
 .peek-muted { color: @faint; font-size: 12px; }
 .peek-commit { font-family: 'Geist Mono'; font-size: 11px; color: @secondary; }
-button.peek-link { min-height: 30px; padding: 0 10px; border: 1px solid @edge; border-radius: 9px; background: @raised; color: @ink; font-size: 12.5px; font-weight: 400; }
-button.peek-link:hover { background: @wash; border-color: @line_emphasis; }
+button.peek-link { min-height: 30px; padding: 0 10px; border: 1px solid @glass_line; border-radius: 9px; background: @glass_control; color: @ink; font-size: 12.5px; font-weight: 400; }
+button.peek-link:hover { background: @glass_hover; border-color: @glass_line_hover; }
 button.peek-link.done label { color: @secondary; }
 button.peek-edit { border: 1px solid @edge; }
 
@@ -229,7 +229,7 @@ button.filter-option:checked { border-color: alpha(@ink, 0.45); background: @tra
 .board-filter flowboxchild { padding: 0; }
 
 /* ── Empty board and shortcuts ─────────────────────────────────────────── */
-.board-blank { margin: 0 20px 20px; padding: 48px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.board-blank { margin: 0 20px 20px; padding: 48px; border: 1px solid @glass_edge; border-radius: 14px; background: @glass_card; }
 .board-blank-title { color: @ink; font-size: 17px; font-weight: 600; }
 .board-blank-hint { color: @secondary; font-size: 13px; margin-bottom: 8px; }
 .board-kbd { padding: 1px 6px; border: 1px solid @line_emphasis; border-radius: 6px; font-family: 'Geist Mono'; font-size: 10.5px; color: @faint; }
@@ -249,51 +249,51 @@ entry.issue-title-entry { min-height: 40px; border-radius: 10px; font-size: 15px
 .issue-compose-footer button, .issue-composer button, .issue-header button.primary { border-radius: 10px; }
 .issue-page button.primary { min-height: 34px; padding: 0 16px; border-radius: 10px; }
 .issue-page button.quiet { min-height: 34px; border-radius: 10px; }
-.issue-page combobox button, .issue-page dropdown > button { min-height: 34px; border: 1px solid @strong; border-radius: 10px; background: @raised; }
+.issue-page combobox button, .issue-page dropdown > button { min-height: 34px; border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; }
 
 /* The Markdown field: Write / Preview tabs and a formatting bar over the text. */
-.md-field { border: 1px solid @strong; border-radius: 12px; background: @raised; }
+.md-field { border: 1px solid @glass_line; border-radius: 12px; background: @glass_card; }
 .md-field:focus-within { border-color: alpha(@ink, 0.35); box-shadow: 0 0 0 3px alpha(@ink, 0.06); }
-.md-bar { padding: 6px 8px 6px; border-bottom: 1px solid @edge; border-radius: 12px 12px 0 0; background: alpha(@ink, 0.02); }
+.md-bar { padding: 6px 8px 6px; border-bottom: 1px solid @glass_edge; border-radius: 12px 12px 0 0; background: alpha(@ink, 0.02); }
 button.md-tab { min-height: 28px; padding: 0 14px; border: 0; border-radius: 8px; background: transparent; color: @faint; font-size: 12.5px; font-weight: 500; }
 button.md-tab:hover { color: @ink; }
-button.md-tab:checked { background: @track; color: @ink; }
+button.md-tab:checked { background: @glass_selected; color: @ink; }
 button.md-tool { min-height: 28px; min-width: 28px; padding: 0 5px; border: 0; border-radius: 7px; background: transparent; color: @faint; font-size: 12px; font-weight: 600; }
-button.md-tool:hover { color: @ink; background: @wash; }
+button.md-tool:hover { color: @ink; background: @glass_hover; }
 textview.md-input, textview.md-input text { background: transparent; font-size: 13.5px; }
 .md-placeholder { margin: 10px 14px; color: @faint; font-size: 13.5px; }
 .md-preview { padding: 12px 14px; color: @ink; font-size: 13.5px; }
 
 /* The issue header: a large title, its number, then a status pill and the dates. */
-.issue-header { padding-bottom: 18px; border-bottom: 1px solid @edge; }
+.issue-header { padding-bottom: 18px; border-bottom: 1px solid @glass_edge; }
 .issue-title { color: @ink; font-size: 28px; font-weight: 500; letter-spacing: -0.02em; }
 .issue-number { color: @faint; font-size: 28px; font-weight: 300; }
-.status-pill { padding: 5px 13px 5px 10px; border-radius: 99px; background: @track; }
+.status-pill { padding: 5px 13px 5px 10px; border-radius: 99px; background: @glass_selected; }
 .status-pill-name { color: @ink; font-size: 12.5px; font-weight: 600; }
 .status-pill-ready { background: alpha(#4493f8, 0.22); }
 .status-pill-active { background: alpha(@waiting, 0.2); }
 .status-pill-in_review { background: alpha(#ab7df8, 0.22); }
 .status-pill-done { background: #8957e5; }
 .status-pill-done .status-pill-name, .status-pill-done .status-icon { color: white; }
-button.issue-pill { min-height: 28px; padding: 0 12px; border: 1px solid @strong; border-radius: 99px; background: @slab; color: @secondary; font-size: 12.5px; font-weight: 400; }
-button.issue-pill:hover { color: @ink; border-color: @line_emphasis; background: @wash; }
+button.issue-pill { min-height: 28px; padding: 0 12px; border: 1px solid @glass_line; border-radius: 99px; background: @glass_control; color: @secondary; font-size: 12.5px; font-weight: 400; }
+button.issue-pill:hover { color: @ink; border-color: @glass_line_hover; background: @glass_hover; }
 .issue-opened { color: @faint; font-size: 12.5px; }
 .issue-status { padding: 10px 14px; border: 1px solid alpha(@waiting, 0.35); border-radius: 10px; background: alpha(@waiting, 0.08); color: @ink; }
 
 /* The thread: comment cards and the steps between them on one rail. */
-.issue-comment { border: 1px solid @edge; border-radius: 14px; background: @slab; }
-.issue-comment-head { min-height: 42px; padding: 0 10px 0 16px; border-bottom: 1px solid @edge; border-radius: 14px 14px 0 0; background: alpha(@ink, 0.025); }
+.issue-comment { border: 1px solid @glass_edge; border-radius: 14px; background: @glass_card; }
+.issue-comment-head { min-height: 42px; padding: 0 10px 0 16px; border-bottom: 1px solid @glass_edge; border-radius: 14px 14px 0 0; background: alpha(@ink, 0.025); }
 .issue-comment-who { color: @secondary; font-size: 12.5px; }
 .issue-comment-body { padding: 14px 16px 16px; color: @ink; font-size: 13.5px; }
 .issue-section-title { color: @ink; font-size: 13.5px; font-weight: 600; }
-button.issue-link { min-height: 34px; padding: 0 14px; border: 1px solid @edge; border-radius: 10px; background: @slab; color: @ink; font-weight: 400; }
-button.issue-link:hover { background: @wash; border-color: @line_emphasis; }
+button.issue-link { min-height: 34px; padding: 0 14px; border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; color: @ink; font-weight: 400; }
+button.issue-link:hover { background: @glass_hover; border-color: @glass_line_hover; }
 .issue-sidebar button.issue-link { min-height: 28px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; }
-.issue-sidebar button.issue-link:hover { background: @wash; }
+.issue-sidebar button.issue-link:hover { background: @glass_hover; }
 .issue-timeline { margin-top: 6px; }
 .issue-event { min-height: 42px; }
 .issue-rail { min-width: 34px; }
-.issue-rail-line { min-width: 2px; background: @edge; }
+.issue-rail-line { min-width: 2px; background: @glass_line; }
 .issue-badge { min-width: 30px; min-height: 30px; margin-top: 6px; border-radius: 99px; background: @raised; border: 2px solid @wall_solid; color: @secondary; }
 .issue-badge-closed { background: #8957e5; }
 .issue-badge-closed .status-icon { color: white; }
@@ -310,26 +310,26 @@ button.issue-link:hover { background: @wash; border-color: @line_emphasis; }
 .avatar-hue-5 { background: #8db6bd; }
 .avatar-hue-6 { background: #b3b78b; }
 .avatar-hue-7 { background: #c09a8d; }
-.issue-composer { margin-top: 22px; padding-top: 20px; border-top: 1px solid @edge; }
+.issue-composer { margin-top: 22px; padding-top: 20px; border-top: 1px solid @glass_edge; }
 .issue-composer-title { color: @ink; font-size: 15px; font-weight: 600; }
-button.issue-close { min-height: 34px; padding: 0 14px; border: 1px solid @strong; border-radius: 10px; background: @slab; color: @ink; font-weight: 500; }
-button.issue-close:hover { background: @wash; border-color: @line_emphasis; }
+button.issue-close { min-height: 34px; padding: 0 14px; border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; color: @ink; font-weight: 500; }
+button.issue-close:hover { background: @glass_hover; border-color: @glass_line_hover; }
 
 /* The sidebar: one card of compact sections under hairlines, like a Settings card. */
-.issue-sidebar { margin-top: 2px; padding: 4px 16px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
-.issue-side-section { padding: 14px 0 15px; border-bottom: 1px solid @edge; }
+.issue-sidebar { margin-top: 2px; padding: 4px 16px; border: 1px solid @glass_edge; border-radius: 14px; background: @glass_card; }
+.issue-side-section { padding: 14px 0 15px; border-bottom: 1px solid @glass_edge; }
 .issue-side-section:last-child { border-bottom: 0; }
 .issue-side-title { color: @faint; font-size: 12px; font-weight: 600; }
 .issue-side-empty { color: @faint; font-size: 12.5px; }
 .issue-side-value { color: @ink; font-size: 13px; }
-entry.issue-side-entry { min-height: 32px; border: 1px solid @strong; border-radius: 9px; background: @raised; box-shadow: none; font-size: 12.5px; }
+entry.issue-side-entry { min-height: 32px; border: 1px solid @glass_line; border-radius: 9px; background: @glass_card; box-shadow: none; font-size: 12.5px; }
 entry.issue-side-entry:focus-within { border-color: alpha(@ink, 0.4); }
-button.choice-pill { min-height: 28px; padding: 0 9px; border: 1px solid @strong; border-radius: 8px; background: @raised; color: @secondary; font-size: 12.5px; font-weight: 400; }
-button.choice-pill:hover { background: @wash; border-color: @line_emphasis; color: @ink; }
-button.choice-pill.selected { border-color: alpha(@ink, 0.5); background: @track; color: @ink; font-weight: 600; }
+button.choice-pill { min-height: 28px; padding: 0 9px; border: 1px solid @glass_line; border-radius: 8px; background: @glass_control; color: @secondary; font-size: 12.5px; font-weight: 400; }
+button.choice-pill:hover { background: @glass_hover; border-color: @glass_line_hover; color: @ink; }
+button.choice-pill.selected { border-color: alpha(@ink, 0.5); background: @glass_selected; color: @ink; font-weight: 600; }
 button.choice-pill label { color: inherit; }
 button.issue-side-key { min-height: 28px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: @secondary; font-weight: 400; }
-button.issue-side-key:hover { background: @wash; color: @ink; }
+button.issue-side-key:hover { background: @glass_hover; color: @ink; }
 button.issue-label { min-height: 0; padding: 0; border: 0; background: transparent; }
 button.issue-label:hover .label-chip { border-color: @held; }
 button.issue-delete { min-height: 28px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: @faint; font-weight: 400; }
@@ -343,7 +343,7 @@ button.issue-delete:hover { background: alpha(@held, 0.12); color: @held_text; }
 flowbox.attachment-tray { padding: 0 16px 12px; }
 flowbox.attachment-tray > flowboxchild { padding: 0; }
 box.attachment-tray { margin-top: 4px; }
-.attachment-tile { border: 1px solid @edge; border-radius: 10px; background: @raised; }
+.attachment-tile { border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; }
 .attachment-tile picture, .attachment-tile image { border-radius: 8px; }
 .attachment-name { color: @secondary; font-size: 11px; }
 button.attachment-remove { margin: 4px; min-height: 22px; min-width: 22px; border: 0; border-radius: 99px; background: alpha(black, 0.6); opacity: 0; }
@@ -370,41 +370,41 @@ button.view-pill label { color: inherit; }
 .modules-section-title { color: @secondary; font-size: 13px; font-weight: 600; }
 flowbox.module-grid { margin-bottom: 22px; }
 flowbox.module-grid > flowboxchild { padding: 0; }
-button.module-card { padding: 16px 18px 14px; border: 1px solid @edge; border-radius: 14px; background: @slab; font-weight: 400; transition: border-color 120ms ease-out, background 120ms ease-out; }
-button.module-card:hover { border-color: @line_emphasis; background: @wash; }
+button.module-card { padding: 16px 18px 14px; border: 1px solid @glass_edge; border-radius: 14px; background: @glass_card; font-weight: 400; transition: border-color 120ms ease-out, background 120ms ease-out; }
+button.module-card:hover { border-color: @glass_line_hover; background: @glass_hover; }
 button.module-card.module-complete { background: alpha(@ink, 0.02); }
 .module-card-mark { color: @faint; }
 .module-card-name { color: @ink; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 .module-card-pct { min-width: 44px; color: @ink; font-size: 18px; font-weight: 600; font-feature-settings: "tnum"; }
 .module-card-meta { color: @secondary; font-size: 12px; }
 .module-card-ago { color: @faint; font-size: 11.5px; }
-.module-card-foot { padding-top: 10px; border-top: 1px solid @edge; }
+.module-card-foot { padding-top: 10px; border-top: 1px solid @glass_edge; }
 .module-card-done { padding: 2px 9px; border-radius: 99px; background: #8957e5; color: white; font-size: 11px; font-weight: 600; }
-.modules-empty { margin-top: 40px; padding: 44px 56px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.modules-empty { margin-top: 40px; padding: 44px 56px; border: 1px solid @glass_edge; border-radius: 14px; background: @glass_card; }
 .modules-empty-mark { color: @faint; }
 .modules-empty-title { color: @ink; font-size: 17px; font-weight: 600; }
 .modules-empty-hint { color: @secondary; font-size: 13px; line-height: 1.4; }
 /* A module's own board: its name and actions on one card over the stats band. */
-.module-banner { min-height: 52px; margin: 0 20px 14px; padding: 0 10px 0 6px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.module-banner { min-height: 52px; margin: 0 20px 14px; padding: 0 10px 0 6px; border: 1px solid @glass_edge; border-radius: 14px; background: @glass_card; }
 .module-banner-name { color: @ink; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
 .module-banner .field-pill { min-height: 0; }
 .module-banner progressbar { margin-right: 4px; }
 button.module-back, button.module-action { min-height: 32px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; color: @secondary; font-weight: 500; }
-button.module-back:hover, button.module-action:hover { background: @wash; color: @ink; }
+button.module-back:hover, button.module-action:hover { background: @glass_hover; color: @ink; }
 button.module-back { margin-right: 4px; }
 .module-banner > button.icon-key { border: 0; background: transparent; color: @faint; }
-.module-banner > button.icon-key:hover { background: @wash; color: @ink; }
-.module-pick-list { padding: 4px; border: 1px solid @edge; border-radius: 14px; background: @slab; }
+.module-banner > button.icon-key:hover { background: @glass_hover; color: @ink; }
+.module-pick-list { padding: 4px; border: 1px solid @glass_edge; border-radius: 14px; background: @glass_card; }
 .module-pick-list checkbutton, checkbutton.module-pick { min-height: 38px; padding: 0 10px; border-radius: 10px; }
-.module-pick-list checkbutton:hover { background: @wash; }
-.module-pick-list checkbutton + checkbutton { border-top: 1px solid @line_subtle; }
+.module-pick-list checkbutton:hover { background: @glass_hover; }
+.module-pick-list checkbutton + checkbutton { border-top: 1px solid @glass_edge; }
 .pick-size { padding: 1px 6px; border: 1px solid @edge; border-radius: 6px; color: @secondary; font-family: 'Geist Mono'; font-size: 10.5px; }
 .patch-notes { color: @ink; font-size: 13px; }
 .module-grid button.module-card progressbar { min-width: 120px; }
 /* Renaming a module happens in the banner's own height: a slim field and small pills. */
-.module-editor entry { min-height: 30px; padding: 0 10px; border: 1px solid @strong; border-radius: 9px; background: @raised; box-shadow: none; font-size: 13px; }
+.module-editor entry { min-height: 30px; padding: 0 10px; border: 1px solid @glass_line; border-radius: 9px; background: @glass_card; box-shadow: none; font-size: 13px; }
 .module-editor entry:focus-within { border-color: alpha(@ink, 0.4); }
 .module-editor button.choice-pill { min-height: 28px; padding: 0 9px; }
-button.module-action.module-save { border: 1px solid alpha(@ink, 0.35); background: @track; color: @ink; }
-button.module-action.module-save:hover { background: @line_focus; }
+button.module-action.module-save { border: 1px solid alpha(@ink, 0.35); background: @glass_selected; color: @ink; }
+button.module-action.module-save:hover { background: @glass_line_hover; }
 .module-banner > button, .module-banner > box { margin-top: 8px; margin-bottom: 8px; }
