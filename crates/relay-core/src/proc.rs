@@ -47,17 +47,38 @@ pub fn output_with_input(cmd: &mut Command, input: &[u8], timeout: Duration) -> 
     run(cmd, Some(input.to_vec()), timeout)
 }
 
+/// How often, and how long apart, a spawn refused with `ETXTBSY` is tried again.
+const BUSY_TEXT_RETRIES: u32 = 5;
+const BUSY_TEXT_PAUSE: Duration = Duration::from_millis(5);
+
+/// `cmd.spawn()`, tried again a few times while the program is "Text file busy". Exec refuses a
+/// file some process holds open for writing, and a script Relay (or a test) has just written can
+/// be held that way for a moment by a child another thread forked meanwhile: the child inherits
+/// the write handle until its own exec closes it. Waiting a few milliseconds is enough.
+fn spawn_past_busy_text(cmd: &mut Command) -> io::Result<std::process::Child> {
+    let mut pause = BUSY_TEXT_PAUSE;
+    for _ in 0..BUSY_TEXT_RETRIES {
+        match cmd.spawn() {
+            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
+                std::thread::sleep(pause);
+                pause *= 2;
+            }
+            other => return other,
+        }
+    }
+    cmd.spawn()
+}
+
 fn run(cmd: &mut Command, input: Option<Vec<u8>>, timeout: Duration) -> io::Result<Option<Output>> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    let mut child = cmd
-        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+    cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    let mut child = spawn_past_busy_text(cmd)?;
     if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
         std::thread::spawn(move || {
             let _ = io::Write::write_all(&mut stdin, &input);
@@ -163,6 +184,28 @@ fn drain<R: io::Read + Send + 'static>(mut reader: R) -> Drain {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The race that failed CI once (`Text file busy` from a test's fake `adb`), made on purpose:
+    /// a script still open for writing cannot be run, and is run once the handle is gone.
+    #[test]
+    fn a_script_held_open_for_writing_a_moment_still_runs() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("script");
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(b"#!/bin/sh\necho ran\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let busy = Command::new(&path).spawn().map(|_| ()).unwrap_err();
+        assert_eq!(busy.raw_os_error(), Some(libc::ETXTBSY), "{busy}");
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(15));
+            drop(file);
+        });
+        let output = output_with_timeout(&mut Command::new(&path), Duration::from_secs(5)).unwrap().unwrap();
+        closer.join().unwrap();
+        assert_eq!(output.stdout, b"ran\n");
+    }
 
     #[test]
     fn a_child_that_finishes_returns_its_output() {

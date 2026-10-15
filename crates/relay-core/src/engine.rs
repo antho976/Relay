@@ -21,7 +21,7 @@ use relay_bus::types::{Id, Page, PaneInfo, PaneRef, UndoOp, WindowInfo};
 use rusqlite::Transaction;
 use serde_json::{json, Value};
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -506,10 +506,13 @@ pub struct Engine {
     in_flight: std::sync::Mutex<HashSet<Uuid>>,
     in_flight_done: std::sync::Condvar,
     /// Live PTYs by session id (phase 3). Not persisted: a restart makes sessions restorable.
-    ptys: std::sync::Mutex<HashMap<Id, Arc<Pty>>>,
+    /// Ordered maps, here and below: a keystroke looks a session up three times, and a few dozen
+    /// short keys are found with a handful of compares, where `HashMap` runs SipHash each time
+    /// (11 % of `session.input`).
+    ptys: std::sync::Mutex<BTreeMap<Id, Arc<Pty>>>,
     /// Session name → id for the live PTYs above, so `session.input` can resolve a keystroke's
     /// target without a `SELECT` (D148).
-    pty_ids: std::sync::Mutex<HashMap<String, Id>>,
+    pty_ids: std::sync::Mutex<BTreeMap<String, Id>>,
     pub(crate) mirrors: std::sync::Mutex<HashMap<Id, Arc<MirrorRuntime>>>,
     pub(crate) device_runs: std::sync::Mutex<HashMap<Id, Arc<RunRuntime>>>,
     pub(crate) device_watch: std::sync::Mutex<DeviceWatchState>,
@@ -560,8 +563,8 @@ impl Engine {
                 self_ref: self_ref.clone(),
                 in_flight: std::sync::Mutex::new(HashSet::new()),
                 in_flight_done: std::sync::Condvar::new(),
-                ptys: std::sync::Mutex::new(HashMap::new()),
-                pty_ids: std::sync::Mutex::new(HashMap::new()),
+                ptys: std::sync::Mutex::new(BTreeMap::new()),
+                pty_ids: std::sync::Mutex::new(BTreeMap::new()),
                 mirrors: std::sync::Mutex::new(HashMap::new()),
                 device_runs: std::sync::Mutex::new(HashMap::new()),
                 device_watch: std::sync::Mutex::new(DeviceWatchState::default()),
@@ -805,7 +808,7 @@ impl Engine {
             );
         }
         self.pty_ids.lock().unwrap().clear();
-        let ptys: Vec<(Id, Arc<Pty>)> = self.ptys.lock().unwrap().drain().collect();
+        let ptys: Vec<(Id, Arc<Pty>)> = std::mem::take(&mut *self.ptys.lock().unwrap()).into_iter().collect();
         if ptys.is_empty() {
             return;
         }
@@ -1393,7 +1396,7 @@ impl Engine {
     /// session — and the request falls through to the registered handler, which owns the exact
     /// typed error for that case.
     fn pty_fast_path(&self, op: &str, payload: &Value) -> Result<Option<Value>, BusError> {
-        use relay_bus::ops::session::{InputIn, ResizeIn};
+        use relay_bus::ops::session::ResizeIn;
         use serde::Deserialize;
         let name = payload
             .get("session")
@@ -1404,7 +1407,7 @@ impl Engine {
         };
         match op {
             "session.input" => {
-                let p = InputIn::deserialize(payload)
+                let p = InputRef::deserialize(payload)
                     .map_err(|e| BusError::schema("session.input", e))?;
                 if pty.exited() {
                     return Err(BusError::conflict(
@@ -1593,6 +1596,20 @@ impl<T, E: std::fmt::Display> IntoBus<T> for Result<T, E> {
     }
 }
 
+/// `session.input`'s payload (`relay_bus::ops::session::InputIn`) read in place: the same fields
+/// and the same refusal of any other, borrowing the session name and the text from the request
+/// instead of copying both on every keystroke. A test holds the two to the same answers.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields, expecting = "struct InputIn")]
+struct InputRef<'a> {
+    // `Cow`, not `&str`: it borrows all the same from a `Value`, and a payload of the wrong type
+    // is refused in `InputIn`'s words ("expected a string").
+    #[serde(borrow)]
+    session: std::borrow::Cow<'a, str>,
+    #[serde(borrow)]
+    data: std::borrow::Cow<'a, str>,
+}
+
 /// Write a keystroke batch to a live PTY, shared by the in-memory fast path and the staged
 /// `session.input` fallback. `true` when this write ends an idle period, which owes the store
 /// a `running` row (RA-646).
@@ -1607,6 +1624,33 @@ mod inline_path_tests {
     use super::*;
     use relay_bus::Request;
     use serde_json::json;
+
+    /// The fast path reads `session.input` through `InputRef`; it must take and refuse exactly
+    /// what `InputIn` does, in the same words, and borrow rather than copy.
+    #[test]
+    fn input_ref_answers_as_input_in() {
+        use relay_bus::ops::session::InputIn;
+        use serde::Deserialize;
+        let payloads = [
+            json!({"session": "spry-kestrel", "data": "k"}),
+            json!({"session": "s", "data": "a \"quoted\" line\n\u{1b}[A"}),
+            json!({"session": "s"}),
+            json!({"data": "k"}),
+            json!({"session": "s", "data": "k", "extra": 1}),
+            json!({"session": "s", "data": 7}),
+            json!({"session": null, "data": "k"}),
+            json!(["s", "k"]),
+            json!("s"),
+        ];
+        for payload in &payloads {
+            let typed = InputIn::deserialize(payload).map(|p| (p.session, p.data)).map_err(|e| e.to_string());
+            let borrowed = InputRef::deserialize(payload).map(|p| (p.session.into_owned(), p.data.into_owned())).map_err(|e| e.to_string());
+            assert_eq!(borrowed, typed, "{payload}");
+        }
+        let payload = json!({"session": "s", "data": "k"});
+        let p = InputRef::deserialize(&payload).unwrap();
+        assert!(matches!(p.data, std::borrow::Cow::Borrowed(_)), "the text is read in place");
+    }
 
     fn engine() -> Arc<Engine> {
         Engine::new(crate::Instance::Test, crate::Store::open_memory().unwrap())

@@ -43,7 +43,7 @@ What the passes got wrong first, and what changed:
 
 ## What the attribution shows
 
-New leads; 1 and 3 are fixed (below), the rest are open. Each is worth an estimate before it is worth a change.
+Six leads. All six are now fixed, 3 and 4 in part ("Fixed since" and "Fixed since, part 2" below).
 
 1. **`settings.set` spends 53 % of its 391 k instructions in `settings::get`**, which it calls
    twice (before, for undo; after, for the event). `subtree` starts every read with
@@ -54,7 +54,7 @@ New leads; 1 and 3 are fixed (below), the rest are open. Each is worth an estima
 2. **`app.status` spends 51 % in `providers::spawn_profile`** (27 % in `Codex::args` alone) and
    19.5 % compiling SQL (`sqlite3_prepare`). It builds every provider's launch profile to report
    status, and somewhere a statement is not cached. The shell calls it on connect and on
-   changes; 436 k instructions.
+   changes; 436 k instructions. **Fixed**: 466 k → 178 k.
 3. **`audit.list` is 53 % allocation and 26 % `serde_json::from_str`.** It parses each stored
    payload into a `Value`, and the engine's `to_value` of the typed result copies that `Value`
    node by node (`AuditRow::serialize` 40 %); 8.8 M instructions per page. Passing the stored
@@ -63,12 +63,16 @@ New leads; 1 and 3 are fixed (below), the rest are open. Each is worth an estima
 4. **`task.list` (4.6 M) and `dashboard.get` (2.0 M) spend 29 % in `task::hydrate`** and 25 %
    / 16 % building `serde_json::Value` maps (`IndexMap::push_entry` is the hottest Relay-side
    self frame). That is typed structs serialized through `Value` instead of directly.
+   **Fixed in part**: 4.63 M → 3.56 M, from reading columns by index and a statement SQLite
+   re-prepared on every call; the `Value` maps stay (see "What is left").
 5. **`session.input` (6.1 k instructions, about 1 µs) spends 11 % in `RandomState::hash_one`**
    (SipHash on the PTY name lookup, `Engine::pty_named`) and 21 % deserializing the payload
    through a `Map`. Small in absolute terms; it is the request a person feels.
+   **Fixed**: 6.06 k → 5.17 k.
 6. **`path.engine.startup` is 30.8 M instructions**, 9.5 % compiling SQL and 31 % in `std`/
    collection code under `Vec::from_iter` (skills and recovery). Measured cold-store startup
-   was the audit's open item; this is where its CPU goes.
+   was the audit's open item; this is where its CPU goes. Read by caller, 62 % was crash
+   recovery copying the environment of every process on the machine. **Fixed**: 30.3 M → 13.0 M.
 
 The `git` ops are mostly `git`: `session.create` is 66 M instructions, 91 % of them in child
 processes, and `file.tree`'s one level is 0.7 M in Relay and 4.7 M in `git status` for the
@@ -115,6 +119,61 @@ its argument, so it copied every row once more. The rows object is now built dir
 
 What is left in `audit.list`: parsing the stored text (35 %), the rows' own small maps with
 their owned keys (24 %), and copying the text out of SQLite (17 %).
+
+## Fixed since, part 2
+
+Leads 2, 4, 5 and 6. Same machine and build, two runs of each, raw rows and the script that
+prints them in `runs/2026-10-14-attribution/fixes-2/`. Two-run spread under 0.5 % on every
+instruction count except startup's, which reads every process on the machine and so moves with
+what else is running.
+
+| scenario | instructions before → after | p50 before → after | allocations before → after |
+|---|---:|---:|---:|
+| `op.app.status` | 466 k → 178 k (−62 %) | 32.5 µs → 17.7 µs | 471 → 292 |
+| `op.provider.list` | 425 k → 138 k (−68 %) | 27.2 µs → 12.3 µs | 401 → 222 |
+| `op.task.list` (board, 40 tasks) | 4.63 M → 3.56 M (−23 %) | 282 µs → 212 µs | 2 428 → 2 268 |
+| `op.task.list.filtered` | 1.49 M → 1.05 M (−30 %) | 92.3 µs → 63.6 µs | 535 → 503 |
+| `op.dashboard.get` | 1.96 M → 1.73 M (−12 %) | 142 µs → 122 µs | 856 → 817 |
+| `path.socket.task_list` (through the socket) | 9.15 M → 8.08 M (−12 %) | 690 µs → 583 µs | 4 999 → 4 839 |
+| `path.engine.startup` | 30.3 M → 13.0 M (−57 %) | 3.1–3.4 ms → 2.0–2.4 ms | 19 005 → 6 436 |
+| `op.session.input` (a keystroke) | 6.06 k → 5.17 k (−15 %) | 0.8 µs → 0.8 µs | 5 → 3 |
+| `path.socket.keystroke` | 49.0 k → 47.1 k (−4 %) | 7.1 µs → 7.2–8.2 µs | 27 → 26 |
+| `op.task.get` (control: one task, unchanged path) | 254 k → 255 k | 18.2 µs → 17.7 µs | 87 → 83 |
+
+A keystroke's wall time is under the timer's resolution here; the instructions are the
+measure. Startup's wall time is noisy, its instructions are not.
+
+- **`providers.rs`** (lead 2): `spawn_profile_of` builds each provider's launch profile once;
+  everything it reads is fixed in the build (`the_kept_spawn_profile_is_the_one_built_now`).
+  The two `query_row`s per provider, compiled on every call, are `prepare_cached`.
+- **`handlers/task.rs`, `handlers/notify.rs`** (lead 4): `TaskCols` finds a statement's columns
+  once; rusqlite finds a column by name by comparing it with every column's name, twenty times a
+  row. And `task.list`'s `LIMIT ? OFFSET ?` became `LIMIT ?+0 OFFSET ?+0`: **SQLite re-prepares a
+  statement whose LIMIT is a bare parameter on every run**, so its `prepare_cached` statement was
+  compiled again each call. Every `LIMIT ?` in the engine is now `?+0` (ten statements: audit,
+  notifications, holds, both mailbox lists, task activity and messages, file trash, purge);
+  `EXPLAIN QUERY PLAN` is the same for each with a literal limit of 2 and of 201.
+  `tests/store.rs` `no_limit_is_a_bare_parameter` pins SQLite's behaviour and keeps a bare one
+  from coming back.
+- **`pty.rs`** (lead 6): crash recovery's `relay_children` reads every process's environment
+  looking for Relay's three variables; it searched owned copies of every variable of every
+  process. It now searches the bytes as read and copies only a match
+  (`relay_child_session_reads_the_environment_as_proc_env_did`).
+- **`engine.rs`** (lead 5): the PTY registries are `BTreeMap`s, which find one of a few dozen
+  short keys in a handful of compares where `HashMap` ran SipHash three times a keystroke; and
+  the input fast path reads its payload borrowing the session name and text (`InputRef`), held
+  to `InputIn`'s answers and error words by `input_ref_answers_as_input_in`. That test caught
+  a difference in the first version: serde's error names the struct.
+
+### What is left
+
+The largest remaining cost on every list is building `serde_json::Value` trees: a handler's
+typed result goes through `to_value` and is then written to the socket from the tree (`task.list`
+25 %, `audit.list` 59 % counting the stored payloads it parses). Writing typed results straight
+to the socket as text would remove both, but it changes the one path every request takes:
+`Response.result` is a `Value` that the socket, the idempotency record, events, the phone door,
+the CLI and the client all read. The calls it would speed up are already well inside the
+100 ms a person notices (board 212 µs, audit page 410 µs in process).
 
 ## Rerun
 

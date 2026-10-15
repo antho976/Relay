@@ -427,3 +427,42 @@ fn v3_import_dry_run_then_real() {
     let r = call(&e, "app.import.v3", json!({"source": src, "project_id": 9}));
     assert_eq!(r.error.unwrap().code, "project.not_found");
 }
+
+/// Why every `LIMIT` in the engine is `?+0` and not `?`: SQLite re-prepares a statement whose
+/// LIMIT is a bare parameter on every run, so `prepare_cached` saved nothing for it, while as an
+/// expression the plan is the same and the statement is kept. If SQLite stops doing that, the
+/// `+0`s can go; until then, no query here may bring a bare one back.
+#[test]
+fn no_limit_is_a_bare_parameter() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE t (id INTEGER PRIMARY KEY)").unwrap();
+    let reprepared = |sql: &str| {
+        let mut stmt = conn.prepare(sql).unwrap();
+        for n in 1..=3 {
+            stmt.query_map([n], |_| Ok(())).unwrap().for_each(drop);
+        }
+        stmt.get_status(rusqlite::StatementStatus::RePrepare)
+    };
+    assert_eq!(reprepared("SELECT id FROM t LIMIT ?"), 3, "SQLite no longer re-prepares a bare LIMIT parameter");
+    assert_eq!(reprepared("SELECT id FROM t LIMIT ?+0"), 0);
+
+    let bare = regex::Regex::new(r"LIMIT \?\d*[^\d+]").unwrap();
+    let mut found = Vec::new();
+    let mut dirs = vec![std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                for (n, line) in text.lines().enumerate() {
+                    if bare.is_match(line) && !line.trim_start().starts_with("//") {
+                        found.push(format!("{}:{}", path.display(), n + 1));
+                    }
+                }
+            }
+        }
+    }
+    assert!(found.is_empty(), "a bare LIMIT parameter: {found:?}");
+}

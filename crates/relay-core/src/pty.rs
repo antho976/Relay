@@ -800,6 +800,10 @@ pub fn proc_env(pid: u32) -> Option<Vec<(String, String)>> {
 /// Every live pid whose environment carries `RELAY_SESSION` for `instance` **and** this
 /// store (`RELAY_STORE`) — Relay's own children (and theirs), regardless of which engine
 /// process spawned them. The store filter keeps a test engine from reaping a real one.
+///
+/// Every process on the machine is read, so each environment is searched as it came, for the
+/// three variables, and nothing is copied out of a process that is not ours: as owned pairs, the
+/// environments of a desktop's few hundred processes were most of engine startup.
 pub fn relay_children(instance: &str, store: &str) -> Vec<(u32, String)> {
     let mut out = Vec::new();
     let Ok(rd) = std::fs::read_dir("/proc") else { return out };
@@ -807,22 +811,44 @@ pub fn relay_children(instance: &str, store: &str) -> Vec<(u32, String)> {
     for e in rd.flatten() {
         let Ok(pid) = e.file_name().to_string_lossy().parse::<u32>() else { continue };
         if pid == me { continue; }
-        let Some(env) = proc_env(pid) else { continue };
-        let inst = env.iter().find(|(k, _)| k == "RELAY_INSTANCE").map(|(_, v)| v.as_str());
-        let st = env.iter().find(|(k, _)| k == "RELAY_STORE").map(|(_, v)| v.as_str());
-        let sess = env.iter().find(|(k, _)| k == "RELAY_SESSION").map(|(_, v)| v.clone());
-        if inst == Some(instance) && st == Some(store) {
-            if let Some(s) = sess {
-                out.push((pid, s));
-            }
+        let Ok(raw) = std::fs::read(format!("/proc/{pid}/environ")) else { continue };
+        if let Some(session) = relay_child_session(&raw, instance, store) {
+            out.push((pid, session));
         }
     }
     out
 }
 
+/// The `RELAY_SESSION` of an `/proc/<pid>/environ` whose `RELAY_INSTANCE` and `RELAY_STORE` are
+/// `instance` and `store`, the first of each name counting, as [`proc_env`] would read them.
+fn relay_child_session(environ: &[u8], instance: &str, store: &str) -> Option<String> {
+    let first = |key: &[u8]| environ.split(|b| *b == 0).find_map(|kv| kv.strip_prefix(key));
+    if first(b"RELAY_INSTANCE=")? != instance.as_bytes() || first(b"RELAY_STORE=")? != store.as_bytes() {
+        return None;
+    }
+    first(b"RELAY_SESSION=").map(|v| String::from_utf8_lossy(v).into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The byte search answers as the owned pairs of [`proc_env`] did: the first of each name,
+    /// exact values, no session without both the instance and the store.
+    #[test]
+    fn relay_child_session_reads_the_environment_as_proc_env_did() {
+        let env = |vars: &[&str]| vars.iter().flat_map(|v| v.bytes().chain([0])).collect::<Vec<u8>>();
+        let ours = env(&["HOME=/h", "RELAY_INSTANCE=default", "RELAY_STORE=/s/store.db", "RELAY_SESSION=spry-kestrel"]);
+        assert_eq!(relay_child_session(&ours, "default", "/s/store.db").as_deref(), Some("spry-kestrel"));
+        assert_eq!(relay_child_session(&ours, "default", "/s/store.db.bak"), None, "a value is matched whole");
+        assert_eq!(relay_child_session(&ours, "other", "/s/store.db"), None);
+        assert_eq!(relay_child_session(&env(&["RELAY_INSTANCE=default", "RELAY_STORE=/s/store.db"]), "default", "/s/store.db"), None);
+        assert_eq!(relay_child_session(&env(&["RELAY_STORE=/s/store.db", "RELAY_SESSION=a"]), "default", "/s/store.db"), None);
+        let twice = env(&["RELAY_INSTANCE=other", "RELAY_INSTANCE=default", "RELAY_STORE=/s/store.db", "RELAY_SESSION=a"]);
+        assert_eq!(relay_child_session(&twice, "default", "/s/store.db"), None, "the first of a name counts");
+        assert_eq!(relay_child_session(&env(&["XRELAY_INSTANCE=default", "RELAY_STORE=/s/store.db", "RELAY_SESSION=a"]), "default", "/s/store.db"), None);
+        assert_eq!(relay_child_session(b"RELAY_INSTANCE=default\0RELAY_STORE=/s/store.db\0RELAY_SESSION=a", "default", "/s/store.db").as_deref(), Some("a"), "no NUL after the last");
+    }
 
     #[test]
     fn catch_up_is_bounded_and_starts_on_a_frame_boundary() {

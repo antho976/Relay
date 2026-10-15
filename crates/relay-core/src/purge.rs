@@ -122,7 +122,7 @@ pub fn run(tx: &Transaction, store_dir: &Path) -> rusqlite::Result<Purged> {
     let n = tx.execute("DELETE FROM notifications WHERE read=1 AND created_at < ?1", [crate::time::days_ago(READ_NOTIFICATION_DAYS)])?
         + tx.execute("DELETE FROM notifications WHERE created_at < ?1", [crate::time::days_ago(NOTIFICATION_DAYS)])?
         + tx.execute(
-            "DELETE FROM notifications WHERE id NOT IN (SELECT id FROM notifications ORDER BY created_at DESC, id DESC LIMIT ?1)",
+            "DELETE FROM notifications WHERE id NOT IN (SELECT id FROM notifications ORDER BY created_at DESC, id DESC LIMIT ?1+0)",
             [MAX_NOTIFICATIONS],
         )?;
     note(n, "old notification(s)");

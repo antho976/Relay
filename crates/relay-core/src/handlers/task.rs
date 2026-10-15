@@ -241,29 +241,58 @@ fn attachment_on(tx: &Transaction, task_id: Id, id: Id, detached: bool) -> Resul
         })
 }
 
+/// Where each column [`task_columns_at`] reads sits in one statement's rows, looked up once.
+/// rusqlite finds a column by name by comparing it with every column's name, ignoring case:
+/// read by name, a row's twenty fields were a sixth of `task.list`.
+pub(crate) struct TaskCols {
+    id: usize, project_id: usize, module_id: usize, module_name: Option<usize>, title: usize, body: usize,
+    changelog: usize, col: usize, position: usize, state: usize, priority: usize, size: usize, kind: usize,
+    parent_id: usize, note_id: usize, created_at: usize, updated_at: usize, deleted_at: usize,
+}
+
+impl TaskCols {
+    pub(crate) fn of(stmt: &rusqlite::Statement) -> rusqlite::Result<Self> {
+        let at = |name: &str| stmt.column_index(name);
+        Ok(Self {
+            id: at("id")?, project_id: at("project_id")?, module_id: at("module_id")?,
+            // `task.list` selects the name with the row; [`hydrate`] looks up the rest by key.
+            // Neither asks whether the module is completed: an archived module still names its
+            // cards (RA-495).
+            module_name: at("module_name").ok(),
+            title: at("title")?, body: at("body")?, changelog: at("changelog")?, col: at("col")?,
+            position: at("position")?, state: at("state")?, priority: at("priority")?, size: at("size")?,
+            kind: at("kind")?, parent_id: at("parent_id")?, note_id: at("note_id")?,
+            created_at: at("created_at")?, updated_at: at("updated_at")?, deleted_at: at("deleted_at")?,
+        })
+    }
+}
+
 /// The task row's own columns, with every list field empty and depth 0: [`hydrate`] fills them.
+/// A caller reading many rows of one statement looks the columns up once, with
+/// [`task_columns_at`].
 pub(crate) fn task_columns(row: &Row) -> rusqlite::Result<Task> {
+    task_columns_at(row, &TaskCols::of(row.as_ref())?)
+}
+
+pub(crate) fn task_columns_at(row: &Row, c: &TaskCols) -> rusqlite::Result<Task> {
     Ok(Task {
-        id: row.get("id")?,
-        project_id: row.get("project_id")?,
-        module_id: row.get("module_id")?,
-        // `task.list` selects the name with the row; [`hydrate`] looks up the rest by key.
-        // Neither asks whether the module is completed: an archived module still names its
-        // cards (RA-495).
-        module_name: match row.as_ref().column_index("module_name") {
-            Ok(index) => row.get(index)?,
-            Err(_) => None,
+        id: row.get(c.id)?,
+        project_id: row.get(c.project_id)?,
+        module_id: row.get(c.module_id)?,
+        module_name: match c.module_name {
+            Some(index) => row.get(index)?,
+            None => None,
         },
-        title: row.get("title")?,
-        body: row.get("body")?,
-        changelog: row.get("changelog")?,
-        column: parse_column(&row.get::<_, String>("col")?),
-        position: row.get("position")?,
-        state: parse_task_state(&row.get::<_, String>("state")?),
-        priority: parse_priority(&row.get::<_, String>("priority")?),
-        size: parse_size(row.get("size")?),
-        task_type: parse_type(&row.get::<_, String>("kind")?),
-        parent_id: row.get("parent_id")?,
+        title: row.get(c.title)?,
+        body: row.get(c.body)?,
+        changelog: row.get(c.changelog)?,
+        column: parse_column(row.get_ref(c.col)?.as_str()?),
+        position: row.get(c.position)?,
+        state: parse_task_state(row.get_ref(c.state)?.as_str()?),
+        priority: parse_priority(row.get_ref(c.priority)?.as_str()?),
+        size: parse_size(row.get(c.size)?),
+        task_type: parse_type(row.get_ref(c.kind)?.as_str()?),
+        parent_id: row.get(c.parent_id)?,
         depth: 0,
         children: Vec::new(),
         rollup: TaskRollup::default(),
@@ -271,13 +300,13 @@ pub(crate) fn task_columns(row: &Row) -> rusqlite::Result<Task> {
         blocked_by: Vec::new(),
         blocks: Vec::new(),
         duplicate_of: None,
-        note_id: row.get("note_id")?,
+        note_id: row.get(c.note_id)?,
         sessions: Vec::new(),
         commits: Vec::new(),
         attachments: Vec::new(),
-        created_at: row.get("created_at")?,
-        updated_at: row.get("updated_at")?,
-        deleted_at: row.get("deleted_at")?,
+        created_at: row.get(c.created_at)?,
+        updated_at: row.get(c.updated_at)?,
+        deleted_at: row.get(c.deleted_at)?,
     })
 }
 
@@ -937,7 +966,7 @@ fn activity_sql() -> &'static str {
              AND (json_extract(payload, '$.task_id') = ?2
                OR (op = 'task.create' AND json_extract(result_summary, '$.id') = ?2)
                OR (op = 'task.dispatch' AND json_extract(result_summary, '$.task.id') = ?2))
-             ORDER BY id DESC LIMIT ?4"
+             ORDER BY id DESC LIMIT ?4+0"
         )
     })
 }
@@ -1052,7 +1081,7 @@ pub fn register(e: &mut Engine) {
             .tx()
             .prepare_cached(
                 "SELECT * FROM messages WHERE project_id = ?1 AND re_task = ?2
-             AND (?3 IS NULL OR id < ?3) ORDER BY id DESC LIMIT ?4",
+             AND (?3 IS NULL OR id < ?3) ORDER BY id DESC LIMIT ?4+0",
             )
             .bus()?;
         let mut messages = stmt
@@ -1153,15 +1182,18 @@ pub fn register(e: &mut Engine) {
         // changelog and roll-up, grew past what a client accepts on one line (RA-027).
         let limit = p.limit.unwrap_or(TASK_PAGE).clamp(1, TASK_PAGE_MAX);
         let offset = p.offset.unwrap_or(0);
-        sql.push_str(" LIMIT ? OFFSET ?");
+        // Not a bare `LIMIT ?`: SQLite re-prepares such a statement on every run, so the cached
+        // statement saved nothing. As an expression the plan is the same and the statement is kept.
+        sql.push_str(" LIMIT ?+0 OFFSET ?+0");
         args.push(Box::new(limit as i64 + 1));
         args.push(Box::new(offset as i64));
         // A dozen filter shapes at most, and the store's statement cache holds 128: the built
         // statement is compiled once per shape, not once per call.
         let mut stmt=ctx.tx().prepare_cached(&sql).bus()?;
+        let cols = TaskCols::of(&stmt).bus()?;
         let mut rows=stmt.query(rusqlite::params_from_iter(args.iter().map(|v| v.as_ref()))).bus()?;
         let mut tasks=Vec::new();
-        while let Some(row)=rows.next().bus()? { tasks.push(task_columns(row).bus()?); }
+        while let Some(row)=rows.next().bus()? { tasks.push(task_columns_at(row, &cols).bus()?); }
         drop(rows);
         let next_offset = (tasks.len() > limit as usize).then_some(offset + limit);
         tasks.truncate(limit as usize);
