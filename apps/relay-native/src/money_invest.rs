@@ -153,7 +153,7 @@ pub(super) fn head(ui: &Rc<Ui>, page: &Page) {
     ));
     rates.set_visible(false);
     keys.append(&rates);
-    let ask = button("", "quiet");
+    let ask = super::pages::bare("quiet");
     ask.set_widget_name("money-invest-ask");
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let mark = crate::icons::image("claude", 14);

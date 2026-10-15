@@ -92,7 +92,26 @@ button.money-chrome { border-radius: 10px; min-width: 32px; min-height: 32px; }
 .money-picker stack, .money-picker box { background: transparent; }
 .money-sheet checkbutton { color: @secondary; }
 .money-sheet-actions { margin-top: 12px; }
+/* A drop-down with nothing chosen says what to choose, in a field's placeholder ink. */
+.money-placeholder { color: @faint; font-size: 13px; }
+/* What Save and add another just saved, above the keys, with its Undo. */
+.money-added { margin-top: 4px; padding: 4px 4px 4px 12px; border: 1px solid @edge; border-radius: 10px; background: @slab_solid; }
+.money-added-text { color: @secondary; font-size: 13px; font-feature-settings: "tnum"; }
 .money-sheet .money-import-account { padding: 4px 0; }
+
+/* Menus and the category chooser (pages::chooser): they float over the page, so they are opaque,
+   in the _solid twins, as the board's menus are. */
+popover.money-menu contents { padding: 6px; border: 1px solid @strong; border-radius: 12px; background: @slab_solid; }
+.money-chooser { min-width: 248px; }
+.money-chooser-list > button.money-menu-item { min-height: 34px; padding: 0 6px; }
+.money-chooser-name { font-size: 13px; color: @ink; }
+.money-chooser-tick { color: @secondary; }
+.money-menu-title { padding: 4px 8px 6px; color: @faint; font-size: 12px; }
+button.money-menu-item { min-height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: @ink; font-weight: 400; }
+button.money-menu-item:hover, button.money-menu-item:focus-visible { background: @wash_solid; }
+button.money-menu-item image { color: @faint; }
+button.money-menu-item.destructive label, button.money-menu-item.destructive image { color: @held_text; }
+menubutton.money-picker > button { padding: 0 10px; }
 
 /* The Undo toast. */
 .money-toast { background: @slab; border: 1px solid @strong; color: @ink; border-radius: 12px; padding: 6px 8px 6px 16px; box-shadow: 0 6px 18px alpha(black, 0.45); font-size: 13px; }

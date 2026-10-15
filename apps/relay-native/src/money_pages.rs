@@ -123,6 +123,114 @@ pub fn badge_sized(icon: &str, color: i64, size: i32) -> gtk::Box {
     tile
 }
 
+/// A key with no label of its own, for a drawn child: `button("")` would leave it named by the
+/// label it no longer shows, so assistive technology read it as nameless. Name it with
+/// `update_property`.
+pub(super) fn bare(class: &str) -> gtk::Button {
+    let key = gtk::Button::new();
+    key.add_css_class(class);
+    key
+}
+
+/// A category as a [`chooser`] lists it.
+pub(super) struct Choice {
+    pub id: i64,
+    pub name: String,
+    pub icon: String,
+    pub color: i64,
+}
+
+/// The categories of `kind` (`EXPENSE` or `INCOME`) among `money.lists`' `categories`, archived
+/// ones left out unless one is `keep` (an entry's own).
+pub(super) fn choices(categories: &[Value], kind: &str, keep: Option<i64>) -> Vec<Choice> {
+    categories
+        .iter()
+        .filter(|c| text(c, "kind") == kind && (c["archived"] != true || c["id"].as_i64() == keep))
+        .map(|c| Choice { id: n(c, "id"), name: text(c, "name").to_string(), icon: text(c, "icon").to_string(), color: n(c, "color") })
+        .collect()
+}
+
+/// A list of categories to pick one from, as a popover's content: a search field over badge rows,
+/// `current` ticked. Typing narrows the rows, Enter takes the first one left, Down moves into them;
+/// `pick` gets the chosen id.
+pub(super) fn chooser(choices: &[Choice], current: Option<i64>, pick: Rc<dyn Fn(i64)>) -> gtk::Box {
+    let block = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    block.add_css_class("money-chooser");
+    let search = gtk::SearchEntry::new();
+    search.set_placeholder_text(Some("Find a category"));
+    search.update_property(&[gtk::accessible::Property::Label("Find a category")]);
+    // It takes the focus as the popover opens: typing finds at once.
+    search.connect_map(|s| {
+        s.grab_focus();
+    });
+    block.append(&search);
+    // Each row is a key, so it can be clicked, focused and activated by keyboard and by
+    // assistive technology alike; arrows move between them.
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    list.add_css_class("money-chooser-list");
+    let mut keys: Vec<(gtk::Button, String)> = Vec::with_capacity(choices.len());
+    for c in choices {
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        line.append(&badge_sized(&c.icon, c.color, 24));
+        let name = label(&c.name, "money-chooser-name");
+        name.set_hexpand(true);
+        name.set_xalign(0.0);
+        name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        line.append(&name);
+        if Some(c.id) == current {
+            let tick = crate::icons::image("check", 14);
+            tick.add_css_class("money-chooser-tick");
+            line.append(&tick);
+        }
+        let key = bare("money-menu-item");
+        key.set_child(Some(&line));
+        key.update_property(&[gtk::accessible::Property::Label(&c.name)]);
+        let (took, id) = (pick.clone(), c.id);
+        key.connect_clicked(move |_| took(id));
+        list.append(&key);
+        keys.push((key, c.name.to_lowercase()));
+    }
+    if choices.is_empty() {
+        list.append(&label("No categories of this kind yet", "money-muted"));
+    }
+    let keys = Rc::new(keys);
+    let first_shown = {
+        let keys = keys.clone();
+        move || keys.iter().map(|(key, _)| key).find(|key| key.is_visible()).cloned()
+    };
+    let shown = keys.clone();
+    search.connect_search_changed(move |search| {
+        let wanted = search.text().trim().to_lowercase();
+        for (key, name) in shown.iter() {
+            key.set_visible(wanted.is_empty() || name.contains(&wanted));
+        }
+    });
+    let first = first_shown.clone();
+    search.connect_activate(move |_| {
+        if let Some(key) = first() {
+            key.emit_clicked();
+        }
+    });
+    let down = gtk::EventControllerKey::new();
+    down.connect_key_pressed(move |_, key, _, _| {
+        if key == gtk::gdk::Key::Down {
+            if let Some(row) = first_shown() {
+                row.grab_focus();
+                return glib::Propagation::Stop;
+            }
+        }
+        glib::Propagation::Proceed
+    });
+    search.add_controller(down);
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    scroll.set_propagate_natural_height(true);
+    scroll.set_max_content_height(320);
+    scroll.set_child(Some(&list));
+    block.append(&scroll);
+    block
+}
+
 /// What a failed read says on the page. An engine without the ledger yet says so plainly.
 pub fn unavailable(error: &Error) -> String {
     match error {
@@ -408,7 +516,7 @@ pub(super) fn card_asking(parent: &gtk::Box, name: &str, action: Option<(&str, A
 
 /// A quiet key that opens a thread asking `question`: the bridge from a page to the agent.
 fn ask_key(ui: &Rc<Ui>, question: &str) -> gtk::Button {
-    let key = button("", "money-text-action");
+    let key = bare("money-text-action");
     key.add_css_class("money-ask");
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 5);
     let mark = crate::icons::image("claude", 13);
@@ -678,12 +786,13 @@ pub(super) fn row_key(line: &gtk::Box, tooltip: &str, run: Action) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     row.add_css_class("tally-row");
     row.add_css_class("tally-entry");
-    let key = button("", "money-row-key");
+    let key = bare("money-row-key");
     key.add_css_class("tally-line-key");
     key.set_hexpand(true);
     line.remove_css_class("tally-row");
     key.set_child(Some(line));
     key.set_tooltip_text(Some(tooltip));
+    key.update_property(&[gtk::accessible::Property::Label(tooltip)]);
     key.connect_clicked(move |_| run());
     row.append(&key);
     row
@@ -756,7 +865,7 @@ fn tx_row(ui: &Rc<Ui>, tx: &Value, deletable: bool, dated: bool) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     row.add_css_class("tally-row");
     row.add_css_class("tally-entry");
-    let main = button("", "money-row-key");
+    let main = bare("money-row-key");
     main.set_hexpand(true);
     let inner = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     let kind = text(tx, "type");
