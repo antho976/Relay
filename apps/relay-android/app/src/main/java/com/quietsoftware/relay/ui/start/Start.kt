@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,6 +42,10 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -77,6 +82,7 @@ import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 
 /** Whether this process has played the opening: coming back to the start screen shows it settled. */
@@ -87,8 +93,9 @@ private var opened = false
  * per space with one live line each. It has its own colours, as on the PC, and the PC's opening
  * (`Mark`): the lanes draw in, the signal breaks away and sends a wave across the field, the
  * wordmark spells in, then the words and the cards one after the other. After that the signal
- * beats and sends a fainter wave every few seconds. Everything moving reads the timeline in the
- * draw phase, so a frame of it redraws without recomposing the screen.
+ * beats and sends a fainter wave every few seconds, and the field answers a finger. Everything
+ * moving reads the timeline in the draw phase, so a frame of it redraws without recomposing the
+ * screen.
  */
 @Composable
 fun StartScreen(nav: Nav) {
@@ -120,6 +127,51 @@ fun StartScreen(nav: Nav) {
         if (pulse.value < 1f && into < 420f) sin(PI.toFloat() * into / 420f) else 0f
     }
     var markAt by remember { mutableStateOf(Rect.Zero) }
+    // The field answers a finger (or a mouse): the dots under it light and lean away, and a tap
+    // sends a ripple out from where it landed. In the field's pixels.
+    val scope = rememberCoroutineScope()
+    var touchAt by remember { mutableStateOf(Offset.Zero) }
+    val touch = remember { Animatable(0f) }
+    var rippleAt by remember { mutableStateOf(Offset.Zero) }
+    val ripple = remember { Animatable(1f) }
+    val answer = if (!moving) Modifier else Modifier.pointerInput(Unit) {
+        val slop = viewConfiguration.touchSlop
+        awaitPointerEventScope {
+            var down: Offset? = null
+            var downAt = 0L
+            while (true) {
+                // Watched on the way in and never consumed: scrolling and the cards work as before.
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull() ?: continue
+                when (event.type) {
+                    PointerEventType.Press -> {
+                        down = change.position
+                        downAt = change.uptimeMillis
+                        touchAt = change.position
+                        scope.launch { touch.animateTo(1f, tween(180)) }
+                    }
+                    PointerEventType.Move, PointerEventType.Enter -> {
+                        touchAt = change.position
+                        if (touch.targetValue < 1f) scope.launch { touch.animateTo(1f, tween(180)) }
+                    }
+                    PointerEventType.Release -> {
+                        val from = down
+                        if (from != null && (change.position - from).getDistance() < slop && change.uptimeMillis - downAt < 350) {
+                            rippleAt = change.position
+                            scope.launch {
+                                ripple.snapTo(0f)
+                                ripple.animateTo(1f, tween(RIPPLE_MS, easing = LinearEasing))
+                            }
+                        }
+                        down = null
+                        // A finger lifts away; a mouse is still there.
+                        if (change.type == PointerType.Touch) scope.launch { touch.animateTo(0f, tween(600)) }
+                    }
+                    PointerEventType.Exit -> scope.launch { touch.animateTo(0f, tween(600)) }
+                }
+            }
+        }
+    }
 
     val devLine = (dashboard.result as? JsonObject)?.let(::devReading)
         ?: s.sessions.count { it.state in setOf("running", "idle", "blocked") }.let { if (it == 0) null else "$it agents running" }
@@ -127,8 +179,8 @@ fun StartScreen(nav: Nav) {
     val first = s.prefs.name.trim().substringBefore(' ')
     val greeting = greetingFor(LocalTime.now().hour) + if (first.isNotEmpty()) ", $first" else ""
 
-    Box(Modifier.fillMaxSize().background(Palette.START_GROUND)) {
-        DotField(Modifier.fillMaxSize(), t, pulsing) { markAt }
+    Box(Modifier.fillMaxSize().background(Palette.START_GROUND).then(answer)) {
+        DotField(Modifier.fillMaxSize(), t, pulsing, { touchAt to touch.value }, { rippleAt to ripple.value }) { markAt }
         Column(
             Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -193,9 +245,11 @@ private fun SpaceCard(modifier: Modifier, glyph: String, title: String, descript
 
 /** The field of dots behind the lockup (start.rs `draw_field`, its dots a little quieter on a
  *  phone): a signal glow around the mark and a grid of dots that the opening uncovers from the
- *  signal outward, lit lime where a wave passes. `mark` is the mark's bounds in the root. */
+ *  signal outward, lit lime where a wave passes. Under a finger the dots light and lean away
+ *  from it (`touch`: where, how present), and a tap's ripple runs out from where it landed
+ *  (`ripple`: where, how far, 1 none). `mark` is the mark's bounds in the root. */
 @Composable
-private fun DotField(modifier: Modifier, t: () -> Float, pulse: () -> Float, mark: () -> Rect) {
+private fun DotField(modifier: Modifier, t: () -> Float, pulse: () -> Float, touch: () -> Pair<Offset, Float>, ripple: () -> Pair<Offset, Float>, mark: () -> Rect) {
     var origin by remember { mutableStateOf(Offset.Zero) }
     Canvas(modifier.onGloballyPositioned { origin = it.positionInRoot() }) {
         val m = mark()
@@ -204,22 +258,30 @@ private fun DotField(modifier: Modifier, t: () -> Float, pulse: () -> Float, mar
         } else {
             Offset(size.width / 2, size.height * .15f).let { it to it }
         }
-        drawField(t(), pulse(), signal, glow)
+        drawField(t(), pulse(), signal, glow, touch(), ripple())
     }
 }
 
-private fun DrawScope.drawField(t: Float, pulse: Float, signal: Offset, glow: Offset) {
-    // Each wave: how far out it is (0..1) and how strong. The landing's is stronger than the pulses.
+/** One wave over the field: where it starts, how far out it is (0..1), how strong, how far it goes. */
+private class Wave(val from: Offset, val progress: Float, val strength: Float, val far: Float)
+
+private fun DrawScope.farthest(p: Offset) =
+    listOf(Offset.Zero, Offset(size.width, 0f), Offset(0f, size.height), Offset(size.width, size.height))
+        .maxOf { (it - p).getDistance() }.coerceAtLeast(1f)
+
+private fun DrawScope.drawField(t: Float, pulse: Float, signal: Offset, glow: Offset, touch: Pair<Offset, Float>, ripple: Pair<Offset, Float>) {
+    val far = farthest(signal)
+    // The landing's wave is stronger than the pulses after it; a tap's ripple starts where it landed.
     val landing = ((t - Mark.PING.from) / (Mark.PING.to - Mark.PING.from)).coerceIn(0f, 1f)
     val waves = buildList {
-        if (landing > 0f && landing < 1f) add(landing to .9f)
-        if (pulse < 1f) add(pulse to .55f)
+        if (landing > 0f && landing < 1f) add(Wave(signal, landing, .9f, far))
+        if (pulse < 1f) add(Wave(signal, pulse, .55f, far))
+        if (ripple.second < 1f) add(Wave(ripple.first, ripple.second, .7f, farthest(ripple.first)))
     }
     val lit = Mark.phase(t, Mark.WAVE)
-    val far = listOf(Offset.Zero, Offset(size.width, 0f), Offset(0f, size.height), Offset(size.width, size.height))
-        .maxOf { (it - signal).getDistance() }.coerceAtLeast(1f)
+    val (touchAt, present) = touch
 
-    val strongest = waves.maxOfOrNull { (1f - it.first) * it.second } ?: 0f
+    val strongest = waves.filter { it.from == signal }.maxOfOrNull { (1f - it.progress) * it.strength } ?: 0f
     val glowAlpha = .085f * lit + .03f * strongest
     val reach = 230.dp.toPx()
     drawCircle(
@@ -227,6 +289,11 @@ private fun DrawScope.drawField(t: Float, pulse: Float, signal: Offset, glow: Of
         reach,
         glow,
     )
+    val touchReach = 110.dp.toPx()
+    if (present > .01f) {
+        drawCircle(Brush.radialGradient(listOf(Palette.SIGNAL.copy(alpha = .07f * present), Color.Transparent), touchAt, touchReach * 1.6f), touchReach * 1.6f, touchAt)
+    }
+    val push = 11.dp.toPx()
 
     val step = 26.dp.toPx()
     val dot = 1.dp.toPx()
@@ -240,25 +307,42 @@ private fun DrawScope.drawField(t: Float, pulse: Float, signal: Offset, glow: Of
         while (x < size.width) {
             val d = hypot(x - signal.x, y - signal.y)
             val fade = max(0f, 1f - (d / far).pow(1.15f))
-            val a = BASE_DOT * ((front - d) / band).coerceIn(0f, 1f) * fade
-            if (a > .004f) drawRect(Color.White.copy(alpha = a), Offset(x - dot, y - dot), Size(2 * dot, 2 * dot))
+            val shown = ((front - d) / band).coerceIn(0f, 1f)
+            // The finger: lime under it, and each dot leaning away along the line from it.
+            var px = x
+            var py = y
+            var near = 0f
+            if (present > .01f) {
+                val vx = x - touchAt.x
+                val vy = y - touchAt.y
+                val dp = hypot(vx, vy)
+                near = present * exp(-(dp / touchReach).pow(2))
+                if (dp > .5f) {
+                    px += vx / dp * push * near
+                    py += vy / dp * push * near
+                }
+            }
+            val a = BASE_DOT * shown * max(fade, near)
+            if (a > .004f) drawRect(Color.White.copy(alpha = a), Offset(px - dot, py - dot), Size(2 * dot, 2 * dot))
             var heat = 0f
-            for ((progress, strength) in waves) {
-                val at = progress * far * .85f
-                heat = max(heat, strength * (1f - progress) * exp(-((d - at) / spread).pow(2)))
+            for (wave in waves) {
+                val dw = hypot(x - wave.from.x, y - wave.from.y)
+                val at = wave.progress * wave.far * .85f
+                heat = max(heat, wave.strength * (1f - wave.progress) * exp(-((dw - at) / spread).pow(2)))
             }
             heat *= .35f + .65f * fade
-            if (heat > .02f) drawRect(Palette.SIGNAL.copy(alpha = .8f * min(heat, 1f)), Offset(x - hot, y - hot), Size(2 * hot, 2 * hot))
+            heat = max(heat, near * max(shown, .3f))
+            if (heat > .02f) drawRect(Palette.SIGNAL.copy(alpha = .8f * min(heat, 1f)), Offset(px - hot, py - hot), Size(2 * hot, 2 * hot))
             x += step
         }
         y += step
     }
-    // Each wave starts as a ring around the signal.
-    for ((progress, strength) in waves) {
-        val p = min(progress * 2.2f, 1f)
+    // Each wave starts as a ring around where it began.
+    for (wave in waves) {
+        val p = min(wave.progress * 2.2f, 1f)
         if (p >= 1f) continue
         val eased = 1f - (1f - p).pow(3)
-        drawCircle(Palette.SIGNAL.copy(alpha = .6f * (1f - eased) * strength), 6.dp.toPx() + 40.dp.toPx() * eased, signal, style = Stroke(1.5.dp.toPx()))
+        drawCircle(Palette.SIGNAL.copy(alpha = .6f * (1f - eased) * wave.strength), 6.dp.toPx() + 40.dp.toPx() * eased, wave.from, style = Stroke(1.5.dp.toPx()))
     }
 }
 
@@ -291,6 +375,7 @@ private fun animates(context: Context) =
 private const val PULSE_EVERY_MS = 4_800
 private const val PULSE_MS = 2_600
 private const val BASE_DOT = .08f
+private const val RIPPLE_MS = 1_800
 
 private fun greetingFor(hour: Int) = when (hour) {
     in 5..11 -> "Good morning"

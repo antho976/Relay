@@ -2,6 +2,8 @@
 """Register this native checkout's launcher and icon for the current user."""
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 
 root = Path(__file__).resolve().parents[1]
@@ -33,7 +35,21 @@ assets = {
     data / "icons/hicolor/scalable/apps/com.quietsoftware.Relay4.svg":
         (root / "apps/relay-native/resources/com.quietsoftware.Relay4.svg").read_bytes(),
 }
+changed = False
 for target, content in assets.items():
     target.parent.mkdir(parents=True, exist_ok=True)
     if not target.exists() or target.read_bytes() != content:
-        target.write_bytes(content)
+        # Written beside and renamed over, so the directory's mtime moves: icon loaders (Plasma's
+        # task manager among them) only notice a theme change by its directories, and kept
+        # showing an icon overwritten in place.
+        staging = target.with_name(f".{target.name}.new")
+        staging.write_bytes(content)
+        staging.replace(target)
+        changed = True
+if changed:
+    os.utime(data / "icons/hicolor")
+    # KDE's service cache, where it has one; elsewhere the desktop picks the change up itself.
+    for rebuild in ("kbuildsycoca6", "kbuildsycoca5"):
+        if shutil.which(rebuild):
+            subprocess.run([rebuild], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60, check=False)
+            break
