@@ -722,7 +722,7 @@ fn show_source(v: &View) {
     }
     v.tally_tabs.set_visible(source == "tally");
     v.arbiter_tabs.set_visible(source == "arbiter");
-    v.avex_tabs.set_visible(source == "avex");
+    v.avex_tabs.set_visible(source == "avex" && super::avex::PANEL_TABS.len() > 1);
     if source == "arbiter" {
         v.limits.set_text("Proposes, you approve");
         v.limits.set_tooltip_text(Some("It reads, backtests and proposes. Orders follow each strategy's mode, always within its limits, and only you change those."));
@@ -1194,10 +1194,16 @@ pub(crate) fn ask(ui: &Rc<Ui>, text: &str) {
 
 /// Put `text` in the open thread's message box, focused with the cursor at its end, without
 /// sending it: a question from the panel the person finishes or sends. What they had written
-/// stays, the draft on a line after it. With no thread open it is asked in a new one ([`ask`]).
+/// stays, the draft on a line after it. With no thread open the words wait in a new thread's
+/// message box, still not sent: a draft such as "About Legs A on Thu 8 Oct: " is unfinished.
 pub(crate) fn draft(ui: &Rc<Ui>, text: &str) {
     let Some(v) = view().filter(|_| current().is_some()) else {
-        ask(ui, text);
+        new_thread(ui);
+        if let Some(v) = view() {
+            let buffer = v.input.buffer();
+            buffer.set_text(text);
+            buffer.place_cursor(&buffer.end_iter());
+        }
         return;
     };
     if *ui.page.borrow() != PAGE {

@@ -212,7 +212,7 @@ They also have Avex (gym.*), their gym app on the phone. Avex has no internet pe
 holds a read-only copy of its training history from the last export the person imported: anything \
 logged since is not here. Read gym.summary first. When `imported` is absent, nothing has been \
 imported yet: tell them to export it in Avex (Settings → Export → Training history, JSON), copy \
-avex_export.json to this computer, and import it on the Avex page's Data tab. When `exported_at` is \
+avex_export.json to this computer, and import it on the Avex page. When `exported_at` is \
 more than a few days before today, say how old the copy is before answering about recent training. \
 Weights and volumes are in `unit` (kg or lb). gym.lifts and gym.lift.get give each lift's best set \
 and history (for the heaviest set or the best of anything, read gym.lifts, not gym.summary's few records), gym.sessions and gym.session.get the workouts and their sets, gym.cardio the cardio; \

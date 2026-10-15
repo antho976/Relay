@@ -5920,7 +5920,7 @@
       }
     },
     "gym.summary": {
-      "summary": "The Avex overview: when the history was exported, totals, this week and the twelve before, the streak, recent workouts, records, the lifts done most and open goals",
+      "summary": "The Avex overview: when the history was exported, totals, this week and the twelve before, the streak, recent workouts, records, the lifts done most and open goals with each lift goal's best",
       "kind": "query",
       "audit": "never",
       "undo": "none",
@@ -5931,7 +5931,7 @@
       "since": "1.0",
       "phase": 12,
       "payload": {
-        "$ref": "#/$defs/Empty"
+        "$ref": "#/$defs/GymSummaryIn"
       },
       "result": {
         "$ref": "#/$defs/GymSummary"
@@ -5956,7 +5956,7 @@
       }
     },
     "gym.session.get": {
-      "summary": "One workout: every exercise and set, with each set's estimated one-rep max, and the journal",
+      "summary": "One workout: every exercise and set, with each set's estimated one-rep max and each lift's last time before, the journal, and the workouts either side",
       "kind": "query",
       "audit": "never",
       "undo": "none",
@@ -23146,6 +23146,19 @@
         "approve"
       ]
     },
+    "GymSummaryIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "today": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Read as if this day (`YYYY-MM-DD`) were today: the weeks, the streak and each lift's four\nweeks count back from it. Give the export's day to see the copy's last week. Today on the\nPC when absent."
+        }
+      }
+    },
     "GymSummary": {
       "type": "object",
       "properties": {
@@ -23276,7 +23289,14 @@
         "sessions": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Tracked workouts: what every total counts."
+        },
+        "untracked": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Workouts the person excluded in Avex: listed, and counted in nothing here."
         },
         "sets": {
           "type": "integer",
@@ -23310,6 +23330,7 @@
       },
       "required": [
         "sessions",
+        "untracked",
         "sets",
         "volume",
         "cardio",
@@ -23497,6 +23518,14 @@
           ],
           "description": "The best set ever, by estimated one-rep max."
         },
+        "best_reps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "For a lift done without weight (pull-ups, dips), the most reps in one set; absent when it\nhas a `best`."
+        },
         "recent_e1rm": {
           "type": [
             "number",
@@ -23525,7 +23554,8 @@
       "type": "object",
       "properties": {
         "kind": {
-          "type": "string"
+          "type": "string",
+          "description": "Avex's kind: `lift_1rm` (an estimated one-rep max on a lift), `consistency`, …"
         },
         "target_key": {
           "type": "string",
@@ -23537,7 +23567,7 @@
             "null"
           ],
           "format": "double",
-          "description": "A `lift_target`'s weight is in the person's unit like every other weight; any other\nkind's figure is as Avex stores it."
+          "description": "A lift's or a body weight's target is in the person's unit like every other weight; any\nother kind's figure is as Avex stores it."
         },
         "created_day": {
           "type": "string"
@@ -23553,6 +23583,17 @@
         },
         "note": {
           "type": "string"
+        },
+        "best": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GymRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For a lift goal, that lift's best set ever by estimated one-rep max: its `e1rm` against\n`target_value` is how close the goal is. Absent when the lift has no working sets."
         }
       },
       "required": [
@@ -23662,6 +23703,21 @@
           "items": {
             "$ref": "#/$defs/GymExercise"
           }
+        },
+        "older_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "The workout just before this one and the one just after, as gym.sessions lists them\n(untracked ones too); absent at either end."
+        },
+        "newer_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
         }
       },
       "required": [
@@ -23712,6 +23768,17 @@
           "items": {
             "$ref": "#/$defs/GymSet"
           }
+        },
+        "previous": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GymLiftPoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "This lift the last time before, in a tracked workout, as gym.lift.get's history gives it;\nabsent the first time."
         }
       },
       "required": [
@@ -23788,82 +23855,6 @@
         "assisted"
       ]
     },
-    "GymLiftsIn": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "query": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Only lifts whose name contains this."
-        }
-      }
-    },
-    "GymLiftsOut": {
-      "type": "object",
-      "properties": {
-        "unit": {
-          "type": "string"
-        },
-        "lifts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/GymLiftRow"
-          }
-        }
-      },
-      "required": [
-        "unit",
-        "lifts"
-      ]
-    },
-    "GymLiftIn": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "name": {
-          "type": "string",
-          "description": "The lift's name as Avex shows it; a unique part of it is enough."
-        },
-        "limit": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0,
-          "description": "At most this many sessions, newest first; 100 by default."
-        }
-      },
-      "required": [
-        "name"
-      ]
-    },
-    "GymLift": {
-      "type": "object",
-      "properties": {
-        "row": {
-          "$ref": "#/$defs/GymLiftRow"
-        },
-        "unit": {
-          "type": "string"
-        },
-        "history": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/GymLiftPoint"
-          },
-          "description": "Newest first."
-        }
-      },
-      "required": [
-        "row",
-        "unit",
-        "history"
-      ]
-    },
     "GymLiftPoint": {
       "type": "object",
       "properties": {
@@ -23913,6 +23904,96 @@
         "sets",
         "volume",
         "record"
+      ]
+    },
+    "GymLiftsIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only lifts whose name contains this."
+        },
+        "today": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Count each lift's four weeks back from this day (`YYYY-MM-DD`), as gym.summary's `today`."
+        }
+      }
+    },
+    "GymLiftsOut": {
+      "type": "object",
+      "properties": {
+        "unit": {
+          "type": "string"
+        },
+        "lifts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GymLiftRow"
+          }
+        }
+      },
+      "required": [
+        "unit",
+        "lifts"
+      ]
+    },
+    "GymLiftIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The lift's name as Avex shows it; a unique part of it is enough."
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "At most this many sessions, newest first; 100 by default."
+        },
+        "today": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Count the lift's four weeks back from this day (`YYYY-MM-DD`), as gym.summary's `today`."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "GymLift": {
+      "type": "object",
+      "properties": {
+        "row": {
+          "$ref": "#/$defs/GymLiftRow"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GymLiftPoint"
+          },
+          "description": "Newest first."
+        }
+      },
+      "required": [
+        "row",
+        "unit",
+        "history"
       ]
     },
     "GymCardioIn": {

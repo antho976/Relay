@@ -8,8 +8,14 @@ use crate::registry::{Actors, OpMeta, Scope};
 use crate::{op, Empty};
 use relay_gym::views::{CardioRow, LiftDetail, LiftRow, Series, SeriesQuery, SessionDetail, SessionRow, Summary};
 
-op!(SummaryOp, "gym.summary", Empty => Summary,
-    OpMeta::query(Scope::Global, 12, "The Avex overview: when the history was exported, totals, this week and the twelve before, the streak, recent workouts, records, the lifts done most and open goals"));
+payload!(#[schemars(rename = "GymSummaryIn")] SummaryIn {
+    /// Read as if this day (`YYYY-MM-DD`) were today: the weeks, the streak and each lift's four
+    /// weeks count back from it. Give the export's day to see the copy's last week. Today on the
+    /// PC when absent.
+    pub today: Option<String>,
+});
+op!(SummaryOp, "gym.summary", SummaryIn => Summary,
+    OpMeta::query(Scope::Global, 12, "The Avex overview: when the history was exported, totals, this week and the twelve before, the streak, recent workouts, records, the lifts done most and open goals with each lift goal's best"));
 
 payload!(#[schemars(rename = "GymSessionsIn")] SessionsIn {
     /// Skip this many, newest first.
@@ -30,11 +36,13 @@ payload!(#[schemars(rename = "GymIdIn")] IdIn {
     /// The session's id, as the lists give it.
     pub id: i64,
 });
-op!(SessionGet, "gym.session.get", IdIn => SessionDetail, OpMeta::query(Scope::Global, 12, "One workout: every exercise and set, with each set's estimated one-rep max, and the journal"));
+op!(SessionGet, "gym.session.get", IdIn => SessionDetail, OpMeta::query(Scope::Global, 12, "One workout: every exercise and set, with each set's estimated one-rep max and each lift's last time before, the journal, and the workouts either side"));
 
 payload!(#[schemars(rename = "GymLiftsIn")] LiftsIn {
     /// Only lifts whose name contains this.
     pub query: Option<String>,
+    /// Count each lift's four weeks back from this day (`YYYY-MM-DD`), as gym.summary's `today`.
+    pub today: Option<String>,
 });
 result!(#[schemars(rename = "GymLiftsOut")] LiftsOut { pub unit: String, pub lifts: Vec<LiftRow> });
 op!(Lifts, "gym.lifts", LiftsIn => LiftsOut, OpMeta::query(Scope::Global, 12, "Every lift, done most first: how often, its best set, and its last four weeks beside the four before"));
@@ -44,6 +52,8 @@ payload!(#[schemars(rename = "GymLiftIn")] LiftIn {
     pub name: String,
     /// At most this many sessions, newest first; 100 by default.
     pub limit: Option<u32>,
+    /// Count the lift's four weeks back from this day (`YYYY-MM-DD`), as gym.summary's `today`.
+    pub today: Option<String>,
 });
 op!(LiftGet, "gym.lift.get", LiftIn => LiftDetail, OpMeta::query(Scope::Global, 12, "One lift's history: each session's heaviest set, estimated one-rep max, sets and volume, records marked"));
 
