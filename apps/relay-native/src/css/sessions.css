@@ -119,3 +119,7 @@ popover.agent-settings button.agent-menu-confirm-go:hover { background: shade(@h
 .terminal-plate.starting .umd .lamp, .lamp.starting { background: @waiting; border-color: @waiting; }
 .terminal-plate.starting .session-state, .terminal-plate.starting .slate-state { color: @waiting; }
 .session-slate spinner { min-width: 18px; min-height: 18px; color: @secondary; }
+
+/* A pane's checkout behind the freshest base: the commits a rebase would bring in. */
+.terminal-plate .umd .session-behind { color: @waiting; }
+.terminal-plate .umd .session-behind label { font-family: 'Fira Mono', monospace; font-size: 11px; }

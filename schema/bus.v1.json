@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 310,
+  "op_count": 311,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -2713,6 +2713,24 @@
       },
       "result": {
         "$ref": "#/$defs/WorktreeDiskOut"
+      }
+    },
+    "worktree.drift": {
+      "summary": "How far each worktree is behind the freshest base, from cached refs (git.fetch refreshes them)",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 3,
+      "payload": {
+        "$ref": "#/$defs/GitProjectIn"
+      },
+      "result": {
+        "$ref": "#/$defs/WorktreeDriftOut"
       }
     },
     "git.status": {
@@ -13318,6 +13336,60 @@
       },
       "required": [
         "worktrees"
+      ]
+    },
+    "WorktreeDriftOut": {
+      "type": "object",
+      "properties": {
+        "base": {
+          "type": "string",
+          "description": "What the counts are against: the base's remote-tracking branch (`origin/main`) or the local\nbase, whichever is further ahead; the remote one when they have diverged."
+        },
+        "head": {
+          "type": "string"
+        },
+        "worktrees": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorktreeDriftRow"
+          }
+        }
+      },
+      "required": [
+        "base",
+        "head",
+        "worktrees"
+      ]
+    },
+    "WorktreeDriftRow": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "behind": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "Commits on `base` this checkout's HEAD does not have: what a rebase onto it would bring in."
+        },
+        "ahead": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "Commits on this checkout's HEAD that `base` does not have."
+        }
+      },
+      "required": [
+        "path",
+        "branch"
       ]
     },
     "GitWtIn": {
