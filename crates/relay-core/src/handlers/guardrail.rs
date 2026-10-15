@@ -326,7 +326,8 @@ pub fn register(engine: &mut Engine) {
             sql.push_str(" AND state = 'open'");
         }
         // A page, newest first: every client fetches this whole, on a socket that caps a line.
-        sql.push_str(" ORDER BY id DESC LIMIT ?");
+        // `?+0`: SQLite re-prepares a statement whose LIMIT is a bare parameter on every run.
+        sql.push_str(" ORDER BY id DESC LIMIT ?+0");
         args.push(Box::new(payload.limit.unwrap_or(HOLDS_PAGE).clamp(1, HOLDS_PAGE_MAX)));
         let mut stmt = ctx.tx().prepare_cached(&sql).bus()?;
         let mut holds = stmt

@@ -220,6 +220,15 @@ pub fn driver(provider: Provider) -> &'static dyn Driver {
     }
 }
 
+/// [`spawn_profile`] for `provider`, built once. Everything it reads is fixed in the build — a
+/// placeholder session, the inline settings, the role texts — and `app.status`, which the shell
+/// reads on connect and after changes, spent half its instructions rebuilding both providers'.
+fn spawn_profile_of(provider: Provider) -> Value {
+    static PROFILES: std::sync::LazyLock<[Value; 2]> =
+        std::sync::LazyLock::new(|| [spawn_profile(driver(Provider::Claude)), spawn_profile(driver(Provider::Codex))]);
+    PROFILES[match provider { Provider::Claude => 0, Provider::Codex => 1 }].clone()
+}
+
 /// `provider.list`'s `spawn_profile`: the command lines [`Driver::args`] builds, for a
 /// placeholder session that sets every option, so it cannot drift from what is run (RA-617).
 /// An argument too long to read (inline settings, role instructions) is shown by its name.
@@ -350,7 +359,8 @@ pub fn validate_options(provider: Provider, model: Option<&str>, effort: Option<
 
 fn configured_path(conn: &Connection, provider: Provider) -> Option<PathBuf> {
     let key = format!("providers.{}.path", driver(provider).binary());
-    let configured: Option<String> = conn.query_row("SELECT value FROM settings WHERE path=?1", [key], |row| row.get(0)).optional().ok().flatten();
+    let configured: Option<String> = conn.prepare_cached("SELECT value FROM settings WHERE path=?1").ok()?
+        .query_row([key], |row| row.get(0)).optional().ok().flatten();
     configured.and_then(|raw| serde_json::from_str::<Option<String>>(&raw).ok().flatten()).map(PathBuf::from)
 }
 
@@ -379,11 +389,12 @@ pub fn list(conn: &Connection) -> Result<Vec<ProviderInfo>, BusError> {
     [Provider::Claude, Provider::Codex].into_iter().map(|provider| {
         let drv = driver(provider);
         let resolved = executable(conn, provider).ok();
-        let cached = conn.query_row("SELECT * FROM provider_cache WHERE provider=?1", [drv.binary()], cache_row).optional().bus()?;
+        let cached = conn.prepare_cached("SELECT * FROM provider_cache WHERE provider=?1").bus()?
+            .query_row([drv.binary()], cache_row).optional().bus()?;
         let (path, version, signed_in_as, last_seen_version) = cached.unwrap_or_default();
         let path = resolved.as_ref().map(|p| p.display().to_string()).or(path);
         // Derived, not the cached copy: what this build runs, not what the last refresh's did.
-        Ok(ProviderInfo { provider, installed: resolved.is_some(), path, version, signed_in_as, last_seen_version, spawn_profile: spawn_profile(drv), guarded: drv.guarded() })
+        Ok(ProviderInfo { provider, installed: resolved.is_some(), path, version, signed_in_as, last_seen_version, spawn_profile: spawn_profile_of(provider), guarded: drv.guarded() })
     }).collect()
 }
 
@@ -446,7 +457,7 @@ pub fn record(tx: &Transaction, now: &str, probes: Vec<Probe>) -> Result<Vec<Dis
         };
         let version_changed = previous_version.is_some() && previous_version != version;
         let last_seen_version = if version_changed { previous_version.clone() } else { old_last_seen };
-        let profile = spawn_profile(drv);
+        let profile = spawn_profile_of(provider);
         tx.execute(
             "INSERT INTO provider_cache(provider,path,version,signed_in_as,last_seen_version,spawn_profile,detected_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7)
@@ -528,6 +539,14 @@ mod tests {
         assert_eq!(args[7], "--config");
         assert!(args[8].starts_with("developer_instructions=\"You are this Relay session's reviewer."));
         assert_eq!(args[9], "cx-id");
+    }
+
+    /// `app.status` and `provider.list` answer with the profile built once; it is the one built now.
+    #[test]
+    fn the_kept_spawn_profile_is_the_one_built_now() {
+        for provider in [Provider::Claude, Provider::Codex] {
+            assert_eq!(spawn_profile_of(provider), spawn_profile(driver(provider)));
+        }
     }
 
     #[test]

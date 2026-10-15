@@ -68,7 +68,8 @@ fn list(
         sql.push_str(" AND category=?");
         args.push(Box::new(category_str(category_).to_string()));
     }
-    sql.push_str(" ORDER BY created_at DESC,id DESC LIMIT ?");
+    // `?+0`: SQLite re-prepares a statement whose LIMIT is a bare parameter on every run.
+    sql.push_str(" ORDER BY created_at DESC,id DESC LIMIT ?+0");
     args.push(Box::new(i64::from(limit.unwrap_or(100).min(500))));
     // Eight filter shapes at most: each is compiled once, not once per badge refresh.
     let mut stmt = ctx.tx().prepare_cached(&sql).bus()?;
@@ -206,9 +207,10 @@ pub fn register(engine: &mut Engine) {
         for project_id in project_ids { sessions_live.extend(crate::awareness::peers(ctx.tx(), project_id, None, Some(ctx.engine()))?); }
         sessions_live.retain(|peer| matches!(peer.state, relay_bus::types::SessionState::Spawning | relay_bus::types::SessionState::Running | relay_bus::types::SessionState::Idle | relay_bus::types::SessionState::Blocked));
         let mut stmt = ctx.tx().prepare_cached("SELECT * FROM tasks WHERE col='in_review' AND deleted_at IS NULL AND (?1 IS NULL OR project_id=?1) ORDER BY updated_at DESC,id DESC").bus()?;
+        let cols = crate::handlers::task::TaskCols::of(&stmt).bus()?;
         let mut rows = stmt.query([only]).bus()?;
         let mut in_review = Vec::new();
-        while let Some(row) = rows.next().bus()? { in_review.push(crate::handlers::task::task_columns(row).bus()?); }
+        while let Some(row) = rows.next().bus()? { in_review.push(crate::handlers::task::task_columns_at(row, &cols).bus()?); }
         drop(rows);
         crate::handlers::task::hydrate(ctx.tx(), &mut in_review).bus()?;
         // The newest open holds, cut like guardrail.holds.list cuts them: the dashboard is one

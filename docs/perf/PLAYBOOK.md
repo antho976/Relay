@@ -14,7 +14,7 @@ each half, and where the next audit should look first.
 | Runner | `scripts/perf/baseline.py` (`--quick` ≈ 5 min; full ≈ 55 min with callgrind, less with perf sampling) | native wall/CPU/allocs, instruction counts from the CPU's counters, attribution (callgrind, or `perf record` where Valgrind cannot run), strace counts, ×10 rows, soak, the real `relay serve` process |
 | Compare | `scripts/perf/compare.py <old run> <new run>` | trusts instruction counts and breakdowns over absolute times |
 | Native client | `scripts/perf/native-baseline.py` | every page against a disposable engine: CPU at startup and at rest, wakeups, RSS, `perf` profile per page, `GDK_DEBUG=frames` log |
-| Readings | `BASELINE-<date>.md`, `FIXES-<date>.md`, `runs/<date>/` | the format every new reading follows (see the plugin's `perf-audit` templates); `ATTRIBUTION-2026-10-14.md` is the first with CPU counts and sampled attribution: six leads, two fixed (`settings` reads, `audit.list`) |
+| Readings | `BASELINE-<date>.md`, `FIXES-<date>.md`, `runs/<date>/` | the format every new reading follows (see the plugin's `perf-audit` templates); `ATTRIBUTION-2026-10-14.md` is the first with CPU counts and sampled attribution: six leads, all fixed (two in part) |
 | In-process lock budget | `engine.rs`: a handler holding the store lock ≥ 16 ms logs "store lock over budget" | read the log after any scenario run |
 
 **Tools the full run wants** on the measuring machine: `valgrind` (callgrind pass; the 2026-10-07

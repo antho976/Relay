@@ -756,7 +756,7 @@ pub fn register(e: &mut Engine) {
                 "SELECT m.*, NULL AS acked_at FROM messages m
              WHERE m.project_id = ?1 AND m.from_session = ?2 AND (?3 IS NULL OR m.sent_at >= ?3)
                AND (?5 IS NULL OR julianday(m.sent_at) >= julianday(?5))
-             ORDER BY m.sent_at DESC, m.id DESC LIMIT ?4",
+             ORDER BY m.sent_at DESC, m.id DESC LIMIT ?4+0",
             )
             .bus()?;
         let messages = stmt
@@ -816,7 +816,8 @@ pub fn register(e: &mut Engine) {
         // unread mail takes the oldest first and acks as it goes; every other view wants the
         // newest. Either way one row past the page says whether there is more.
         let unread = p.unread_only.unwrap_or(false);
-        sql.push_str(if unread { " ORDER BY m.id ASC LIMIT ?5" } else { " ORDER BY m.id DESC LIMIT ?5" });
+        // `?5+0`: SQLite re-prepares a statement whose LIMIT is a bare parameter on every run.
+        sql.push_str(if unread { " ORDER BY m.id ASC LIMIT ?5+0" } else { " ORDER BY m.id DESC LIMIT ?5+0" });
         let limit = p.limit.unwrap_or(MAILBOX_PAGE).clamp(1, MAILBOX_PAGE_MAX) as usize;
         let since = p.since.as_deref().map(|raw| crate::time::bound("since", raw)).transpose()?;
         let mut stmt = ctx.tx().prepare_cached(&sql).bus()?;

@@ -303,7 +303,8 @@ pub fn list_raw(conn: &Connection, f: &ListFilter) -> Result<Vec<RawAudit>> {
     if let Some(p) = f.parent_req { sql.push_str(" AND parent_req = ?"); args.push(Box::new(p.to_string())); }
     if let Some(s) = f.since { sql.push_str(" AND ts >= ?"); args.push(Box::new(s.to_string())); }
     if let Some(u) = f.until { sql.push_str(" AND ts <= ?"); args.push(Box::new(u.to_string())); }
-    sql.push_str(" ORDER BY id DESC LIMIT ?");
+    // `?+0`: SQLite re-prepares a statement whose LIMIT is a bare parameter on every run.
+    sql.push_str(" ORDER BY id DESC LIMIT ?+0");
     args.push(Box::new(f.limit.min(1000)));
     // Keyed by SQL text, so each combination of filters compiles once.
     let mut stmt = conn.prepare_cached(&sql)?;

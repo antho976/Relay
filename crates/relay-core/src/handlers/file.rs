@@ -358,7 +358,7 @@ pub fn register(e: &mut Engine) {
             get_project(conn, p.project_id)?;
             conn.prepare_cached(
                 "SELECT id, original_path, worktree, trash_path, created_at FROM file_trash
-                 WHERE project_id = ?1 AND restored_at IS NULL ORDER BY id DESC LIMIT ?2",
+                 WHERE project_id = ?1 AND restored_at IS NULL ORDER BY id DESC LIMIT ?2+0",
             ).bus()?
             .query_map(params![p.project_id, limit], |r| {
                 Ok((r.get::<_, Id>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?))
