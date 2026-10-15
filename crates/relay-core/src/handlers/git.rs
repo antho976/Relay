@@ -218,6 +218,11 @@ pub fn register(e: &mut Engine) {
             .collect();
         Ok(WorktreeDiskOut { worktrees })
     });
+    // Rev walks over cached refs: no network, and nothing the store has to wait for.
+    e.register_unlocked::<WorktreeDrift>(|ctx, p| {
+        let project = ctx.read(|conn| get_project(conn, p.project_id))?;
+        drift(Path::new(&project.path), &project.base_branch)
+    });
     e.register_unlocked::<Status>(|ctx, p| {
         let (project, root) = resolve_root_unlocked(ctx, p.project_id, p.worktree.as_deref())?;
         crate::watch::ensure_after_commit(ctx, root.clone(), project.id);
@@ -1644,19 +1649,8 @@ pub(super) fn new_worktree_start(root: &Path, branch: &str, base: &str, from: Op
 pub fn new_worktree_base(root: &Path, base: &str) -> Result<Option<String>, BusError> {
     let repo = gix::open(root).map_err(gix_err("git.open_failed"))?;
     let local_name = format!("refs/heads/{}", base.trim_start_matches("refs/heads/"));
-    let local = repo.find_reference(local_name.as_str()).ok();
-    let upstream = local.as_ref().and_then(|reference| {
-        reference.remote_tracking_ref_name(gix::remote::Direction::Fetch)
-    }).transpose().map_err(gix_err("git.base_invalid"))?;
-    let remote_name = upstream.map(|name| name.as_bstr().to_string()).or_else(|| {
-        let name = format!("refs/remotes/origin/{}", base.trim_start_matches("refs/heads/"));
-        repo.find_reference(name.as_str()).ok().map(|_| name)
-    });
-    let remote = remote_name.as_ref().map(|name| {
-        repo.rev_parse_single(name.as_str()).map(|id| id.detach())
-            .map_err(gix_err("git.base_upstream_missing"))
-    }).transpose()?;
-    let local = local.and_then(|reference| reference.try_id().map(|id| id.detach()));
+    let (local, remote) = base_tips(&repo, base)?;
+    let (local, remote) = (local.map(|(_, id)| id), remote.map(|(_, id)| id));
     // A repository before its first commit has a valid unborn base, but no commit to pin.
     if local.is_none() && remote.is_none()
         && repo.head().is_ok_and(|head| head.is_unborn())
@@ -1678,6 +1672,59 @@ pub fn new_worktree_base(root: &Path, base: &str) -> Result<Option<String>, BusE
         _ => return Err(BusError::conflict("git.base_missing", format!("Base branch {base:?} does not exist"))),
     };
     Ok(Some(selected.to_string()))
+}
+
+/// A branch tip with the short name a person reads (`main`, `origin/main`).
+type Tip = (String, gix::ObjectId);
+
+/// The base branch's local tip and its remote-tracking tip (its configured upstream, else
+/// `origin/<base>`).
+fn base_tips(repo: &gix::Repository, base: &str) -> Result<(Option<Tip>, Option<Tip>), BusError> {
+    let short = base.trim_start_matches("refs/heads/");
+    let local = repo.find_reference(format!("refs/heads/{short}").as_str()).ok();
+    let upstream = local.as_ref().and_then(|reference| {
+        reference.remote_tracking_ref_name(gix::remote::Direction::Fetch)
+    }).transpose().map_err(gix_err("git.base_invalid"))?;
+    let remote_name = upstream.map(|name| name.as_bstr().to_string()).or_else(|| {
+        let name = format!("refs/remotes/origin/{short}");
+        repo.find_reference(name.as_str()).ok().map(|_| name)
+    });
+    let remote = remote_name.map(|name| {
+        repo.rev_parse_single(name.as_str()).map(|id| (name.trim_start_matches("refs/remotes/").to_string(), id.detach()))
+            .map_err(gix_err("git.base_upstream_missing"))
+    }).transpose()?;
+    let local = local.and_then(|reference| reference.try_id().map(|id| (short.to_string(), id.detach())));
+    Ok((local, remote))
+}
+
+/// The newest commit a session could start from: whichever of the local base and its remote
+/// tip contains the other, and the remote one (what GitHub has) when they have diverged.
+fn freshest_base(repo: &gix::Repository, base: &str) -> Result<Tip, BusError> {
+    match base_tips(repo, base)? {
+        (Some(local), Some(remote)) if local.1 != remote.1 => {
+            let common = repo.merge_base(local.1, remote.1).ok().map(|id| id.detach());
+            Ok(if common == Some(remote.1) { local } else { remote })
+        }
+        (_, Some(tip)) | (Some(tip), None) => Ok(tip),
+        _ => Err(BusError::conflict("git.base_missing", format!("Base branch {base:?} does not exist"))),
+    }
+}
+
+/// How far each worktree of `root` is behind (and ahead of) the freshest `base`, from the refs
+/// already on disk: `worktree.drift`.
+pub fn drift(root: &Path, base: &str) -> Result<DriftOut, BusError> {
+    let repo = gix::open(root).map_err(gix_err("git.open_failed"))?;
+    let (name, tip) = freshest_base(&repo, base)?;
+    let worktrees = worktree::list_with_dirty(root, false)
+        .map_err(|e| BusError::unavailable("worktree.list_failed", e.to_string()))?
+        .into_iter()
+        .map(|w| {
+            let counts = gix::ObjectId::from_hex(w.head.as_bytes()).ok()
+                .and_then(|head| divergence(&repo, head, tip));
+            DriftRow { path: w.path, branch: w.branch, ahead: counts.map(|c| c.0), behind: counts.map(|c| c.1) }
+        })
+        .collect();
+    Ok(DriftOut { base: name, head: tip.to_string(), worktrees })
 }
 
 /// Cached Git context only: generating a brief must never make a network request.
@@ -2478,6 +2525,47 @@ mod tests {
         let brief = briefing_state(&new_path, "relay/fixture", "main");
         assert!(brief.contains("git_base_upstream_behind: 1"));
         assert!(brief.contains("cached snapshot"));
+    }
+
+    #[test]
+    fn drift_counts_each_worktree_against_the_freshest_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let origin = dir.path().join("origin");
+        let checkout = dir.path().join("checkout");
+        std::fs::create_dir(&origin).unwrap();
+        git(&origin, &["init", "-b", "main"]);
+        git(&origin, &["config", "user.name", "Fixture"]);
+        git(&origin, &["config", "user.email", "fixture@example.test"]);
+        git(&origin, &["commit", "--allow-empty", "-m", "initial"]);
+        git(dir.path(), &["clone", origin.to_str().unwrap(), checkout.to_str().unwrap()]);
+        git(&checkout, &["config", "user.name", "Fixture"]);
+        git(&checkout, &["config", "user.email", "fixture@example.test"]);
+        let linked = dir.path().join("linked");
+        git(&checkout, &["worktree", "add", "-q", "-b", "side", linked.to_str().unwrap()]);
+        git(&linked, &["commit", "--allow-empty", "-m", "side work"]);
+        for n in 0..3 {
+            git(&origin, &["commit", "--allow-empty", "-m", &format!("merged {n}")]);
+        }
+        let row = |out: &DriftOut, path: &Path| {
+            let want = std::fs::canonicalize(path).unwrap().display().to_string();
+            let row = out.worktrees.iter().find(|w| w.path == want).unwrap();
+            (row.behind, row.ahead)
+        };
+        // Cached refs only: nothing is behind until a fetch has seen the new commits.
+        let before = drift(&checkout, "main").unwrap();
+        assert_eq!(before.base, "origin/main");
+        assert_eq!(row(&before, &linked), (Some(0), Some(1)));
+        fetch_remote(&checkout).unwrap();
+        let after = drift(&checkout, "main").unwrap();
+        assert_eq!(after.head, git(&origin, &["rev-parse", "HEAD"]));
+        assert_eq!(row(&after, &checkout), (Some(3), Some(0)));
+        assert_eq!(row(&after, &linked), (Some(3), Some(1)));
+        // A local base ahead of its remote is the freshest one.
+        git(&checkout, &["merge", "-q", "--ff-only", "origin/main"]);
+        git(&checkout, &["commit", "--allow-empty", "-m", "local only"]);
+        let local = drift(&checkout, "main").unwrap();
+        assert_eq!(local.base, "main");
+        assert_eq!(row(&local, &linked), (Some(4), Some(1)));
     }
 
     #[test]

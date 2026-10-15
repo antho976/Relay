@@ -224,6 +224,9 @@ pub struct Pane {
     lamp: gtk::Box,
     branch: gtk::Label,
     branch_row: gtk::Box,
+    /// Commits the freshest base has that this checkout does not (`worktree.drift`).
+    behind: gtk::Box,
+    behind_count: gtk::Label,
     lane: gtk::DrawingArea,
     pub slate_actions: gtk::Box,
     slate: gtk::Box,
@@ -309,6 +312,14 @@ impl Pane {
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
         footer.append(&spacer);
+        let behind = gtk::Box::new(gtk::Orientation::Horizontal, 1);
+        behind.add_css_class("session-behind");
+        behind.set_valign(gtk::Align::Center);
+        behind.append(&crate::icons::image("arrow-down", 11));
+        let behind_count = gtk::Label::new(None);
+        behind.append(&behind_count);
+        behind.set_visible(false);
+        footer.append(&behind);
         footer.append(&state);
         footer.append(&actions);
         root.append(&footer);
@@ -372,6 +383,8 @@ impl Pane {
             lamp,
             branch,
             branch_row,
+            behind,
+            behind_count,
             lane,
             slate_actions,
             slate,
@@ -533,6 +546,19 @@ impl Pane {
     }
     pub fn context_card(&self, serial: u64) -> Option<&gtk::Box> {
         (self.context_serial.get() == serial).then_some(&self.slate_context)
+    }
+    /// How many commits `base` has that this pane's checkout does not; nothing shows at none.
+    pub fn set_behind(&self, behind: Option<i64>, base: &str) {
+        let Some(n) = behind.filter(|n| *n > 0) else {
+            self.behind.set_visible(false);
+            return;
+        };
+        self.behind_count.set_text(&n.to_string());
+        self.behind.set_tooltip_text(Some(&format!(
+            "{n} commit{} behind {base}",
+            if n == 1 { "" } else { "s" }
+        )));
+        self.behind.set_visible(true);
     }
     pub fn update_session(&self, session: &serde_json::Value) {
         use crate::app::text;

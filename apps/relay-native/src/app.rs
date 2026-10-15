@@ -144,6 +144,8 @@ thread_local! {
 
 /// How long an armed key waits for its second click before it reverts.
 const CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(4);
+/// How often the open project is fetched, so a pane's "behind" count sees what landed on GitHub.
+const DRIFT_FETCH_SECS: u32 = 300;
 
 /// A destructive key that confirms in place instead of opening a dialog.
 ///
@@ -326,6 +328,11 @@ pub struct Ui {
     registry_dirty: Cell<bool>,
     pub(crate) workspaces: RefCell<Vec<Value>>,
     rendered_sessions: RefCell<BTreeMap<String, Value>>,
+    /// The last `worktree.drift` and the project it was for: each pane's commits behind base.
+    drift: RefCell<(i64, Value)>,
+    drift_pending: Cell<bool>,
+    drift_dirty: Cell<bool>,
+    drift_timer: Cell<bool>,
     restored_project: Cell<i64>,
     /// The project an explicit destination was opened for: its layout restore applies
     /// everything but the saved page.
@@ -1103,6 +1110,10 @@ impl Ui {
             registry_dirty: Cell::new(true),
             workspaces: RefCell::default(),
             rendered_sessions: RefCell::default(),
+            drift: RefCell::new((0, Value::Null)),
+            drift_pending: Cell::new(false),
+            drift_dirty: Cell::new(false),
+            drift_timer: Cell::new(false),
             restored_project: Cell::new(0),
             explicit_page: Cell::new(0),
             layout_revision: Cell::new(0),
@@ -1550,6 +1561,7 @@ impl Ui {
                     ui.refresh();
                     ui.load_appearance();
                     crate::wallpaper_rotation::refresh(&ui);
+                    ui.watch_drift();
                     ui.load_keybindings();
                     crate::money::startup(&ui);
                     if *ui.page.borrow() == "devices" {
@@ -1690,6 +1702,9 @@ impl Ui {
                                         | "integration.result"
                                 ) {
                                     ui.editor.invalidate(&ui, Some((&e.ev, &e.payload)));
+                                    if e.ev != "file.changed" {
+                                        ui.refresh_drift();
+                                    }
                                 } else if e.ev == "layout.changed"
                                     && e.payload["action"] == "applied"
                                 {
@@ -2025,6 +2040,73 @@ impl Ui {
 
         self.wall_stack
             .set_visible_child_name(if sessions.is_empty() { "empty" } else { "wall" });
+        self.apply_drift();
+    }
+    /// Fetch now and every few minutes, so "behind" counts what has landed on GitHub too.
+    /// One timer for the window's life; a fetch while disconnected just fails quietly.
+    fn watch_drift(self: &Rc<Self>) {
+        self.fetch_for_drift();
+        if self.drift_timer.replace(true) {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_seconds_local(DRIFT_FETCH_SECS, move || {
+            let Some(ui) = weak.upgrade() else { return glib::ControlFlow::Break };
+            if ui.connected.get() {
+                ui.fetch_for_drift();
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+    fn fetch_for_drift(self: &Rc<Self>) {
+        let project = self.project.get();
+        if project == 0 {
+            return;
+        }
+        let ui = self.clone();
+        glib::spawn_future_local(async move {
+            // Offline or no remote: the counts stay against the refs already fetched.
+            let _ = ui.call("git.fetch", json!({"project_id": project})).await;
+            ui.refresh_drift();
+        });
+    }
+    /// Re-read `worktree.drift` for the current project; calls while one is out coalesce.
+    fn refresh_drift(self: &Rc<Self>) {
+        self.drift_dirty.set(true);
+        if self.drift_pending.replace(true) {
+            return;
+        }
+        let ui = self.clone();
+        glib::spawn_future_local(async move {
+            while ui.drift_dirty.replace(false) {
+                let project = ui.project.get();
+                if project == 0 {
+                    break;
+                }
+                // Not every project has a base with commits yet; such a pane shows no count.
+                let drift = ui.call("worktree.drift", json!({"project_id": project})).await.unwrap_or(Value::Null);
+                if ui.project.get() == project {
+                    *ui.drift.borrow_mut() = (project, drift);
+                    ui.apply_drift();
+                }
+            }
+            ui.drift_pending.set(false);
+        });
+    }
+    fn apply_drift(self: &Rc<Self>) {
+        let project = self.project.get();
+        if self.drift.borrow().0 != project {
+            self.refresh_drift();
+            return;
+        }
+        let drift = self.drift.borrow();
+        let base = text(&drift.1, "base");
+        let rows = rows(&drift.1, "worktrees");
+        for s in self.sessions.borrow().iter() {
+            let Some(pane) = self.panes.borrow().get(text(s, "name")).cloned() else { continue };
+            let behind = rows.iter().find(|w| text(w, "path") == text(s, "worktree")).and_then(|w| w["behind"].as_i64());
+            pane.set_behind(behind, base);
+        }
     }
     /// Follow the compositor's own view of whether this window is on screen.
     ///

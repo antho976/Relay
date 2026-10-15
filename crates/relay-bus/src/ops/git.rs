@@ -27,6 +27,21 @@ op!(WorktreeRemove, "worktree.remove", WorktreeRemoveIn => FreedOut,
     OpMeta::mutation(Scope::Project, 3, "Remove a worktree; conflict if a session owns it or it is dirty (unless discard_changes)").actors(Actors::UserOnly).emits(&["worktree.changed"]));
 result!(#[schemars(rename = "WorktreeDiskOut")] WorktreeDiskOut { pub worktrees: Vec<crate::ops::app::WorktreeDisk> });
 op!(WorktreeDisk, "worktree.disk", ProjectIn => WorktreeDiskOut, OpMeta::query(Scope::Project, 3, "Disk per worktree, build output separately"));
+result!(#[schemars(rename = "WorktreeDriftRow")] DriftRow {
+    pub path: String, pub branch: String,
+    /// Commits on `base` this checkout's HEAD does not have: what a rebase onto it would bring in.
+    pub behind: Option<i64>,
+    /// Commits on this checkout's HEAD that `base` does not have.
+    pub ahead: Option<i64>,
+});
+result!(#[schemars(rename = "WorktreeDriftOut")] DriftOut {
+    /// What the counts are against: the base's remote-tracking branch (`origin/main`) or the local
+    /// base, whichever is further ahead; the remote one when they have diverged.
+    pub base: String,
+    pub head: String,
+    pub worktrees: Vec<DriftRow>,
+});
+op!(WorktreeDrift, "worktree.drift", ProjectIn => DriftOut, OpMeta::query(Scope::Project, 3, "How far each worktree is behind the freshest base, from cached refs (git.fetch refreshes them)"));
 
 payload!(#[schemars(rename = "GitWtIn")] WtIn { pub project_id: Id, pub worktree: Option<String> });
 result!(#[schemars(rename = "GitStatusOut")] StatusOut {
@@ -194,6 +209,7 @@ entries!(
     WorktreeCreate,
     WorktreeRemove,
     WorktreeDisk,
+    WorktreeDrift,
     Status,
     Diff,
     DiffFileOp,

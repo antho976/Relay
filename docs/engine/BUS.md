@@ -971,6 +971,7 @@ Provider-neutral Markdown; the same for both providers.
 | `worktree.create` | mutation · always | `{ project_id, branch, from?: string }` → `Worktree` |
 | `worktree.remove` | mutation · always | `{ project_id, path, purge_build? }` → `{ freed_mb }` — `conflict` if a session owns it |
 | `worktree.disk` | query | `{ project_id }` → `{ worktrees: {path, disk_mb, build_mb}[] }` |
+| `worktree.drift` | query | `{ project_id }` → `{ base, head, worktrees: {path, branch, behind?, ahead?}[] }` — how far each worktree's HEAD is behind the freshest base: the base's remote-tracking branch, or the local base when it contains it. Cached refs only, never the network; `git.fetch` refreshes them |
 | `git.status` | query | `{ project_id, worktree? }` → `{ branch, upstream?, ahead, behind, files: FileStatus[] }` |
 |  |  | **`worktree` throughout `git.*` and `file.*`:** omitted, it is the caller's own session worktree for an agent and the project root for the user. `"@project"` asks for the project root explicitly. Defaulting an agent to the project root returned confident, well-formed, wrong answers with no error either way (D111) |
 | `git.diff` | query | `{ project_id, worktree?, base?, staged? }` → `{ files: DiffFile[] }` |
