@@ -215,19 +215,37 @@ pub(super) fn rgb(hex: &str) -> (f64, f64, f64) {
     (f64::from((v >> 16) & 0xFF) / 255.0, f64::from((v >> 8) & 0xFF) / 255.0, f64::from(v & 0xFF) / 255.0)
 }
 
-/// [`meter`] filled in `tone`.
+/// The glass a meter's empty track is: `@glass_selected`, the Glass Rule's track.
+const TRACK_ALPHA: f64 = 0.09;
+/// The tick's ink, about `@faint` over the page.
+const TICK_ALPHA: f64 = 0.55;
+
+/// The ink a meter draws its track and tick in: its CSS colour (`.money-meter`, `@ink`), so it
+/// follows the appearance mode instead of a fixed grey.
+fn ink_of(area: &gtk::DrawingArea) -> (f64, f64, f64) {
+    let c = area.color();
+    (f64::from(c.red()), f64::from(c.green()), f64::from(c.blue()))
+}
+
+/// [`meter`] filled in `tone`. The track is a glass veil of the ink, as cards are (DESIGN.md, the
+/// Glass Rule), so the wallpaper shows through it in every mode.
 pub fn meter_in(fraction: f64, tick: Option<f64>, tone: Tone, height: i32) -> gtk::DrawingArea {
     let area = gtk::DrawingArea::new();
     area.set_content_height(height + 6);
     area.set_hexpand(true);
     area.add_css_class("money-meter");
-    let fill = match tone {
-        Tone::Plain => rgb("#EDE9E2"),
-        Tone::Hue(h) => rgb(HUES[h.rem_euclid(HUES.len() as i64) as usize]),
-        Tone::Ahead => rgb("#f0a828"),
-        Tone::Over => rgb("#f0786f"),
+    let hue = match tone {
+        Tone::Plain => None,
+        Tone::Hue(h) => Some(rgb(HUES[h.rem_euclid(HUES.len() as i64) as usize])),
+        Tone::Ahead => Some(rgb("#f0a828")),
+        Tone::Over => Some(rgb("#f0786f")),
     };
-    area.set_draw_func(move |_, cr, width, _| {
+    area.set_draw_func(move |area, cr, width, _| {
+        // A meter squeezed under 2px has no room for its ends or its tick: it draws nothing
+        // rather than clamp into an empty range (which panics, and aborts the client).
+        if width < 2 {
+            return;
+        }
         let (w, h, top) = (width as f64, height as f64, 3.0);
         let rounded = |x: f64, w: f64| {
             let r = (h / 2.0).min(w / 2.0);
@@ -236,20 +254,20 @@ pub fn meter_in(fraction: f64, tick: Option<f64>, tone: Tone, height: i32) -> gt
             cr.arc(x + r, top + r, r, std::f64::consts::FRAC_PI_2, 3.0 * std::f64::consts::FRAC_PI_2);
             cr.close_path();
         };
-        let (r, g, b) = rgb("#2A2826");
-        cr.set_source_rgb(r, g, b);
+        let ink = ink_of(area);
+        cr.set_source_rgba(ink.0, ink.1, ink.2, TRACK_ALPHA);
         rounded(0.0, w);
         let _ = cr.fill();
-        let filled = (fraction.clamp(0.0, 1.0) * w).max(if fraction > 0.0 { h } else { 0.0 });
+        let filled = (fraction.clamp(0.0, 1.0) * w).max(if fraction > 0.0 { h } else { 0.0 }).min(w);
         if filled > 0.0 {
+            let fill = hue.unwrap_or(ink);
             cr.set_source_rgb(fill.0, fill.1, fill.2);
             rounded(0.0, filled);
             let _ = cr.fill();
         }
         if let Some(tick) = tick.filter(|t| (0.0..=1.0).contains(t)) {
             let x = (tick * w).clamp(1.0, w - 1.0);
-            let (r, g, b) = rgb("#8C877F");
-            cr.set_source_rgb(r, g, b);
+            cr.set_source_rgba(ink.0, ink.1, ink.2, TICK_ALPHA);
             cr.set_line_width(2.0);
             cr.move_to(x, 0.0);
             cr.line_to(x, h + 6.0);
@@ -273,10 +291,13 @@ pub(crate) fn allocation_bar(parts: &[(i64, f64)], height: i32) -> gtk::DrawingA
     let parts: Vec<(i64, f64)> = parts.iter().copied().filter(|(_, share)| *share > 0.0).collect();
     let spoken: Vec<String> = parts.iter().map(|(_, share)| format!("{:.0} percent", share * 100.0)).collect();
     area.update_property(&[gtk::accessible::Property::Label(&format!("Shares: {}", spoken.join(", ")))]);
-    area.set_draw_func(move |_, cr, width, _| {
+    area.set_draw_func(move |area, cr, width, _| {
+        if width < 1 {
+            return;
+        }
         let (w, h) = (width as f64, height as f64);
         let rounded = |x: f64, w: f64| {
-            let r = 4.0_f64.min(h / 2.0).min(w / 2.0);
+            let r = 4.0_f64.min(h / 2.0).min(w / 2.0).max(0.0);
             cr.new_sub_path();
             cr.arc(x + w - r, r, r, -std::f64::consts::FRAC_PI_2, 0.0);
             cr.arc(x + w - r, h - r, r, 0.0, std::f64::consts::FRAC_PI_2);
@@ -286,8 +307,8 @@ pub(crate) fn allocation_bar(parts: &[(i64, f64)], height: i32) -> gtk::DrawingA
         };
         let total: f64 = parts.iter().map(|(_, share)| share).sum();
         if parts.is_empty() || total <= 0.0 {
-            let (r, g, b) = rgb("#2A2826");
-            cr.set_source_rgb(r, g, b);
+            let (r, g, b) = ink_of(area);
+            cr.set_source_rgba(r, g, b, TRACK_ALPHA);
             rounded(0.0, w);
             let _ = cr.fill();
             return;
@@ -633,6 +654,8 @@ fn budget_line(b: &Value, pace_fraction: f64) -> gtk::Box {
     row.append(&name);
     let bar = meter_in(spent as f64 / budget.max(1) as f64, Some(pace_fraction), tone(status, b["color"].as_i64()), 6);
     bar.set_valign(gtk::Align::Center);
+    // However narrow the card, the meter keeps enough width to read.
+    bar.set_size_request(40, -1);
     bar.set_tooltip_text(Some("The tick is where an even spend would be today"));
     row.append(&bar);
     let figures = label(&format!("{} / {}", fmt.format_whole(spent), fmt.format_whole(budget)), "tally-figures");
@@ -861,7 +884,7 @@ pub fn install(ui: &Rc<Ui>) {
     previous.add_css_class("money-chrome");
     previous.set_widget_name("money-period-previous");
     let period = label("", "money-period");
-    period.set_width_chars(16);
+    period.set_width_chars(14);
     period.set_xalign(0.5);
     let next = crate::app::icon_button("chevron-right", "Next period");
     next.add_css_class("money-chrome");
@@ -876,8 +899,12 @@ pub fn install(ui: &Rc<Ui>) {
     filters.append(&accounts);
     filters.append(&categories);
     let search = gtk::SearchEntry::new();
-    search.set_placeholder_text(Some("Search notes, categories, accounts"));
-    search.set_width_chars(24);
+    search.set_placeholder_text(Some("Search entries"));
+    search.set_tooltip_text(Some("Notes, categories and accounts · Ctrl F"));
+    // Narrow enough that the row fits a page just over the stacking width (`STACK_STRIP`); it
+    // still grows with the spare width.
+    search.set_width_chars(14);
+    search.set_hexpand(true);
     search.add_css_class("money-search");
     search.set_widget_name("money-search");
     filters.append(&search);
