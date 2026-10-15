@@ -131,8 +131,14 @@ pub fn code(response: Response) -> String {
     refused(response).code
 }
 
-pub fn wait_until(what: &str, mut f: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+pub fn wait_until(what: &str, f: impl FnMut() -> bool) {
+    wait_until_within(what, Duration::from_secs(10), f)
+}
+
+/// [`wait_until`] for something that runs a real host tool, which a cold CI runner can take
+/// far longer to start than the work takes.
+pub fn wait_until_within(what: &str, within: Duration, mut f: impl FnMut() -> bool) {
+    let deadline = Instant::now() + within;
     while !f() {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(20));

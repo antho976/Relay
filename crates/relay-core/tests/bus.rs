@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{call_as as call, err, git, wait_until};
+use common::{call_as as call, err, git, wait_until, wait_until_within};
 use relay_bus::{Actor, ErrorKind, Request};
 use relay_core::engine::{Door, Engine};
 use relay_core::{Instance, Store};
@@ -590,7 +590,10 @@ esac
     .unwrap();
     let published_id = published["id"].as_i64().unwrap();
     let mut row = json!(null);
-    wait_until("the publishing build to finish", || {
+    // A bundle's signature is checked with the host's own `jarsigner` (JAVA_HOME or PATH), a JVM:
+    // 90 ms here, but on a cold CI runner it once took past the usual 10 s. Wait as long as
+    // Relay itself would (SIGNING_VERIFY_TIMEOUT); the row says "unverified" either way.
+    wait_until_within("the publishing build to finish", std::time::Duration::from_secs(70), || {
         let result = call(
             &e,
             Actor::User,
