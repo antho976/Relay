@@ -662,6 +662,20 @@ pub(super) fn strip(parent: &gtk::Box) -> (gtk::Box, gtk::Box) {
 
 /// One figure of a strip: an icon and what it is, the figure, and a line under it.
 pub(super) fn cell(cells: &gtk::Box, icon: &str, caption: &str, figure: &str, sub: &str, class: Option<&str>) {
+    figure_cell(cells, icon, caption, figure, sub, class);
+}
+
+/// [`cell`], returning it for a caller that adds to it.
+fn figure_cell(cells: &gtk::Box, icon: &str, caption: &str, figure: &str, sub: &str, class: Option<&str>) -> gtk::Box {
+    let f = label(figure, "tally-cell-figure");
+    if let Some(class) = class {
+        f.add_css_class(class);
+    }
+    cell_with(cells, icon, caption, &f, sub)
+}
+
+/// [`cell`] around any `figure` (Plan's strip holds a field), returned.
+pub(super) fn cell_with(cells: &gtk::Box, icon: &str, caption: &str, figure: &impl IsA<gtk::Widget>, sub: &str) -> gtk::Box {
     if cells.first_child().is_some() {
         let rule = gtk::Separator::new(gtk::Orientation::Vertical);
         rule.add_css_class("tally-rule");
@@ -678,18 +692,20 @@ pub(super) fn cell(cells: &gtk::Box, icon: &str, caption: &str, figure: &str, su
     top.append(&image);
     top.append(&label(caption, "tally-cell-caption"));
     cell.append(&top);
-    let f = label(figure, "tally-cell-figure");
-    if let Some(class) = class {
-        f.add_css_class(class);
-    }
-    cell.append(&f);
+    cell.append(figure);
     if !sub.is_empty() {
-        let line = label(sub, "tally-cell-sub");
-        line.set_wrap(true);
-        line.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-        cell.append(&line);
+        cell.append(&sub_line(sub));
     }
     cells.append(&cell);
+    cell
+}
+
+/// A line under a strip's figure.
+fn sub_line(text: &str) -> gtk::Label {
+    let line = label(text, "tally-cell-sub");
+    line.set_wrap(true);
+    line.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    line
 }
 
 /// A neutral icon tile, for rows that are not a category.
@@ -804,9 +820,7 @@ fn budget_key(ui: &Rc<Ui>, b: &Value, pace_fraction: f64) -> gtk::Box {
     let category = b["category_id"].as_i64();
     let run: Action = Rc::new(move || {
         if let Some(ui) = weak.upgrade() {
-            super::set_filters(None, category);
-            super::set_period_offset(0);
-            ui.navigate("money-transactions");
+            show_entries(&ui, None, category);
         }
     });
     row_key(&budget_line(b, pace_fraction), &format!("See this period's {} entries", text(b, "name")), run)
@@ -817,10 +831,10 @@ fn go(ui: &Rc<Ui>, page: &'static str) -> Action {
     Rc::new(move || {
         if let Some(ui) = weak.upgrade() {
             if page == "money-transactions" {
-                super::set_period_offset(0);
-                super::set_filters(None, None);
+                show_entries(&ui, None, None);
+            } else {
+                ui.navigate(page);
             }
-            ui.navigate(page);
         }
     })
 }
@@ -941,6 +955,7 @@ struct TxHead {
     context: gtk::Label,
     period: gtk::Label,
     next: gtk::Button,
+    search: gtk::SearchEntry,
     accounts: gtk::DropDown,
     categories: gtk::DropDown,
     account_rows: RefCell<Vec<(Option<i64>, String)>>,
@@ -1032,15 +1047,20 @@ pub fn install(ui: &Rc<Ui>) {
     }
     let weak = Rc::downgrade(ui);
     search.connect_search_changed(move |entry| {
-        if let Some(ui) = weak.upgrade() {
-            super::set_query(entry.text().trim());
-            ui.refresh_page();
+        let Some(ui) = weak.upgrade() else { return };
+        let typed = entry.text().trim().to_string();
+        // Cleared from code (`show_entries`), it already reads what it asks for.
+        if typed == super::query() {
+            return;
         }
+        super::set_query(&typed);
+        ui.refresh_page();
     });
     let head = Rc::new(TxHead {
         context,
         period,
         next,
+        search: search.clone(),
         accounts,
         categories,
         account_rows: RefCell::new(vec![(None, String::from("All accounts"))]),
@@ -1238,16 +1258,16 @@ pub(super) fn failed(ui: &Rc<Ui>, page: &Page, name: &str, error: &Error) {
     page.body.append(&retry);
 }
 
-/// Overview: the period in one strip (left to spend, spent, income, net worth, and the pace), then
-/// budgets beside recent entries, then bills, accounts and goals side by side: one screen.
+/// Overview: what is left to spend, large, with how it got there under it and income beside it,
+/// then the pace across the period; budgets and accounts beside recent entries, bills and goals.
+/// Each figure appears once.
 fn home(ui: &Rc<Ui>, page: &Page, s: &Value) {
     remember_currency(s);
     let fmt = formatter();
     let period = &s["period"];
-    let (days, days_left) = (n(period, "days"), n(period, "days_left"));
+    let days_left = n(period, "days_left");
     let resets = date(text(period, "end_exclusive")).and_then(|d| d.format("%-d %b").ok()).map(|d| format!("resets {d}")).unwrap_or_default();
-    let context = [format!("Day {} of {days}", (days - days_left + 1).clamp(1, days.max(1))), copy::plural(days_left, "day") + " left", resets];
-    title(&page.head, &period_name(period), &context.iter().filter(|p| !p.is_empty()).cloned().collect::<Vec<_>>().join(" · "));
+    title(&page.head, &period_name(period), &joined(&[copy::plural(days_left, "day") + " left", resets]));
     clear(&page.body);
     if s["empty"] == true {
         empty_state(ui, &page.body);
@@ -1257,51 +1277,69 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value) {
     let lines = &s["lines"];
     let status = text(pace, "status");
     let budgeted = status != "NO_BUDGET" && n(pace, "budget") > 0;
+    let spent = n(s, "spent");
 
-    // The strip: four figures, then the pace across the period.
+    // The strip: what is left, then income; the pace across the period under them.
     let (strip, cells) = strip(&page.body);
-    if budgeted {
+    let hero = if budgeted {
         let remaining = n(pace, "remaining");
-        let sub = [format!("of {}", fmt.format_whole(n(pace, "budget"))), text(lines, "margin").to_string()];
-        let class = if remaining < 0 { Some("money-over") } else { None };
-        cell(&cells, "card", "Left to spend", &fmt.format_whole(remaining), &sub.iter().filter(|p| !p.is_empty()).cloned().collect::<Vec<_>>().join(" · "), class);
+        let class = match status {
+            _ if remaining < 0 => Some("money-over"),
+            "OVER_BUDGET" => Some("money-over"),
+            "OVER_PACE" => Some("money-ahead"),
+            _ => None,
+        };
+        let how = joined(&[
+            format!("{} of {} spent", fmt.format_whole(spent), fmt.format_whole(n(pace, "budget"))),
+            text(lines, "margin").to_string(),
+            text(lines, "versus_last").to_string(),
+        ]);
+        figure_cell(&cells, "card", "Left to spend", &fmt.format_whole(remaining), &how, class)
     } else {
-        cell(&cells, "card", "Left to spend", "No budget", "Set one in Plan to see your pace", None);
-    }
-    cell(&cells, "spend", "Spent", &fmt.format_whole(n(s, "spent")), text(lines, "versus_last"), None);
+        let how = joined(&[text(lines, "versus_last").to_string(), String::from("Set a monthly budget in Plan to see what is left")]);
+        figure_cell(&cells, "spend", "Spent", &fmt.format_whole(spent), &how, None)
+    };
+    hero.add_css_class("tally-hero");
     let income = n(s, "income");
-    cell(&cells, "income", "Income", &fmt.format_whole(income), "this period", (income > 0).then_some("money-in"));
-    let accounts = rows(s, "accounts");
-    let worth = n(s, "net_worth");
-    cell(&cells, "bank", "Net worth", &fmt.format_whole(worth), &plural(accounts.len(), "account"), (worth < 0).then_some("money-over"));
+    let side = figure_cell(&cells, "income", "Income", &fmt.format_whole(income), "this period", (income > 0).then_some("money-in"));
+    side.set_hexpand(false);
+    side.add_css_class("tally-side");
     if budgeted {
         let pace_row = gtk::Box::new(gtk::Orientation::Vertical, 6);
         pace_row.add_css_class("tally-pace");
-        let bar = meter_in(pace["spent_fraction"].as_f64().unwrap_or(0.0), pace["pace_fraction"].as_f64(), tone(status, None), 8);
-        bar.set_tooltip_text(Some("The tick is where an even spend would be today"));
+        let (spent_fraction, time_fraction) = (pace["spent_fraction"].as_f64().unwrap_or(0.0), pace["pace_fraction"].as_f64().unwrap_or(0.0));
+        let bar = meter_in(spent_fraction, Some(time_fraction), tone(status, None), 8);
+        let shares = format!(
+            "{:.0}% spent, {:.0}% of the period gone. The tick is where an even spend would be today.",
+            (spent_fraction * 100.0).round(),
+            (time_fraction * 100.0).round()
+        );
+        bar.set_tooltip_text(Some(&shares));
+        bar.set_accessible_role(gtk::AccessibleRole::Img);
+        bar.update_property(&[gtk::accessible::Property::Label(&shares)]);
         pace_row.append(&bar);
-        let legend = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let said = label(text(lines, "pace"), "tally-cell-sub");
-        said.set_hexpand(true);
         said.set_ellipsize(gtk::pango::EllipsizeMode::End);
         if let Some(class) = tone_class(status) {
             said.add_css_class(class);
         }
-        legend.append(&said);
-        let spent_share = (pace["spent_fraction"].as_f64().unwrap_or(0.0) * 100.0).round();
-        let time_share = (pace["pace_fraction"].as_f64().unwrap_or(0.0) * 100.0).round();
-        legend.append(&label(&format!("{spent_share:.0}% spent · {time_share:.0}% of the period gone"), "tally-figures"));
-        pace_row.append(&legend);
+        pace_row.append(&said);
         strip.append(&pace_row);
     }
 
-    // Budgets beside recent entries.
+    // Budgets beside recent entries; then accounts, bills and goals, those there are, in a row.
     let pace_fraction = pace["pace_fraction"].as_f64().unwrap_or(0.0);
     let mut budgets: Vec<Value> = rows(s, "budgets").into_iter().filter(|b| n(b, "budget") > 0).collect();
     let ahead = |b: &Value| n(b, "spent") as f64 / n(b, "budget").max(1) as f64 - pace_fraction;
     budgets.sort_by(|a, b| ahead(b).total_cmp(&ahead(a)));
     let pair = columns(&page.body, 2);
-    let ask = (!budgets.is_empty()).then_some((ui, "Which of my budgets are ahead of pace this month, and why?"));
+    // The page's one question, the one its state raises.
+    let question = match status {
+        "OVER_BUDGET" => "I'm over my budget this month. Which categories put me there, and what can I still do?",
+        "OVER_PACE" => "I'm spending ahead of pace this month. Which budgets put me there, and how do I get back on pace?",
+        _ => "Which of my budgets are ahead of pace this month, and why?",
+    };
+    let ask = (!budgets.is_empty()).then_some((ui, question));
     let list = card_asking(&pair[0], "Budgets", Some(("Plan", go(ui, "money-plan"))), ask);
     if budgets.is_empty() {
         list.append(&icon_row(&tile("plan"), "No budgets yet", "Give each category a monthly budget in Plan", "", ""));
@@ -1309,10 +1347,42 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value) {
     for b in budgets.iter().take(8) {
         list.append(&budget_key(ui, b, pace_fraction));
     }
-    let bills = rows(s, "bills");
+    let recent = rows(s, "recent");
+    let list = card(&pair[1], "Recent", Some(("All entries", go(ui, "money-transactions"))));
+    if recent.is_empty() {
+        list.append(&icon_row(&tile("list"), "Nothing logged this period yet", "Add an entry with the Entry key or Ctrl E", "", ""));
+    }
+    for tx in recent.iter().take(RECENT_SHOWN) {
+        list.append(&tx_row(ui, tx, false, true));
+    }
+
+    let (accounts, bills, goals) = (rows(s, "accounts"), rows(s, "bills"), rows(s, "goals"));
+    let count = [accounts.is_empty(), bills.is_empty(), goals.is_empty()].iter().filter(|empty| !**empty).count();
+    if count == 0 {
+        return;
+    }
+    let mut slots = columns(&page.body, count).into_iter();
+    if !accounts.is_empty() {
+        let list = card(&slots.next().expect("counted"), "Accounts", None);
+        for account in &accounts {
+            list.append(&account_key(ui, account));
+        }
+        let total = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        total.add_css_class("tally-total");
+        let caption = label("Net worth", "money-row-title");
+        caption.set_hexpand(true);
+        total.append(&caption);
+        let worth = n(s, "net_worth");
+        let figure = label(&fmt.format(worth), "tally-total-figure");
+        if worth < 0 {
+            figure.add_css_class("money-over");
+        }
+        total.append(&figure);
+        list.append(&total);
+    }
     if !bills.is_empty() {
-        let list = card(&pair[0], "Upcoming bills", None);
-        for bill in bills.iter().take(5) {
+        let list = card(&slots.next().expect("counted"), "Upcoming bills", None);
+        for bill in bills.iter().take(BILLS_SHOWN) {
             let amount = n(bill, "amount");
             let income = text(bill, "type") == "INCOME";
             let (figure, class) = if income { (fmt.format_signed(amount), "money-in") } else { (format!("−{}", fmt.format(amount)), "") };
@@ -1323,56 +1393,11 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value) {
             }
             list.append(&row);
         }
-    }
-    let recent = rows(s, "recent");
-    let list = card(&pair[1], "Recent", Some(("All entries", go(ui, "money-transactions"))));
-    if recent.is_empty() {
-        list.append(&icon_row(&tile("list"), "Nothing logged this period yet", "Add an entry with the Entry key above", "", ""));
-    }
-    for tx in recent.iter().take(8) {
-        list.append(&tx_row(ui, tx, false, true));
-    }
-
-    // Accounts and goals, those there are, side by side.
-    let goals = rows(s, "goals");
-    let count = usize::from(!accounts.is_empty()) + usize::from(!goals.is_empty());
-    if count == 0 {
-        return;
-    }
-    let mut slots = columns(&page.body, count).into_iter();
-    if !accounts.is_empty() {
-        let investing = accounts.iter().any(|a| text(a, "type") == "INVESTMENT");
-        let list = card(&slots.next().expect("counted"), "Accounts", investing.then(|| ("Investments", go(ui, "money-invest"))));
-        for account in &accounts {
-            let balance = n(account, "balance");
-            let row = icon_row(
-                &tile(account_icon(text(account, "type"))),
-                text(account, "name"),
-                &word(text(account, "type")),
-                &fmt.format(balance),
-                if balance < 0 { "money-over" } else { "" },
-            );
-            if text(account, "type") != "INVESTMENT" {
-                list.append(&row);
-                continue;
-            }
-            // An investment account is worth what its statement says: a click records that.
-            let weak = Rc::downgrade(ui);
-            let held = account.clone();
-            let run: Action = Rc::new(move || {
-                if let Some(ui) = weak.upgrade() {
-                    super::record_value(&ui, &held);
-                }
-            });
-            list.append(&row_key(&row, &format!("Record what {} is worth", text(account, "name")), run));
+        if bills.len() > BILLS_SHOWN {
+            let more = label(&format!("{} more in the next 30 days", bills.len() - BILLS_SHOWN), "money-row-detail");
+            more.add_css_class("tally-note");
+            list.append(&more);
         }
-        let total = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        total.add_css_class("tally-total");
-        let caption = label("Net worth", "money-row-title");
-        caption.set_hexpand(true);
-        total.append(&caption);
-        total.append(&label(&fmt.format(worth), "tally-total-figure"));
-        list.append(&total);
     }
     if !goals.is_empty() {
         let list = card(&slots.next().expect("counted"), "Goals", None);
@@ -1380,7 +1405,11 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value) {
             let block = gtk::Box::new(gtk::Orientation::Vertical, 6);
             block.add_css_class("tally-row");
             let (saved, target) = (n(goal, "saved"), n(goal, "target"));
-            let top = icon_row(&tile("spark"), text(goal, "name"), text(goal, "line"), &format!("{} / {}", fmt.format_whole(saved), fmt.format_whole(target)), "");
+            // What is saved of the target leads the line, so the figure can be the share: it
+            // fits a narrow column.
+            let detail = joined(&[format!("{} of {}", fmt.format_whole(saved), fmt.format_whole(target)), text(goal, "line").to_string()]);
+            let share = if target > 0 { format!("{:.0}%", (saved as f64 / target as f64 * 100.0).clamp(0.0, 100.0).floor()) } else { String::new() };
+            let top = icon_row(&tile("spark"), text(goal, "name"), &detail, &share, "tally-figures");
             top.remove_css_class("tally-row");
             block.append(&top);
             if target > 0 {
@@ -1389,6 +1418,52 @@ fn home(ui: &Rc<Ui>, page: &Page, s: &Value) {
             list.append(&block);
         }
     }
+}
+
+/// How many recent entries and bills Overview lists: enough to glance at, the page about a screen.
+const RECENT_SHOWN: usize = 5;
+const BILLS_SHOWN: usize = 3;
+
+/// `parts` that say something, joined by a middle dot.
+fn joined(parts: &[String]) -> String {
+    parts.iter().filter(|p| !p.is_empty()).cloned().collect::<Vec<_>>().join(" · ")
+}
+
+/// An account as a key: an everyday account opens this period's entries in it; an investment
+/// account opens Investments, where its value is recorded.
+fn account_key(ui: &Rc<Ui>, account: &Value) -> gtk::Box {
+    let balance = n(account, "balance");
+    let kind = text(account, "type");
+    // One line: the tile says what kind of account it is.
+    let row = icon_row(&tile(account_icon(kind)), text(account, "name"), "", &formatter().format(balance), if balance < 0 { "money-over" } else { "" });
+    row.set_tooltip_text(Some(&word(kind)));
+    let investing = kind == "INVESTMENT";
+    let id = account["id"].as_i64();
+    let weak = Rc::downgrade(ui);
+    let run: Action = Rc::new(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        if investing {
+            ui.navigate("money-invest");
+        } else {
+            show_entries(&ui, id, None);
+        }
+    });
+    let name = text(account, "name");
+    let tooltip = if investing { format!("See {name} in Investments") } else { format!("See this period's {name} entries") };
+    row_key(&row, &tooltip, run)
+}
+
+/// Opens Entries on this period, filtered to `account` and `category` (`None` is all), its search
+/// cleared.
+pub(super) fn show_entries(ui: &Rc<Ui>, account: Option<i64>, category: Option<i64>) {
+    super::set_filters(account, category);
+    super::set_period_offset(0);
+    super::set_query("");
+    if let Some(head) = TX_HEAD.with(|h| h.borrow().clone()) {
+        // Its delayed search-changed finds the query already empty, and reads nothing more.
+        head.search.set_text("");
+    }
+    ui.navigate("money-transactions");
 }
 
 /// An empty ledger says so, and offers the three ways to fill it.
