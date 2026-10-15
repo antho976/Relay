@@ -22,6 +22,26 @@ pub const STORE_LIMIT: usize = 64 * 1024;
 /// the edit's full new text — and its hold, when there is one, keeps its own frozen envelope.
 pub const CHATTY_STORE_LIMIT: usize = 2 * 1024;
 
+/// What an allowed `guardrail.gate` or an accepted `session.report` keeps of its payload: who,
+/// what kind of call, and the command, path or tool name — not the hook's whole envelope
+/// (transcript path, working directory, the tool's full input). Those two ops are an audit row
+/// per agent tool call, and their full payloads were 85 % of a 260 MB store
+/// (BASELINE-2026-10-14 §1.2). Refusals and holds are not ok outcomes and keep everything. A
+/// payload without a `kind` is not a hook's and is kept as sent. Migration v27 slims older rows
+/// the same way.
+fn slim(op: &str, payload: &Value) -> Option<String> {
+    let kind = payload.get("kind").filter(|k| !k.is_null())?;
+    let slim = match op {
+        "guardrail.gate" => {
+            let command = payload["command"].as_str().map(|c| c.chars().take(200).collect::<String>());
+            serde_json::json!({"session": payload["session"], "kind": kind, "command": command, "path": payload["path"], "slim": true})
+        }
+        "session.report" => serde_json::json!({"session": payload["session"], "kind": kind, "tool": payload["data"]["tool_name"], "slim": true}),
+        _ => return None,
+    };
+    serde_json::to_string(&slim).ok()
+}
+
 fn store_limit(op: &str) -> usize {
     match op {
         "session.report" | "usage.report" | "guardrail.gate" => CHATTY_STORE_LIMIT,
@@ -88,7 +108,10 @@ pub fn append(tx: &Transaction, e: &AuditEntry) -> Result<Id> {
     // "there was nothing to store" are different answers to `audit.get`. Built only when the
     // payload is actually over the limit, which is the rare case.
     let oversize;
-    let payload_col = if payload_json.len() <= store_limit(e.op) {
+    let slimmed = if e.outcome.is_ok() { slim(e.op, e.payload) } else { None };
+    let payload_col = if let Some(slimmed) = &slimmed {
+        slimmed
+    } else if payload_json.len() <= store_limit(e.op) {
         &payload_json
     } else {
         oversize = serde_json::json!({"truncated": true, "bytes": payload_json.len()}).to_string();
@@ -269,4 +292,51 @@ pub fn get_raw(conn: &Connection, id: Id) -> Result<Option<RawAudit>> {
 
 pub fn get(conn: &Connection, id: Id) -> Result<Option<AuditRow>> {
     Ok(get_raw(conn, id)?.map(RawAudit::parse))
+}
+
+#[cfg(test)]
+mod hook_tests {
+    use super::*;
+
+    fn write(tx: &Transaction, op: &str, payload: &Value, outcome: &std::result::Result<Value, BusError>) -> (String, String) {
+        let actor = Actor::User;
+        let id = append(tx, &AuditEntry {
+            ts: "2026-10-14T00:00:00Z", req_id: Uuid::new_v4(), parent_req: None, actor: &actor, on_behalf_of: None,
+            session_id: None, op, project_id: None, payload, outcome, hold_id: None, undo_op: None, undo_of: None,
+        }).unwrap();
+        tx.query_row("SELECT payload, payload_hash FROM audit WHERE id=?1", [id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
+    }
+
+    /// An allowed gate and an accepted report keep who, what and the command or tool; the hash
+    /// still names the full payload, and a refusal keeps everything.
+    #[test]
+    fn allowed_hook_rows_keep_a_summary_and_refusals_keep_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::store::Store::open(&dir.path().join("store.db"), false).unwrap();
+        let mut conn = store.lock();
+        let tx = conn.transaction().unwrap();
+        let long = "x".repeat(500);
+        let gate = serde_json::json!({"session": "s1", "kind": "exec", "command": format!("cargo test {long}"),
+            "transcript_path": "/home/someone/.claude/t.jsonl", "cwd": "/w"});
+        let (payload, hash) = write(&tx, "guardrail.gate", &gate, &Ok(serde_json::json!({"verdict": "allow"})));
+        let kept: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(kept["session"], "s1");
+        assert_eq!(kept["kind"], "exec");
+        assert_eq!(kept["slim"], true);
+        assert_eq!(kept["command"].as_str().unwrap().chars().count(), 200);
+        assert!(kept.get("transcript_path").is_none() && kept.get("cwd").is_none());
+        assert_eq!(hash, payload_hash(&gate), "the hash is the full payload's");
+
+        let report = serde_json::json!({"session": "s1", "kind": "tool_use", "data": {"tool_name": "Bash", "tool_input": {"command": long}}});
+        let (payload, _) = write(&tx, "session.report", &report, &Ok(Value::Null));
+        assert_eq!(serde_json::from_str::<Value>(&payload).unwrap(), serde_json::json!({"session": "s1", "kind": "tool_use", "tool": "Bash", "slim": true}));
+
+        let refused = Err(BusError::refused("guardrail.command", "denied"));
+        let (payload, _) = write(&tx, "guardrail.gate", &gate, &refused);
+        assert_eq!(serde_json::from_str::<Value>(&payload).unwrap(), gate, "a refusal keeps the whole payload");
+
+        let other = serde_json::json!({"path": "appearance.mode", "value": "dark"});
+        let (payload, _) = write(&tx, "settings.set", &other, &Ok(Value::Null));
+        assert_eq!(serde_json::from_str::<Value>(&payload).unwrap(), other, "other ops are not slimmed");
+    }
 }

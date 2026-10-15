@@ -56,7 +56,11 @@ pub fn defaults() -> &'static Value {
             // when it is not on PATH, and the minutes unused before it stops (0 = never).
             "threads": { "local": { "dir": null, "server": null, "idle_minutes": 15 } },
             "undo": { "grace_days": 7 },
-            "audit": { "retention_days": 180 },
+            // Gaming mode (gaming.rs): `on` caps every agent to `threads` CPU threads at the
+            // lowest CPU and disk priority; `auto` also does while a game runs.
+            "performance": { "gaming": { "on": false, "auto": false, "threads": 2 } },
+            // `hook_retention_days`: allowed hook calls (purge.rs), a row per agent tool call.
+            "audit": { "retention_days": 180, "hook_retention_days": 30 },
             // `layout.current.<project>` is the shell's last arrangement (ui.rs).
             "layout": {},
             "keybindings": {
@@ -322,6 +326,12 @@ fn set_bounded_undo(ctx: &mut Ctx, path: &str, before: Value) {
     }
 }
 
+/// A change at or around `performance.gaming` (the subtree, a leaf in it, or an ancestor).
+fn touches_gaming(path: &str) -> bool {
+    const GAMING: &str = "performance.gaming";
+    path.is_empty() || path.starts_with(GAMING) || GAMING.starts_with(path)
+}
+
 pub fn register(e: &mut Engine) {
     e.register::<SettingsGet>(|ctx, p| Ok(ValueOut { value: get(ctx.tx(), p.path.as_deref())? }));
     e.register::<SettingsSet>(|ctx: &mut Ctx, p| {
@@ -338,6 +348,9 @@ pub fn register(e: &mut Engine) {
         set_bounded_undo(ctx, &p.path, before);
         let value = get(ctx.tx(), Some(&p.path))?;
         ctx.emit("settings.changed", json!({ "path": p.path, "value": value }));
+        if touches_gaming(&p.path) {
+            ctx.after_commit(|_| crate::gaming::nudge());
+        }
         Ok(ValueOut { value })
     });
     e.register::<SettingsReset>(|ctx: &mut Ctx, p| {
@@ -349,6 +362,9 @@ pub fn register(e: &mut Engine) {
         delete_under(ctx.tx(), &path)?;
         set_bounded_undo(ctx, &path, before);
         let value = get(ctx.tx(), Some(&path))?;
+        if touches_gaming(&path) {
+            ctx.after_commit(|_| crate::gaming::nudge());
+        }
         ctx.emit("settings.changed", json!({ "path": path, "value": value }));
         Ok(ValueOut { value })
     });

@@ -208,6 +208,10 @@ pub fn image_with_stroke(name: &str, size: i32, stroke: f64) -> gtk::Image {
         "cpu" => {
             r##"<rect x="4" y="4" width="8" height="8" /><rect x="6.5" y="6.5" width="3" height="3" /><path d="M6 1.5v2.5M10 1.5v2.5M6 12v2.5M10 12v2.5M1.5 6h2.5M1.5 10h2.5M12 6h2.5M12 10h2.5" />"##
         }
+        // A controller: the body, a d-pad on the left, two buttons on the right.
+        "gamepad" => {
+            r##"<path d="M5 4.5h6a3.5 3.5 0 0 1 3.4 2.7l.8 3.7a1.5 1.5 0 0 1-2.6 1.3L11.2 10.7H4.8l-1.4 1.5A1.5 1.5 0 0 1 .8 10.9l.8-3.7A3.5 3.5 0 0 1 5 4.5z" /><path d="M4.75 6.5v2.5M3.5 7.75h2.5" /><circle cx="10.5" cy="7" r=".5" /><circle cx="12" cy="8.5" r=".5" />"##
+        }
         "device" => {
             r##"<rect x="4.25" y="1.5" width="7.5" height="13" rx="1" /><path d="M6.5 3h3M7.25 12.5h1.5" />"##
         }

@@ -9,11 +9,17 @@ result!(#[schemars(rename = "BuildInfo")] BuildInfo { pub profile: String, pub g
 result!(#[schemars(rename = "AppVersionOut")] VersionOut { pub version: String, pub instance: String, pub build: BuildInfo });
 op!(Version, "app.version", Empty => VersionOut, OpMeta::query(Scope::Global, 1, "Version, instance and build info"));
 
+// Gaming mode (`settings: performance.gaming`): while `active`, agents and what they run share
+// `threads` CPU threads at the lowest CPU and disk priority. `supported` is false without a
+// systemd user manager; `game` is what `auto` found running. `gaming.changed` carries the same.
+result!(#[schemars(rename = "GamingStatus")] GamingStatus {
+    pub supported: bool, pub on: bool, pub auto: bool, pub threads: u32, pub active: bool, pub game: Option<String>,
+});
 result!(#[schemars(rename = "AppStatusOut")] StatusOut {
     pub pid: u32, pub uptime_s: u64, pub store_path: String, pub socket_path: String,
-    pub sessions_live: i64, pub providers: Vec<ProviderInfo>,
+    pub sessions_live: i64, pub providers: Vec<ProviderInfo>, pub gaming: GamingStatus,
 });
-op!(Status, "app.status", Empty => StatusOut, OpMeta::query(Scope::Global, 1, "Engine status: paths, live sessions, providers"));
+op!(Status, "app.status", Empty => StatusOut, OpMeta::query(Scope::Global, 1, "Engine status: paths, live sessions, providers, gaming mode"));
 
 payload!(#[schemars(rename = "AppQuitIn")] QuitIn { pub force: Option<bool> });
 op!(Quit, "app.quit", QuitIn => Empty,

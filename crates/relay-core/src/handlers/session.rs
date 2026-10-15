@@ -1033,6 +1033,8 @@ fn finish_launch(ctx: &mut Ctx, prepared: PreparedLaunch) -> Result<Session, Bus
          exit_code=NULL,restore_reason=NULL,done_pending_stop=NULL,updated_at=?3 WHERE id=?4",
         params![pty.pid() as i64, epoch as i64, ctx.now, sid],
     ).bus()?;
+    // Into the agents' slice, where gaming mode can cap it and everything it starts.
+    crate::gaming::adopt(pty.pid(), &name);
     if let Some(old) = ctx.engine().set_pty(sid, &name, pty) {
         kill_detached(old, Duration::from_millis(500));
     }
