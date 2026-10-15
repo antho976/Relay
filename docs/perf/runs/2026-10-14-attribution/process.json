@@ -1,0 +1,95 @@
+{
+  "window_seconds": 30,
+  "phases": {
+    "idle_six_quiet_sessions": {
+      "seconds": 30.0,
+      "cpu_percent": 0.0,
+      "cpu_ms_total": 0.0,
+      "wakeups_per_s": 3.0,
+      "preemptions_per_s": 0.0,
+      "rss_mb": 29.5,
+      "threads": 33
+    },
+    "idle_resources_watch_on": {
+      "seconds": 30.0,
+      "cpu_percent": 0.033,
+      "cpu_ms_total": 10.0,
+      "wakeups_per_s": 5.7,
+      "preemptions_per_s": 0.1,
+      "rss_mb": 29.7,
+      "threads": 34
+    },
+    "output_60_lines_per_s_unattached": {
+      "seconds": 30.0,
+      "cpu_percent": 0.0,
+      "cpu_ms_total": 0.0,
+      "wakeups_per_s": 63.2,
+      "preemptions_per_s": 2.4,
+      "rss_mb": 29.8,
+      "threads": 33
+    },
+    "output_60_lines_per_s_attached": {
+      "seconds": 30.0,
+      "cpu_percent": 0.1,
+      "cpu_ms_total": 30.0,
+      "wakeups_per_s": 216.3,
+      "preemptions_per_s": 6.3,
+      "rss_mb": 31.9,
+      "threads": 33,
+      "client_frames": 1872,
+      "client_bytes": 504559
+    },
+    "burst_50k_lines_attached": {
+      "seconds_until_stream_quiet": 1.068,
+      "engine_cpu_ms": 50.0,
+      "payload_bytes": 4900000,
+      "payload_bytes_received": 4688310,
+      "wire_bytes_received": 8712488,
+      "frames": 30889,
+      "frames_dropped": 2967,
+      "mib_per_s_to_client": 7.8
+    }
+  },
+  "startup_s_fresh_store": 0.035,
+  "rss_mb_fresh": 20.7,
+  "rss_mb_six_sessions": 29.5,
+  "recovery_report": {
+    "at": "2026-10-14T23:26:59.329301222Z",
+    "reaped_pids": [],
+    "fsck_fixes": [
+      "session gentle-egret: running \u2192 restorable (pid 1927776 now belongs to another process; left alone)",
+      "session sharp-zebra: running \u2192 restorable (pid 1927850 now belongs to another process; left alone)",
+      "session sharp-dingo: running \u2192 restorable (pid 1927919 now belongs to another process; left alone)",
+      "session amber-llama: running \u2192 restorable (pid 1927993 now belongs to another process; left alone)",
+      "session snug-moose: running \u2192 restorable (pid 1928063 now belongs to another process; left alone)",
+      "session quiet-falcon: running \u2192 restorable (pid 1928137 now belongs to another process; left alone)"
+    ],
+    "dirty_worktrees": [],
+    "tasks_reset_offered": []
+  },
+  "restart_s": {
+    "with_six_live_sessions": 0.005,
+    "clean": [
+      0.005,
+      0.005
+    ]
+  },
+  "cli": {
+    "ping": {
+      "min_ms": 1.06,
+      "p50_ms": 1.11,
+      "max_ms": 1.19
+    },
+    "q_session_list": {
+      "min_ms": 1.26,
+      "p50_ms": 1.33,
+      "max_ms": 1.56
+    },
+    "q_app_status": {
+      "min_ms": 1.2,
+      "p50_ms": 1.29,
+      "max_ms": 1.8
+    }
+  },
+  "engine_binary_bytes": 505171464
+}

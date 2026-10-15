@@ -115,8 +115,9 @@ const PREPARED_BEFORE: &[&str] = &["file.restore"];
 
 pub fn register(e: &mut Engine) {
     // Unlocked (D149): a list is up to 1000 rows of up to 64 KB payload and result each. Only
-    // copying the text out holds the store; parsing it runs after the lock is released.
-    e.register_unlocked::<List>(|ctx, p| {
+    // copying the text out holds the store; parsing it runs after the lock is released, straight
+    // into the result (`RawAudit::into_json`), not into an `AuditRow` serialized again.
+    e.register_unlocked_json::<List>(|ctx, p| {
         let since = p.since.as_deref().map(|s| crate::time::bound("since", s)).transpose()?;
         let until = p.until.as_deref().map(|s| crate::time::bound("until", s)).transpose()?;
         let f = log::ListFilter {
@@ -130,11 +131,13 @@ pub fn register(e: &mut Engine) {
             limit: p.limit.unwrap_or(200),
         };
         let raw = ctx.read(|conn| log::list_raw(conn, &f).bus())?;
-        Ok(ListOut { rows: raw.into_iter().map(log::RawAudit::parse).collect() })
+        // Not `json!`: it serializes its argument, which would copy every row once more.
+        let rows = Value::Array(raw.into_iter().map(log::RawAudit::into_json).collect());
+        Ok(Value::Object(serde_json::Map::from_iter([("rows".to_string(), rows)])))
     });
-    e.register_unlocked::<Get>(|ctx, p| {
+    e.register_unlocked_json::<Get>(|ctx, p| {
         ctx.read(|conn| log::get_raw(conn, p.audit_id).bus())?
-            .map(log::RawAudit::parse)
+            .map(log::RawAudit::into_json)
             .ok_or_else(|| BusError::not_found("audit.not_found", format!("no audit row {}", p.audit_id)))
     });
     // Staged (D149): the inverse is a registered op, and the read phase of one that only reads —

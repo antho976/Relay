@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-14",
+  "git_sha": "4fb59462738856b0c82570ba5f8a0058970fdd76",
+  "git_branch": "relay/perf-counters",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28) (Arch Linux rust 1:1.99.0-1)",
+  "profile": "dev (opt-level 1 workspace, 3 dependencies; the profile run.sh launches)",
+  "kernel": "7.2.9-2-cachyos",
+  "cpu": "AMD Ryzen 7 9800X3D 8-Core Processor",
+  "cores": 16,
+  "mem_gib": 30.5,
+  "valgrind": "valgrind-3.25.1",
+  "perf": "perf version 7.2.10-1",
+  "perf_event_paranoid": "1",
+  "strace": "strace -- version 7.2",
+  "load_at_start": [
+    2.3505859375,
+    3.14453125,
+    3.49755859375
+  ],
+  "container": false,
+  "quick": false,
+  "attribution": "perf (Valgrind cannot run here)"
+}
