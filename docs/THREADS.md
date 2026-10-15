@@ -211,9 +211,11 @@ imported activity from the phone through `money.sync`.
 ## Avex (2026-10-09)
 
 Avex, the gym app, is the panel's third source, beside Tally and Arbiter: a chip in the message box,
-a switch above the panel (Overview, Workouts, Lifts), a sidebar key and its own pages. It has no
-internet, so Relay reads the training history it exports and keeps it read only; an agent reads
-`gym.*` and charts with a `gym` question instead of `query`. `docs/GYM.md` is the contract.
+one scroll in the panel (the copy's week, recent workouts, lifts moving, records), a sidebar key and
+its own pages. A panel row drafts a question about itself into the open thread rather than leaving
+it. It has no internet, so Relay reads the training history it exports and keeps it read only; an
+agent reads `gym.*` and charts with a `gym` question instead of `query`. `docs/GYM.md` is the
+contract.
 
 ## Local models (2026-10-10)
 
@@ -274,7 +276,8 @@ phone case, stored as `15799`, as $15,799. So models never see them.
   | `omit` | left out | palette colours and icons outside an entry, sync uids, `fraction_digits`, `devices`, a backtest's 400-point `equity` curve |
 
   An entry keeps its `icon` and `color`, because its card draws them.
-- **Avex goal targets are in the person's unit.** A `lift_target` goal's `target_value` is
-  converted at the source (`relay_gym::views`), like every other weight. Avex stores it in
-  pounds, and a kg user's Avex page showed that pound figure.
+- **Avex goal targets are in the person's unit.** A lift goal's (`lift_1rm`, or `lift_target` in
+  an older export) and a body-weight goal's `target_value` are converted at the source
+  (`relay_gym::views`), like every other weight. Avex stores them in pounds, and a kg user's Avex
+  page showed that pound figure.
 - **Only the MCP door changes.** The socket, the CLI and the phone door still carry the integers.

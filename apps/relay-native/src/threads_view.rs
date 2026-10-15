@@ -679,7 +679,7 @@ fn show_source(v: &View) {
     }
     v.tally_tabs.set_visible(source == "tally");
     v.arbiter_tabs.set_visible(source == "arbiter");
-    v.avex_tabs.set_visible(source == "avex");
+    v.avex_tabs.set_visible(source == "avex" && super::avex::PANEL_TABS.len() > 1);
     if source == "arbiter" {
         v.limits.set_text("Proposes, you approve");
         v.limits.set_tooltip_text(Some("It reads, backtests and proposes. Orders follow each strategy's mode, always within its limits, and only you change those."));
@@ -3644,6 +3644,20 @@ fn invest_empty(ui: &Rc<Ui>, body: &gtk::Box, currency: &str) {
     open.connect_clicked(move |_| run());
     head.append(&open);
     body.append(&head);
+}
+
+// draft(): the panel builder's version replaces this copy at merge.
+/// The person's words in the open thread's message box, focused and not sent; with no thread
+/// open, a new one asked as [`ask`] does.
+pub(crate) fn draft(ui: &Rc<Ui>, text: &str) {
+    let Some(v) = view().filter(|_| current().is_some() && *ui.page.borrow() == PAGE) else {
+        ask(ui, text);
+        return;
+    };
+    let buffer = v.input.buffer();
+    buffer.set_text(text);
+    buffer.place_cursor(&buffer.end_iter());
+    v.input.grab_focus();
 }
 
 #[cfg(test)]

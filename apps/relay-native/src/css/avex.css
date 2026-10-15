@@ -1,6 +1,49 @@
 /* Avex (avex_pages.rs) in the dev space's tokens, beside Tally's and Arbiter's pages: the same
-   cards, strips and rows (money.css, arbiter.css). Lime marks a record, as Relay's signal; the
-   rest is Dev's ink. Backgrounds stay see-through. */
-.tally-row.avex-set { padding-top: 6px; padding-bottom: 6px; }
+   cards, strips and rows (money.css, arbiter.css). Green marks a record and a lift moving up,
+   amber one slipping and a copy waiting for a newer export; the rest is Dev's ink. What Avex adds
+   sits on the page as glass (DESIGN.md, The Glass Rule). */
+
+/* A copy from before this week: what the page shows is that week, and it says why. */
+.avex-notice { padding: 10px 14px; border: 1px solid @glass_edge; border-radius: 12px; background: @glass_card; }
+.avex-notice-mark { color: @waiting; }
+.avex-notice-text { color: @secondary; font-size: 13px; }
+
+/* A quiet way back, above a page's title. */
+button.avex-back { min-height: 22px; padding: 0 6px 0 2px; margin-left: -2px; border: 0; background: transparent; box-shadow: none; color: @faint; font-size: 12px; }
+button.avex-back:hover, button.avex-back:focus-visible { color: @ink; background: transparent; }
+button.avex-step { padding: 0 12px; }
+
+/* A lift's estimated max: ink, and colour only on its four-week change. */
+.avex-est { font-size: 11px; color: @faint; }
+.avex-change { padding: 1px 6px; border-radius: 6px; background: @glass_well; color: @faint; font-family: "Geist Mono", monospace; font-size: 11px; font-feature-settings: "tnum"; }
+.avex-change.avex-up { color: @live; background: alpha(@live, 0.10); }
+.avex-change.avex-down { color: @waiting; background: alpha(@waiting, 0.10); }
+
+/* The Lift page leads with what the lift has done, in words. */
+.avex-trend { font-size: 15px; color: @ink; }
+
+/* One workout's exercises in one card: each a sub-head over its sets and a line of how it went. */
+.avex-exercise-head { padding: 12px 16px 2px; border-top: 1px solid @line_subtle; }
+.tally-rows > .avex-exercise-head:first-child { border-top: 0; padding-top: 4px; }
+.avex-exercise-name { font-size: 13.5px; font-weight: 600; color: @ink; }
+.avex-record-mark { color: @live; font-size: 12px; }
+.avex-exercise-head button.money-text-action { min-height: 22px; }
+.avex-exercise-note { padding: 0 16px 4px 50px; }
+.tally-rows > .tally-row.avex-set { padding: 3px 16px; min-height: 28px; border-top: 0; }
 .avex-set .arbiter-step-number { min-width: 22px; }
 .avex-set .money-muted { color: @faint; }
+.avex-set .tally-figures { color: @faint; }
+.avex-set .tally-figures.avex-best { color: @ink; }
+.avex-exercise-foot { padding: 4px 16px 12px 50px; }
+.avex-versus { font-size: 12px; color: @secondary; }
+
+/* About this copy, behind the Overview's ⋯. */
+.avex-about { padding: 6px 6px 2px; }
+.avex-about-title { font-size: 13px; font-weight: 600; color: @ink; }
+.avex-fact-name { font-size: 12px; color: @faint; }
+.avex-fact { font-size: 13px; color: @ink; }
+
+/* The panel's line for a stale copy, and its quiet ways into Avex beside each block's caption. */
+.avex-panel-notice { margin-top: 2px; }
+button.money-text-action.avex-panel-link { min-height: 22px; padding: 0 4px; font-size: 11.5px; color: @faint; }
+button.money-text-action.avex-panel-link:hover { color: @ink; }
