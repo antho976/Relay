@@ -4,12 +4,13 @@
    registration's hue (data, never text), money in, over budget. The start screen has its own
    look, css/start.css. */
 
-/* Space switcher, beside the brand. */
-.space-switch { background: @screen; border: 1px solid @edge; border-radius: 999px; padding: 2px; }
-.space-switch button { min-height: 20px; min-width: 0; padding: 0 11px; border: 0; border-radius: 999px; background: transparent; color: @secondary; font-size: 12px; font-weight: 500; box-shadow: none; }
-.space-switch button:hover { color: @ink; background: @wash; }
-.space-switch button:checked, .space-switch button:checked:hover { background: @ink; color: @wall; }
-.space-switch button:checked label { color: @wall; }
+/* Space switcher, beside the brand: the app's segmented well (Board | Modules, Agents | Files |
+   Git) in glass, as tall as the title bar's search and keys (34px) so it sits on their line. */
+.space-switch { padding: 3px; border: 1px solid @glass_edge; border-radius: 10px; background: @glass_well; }
+.space-switch button { min-height: 26px; min-width: 0; padding: 0 14px; border: 0; border-radius: 7px; background: transparent; color: @faint; font-size: 13px; font-weight: 500; box-shadow: none; }
+.space-switch button label { color: inherit; }
+.space-switch button:hover { color: @ink; background: transparent; }
+.space-switch button:checked, .space-switch button:checked:hover { background: @glass_selected; color: @ink; }
 
 /* The page: a column centred in at most 1200px of content (pages::fit), at DESIGN.md's inset.
    See-through to the wallpaper: the page stack's @wall is the one layer (threads.css). */

@@ -26,6 +26,26 @@
 @define-color wash_solid #1f1d1b;
 /* A page's one layer, as see-through as a terminal plate on its @wall (shell.rs redefines it). */
 @define-color page_fill #131211;
+/* Glass: everything that sits on a page. A page paints @page_fill once; what lies on it is a
+   veil of @ink over that one layer, never a colour token. @slab, @wash and @raised are nearly
+   opaque under panel opacity (and @raised fully), so a card in them over @page_fill reads as a
+   solid block. One scale by role, the Skills page's Instructions | Projects tabs its reference:
+     @glass_well      a well that groups controls: a segmented control's trough, a board lane
+     @glass_card      a card: stat tiles, facts, the enable card, a list of rows
+     @glass_control   a control at rest on a page: a button, a field, a dropdown, a task card
+     @glass_hover     hover
+     @glass_selected  the chosen segment or row, a count, a track
+   and their edges: @glass_edge for wells and cards, @glass_line for controls, @glass_line_hover.
+   Veils work on any ground, so a dark mode or panel opacity needs nothing more. Only what floats
+   over content (menus, popovers, the quick-create sheet, the drag rail) is opaque: the _solid twins. */
+@define-color glass_well alpha(@ink, 0.03);
+@define-color glass_card alpha(@ink, 0.04);
+@define-color glass_control alpha(@ink, 0.055);
+@define-color glass_hover alpha(@ink, 0.075);
+@define-color glass_selected alpha(@ink, 0.09);
+@define-color glass_edge alpha(@ink, 0.07);
+@define-color glass_line alpha(@ink, 0.11);
+@define-color glass_line_hover alpha(@ink, 0.18);
 /* live, held and waiting are the same in every mode; fonts::STATUS gives them to the editor. */
 @define-color live #2ec469;
 @define-color held #e5382e;
@@ -38,7 +58,7 @@ window > box, stack, scrolledwindow { background: @wall; }
 /* Panel opacity, one value for every page: each page in the page stack (a direct child)
    paints @page_fill once, exactly as see-through as a terminal, whose plate tops up the agents
    view's @wall instead (css/usage.css). Nothing nested repaints, or translucent layers
-   compound to opaque; a card or field on a page is a deliberate step above it. The agents
+   compound to opaque; a card or field on a page is a glass veil above it (@glass_*). The agents
    view's other panes carry .page-layer (editor.rs), and a page with a column in the sidebar's
    place paints its own (.split-page: Settings). Bars and sidebars (@console) stay at panel
    opacity, a few points clearer. */
@@ -237,8 +257,8 @@ scale highlight { min-height: 2px; border: 0; border-radius: 0; background: @str
 scale slider { min-width: 12px; min-height: 12px; margin: -5px 0; border: 0; border-radius: 50%; background: @ink; box-shadow: none; }
 checkbutton check { min-width: 12px; min-height: 12px; border: 1px solid @line_emphasis; border-radius: 4px; background: @wall; box-shadow: none; }
 checkbutton check:checked { background: @ink; border-color: @ink; color: @wall; }
-/* Pill switches: ink when on, a raised well when off. */
-switch { min-width: 32px; min-height: 16px; padding: 0; margin: 0; border: 1px solid @line_emphasis; border-radius: 999px; background: @raised; background-image: none; box-shadow: none; outline: none; }
+/* Pill switches: ink when on, a glass well when off. */
+switch { min-width: 32px; min-height: 16px; padding: 0; margin: 0; border: 1px solid @glass_line_hover; border-radius: 999px; background: @glass_control; background-image: none; box-shadow: none; outline: none; }
 switch:hover { border-color: @faint; }
 switch:checked { background: @ink; border-color: @ink; }
 switch:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: 1px; }
@@ -309,13 +329,13 @@ button.settings-key:hover image { color: @ink; }
 
 /* Above the wall: the project crumb as a pill, and the views as one segmented control. */
 .workspace-strip { min-height: 52px; padding: 0 16px; }
-.workspace-strip > menubutton > button { min-height: 34px; padding: 0 12px; border: 1px solid @edge; border-radius: 10px; background: @slab; }
-.workspace-strip > menubutton > button:hover { background: @wash; border-color: @line_emphasis; }
+.workspace-strip > menubutton > button { min-height: 34px; padding: 0 12px; border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; }
+.workspace-strip > menubutton > button:hover { background: @glass_hover; border-color: @glass_line_hover; }
 .workspace-strip > menubutton label.mono { color: @ink; font-family: 'Geist', sans-serif; font-size: 13px; }
-.view-tabs { padding: 3px; border: 1px solid @edge; border-radius: 12px; background: @slab; }
+.view-tabs { padding: 3px; border: 1px solid @glass_edge; border-radius: 12px; background: @glass_well; }
 .view-tabs button.quiet { min-height: 28px; padding: 0 12px; border-radius: 9px; color: @faint; font-size: 13px; font-weight: 500; }
 .view-tabs button.quiet:hover { background: transparent; color: @ink; }
-.view-tabs button.quiet.selected { background: @track; color: @ink; }
+.view-tabs button.quiet.selected { background: @glass_selected; color: @ink; }
 /* Files and Git open beside the view: a lighter mark than the view that is showing. */
 .view-tabs button.quiet.open { background: alpha(@ink, 0.07); color: @secondary; }
 .view-tabs button.quiet.open:hover { color: @ink; }

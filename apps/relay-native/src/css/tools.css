@@ -4,13 +4,23 @@
    One stylesheet provider serves the whole app, so every rule is scoped under
    .ext-page. Settings' vocabulary (settings.css): a catalog column like its category
    list, a reading column of quiet headings over rounded cards, Settings' switches and
-   rounded keys, pill-segmented choices. Colour only for state. */
+   rounded keys, pill-segmented choices. Colour only for state. Every surface is glass
+   (theme.css @glass_*), the Instructions | Projects tabs the reference: wells, cards and
+   controls are ink veils over the page's one layer, so the wallpaper reads through evenly. */
+
+/* Controls at rest on the page: keys, dropdowns and the source view, in glass. */
+.ext-page dropdown > button { border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; }
+.ext-page dropdown > button:hover { border-color: @glass_line_hover; background: @glass_hover; }
+.ext-page switch.settings-switch { background: @glass_selected; }
+.ext-page switch.settings-switch:hover { background: @glass_line_hover; }
+.ext-page switch.settings-switch:checked { background: @ink; }
+.ext-page switch.settings-switch:checked:hover { background: white; }
 
 .page.ext-page { padding: 0; }
 
 /* Header */
-.ext-page .ext-head { padding: 26px 32px 22px; background: transparent; border-bottom: 1px solid @edge; }
-.ext-page .ext-tile { min-width: 44px; min-height: 44px; background: @raised; border: 1px solid @strong; border-radius: 12px; color: @ink; }
+.ext-page .ext-head { padding: 26px 32px 22px; background: transparent; border-bottom: 1px solid @glass_edge; }
+.ext-page .ext-tile { min-width: 44px; min-height: 44px; background: @glass_control; border: 1px solid @glass_line; border-radius: 12px; color: @ink; }
 .ext-page .ext-title { font-size: 25px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; color: @ink; }
 .ext-page .ext-subtitle { font-size: 13.5px; line-height: 1.35; color: @secondary; }
 .ext-page .ext-scope { margin-left: 8px; }
@@ -18,16 +28,16 @@
 .ext-page .ext-scope dropdown > button { min-width: 160px; }
 .ext-page .ext-actions { margin-left: 4px; }
 .ext-page .ext-actions button { min-height: 34px; padding: 0 14px; border-radius: 9px; }
-.ext-page .ext-actions button:not(.primary) { background: @raised; }
-.ext-page .ext-actions button:not(.primary):hover { background: @wash; border-color: @line_emphasis; }
-.ext-page button.ext-install:checked { background: @wash; border-color: @line_emphasis; color: @ink; }
+.ext-page .ext-actions button:not(.primary) { background: @glass_control; border-color: @glass_line; }
+.ext-page .ext-actions button:not(.primary):hover { background: @glass_hover; border-color: @glass_line_hover; }
+.ext-page button.ext-install:checked { background: @glass_selected; border-color: @glass_line_hover; color: @ink; }
 .ext-page button.ext-install:checked label { color: @ink; }
 
 /* Banner (the skill installer): a rounded card under the header. */
-.ext-page .ext-banner { margin: 16px 32px 0; padding: 18px 20px 20px; background: @slab; border: 1px solid @edge; border-radius: 14px; }
+.ext-page .ext-banner { margin: 16px 32px 0; padding: 18px 20px 20px; background: @glass_card; border: 1px solid @glass_edge; border-radius: 14px; }
 .ext-page .ext-banner-title { font-size: 14px; font-weight: 500; color: @ink; }
 .ext-page .ext-banner .skills-installer { margin: 4px 0 0; padding: 0; background: transparent; border: 0; }
-.ext-page .ext-banner entry { min-height: 34px; border-radius: 9px; }
+.ext-page .ext-banner entry { min-height: 34px; border-radius: 9px; border-color: @glass_line; background: @glass_card; }
 .ext-page .ext-banner button { min-height: 34px; padding: 0 14px; border-radius: 9px; }
 
 /* Inline notice */
@@ -38,17 +48,18 @@
 
 /* Catalog column, like Settings' category list */
 /* A hairline with a grab margin either side, like the sidebar's split. */
-.ext-page paned.ext-split > separator { min-width: 1px; margin: 0 -3px; border-left: 3px solid transparent; border-right: 3px solid transparent; background-clip: content-box; background-color: @edge; background-image: none; }
-.ext-page paned.ext-split > separator:hover { background-color: @line_focus; }
+.ext-page paned.ext-split > separator { min-width: 1px; margin: 0 -3px; border-left: 3px solid transparent; border-right: 3px solid transparent; background-clip: content-box; background-color: @glass_edge; background-image: none; }
+.ext-page paned.ext-split > separator:hover { background-color: @glass_line_hover; }
 .ext-page .ext-tools { padding: 18px 14px 10px; }
-.ext-page entry.ext-search { min-height: 34px; background: @raised; border: 1px solid @strong; border-radius: 10px; }
+.ext-page entry.ext-search { min-height: 34px; background: @glass_card; border: 1px solid @glass_line; border-radius: 10px; }
+.ext-page entry.ext-search:hover { border-color: @glass_line_hover; }
 .ext-page entry.ext-search:focus-within { border-color: alpha(@ink, 0.42); }
-.ext-page .ext-filters { padding: 3px; background: @raised; border: 1px solid @edge; border-radius: 10px; }
+.ext-page .ext-filters { padding: 3px; background: @glass_well; border: 1px solid @glass_edge; border-radius: 10px; }
 .ext-page button.ext-filter { min-height: 26px; padding: 0 6px; background: transparent; border: 0; border-radius: 7px; color: @faint; font-size: 12.5px; font-weight: 500; }
 .ext-page button.ext-filter label { color: @faint; }
 .ext-page button.ext-filter:hover { background: transparent; }
 .ext-page button.ext-filter:hover label { color: @ink; }
-.ext-page button.ext-filter:checked { background: @track; }
+.ext-page button.ext-filter:checked { background: @glass_selected; }
 .ext-page button.ext-filter:checked .ext-filter-name { color: @ink; }
 .ext-page .ext-count { font-size: 11.5px; color: @faint; font-feature-settings: "tnum"; }
 .ext-page button.ext-filter .ext-count { color: @faint; }
@@ -59,8 +70,8 @@
 .ext-page list.ext-list { background: transparent; padding: 0 10px 16px; }
 .ext-page list.ext-list > row { padding: 0; margin: 0; border-radius: 10px; background: transparent; box-shadow: none; outline: none; }
 .ext-page list.ext-list > row.ext-row { margin-bottom: 2px; transition: background 120ms ease-out; }
-.ext-page list.ext-list > row.ext-row:hover { background: alpha(@ink, 0.035); }
-.ext-page list.ext-list > row.ext-row:selected { background: @wash; }
+.ext-page list.ext-list > row.ext-row:hover { background: @glass_card; }
+.ext-page list.ext-list > row.ext-row:selected { background: @glass_selected; }
 .ext-page list.ext-list > row.ext-row:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: -2px; }
 .ext-page list.ext-list > row.ext-group { padding: 16px 8px 6px; border-radius: 0; }
 .ext-page list.ext-list > row.ext-group:first-child { padding-top: 6px; }
@@ -75,17 +86,17 @@
 .ext-page .ext-summary { font-size: 12.5px; line-height: 1.3; color: mix(@faint, @secondary, 0.3); }
 .ext-page .ext-path { font-family: 'Geist Mono', monospace; font-size: 11px; color: @faint; }
 .ext-page list.ext-list > row:selected .ext-summary, .ext-page list.ext-list > row:selected .ext-meta { color: @secondary; }
-.ext-page .ext-mark { min-width: 36px; min-height: 36px; background: @raised; border: 1px solid @strong; border-radius: 10px; color: @ink; font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
+.ext-page .ext-mark { min-width: 36px; min-height: 36px; background: @glass_control; border: 1px solid @glass_line; border-radius: 10px; color: @ink; font-size: 13px; font-weight: 600; letter-spacing: 0.02em; }
 .ext-page .ext-mark.large { min-width: 56px; min-height: 56px; border-radius: 14px; font-size: 19px; }
-.ext-page list.ext-list > row:selected .ext-mark { border-color: @line_emphasis; }
+.ext-page list.ext-list > row:selected .ext-mark { border-color: @glass_line_hover; }
 
 /* Chips: small pills */
 .ext-page flowbox.ext-chips { padding: 0; background: transparent; }
 .ext-page flowbox.ext-chips > flowboxchild { padding: 0; margin: 0; min-height: 0; min-width: 0; background: transparent; border: 0; outline: none; }
-.ext-page .ext-chip { padding: 1px 8px; background: alpha(@ink, 0.04); border: 1px solid @edge; border-radius: 999px; color: @secondary; font-size: 11px; font-weight: 500; }
-.ext-page list.ext-list > row:selected .ext-chip { border-color: @strong; }
+.ext-page .ext-chip { padding: 1px 8px; background: @glass_card; border: 1px solid @glass_edge; border-radius: 999px; color: @secondary; font-size: 11px; font-weight: 500; }
+.ext-page list.ext-list > row:selected .ext-chip { border-color: @glass_line; }
 .ext-page .ext-chip.hint { color: @waiting; background: alpha(@waiting, 0.07); border-color: alpha(@waiting, 0.38); }
-.ext-page .ext-chip.code { padding: 2px 8px; background: @raised; border-color: @strong; border-radius: 7px; color: @ink; font-family: 'Geist Mono', monospace; font-size: 11.5px; font-weight: 400; }
+.ext-page .ext-chip.code { padding: 2px 8px; background: @glass_control; border-color: @glass_line; border-radius: 7px; color: @ink; font-family: 'Geist Mono', monospace; font-size: 11.5px; font-weight: 400; }
 
 /* Detail pane: a reading column like one Settings category */
 .ext-page .ext-detail-scroll, .ext-page .ext-detail-scroll > viewport { background: transparent; }
@@ -95,48 +106,49 @@
 .ext-page .ext-prose.ext-lede { font-size: 14px; color: @secondary; }
 
 /* "On in X": a rounded card, its lamp and Settings' switch */
-.ext-page .ext-enable { padding: 16px 20px; background: @slab; border: 1px solid @edge; border-radius: 14px; }
+.ext-page .ext-enable { padding: 16px 20px; background: @glass_card; border: 1px solid @glass_edge; border-radius: 14px; }
 .ext-page .ext-enable.on { border-color: alpha(@live, 0.3); }
 .ext-page .ext-enable-title { font-size: 14px; font-weight: 500; color: @ink; }
 .ext-page .ext-enable-text { font-size: 12.5px; line-height: 1.3; color: mix(@faint, @secondary, 0.3); }
-.ext-page .ext-lamp { min-width: 8px; min-height: 8px; border: 0; border-radius: 999px; background: @track; }
+.ext-page .ext-lamp { min-width: 8px; min-height: 8px; border: 0; border-radius: 999px; background: @glass_line_hover; }
 .ext-page .ext-lamp.small { min-width: 7px; min-height: 7px; }
 .ext-page .ext-lamp.on { background: @live; }
 
 /* Actions */
 .ext-page .ext-action-bar button { min-height: 32px; padding: 0 14px; border-radius: 9px; }
-.ext-page .ext-action-bar button:not(.quiet) { background: @raised; }
-.ext-page .ext-action-bar button:not(.quiet):hover { background: @wash; border-color: @line_emphasis; }
+.ext-page .ext-action-bar button:not(.quiet) { background: @glass_control; border-color: @glass_line; }
+.ext-page .ext-action-bar button:not(.quiet):hover { background: @glass_hover; border-color: @glass_line_hover; }
 /* Armed, it is the shared inline confirm (sessions.css `.confirm-armed`); these are its resting tints. */
 .ext-page button.ext-danger:not(.confirm-armed) label { color: @secondary; }
 .ext-page button.ext-danger:not(.confirm-armed):hover { background: alpha(@held, 0.1); }
 .ext-page button.ext-danger:not(.confirm-armed):hover label { color: @held; }
 
 /* Facts: key and value rows in a rounded card */
-.ext-page .ext-facts { padding: 16px 20px; background: @slab; border: 1px solid @edge; border-radius: 14px; }
+.ext-page .ext-facts { padding: 16px 20px; background: @glass_card; border: 1px solid @glass_edge; border-radius: 14px; }
 .ext-page .ext-fact-key { min-width: 84px; font-size: 13px; color: @faint; }
 .ext-page .ext-fact { font-size: 13px; color: @ink; }
 .ext-page .ext-fact-mono { font-family: 'Geist Mono', monospace; font-size: 12px; color: @ink; }
 
 /* Tabs: pill-segmented, as in the usage card */
-.ext-page .ext-tabs { margin-top: 6px; padding: 3px; border: 1px solid alpha(@ink, 0.07); border-radius: 10px; background: alpha(@ink, 0.03); }
+.ext-page .ext-tabs { margin-top: 6px; padding: 3px; border: 1px solid @glass_edge; border-radius: 10px; background: @glass_well; }
 .ext-page button.ext-tab { min-height: 28px; padding: 0 12px; margin: 0; background: transparent; border: 0; border-radius: 7px; box-shadow: none; }
 .ext-page button.ext-tab .ext-tab-name { color: @faint; font-size: 13px; font-weight: 500; }
 .ext-page button.ext-tab:hover { background: transparent; }
 .ext-page button.ext-tab:hover .ext-tab-name { color: @secondary; }
-.ext-page button.ext-tab:checked { background: alpha(@ink, 0.09); }
+.ext-page button.ext-tab:checked { background: @glass_selected; }
 .ext-page button.ext-tab:checked .ext-tab-name { color: @ink; }
 .ext-page button.ext-tab:checked .ext-count { color: @secondary; }
 
 /* Sections and Markdown */
 .ext-page .ext-section-title { padding: 0 2px; font-size: 13px; font-weight: 600; color: @secondary; }
-.ext-page textview.ext-source { padding: 0; border: 1px solid @edge; border-radius: 14px; font-family: 'Geist Mono', monospace; font-size: 12px; }
+.ext-page textview.ext-source { padding: 0; border: 1px solid @glass_edge; border-radius: 14px; background: @glass_card; font-family: 'Geist Mono', monospace; font-size: 12px; }
+.ext-page textview.ext-source text { background: transparent; }
 
 /* Plugin skills: rows in one rounded card, each a toggle over the SKILL.md it opens */
-.ext-page .ext-entries { background: @slab; border: 1px solid @edge; border-radius: 14px; }
-.ext-page .ext-entry + .ext-entry { border-top: 1px solid @edge; }
+.ext-page .ext-entries { background: @glass_card; border: 1px solid @glass_edge; border-radius: 14px; }
+.ext-page .ext-entry + .ext-entry { border-top: 1px solid @glass_edge; }
 .ext-page button.ext-entry-key { min-height: 0; padding: 14px 18px 14px 14px; background: transparent; border: 0; border-radius: 0; box-shadow: none; }
-.ext-page button.ext-entry-key:hover { background: alpha(@ink, 0.025); }
+.ext-page button.ext-entry-key:hover { background: @glass_well; }
 .ext-page button.ext-entry-key:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: -2px; }
 .ext-page .ext-entry-chevron { color: @faint; }
 .ext-page button.ext-entry-key:hover .ext-entry-chevron, .ext-page button.ext-entry-key:checked .ext-entry-chevron { color: @ink; }
@@ -146,16 +158,16 @@
 .ext-page .ext-entries > label.dim { padding: 16px 20px; }
 
 /* MCP servers */
-.ext-page .ext-server { padding: 16px 20px 18px; background: @slab; border: 1px solid @edge; border-radius: 14px; }
+.ext-page .ext-server { padding: 16px 20px 18px; background: @glass_card; border: 1px solid @glass_edge; border-radius: 14px; }
 .ext-page .ext-server-name { font-family: 'Geist Mono', monospace; font-size: 13px; font-weight: 600; color: @ink; }
 
 /* Per-project switches: a heading per workspace over a rounded card of rows */
 .ext-page .ext-projects-head { padding: 0 2px; }
 .ext-page .ext-projects-name { font-size: 13px; font-weight: 600; color: @secondary; }
-.ext-page .ext-card-list { background: @slab; border: 1px solid @edge; border-radius: 14px; }
+.ext-page .ext-card-list { background: @glass_card; border: 1px solid @glass_edge; border-radius: 14px; }
 .ext-page .ext-project { min-height: 32px; padding: 10px 16px 10px 18px; }
-.ext-page .ext-project + .ext-project { border-top: 1px solid @edge; }
-.ext-page .ext-project.scoped { background: alpha(@ink, 0.035); }
+.ext-page .ext-project + .ext-project { border-top: 1px solid @glass_edge; }
+.ext-page .ext-project.scoped { background: @glass_well; }
 .ext-page .ext-project.scoped:first-child { border-radius: 13px 13px 0 0; }
 .ext-page .ext-project.scoped:last-child { border-radius: 0 0 13px 13px; }
 .ext-page .ext-project.scoped:only-child { border-radius: 13px; }
