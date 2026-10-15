@@ -637,6 +637,33 @@ impl Engine {
         self.unlocked.insert(O::NAME, call);
     }
 
+    /// [`Engine::register_unlocked`] for a query that builds its result as JSON itself, because
+    /// most of it is JSON already: stored payloads parsed from text. Through `O::Result` each
+    /// would be parsed into a `Value` and then copied, node by node, into the result's.
+    /// `f` must return exactly what `serde_json::to_value` of an `O::Result` would; the handler
+    /// keeps a test that says so.
+    pub fn register_unlocked_json<O: Op>(
+        &mut self,
+        f: impl Fn(&mut Unlocked, O::Payload) -> Result<Value, BusError> + Send + Sync + 'static,
+    ) {
+        debug_assert!(
+            Registry::global().get(O::NAME).is_some(),
+            "{} is not in the registry",
+            O::NAME
+        );
+        debug_assert!(
+            matches!(O::META.kind, OpKind::Query),
+            "{} mutates; it cannot run outside the transaction",
+            O::NAME
+        );
+        let call: UnlockedFn = Arc::new(move |ctx: &mut Unlocked, v: &Value| {
+            let p: O::Payload =
+                serde::Deserialize::deserialize(v).map_err(|e| BusError::schema(O::NAME, e))?;
+            f(ctx, p)
+        });
+        self.unlocked.insert(O::NAME, call);
+    }
+
     /// Register a mutation as three phases instead of one (D149): `prepare` reads what it needs
     /// in short bursts and does the slow external work — a subprocess, a network call, a tree
     /// walk — with the store lock released; `finish` then runs inside the request's transaction
