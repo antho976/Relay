@@ -1326,23 +1326,25 @@ fn build_row_from(note: &Value, title: &str, body: &str, whole: bool) -> Row {
     let heading = label(&name, "notes-row-title");
     heading.set_hexpand(true);
     heading.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    heading.set_valign(gtk::Align::Baseline);
     top.append(&heading);
     if note["pinned"] == true {
         let pin = glyph("pin", 12);
         pin.add_css_class("notes-row-pin");
+        pin.set_valign(gtk::Align::Center);
         pin.set_tooltip_text(Some("Pinned to the top of the library"));
         top.append(&pin);
     }
-    content.append(&top);
-    let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 7);
+    // The date sits at the end of the title line, so the preview has the whole second line.
     let date = label(&fmt_date(text(note, "updated_at")), "notes-row-date");
-    bottom.append(&date);
+    date.set_valign(gtk::Align::Baseline);
+    top.append(&date);
+    content.append(&top);
     let preview = text::preview(title, body);
     let shown = label(if preview.is_empty() { "No additional text" } else { &preview }, "notes-row-preview");
     shown.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    shown.set_hexpand(true);
-    bottom.append(&shown);
-    content.append(&bottom);
+    shown.set_xalign(0.);
+    content.append(&shown);
     row.set_child(Some(&content));
     row.update_property(&[gtk::accessible::Property::Label(&name)]);
     Row { row, note: note.clone(), haystack: format!("{title}\n{body}").to_lowercase(), dot, heading, date, shown, name, preview, whole }
@@ -1678,25 +1680,34 @@ fn refresh_picker(ui: &Rc<Ui>, shell: &Shell, project: i64) {
     clear(&shell.picker);
     let picker = super::workspace_picker(ui, project, "notes");
     picker.set_hexpand(true);
-    // The shared caption reads "Workspace / Project" and ellipsizes at its end, which cuts the
-    // project's name first: here the project leads, with its workspace small before it.
+    // Drawn as the search field's twin: a leading folder where the field has its magnifier,
+    // the project's name, then its workspace faint after it. The shared caption reads
+    // "Workspace / Project" and ellipsizes at its end, which would cut the project first.
     let content = picker.child().and_downcast::<gtk::Box>();
     if let Some(caption) = content.as_ref().and_then(|c| c.first_child()).and_downcast::<gtk::Label>() {
         let full = caption.text().to_string();
         let (space, name) = full.split_once(" / ").unwrap_or(("", full.as_str()));
         picker.set_tooltip_text(Some(&format!("{name} · {space}\nSwitch project")));
         caption.set_text(name);
-        caption.set_hexpand(true);
         caption.set_xalign(0.);
         caption.set_max_width_chars(-1);
-        if !space.is_empty() {
+        let mut after = caption.clone().upcast::<gtk::Widget>();
+        // A workspace named like its project would only say the name twice.
+        if !space.is_empty() && space != name {
             let workspace = label(space, "notes-picker-space");
             workspace.set_ellipsize(gtk::pango::EllipsizeMode::End);
             workspace.set_max_width_chars(14);
-            workspace.set_valign(gtk::Align::Center);
+            workspace.set_xalign(0.);
             if let Some(content) = &content {
-                content.prepend(&workspace);
+                content.insert_child_after(&workspace, Some(&caption));
             }
+            after = workspace.upcast();
+        }
+        after.set_hexpand(true);
+        if let Some(content) = &content {
+            let mark = crate::icons::image("folder", 14);
+            mark.add_css_class("notes-picker-mark");
+            content.prepend(&mark);
         }
     }
     shell.picker.append(&picker);

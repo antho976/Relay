@@ -92,30 +92,38 @@ button.notes-customize-reset { min-height: 26px; padding: 0 10px; border-radius:
 .notes-split > separator { min-width: 1px; margin: 0; padding: 0; border: 0; background: @edge; }
 .notes-library { background: @console; }
 .notes-library scrolledwindow, .notes-library viewport { background: transparent; }
-.notes-picker { padding: 8px 8px 4px; }
-.notes-picker .workspace-picker > button { min-height: 32px; padding: 0 10px; border: 1px solid @edge; border-radius: 7px; background: alpha(@ink, 0.03); }
-.notes-picker .workspace-picker > button:hover,
-.notes-picker .workspace-picker > button:checked { border-color: @strong; background: alpha(@ink, 0.07); }
-.notes-picker .workspace-picker-label { color: @ink; font-size: 12px; font-weight: 500; }
+/* The picker is the search field's twin: same height, ground, stroke, radius and hover, its
+   folder where the field has its magnifier; open, it takes the field's focus ring. */
+.notes-picker { padding: 10px 8px 6px; }
+.notes-picker .workspace-picker > button { min-height: 32px; padding: 0 9px 0 10px; border: 1px solid @strong; border-radius: 10px; background: @wall_solid; color: @ink; box-shadow: none; transition: border-color 120ms ease-out, box-shadow 120ms ease-out; }
+.notes-picker .workspace-picker > button:hover { border-color: @line_emphasis; }
+.notes-picker .workspace-picker > button:checked { border-color: alpha(@ink, 0.42); box-shadow: 0 0 0 3px alpha(@ink, 0.07); }
+.notes-picker .workspace-picker > button:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: 0; }
+.notes-picker .workspace-picker-label { margin-left: 2px; color: @ink; font-size: 13px; font-weight: 500; }
 .notes-picker .workspace-picker image { color: @faint; }
-.notes-picker-space { margin-right: 2px; padding: 1px 6px; border-radius: 4px; background: alpha(@ink, 0.07); color: @secondary; font-size: 10.5px; font-weight: 500; }
-.notes-library-head { padding: 4px 6px 8px 8px; }
+.notes-picker .workspace-picker > button:checked image.notes-picker-mark { color: @secondary; }
+.notes-picker-space { margin-left: 2px; color: @faint; font-size: 12px; }
+.notes-library-head { padding: 0 8px 10px; }
 button.notes-library-key,
-.notes-library-key > button { min-width: 30px; min-height: 30px; margin: 0; padding: 0; border: 0; border-radius: 6px; background: transparent; color: @secondary; }
+.notes-library-key > button { min-width: 32px; min-height: 32px; margin: 0; padding: 0; border: 0; border-radius: 7px; background: transparent; color: @secondary; }
 button.notes-library-key:hover,
 .notes-library-key > button:hover,
 .notes-library-key > button:checked { background: alpha(@ink, 0.08); color: @ink; }
 entry.search.notes-library-search { margin: 0 2px 0 0; background: @wall_solid; }
-list.notes-list { background: transparent; padding: 0 6px 8px; }
-list.notes-list > row.notes-row { margin: 1px 0; padding: 8px 10px 9px 10px; border-radius: 6px; background: transparent; }
-list.notes-list > row.notes-row:hover { background: alpha(@ink, 0.04); }
-list.notes-list > row.notes-row:selected { background: alpha(@ink, 0.09); box-shadow: inset 2px 0 @ink; }
-list.notes-list > row.notes-row:focus-visible { outline: 1px solid alpha(@ink, 0.35); outline-offset: -1px; }
-.notes-row-title { color: @ink; font-size: 13px; font-weight: 500; }
-.notes-row-date { color: @secondary; font-size: 11px; font-feature-settings: "tnum"; }
-.notes-row-preview { color: @faint; font-size: 11px; }
+/* Rows: a title line (name, pin, date) over one line of preview. Hover washes the row and the
+   open note fills it, rounded like every row in Relay, with no rail at its edge. */
+list.notes-list { background: transparent; padding: 0 8px 10px; }
+list.notes-list > row.notes-row { margin: 0 0 2px; padding: 9px 10px 10px; border-radius: 10px; background: transparent; transition: background-color 120ms ease-out; }
+list.notes-list > row.notes-row:hover { background: alpha(@ink, 0.045); }
+list.notes-list > row.notes-row:selected { background: alpha(@ink, 0.095); box-shadow: none; }
+list.notes-list > row.notes-row:selected:hover { background: alpha(@ink, 0.11); }
+list.notes-list > row.notes-row:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: -2px; }
+.notes-row-title { color: @secondary; font-size: 13px; font-weight: 500; }
+list.notes-list > row.notes-row:selected .notes-row-title { color: @ink; }
+.notes-row-date { color: @faint; font-family: 'Geist Mono', monospace; font-size: 10.5px; font-feature-settings: "tnum"; }
+.notes-row-preview { color: @faint; font-size: 12px; }
 .notes-row-pin { color: @faint; }
-.notes-list-header { padding: 12px 10px 4px; color: @faint; font-family: 'Geist', sans-serif; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; }
+.notes-list-header { padding: 14px 10px 6px; color: @faint; font-family: 'Geist', sans-serif; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; }
 .notes-list-empty { padding: 28px 18px; color: @faint; font-size: 12px; }
 
 /* ---- tabs ---- */
