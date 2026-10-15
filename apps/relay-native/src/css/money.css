@@ -131,6 +131,13 @@ menubutton.money-picker > button { padding: 0 10px; }
 .tally-rows > box.tally-entry { padding: 0; }
 .tally-entry > button.money-row-key { padding: 7px 8px 7px 16px; min-height: 34px; border-radius: 0; }
 .tally-entry > button.money-row-key.tally-line-key { padding-right: 16px; }
+/* In Entries the badge leads the row outside its key; an expense's or income's is a key of its
+   own that changes the category, ringed in its hue on hover. */
+.tally-entry > button.money-badge-key, .tally-entry > .tally-lead { margin-left: 16px; }
+.tally-entry > button.money-row-key.after-lead { padding-left: 12px; }
+button.money-badge-key { min-width: 0; min-height: 0; padding: 0; border: 0; border-radius: 9px; background: transparent; box-shadow: none; }
+button.money-badge-key:hover { background: transparent; }
+button.money-badge-key:hover .money-badge, button.money-badge-key:focus-visible .money-badge { box-shadow: inset 0 0 0 1px currentColor; }
 .tally-entry:hover { background: @wash; }
 .tally-rows > .tally-entry:last-child { border-bottom-left-radius: 13px; border-bottom-right-radius: 13px; }
 .tally-entry button.money-row-delete { opacity: 0; margin-right: 10px; }

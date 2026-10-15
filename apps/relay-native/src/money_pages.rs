@@ -871,10 +871,170 @@ pub fn delete(ui: &Rc<Ui>, tx: Value) {
     });
 }
 
+/// What an entry is called on a row and in a toast: its note, else its category, else its kind.
+fn entry_name(tx: &Value) -> String {
+    let note = text(tx, "note").trim();
+    if !note.is_empty() {
+        return note.to_string();
+    }
+    match text(tx, "category") {
+        "" if text(tx, "type") == "TRANSFER" => String::from("Transfer"),
+        "" => word(text(tx, "type")),
+        name => name.to_string(),
+    }
+}
+
+/// "Thu 8 Oct", another year adding it: a day as words that still mean it later, unlike "Today".
+fn long_date(value: &str) -> String {
+    let Some(day) = date(value) else { return value.to_string() };
+    let same_year = glib::DateTime::now_local().is_ok_and(|now| now.year() == day.year());
+    day.format(if same_year { "%a %-d %b" } else { "%a %-d %b %Y" }).map(|s| s.to_string()).unwrap_or_else(|_| value.to_string())
+}
+
+/// The person's question about one entry, as they would type it: "Tell me about this entry:
+/// Burger night, Dining, $14.98 on Thu 8 Oct".
+fn ask_about(tx: &Value) -> String {
+    let amount = formatter().format(n(tx, "amount"));
+    let note = text(tx, "note").trim().to_string();
+    let parts = match text(tx, "type") {
+        "TRANSFER" => vec![note, format!("a transfer of {amount} from {} to {}", text(tx, "account"), text(tx, "to_account"))],
+        "INCOME" => vec![note, text(tx, "category").to_string(), format!("{amount} in")],
+        _ => vec![note, text(tx, "category").to_string(), amount],
+    };
+    let said: Vec<String> = parts.into_iter().filter(|p| !p.is_empty()).collect();
+    format!("Tell me about this entry: {} on {}", said.join(", "), long_date(text(tx, "date")))
+}
+
+thread_local! {
+    /// The ledger's categories as Entries last read them (`money.lists`), for the badge's list.
+    static CATEGORIES: RefCell<Vec<Value>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Moves `tx` to the category `id` (`money.tx.update`), with Undo on the toast putting it back.
+fn recategorize(ui: &Rc<Ui>, tx: &Value, id: i64, name: String) {
+    let ui = ui.clone();
+    let tx = tx.clone();
+    glib::spawn_future_local(async move {
+        match ui.call("money.tx.update", json!({"id":tx["id"],"category_id":id})).await {
+            Ok(_) => {
+                let weak = Rc::downgrade(&ui);
+                let back = json!({"id":tx["id"],"category_id":tx["category_id"]});
+                let undo: Action = Rc::new(move || {
+                    let Some(ui) = weak.upgrade() else { return };
+                    let back = back.clone();
+                    glib::spawn_future_local(async move {
+                        if let Err(e) = ui.call("money.tx.update", back).await {
+                            ui.show_error(&e.to_string());
+                        }
+                        ui.refresh_page();
+                    });
+                });
+                super::toast(&ui, &format!("Moved {} to {name}", entry_name(&tx)), Some(undo));
+                ui.refresh_page();
+            }
+            Err(e) => ui.show_error(&e.to_string()),
+        }
+    });
+}
+
+/// Opens the category list on `anchor` (the row's badge) for `tx`: picking another moves it.
+fn change_category(ui: &Rc<Ui>, anchor: &gtk::Widget, tx: &Value) {
+    let categories = CATEGORIES.with(|c| c.borrow().clone());
+    let current = tx["category_id"].as_i64();
+    let list = choices(&categories, text(tx, "type"), current);
+    let names: Vec<(i64, String)> = list.iter().map(|c| (c.id, c.name.clone())).collect();
+    let popover = gtk::Popover::new();
+    popover.add_css_class("money-menu");
+    popover.set_parent(anchor);
+    let (weak, shut, tx) = (Rc::downgrade(ui), popover.downgrade(), tx.clone());
+    let pick: Rc<dyn Fn(i64)> = Rc::new(move |id| {
+        if let Some(popover) = shut.upgrade() {
+            popover.popdown();
+        }
+        let (Some(ui), false) = (weak.upgrade(), Some(id) == current) else { return };
+        let name = names.iter().find(|(c, _)| *c == id).map(|(_, name)| name.clone()).unwrap_or_default();
+        recategorize(&ui, &tx, id, name);
+    });
+    popover.set_child(Some(&chooser(&list, current, pick)));
+    popover.connect_closed(|popover| {
+        let popover = popover.clone();
+        glib::idle_add_local_once(move || popover.unparent());
+    });
+    popover.popup();
+}
+
+/// An entry's menu, at `point` on its `row` (the row's middle from the keyboard): Edit, Change
+/// category (`badge`, when it has one), Ask about this entry, Delete.
+fn entry_menu(ui: &Rc<Ui>, row: &gtk::Box, badge: Option<&gtk::Widget>, tx: &Value, point: Option<(f64, f64)>) {
+    let popover = gtk::Popover::new();
+    popover.add_css_class("money-menu");
+    popover.set_has_arrow(false);
+    popover.set_parent(row);
+    if let Some((x, y)) = point {
+        popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+    }
+    let menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    menu.set_size_request(220, -1);
+    let item = |icon: gtk::Image, caption: &str, destructive: bool, run: Box<dyn Fn()>| {
+        let key = bare("money-menu-item");
+        if destructive {
+            key.add_css_class("destructive");
+        }
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        line.append(&icon);
+        line.append(&label(caption, ""));
+        key.set_child(Some(&line));
+        key.update_property(&[gtk::accessible::Property::Label(caption)]);
+        let shut = popover.downgrade();
+        key.connect_clicked(move |_| {
+            if let Some(popover) = shut.upgrade() {
+                popover.popdown();
+            }
+            run();
+        });
+        menu.append(&key);
+    };
+    let (weak, edit) = (Rc::downgrade(ui), tx.clone());
+    item(crate::icons::image("edit", 14), "Edit", false, Box::new(move || {
+        if let Some(ui) = weak.upgrade() {
+            super::edit_entry(&ui, edit.clone());
+        }
+    }));
+    if let Some(badge) = badge {
+        let (weak, anchor, moved) = (Rc::downgrade(ui), badge.downgrade(), tx.clone());
+        item(glyph_image("list", 14), "Change category…", false, Box::new(move || {
+            if let (Some(ui), Some(anchor)) = (weak.upgrade(), anchor.upgrade()) {
+                // After this menu has gone: one popover at a time.
+                let moved = moved.clone();
+                glib::idle_add_local_once(move || change_category(&ui, &anchor, &moved));
+            }
+        }));
+    }
+    let (weak, question) = (Rc::downgrade(ui), ask_about(tx));
+    item(crate::icons::image("claude", 14), "Ask about this entry", false, Box::new(move || {
+        if let Some(ui) = weak.upgrade() {
+            super::threads::ask(&ui, &question);
+        }
+    }));
+    let (weak, gone) = (Rc::downgrade(ui), tx.clone());
+    item(glyph_image("trash", 14), "Delete", true, Box::new(move || {
+        if let Some(ui) = weak.upgrade() {
+            delete(&ui, gone.clone());
+        }
+    }));
+    popover.set_child(Some(&menu));
+    popover.connect_closed(|popover| {
+        let popover = popover.clone();
+        glib::idle_add_local_once(move || popover.unparent());
+    });
+    popover.popup();
+}
+
 /// One entry as a row: its category badge, what it was (the note, else the category) over
-/// where it sits, and the amount; `dated` adds the day. Clicking it edits; the trash key (shown on
-/// hover, where `deletable`) deletes with Undo.
-fn tx_row(ui: &Rc<Ui>, tx: &Value, deletable: bool, dated: bool) -> gtk::Box {
+/// where it sits, and the amount; `dated` adds the day. Clicking it edits. In Entries (`actions`)
+/// the badge is a key that changes the category, the trash key (shown on hover) deletes with
+/// Undo, Delete deletes the focused row, and a right click or the Menu key opens its menu.
+fn tx_row(ui: &Rc<Ui>, tx: &Value, actions: bool, dated: bool) -> gtk::Box {
     let fmt = formatter();
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     row.add_css_class("tally-row");
@@ -884,7 +1044,34 @@ fn tx_row(ui: &Rc<Ui>, tx: &Value, deletable: bool, dated: bool) -> gtk::Box {
     let inner = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     let kind = text(tx, "type");
     let transfer = kind == "TRANSFER";
-    inner.append(&badge_sized(if transfer { "repeat" } else { text(tx, "icon") }, if transfer { 10 } else { n(tx, "color") }, 28));
+    let what = entry_name(tx);
+    let badge = badge_sized(if transfer { "repeat" } else { text(tx, "icon") }, if transfer { 10 } else { n(tx, "color") }, 28);
+    // In Entries the badge leads the row outside its key: for an expense or income it is a key of
+    // its own, which changes the category.
+    let badge_key: Option<gtk::Widget> = if actions && !transfer {
+        let key = bare("money-badge-key");
+        key.set_child(Some(&badge));
+        key.set_valign(gtk::Align::Center);
+        key.set_tooltip_text(Some("Change category"));
+        key.update_property(&[gtk::accessible::Property::Label(&format!("Change the category of {what}"))]);
+        let (weak, moved) = (Rc::downgrade(ui), tx.clone());
+        key.connect_clicked(move |key| {
+            if let Some(ui) = weak.upgrade() {
+                change_category(&ui, key.upcast_ref(), &moved);
+            }
+        });
+        row.append(&key);
+        main.add_css_class("after-lead");
+        Some(key.upcast())
+    } else if actions {
+        badge.add_css_class("tally-lead");
+        row.append(&badge);
+        main.add_css_class("after-lead");
+        None
+    } else {
+        inner.append(&badge);
+        None
+    };
     let words = gtk::Box::new(gtk::Orientation::Vertical, 1);
     words.set_hexpand(true);
     words.set_valign(gtk::Align::Center);
@@ -893,8 +1080,7 @@ fn tx_row(ui: &Rc<Ui>, tx: &Value, deletable: bool, dated: bool) -> gtk::Box {
         "" => word(kind),
         name => name.to_string(),
     };
-    let note = text(tx, "note").trim();
-    let (what, mut detail) = if note.is_empty() { (category.clone(), Vec::new()) } else { (note.to_string(), vec![category]) };
+    let mut detail = if text(tx, "note").trim().is_empty() { Vec::new() } else { vec![category] };
     if transfer {
         detail.push(format!("{} → {}", text(tx, "account"), text(tx, "to_account")));
     } else {
@@ -911,11 +1097,12 @@ fn tx_row(ui: &Rc<Ui>, tx: &Value, deletable: bool, dated: bool) -> gtk::Box {
     words.append(&d);
     inner.append(&words);
     let amount = n(tx, "amount");
-    let figure = match kind {
-        "INCOME" => label(&fmt.format_signed(amount), "money-amount"),
-        "EXPENSE" => label(&format!("−{}", fmt.format(amount)), "money-amount"),
-        _ => label(&fmt.format(amount), "money-amount"),
+    let shown = match kind {
+        "INCOME" => fmt.format_signed(amount),
+        "EXPENSE" => format!("−{}", fmt.format(amount)),
+        _ => fmt.format(amount),
     };
+    let figure = label(&shown, "money-amount");
     match kind {
         "INCOME" => figure.add_css_class("money-in"),
         "TRANSFER" => figure.add_css_class("money-quiet"),
@@ -924,7 +1111,8 @@ fn tx_row(ui: &Rc<Ui>, tx: &Value, deletable: bool, dated: bool) -> gtk::Box {
     figure.set_valign(gtk::Align::Center);
     inner.append(&figure);
     main.set_child(Some(&inner));
-    main.set_tooltip_text(Some("Edit this entry"));
+    main.set_tooltip_text(Some(if actions { "Edit this entry · right-click for more" } else { "Edit this entry" }));
+    main.update_property(&[gtk::accessible::Property::Label(&format!("{what}, {}, {shown}", detail.join(", ")))]);
     let weak = Rc::downgrade(ui);
     let edit = tx.clone();
     main.connect_clicked(move |_| {
@@ -933,19 +1121,52 @@ fn tx_row(ui: &Rc<Ui>, tx: &Value, deletable: bool, dated: bool) -> gtk::Box {
         }
     });
     row.append(&main);
-    if deletable {
-        let trash = crate::app::icon_button("trash", "Delete entry");
-        trash.add_css_class("money-row-delete");
-        trash.set_valign(gtk::Align::Center);
-        let weak = Rc::downgrade(ui);
-        let gone = tx.clone();
-        trash.connect_clicked(move |_| {
-            if let Some(ui) = weak.upgrade() {
-                delete(&ui, gone.clone());
-            }
-        });
-        row.append(&trash);
+    if !actions {
+        return row;
     }
+    let trash = crate::app::icon_button("trash", "Delete entry");
+    trash.add_css_class("money-row-delete");
+    trash.set_valign(gtk::Align::Center);
+    let weak = Rc::downgrade(ui);
+    let gone = tx.clone();
+    trash.connect_clicked(move |_| {
+        if let Some(ui) = weak.upgrade() {
+            delete(&ui, gone.clone());
+        }
+    });
+    row.append(&trash);
+    // Its menu, from a right click or the keyboard; Delete on the focused row deletes it.
+    let context = gtk::GestureClick::new();
+    context.set_button(gtk::gdk::BUTTON_SECONDARY);
+    let (weak, held, badge) = (Rc::downgrade(ui), tx.clone(), badge_key.as_ref().map(|b| b.downgrade()));
+    context.connect_pressed(move |gesture, _, x, y| {
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        let (Some(ui), Some(row)) = (weak.upgrade(), gesture.widget().and_downcast::<gtk::Box>()) else { return };
+        let badge = badge.as_ref().and_then(|b| b.upgrade());
+        entry_menu(&ui, &row, badge.as_ref(), &held, Some((x, y)));
+    });
+    row.add_controller(context);
+    let keys = gtk::EventControllerKey::new();
+    let (weak, held, badge) = (Rc::downgrade(ui), tx.clone(), badge_key.as_ref().map(|b| b.downgrade()));
+    keys.connect_key_pressed(move |keys, key, _, mods| {
+        use gtk::gdk::{Key, ModifierType};
+        let Some(ui) = weak.upgrade() else { return glib::Propagation::Proceed };
+        let plain = !mods.intersects(ModifierType::CONTROL_MASK | ModifierType::ALT_MASK | ModifierType::SHIFT_MASK);
+        match key {
+            Key::Delete | Key::KP_Delete if plain => delete(&ui, held.clone()),
+            Key::Menu => {}
+            Key::F10 if mods.contains(ModifierType::SHIFT_MASK) => {}
+            _ => return glib::Propagation::Proceed,
+        }
+        if !matches!(key, Key::Delete | Key::KP_Delete) {
+            if let Some(row) = keys.widget().and_downcast::<gtk::Box>() {
+                let badge = badge.as_ref().and_then(|b| b.upgrade());
+                entry_menu(&ui, &row, badge.as_ref(), &held, None);
+            }
+        }
+        glib::Propagation::Stop
+    });
+    row.add_controller(keys);
     row
 }
 
@@ -1080,6 +1301,24 @@ pub fn install(ui: &Rc<Ui>) {
         });
     }
     TX_HEAD.with(|h| *h.borrow_mut() = Some(head));
+    // Ctrl F on Entries puts the focus in its search.
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak = Rc::downgrade(ui);
+    keys.connect_key_pressed(move |_, key, keycode, mods| {
+        use gtk::gdk::ModifierType;
+        let Some(ui) = weak.upgrade() else { return glib::Propagation::Proceed };
+        let mods = mods & (ModifierType::CONTROL_MASK | ModifierType::SHIFT_MASK | ModifierType::ALT_MASK | ModifierType::META_MASK);
+        let here = *ui.page.borrow() == "money-transactions" && ui.panels.borrow().is_empty();
+        if !here || mods != ModifierType::CONTROL_MASK || crate::shortcuts::latin(key, keycode).to_lower() != gtk::gdk::Key::f {
+            return glib::Propagation::Proceed;
+        }
+        if let Some(head) = TX_HEAD.with(|h| h.borrow().clone()) {
+            head.search.grab_focus();
+        }
+        glib::Propagation::Stop
+    });
+    ui.window.add_controller(keys);
 }
 
 /// Refills the Entries filters from `money.lists`, keeping the person's choice selected. An
@@ -1099,6 +1338,7 @@ fn fill_filters(lists: &Value) -> bool {
         );
         items
     };
+    CATEGORIES.with(|c| *c.borrow_mut() = rows(lists, "categories"));
     head.filling.set(true);
     let mut gone = false;
     for (picker, rows, items, chosen) in [
@@ -1512,11 +1752,9 @@ fn empty_state(ui: &Rc<Ui>, body: &gtk::Box) {
     });
 }
 
-/// What Entries drew last, so a read that changed little changes little: its strip and what the
-/// strip says, its card of days with its question, and each row of that card by what it shows.
+/// What Entries drew last, so a read that changed little changes little: its card of days with
+/// its question, and each row of that card by what it shows.
 struct TxDrawn {
-    strip: gtk::Widget,
-    strip_key: u64,
     card: gtk::Widget,
     rows: gtk::Box,
     question: String,
@@ -1537,16 +1775,24 @@ fn shown_key(parts: &[&dyn std::fmt::Display]) -> u64 {
     hasher.finish()
 }
 
-/// Entries' strip: how many, in, out and net.
-fn tx_strip(body: &gtk::Box, count: usize, name: &str, income: i64, spent: i64) -> gtk::Box {
+/// Entries' context line: how many, in, out and net, and what the filters show: "27 entries · in
+/// $2,150 · out $2,425 · net −$275 · Dining". The period is the caption under it.
+fn tx_context(count: usize, query: &str, income: i64, spent: i64, filtered: &str) -> String {
     let fmt = formatter();
-    let (strip, cells) = strip(body);
-    cell(&cells, "list", "Entries", &count.to_string(), name, None);
-    cell(&cells, "income", "Money in", &fmt.format_whole(income), "income", (income > 0).then_some("money-in"));
-    cell(&cells, "spend", "Money out", &fmt.format_whole(spent), "spending", None);
-    let net = income - spent;
-    cell(&cells, "gauge", "Net", &signed_whole(&fmt, net), "in less out", Some(if net < 0 { "money-over" } else { "money-in" }));
-    strip
+    let count = copy::plural_as(count as i64, "entry", "entries");
+    let mut parts = vec![if query.is_empty() { count } else { format!("{count} matching \u{201c}{query}\u{201d}") }];
+    if income > 0 {
+        parts.push(format!("in {}", fmt.format_whole(income)));
+    }
+    if spent > 0 {
+        parts.push(format!("out {}", fmt.format_whole(spent)));
+    }
+    // With only one of them, the net would say it again.
+    if income > 0 && spent > 0 {
+        parts.push(format!("net {}", signed_whole(&fmt, income - spent)));
+    }
+    parts.push(filtered.to_string());
+    joined(&parts)
 }
 
 /// A day's head in Entries: its name, how many entries, and its net.
@@ -1567,35 +1813,29 @@ fn day_head(day: &str, count: usize, day_net: i64) -> gtk::Box {
     header
 }
 
-/// Entries: the period in a strip (count, in, out, net), then one card of days, each with its
-/// net and its entries. A read like the last one keeps its widgets: a row stays while what it
-/// shows does, and only rows that came, went or changed are touched.
+/// Entries: the period's figures in the context line (count, in, out, net), then one card of days,
+/// each with its net and its entries. A read like the last one keeps its widgets: a row stays
+/// while what it shows does, and only rows that came, went or changed are touched.
 fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str) {
     let entries = rows(list, "transactions");
     let name = period_name(&list["period"]);
-    let count = copy::plural_as(entries.len() as i64, "entry", "entries");
     let filtered = filter_words();
+    let (income, spent) = (n(list, "income"), n(list, "spent"));
     if let Some(head) = TX_HEAD.with(|h| h.borrow().clone()) {
-        let mut context = if query.is_empty() { format!("{count} in {name}") } else { format!("{count} matching \u{201c}{query}\u{201d}") };
-        if !filtered.is_empty() {
-            context = format!("{context} · {filtered}");
-        }
-        head.context.set_text(&context);
+        head.context.set_text(&tx_context(entries.len(), query, income, spent, &filtered));
         head.period.set_text(&name);
         head.next.set_sensitive(offset < 0);
     }
-    let (income, spent) = (n(list, "income"), n(list, "spent"));
     let previous = TX_DRAWN.with(|d| d.borrow_mut().take());
     if entries.is_empty() {
         clear(&page.body);
-        tx_strip(&page.body, entries.len(), &name, income, spent);
         let text = match (query.is_empty(), filtered.is_empty()) {
             (true, true) => format!("Nothing logged in {name}."),
             (true, false) => format!("Nothing in {name} for {filtered}."),
             (false, _) => format!("Nothing in {name} matches \u{201c}{query}\u{201d}."),
         };
         let rows = card(&page.body, "Entries", None);
-        rows.append(&icon_row(&tile("list"), &text, "Add an entry with the Entry key above", "", ""));
+        rows.append(&icon_row(&tile("list"), &text, "Add an entry with the Entry key or Ctrl E", "", ""));
         if !filtered.is_empty() {
             let clear_key = button("Show every entry", "money-secondary");
             clear_key.set_widget_name("money-filter-clear");
@@ -1615,33 +1855,16 @@ fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str
     let currency = super::currency();
     let today = today();
     let question = if filtered.is_empty() { format!("Where did my money go in {name}?") } else { format!("What stands out in my {filtered} entries for {name}?") };
-    let strip_key = shown_key(&[&entries.len(), &name, &income, &spent, &currency]);
-    // The last read's strip and card, while the page still holds just them.
+    // The last read's card, while the page still holds just it.
     let body: &gtk::Widget = page.body.upcast_ref();
-    let previous = previous.filter(|d| {
-        d.question == question
-            && body.first_child().as_ref() == Some(&d.strip)
-            && d.strip.next_sibling().as_ref() == Some(&d.card)
-            && d.card.next_sibling().is_none()
-    });
-    let (strip, rows_box, card, mut old_parts) = match previous {
-        Some(d) => {
-            let strip = if d.strip_key == strip_key {
-                d.strip
-            } else {
-                let strip = tx_strip(&page.body, entries.len(), &name, income, spent);
-                page.body.reorder_child_after(&strip, None::<&gtk::Widget>);
-                page.body.remove(&d.strip);
-                strip.upcast()
-            };
-            (strip, d.rows, d.card, d.parts)
-        }
+    let previous = previous.filter(|d| d.question == question && body.first_child().as_ref() == Some(&d.card) && d.card.next_sibling().is_none());
+    let (rows_box, card, mut old_parts) = match previous {
+        Some(d) => (d.rows, d.card, d.parts),
         None => {
             clear(&page.body);
-            let strip = tx_strip(&page.body, entries.len(), &name, income, spent);
             let rows_box = card_asking(&page.body, "By day", None, Some((ui, &question)));
             let card = rows_box.parent().expect("card_asking puts its rows in a card");
-            (strip.upcast(), rows_box, card, std::collections::HashMap::new())
+            (rows_box, card, std::collections::HashMap::new())
         }
     };
     let mut parts = std::collections::HashMap::new();
@@ -1685,7 +1908,7 @@ fn transactions(ui: &Rc<Ui>, page: &Page, list: &Value, offset: i64, query: &str
     while let Some(extra) = previous.as_ref().map_or_else(|| rows_box.first_child(), |w| w.next_sibling()) {
         rows_box.remove(&extra);
     }
-    TX_DRAWN.with(|d| *d.borrow_mut() = Some(TxDrawn { strip, strip_key, card, rows: rows_box, question, parts }));
+    TX_DRAWN.with(|d| *d.borrow_mut() = Some(TxDrawn { card, rows: rows_box, question, parts }));
 }
 
 /// Plan: the monthly budget and its split, then every expense category in one table with what it
