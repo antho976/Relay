@@ -460,7 +460,10 @@ async fn tools(instance: Instance, actor: &Actor, token: Option<&str>) -> Result
             Some(_) => selected(selection.as_deref(), name),
             None => info["call"] != "no",
         };
-        admitted.then(|| if style.docs { small_model_tool(entry) } else { op_tool(entry) })
+        admitted.then(|| {
+            let tool = if style.docs { small_model_tool(entry) } else { op_tool(entry) };
+            if style.readings { with_category_required(tool) } else { tool }
+        })
     }).collect::<Vec<_>>();
 
     report_tool_count(&mut client, actor, token, tools.len()).await;
@@ -528,13 +531,15 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
             return Ok(refusal(json!({"kind":"invalid","code":"bus.schema","message":why}), None, &style));
         }
     }
-    if style.readings && needs_lists(name, &arguments) && !LISTS_READ.swap(true, Ordering::Relaxed) {
-        // A small model that writes before it has read the ids guesses them: the first such
-        // write is sent back with the accounts and categories, to be made again with them.
+    if let Some(why) = style.readings.then(|| held(name, &arguments, LISTS_READ.load(Ordering::Relaxed))).flatten() {
+        // A small model guesses the ids it has not read and leaves out a category the schema
+        // calls optional: such a write is sent back unmade with the accounts and categories, to
+        // be made again with them.
         let lists = read(&mut client, actor, token, "money.lists", json!({})).await.unwrap_or_else(|| json!({}));
         if let Some(text) = reading(&mut client, actor, token, "money.lists", &json!({}), &lists).await {
-            let text = format!("Not done yet: {name} takes ids from money.lists, read here for you. Pick the account and category \
-                the person named, then call {name} again with those ids.\n\n{text}");
+            LISTS_READ.store(true, Ordering::Relaxed);
+            let text = format!("Not done yet: {why}. The accounts and categories are read here for you: pick the ones the \
+                person named, then call {name} again with their ids.\n\n{text}");
             return Ok(json!({"content":[{"type":"text","text":text}],"isError":true}));
         }
     }
@@ -570,14 +575,41 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
 /// Whether this server has given its model money.lists: this process serves one thread's agent.
 static LISTS_READ: AtomicBool = AtomicBool::new(false);
 
-/// Whether a write takes ids only money.lists gives: an entry added, or one moved to another
-/// account or category.
-fn needs_lists(op: &str, arguments: &Value) -> bool {
-    match op {
+/// Why a small model's write waits, if it does: it takes ids only money.lists gives (an entry
+/// added, or one moved to another account or category) and the lists are not read yet; or it adds
+/// an expense or income with no category, which Tally's own sheet never does.
+fn held(op: &str, arguments: &Value, lists_read: bool) -> Option<&'static str> {
+    let given = |k: &str| arguments.get(k).is_some_and(|v| !v.is_null());
+    let takes_ids = match op {
         "money.tx.add" => true,
-        "money.tx.update" => ["account_id", "category_id", "to_account_id"].iter().any(|k| arguments.get(*k).is_some_and(|v| !v.is_null())),
+        "money.tx.update" => ["account_id", "category_id", "to_account_id"].into_iter().any(given),
         _ => false,
+    };
+    if op == "money.tx.add" && arguments["type"] != "TRANSFER" && !given("category_id") {
+        Some("an expense or income needs its category_id")
+    } else if takes_ids && !lists_read {
+        Some("the account and category ids come from money.lists, not yet read")
+    } else {
+        None
     }
+}
+
+/// `money.tx.add` as a small model is shown it: the category is a field it must give, null only
+/// for a transfer, since a field marked optional is one it leaves out.
+fn with_category_required(mut tool: Value) -> Value {
+    if tool["name"] != "money.tx.add" {
+        return tool;
+    }
+    let schema = &mut tool["inputSchema"];
+    if let Some(category) = schema["properties"].get_mut("category_id") {
+        category["description"] = json!("Required for an expense or income: its id from money.lists. null for a transfer.");
+    }
+    if let Some(required) = schema["required"].as_array_mut() {
+        if !required.iter().any(|r| r == "category_id") {
+            required.push(json!("category_id"));
+        }
+    }
+    tool
 }
 
 /// A refusal as a tool error: in words for a model given readings, else the bus's JSON.
@@ -821,12 +853,21 @@ mod tests {
     }
 
     #[test]
-    fn writes_that_take_ids_wait_for_money_lists() {
-        assert!(needs_lists("money.tx.add", &json!({"amount": "4.50"})));
-        assert!(needs_lists("money.tx.update", &json!({"id": 7, "category_id": 3})));
-        assert!(!needs_lists("money.tx.update", &json!({"id": 7, "amount": "5"})), "a new amount needs no id");
-        assert!(!needs_lists("money.tx.update", &json!({"id": 7, "category_id": null})));
-        assert!(!needs_lists("money.summary", &json!({})) && !needs_lists("thread.propose", &json!({})));
+    fn a_small_models_write_waits_for_the_ids_and_a_category() {
+        let coffee = json!({"type": "EXPENSE", "amount": "4.50", "account_id": 2, "category_id": 4});
+        assert!(held("money.tx.add", &coffee, false).is_some(), "ids not read yet");
+        assert!(held("money.tx.add", &coffee, true).is_none());
+        let uncategorized = json!({"type": "EXPENSE", "amount": "4.50", "account_id": 2});
+        assert!(held("money.tx.add", &uncategorized, true).unwrap().contains("category_id"));
+        assert!(held("money.tx.add", &json!({"type": "TRANSFER", "account_id": 1, "to_account_id": 3}), true).is_none());
+        assert!(held("money.tx.update", &json!({"id": 7, "category_id": 3}), false).is_some());
+        assert!(held("money.tx.update", &json!({"id": 7, "amount": "5"}), false).is_none(), "a new amount needs no id");
+        assert!(held("money.tx.update", &json!({"id": 7, "category_id": null}), false).is_none());
+        assert!(held("money.summary", &json!({}), false).is_none() && held("thread.propose", &json!({}), false).is_none());
+        let tool = with_category_required(op_tool(Registry::global().get("money.tx.add").unwrap()));
+        assert!(tool["inputSchema"]["required"].as_array().unwrap().iter().any(|r| r == "category_id"));
+        let other = with_category_required(op_tool(Registry::global().get("money.tx.update").unwrap()));
+        assert!(!other["inputSchema"]["required"].as_array().unwrap().iter().any(|r| r == "category_id"));
     }
 
     #[test]

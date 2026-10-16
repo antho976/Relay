@@ -495,10 +495,14 @@ held-out split (29 tasks, run once) the default passed 84.5% against 78.2%, +6.3
 reads gained, writes lost. Given the summary up front, the model sometimes adds an entry without
 reading `money.lists` and guesses its category (`bench/threads/results/RESULTS.md`).
 
-So with readings the door holds the first write that takes ids (`money.tx.add`, or a
-`money.tx.update` that moves an entry to another account or category) until the model has read
-`money.lists`: it sends that write back unmade with the lists' reading in it, to be made again with
-the ids the person meant (`mcp.rs`, `needs_lists`). A model that read the lists first is never held.
+So with readings the door holds two kinds of write (`mcp.rs`, `held`): one that takes ids
+(`money.tx.add`, or a `money.tx.update` that moves an entry to another account or category) before
+the model has read `money.lists`, and an expense or income added with no category, which the model
+left out because the schema calls it optional (Tally's sheet never saves one). It sends either back
+unmade with the lists' reading in it, to be made again with the ids the person meant; and it shows
+a small model `money.tx.add` with `category_id` required, null only for a transfer. A model that
+read the lists and gave the category is never held. The dev split's write tasks went from 7 of 10
+with the first hold alone to 14 of 15 with both.
 
 `RELAY_THREADS_LOCAL` in the engine's environment, a comma list of those parts or `classic` for
 none, overrides the default, to measure a new model or a change (`bench/threads/variants.json`).
