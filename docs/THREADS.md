@@ -504,6 +504,13 @@ a small model `money.tx.add` with `category_id` required, null only for a transf
 read the lists and gave the category is never held. The dev split's write tasks went from 7 of 10
 with the first hold alone to 14 of 15 with both.
 
+The whole bench again on the finished branch (111 tasks × 3 runs, every split, with asking first
+and the Avex and Tally changes in): 74.5% [69.5, 78.9] → 89.8% [86.1, 92.6], Δ +15.3 [+8.7, +22.5]
+over tasks; dev 73.2% → 90.7%, holdout 78.2% → 87.4%; questions on both Tally and Avex 0% → 80%,
+totals over a period 41% → 87%, charts 44% → 72%; a median task 16.6 s → 3.0 s. Writes did not
+move (75.0% → 70.8%, within noise): the model still now and then picks the wrong account or
+category, or reads "45,20 $" as 45,200.
+
 `RELAY_THREADS_LOCAL` in the engine's environment, a comma list of those parts or `classic` for
 none, overrides the default, to measure a new model or a change (`bench/threads/variants.json`).
 A thread on Claude is unchanged.

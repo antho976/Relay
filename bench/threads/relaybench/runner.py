@@ -187,7 +187,9 @@ class Transcripts:
             for path in sorted(self.root.glob("*/*.jsonl"), key=lambda p: p.stat().st_mtime):
                 if path in self.claimed or path.stat().st_mtime < since - 2:
                     continue
-                if (self._first_prompt(path) or "").strip() == prompt.strip():
+                # A thread on a local model may start with Relay's data ahead of the person's
+                # words (prefetch), so the first prompt ends with them rather than being them.
+                if (self._first_prompt(path) or "").strip().endswith(prompt.strip()):
                     found = path
                     break
             if not found:

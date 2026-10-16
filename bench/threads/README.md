@@ -14,6 +14,32 @@ start loads, how many slots it gets, and the date.
 
 Python 3, standard library only. No GPU is needed for the unit tests.
 
+## A new small model, in short
+
+```fish
+cargo build -p relay-cli
+python3 bench/threads/bench.py run --gguf ~/models/NewModel.gguf --runs 3 --append
+python3 bench/threads/bench.py compare bench/threads/results/2026-10-15-qwen35-4b-after.json bench/threads/results/<the new file>.json
+```
+
+A Qwen3.5 GGUF keeps Relay's patched template; any other renders with its own, and one whose template
+refuses Claude Code's second system message needs `--template` (see "Any model"). Three runs of 111
+tasks take about 20 minutes on the 4070 with a 4B. To use the model in Relay afterwards it still has
+to be added to `local_models::MODELS`.
+
+## Where it stands (Qwen3.5 4B Q8_0, RTX 4070, 111 tasks × 3 runs)
+
+| Build | Pass [95% CI] | Dev | Holdout | Median s |
+|---|---|---|---|---|
+| As Threads first shipped (`ff599ba`) | 74.5% [69.5, 78.9] | 73.2% | 78.2% | 16.6 |
+| Small-model profile, ask first, Avex/Tally rework (`a24ed13`) | 89.8% [86.1, 92.6] | 90.7% | 87.4% | 3.0 |
+
+Δ +15.3 points, bootstrap 95% over tasks [+8.7, +22.5]. What changed is in `docs/THREADS.md`
+("Small models"). The holdout split was looked at twice while the profile was built (once for the
+profile, once to find the write problem the category hold fixes), so its number is a little less
+blind than its name. Still weakest: writes (70.8%: a wrong account or category, a French decimal
+comma read as thousands, an activity added to a Wealthsimple-filled account) and charts (72.2%).
+
 ## Quick start
 
 ```fish
