@@ -18,6 +18,12 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.ui.Modifier
 import androidx.health.connect.client.PermissionController
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -82,6 +88,10 @@ internal fun RecoveryPage(onBack: () -> Unit, viewModel: HealthConnectViewModel 
     val exerciseLauncher = rememberLauncherForActivityResult(
         contract = PermissionController.createRequestPermissionResultContract()
     ) { viewModel.refresh() }
+    val allLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { viewModel.refresh() }
+    val watchAppPaired by viewModel.watchAppPaired.collectAsStateWithLifecycle()
 
     val sleepConnected = state.granted && state.available
     // Row order = rail order: sleep · bodyweight · body fat · muscle mass · calories · sessions ·
@@ -94,7 +104,7 @@ internal fun RecoveryPage(onBack: () -> Unit, viewModel: HealthConnectViewModel 
     val connectable = state.available && !state.loading
     val brand = WearableBrand.fromKey(state.wearableBrand)
 
-    SettingsScaffold("Wearable", onBack) {
+    SettingsScaffold("Watch & health data", onBack) {
 
         // Without a provider nothing below can connect; installing or updating it is the only way on.
         if (!state.loading && !state.available) {
@@ -107,24 +117,70 @@ internal fun RecoveryPage(onBack: () -> Unit, viewModel: HealthConnectViewModel 
             ) { openHealthConnectInStore(context) }
         }
 
-        // Advisory only: every read works for any wearable. The pick names the companion app.
-        SettingsGroup(
-            "Your device",
-            footer = when (brand) {
-                WearableBrand.GALAXY -> "Syncs through Samsung Health. Turn on its Health Connect sharing first."
-                WearableBrand.PIXEL -> "Syncs through the Fitbit app. Turn on its Health Connect sharing first."
-                WearableBrand.NONE -> "Any watch or ring that feeds Health Connect works."
-                null -> "Pick what you wear and Avex tailors the setup notes to it."
+        // The page opens on where you stand and ONE way forward. It used to open on a device picker
+        // that only changed some setup wording, then nine rows with nine Connect buttons, each a
+        // separate trip through the same Health Connect screen.
+        if (connectable) {
+            val connectedCount = railStates.count { it }
+            SettingsGroup {
+                SettingsGroupBlock {
+                    Text(
+                        when (connectedCount) {
+                            0 -> "Not connected"
+                            railStates.size -> "Everything connected"
+                            else -> "$connectedCount of ${railStates.size} connected"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        if (connectedCount == 0) {
+                            "Your watch or ring's own app (Samsung Health, Fitbit, Garmin Connect and others) shares " +
+                                "sleep, heart rate, steps and workouts with Health Connect. Avex reads them from there. " +
+                                "You choose each one on the next screen."
+                        } else {
+                            "Sleep and heart rate feed the coach's recovery calls, and show on Home and Stats → Body."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (connectedCount < railStates.size) {
+                        Spacer(Modifier.height(14.dp))
+                        com.forge.app.ui.common.ForgeHeroAction(
+                            text = if (connectedCount == 0) "Connect" else "Connect the rest",
+                            onClick = { allLauncher.launch(viewModel.allPermissions(state.historySupported)) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
             }
+        }
+
+        // The Wear OS app had no mention anywhere on the phone, so the only way to learn it existed
+        // was the Play Store listing.
+        SettingsGroup(
+            "Avex on your watch",
+            footer = if (watchAppPaired) null
+            else "On a Wear OS watch, install Avex from the Play Store on the watch, or from its listing on this phone."
         ) {
-            SettingsGroupBlock(padding = PaddingValues(12.dp)) {
-                val brands = WearableBrand.entries
-                SettingsSegmented(
-                    options = brands.map { brandShortLabel(it) },
-                    selectedIndex = brands.indexOfFirst { it.key == state.wearableBrand },
-                    onSelect = { viewModel.setWearableBrand(brands[it].key) },
-                    contentDescription = "Your device"
-                )
+            if (watchAppPaired) {
+                SettingsGroupBlock {
+                    Text("Watch app paired", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Start a workout on either device and the other follows. Log sets, run the rest timer and read your live heart rate from your wrist.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                SettingsNavigationRow(
+                    "Get the watch app",
+                    "Log sets, rest timer and live heart rate on your wrist",
+                    Icons.Rounded.Watch,
+                    external = true
+                ) { openAvexInStore(context) }
             }
         }
 
@@ -291,6 +347,27 @@ internal fun RecoveryPage(onBack: () -> Unit, viewModel: HealthConnectViewModel 
                 onConnect = { exerciseLauncher.launch(viewModel.exercisePermissions) },
                 receiving = state.signalFlow?.route
             )
+        }
+
+        // Advisory only: every read works for any wearable. The pick names the companion app.
+        SettingsGroup(
+            "Setup help",
+            footer = when (brand) {
+                WearableBrand.GALAXY -> "Syncs through Samsung Health. Turn on its Health Connect sharing first."
+                WearableBrand.PIXEL -> "Syncs through the Fitbit app. Turn on its Health Connect sharing first."
+                WearableBrand.NONE -> "Any watch or ring that feeds Health Connect works."
+                null -> "Nothing arriving? Pick what you wear for the step most people miss."
+            }
+        ) {
+            SettingsGroupBlock(padding = PaddingValues(12.dp)) {
+                val brands = WearableBrand.entries
+                SettingsSegmented(
+                    options = brands.map { brandShortLabel(it) },
+                    selectedIndex = brands.indexOfFirst { it.key == state.wearableBrand },
+                    onSelect = { viewModel.setWearableBrand(brands[it].key) },
+                    contentDescription = "Your device"
+                )
+            }
         }
 
         if (!state.loading && state.available) {

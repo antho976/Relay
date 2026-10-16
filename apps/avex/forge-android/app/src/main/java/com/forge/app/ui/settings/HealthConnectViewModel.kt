@@ -13,6 +13,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -32,8 +33,13 @@ class HealthConnectViewModel @Inject constructor(
     private val bodyweightRepo: BodyweightRepository,
     private val bodyFatRepo: BodyFatRepository,
     private val leanMassRepo: com.forge.app.data.repo.LeanMassRepository,
-    private val clock: Clock
+    private val clock: Clock,
+    wearConnection: com.forge.app.service.wear.WearConnection
 ) : ViewModel() {
+
+    /** True while a watch with the Avex Wear OS app is paired to this phone, in range or not. */
+    val watchAppPaired: StateFlow<Boolean> = wearConnection.pairedWearApp()
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), false)
 
     data class UiState(
         val loading: Boolean = true,
@@ -145,6 +151,16 @@ class HealthConnectViewModel @Inject constructor(
 
     /** Permissions the muscle-mass launcher should request (read LeanBodyMass, W6). */
     val leanMassPermissions: Set<String> get() = manager.leanMassPermissions
+
+    /**
+     * Everything at once, for the page's one Connect button. Health Connect shows each type as its
+     * own switch on a single screen, so asking for the lot is one decision with full control,
+     * where the per-row buttons made it nine trips through the same screen.
+     */
+    fun allPermissions(historySupported: Boolean): Set<String> =
+        permissions + hrvPermissions + stepsPermissions + watchWorkoutPermissions + exercisePermissions +
+            weightPermissions + bodyFatPermissions + leanMassPermissions + caloriePermissions +
+            sessionWritePermissions + (if (historySupported) historyPermissions else emptySet())
 
     /**
      * One refresh at a time. Every permission result calls [refresh], and a history backfill can
