@@ -165,6 +165,8 @@ fun HubScreen(
                     // The consistency-heatmap day sheet drills into the same detail screens History uses.
                     onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
                     onOpenCardioSession = { cardioId -> nav.navigate(Routes.cardioSession(cardioId)) },
+                    onConnectWatch = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } },
+                    onOpenProfile = { pushOnce(Routes.PROFILE) },
                     initialTab = 1,
                     title = "Stats"
                 )
@@ -192,7 +194,10 @@ fun HubScreen(
                     onViewAllHistory = { pushOnce(Routes.SESSION_HISTORY) },
                     onLogFreestyle = { pushOnce(Routes.FREESTYLE_LOG) },
                     onBuildPlan = { pushOnce(Routes.programBuilder()) },
-                    onOpenBody = { goToTab(BottomTab.STATS) },
+                    onOpenBody = {
+                        com.forge.app.ui.gym.stats.StatsLensRequests.pending.value = com.forge.app.ui.gym.stats.StatsLens.BODY
+                        goToTab(BottomTab.STATS)
+                    },
                     onConnectWatch = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
                 )
                 // Coach and Academy sit furthest from Home, so each carries the top-bar back arrow

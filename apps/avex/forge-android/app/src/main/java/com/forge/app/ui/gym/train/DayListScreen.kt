@@ -41,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.gym.stats.StatsContent
 import com.forge.app.ui.gym.train.components.DayCard
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.Spacer
 import com.forge.app.ui.common.Corners
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.ForgeSecondaryCapsule
@@ -71,6 +72,10 @@ fun DayListScreen(
     onOpenSession: (Long) -> Unit = {},
     /** Stats → consistency-heatmap day sheet → a cardio session's detail screen. */
     onOpenCardioSession: (Long) -> Unit = {},
+    /** Stats → Body lens → Settings → Wearable. */
+    onConnectWatch: () -> Unit = {},
+    /** Stats → Body lens → the profile, to log a weigh-in. */
+    onOpenProfile: () -> Unit = {},
     initialTab: Int = 0,
     /** Top-bar heading — "Stats" / "PRs" when hosting those sub-screens, "GYM" by default. */
     title: String = "GYM",
@@ -81,7 +86,10 @@ fun DayListScreen(
             Column {
                 // Back capsule only when pushed as a deep route; a hub page has system back.
                 if (onBack != null) ForgeTopBar(onBack = onBack)
-                Text(
+                // Stats draws its own title inside its list so it scrolls away with the page.
+                if (initialTab == 1) {
+                    Spacer(Modifier.windowInsetsPadding(TopAppBarDefaults.windowInsets))
+                } else Text(
                     title,
                     style = MaterialTheme.typography.headlineLarge,
                     color = MaterialTheme.colorScheme.onBackground,
@@ -97,13 +105,16 @@ fun DayListScreen(
             // No Train/Stats tab row — each is its own screen reached from Overview
             // (Gym tile → Train, Stats tile → Stats). Content is chosen by the route.
             when (initialTab) {
-                // onOpenHistory/onOpenNotes/onOpenRecap stay wired into DayListScreen (and HubScreen)
-                // so the history/notes/recap routes keep an entry point, but the rebuilt Stats screen
-                // no longer surfaces them, so they aren't forwarded here.
+                // History, notes and the recap are Stats' "Look back" links at the foot of each lens.
                 1 -> StatsContent(
                     modifier = Modifier.fillMaxSize(),
                     onOpenSession = onOpenSession,
-                    onOpenCardioSession = onOpenCardioSession
+                    onOpenCardioSession = onOpenCardioSession,
+                    onConnectWatch = onConnectWatch,
+                    onOpenProfile = onOpenProfile,
+                    onOpenHistory = onOpenHistory,
+                    onOpenNotes = onOpenNotes,
+                    onOpenRecap = onOpenRecap
                 )
                 else -> TrainTab(
                     onOpenDay = onOpenDay,

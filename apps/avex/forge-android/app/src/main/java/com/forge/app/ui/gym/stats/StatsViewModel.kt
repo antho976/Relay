@@ -32,8 +32,51 @@ class StatsViewModel @Inject constructor(
     private val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
     private val sessionDao: SessionDao,
     private val cardioRepo: CardioRepository,
-    engineInputs: com.forge.app.data.repo.EngineInputSignals
+    engineInputs: com.forge.app.data.repo.EngineInputSignals,
+    private val healthConnect: com.forge.app.data.health.HealthConnectManager,
+    private val clock: com.forge.app.core.time.Clock
 ) : ViewModel() {
+
+    private val _body = MutableStateFlow<StatsBodyUi?>(null)
+    /** The Body lens: the watch's last [BODY_DAYS] days. Null until the first read. */
+    val body: StateFlow<StatsBodyUi?> = _body.asStateFlow()
+
+    private val bodyRefresh = com.forge.app.core.ConflatedRefresh(viewModelScope) {
+        runCatching { loadBody() }.onFailure {
+            if (it is kotlinx.coroutines.CancellationException) throw it
+            _body.value = StatsBodyUi(available = healthConnect.isAvailable, connected = false)
+        }
+    }
+
+    /** Re-read Health Connect: on opening the Body lens and on resume, since nothing observes it. */
+    fun refreshBody() = bodyRefresh.request()
+
+    private suspend fun loadBody() {
+        if (!healthConnect.isAvailable) {
+            _body.value = StatsBodyUi(available = false, connected = false)
+            return
+        }
+        val granted = healthConnect.grantedPermissions()
+        val reads = healthConnect.permissions + healthConnect.hrvPermissions + healthConnect.stepsPermissions
+        if (granted.none { it in reads }) {
+            _body.value = StatsBodyUi(available = true, connected = false)
+            return
+        }
+        val zone = java.time.ZoneId.systemDefault()
+        val now = clock.nowMs()
+        val today = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        val todayStartMs = today.atStartOfDay(zone).toInstant().toEpochMilli()
+        val sinceMs = today.minusDays(BODY_DAYS.toLong()).atStartOfDay(zone).toInstant().toEpochMilli()
+        val snap = healthConnect.readRecovery(sinceMs, now)
+        _body.value = statsBodySeries(
+            snap,
+            todayStartMs,
+            dayStartMs = { ms ->
+                java.time.Instant.ofEpochMilli(ms).atZone(zone).toLocalDate().atStartOfDay(zone).toInstant().toEpochMilli()
+            },
+            stepsGranted = healthConnect.stepsPermissions.all { it in granted }
+        )
+    }
 
     /** Refresh for changed engine inputs, including same-count edits and date boundaries. */
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)

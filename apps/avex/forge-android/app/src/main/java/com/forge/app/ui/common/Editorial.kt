@@ -85,7 +85,9 @@ fun EditorialFigure(
     muted: Color,
     accent: Color,
     modifier: Modifier = Modifier,
-    delta: Int? = null
+    delta: Int? = null,
+    /** How [delta]'s size reads, when the bare integer would not ("4.9k" rather than "4893"). */
+    deltaText: String? = null
 ) {
     Column(modifier) {
         Row(verticalAlignment = Alignment.Top) {
@@ -99,7 +101,7 @@ fun EditorialFigure(
             if (delta != null && delta != 0) {
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    "${if (delta > 0) "↑" else "↓"}${kotlin.math.abs(delta)}",
+                    "${if (delta > 0) "↑" else "↓"}${deltaText ?: kotlin.math.abs(delta)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (delta > 0) accent else muted,
                     fontSize = 10.sp,

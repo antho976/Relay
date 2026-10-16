@@ -142,7 +142,6 @@
 3 font-size ui/gym/session/SessionDetailCharts.kt fontSize=
 3 font-size ui/gym/session/SessionDetailComponents.kt fontSize=
 2 font-size ui/gym/session/SessionDetailMetricCards.kt fontSize=
-1 font-size ui/gym/stats/StatsReadiness.kt fontSize=
 3 font-size ui/gym/stats/StatsStrength.kt fontSize=
 2 font-size ui/gym/stats/StatsVolume.kt fontSize=
 4 font-size ui/gym/train/DaySessionContent.kt fontSize=
