@@ -246,6 +246,80 @@ Claude Code would use, its background one included, is pointed there (`ANTHROPIC
   `stopped` and `failed`. The picker shows "· loading" until the model answers, and a failure
   shows its reason.
 
+## Small models (2026-10-15)
+
+A 4B model on this PC was given what Claude is given, and most of it was in its way. Measured on
+the bench (`bench/threads`, Qwen3.5 4B Q8_0, counted with Qwen's tokenizer), before its first
+question it read about 20,000 of its 32,768 tokens:
+
+| What | Before | After |
+|---|---|---|
+| Claude Code's own prompt (coding, memory files, security testing) | 1,358 | 15 |
+| Relay's prompt (`PROMPT`; `LOCAL_PROMPT` after) | 2,597 | 1,340 |
+| Tool schemas: 30 before (`arbiter.backtest` and `arbiter.propose` alone 10,855), 17 after | 15,485 | 3,273 |
+| Claude Code's environment message | 567 | 501 |
+| **Before the question** | **19,957** | **5,129** |
+| Tally's and Avex's readings ahead of the first message (prefetch) | 0 | 6,109 |
+
+Then each read came back as pretty JSON (`money.summary` 1,588 tokens, `gym.sessions` 4,538,
+`gym.summary` 2,465), so a few reads overflowed the context: the bench saw `exceeds the available
+context size` on turns that read entries month by month. A thread on a local model now runs a
+profile of its own (`threads::LocalStyle`), each part kept for what it did on the bench:
+
+- **Lean** (`lean`): Relay's own short prompt (`LOCAL_PROMPT`) in place of Claude Code's
+  (`--system-prompt`, not `--append-system-prompt`; Claude Code still lists and calls the tools):
+  plain numbered rules, which tool answers what, what the words mean, the chart and import cards,
+  and only Tally's and Avex's tools (`threads::local_ops`: `AGENT_OPS` without Arbiter's or
+  `bus.schema`).
+- **Readings** (`readings`): the MCP door answers each read (`relay_core::readings::OPS`) with a
+  reading instead of JSON: labelled lines that say what they are and what today is, money as
+  "$1,234.56", days as "Thu Sep 17" with how long ago, weights in both units, and every figure a
+  question is likely to need already worked out and named: where each budget stands ("NOT over
+  budget, $93.05 left; over pace by $106.95"), what was spent today, yesterday, this week and each
+  week before, by category this month and month by month, the three biggest expenses, the same
+  day last month, which `period_offset` is which month, the weekday of each of the last seven
+  dates, the last workout set by set, each lift's best set and how it improved, the only lifts
+  ever logged. A summary folds in the reads it is most often followed by (`readings::extras`). A
+  series ends with the chart block that draws it. Writes keep their JSON, which the entry and
+  activity cards parse; a refusal reads as a sentence. Ids appear only where a write needs one: a
+  model given every id in the summary added entries without `money.lists`, whose reading says
+  which account "cash" is, and wrote to the wrong one.
+- **Prefetch** (`prefetch`): a fresh agent's first message carries Tally's and Avex's summaries as
+  readings ahead of the person's words, read by the engine outside any handler, so an easy
+  question needs no tool call. The thread stores the person's words alone. Claude Code cuts an MCP
+  server's instructions at about 4,000 characters, so they cannot carry it.
+- **Docs** (`docs`, off): tool descriptions in plain words with an example call each, and no
+  `today` or `limit` field to set wrongly. It moved nothing on the bench.
+
+The agent's environment for a local model also drops Claude Code's billing line
+(`CLAUDE_CODE_ATTRIBUTION_HEADER=0`: it changed with each conversation and was the first thing in
+the prompt, so the server could reuse none of a prompt it had already read) and tells Claude Code
+the real window (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`, with replies up to 4,096 tokens), so it compacts
+before the server refuses.
+
+On the bench's dev split (82 tasks, the frozen binary three times, each candidate twice;
+bootstrap 95% intervals over tasks against the frozen binary; the default was run twice, the
+model shown the same prompt and readings each time, and a median task took 2.5 to 3 seconds
+against 16.6):
+
+| Profile | Pass | Δ |
+|---|---|---|
+| As shipped (frozen binary) | 73.2% | |
+| `lean` | 72.6% | −0.6 [−8.3, +6.5] |
+| `lean,readings` | 81.1% | +7.9 [+0.8, +15.2] |
+| `lean,readings,prefetch` (the default) | 89.6%, 92.1% | +16.5 [+7.9, +25.2], +18.9 [+10.2, +28.0] |
+| `lean,readings,prefetch,docs` | 92.1% | +18.9 [+11.2, +27.0]; 0.0 beside the same without `docs` |
+
+Lean alone tells the model the figures are worked out while the tools still answer JSON; it is
+for use with readings. Prefetch added 9.8 points [+1.2, +18.3] over `lean,readings`. On the
+held-out split (29 tasks, run once) the default passed 84.5% against 78.2%, +6.3 [−4.6, +19.5]:
+reads gained, writes lost. Given the summary up front, the model sometimes adds an entry without
+reading `money.lists` and guesses its category (`bench/threads/results/RESULTS.md`).
+
+`RELAY_THREADS_LOCAL` in the engine's environment, a comma list of those parts or `classic` for
+none, overrides the default, to measure a new model or a change (`bench/threads/variants.json`).
+A thread on Claude is unchanged.
+
 ## Amounts for models (2026-10-11)
 
 The ledger counts money in minor units, and investment quantities, prices and rates at 1e-8.

@@ -51,6 +51,8 @@ pub const IDLE_MINUTES: u64 = 15;
 /// The context of the server's one conversation. Claude Code's prompt and Relay's tools are a
 /// few thousand tokens of it; the rest is the thread.
 const CONTEXT: u32 = 32_768;
+/// The most a local model's reply may be, in tokens, out of [`CONTEXT`].
+const MAX_OUTPUT: u32 = 4_096;
 /// The longest a model may take to load before its start counts as failed.
 const LOAD_WITHIN: Duration = Duration::from_secs(180);
 /// How long a stopped server has to exit, and let go of the graphics card, before the next one
@@ -324,6 +326,15 @@ pub fn agent_env(port: u16, model: &Model) -> Vec<(&'static str, String)> {
         ("ANTHROPIC_BASE_URL", format!("http://127.0.0.1:{port}")),
         ("ANTHROPIC_AUTH_TOKEN", key),
         ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1".to_string()),
+        // Claude Code's first system block is a billing line that changes with each conversation,
+        // so the server could reuse none of the prompt it had already read: every new thread read
+        // the whole prompt and tools again. Without it the prefix stays the same.
+        ("CLAUDE_CODE_ATTRIBUTION_HEADER", "0".to_string()),
+        // Claude Code takes a model it does not know for a 200k one and would never compact
+        // before the server refuses past CONTEXT; with the real window it compacts in time. A
+        // reply is short, and the room kept for it comes out of that window.
+        ("CLAUDE_CODE_MAX_CONTEXT_TOKENS", CONTEXT.to_string()),
+        ("CLAUDE_CODE_MAX_OUTPUT_TOKENS", MAX_OUTPUT.to_string()),
     ];
     for var in ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"] {
         env.push((var, model.id.to_string()));
@@ -445,6 +456,10 @@ mod tests {
         assert_eq!(get("ANTHROPIC_BASE_URL"), Some("http://127.0.0.1:4321"));
         assert_eq!(get("ANTHROPIC_SMALL_FAST_MODEL"), Some(MODELS[0].id));
         assert_eq!(get("ANTHROPIC_DEFAULT_HAIKU_MODEL"), Some(MODELS[0].id));
+        // The window Claude Code compacts within is the server's, and the prompt's prefix stays
+        // the same from one conversation to the next.
+        assert_eq!(get("CLAUDE_CODE_MAX_CONTEXT_TOKENS"), Some("32768"));
+        assert_eq!(get("CLAUDE_CODE_ATTRIBUTION_HEADER"), Some("0"));
         // The server's own key, minted per start; a port with no server of Relay's gets one
         // that matches nothing, never a fixed token.
         let unknown = get("ANTHROPIC_AUTH_TOKEN").unwrap().to_string();

@@ -398,11 +398,17 @@ async fn handle(instance: Instance, actor: &Actor, token: Option<&str>, message:
     };
     let result = match method {
         Some("initialize") => {
+            // A small model's thread is told what the tools are for, not how the bus works.
+            let instructions = if Style::from_env().lean {
+                "The person's own data: Tally, their budget (money.*), and Avex, their gym log (gym.*)."
+            } else {
+                "Relay's typed command bus. Tool names are bus op names; typed refusals are returned as tool errors. The tool list is filtered to what this session may actually call, all three gating layers applied — if an op is missing, your role cannot call it. Result shapes are not inlined here: `bus.schema {op}` returns one op's full payload and result schema. `session.bootstrap` returns your peers, your callable ops and your guardrails."
+            };
             Ok(json!({
                 "protocolVersion": protocol(&message),
                 "capabilities": {"tools":{"listChanged":false}},
                 "serverInfo": {"name":"relay","title":"Relay command bus","version":env!("CARGO_PKG_VERSION")},
-                "instructions":"Relay's typed command bus. Tool names are bus op names; typed refusals are returned as tool errors. The tool list is filtered to what this session may actually call, all three gating layers applied — if an op is missing, your role cannot call it. Result shapes are not inlined here: `bus.schema {op}` returns one op's full payload and result schema. `session.bootstrap` returns your peers, your callable ops and your guardrails."
+                "instructions": instructions
             }))
         }
         Some("ping") => Ok(json!({})),
@@ -440,6 +446,7 @@ async fn tools(instance: Instance, actor: &Actor, token: Option<&str>) -> Result
     // large enough that a harness could drop the lot — so the working integration reached
     // nobody at all (D104).
     let selection = selection();
+    let style = Style::from_env();
     let tools = listed.into_iter().filter_map(|info| {
         if info["implemented"] != true { return None; }
         let name = info["name"].as_str()?;
@@ -452,7 +459,7 @@ async fn tools(instance: Instance, actor: &Actor, token: Option<&str>) -> Result
             Some(_) => selected(selection.as_deref(), name),
             None => info["call"] != "no",
         };
-        admitted.then(|| op_tool(entry))
+        admitted.then(|| if style.docs { small_model_tool(entry) } else { op_tool(entry) })
     }).collect::<Vec<_>>();
 
     report_tool_count(&mut client, actor, token, tools.len()).await;
@@ -514,15 +521,24 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
     let schema = relay_bus::schema::render_op(name).unwrap_or(Value::Null);
     let (in_units, out_units) = (units::has_units(&schema["payload"]), units::has_units(&schema["result"]));
     let ledger = if in_units || out_units { ledger_digits(&mut client, actor, token).await } else { 2 };
+    let style = Style::from_env();
     if in_units {
         if let Err(why) = units::to_engine(&mut arguments, &schema["payload"], ledger) {
-            return Ok(tool_error(json!({"kind":"invalid","code":"bus.schema","message":why}), None));
+            return Ok(refusal(json!({"kind":"invalid","code":"bus.schema","message":why}), None, &style));
         }
     }
     let mut request = Request::new(actor.clone(), name, arguments);
     if let Some(token) = token { request = request.with_token(token); }
     let response = client.call(&request, |_| {}).await?;
     let mail = response.mail.clone();
+    if response.ok && style.readings && relay_core::readings::OPS.contains(&name) {
+        // A small model is given the reading, worked out and in words, not the JSON.
+        let result = response.result.clone().unwrap_or_else(|| json!({}));
+        let payload = request.payload.clone();
+        if let Some(text) = reading(&mut client, actor, token, name, &payload, &result).await {
+            return Ok(reading_success(text, mail.as_ref()));
+        }
+    }
     if response.ok {
         let mut value = response.result.unwrap_or_else(|| json!({}));
         if out_units {
@@ -533,8 +549,74 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
         }
         Ok(tool_success(value, mail.as_ref())?)
     } else {
-        Ok(tool_error(serde_json::to_value(response.error)?, mail.as_ref()))
+        Ok(refusal(serde_json::to_value(response.error)?, mail.as_ref(), &style))
     }
+}
+
+/// A refusal as a tool error: in words for a model given readings, else the bus's JSON.
+fn refusal(error: Value, mail: Option<&MailHint>, style: &Style) -> Value {
+    if !style.readings {
+        return tool_error(error, mail);
+    }
+    let mut text = format!("Not done ({}): {}", error["code"].as_str().unwrap_or("refused"), error["message"].as_str().unwrap_or("refused").trim_end_matches('.'));
+    text.push('.');
+    if let Some(hint) = error["hint"].as_str() {
+        text.push_str(&format!(" Hint: {hint}."));
+    }
+    let mut content = vec![json!({"type":"text","text":text})];
+    if let Some(notice) = mail_notice(mail) {
+        content.push(notice);
+    }
+    json!({"content":content,"isError":true})
+}
+
+/// How this server answers the model it serves (`RELAY_MCP_STYLE`, set by the engine for a
+/// thread on a model on this PC: `threads::LocalStyle`).
+#[derive(Default)]
+struct Style {
+    /// A short introduction in place of the bus's.
+    lean: bool,
+    /// Reads answered as readings (`relay_core::readings`) instead of JSON.
+    readings: bool,
+    /// Tools described in plain words with an example each.
+    docs: bool,
+}
+
+impl Style {
+    fn from_env() -> Style {
+        let spec = std::env::var("RELAY_MCP_STYLE").unwrap_or_default();
+        let has = |part: &str| spec.split(',').any(|p| p.trim() == part);
+        Style { lean: has("lean"), readings: has("readings"), docs: has("docs") }
+    }
+}
+
+/// One op's result, or `None` when it is refused or the engine does not answer.
+async fn read(client: &mut Client, actor: &Actor, token: Option<&str>, op: &str, payload: Value) -> Option<Value> {
+    let mut request = Request::new(actor.clone(), op, payload);
+    if let Some(token) = token { request = request.with_token(token); }
+    client.call(&request, |_| {}).await.ok().filter(|r| r.ok).and_then(|r| r.result)
+}
+
+/// `result` of `op` as its reading, the reads it folds in read first.
+async fn reading(client: &mut Client, actor: &Actor, token: Option<&str>, op: &str, payload: &Value, result: &Value) -> Option<String> {
+    let mut extras = Vec::new();
+    for (extra, with) in relay_core::readings::extras(op, result) {
+        extras.push(read(client, actor, token, extra, with).await);
+    }
+    let currency = read(client, actor, token, "money.lists", json!({})).await
+        .and_then(|lists| lists["currency"].as_str().map(str::to_string))
+        .unwrap_or_else(|| "CAD".into());
+    let ctx = relay_core::readings::Ctx { today: jiff::Zoned::now().date(), currency };
+    relay_core::readings::render(op, payload, result, &extras, &ctx)
+}
+
+/// A reading as a tool's answer: plain text, with no JSON beside it for a client to prefer.
+fn reading_success(text: String, mail: Option<&MailHint>) -> Value {
+    let mut content = vec![json!({"type":"text","text":text})];
+    if let Some(notice) = mail_notice(mail) {
+        content.push(notice);
+    }
+    json!({"content":content,"isError":false})
 }
 
 /// The ledger currency's decimal places, for a reading that does not name its currency.
@@ -567,6 +649,23 @@ fn op_tool(entry: &OpEntry) -> Value {
             "openWorldHint":false
         }
     })
+}
+
+/// A tool as a small model is shown it: its description in plain words with an example call, and
+/// without the fields it is better without (`relay_core::readings`).
+fn small_model_tool(entry: &OpEntry) -> Value {
+    let mut tool = op_tool(entry);
+    if let Some(about) = relay_core::readings::description(entry.name, jiff::Zoned::now().date()) {
+        tool["description"] = Value::String(about);
+    }
+    for (op, field) in relay_core::readings::HIDDEN_FIELDS {
+        if *op == entry.name {
+            if let Some(props) = tool["inputSchema"]["properties"].as_object_mut() {
+                props.remove(*field);
+            }
+        }
+    }
+    tool
 }
 
 fn mail_notice(mail: Option<&MailHint>) -> Option<Value> {
@@ -679,6 +778,32 @@ mod tests {
         assert!(!selected(Some(&set), "money.reset"));
         assert!(!selected(Some(&[]), "money.summary"));
         assert!(selected(None, "money.reset"), "no set: the engine's own checks decide");
+    }
+
+    #[test]
+    fn a_small_model_sees_plain_descriptions_and_no_fields_it_would_misuse() {
+        let tool = small_model_tool(Registry::global().get("money.tx.list").unwrap());
+        assert!(tool["description"].as_str().unwrap().contains("period_offset: 0 this month, -1 last month"));
+        let props = tool["inputSchema"]["properties"].as_object().unwrap();
+        assert!(props.contains_key("period_offset") && !props.contains_key("today") && !props.contains_key("limit"));
+        let tool = small_model_tool(Registry::global().get("money.tx.add").unwrap());
+        assert_eq!(tool["inputSchema"]["properties"]["amount"]["type"], "string", "still decimals");
+        for op in relay_core::threads::local_ops().into_iter().filter(|op| op.starts_with("money.") || op.starts_with("gym.")) {
+            assert!(relay_core::readings::description(op, jiff::Zoned::now().date()).is_some(), "{op}");
+        }
+    }
+
+    #[test]
+    fn a_reading_is_plain_text_and_a_refusal_is_words_for_a_model_given_readings() {
+        let ok = reading_success("TALLY, the person's budget.".into(), None);
+        assert_eq!(ok["content"][0]["text"], "TALLY, the person's budget.");
+        assert!(ok.get("structuredContent").is_none(), "no JSON beside it for a client to prefer");
+        let error = json!({"kind":"not_found","code":"money.not_found","message":"No entry 5","hint":"list entries with money.tx.list"});
+        let plain = refusal(error.clone(), None, &Style { lean: true, readings: true, docs: false });
+        assert_eq!(plain["isError"], true);
+        assert_eq!(plain["content"][0]["text"], "Not done (money.not_found): No entry 5. Hint: list entries with money.tx.list.");
+        let json = refusal(error, None, &Style::default());
+        assert!(json["content"][0]["text"].as_str().unwrap().contains("\"code\": \"money.not_found\""));
     }
 
     #[test]
