@@ -282,7 +282,7 @@ internal fun LastSessionStrip(
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
             Text("$animatedVolume ${unitLabel(weightUnit)}", style = MaterialTheme.typography.labelMedium, color = onBg)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
-            Text("$currentSets/$targetSets", style = MaterialTheme.typography.labelMedium, color = muted)
+            Text("$currentSets of $targetSets sets", style = MaterialTheme.typography.labelMedium, color = muted)
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
             // Only show the comparison line once you've logged a set this session —
