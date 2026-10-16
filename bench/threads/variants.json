@@ -52,5 +52,19 @@
       "RELAY_THREADS_LOCAL": "lean,readings,prefetch,docs"
     },
     "settings": {}
+  },
+  "think": {
+    "description": "The default small-model profile, with the model thinking before it answers, no limit.",
+    "env": {
+      "RELAY_THREADS_LOCAL": "lean,readings,prefetch,think"
+    },
+    "settings": {}
+  },
+  "think-512": {
+    "description": "The default small-model profile, with the model thinking before it answers, within 512 tokens.",
+    "env": {
+      "RELAY_THREADS_LOCAL": "lean,readings,prefetch,think:512"
+    },
+    "settings": {}
   }
 }

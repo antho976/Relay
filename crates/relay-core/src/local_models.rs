@@ -224,8 +224,10 @@ pub fn ensure(engine: &Arc<Engine>, model: &'static Model) -> Result<u16, String
     cmd.arg("-m").arg(&file)
         .args(["--alias", model.id, "--host", "127.0.0.1", "--port", &port.to_string()])
         // One conversation with the whole context; thinking off, which is most of a small
-        // model's wait. The layers on the card are fitted to its free memory.
-        .args(["-c", &CONTEXT.to_string(), "-np", "1", "--jinja", "--reasoning", "off", "--no-webui"])
+        // model's wait, unless the profile turns it on (within a budget). The layers on the card
+        // are fitted to its free memory.
+        .args(["-c", &CONTEXT.to_string(), "-np", "1", "--jinja", "--no-webui"])
+        .args(thinking(crate::threads::LocalStyle::from_env().think))
         .arg("--chat-template-file").arg(&template)
         // The key in the environment, not the command line any local user can read; and no
         // `/slots`, which would hand out the prompt being worked on.
@@ -319,6 +321,26 @@ pub fn ensure(engine: &Arc<Engine>, model: &'static Model) -> Result<u16, String
 /// The environment that points a thread's Claude Code at the server on `port`, with that
 /// server's key. Every model Claude Code would reach for, its background one included, is the
 /// local one.
+/// The longest reply Claude Code may ask for: a thinking model's thought comes out of the same
+/// budget, so it gets its own on top, or room for a long one when it has no limit.
+fn output_tokens(think: Option<i32>) -> u32 {
+    match think {
+        None => MAX_OUTPUT,
+        Some(budget) if budget < 0 => MAX_OUTPUT * 3,
+        Some(budget) => MAX_OUTPUT + budget as u32,
+    }
+}
+
+/// llama-server's thinking arguments for a profile's `think`: off, on, or on within a budget.
+fn thinking(think: Option<i32>) -> Vec<String> {
+    match think {
+        None => vec!["--reasoning".into(), "off".into()],
+        Some(budget) if budget < 0 => vec!["--reasoning".into(), "on".into()],
+        Some(budget) => vec!["--reasoning".into(), "on".into(), "--reasoning-budget".into(), budget.to_string(),
+            "--reasoning-budget-message".into(), "Time to answer.".into()],
+    }
+}
+
 pub fn agent_env(port: u16, model: &Model) -> Vec<(&'static str, String)> {
     // A port no server of Relay's holds gets a key nothing accepts, never a shared one.
     let key = key_for(port).unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
@@ -334,7 +356,7 @@ pub fn agent_env(port: u16, model: &Model) -> Vec<(&'static str, String)> {
         // before the server refuses past CONTEXT; with the real window it compacts in time. A
         // reply is short, and the room kept for it comes out of that window.
         ("CLAUDE_CODE_MAX_CONTEXT_TOKENS", CONTEXT.to_string()),
-        ("CLAUDE_CODE_MAX_OUTPUT_TOKENS", MAX_OUTPUT.to_string()),
+        ("CLAUDE_CODE_MAX_OUTPUT_TOKENS", output_tokens(crate::threads::LocalStyle::from_env().think).to_string()),
     ];
     for var in ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"] {
         env.push((var, model.id.to_string()));

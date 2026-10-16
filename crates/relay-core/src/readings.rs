@@ -531,21 +531,21 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
 
     let budgets = list(r, "budgets");
     if !budgets.is_empty() {
-        let _ = writeln!(o, "\nBUDGETS BY CATEGORY (spent of budget, then where it stands):");
+        // Over budget and over pace are different questions a small model mixes up: each gets
+        // its own yes or no, and the over ones are named together first.
+        let over: Vec<&str> = budgets.iter().filter(|b| int(b, "left") < 0).map(|b| s(b, "name")).collect();
+        let _ = writeln!(o, "\nBUDGETS BY CATEGORY. Over budget means more spent than the budget; ahead of pace only means spending faster than the days gone, and is NOT over budget.");
+        let _ = writeln!(o, "Over budget now: {}.", if over.is_empty() { "none".to_string() } else { over.join(", ") });
         for b in budgets {
             let (spent, budget, left, delta) = (int(b, "spent"), int(b, "budget"), int(b, "left"), int(b, "pace_delta"));
-            let stand = if left < 0 {
-                format!("OVER BUDGET by {}", m.fmt(-left))
-            } else {
-                let pace = match delta.cmp(&0) {
-                    std::cmp::Ordering::Greater => format!("over pace by {}", m.fmt(delta)),
-                    std::cmp::Ordering::Less => format!("under pace by {}", m.fmt(-delta)),
-                    std::cmp::Ordering::Equal => "on pace".into(),
-                };
-                format!("NOT over budget: {} left. {}", m.fmt(left), capitalised(&pace))
+            let budget_q = if left < 0 { format!("Over budget? YES, by {}", m.fmt(-left)) } else { format!("Over budget? NO, {} left", m.fmt(left)) };
+            let pace_q = match delta.cmp(&0) {
+                std::cmp::Ordering::Greater => format!("Ahead of pace? YES, by {}", m.fmt(delta)),
+                std::cmp::Ordering::Less => format!("Ahead of pace? NO, under pace by {}", m.fmt(-delta)),
+                std::cmp::Ordering::Equal => "Ahead of pace? NO, on pace".into(),
             };
             let spent = if spent == 0 { format!("{NONE_LOGGED} this month, budget {}", m.fmt(budget)) } else { format!("{} of {}", m.fmt(spent), m.fmt(budget)) };
-            let _ = writeln!(o, "- {}: {spent}. {stand}.", s(b, "name"));
+            let _ = writeln!(o, "- {}: {spent}. {budget_q}. {pace_q}.", s(b, "name"));
         }
     }
 
@@ -1727,9 +1727,10 @@ mod tests {
             "- Pace: $1,022.03 OVER pace (an even pace would be $1,403.23 spent by today).",
             "- To stay within the budget: $27.92 a day for the 17 days left.",
             "- Compared with last month at the same day: last month had spent $90.00 by Tue Sep 15 (its day 15); this month $2,425.26: $2,335.26 MORE than last month by this day.",
-            "- Dining: $336.61 of $320.00. OVER BUDGET by $16.61.",
-            "- Groceries: $382.17 of $500.00. NOT over budget: $117.83 left. Over pace by $140.23.",
-            "- Entertainment: none logged in Tally this month, budget $80.00. NOT over budget: $80.00 left. Under pace by $38.71.",
+            "- Dining: $336.61 of $320.00. Over budget? YES, by $16.61.",
+            "Over budget now: Dining.",
+            "- Groceries: $382.17 of $500.00. Over budget? NO, $117.83 left. Ahead of pace? YES, by $140.23.",
+            "- Entertainment: none logged in Tally this month, budget $80.00. Over budget? NO, $80.00 left. Ahead of pace? NO, under pace by $38.71.",
             "- money.tx.list's period_offset: 0 = October 2026, -1 = September 2026.",
             "- Weeks before (Monday to Sunday): Mon Sep 28 to Sun Oct 4: $1,364.98; Mon Sep 21 to Sun Sep 27: none logged in Tally;",
             "- Housing: $1,350.00 (1)",

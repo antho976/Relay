@@ -102,18 +102,26 @@ pub struct LocalStyle {
     pub prefetch: bool,
     /// Tools described in plain words with an example call each, by the MCP door.
     pub docs: bool,
+    /// The model thinks before it answers (`think`), within this many tokens (`think:512`); -1 is
+    /// no limit. Off, the server answers at once (`local_models`).
+    pub think: Option<i32>,
 }
 
 impl LocalStyle {
-    pub const CLASSIC: LocalStyle = LocalStyle { lean: false, readings: false, prefetch: false, docs: false };
+    pub const CLASSIC: LocalStyle = LocalStyle { lean: false, readings: false, prefetch: false, docs: false, think: None };
     /// What a local thread runs with when nothing overrides it: on the bench's dev split, Qwen3.5
     /// 4B answered 73% with none of it and 92% with these three; `docs` moved nothing.
-    pub const DEFAULT: LocalStyle = LocalStyle { lean: true, readings: true, prefetch: true, docs: false };
+    pub const DEFAULT: LocalStyle = LocalStyle { lean: true, readings: true, prefetch: true, docs: false, think: None };
 
-    /// `lean,readings` and the like; `classic` (or nothing known) is none of them.
+    /// `lean,readings` and the like; `classic` (or nothing known) is none of them. `think` or
+    /// `think:<tokens>` turns thinking on.
     pub fn parse(spec: &str) -> LocalStyle {
         let has = |part: &str| spec.split(',').any(|p| p.trim().eq_ignore_ascii_case(part));
-        LocalStyle { lean: has("lean"), readings: has("readings"), prefetch: has("prefetch"), docs: has("docs") }
+        let think = spec.split(',').map(str::trim).find_map(|p| {
+            let lower = p.to_ascii_lowercase();
+            if lower == "think" { Some(-1) } else { lower.strip_prefix("think:").and_then(|n| n.parse::<i32>().ok()).filter(|n| *n >= 0) }
+        });
+        LocalStyle { lean: has("lean"), readings: has("readings"), prefetch: has("prefetch"), docs: has("docs"), think }
     }
 
     /// `RELAY_THREADS_LOCAL`, else (unset or empty) [`LocalStyle::DEFAULT`].
@@ -1302,7 +1310,10 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--append-system-prompt" || a == PROMPT));
         let args = agent_args("{}", None, None, None, false);
         assert!(args.windows(2).any(|w| w[0] == "--append-system-prompt" && w[1] == PROMPT));
-        assert_eq!(LocalStyle::parse(" lean, Readings"), LocalStyle { lean: true, readings: true, prefetch: false, docs: false });
+        assert_eq!(LocalStyle::parse(" lean, Readings"), LocalStyle { lean: true, readings: true, prefetch: false, docs: false, think: None });
+        assert_eq!(LocalStyle::parse("lean,think").think, Some(-1));
+        assert_eq!(LocalStyle::parse("lean,think:512").think, Some(512));
+        assert_eq!(LocalStyle::parse("lean,think:x").think, None);
         assert_eq!(LocalStyle::parse("classic"), LocalStyle::CLASSIC);
         assert_eq!(LocalStyle::parse("lean,readings,prefetch").door(), "lean,readings");
         assert_eq!(LocalStyle::CLASSIC.door(), "");

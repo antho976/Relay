@@ -448,6 +448,15 @@ async fn tools(instance: Instance, actor: &Actor, token: Option<&str>) -> Result
     // nobody at all (D104).
     let selection = selection();
     let style = Style::from_env();
+    // A small model told only in a reading which accounts it must not record activity in tries
+    // anyway: the tool itself names them.
+    let filled = if style.readings && selected(selection.as_deref(), "money.invest.add") {
+        let mut request = Request::new(actor.clone(), "money.lists", json!({}));
+        if let Some(token) = token { request = request.with_token(token); }
+        client.call(&request, |_| {}).await.ok().filter(|r| r.ok).and_then(|r| r.result).map(|lists| filled_by_wealthsimple(&lists)).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let tools = listed.into_iter().filter_map(|info| {
         if info["implemented"] != true { return None; }
         let name = info["name"].as_str()?;
@@ -462,7 +471,7 @@ async fn tools(instance: Instance, actor: &Actor, token: Option<&str>) -> Result
         };
         admitted.then(|| {
             let tool = if style.docs { small_model_tool(entry) } else { op_tool(entry) };
-            if style.readings { by_names(tool) } else { tool }
+            if style.readings { never_into(by_names(tool), &filled) } else { tool }
         })
     }).collect::<Vec<_>>();
 
@@ -609,6 +618,29 @@ fn held(op: &str, arguments: &Value, lists_read: bool) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// The accounts Wealthsimple's files fill, by name: activity recorded in one by hand would count
+/// twice once the next export brings it, and the engine refuses it from an agent.
+fn filled_by_wealthsimple(lists: &Value) -> Vec<String> {
+    lists["accounts"].as_array().map(|accounts| accounts.iter()
+        .filter(|a| a["archived"] != true && a["institution"].as_str().is_some_and(|i| i.trim().eq_ignore_ascii_case("wealthsimple")))
+        .filter_map(|a| a["name"].as_str().map(str::to_string))
+        .collect()).unwrap_or_default()
+}
+
+/// `money.invest.add` as a small model is shown it: the accounts it is never for, named.
+fn never_into(mut tool: Value, filled: &[String]) -> Value {
+    if tool["name"] != "money.invest.add" || filled.is_empty() {
+        return tool;
+    }
+    let about = tool["description"].as_str().unwrap_or("").to_string();
+    tool["description"] = json!(format!(
+        "{about}. NEVER for {}: Wealthsimple's files fill {}, so the next export brings the activity and recording it here would count \
+         it twice. For those, say the next export brings it.",
+        filled.join(", "), if filled.len() == 1 { "it" } else { "them" }
+    ));
+    tool
 }
 
 /// The writes a small model makes by naming the account and category instead of their ids.
@@ -971,6 +1003,20 @@ mod tests {
         for op in relay_core::threads::local_ops().into_iter().filter(|op| op.starts_with("money.") || op.starts_with("gym.")) {
             assert!(relay_core::readings::description(op, jiff::Zoned::now().date()).is_some(), "{op}");
         }
+    }
+
+    #[test]
+    fn a_small_model_is_told_which_accounts_take_no_activity() {
+        let lists = json!({"accounts": [
+            {"id": 6, "name": "Demo TFSA", "type": "INVESTMENT", "institution": "Wealthsimple"},
+            {"id": 7, "name": "Sample TFSA", "type": "INVESTMENT", "institution": ""},
+            {"id": 8, "name": "Old WS", "type": "INVESTMENT", "institution": "wealthsimple", "archived": true},
+        ]});
+        assert_eq!(filled_by_wealthsimple(&lists), ["Demo TFSA"]);
+        let tool = never_into(op_tool(Registry::global().get("money.invest.add").unwrap()), &filled_by_wealthsimple(&lists));
+        assert!(tool["description"].as_str().unwrap().contains("NEVER for Demo TFSA"));
+        let other = never_into(op_tool(Registry::global().get("money.tx.add").unwrap()), &["Demo TFSA".into()]);
+        assert!(!other["description"].as_str().unwrap().contains("NEVER"));
     }
 
     #[test]
