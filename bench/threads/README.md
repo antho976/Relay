@@ -33,6 +33,7 @@ to be added to `local_models::MODELS`.
 |---|---|---|---|---|
 | As Threads first shipped (`ff599ba`) | 74.5% [69.5, 78.9] | 73.2% | 78.2% | 16.6 |
 | Small-model profile, ask first, Avex/Tally rework (`a24ed13`) | 89.8% [86.1, 92.6] | 90.7% | 87.4% | 3.0 |
+| The same build on Qwen3.5 9B Q5_K_M (one slot) | 95.8% [93.1, 97.5] | 96.3% | 94.3% | 2.5 |
 
 Δ +15.3 points, bootstrap 95% over tasks [+8.7, +22.5]. What changed is in `docs/THREADS.md`
 ("Small models"). The holdout split was looked at twice while the profile was built (once for the
