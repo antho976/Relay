@@ -191,7 +191,9 @@ fun HubScreen(
                     // entry) rather than a bottom sheet, so Back from a session returns to the list.
                     onViewAllHistory = { pushOnce(Routes.SESSION_HISTORY) },
                     onLogFreestyle = { pushOnce(Routes.FREESTYLE_LOG) },
-                    onBuildPlan = { pushOnce(Routes.programBuilder()) }
+                    onBuildPlan = { pushOnce(Routes.programBuilder()) },
+                    onOpenBody = { goToTab(BottomTab.STATS) },
+                    onConnectWatch = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
                 )
                 // Coach and Academy sit furthest from Home, so each carries the top-bar back arrow
                 // to it; the system Back already goes there (the BackHandler above).

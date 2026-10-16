@@ -58,7 +58,6 @@
 1 alpha ui/gym/train/components/SetRow.kt 0.5
 1 alpha ui/gym/train/components/SetRow.kt 0.8
 1 alpha ui/gym/train/components/SetRow.kt 0.85
-1 alpha ui/overview/OverviewScreen.kt 0.3
 1 alpha ui/profile/BodyMeasurementsScreen.kt 0.30
 1 alpha ui/profile/BodyMeasurementsScreen.kt 0.55
 1 alpha ui/profile/MirrorTestCompare.kt 0.85

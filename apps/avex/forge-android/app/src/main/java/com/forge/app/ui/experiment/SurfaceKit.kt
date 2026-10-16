@@ -354,12 +354,12 @@ private class SparklineGeometry {
  *
  * ## Where the colour goes
  *
- * A trained day is filled in `onBg` and carries a check; only TODAY is accent. That is deliberate and
+ * A trained day is filled in `onBg` and carries a check; only TODAY is accent, as a ring. That is deliberate and
  * it is the whole colour budget of this mark: four trained days in ember would be four competing
  * warm blobs under a warm CTA, and the accent would stop meaning anything (§5). One lit dot in a row
  * of seven says "you are here" at a glance and spends one unit of colour to do it.
  *
- * Works at zero — an untrained week is seven open cells with one lit today, which is a real
+ * Works at zero — an untrained week is seven open cells with today ringed, which is a real
  * reading, not an empty state (§12).
  *
  * ## Rest days (2026-09-28)
@@ -421,19 +421,18 @@ fun WeekStrip(
                         // constraint and grows at 200% (§14). 34dp, up from 26 — see above.
                         .sizeIn(minWidth = 34.dp, minHeight = 34.dp)
                         .clip(CellShape)
+                        // Today is a RING, never a fill (2026-10-16). A solid accent cell for an
+                        // untrained today was the loudest thing in the row and read as "done", the
+                        // opposite of what it meant. The ring says "you are here" on any cell.
                         .background(
                             when {
                                 done -> onBg
-                                // Today stays lit on a rest day too: "you are here" outranks "rest".
-                                isToday && !isRest -> accent
                                 isRest -> Color.Transparent
                                 else -> openFill
                             }
                         )
-                        // A trained TODAY is filled like any other trained day, so the accent ring
-                        // around it is what still says "you are here".
                         .then(
-                            if ((done || isRest) && isToday) Modifier.border(2.dp, accent, CellShape) else Modifier
+                            if (isToday) Modifier.border(2.dp, accent, CellShape) else Modifier
                         ),
                     contentAlignment = Alignment.Center
                 ) {
