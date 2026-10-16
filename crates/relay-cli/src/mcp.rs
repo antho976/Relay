@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use tokio::sync::mpsc;
 
@@ -527,10 +528,23 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
             return Ok(refusal(json!({"kind":"invalid","code":"bus.schema","message":why}), None, &style));
         }
     }
+    if style.readings && needs_lists(name, &arguments) && !LISTS_READ.swap(true, Ordering::Relaxed) {
+        // A small model that writes before it has read the ids guesses them: the first such
+        // write is sent back with the accounts and categories, to be made again with them.
+        let lists = read(&mut client, actor, token, "money.lists", json!({})).await.unwrap_or_else(|| json!({}));
+        if let Some(text) = reading(&mut client, actor, token, "money.lists", &json!({}), &lists).await {
+            let text = format!("Not done yet: {name} takes ids from money.lists, read here for you. Pick the account and category \
+                the person named, then call {name} again with those ids.\n\n{text}");
+            return Ok(json!({"content":[{"type":"text","text":text}],"isError":true}));
+        }
+    }
     let mut request = Request::new(actor.clone(), name, arguments);
     if let Some(token) = token { request = request.with_token(token); }
     let response = client.call(&request, |_| {}).await?;
     let mail = response.mail.clone();
+    if response.ok && name == "money.lists" {
+        LISTS_READ.store(true, Ordering::Relaxed);
+    }
     if response.ok && style.readings && relay_core::readings::OPS.contains(&name) {
         // A small model is given the reading, worked out and in words, not the JSON.
         let result = response.result.clone().unwrap_or_else(|| json!({}));
@@ -550,6 +564,19 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
         Ok(tool_success(value, mail.as_ref())?)
     } else {
         Ok(refusal(serde_json::to_value(response.error)?, mail.as_ref(), &style))
+    }
+}
+
+/// Whether this server has given its model money.lists: this process serves one thread's agent.
+static LISTS_READ: AtomicBool = AtomicBool::new(false);
+
+/// Whether a write takes ids only money.lists gives: an entry added, or one moved to another
+/// account or category.
+fn needs_lists(op: &str, arguments: &Value) -> bool {
+    match op {
+        "money.tx.add" => true,
+        "money.tx.update" => ["account_id", "category_id", "to_account_id"].iter().any(|k| arguments.get(*k).is_some_and(|v| !v.is_null())),
+        _ => false,
     }
 }
 
@@ -791,6 +818,15 @@ mod tests {
         for op in relay_core::threads::local_ops().into_iter().filter(|op| op.starts_with("money.") || op.starts_with("gym.")) {
             assert!(relay_core::readings::description(op, jiff::Zoned::now().date()).is_some(), "{op}");
         }
+    }
+
+    #[test]
+    fn writes_that_take_ids_wait_for_money_lists() {
+        assert!(needs_lists("money.tx.add", &json!({"amount": "4.50"})));
+        assert!(needs_lists("money.tx.update", &json!({"id": 7, "category_id": 3})));
+        assert!(!needs_lists("money.tx.update", &json!({"id": 7, "amount": "5"})), "a new amount needs no id");
+        assert!(!needs_lists("money.tx.update", &json!({"id": 7, "category_id": null})));
+        assert!(!needs_lists("money.summary", &json!({})) && !needs_lists("thread.propose", &json!({})));
     }
 
     #[test]
