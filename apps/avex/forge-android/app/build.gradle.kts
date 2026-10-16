@@ -111,16 +111,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-        // Pin the annotation-use-site default (KT-73255) instead of inheriting whatever a future
-        // Kotlin release picks. The warnings this clears are spread across data/repo and service,
-        // and the change they warn about is BEHAVIOURAL — an annotation silently moving from the
-        // property to the constructor parameter (or back) rewires what Hilt, Room and
-        // kotlinx-serialization see. Choosing it deliberately now means a Kotlin upgrade is a
-        // version bump rather than a behaviour change.
-        freeCompilerArgs += listOf("-Xannotation-default-target=param-property")
-    }
 
     buildFeatures {
         compose = true
@@ -196,6 +186,15 @@ android {
                     System.getProperty("forge.regen") == "true"
             }
         }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        // No -Xannotation-default-target flag: param-property (KT-73255) is the default from Kotlin
+        // 2.4, which is the behaviour this module was pinned to before, so dropping the flag changes
+        // nothing Hilt, Room or kotlinx-serialization see.
     }
 }
 
@@ -323,8 +322,8 @@ dependencies {
     ksp(libs.hilt.androidx.compiler)
 
     // Glance for home screen widget (#146)
-    implementation("androidx.glance:glance-appwidget:1.1.1")
-    implementation("androidx.glance:glance-material3:1.1.1")
+    implementation("androidx.glance:glance-appwidget:1.2.0")
+    implementation("androidx.glance:glance-material3:1.2.0")
 
     // DocumentFile — enumerate a user-granted folder (Downloads) to auto-find gym-app exports (#GYMAP-17).
     implementation("androidx.documentfile:documentfile:1.1.0")
@@ -341,7 +340,7 @@ dependencies {
 
     // WebSocket client for the personal build's uploader only (src/personal/RELAY.md). Never on
     // the release classpath.
-    "personalImplementation"("com.squareup.okhttp3:okhttp:4.12.0")
+    "personalImplementation"("com.squareup.okhttp3:okhttp:5.5.0")
 
     // Test
     testImplementation(libs.junit)

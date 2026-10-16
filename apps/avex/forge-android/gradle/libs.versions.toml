@@ -1,23 +1,23 @@
 [versions]
-guava = "33.3.1-android"
-protobuf-lite = "3.25.5"
+guava = "33.7.2-android"
+protobuf-lite = "4.36.2"
 # Core toolchain
-agp = "9.2.1"
-kotlin = "2.2.10"
-ksp = "2.3.2"
+agp = "9.4.1"
+kotlin = "2.4.21"
+ksp = "2.3.12"
 
 # Compose
-compose-bom = "2026.08.00"
-activity-compose = "1.10.1"
+compose-bom = "2026.09.00"
+activity-compose = "1.13.0"
 # 2.11.0 is what androidx.hilt 1.4.0 pulls in transitively, and Gradle resolves to the higher
 # version regardless of what this pin says. Written down so the catalog describes the build that
 # actually runs rather than one that lost a conflict resolution.
 lifecycle = "2.11.0"
-navigation-compose = "2.10.0"
+navigation-compose = "2.10.2"
 
 # Hilt + DI
 #
-# Floored at 2.59.2 by androidx.hilt 1.4.0, which depends on hilt-android at 2.58 or later. Dagger
+# Floored at 2.58 by androidx.hilt 1.4.0, which depends on hilt-android at 2.58 or later. Dagger
 # 2.58 REPLACED `ActivityComponentManager.getSavedStateHandleHolder()` with
 # `initSavedStateHandleHolders()` / `clearSavedStateHandleHolders()`. This pin is the KSP processor
 # as well as the runtime, so leaving it at 2.56.2 meant the 2.56 generator emitting
@@ -25,27 +25,26 @@ navigation-compose = "2.10.0"
 # that no longer has it — `:app:compileDebugJavaWithJavac` fails on generated code, naming a symbol
 # that appears nowhere in this repository. Generator and runtime have to be one version.
 #
-# 2.59.2 and not 2.60.x: 2.60 wants kotlin-stdlib and kotlin-metadata-jvm 2.3.21 and KSP 2.3.7,
-# which makes this a Kotlin toolchain upgrade rather than a Hilt one. 2.59.2 is the last release on
-# the 2.2 line this project builds with.
-hilt = "2.59.2"
+# 2.60 needs kotlin-stdlib and kotlin-metadata-jvm 2.3.21+ and KSP 2.3.7+, which the Kotlin 2.4 /
+# KSP 2.3.12 toolchain above satisfies. Moving Kotlin back below 2.3.21 means moving Hilt back to 2.59.2.
+hilt = "2.60.1"
 hilt-navigation-compose = "1.4.0"
 
 # Persistence
-room = "2.8.4"
-datastore = "1.1.1"
+room = "2.8.5"
+datastore = "1.2.1"
 
 # Health Connect (on-device recovery signals — sleep, resting HR — for the coach)
 health-connect = "1.1.0"
 
 # CameraX (in-app guided progress-photo capture with a pose-ghost overlay)
-camerax = "1.4.2"
+camerax = "1.6.2"
 
 # Biometric / device-credential app lock (GYMAP-69) — no app PIN stored; the OS handles the credential
 biometric = "1.1.0"
 
 # Async
-coroutines = "1.9.0"
+coroutines = "1.11.0"
 
 # Serialization (W1 — the wear Data Layer protocol DTOs in :shared)
 #
@@ -56,42 +55,41 @@ coroutines = "1.9.0"
 # `AbstractMethodError` the moment MigrationTestHelper read a schema — a failure only the emulator
 # job can see, because it is the only one that opens a database.
 #
-# 1.9.0 and not later: it wants Kotlin stdlib 2.2.0 and this project is on 2.2.10, while 1.11.0
-# wants 2.3.20 and would make this a toolchain upgrade instead of a compatibility fix.
-kotlinx-serialization = "1.9.0"
+# 1.11.0 wants Kotlin stdlib 2.3.20+, which the Kotlin 2.4 toolchain above satisfies.
+kotlinx-serialization = "1.11.0"
 
 # Wear OS (W1–W4: watch app, tiles, complications, live HR)
-wear-compose = "1.4.1"
+wear-compose = "1.7.1"
 play-services-wearable = "20.0.1"
 wear-tiles = "1.6.2"
 protolayout = "1.4.2"
 watchface-complications = "1.3.0"
 wear-ongoing = "1.1.0"
-health-services = "1.0.0"
-concurrent-futures = "1.2.0"
+health-services = "1.1.0"
+concurrent-futures = "1.3.0"
 
 # WorkManager
-work = "2.10.1"
+work = "2.12.0"
 hilt-work = "1.4.0"
 
 # Test
 junit = "4.13.2"
 # Screenshot testing (Roborazzi runs on the JVM via Robolectric, so no emulator and no AGP coupling).
-roborazzi = "1.73.0"
-robolectric = "4.16.1"
+roborazzi = "1.76.0"
+robolectric = "4.17"
 androidx-test-junit = "1.3.0"
 espresso = "3.7.0"
 
 # Startup performance (Baseline Profile + Macrobenchmark — P2)
 profileinstaller = "1.4.1"
-benchmark = "1.4.1"
+benchmark = "1.5.0"
 uiautomator = "2.4.0"
 
 [libraries]
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
 protobuf-lite = { module = "com.google.protobuf:protobuf-javalite", version.ref = "protobuf-lite" }
 # Core AndroidX
-androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version = "1.19.0" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version = "1.19.1" }
 androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version = "1.2.0" }
 androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version = "1.4.2" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity-compose" }

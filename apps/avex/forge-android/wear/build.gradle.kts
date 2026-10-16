@@ -70,18 +70,17 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-        // Pin the annotation-use-site default (KT-73255) instead of inheriting whatever a future
-        // Kotlin release picks. The warnings this clears are spread across data/repo and service,
-        // and the change they warn about is BEHAVIOURAL — an annotation silently moving from the
-        // property to the constructor parameter (or back) rewires what Hilt, Room and
-        // kotlinx-serialization see. Choosing it deliberately now means a Kotlin upgrade is a
-        // version bump rather than a behaviour change.
-        freeCompilerArgs += listOf("-Xannotation-default-target=param-property")
-    }
 
     buildFeatures { compose = true }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        // No -Xannotation-default-target flag: param-property (KT-73255) is the default from Kotlin
+        // 2.4, which is the behaviour this module was pinned to before, so dropping the flag changes
+        // nothing Hilt, Room or kotlinx-serialization see.
+    }
 }
 
 dependencies {
@@ -93,7 +92,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     // The wearable/ongoing libs pull a pre-1.3 fragment transitively, which trips lint-vital's
     // InvalidFragmentVersionForActivityResult on registerForActivityResult — pin a modern one.
-    implementation("androidx.fragment:fragment:1.9.0")
+    implementation("androidx.fragment:fragment:1.9.1")
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.activity.compose)
