@@ -8,11 +8,16 @@
 //! agent reaches the person's data through the ops its thread is given, not through these.
 //!
 //! Events: `thread.changed` (a thread was created, renamed, deleted, or started or finished a
-//! turn), `thread.message` (a message was stored) and `thread.delta` (a piece of the reply being
-//! written, for live display; not stored).
+//! turn), `thread.message` (a message was stored), `thread.delta` (a piece of the reply being
+//! written, for live display; not stored) and `thread.proposal` (a proposal was made or answered).
+//!
+//! Asking first: what the agent may not change alone it proposes (`thread.propose`, one
+//! [`Action`] each), and the person approves or declines it on a card (`thread.proposal.*`).
+use crate::ops::money::{AccountAddIn, AccountUpdateIn, BudgetSetIn, IdIn as MoneyIdIn, TxUpdateIn};
 use crate::registry::{Actors, OpMeta, Scope};
 use crate::types::Id;
 use crate::{op, Empty};
+use relay_money::views::{AccountView, ActivityView, Tx};
 use serde_json::Value;
 
 result!(#[schemars(rename = "ThreadView")] ThreadView {
@@ -126,4 +131,154 @@ op!(Pick, "thread.pick", PickIn => Empty,
     OpMeta::mutation(Scope::Global, 5, "A model was picked in the Threads picker: load a local one now, or stop the local one")
         .actors(Actors::UserOnly).emits(&["thread.local"]));
 
-entries!(List, Get, Create, Send, Stop, Set, Rename, Delete, Models, Pick);
+// ── Asking first (docs/THREADS.md, phase 4) ───────────────────────────────
+
+/// One change a thread's agent asks the person for: the op approving runs, keyed by its name,
+/// holding a list of that op's own payloads, all applied together or none,
+/// e.g. `{"money.tx.delete": [{"id": 42}, {"id": 43}]}`.
+#[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize, ::schemars::JsonSchema)]
+#[schemars(rename = "ThreadAction")]
+pub enum Action {
+    /// Delete entries, up to 50.
+    #[serde(rename = "money.tx.delete")]
+    TxDelete(Vec<MoneyIdIn>),
+    /// Change entries, up to 50: recategorize them, or fix an amount, a date or a note.
+    #[serde(rename = "money.tx.update")]
+    TxUpdate(Vec<TxUpdateIn>),
+    /// Set monthly budgets, up to 20; an amount of zero removes one.
+    #[serde(rename = "money.budget.set")]
+    BudgetSet(Vec<BudgetSetIn>),
+    /// Add accounts, up to 5.
+    #[serde(rename = "money.account.add")]
+    AccountAdd(Vec<AccountAddIn>),
+    /// Rename or archive accounts, up to 5.
+    #[serde(rename = "money.account.update")]
+    AccountUpdate(Vec<AccountUpdateIn>),
+    /// Delete investment activities, up to 50.
+    #[serde(rename = "money.invest.delete")]
+    InvestDelete(Vec<MoneyIdIn>),
+}
+
+impl Action {
+    /// The op approving runs, once per payload.
+    pub fn op(&self) -> &'static str {
+        match self {
+            Action::TxDelete(_) => "money.tx.delete",
+            Action::TxUpdate(_) => "money.tx.update",
+            Action::BudgetSet(_) => "money.budget.set",
+            Action::AccountAdd(_) => "money.account.add",
+            Action::AccountUpdate(_) => "money.account.update",
+            Action::InvestDelete(_) => "money.invest.delete",
+        }
+    }
+
+    /// How many payloads it holds.
+    pub fn len(&self) -> usize {
+        match self {
+            Action::TxDelete(v) | Action::InvestDelete(v) => v.len(),
+            Action::TxUpdate(v) => v.len(),
+            Action::BudgetSet(v) => v.len(),
+            Action::AccountAdd(v) => v.len(),
+            Action::AccountUpdate(v) => v.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The most payloads one proposal of this kind may hold.
+    pub fn most(&self) -> usize {
+        match self {
+            Action::TxDelete(_) | Action::TxUpdate(_) | Action::InvestDelete(_) => 50,
+            Action::BudgetSet(_) => 20,
+            Action::AccountAdd(_) | Action::AccountUpdate(_) => 5,
+        }
+    }
+}
+
+/// One thing a proposal acts on, read from the ledger: as it is now while the proposal waits,
+/// and as it was just before it was answered after that, so a card still shows what was deleted.
+#[derive(Debug, Clone, Default, PartialEq, ::serde::Serialize, ::serde::Deserialize, ::schemars::JsonSchema)]
+#[schemars(rename = "ThreadProposalItem")]
+pub struct Item {
+    /// `same` as when it was proposed, `changed` since, `gone` from the ledger since, or `new`
+    /// (an account to add).
+    pub state: String,
+    /// Entries: the entry, and as the change would leave it.
+    pub entry: Option<Tx>,
+    pub entry_after: Option<Tx>,
+    /// Investment activities to delete.
+    pub activity: Option<ActivityView>,
+    /// Accounts: the account (absent for one to add), and as the change would leave it.
+    pub account: Option<AccountView>,
+    pub account_after: Option<AccountView>,
+    /// Budgets: the category's name (absent for the overall monthly budget), the budget now and
+    /// the one proposed; absent when there is none.
+    pub category: Option<String>,
+    #[schemars(extend("x-unit" = "minor"))]
+    pub budget: Option<i64>,
+    #[schemars(extend("x-unit" = "minor"))]
+    pub budget_after: Option<i64>,
+}
+
+payload!(#[schemars(rename = "ThreadProposeIn")] ProposeIn {
+    /// The one change: `{"<op>": [<that op's payload>, ...]}`.
+    pub action: Action,
+    /// Why, in a sentence the person reads on the card.
+    pub why: String,
+});
+result!(#[schemars(rename = "ThreadProposal")] ProposalView {
+    pub id: Id,
+    pub thread_id: Id,
+    pub action: Action,
+    pub why: String,
+    /// What approving does, in words read from the ledger. Quote it.
+    pub summary: String,
+    /// `pending`, `running` (approved, under way), `approved`, `declined`, `failed` or `undone`.
+    pub status: String,
+    /// What approving did, or why it could not be done.
+    pub outcome: Option<String>,
+    /// The ledger's currency.
+    pub currency: String,
+    /// What it acts on, one per payload, in order.
+    pub items: Vec<Item>,
+    /// Something changed or went since it was proposed: approving needs a fresh look (`seen`).
+    pub stale: bool,
+    /// The fingerprint of `items` as read now: an approval passes it back as `seen`.
+    pub seen: String,
+    /// Approved, and `thread.proposal.undo` can put it back.
+    pub undoable: bool,
+    pub created_at: String,
+    pub resolved_at: Option<String>,
+});
+op!(Propose, "thread.propose", ProposeIn => ProposalView,
+    OpMeta::mutation(Scope::Global, 5, "A thread's agent asks the person for a change it may not make alone: deleting entries or investment activities, changing many entries, budgets, adding, renaming or archiving accounts. It waits on a card; nothing changes until they approve")
+        .emits(&["thread.proposal"]));
+
+payload!(#[schemars(rename = "ThreadProposalListIn")] ProposalListIn {
+    pub thread_id: Id,
+    /// Only those still waiting when true.
+    pub pending: Option<bool>,
+});
+result!(#[schemars(rename = "ThreadProposalsOut")] ProposalsOut { pub proposals: Vec<ProposalView> });
+op!(ProposalList, "thread.proposal.list", ProposalListIn => ProposalsOut,
+    OpMeta::query(Scope::Global, 5, "A thread's proposals, oldest first, each with what it acts on read from the ledger").actors(Actors::UserOnly));
+op!(ProposalGet, "thread.proposal.get", IdIn => ProposalView,
+    OpMeta::query(Scope::Global, 5, "One proposal, with what it acts on read from the ledger").actors(Actors::UserOnly));
+
+payload!(#[schemars(rename = "ThreadProposalResolveIn")] ProposalResolveIn {
+    pub id: Id,
+    pub approve: bool,
+    /// The `seen` of the reading the person approved. Without it, an approval is refused once
+    /// anything changed since the proposal.
+    pub seen: Option<String>,
+});
+op!(ProposalResolve, "thread.proposal.resolve", ProposalResolveIn => ProposalView,
+    OpMeta::mutation(Scope::Global, 5, "Approve or decline a proposal. Approving applies all of it once, as the person, or none of it; a failure is kept on the proposal with its reason. The agent hears the answer with the next message")
+        .actors(Actors::UserOnly).emits(&["thread.proposal", "money.changed"]));
+op!(ProposalUndo, "thread.proposal.undo", IdIn => ProposalView,
+    OpMeta::mutation(Scope::Global, 5, "Put an approved proposal back: entries and activities restored, budgets and accounts as they were, all or none")
+        .actors(Actors::UserOnly).emits(&["thread.proposal", "money.changed"]));
+
+entries!(List, Get, Create, Send, Stop, Set, Rename, Delete, Models, Pick, Propose, ProposalList, ProposalGet, ProposalResolve, ProposalUndo);

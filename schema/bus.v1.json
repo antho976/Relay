@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 311,
+  "op_count": 316,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -4711,7 +4711,7 @@
       }
     },
     "money.tx.update": {
-      "summary": "Change an entry; absent fields keep their value",
+      "summary": "Change an entry; absent fields keep their value. Answers with the entry and how it was before",
       "kind": "mutation",
       "audit": "always",
       "undo": "none",
@@ -4727,7 +4727,7 @@
         "$ref": "#/$defs/MoneyTxUpdateIn"
       },
       "result": {
-        "$ref": "#/$defs/MoneyTx"
+        "$ref": "#/$defs/MoneyTxChanged"
       }
     },
     "money.tx.delete": {
@@ -5379,6 +5379,104 @@
         "$ref": "#/$defs/Empty"
       }
     },
+    "thread.propose": {
+      "summary": "A thread's agent asks the person for a change it may not make alone: deleting entries or investment activities, changing many entries, budgets, adding, renaming or archiving accounts. It waits on a card; nothing changes until they approve",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "thread.proposal"
+      ],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/ThreadProposeIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ThreadProposal"
+      }
+    },
+    "thread.proposal.list": {
+      "summary": "A thread's proposals, oldest first, each with what it acts on read from the ledger",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/ThreadProposalListIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ThreadProposalsOut"
+      }
+    },
+    "thread.proposal.get": {
+      "summary": "One proposal, with what it acts on read from the ledger",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/ThreadIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ThreadProposal"
+      }
+    },
+    "thread.proposal.resolve": {
+      "summary": "Approve or decline a proposal. Approving applies all of it once, as the person, or none of it; a failure is kept on the proposal with its reason. The agent hears the answer with the next message",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "thread.proposal",
+        "money.changed"
+      ],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/ThreadProposalResolveIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ThreadProposal"
+      }
+    },
+    "thread.proposal.undo": {
+      "summary": "Put an approved proposal back: entries and activities restored, budgets and accounts as they were, all or none",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "global",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "thread.proposal",
+        "money.changed"
+      ],
+      "since": "1.0",
+      "phase": 5,
+      "payload": {
+        "$ref": "#/$defs/ThreadIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/ThreadProposal"
+      }
+    },
     "arbiter.summary": {
       "summary": "The Arbiter overview: the exchange connection, paper and live accounts, every strategy and what it is doing, today's use of the limits, what waits for approval, open orders, recent fills and prices",
       "kind": "query",
@@ -5822,7 +5920,7 @@
       }
     },
     "gym.summary": {
-      "summary": "The Avex overview: when the history was exported, totals, this week and the twelve before, the streak, recent workouts, records, the lifts done most and open goals",
+      "summary": "The Avex overview: when the history was exported, totals, this week and the twelve before, the streak, recent workouts, records, the lifts done most and open goals with each lift goal's best",
       "kind": "query",
       "audit": "never",
       "undo": "none",
@@ -5833,7 +5931,7 @@
       "since": "1.0",
       "phase": 12,
       "payload": {
-        "$ref": "#/$defs/Empty"
+        "$ref": "#/$defs/GymSummaryIn"
       },
       "result": {
         "$ref": "#/$defs/GymSummary"
@@ -5858,7 +5956,7 @@
       }
     },
     "gym.session.get": {
-      "summary": "One workout: every exercise and set, with each set's estimated one-rep max, and the journal",
+      "summary": "One workout: every exercise and set, with each set's estimated one-rep max and each lift's last time before, the journal, and the workouts either side",
       "kind": "query",
       "audit": "never",
       "undo": "none",
@@ -18289,6 +18387,95 @@
         "id"
       ]
     },
+    "MoneyTxChanged": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "uid": {
+          "type": "string",
+          "x-unit": "omit"
+        },
+        "type": {
+          "$ref": "#/$defs/TxType"
+        },
+        "amount": {
+          "type": "integer",
+          "format": "int64",
+          "x-unit": "minor"
+        },
+        "date": {
+          "type": "string"
+        },
+        "account_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "account": {
+          "type": "string"
+        },
+        "to_account_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "to_account": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "category_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "color": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "note": {
+          "type": "string"
+        },
+        "previous": {
+          "$ref": "#/$defs/MoneyTx",
+          "description": "The entry as it was before this change: a card shows before → after, and its Undo puts\nit back."
+        }
+      },
+      "required": [
+        "id",
+        "uid",
+        "type",
+        "amount",
+        "date",
+        "account_id",
+        "account",
+        "note",
+        "previous"
+      ],
+      "description": "One entry as a client draws it, its account and category names joined in."
+    },
     "MoneyIdIn": {
       "type": "object",
       "additionalProperties": false,
@@ -20116,6 +20303,352 @@
           "description": "The model picked: a local one starts loading, anything else (or none) stops the local\nmodel server."
         }
       }
+    },
+    "ThreadProposeIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ThreadAction",
+          "description": "The one change: `{\"<op>\": [<that op's payload>, ...]}`."
+        },
+        "why": {
+          "type": "string",
+          "description": "Why, in a sentence the person reads on the card."
+        }
+      },
+      "required": [
+        "action",
+        "why"
+      ]
+    },
+    "ThreadAction": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "money.tx.delete": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MoneyIdIn"
+              }
+            }
+          },
+          "required": [
+            "money.tx.delete"
+          ],
+          "additionalProperties": false,
+          "description": "Delete entries, up to 50."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "money.tx.update": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MoneyTxUpdateIn"
+              }
+            }
+          },
+          "required": [
+            "money.tx.update"
+          ],
+          "additionalProperties": false,
+          "description": "Change entries, up to 50: recategorize them, or fix an amount, a date or a note."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "money.budget.set": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MoneyBudgetSetIn"
+              }
+            }
+          },
+          "required": [
+            "money.budget.set"
+          ],
+          "additionalProperties": false,
+          "description": "Set monthly budgets, up to 20; an amount of zero removes one."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "money.account.add": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MoneyAccountAddIn"
+              }
+            }
+          },
+          "required": [
+            "money.account.add"
+          ],
+          "additionalProperties": false,
+          "description": "Add accounts, up to 5."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "money.account.update": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MoneyAccountUpdateIn"
+              }
+            }
+          },
+          "required": [
+            "money.account.update"
+          ],
+          "additionalProperties": false,
+          "description": "Rename or archive accounts, up to 5."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "money.invest.delete": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MoneyIdIn"
+              }
+            }
+          },
+          "required": [
+            "money.invest.delete"
+          ],
+          "additionalProperties": false,
+          "description": "Delete investment activities, up to 50."
+        }
+      ],
+      "description": "One change a thread's agent asks the person for: the op approving runs, keyed by its name,\nholding a list of that op's own payloads, all applied together or none,\ne.g. `{\"money.tx.delete\": [{\"id\": 42}, {\"id\": 43}]}`."
+    },
+    "ThreadProposal": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "thread_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "action": {
+          "$ref": "#/$defs/ThreadAction"
+        },
+        "why": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string",
+          "description": "What approving does, in words read from the ledger. Quote it."
+        },
+        "status": {
+          "type": "string",
+          "description": "`pending`, `running` (approved, under way), `approved`, `declined`, `failed` or `undone`."
+        },
+        "outcome": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What approving did, or why it could not be done."
+        },
+        "currency": {
+          "type": "string",
+          "description": "The ledger's currency."
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ThreadProposalItem"
+          },
+          "description": "What it acts on, one per payload, in order."
+        },
+        "stale": {
+          "type": "boolean",
+          "description": "Something changed or went since it was proposed: approving needs a fresh look (`seen`)."
+        },
+        "seen": {
+          "type": "string",
+          "description": "The fingerprint of `items` as read now: an approval passes it back as `seen`."
+        },
+        "undoable": {
+          "type": "boolean",
+          "description": "Approved, and `thread.proposal.undo` can put it back."
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "resolved_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "action",
+        "why",
+        "summary",
+        "status",
+        "currency",
+        "items",
+        "stale",
+        "seen",
+        "undoable",
+        "created_at"
+      ]
+    },
+    "ThreadProposalItem": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "description": "`same` as when it was proposed, `changed` since, `gone` from the ledger since, or `new`\n(an account to add)."
+        },
+        "entry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MoneyTx"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Entries: the entry, and as the change would leave it."
+        },
+        "entry_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MoneyTx"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "activity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MoneyActivity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Investment activities to delete."
+        },
+        "account": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MoneyAccount"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Accounts: the account (absent for one to add), and as the change would leave it."
+        },
+        "account_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MoneyAccount"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Budgets: the category's name (absent for the overall monthly budget), the budget now and\nthe one proposed; absent when there is none."
+        },
+        "budget": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "x-unit": "minor"
+        },
+        "budget_after": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "x-unit": "minor"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "description": "One thing a proposal acts on, read from the ledger: as it is now while the proposal waits,\nand as it was just before it was answered after that, so a card still shows what was deleted."
+    },
+    "ThreadProposalListIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "pending": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Only those still waiting when true."
+        }
+      },
+      "required": [
+        "thread_id"
+      ]
+    },
+    "ThreadProposalsOut": {
+      "type": "object",
+      "properties": {
+        "proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ThreadProposal"
+          }
+        }
+      },
+      "required": [
+        "proposals"
+      ]
+    },
+    "ThreadProposalResolveIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "approve": {
+          "type": "boolean"
+        },
+        "seen": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The `seen` of the reading the person approved. Without it, an approval is refused once\nanything changed since the proposal."
+        }
+      },
+      "required": [
+        "id",
+        "approve"
+      ]
     },
     "ArbiterSummary": {
       "type": "object",
@@ -22613,6 +23146,19 @@
         "approve"
       ]
     },
+    "GymSummaryIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "today": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Read as if this day (`YYYY-MM-DD`) were today: the weeks, the streak and each lift's four\nweeks count back from it. Give the export's day to see the copy's last week. Today on the\nPC when absent."
+        }
+      }
+    },
     "GymSummary": {
       "type": "object",
       "properties": {
@@ -22743,7 +23289,14 @@
         "sessions": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Tracked workouts: what every total counts."
+        },
+        "untracked": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Workouts the person excluded in Avex: listed, and counted in nothing here."
         },
         "sets": {
           "type": "integer",
@@ -22777,6 +23330,7 @@
       },
       "required": [
         "sessions",
+        "untracked",
         "sets",
         "volume",
         "cardio",
@@ -22964,6 +23518,14 @@
           ],
           "description": "The best set ever, by estimated one-rep max."
         },
+        "best_reps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "For a lift done without weight (pull-ups, dips), the most reps in one set; absent when it\nhas a `best`."
+        },
         "recent_e1rm": {
           "type": [
             "number",
@@ -22992,7 +23554,8 @@
       "type": "object",
       "properties": {
         "kind": {
-          "type": "string"
+          "type": "string",
+          "description": "Avex's kind: `lift_1rm` (an estimated one-rep max on a lift), `consistency`, …"
         },
         "target_key": {
           "type": "string",
@@ -23004,7 +23567,7 @@
             "null"
           ],
           "format": "double",
-          "description": "A `lift_target`'s weight is in the person's unit like every other weight; any other\nkind's figure is as Avex stores it."
+          "description": "A lift's or a body weight's target is in the person's unit like every other weight; any\nother kind's figure is as Avex stores it."
         },
         "created_day": {
           "type": "string"
@@ -23020,6 +23583,17 @@
         },
         "note": {
           "type": "string"
+        },
+        "best": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GymRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For a lift goal, that lift's best set ever by estimated one-rep max: its `e1rm` against\n`target_value` is how close the goal is. Absent when the lift has no working sets."
         }
       },
       "required": [
@@ -23129,6 +23703,21 @@
           "items": {
             "$ref": "#/$defs/GymExercise"
           }
+        },
+        "older_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "The workout just before this one and the one just after, as gym.sessions lists them\n(untracked ones too); absent at either end."
+        },
+        "newer_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
         }
       },
       "required": [
@@ -23179,6 +23768,17 @@
           "items": {
             "$ref": "#/$defs/GymSet"
           }
+        },
+        "previous": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GymLiftPoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "This lift the last time before, in a tracked workout, as gym.lift.get's history gives it;\nabsent the first time."
         }
       },
       "required": [
@@ -23255,82 +23855,6 @@
         "assisted"
       ]
     },
-    "GymLiftsIn": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "query": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Only lifts whose name contains this."
-        }
-      }
-    },
-    "GymLiftsOut": {
-      "type": "object",
-      "properties": {
-        "unit": {
-          "type": "string"
-        },
-        "lifts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/GymLiftRow"
-          }
-        }
-      },
-      "required": [
-        "unit",
-        "lifts"
-      ]
-    },
-    "GymLiftIn": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "name": {
-          "type": "string",
-          "description": "The lift's name as Avex shows it; a unique part of it is enough."
-        },
-        "limit": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0,
-          "description": "At most this many sessions, newest first; 100 by default."
-        }
-      },
-      "required": [
-        "name"
-      ]
-    },
-    "GymLift": {
-      "type": "object",
-      "properties": {
-        "row": {
-          "$ref": "#/$defs/GymLiftRow"
-        },
-        "unit": {
-          "type": "string"
-        },
-        "history": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/GymLiftPoint"
-          },
-          "description": "Newest first."
-        }
-      },
-      "required": [
-        "row",
-        "unit",
-        "history"
-      ]
-    },
     "GymLiftPoint": {
       "type": "object",
       "properties": {
@@ -23380,6 +23904,96 @@
         "sets",
         "volume",
         "record"
+      ]
+    },
+    "GymLiftsIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only lifts whose name contains this."
+        },
+        "today": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Count each lift's four weeks back from this day (`YYYY-MM-DD`), as gym.summary's `today`."
+        }
+      }
+    },
+    "GymLiftsOut": {
+      "type": "object",
+      "properties": {
+        "unit": {
+          "type": "string"
+        },
+        "lifts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GymLiftRow"
+          }
+        }
+      },
+      "required": [
+        "unit",
+        "lifts"
+      ]
+    },
+    "GymLiftIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The lift's name as Avex shows it; a unique part of it is enough."
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "At most this many sessions, newest first; 100 by default."
+        },
+        "today": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Count the lift's four weeks back from this day (`YYYY-MM-DD`), as gym.summary's `today`."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "GymLift": {
+      "type": "object",
+      "properties": {
+        "row": {
+          "$ref": "#/$defs/GymLiftRow"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GymLiftPoint"
+          },
+          "description": "Newest first."
+        }
+      },
+      "required": [
+        "row",
+        "unit",
+        "history"
       ]
     },
     "GymCardioIn": {

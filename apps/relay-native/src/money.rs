@@ -25,6 +25,8 @@ mod pages;
 pub(crate) mod threads;
 #[path = "threads_chart.rs"]
 mod chart;
+#[path = "threads_ask.rs"]
+mod ask;
 #[path = "arbiter_pages.rs"]
 mod arbiter;
 #[path = "avex_pages.rs"]
@@ -160,7 +162,7 @@ pub fn add_key() -> gtk::Button {
     row.append(&label("Entry", ""));
     key.set_child(Some(&row));
     key.set_valign(gtk::Align::Center);
-    key.set_tooltip_text(Some("Add an entry"));
+    key.set_tooltip_text(Some("Add an entry · Ctrl E"));
     key.set_visible(false);
     STATE.with(|s| s.money_only.borrow_mut().push(key.clone().upcast()));
     key
@@ -404,6 +406,23 @@ pub fn install(ui: &Rc<Ui>, nav: &gtk::Box, add: &gtk::Button, dev_only: Vec<gtk
             add_entry(&ui);
         }
     });
+    // Ctrl E in Threads logs an entry, as the Entry key does: from a page or from a thread. A
+    // sheet already open, or the start screen, keeps the key.
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak = Rc::downgrade(ui);
+    keys.connect_key_pressed(move |_, key, keycode, mods| {
+        use gtk::gdk::ModifierType;
+        let Some(ui) = weak.upgrade() else { return glib::Propagation::Proceed };
+        let mods = mods & (ModifierType::CONTROL_MASK | ModifierType::SHIFT_MASK | ModifierType::ALT_MASK | ModifierType::META_MASK);
+        let open = active() && ui.panels.borrow().is_empty() && STATE.with(|s| s.start.borrow().is_none());
+        if !open || mods != ModifierType::CONTROL_MASK || crate::shortcuts::latin(key, keycode).to_lower() != gtk::gdk::Key::e {
+            return glib::Propagation::Proceed;
+        }
+        add_entry(&ui);
+        glib::Propagation::Stop
+    });
+    ui.window.add_controller(keys);
     pages::install(ui);
     arbiter::install();
     avex::install();
@@ -528,6 +547,8 @@ pub fn changed(ui: &Rc<Ui>) {
     // A thread's charts read again in view; out of it, with another page showing, they wait to
     // read when they show again (`chart::load_stale`).
     chart::refresh_all();
+    // A proposal card waiting in the open thread shows the ledger as it is now.
+    ask::refresh();
     if page == threads::PAGE {
         threads::refresh_panel(ui);
     } else if is_page(&page) {

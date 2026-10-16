@@ -65,7 +65,7 @@ fn bus(e: LedgerError) -> BusError {
 
 /// Runs `f` on the ledger, opening `money.db` beside the store on first use (in memory when the
 /// store is, as in tests).
-fn ledger<T>(engine: &Engine, f: impl FnOnce(&mut Ledger) -> Result<T, LedgerError>) -> Result<T, BusError> {
+pub(crate) fn ledger<T>(engine: &Engine, f: impl FnOnce(&mut Ledger) -> Result<T, LedgerError>) -> Result<T, BusError> {
     let mut slot = engine.money.lock().unwrap_or_else(|p| p.into_inner());
     if slot.is_none() {
         let store = engine.store.path();
@@ -223,9 +223,12 @@ pub fn register(e: &mut Engine) {
             r#type: p.r#type, amount: p.amount, date: p.date, account_id: p.account_id,
             to_account_id: p.to_account_id, category_id: p.category_id, note: p.note,
         };
-        let tx = ledger(ctx.engine(), |l| l.tx_update(p.id, &patch))?;
+        let (tx, previous) = ledger(ctx.engine(), |l| {
+            let previous = l.tx(p.id)?;
+            Ok((l.tx_update(p.id, &patch)?, previous))
+        })?;
         ctx.emit("money.changed", json!({"tx": tx.id}));
-        Ok(tx)
+        Ok(TxChanged { tx, previous })
     });
     e.register::<TxDelete>(|ctx, p| {
         ledger(ctx.engine(), |l| l.tx_delete(p.id))?;

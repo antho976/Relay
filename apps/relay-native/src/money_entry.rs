@@ -6,10 +6,38 @@ use crate::panel::Panel;
 use gtk::prelude::*;
 use gtk4 as gtk;
 use serde_json::{json, Value};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 const KINDS: [(&str, &str); 3] = [("EXPENSE", "Expense"), ("INCOME", "Income"), ("TRANSFER", "Transfer")];
+
+thread_local! {
+    /// The account each kind of entry was last saved against (`EXPENSE`, `INCOME`, `TRANSFER`): a
+    /// new one starts there. The category is never carried over to a new sheet, so nothing is
+    /// filed where the person did not choose; Save and add another keeps it in the open sheet.
+    static LAST_ACCOUNT: RefCell<HashMap<String, i64>> = RefCell::new(HashMap::new());
+    /// Whether [`LAST_ACCOUNT`] was seeded from the ledger's newest entries yet.
+    static SEEDED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Seeds [`LAST_ACCOUNT`] from a `money.tx.list` answer (newest first), once per run: before the
+/// first save here, the sheet starts on the account each kind was last logged against anywhere.
+fn seed_accounts(list: &Value) {
+    SEEDED.with(|s| s.set(true));
+    LAST_ACCOUNT.with(|last| {
+        let mut last = last.borrow_mut();
+        for tx in rows(list, "transactions") {
+            if let Some(account) = tx["account_id"].as_i64() {
+                last.entry(text(&tx, "type").to_string()).or_insert(account);
+            }
+        }
+    });
+}
+
+fn last_account(kind: &str) -> Option<i64> {
+    LAST_ACCOUNT.with(|last| last.borrow().get(kind).copied())
+}
 
 fn field(body: &gtk::Box, caption: &str, widget: &impl IsA<gtk::Widget>) -> gtk::Box {
     let block = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -19,19 +47,61 @@ fn field(body: &gtk::Box, caption: &str, widget: &impl IsA<gtk::Widget>) -> gtk:
     block
 }
 
-/// A drop-down over `(id, name)` pairs, selecting `selected` when present.
+/// A drop-down over `(id, name)` pairs, selecting `selected` when present. Typing in its list
+/// finds a row, as in Entries' filters.
 fn picker(items: &[(i64, String)], selected: Option<i64>) -> gtk::DropDown {
     let names: Vec<&str> = items.iter().map(|(_, n)| n.as_str()).collect();
     let dropdown = gtk::DropDown::from_strings(&names);
     dropdown.add_css_class("money-picker");
+    dropdown.set_enable_search(true);
+    // Search filters on this expression; without one it matches every row.
+    dropdown.set_expression(Some(gtk::PropertyExpression::new(gtk::StringObject::static_type(), None::<gtk::Expression>, "string")));
     if let Some(index) = selected.and_then(|id| items.iter().position(|(i, _)| *i == id)) {
         dropdown.set_selected(index as u32);
     }
     dropdown
 }
 
+/// The category key's face: the chosen category's badge and name, or what to do while there is
+/// none.
+fn show_choice(key: &gtk::MenuButton, choice: Option<&super::pages::Choice>) {
+    let face = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    face.set_hexpand(true);
+    let name = match choice {
+        Some(c) => {
+            face.append(&super::pages::badge_sized(&c.icon, c.color, 20));
+            label(&c.name, "")
+        }
+        None => label("Choose a category", "money-placeholder"),
+    };
+    name.set_hexpand(true);
+    name.set_xalign(0.0);
+    face.append(&name);
+    // The drop-downs' chevron, beside them in the sheet.
+    face.append(&crate::icons::image_with_stroke("chevron-down", 16, 2.0));
+    key.set_child(Some(&face));
+}
+
 fn chosen(dropdown: &gtk::DropDown, items: &[(i64, String)]) -> Option<i64> {
     items.get(dropdown.selected() as usize).map(|(id, _)| *id)
+}
+
+/// "−$14.98", "+$2,150.00" or "$50.00": an entry's amount signed by its kind.
+fn signed(kind: &str, amount: i64) -> String {
+    let fmt = formatter();
+    match kind {
+        "EXPENSE" => format!("−{}", fmt.format(amount)),
+        "INCOME" => format!("+{}", fmt.format(amount)),
+        _ => fmt.format(amount),
+    }
+}
+
+/// A toast on the Money page showing, when one is: the Threads page has no toast of its own, and
+/// its panel shows the change anyway.
+fn tell(ui: &Ui, text: &str, undo: Option<super::Action>) {
+    if super::page(&ui.page.borrow()).is_some() {
+        super::toast(ui, text, undo);
+    }
 }
 
 /// Opens the entry sheet: a new entry, or `tx` to edit.
@@ -44,7 +114,16 @@ pub fn open(ui: &Rc<Ui>, tx: Option<Value>) {
     panel.present();
     let ui = ui.clone();
     glib::spawn_future_local(async move {
-        let lists = ui.call("money.lists", json!({})).await;
+        // The first new entry of a run also reads the newest entries, for the account to start on.
+        let lists = if tx.is_none() && !SEEDED.with(Cell::get) {
+            let (lists, recent) = tokio::join!(ui.call("money.lists", json!({})), ui.call("money.tx.list", json!({"limit":60})));
+            if let Ok(recent) = &recent {
+                seed_accounts(recent);
+            }
+            lists
+        } else {
+            ui.call("money.lists", json!({})).await
+        };
         loading.unparent();
         match lists {
             Ok(lists) => {
@@ -133,38 +212,61 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, lists: &Value, tx: Option<Value>) {
     problem.set_visible(false);
     body.append(&problem);
 
-    // Category, of the kind that matches; transfers take none.
-    let category_items: Rc<RefCell<Vec<(i64, String)>>> = Rc::default();
-    let category_slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let category_block = field(body, "Category", &category_slot);
-    let category: Rc<RefCell<Option<gtk::DropDown>>> = Rc::default();
+    // Category, of the kind that matches; transfers take none. A new entry starts with none
+    // chosen: the person picks it, so nothing is filed under the list's first row by default.
+    // The key opens a list to type into (`pages::chooser`).
+    let category_items: Rc<RefCell<Vec<super::pages::Choice>>> = Rc::default();
+    let category_choice: Rc<Cell<Option<i64>>> = Rc::default();
+    let category = gtk::MenuButton::new();
+    category.add_css_class("money-picker");
+    category.set_widget_name("money-entry-category");
+    category.update_property(&[gtk::accessible::Property::Label("Category")]);
+    let category_popover = gtk::Popover::new();
+    category_popover.add_css_class("money-menu");
+    category.set_popover(Some(&category_popover));
+    {
+        // Built each time it opens, so the tick follows the choice.
+        let (items, choice) = (category_items.clone(), category_choice.clone());
+        category.set_create_popup_func(move |key| {
+            let Some(popover) = key.popover() else { return };
+            let (items_for_pick, choice_for_pick, shown, sheet_popover) = (items.clone(), choice.clone(), key.downgrade(), popover.downgrade());
+            let pick: Rc<dyn Fn(i64)> = Rc::new(move |id| {
+                choice_for_pick.set(Some(id));
+                if let Some(key) = shown.upgrade() {
+                    show_choice(&key, items_for_pick.borrow().iter().find(|c| c.id == id));
+                }
+                if let Some(popover) = sheet_popover.upgrade() {
+                    popover.popdown();
+                }
+            });
+            popover.set_child(Some(&super::pages::chooser(&items.borrow(), choice.get(), pick)));
+        });
+    }
+    let category_block = field(body, "Category", &category);
     let fill_categories = {
-        let (items, slot, category, block, kind) = (category_items.clone(), category_slot.clone(), category.clone(), category_block.clone(), kind.clone());
+        let (items, choice, key, block, kind) = (category_items.clone(), category_choice.clone(), category.clone(), category_block.clone(), kind.clone());
         let selected = tx.as_ref().and_then(|t| t["category_id"].as_i64());
         move || {
             let kind = kind.borrow().clone();
             block.set_visible(kind != "TRANSFER");
-            let list: Vec<(i64, String)> = categories
-                .iter()
-                .filter(|c| text(c, "kind") == kind && (c["archived"] != true || c["id"].as_i64() == selected))
-                .map(|c| (c["id"].as_i64().unwrap_or(0), text(c, "name").to_string()))
-                .collect();
-            if let Some(old) = category.borrow_mut().take() {
-                slot.remove(&old);
-            }
-            let dropdown = picker(&list, selected);
-            dropdown.set_widget_name("money-entry-category");
-            slot.append(&dropdown);
-            *category.borrow_mut() = Some(dropdown);
+            let list = super::pages::choices(&categories, &kind, selected);
+            // The entry's own category, when it is of this kind; otherwise none until picked.
+            let current = selected.filter(|id| list.iter().any(|c| c.id == *id));
+            choice.set(current);
+            show_choice(&key, list.iter().find(|c| Some(c.id) == current));
             *items.borrow_mut() = list;
         }
     };
     fill_categories();
 
-    let from = picker(&accounts, tx.as_ref().and_then(|t| t["account_id"].as_i64()));
+    // The account: the entry's own, else the one this kind was last saved against, else the first.
+    let first_kind = kind.borrow().clone();
+    let start = tx.as_ref().and_then(|t| t["account_id"].as_i64()).or_else(|| last_account(&first_kind)).filter(|id| accounts.iter().any(|a| a.0 == *id));
+    let from = picker(&accounts, start.or_else(|| accounts.first().map(|a| a.0)));
     from.set_widget_name("money-entry-account");
+    from.update_property(&[gtk::accessible::Property::Label("Account")]);
     let from_block = field(body, "Account", &from);
-    let to = picker(&accounts, tx.as_ref().and_then(|t| t["to_account_id"].as_i64()).or_else(|| accounts.get(1).map(|a| a.0)));
+    let to = picker(&accounts, tx.as_ref().and_then(|t| t["to_account_id"].as_i64()).or_else(|| accounts.iter().map(|a| a.0).find(|id| Some(*id) != start.or(accounts.first().map(|a| a.0)))));
     to.set_widget_name("money-entry-to-account");
     let to_block = field(body, "To account", &to);
     to_block.set_visible(*kind.borrow() == "TRANSFER");
@@ -190,6 +292,35 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, lists: &Value, tx: Option<Value>) {
     }
     field(body, "Note", &note);
 
+    // What Save and add another just saved, with its Undo: the sheet stays open for the next one.
+    let added = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    added.add_css_class("money-added");
+    added.set_visible(false);
+    let added_text = label("", "money-added-text");
+    added_text.set_hexpand(true);
+    added_text.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    added.append(&added_text);
+    let added_undo = button("Undo", "money-text-action");
+    added_undo.set_widget_name("money-entry-added-undo");
+    added.append(&added_undo);
+    body.append(&added);
+    let added_id: Rc<RefCell<Option<(Value, String)>>> = Rc::default();
+    {
+        let (ui, added_id, added_text) = (ui.clone(), added_id.clone(), added_text.clone());
+        added_undo.connect_clicked(move |key| {
+            let Some((id, said)) = added_id.borrow_mut().take() else { return };
+            key.set_visible(false);
+            let (ui, added_text) = (ui.clone(), added_text.clone());
+            glib::spawn_future_local(async move {
+                match ui.call("money.tx.delete", json!({"id":id})).await {
+                    Ok(_) => added_text.set_text(&format!("Took back {said}")),
+                    Err(e) => ui.show_error(&e.to_string()),
+                }
+                ui.refresh_page();
+            });
+        });
+    }
+
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     actions.add_css_class("money-sheet-actions");
     let save = button("", "primary");
@@ -202,6 +333,11 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, lists: &Value, tx: Option<Value>) {
         _ => "Save expense",
     };
     save.set_label(caption(&kind.borrow()));
+    // A new entry can be saved with the sheet kept open for the next: the same day, account and
+    // category, the amount and note cleared.
+    let another = button("Save and add another", "money-secondary");
+    another.set_widget_name("money-entry-another");
+    another.set_tooltip_text(Some("Save, then log the next one on the same day, account and category · Ctrl Enter"));
     if let Some(t) = &tx {
         let delete = button("Delete", "money-destructive");
         delete.set_widget_name("money-entry-delete");
@@ -215,6 +351,8 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, lists: &Value, tx: Option<Value>) {
             }
         });
         actions.append(&delete);
+    } else {
+        actions.append(&another);
     }
     actions.append(&save);
     body.append(&actions);
@@ -234,72 +372,97 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, lists: &Value, tx: Option<Value>) {
         });
     }
 
+    // Saves the sheet. With `another`, a new entry keeps the sheet open for the next one;
+    // otherwise the sheet closes and the page's toast says what was saved, with Undo.
     let submit = {
         let ui = ui.clone();
         let sheet = Rc::downgrade(panel);
-        let (amount, problem, kind, category, category_items, from, to, day, note) =
-            (amount.clone(), problem.clone(), kind.clone(), category.clone(), category_items.clone(), from.clone(), to.clone(), day.clone(), note.clone());
+        let (amount, problem, kind, category, category_items, category_choice, from, to, day, note) =
+            (amount.clone(), problem.clone(), kind.clone(), category.clone(), category_items.clone(), category_choice.clone(), from.clone(), to.clone(), day.clone(), note.clone());
         let accounts = accounts.clone();
-        let id = tx.as_ref().map(|t| t["id"].clone());
-        let save = save.clone();
-        move || {
-            let refuse = |text: &str| {
+        let before = tx.clone();
+        let (save, another, added, added_text, added_undo, added_id) = (save.clone(), another.clone(), added.clone(), added_text.clone(), added_undo.clone(), added_id.clone());
+        move |keep_open: bool| {
+            let keep_open = keep_open && before.is_none();
+            let refuse = |text: &str, culprit: &gtk::Widget| {
                 problem.set_text(text);
                 problem.set_visible(true);
-                amount.add_css_class("error");
+                if culprit == amount.upcast_ref::<gtk::Widget>() {
+                    amount.add_css_class("error");
+                }
+                culprit.grab_focus();
             };
             let Some(value) = formatter().parse(&amount.text()).filter(|v| *v > 0) else {
-                refuse("Type an amount above zero, like 12.50.");
-                amount.grab_focus();
+                refuse("Type an amount above zero, like 12.50.", amount.upcast_ref());
                 return;
             };
             amount.remove_css_class("error");
             let kind = kind.borrow().clone();
             let Some(account) = chosen(&from, &accounts) else {
-                refuse("Pick the account this came from.");
+                refuse("Pick the account this came from.", from.upcast_ref());
                 return;
             };
             let mut payload = json!({"type":kind,"amount":value,"date":*day.borrow(),"account_id":account});
-            if kind == "TRANSFER" {
+            let what = if kind == "TRANSFER" {
                 let target = chosen(&to, &accounts);
                 if target.is_none_or(|t| t == account) {
-                    refuse("A transfer goes to a different account.");
+                    refuse("A transfer goes to a different account.", to.upcast_ref());
                     return;
                 }
                 payload["to_account_id"] = json!(target);
+                String::from("Transfer")
             } else {
-                let picked = category.borrow().as_ref().and_then(|d| chosen(d, &category_items.borrow()));
-                match picked {
-                    Some(c) => payload["category_id"] = json!(c),
-                    None => {
-                        refuse("Pick a category. Tally keeps every expense and income in one.");
-                        return;
-                    }
-                }
-            }
+                let Some(c) = category_choice.get() else {
+                    refuse("Choose a category. Tally keeps every expense and income in one.", category.upcast_ref());
+                    return;
+                };
+                payload["category_id"] = json!(c);
+                category_items.borrow().iter().find(|item| item.id == c).map_or_else(|| super::pages::word(&kind), |item| item.name.clone())
+            };
             payload["note"] = json!(note.text().trim());
-            let op = match &id {
-                Some(id) => {
-                    payload["id"] = id.clone();
+            let said = format!("{what} {}", signed(&kind, value));
+            let op = match &before {
+                Some(t) => {
+                    payload["id"] = t["id"].clone();
                     "money.tx.update"
                 }
                 None => "money.tx.add",
             };
             problem.set_visible(false);
             save.set_sensitive(false);
-            let (ui, sheet, problem, save) = (ui.clone(), sheet.clone(), problem.clone(), save.clone());
+            another.set_sensitive(false);
+            let (ui, sheet, problem, save, another, before) = (ui.clone(), sheet.clone(), problem.clone(), save.clone(), another.clone(), before.clone());
+            let (amount, note, added, added_text, added_undo, added_id) = (amount.clone(), note.clone(), added.clone(), added_text.clone(), added_undo.clone(), added_id.clone());
             glib::spawn_future_local(async move {
                 match ui.call(op, payload).await {
-                    Ok(_) => {
+                    Ok(saved) => {
+                        LAST_ACCOUNT.with(|last| last.borrow_mut().insert(kind.clone(), account));
+                        ui.refresh_page();
+                        if keep_open {
+                            // The same sheet, ready for the next amount; what went in shows above
+                            // the keys with its own Undo.
+                            amount.set_text("");
+                            note.set_text("");
+                            save.set_sensitive(true);
+                            another.set_sensitive(true);
+                            *added_id.borrow_mut() = Some((saved["id"].clone(), said.clone()));
+                            added_text.set_text(&format!("Added {said}"));
+                            added_undo.set_visible(true);
+                            added.set_visible(true);
+                            amount.grab_focus();
+                            return;
+                        }
                         if let Some(sheet) = sheet.upgrade() {
                             sheet.close();
                         }
-                        ui.refresh_page();
+                        let undo = undo_save(&ui, &saved, before.as_ref());
+                        tell(&ui, &format!("{} {said}", if before.is_some() { "Saved" } else { "Added" }), Some(undo));
                     }
                     Err(e) => {
                         problem.set_text(&e.to_string());
                         problem.set_visible(true);
                         save.set_sensitive(true);
+                        another.set_sensitive(true);
                     }
                 }
             });
@@ -307,11 +470,54 @@ fn form(ui: &Rc<Ui>, panel: &Rc<Panel>, lists: &Value, tx: Option<Value>) {
     };
     let submit = Rc::new(submit);
     let run = submit.clone();
-    save.connect_clicked(move |_| run());
+    save.connect_clicked(move |_| run(false));
     let run = submit.clone();
-    amount.connect_activate(move |_| run());
-    note.connect_activate(move |_| submit());
+    another.connect_clicked(move |_| run(true));
+    let run = submit.clone();
+    amount.connect_activate(move |_| run(false));
+    let run = submit.clone();
+    note.connect_activate(move |_| run(false));
+    // Ctrl Enter anywhere in the sheet: save and add another (on an edit, save).
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed(move |_, key, _, mods| {
+        use gtk::gdk::{Key, ModifierType};
+        let mods = mods & (ModifierType::CONTROL_MASK | ModifierType::SHIFT_MASK | ModifierType::ALT_MASK | ModifierType::META_MASK);
+        if mods == ModifierType::CONTROL_MASK && matches!(key, Key::Return | Key::KP_Enter | Key::ISO_Enter) {
+            submit(true);
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    body.add_controller(keys);
     amount.grab_focus();
+}
+
+/// The Undo for a save: a new entry is deleted; an edited one gets its fields back as they were.
+fn undo_save(ui: &Rc<Ui>, saved: &Value, before: Option<&Value>) -> super::Action {
+    let weak = Rc::downgrade(ui);
+    let (op, payload) = match before {
+        None => ("money.tx.delete", json!({"id":saved["id"]})),
+        Some(t) => {
+            let mut back = json!({"id":t["id"],"type":t["type"],"amount":t["amount"],"date":t["date"],"account_id":t["account_id"],"note":t["note"]});
+            for key in ["to_account_id", "category_id"] {
+                if !t[key].is_null() {
+                    back[key] = t[key].clone();
+                }
+            }
+            ("money.tx.update", back)
+        }
+    };
+    Rc::new(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        let payload = payload.clone();
+        glib::spawn_future_local(async move {
+            if let Err(e) = ui.call(op, payload).await {
+                ui.show_error(&e.to_string());
+            }
+            ui.refresh_page();
+        });
+    })
 }
 
 fn parse_day(value: &str) -> Option<glib::DateTime> {

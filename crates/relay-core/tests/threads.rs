@@ -3,22 +3,26 @@
 mod common;
 
 use common::{call, call_as, code, engine, ok, wait_until};
-use relay_bus::Actor;
-use relay_core::engine::Engine;
+use relay_bus::{Actor, Request, Response};
+use relay_core::engine::{Door, Engine};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-/// A Claude that logs its arguments, then answers each line on stdin the way the real one does:
-/// its id, a piece of text, a tool call and its answer, the reply, the result. A message saying
-/// `slow` waits a second first; one saying `die` exits mid-turn.
+/// A Claude that logs its arguments and each line it is given (`lines.log`), then answers each
+/// line on stdin the way the real one does: its id, a piece of text, a tool call and its answer,
+/// the reply, the result. A message saying `slow` waits a second first; one saying `die` exits
+/// mid-turn; one saying `propose` runs `client.py` beside it first, from inside its own tree, as
+/// Relay's MCP server would.
 fn fake_claude(dir: &Path) -> (PathBuf, PathBuf) {
     let log = dir.join("args.log");
     let script = dir.join("claude");
     let body = r#"#!/bin/sh
 printf 'OPS=%s %s\n' "$RELAY_MCP_OPS" "$*" | tr '\n' ' ' >> "LOG"; echo >> "LOG"
 while IFS= read -r line; do
+  printf '%s\n' "$line" >> "DIR/lines.log"
   case "$line" in *die*) exit 3;; esac
   case "$line" in *slow*) sleep 1;; esac
+  case "$line" in *propose*) sleep 0.3; python3 "DIR/client.py" "DIR";; esac
   case "$line" in
     *notools*) echo '{"type":"system","subtype":"init","session_id":"fake-session-1","mcp_servers":[{"name":"relay","status":"failed"}],"tools":[]}';;
     *) echo '{"type":"system","subtype":"init","session_id":"fake-session-1","mcp_servers":[{"name":"relay","status":"connected"}],"tools":["mcp__relay__money_summary"]}';;
@@ -30,7 +34,8 @@ while IFS= read -r line; do
   echo '{"type":"result","subtype":"success","is_error":false,"result":"Hi from the fake"}'
 done
 "#
-    .replace("LOG", &log.display().to_string());
+    .replace("LOG", &log.display().to_string())
+    .replace("DIR", &dir.display().to_string());
     std::fs::write(&script, body).unwrap();
     #[cfg(unix)]
     {
@@ -200,3 +205,273 @@ fn a_reply_stopped_midway_leaves_the_next_message_its_own_turn() {
     assert_eq!(read_again["thread"]["working"], false);
     assert!(std::fs::read_to_string(&log).unwrap().lines().count() <= 2);
 }
+
+// ── Asking first (phase 4) ─────────────────────────────────────────────────
+
+/// What thread `thread`'s agent sends through Relay's MCP server. The socket door knows the
+/// agent by its process and hands the request on as that thread's
+/// (`Engine::dispatch_from_thread`); in process, the test says which thread it is.
+fn from_agent(engine: &Engine, thread: &Value, op: &str, payload: Value) -> Response {
+    engine.dispatch_from_thread(Request::new(Actor::User, op, payload), Door::InProcess, thread.as_i64().unwrap())
+}
+
+fn category(engine: &Engine, name: &str) -> Value {
+    let lists = ok(engine, "money.lists", json!({}));
+    lists["categories"].as_array().unwrap().iter().find(|c| c["name"] == name).unwrap()["id"].clone()
+}
+
+fn entries(engine: &Engine) -> Vec<Value> {
+    ok(engine, "money.tx.list", json!({"today": "2026-10-07"}))["transactions"].as_array().unwrap().clone()
+}
+
+/// A chequing account and three entries this month: Metro, Metro again, a dinner.
+fn ledger(engine: &Engine) -> Vec<Value> {
+    let account = ok(engine, "money.account.add", json!({"name": "Chequing", "type": "CHEQUING", "opening_balance": 100_000}));
+    let (groceries, dining) = (category(engine, "Groceries"), category(engine, "Dining"));
+    [("Metro", 4_250, &groceries, "2026-10-05"), ("Metro", 4_250, &groceries, "2026-10-05"), ("Burger night", 1_498, &dining, "2026-10-06")]
+        .into_iter()
+        .map(|(note, amount, category, date)| ok(engine, "money.tx.add", json!({
+            "type": "EXPENSE", "amount": amount, "date": date, "account_id": account["id"], "category_id": category, "note": note
+        })))
+        .collect()
+}
+
+#[test]
+fn a_thread_agent_proposes_and_the_person_answers_it_once() {
+    let engine = engine();
+    let added = ledger(&engine);
+    let thread = ok(&engine, "thread.create", json!({}))["id"].clone();
+    let delete = json!({"action": {"money.tx.delete": [{"id": added[0]["id"]}, {"id": added[1]["id"]}]}, "why": "The same shop twice, a minute apart"});
+
+    // Only a thread's own agent proposes: the person changes the ledger directly.
+    assert_eq!(code(call(&engine, "thread.propose", delete.clone())), "thread.not_agent");
+    let proposal = from_agent(&engine, &thread, "thread.propose", delete.clone()).into_result().unwrap();
+    let id = proposal["id"].clone();
+    assert_eq!((proposal["status"].as_str(), &proposal["thread_id"]), (Some("pending"), &thread));
+    let summary = proposal["summary"].as_str().unwrap();
+    assert!(summary.starts_with("Delete 2 entries: 2026-10-05 \u{201c}Metro\u{201d} 42.50 CAD"), "{summary}");
+    assert_eq!(proposal["items"][1]["entry"]["id"], added[1]["id"], "what it acts on is read from the ledger");
+    assert_eq!(proposal["stale"], false);
+    assert_eq!(entries(&engine).len(), 3, "nothing changes before the person answers");
+    assert_eq!(from_agent(&engine, &thread, "thread.propose", delete.clone()).into_result().unwrap()["id"], id, "asking again is the same card");
+
+    // Refused: an op off the list, what is not in the ledger, a change that changes nothing, one
+    // target twice, too many at once, no reason.
+    let propose = |action: Value, why: &str| from_agent(&engine, &thread, "thread.propose", json!({"action": action, "why": why}));
+    assert_eq!(code(propose(json!({"money.reset": [{}]}), "Start over")), "bus.schema");
+    assert_eq!(code(propose(json!({"money.invest.room": [{"registration": "TFSA", "year": 2026, "amount": 700_000}]}), "CRA")), "bus.schema");
+    assert_eq!(code(propose(json!({"money.tx.delete": [{"id": 999}]}), "Gone")), "money.not_found");
+    assert_eq!(code(propose(json!({"money.budget.set": [{"amount": 0}]}), "No budget")), "money.invalid");
+    assert_eq!(code(propose(json!({"money.tx.update": [{"id": added[2]["id"], "note": "Burger night"}]}), "Same")), "money.invalid");
+    assert_eq!(code(propose(json!({"money.tx.delete": [{"id": added[0]["id"]}, {"id": added[0]["id"]}]}), "Twice")), "thread.invalid");
+    let many: Vec<Value> = (0..51).map(|i| json!({"id": i})).collect();
+    assert_eq!(code(propose(json!({"money.tx.delete": many}), "Many")), "thread.invalid");
+    assert_eq!(code(propose(json!({"money.tx.delete": [{"id": added[2]["id"]}]}), "  ")), "thread.invalid");
+    // The ledger's own rules, checked before the card is shown.
+    assert_eq!(code(propose(json!({"money.budget.set": [{"category_id": category(&engine, "Salary"), "amount": 100}]}), "Income")), "money.invalid");
+
+    // No agent answers a proposal: not the thread's, not a session.
+    assert_eq!(code(from_agent(&engine, &thread, "thread.proposal.resolve", json!({"id": id, "approve": true}))), "thread.not_person");
+    assert!(call_as(&engine, Actor::agent("brisk-otter"), "thread.proposal.resolve", json!({"id": id, "approve": true})).error.is_some());
+    let waiting = ok(&engine, "thread.proposal.list", json!({"thread_id": thread, "pending": true}));
+    assert_eq!(waiting["proposals"].as_array().unwrap().len(), 1);
+
+    // The person approves: applied, once.
+    let approved = ok(&engine, "thread.proposal.resolve", json!({"id": id, "approve": true}));
+    assert_eq!((approved["status"].as_str(), approved["outcome"].as_str()), (Some("approved"), Some("Deleted 2 entries.")));
+    assert_eq!(approved["undoable"], true);
+    assert_eq!(entries(&engine).len(), 1);
+    assert_eq!(code(call(&engine, "thread.proposal.resolve", json!({"id": id, "approve": true}))), "thread.proposal_answered");
+    assert_eq!(code(call(&engine, "thread.proposal.resolve", json!({"id": id, "approve": false}))), "thread.proposal_answered");
+    // It stays answered, still saying what it deleted.
+    let read = ok(&engine, "thread.proposal.get", json!({"id": id}));
+    assert_eq!((read["status"].as_str(), read["items"][0]["entry"]["note"].as_str()), (Some("approved"), Some("Metro")));
+    assert!(ok(&engine, "thread.proposal.list", json!({"thread_id": thread, "pending": true}))["proposals"].as_array().unwrap().is_empty());
+
+    // Undo puts both back, once.
+    let undone = ok(&engine, "thread.proposal.undo", json!({"id": id}));
+    assert_eq!(undone["status"], "undone");
+    assert_eq!(entries(&engine).len(), 3);
+    assert_eq!(code(call(&engine, "thread.proposal.undo", json!({"id": id}))), "thread.proposal_not_approved");
+
+    // Budgets, declined: nothing changes, and a declined proposal cannot be approved after.
+    let groceries = category(&engine, "Groceries");
+    let budgets = propose(json!({"money.budget.set": [{"category_id": groceries, "amount": 60_000}, {"amount": 300_000}]}), "From your last three months").into_result().unwrap();
+    let summary = budgets["summary"].as_str().unwrap();
+    assert!(summary.contains("Groceries none → 600.00 CAD") && summary.contains("the monthly budget none → 3000.00 CAD"), "{summary}");
+    assert_eq!(ok(&engine, "thread.proposal.resolve", json!({"id": budgets["id"], "approve": false}))["status"], "declined");
+    assert!(ok(&engine, "money.summary", json!({"today": "2026-10-07"}))["budgets"].as_array().unwrap().is_empty());
+    assert_eq!(code(call(&engine, "thread.proposal.resolve", json!({"id": budgets["id"], "approve": true}))), "thread.proposal_answered");
+
+    // Accounts: added on approval, and a proposal goes with its thread.
+    let account = propose(json!({"money.account.add": [{"name": "Tangerine", "type": "SAVINGS", "opening_balance": "x"}]}), "Savings");
+    assert_eq!(code(account), "bus.schema", "the payload is the op's own");
+    let account = propose(json!({"money.account.add": [{"name": "Tangerine", "type": "SAVINGS", "opening_balance": 50_000}]}), "Savings").into_result().unwrap();
+    assert!(account["summary"].as_str().unwrap().contains("\u{201c}Tangerine\u{201d} (savings, opening balance 500.00 CAD)"), "{}", account["summary"]);
+    assert_eq!(account["items"][0]["state"], "new");
+    ok(&engine, "thread.proposal.resolve", json!({"id": account["id"], "approve": true}));
+    let names: Vec<Value> = ok(&engine, "money.lists", json!({}))["accounts"].as_array().unwrap().iter().map(|a| a["name"].clone()).collect();
+    assert!(names.contains(&json!("Tangerine")), "{names:?}");
+    ok(&engine, "thread.delete", json!({"id": thread}));
+    assert_eq!(code(call(&engine, "thread.proposal.get", json!({"id": id}))), "thread.proposal_not_found");
+}
+
+#[test]
+fn an_approval_is_refused_once_what_it_acts_on_changed_and_a_failure_is_kept() {
+    let engine = engine();
+    // The phone's ledger, so a category can go from under a proposal the way a sync takes it.
+    let row = |name: &str| json!({"name": name, "kind": "EXPENSE", "color": 3, "icon": "dot", "archived": false, "sortOrder": 0});
+    let tx = |uid: &str, note: &str| json!({"table": "transactions", "uid": uid, "updated_at": 100, "row": {"type": "EXPENSE", "amount": 1_200, "date": "2026-10-03",
+        "account": "a1", "toAccount": null, "category": "c-food", "note": note, "recurring": null, "createdAt": 100}});
+    let first = ok(&engine, "money.sync", json!({"device": "Pixel 9", "replace": true, "since": 0, "changes": [
+        {"table": "accounts", "uid": "a1", "updated_at": 100, "row": {"name": "Chequing", "type": "CHEQUING", "openingBalance": 50_000, "archived": false, "sortOrder": 0}},
+        {"table": "categories", "uid": "c-food", "updated_at": 100, "row": row("Food")},
+        {"table": "categories", "uid": "c-out", "updated_at": 100, "row": row("Eating out")},
+        tx("t1", "Pho"), tx("t2", "Tacos"), tx("t3", "Ramen"),
+    ]}));
+    let thread = ok(&engine, "thread.create", json!({}))["id"].clone();
+    let id_of = |note: &str| entries(&engine).into_iter().find(|t| t["note"] == note).unwrap()["id"].clone();
+    let (pho, tacos, ramen, out) = (id_of("Pho"), id_of("Tacos"), id_of("Ramen"), category(&engine, "Eating out"));
+    let category_of = |id: &Value| entries(&engine).into_iter().find(|t| &t["id"] == id).unwrap()["category"].clone();
+
+    let moved = from_agent(&engine, &thread, "thread.propose", json!({
+        "action": {"money.tx.update": [{"id": pho, "category_id": out}, {"id": tacos, "category_id": out}]}, "why": "Restaurants, not groceries"
+    })).into_result().unwrap();
+    assert!(moved["summary"].as_str().unwrap().contains("Food → Eating out"), "{}", moved["summary"]);
+    assert_eq!(moved["items"][0]["entry_after"]["category"], "Eating out", "as the change would leave it");
+
+    // The person changes one meanwhile: the card says which, and an approval of what was asked
+    // is refused until they look again.
+    ok(&engine, "money.tx.update", json!({"id": pho, "amount": 1_350}));
+    let read = ok(&engine, "thread.proposal.get", json!({"id": moved["id"]}));
+    assert_eq!((read["stale"].as_bool(), read["items"][0]["state"].as_str(), read["items"][1]["state"].as_str()), (Some(true), Some("changed"), Some("same")));
+    assert_ne!(read["seen"], moved["seen"]);
+    assert_eq!(code(call(&engine, "thread.proposal.resolve", json!({"id": moved["id"], "approve": true}))), "thread.proposal_changed");
+    assert_eq!(code(call(&engine, "thread.proposal.resolve", json!({"id": moved["id"], "approve": true, "seen": moved["seen"]}))), "thread.proposal_changed");
+    // Approved as they saw it last: both move at once.
+    let approved = ok(&engine, "thread.proposal.resolve", json!({"id": moved["id"], "approve": true, "seen": read["seen"]}));
+    assert_eq!(approved["outcome"], "Changed 2 entries.");
+    assert_eq!((category_of(&pho), category_of(&tacos)), (json!("Eating out"), json!("Eating out")));
+    // Undone, both go back; the amount the person typed stays theirs.
+    ok(&engine, "thread.proposal.undo", json!({"id": moved["id"]}));
+    assert_eq!((category_of(&pho), category_of(&tacos)), (json!("Food"), json!("Food")));
+    assert_eq!(entries(&engine).into_iter().find(|t| t["id"] == pho).unwrap()["amount"], 1_350);
+
+    // The phone deletes the category it moves an entry into: approving fails whole, says why,
+    // and leaves the ledger as it was.
+    let again = from_agent(&engine, &thread, "thread.propose", json!({
+        "action": {"money.tx.update": [{"id": tacos, "category_id": out}, {"id": ramen, "category_id": out}]}, "why": "Restaurants"
+    })).into_result().unwrap();
+    ok(&engine, "money.sync", json!({"device": "Pixel 9", "since": first["cursor"], "generation": first["generation"], "changes": [
+        {"table": "categories", "uid": "c-out", "updated_at": 200, "deleted": true},
+    ]}));
+    let failed = ok(&engine, "thread.proposal.resolve", json!({"id": again["id"], "approve": true}));
+    assert_eq!(failed["status"], "failed");
+    assert!(failed["outcome"].as_str().unwrap().contains("not for this kind of entry"), "{}", failed["outcome"]);
+    assert_eq!((category_of(&tacos), category_of(&ramen)), (json!("Food"), json!("Food")));
+    assert_eq!(code(call(&engine, "thread.proposal.resolve", json!({"id": again["id"], "approve": true}))), "thread.proposal_answered");
+    assert_eq!(code(call(&engine, "thread.proposal.undo", json!({"id": again["id"]}))), "thread.proposal_not_approved");
+
+    // A delete whose entry went meanwhile is refused, and waits for the person to decline it.
+    let delete = from_agent(&engine, &thread, "thread.propose", json!({"action": {"money.tx.delete": [{"id": ramen}]}, "why": "Twice"})).into_result().unwrap();
+    ok(&engine, "money.tx.delete", json!({"id": ramen}));
+    assert_eq!(code(call(&engine, "thread.proposal.resolve", json!({"id": delete["id"], "approve": true}))), "thread.proposal_gone");
+    let read = ok(&engine, "thread.proposal.get", json!({"id": delete["id"]}));
+    assert_eq!((read["status"].as_str(), read["items"][0]["state"].as_str()), (Some("pending"), Some("gone")));
+    assert_eq!(ok(&engine, "thread.proposal.resolve", json!({"id": delete["id"], "approve": false}))["status"], "declined");
+}
+
+#[test]
+fn the_agent_hears_how_its_proposals_were_answered_once() {
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    with_fake(&engine, dir.path());
+    let added = ledger(&engine);
+    let created = ok(&engine, "thread.create", json!({"text": "Any duplicates?"}));
+    let id = created["id"].clone();
+    settled(&engine, &id, 4);
+    let ask = |action: Value| from_agent(&engine, &id, "thread.propose", json!({"action": action, "why": "Asked"})).into_result().unwrap();
+    let delete = ask(json!({"money.tx.delete": [{"id": added[1]["id"]}]}));
+    let budget = ask(json!({"money.budget.set": [{"amount": 300_000}]}));
+    ok(&engine, "thread.proposal.resolve", json!({"id": delete["id"], "approve": true}));
+    ok(&engine, "thread.proposal.resolve", json!({"id": budget["id"], "approve": false}));
+    let last = || {
+        let lines = std::fs::read_to_string(dir.path().join("lines.log")).unwrap();
+        let line: Value = serde_json::from_str(lines.lines().last().unwrap()).unwrap();
+        line["message"]["content"].as_str().unwrap().to_string()
+    };
+
+    ok(&engine, "thread.send", json!({"id": id, "text": "Done?"}));
+    settled(&engine, &id, 8);
+    let content = last();
+    assert!(content.starts_with(&format!("[Relay: the person approved proposal {} (Delete 1 entry: 2026-10-05", delete["id"])), "{content}");
+    assert!(content.contains(&format!("[Relay: the person declined proposal {} (Set 1 budget: the monthly budget none → 3000.00 CAD); nothing changed.]", budget["id"])), "{content}");
+    assert!(content.ends_with("\n\nDone?"), "{content}");
+    // The thread keeps the person's own words.
+    let messages = thread(&engine, &id)["messages"].as_array().unwrap().clone();
+    assert_eq!(messages.iter().rev().find(|m| m["role"] == "user").unwrap()["body"]["text"], "Done?");
+
+    // Told once; an undo is news again, and a cold thread hears it in its first line.
+    ok(&engine, "thread.send", json!({"id": id, "text": "And now?"}));
+    settled(&engine, &id, 12);
+    assert_eq!(last(), "And now?");
+    ok(&engine, "thread.proposal.undo", json!({"id": delete["id"]}));
+    ok(&engine, "thread.stop", json!({"id": id}));
+    wait_until("the agent to close", || thread(&engine, &id)["thread"]["live"] == false);
+    ok(&engine, "thread.send", json!({"id": id, "text": "Hm"}));
+    settled(&engine, &id, 16);
+    assert!(last().starts_with(&format!("[Relay: the person undid proposal {}", delete["id"])), "{}", last());
+}
+
+/// The whole path a real agent takes: a process in the agent's own tree (Relay's MCP server in
+/// life, `client.py` here) sends `thread.propose` to a test engine's socket door as the person,
+/// and the door names the thread; the same connection cannot answer it.
+#[test]
+fn an_agent_proposes_through_the_socket_door_for_its_own_thread() {
+    if !std::process::Command::new("python3").args(["-c", ""]).status().is_ok_and(|s| s.success()) {
+        eprintln!("skipping: no python3 to stand in for Relay's MCP server");
+        return;
+    }
+    let engine = engine();
+    let dir = tempfile::tempdir().unwrap();
+    with_fake(&engine, dir.path());
+    let added = ledger(&engine);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let server = runtime.block_on(relay_core::socket::SocketServer::start_in(engine.clone(), dir.path().join("run"))).unwrap();
+    let calls = json!([
+        ["thread.propose", {"action": {"money.tx.delete": [{"id": added[0]["id"]}]}, "why": "Logged twice"}],
+        ["thread.proposal.resolve", {"id": 1, "approve": true}],
+    ]);
+    std::fs::write(dir.path().join("calls.json"), calls.to_string()).unwrap();
+    std::fs::write(dir.path().join("sock"), server.path.display().to_string()).unwrap();
+    std::fs::write(dir.path().join("client.py"), CLIENT).unwrap();
+
+    let created = ok(&engine, "thread.create", json!({"text": "Please propose deleting the duplicate"}));
+    settled(&engine, &created["id"], 4);
+    let answers: Value = serde_json::from_str(&std::fs::read_to_string(dir.path().join("answers.json")).unwrap()).unwrap();
+    assert_eq!(answers[0]["ok"], true, "{answers}");
+    assert_eq!(answers[0]["result"]["thread_id"], created["id"], "the door named the agent's own thread");
+    assert_eq!(answers[1]["error"]["code"], "actor.peer", "{answers}");
+    let listed = ok(&engine, "thread.proposal.list", json!({"thread_id": created["id"]}));
+    assert_eq!(listed["proposals"][0]["status"], "pending");
+    assert_eq!(entries(&engine).len(), 3);
+    drop(server);
+}
+
+/// Sends each `[op, payload]` in `calls.json` to the socket named in `sock`, as Relay's MCP
+/// server does for a thread's agent, and writes the answers to `answers.json`.
+const CLIENT: &str = r#"
+import json, os, socket, sys, uuid
+d = sys.argv[1]
+s = socket.socket(socket.AF_UNIX)
+s.connect(open(d + "/sock").read())
+f = s.makefile("rw")
+answers = []
+for op, payload in json.load(open(d + "/calls.json")):
+    f.write(json.dumps({"v": 1, "id": str(uuid.uuid4()), "actor": "user", "op": op, "payload": payload}) + "\n")
+    f.flush()
+    answers.append(json.loads(f.readline()))
+with open(d + "/answers.tmp", "w") as out:
+    json.dump(answers, out)
+os.replace(d + "/answers.tmp", d + "/answers.json")
+"#;

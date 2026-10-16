@@ -18,6 +18,11 @@
 //!
 //! A thread on a local model (`local_models`) runs the same agent against a server on this PC;
 //! its first message waits for the model to load, on a thread of its own.
+//!
+//! What the agent may not change alone it proposes, and the person answers on a card
+//! ([`proposals`]); the agent hears the answers at the head of the person's next message.
+
+pub mod proposals;
 
 use crate::engine::Engine;
 use relay_bus::ops::thread::{MessageView, ThreadView};
@@ -33,8 +38,9 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 /// The ops a thread's agent may call. Reads of the ledger and its investments, and the changes a
-/// card can undo; deleting, budgets, accounts, importing files, room, prices, rates and anything
-/// that replaces the ledger stay the person's.
+/// card can undo; deleting, many changes at once, budgets and accounts it proposes
+/// (`thread.propose`) for the person to approve; importing files, room, prices, rates and
+/// anything that replaces the ledger stay the person's.
 /// Arbiter's reads and backtests, its proposals, the kill switch, and orders — which pass the
 /// same risk gate as a rule's and are placed only for a strategy the person lets the AI trade
 /// (docs/ARBITER.md). Keys, strategy edits, limits, restarts and approvals stay the person's.
@@ -48,6 +54,7 @@ pub const AGENT_OPS: &[&str] = &[
     "money.tx.add",
     "money.tx.update",
     "money.tx.restore",
+    "thread.propose",
     "money.invest.summary",
     "money.invest.list",
     "money.invest.add",
@@ -159,8 +166,9 @@ yourself. The bills in money.summary include income (`type` INCOME) and transfer
 are bills to pay. Entries are in money.tx.list, not money.summary: read it for the largest or smallest \
 entry, or anything else across a period. Never add up, subtract or compare figures \
 yourself when a tool gives the result (`net_worth` for all accounts together, `spent`, a budget's `left`): quote it. You may add and change entries, and restore one; say plainly what you \
-changed. You cannot delete entries, change budgets or add accounts: say what you would do and let \
-the person do it in the Tally panel. Answer briefly, lead with the number they asked for, and never \
+changed. To delete entries or investment activities, change more than 3 entries, set budgets, or add, \
+rename or archive accounts, call thread.propose with one action and why; the person approves it on a \
+card. Say what you proposed: it is not done until Relay tells you it was approved. Answer briefly, lead with the number they asked for, and never \
 invent figures the tools did not give you.
 
 To show a chart, write a fenced block with the language `chart` holding one JSON object. Give it a \
@@ -191,8 +199,8 @@ is above zero, say Tally counts every deposit and transfer in, including a direc
 another institution's plan, which uses no room, and to check CRA My Account before taking money \
 out. Don't recommend securities to buy or sell. You may record an activity with money.invest.add, \
 which the person can undo, but not in an account Wealthsimple's files fill (`institution` \
-Wealthsimple): the next export brings it, and both would count. Importing files, room, prices, \
-rates and accounts are theirs, on Tally's Investments page.
+Wealthsimple): the next export brings it, and both would count. Importing files, room, prices and \
+rates are theirs, on Tally's Investments page.
 
 Wealthsimple has no API for a person: Tally reads the files Wealthsimple's site gives them, on this \
 computer. What you read from Tally to answer (names and figures) goes to Claude like the rest of \
@@ -253,7 +261,7 @@ They also have Avex (gym.*), their gym app on the phone. Avex has no internet pe
 holds a read-only copy of its training history from the last export the person imported: anything \
 logged since is not here. Read gym.summary first. When `imported` is absent, nothing has been \
 imported yet: tell them to export it in Avex (Settings → Export → Training history, JSON), copy \
-avex_export.json to this computer, and import it on the Avex page's Data tab. When `exported_at` is \
+avex_export.json to this computer, and import it on the Avex page. When `exported_at` is \
 more than a few days before today, say how old the copy is before answering about recent training. \
 Weights and volumes are in `unit` (kg or lb). gym.lifts and gym.lift.get give each lift's best set \
 and history (for the heaviest set or the best of anything, read gym.lifts, not gym.summary's few records), gym.sessions and gym.session.get the workouts and their sets, gym.cardio the cardio; \
@@ -319,8 +327,10 @@ dates list, account_id and, for an expense or income, always a category_id, both
 Say plainly what you changed. When the amount or the account is unclear, ask first. \
 money.tx.restore brings back a deleted entry. money.invest.add records an investment activity, but \
 not in an account Wealthsimple's files fill.
-- You cannot delete entries, change budgets or add accounts: say what you would do and let the \
-person do it in the Tally panel. Settings, such as the day the budget month starts, are theirs too.
+- To delete entries or investment activities, change more than 3 entries, set budgets, or add, \
+rename or archive accounts, call thread.propose with one action and why; the person approves it on a \
+card. Say what you proposed: it is not done until Relay tells you it was approved. Settings, such as \
+the day the budget month starts, are theirs.
 - Avex's data is read only: changes happen in Avex on the phone.
 
 Charts: when they ask to show, chart, plot, draw or graph something, answer with a chart: a fenced \
@@ -474,7 +484,14 @@ impl ThreadStore {
             conn.execute_batch("ALTER TABLE thread ADD COLUMN effort TEXT")?;
             conn.pragma_update(None, "user_version", 2)?;
         }
-        Ok(ThreadStore { conn })
+        // 3: proposals the agent makes and the person answers (`proposals`).
+        if version < 3 {
+            conn.execute_batch(proposals::SCHEMA)?;
+            conn.pragma_update(None, "user_version", 3)?;
+        }
+        let store = ThreadStore { conn };
+        store.settle_interrupted(&crate::time::now())?;
+        Ok(store)
     }
 
     pub fn list(&self) -> rusqlite::Result<Vec<Stored>> {
@@ -822,7 +839,11 @@ fn fail(engine: &Engine, id: Id, token: u64, why: &str) {
 /// Runs after the handler that stored the message has returned; a message whose turn was
 /// stopped in between is not given.
 pub fn deliver(engine: &Arc<Engine>, id: Id, token: u64, text: &str) {
-    let line = user_line(text);
+    // How the person answered its proposals since it last heard goes first, so it never takes a
+    // change for done that was declined, or asks again for one that was approved.
+    let (heard, answers) = proposals::heard(engine, id);
+    let content = if heard.is_empty() { text.to_string() } else { format!("{heard}\n\n{text}") };
+    let line = user_line(&content);
     let token = {
         let mut live = lock(&engine.threads.live);
         // Only the turn this message began: stopped before this ran, there is none, or the
@@ -842,6 +863,7 @@ pub fn deliver(engine: &Arc<Engine>, id: Id, token: u64, text: &str) {
                 stdin.write_all(line.as_bytes()).and_then(|()| stdin.flush())
             };
             if written.is_ok() {
+                proposals::told(engine, &answers);
                 if local {
                     crate::local_models::touch(engine);
                 }
@@ -864,15 +886,14 @@ pub fn deliver(engine: &Arc<Engine>, id: Id, token: u64, text: &str) {
     };
     let local = with_db(engine, |db| db.get(id)).ok().flatten().and_then(|t| t.model).and_then(|m| crate::local_models::find(&m));
     let Some(model) = local else {
-        start(engine, id, token, &line, None);
+        start(engine, id, token, &line, None, &answers);
         return;
     };
     let waiting = engine.clone();
-    let text = text.to_string();
     let started = std::thread::Builder::new().name(format!("thread-{id}-local")).spawn(move || {
         // A small model starts with what the data says, so an easy question needs no tool call.
-        let line = if LocalStyle::from_env().prefetch { user_line(&prefetched(&waiting, &text)) } else { line };
-        start(&waiting, id, token, &line, Some(model))
+        let line = if LocalStyle::from_env().prefetch { user_line(&prefetched(&waiting, &content)) } else { line };
+        start(&waiting, id, token, &line, Some(model), &answers)
     });
     if let Err(e) = started {
         fail(engine, id, token, &format!("Could not start the agent: {e}"));
@@ -910,8 +931,8 @@ fn prefetched(engine: &Engine, text: &str) -> String {
 }
 
 /// Start an agent for the thread's turn `token` and hand it `line`, the model's server loaded
-/// first when it is a local one.
-fn start(engine: &Arc<Engine>, id: Id, token: u64, line: &str, local: Option<&'static crate::local_models::Model>) {
+/// first when it is a local one. `answers` are the proposals' answers `line` tells it of.
+fn start(engine: &Arc<Engine>, id: Id, token: u64, line: &str, local: Option<&'static crate::local_models::Model>, answers: &[(Id, String)]) {
     let port = match local.map(|model| crate::local_models::ensure(engine, model)).transpose() {
         Ok(port) => port,
         Err(why) => {
@@ -925,7 +946,10 @@ fn start(engine: &Arc<Engine>, id: Id, token: u64, line: &str, local: Option<&'s
         return;
     }
     match spawn(engine, id, token, line, local.zip(port)) {
-        Ok(true) => emit_changed(engine, id),
+        Ok(true) => {
+            proposals::told(engine, answers);
+            emit_changed(engine, id);
+        }
         Ok(false) => {}
         Err(why) => fail(engine, id, token, &why),
     }
@@ -1306,13 +1330,14 @@ mod tests {
             _ => None,
         }).collect();
         assert!(charts.iter().any(|c| c.gym.is_some()) && charts.iter().any(|c| c.gym.is_none()));
-        // Every tool it names is one it has, and the sentence about what stays the person's is
-        // the same as the full prompt's.
+        // Every tool it names is one it has, and the sentence about what it proposes rather than
+        // does is the same as the full prompt's.
         for op in &ops {
             assert!(LOCAL_PROMPT.contains(op), "{op}");
         }
-        let theirs = "You cannot delete entries, change budgets or add accounts: say what you would do and let the person do it in the Tally panel.";
-        assert!(LOCAL_PROMPT.replace('\n', " ").contains(theirs) && PROMPT.replace('\n', " ").contains(theirs));
+        let theirs = "rename or archive accounts, call thread.propose with one action and why; the person approves it on a card.";
+        assert!(LOCAL_PROMPT.contains(theirs) && PROMPT.contains(theirs));
+        assert!(!LOCAL_PROMPT.contains("Tally panel"), "the panel does not set budgets or add accounts");
     }
 
     #[test]
@@ -1332,6 +1357,15 @@ mod tests {
             assert!(PROMPT.contains(op) && AGENT_OPS.contains(&op), "{op}");
         }
         assert!(!AGENT_OPS.iter().any(|op| op.starts_with("money.fx") || *op == "money.invest.import" || *op == "money.invest.delete"));
+        // What it may not do alone it proposes; the answering is the person's. Every op a
+        // proposal runs is out of its own reach, but for an edit, which it may make one at a time.
+        assert!(PROMPT.contains("thread.propose") && AGENT_OPS.contains(&"thread.propose"));
+        assert!(!AGENT_OPS.iter().any(|op| op.starts_with("thread.proposal")));
+        assert!(!PROMPT.contains("Tally panel"), "the panel does not set budgets or add accounts");
+        use relay_bus::ops::thread::Action;
+        for action in [Action::TxDelete(vec![]), Action::TxUpdate(vec![]), Action::BudgetSet(vec![]), Action::AccountAdd(vec![]), Action::AccountUpdate(vec![]), Action::InvestDelete(vec![])] {
+            assert_eq!(AGENT_OPS.contains(&action.op()), action.op() == "money.tx.update", "{}", action.op());
+        }
         // Avex's history is read only to an agent, and its chart example is one the thread draws.
         for op in ["gym.summary", "gym.lifts", "gym.lift.get", "gym.sessions", "gym.session.get", "gym.series"] {
             assert!(PROMPT.contains(op) && AGENT_OPS.contains(&op), "{op}");
