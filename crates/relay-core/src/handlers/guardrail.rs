@@ -305,8 +305,14 @@ pub fn register(engine: &mut Engine) {
     // The gate reads the old file, asks git whether it could restore it, and reads the staged
     // numstat: all of that happens first, with the store lock released, and the transaction
     // only judges what was read and records the hold or refusal (D149, RA-100).
+    // A cargo command in a new worktree first waits for its build-seed copy (build_seed).
     engine.register_staged::<Gate, Probes>(
-        |ctx, payload| Ok(warm_gate(ctx, ctx.actor.clone(), payload, None)),
+        |ctx, payload| {
+            if let (GateKind::Exec, Some(command)) = (payload.kind, payload.command.as_deref()) {
+                crate::build_seed::gate(ctx, &payload.session, command)?;
+            }
+            Ok(warm_gate(ctx, ctx.actor.clone(), payload, None))
+        },
         |ctx: &mut Ctx, payload, probes| gate(ctx, payload, None, &probes),
     );
 

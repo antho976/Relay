@@ -1268,6 +1268,11 @@ pub fn register(e: &mut Engine) {
                 let start = super::git::new_worktree_start(&repo, &branch, &prepared.project.base_branch, None)?;
                 let wt = worktree::create_at(&repo, &path, &branch, &start)
                     .map_err(|e| BusError::conflict("worktree.create_failed", e.to_string()))?;
+                // Its `target/` arrives on a thread of its own: a copy of the project's prebuilt
+                // dependencies, which its first cargo command waits for (build_seed).
+                if let Some(engine) = ctx.engine().arc() {
+                    crate::build_seed::seed_new_worktree(&engine, ctx.instance(), prepared.project.id, &repo, Path::new(&wt.path));
+                }
                 (wt.path, wt.branch)
             }
             other => {
