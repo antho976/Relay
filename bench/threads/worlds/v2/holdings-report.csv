@@ -1,0 +1,7 @@
+Account Name,Account Type,Account Classification,Account Number,Symbol,Exchange,MIC,Name,Security Type,Quantity,Position Direction,Market Price,Market Price Currency,Book Value (CAD),Book Value Currency (CAD),Book Value (Market),Book Value Currency (Market),Market Value,Market Value Currency,Market Unrealized Returns,Market Unrealized Returns Currency
+"TFSA","TFSA","Trade","HQ8T4M2R7CAD","XEQT","TSX","XTSE","iShares Core Equity ETF Portfolio","EXCHANGE_TRADED_FUND","152","LONG","36.85","CAD","5104.55","CAD","5104.55","CAD","5601.20","CAD","496.65","CAD"
+"TFSA","TFSA","Trade","HQ8T4M2R7CAD","VFV","TSX","XTSE","Vanguard S&P 500 Index ETF","EXCHANGE_TRADED_FUND","18","LONG","152.40","CAD","2388.60","CAD","2388.60","CAD","2743.20","CAD","354.60","CAD"
+"TFSA","TFSA","Trade","HQ8T4M2R7CAD","ZAG","TSX","XTSE","BMO Aggregate Bond Index ETF","EXCHANGE_TRADED_FUND","60","LONG","13.92","CAD","862.80","CAD","862.80","CAD","835.20","CAD","-27.60","CAD"
+"TFSA","TFSA","Trade","HQ8T4M2R7CAD","SHOP","TSX","XTSE","Shopify Inc","EQUITY","4","LONG","214.75","CAD","512.40","CAD","512.40","CAD","859.00","CAD","346.60","CAD"
+
+"As of 2026-07-31 16:00 GMT-04:00"

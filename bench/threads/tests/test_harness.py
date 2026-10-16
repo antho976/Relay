@@ -10,7 +10,7 @@ import time
 import unittest
 from pathlib import Path
 
-from relaybench import fixtures, grade, model, report, runner, truths
+from relaybench import fixtures, grade, model, report, runner, truths, truths_v2  # noqa: F401 (registers the v2 truths)
 from relaybench.engine import clean_env
 
 
@@ -223,6 +223,53 @@ class Stats(unittest.TestCase):
     def test_bootstrap_is_reproducible(self):
         vals = [1.0, 0.0, 0.5, 1.0, 1.0]
         self.assertEqual(report.bootstrap_mean(vals), report.bootstrap_mean(vals))
+
+
+class V2(unittest.TestCase):
+    """The second suite and its world (README, "v2")."""
+
+    def test_v2_tasks_are_valid_and_kept_apart(self):
+        tasks = runner.load_tasks("v2") + runner.load_tasks("v2/smoke")
+        self.assertTrue(tasks)
+        for t in tasks:
+            self.assertTrue(t["id"].startswith("v2."), t["id"])
+            self.assertTrue(t["suite"].startswith("v2/"), t["suite"])
+            self.assertEqual(grade.validate_task(t, truths.TRUTHS), [], t["id"])
+            self.assertTrue(t["truth"].startswith("v2_"), t["id"])
+        self.assertEqual(runner.world_of(tasks), "v2")
+        self.assertFalse(any(t["id"].startswith("v2.") for t in runner.load_tasks("all")))
+        self.assertEqual(runner.world_of(runner.load_tasks("all")), "v1")
+        with self.assertRaises(ValueError):
+            runner.world_of(runner.load_tasks("smoke") + tasks)
+
+    def test_the_v2_smoke_starter_joins_only_when_named(self):
+        named = runner.load_tasks("v2", ["v2.smoke.*"])
+        self.assertTrue(named)
+        self.assertTrue(all(t["suite"] == "v2/smoke" for t in named))
+        self.assertFalse(any(t["suite"] == "v2/smoke" for t in runner.load_tasks("v2")))
+        self.assertEqual([t["id"] for t in runner.load_tasks("v2/smoke")], [t["id"] for t in named])
+
+    def test_the_committed_world_is_what_the_generator_writes(self):
+        import importlib.util
+        path = fixtures.V2_DIR / "generate.py"
+        spec = importlib.util.spec_from_file_location("v2_generate", path)
+        gen = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gen)
+        for name, text in gen.render().items():
+            self.assertEqual((fixtures.V2_DIR / name).read_text(), text, f"{name} is out of date: run {path}")
+
+    def test_max_tools(self):
+        task = {"id": "x", "source": "tally", "category": "lookup", "difficulty": 1, "prompt": "?", "max_tools": 1,
+                "checks": [{"type": "no_error"}]}
+        call = {"op": "money.summary", "input": {}, "is_error": False}
+        two = {"turns": [{"text": "ok", "tool_calls": [call, call]}], "error": None, "timeout": False}
+        one = {"turns": [{"text": "ok", "tool_calls": [call]}], "error": None, "timeout": False}
+        self.assertEqual(grade.grade(task, {}, one)[0], True)
+        ok, results = grade.grade(task, {}, two)
+        self.assertFalse(ok)
+        self.assertEqual(results[-1]["type"], "max_tools")
+        self.assertEqual(grade.validate_task(dict(task, max_tools=-1)), ["max_tools -1: a whole number of calls, 0 or more"])
+        self.assertEqual(grade.validate_task({k: v for k, v in task.items() if k != "max_tools"}), [])
 
 
 if __name__ == "__main__":

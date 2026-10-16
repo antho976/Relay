@@ -8,7 +8,9 @@ outcome of `effect` checks (the truth function after the turn), and the thread, 
                 "error", "timeout", "seconds"}],
      "error": str | None, "timeout": bool}
 
-Check types: number, text_any, text_all, text_none, tool, no_tool, effect, chart, no_error.
+Check types: number, text_any, text_all, text_none, tool, no_tool, effect, chart, no_error. A task
+may also set `max_tools` (an integer): it then fails when the thread made more tool calls than
+that, scored as a check of its own type `max_tools`.
 Common keys: `turn` ("last" (default for answers), "all", or an index) picks which reply a text,
 number or chart check reads; tool checks read every turn unless given one.
 """
@@ -298,6 +300,9 @@ def grade(task, expected, thread, effects=None):
             ok, why = False, f"check crashed: {type(e).__name__}: {e}"
         results.append({"type": check.get("type"), "pass": bool(ok), "why": why,
                         **({"of": check["of"]} if "of" in check else {})})
+    if task.get("max_tools") is not None:
+        n, most = len(tool_calls(thread)), int(task["max_tools"])
+        results.append({"type": "max_tools", "pass": n <= most, "why": f"{n} tool calls, at most {most}"})
     return all(r["pass"] for r in results) and bool(results), results
 
 
@@ -309,6 +314,8 @@ def validate_task(task, truths=None):
             problems.append(f"missing {key}")
     if task.get("source") not in ("tally", "avex", "both"):
         problems.append(f"source {task.get('source')!r}")
+    if "max_tools" in task and not (isinstance(task["max_tools"], int) and not isinstance(task["max_tools"], bool) and task["max_tools"] >= 0):
+        problems.append(f"max_tools {task['max_tools']!r}: a whole number of calls, 0 or more")
     if truths is not None and task.get("truth") and task["truth"] not in truths:
         problems.append(f"unknown truth {task['truth']!r}")
     for i, check in enumerate(task.get("checks") or []):

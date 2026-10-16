@@ -303,6 +303,56 @@ What follows from it:
 - Each request also carries `thinking: adaptive`, `output_config.effort: high` and
   `max_tokens: 32000`; the server runs with reasoning off.
 
+## v2: the harder suite
+
+v1 is saturated (98.2% on the 4B) and stays frozen as a regression guard: its tasks, truths and world
+do not change. v2 is a second suite in a second, messier world, meant to leave room to climb.
+
+- **The world** (`worlds/v2/`, what is in it: `worlds/v2/WORLD.md`): the same clock, a household
+  ledger from 2025-08-15 to today with the **budget month starting on the 15th** ("this month" is
+  Sep 15 – Oct 14), ten accounts (two savings, two cards, a line of credit, a closed card), duplicates,
+  entries with no category, refunds in an expense category, a note that is an instruction, notes in
+  French and English, bills that post and reminders that don't, goals, a Wealthsimple TFSA filled from
+  a holdings report and an activities export as of 2026-07-31, and an RRSP at Desjardins valued by
+  hand; Avex for nine months in **kilograms**, with a deload week, a two-week trip, a plateaued
+  overhead press, barbell bench switched to dumbbells, untracked sessions, runs, rides and hikes.
+- **Loaded through the engine's own ops**: `money.import` of `tally-backup.json`, `money.invest.import`
+  of the two Wealthsimple files, `gym.import` of `avex_export.json`. Then every load compares the
+  engine's readings (periods, balances, budget standings, counts) with `worlds/v2/facts.json` and
+  stops on a difference.
+- **Built by** `worlds/v2/generate.py` (seeded, standard library). Its output is committed, so a run
+  never regenerates; after changing it, run it and commit both (`generate.py --check`, and a unit
+  test, fail when the files are stale). Changing the world changes the fingerprint and every v2
+  answer key's inputs: compare results only across runs with the same fingerprint.
+- **Tasks**: `tasks/v2/*.json`, the same format as v1, ids `v2.<file>.<name>`, truths in
+  `relaybench/truths_v2.py` named `v2_*` (registered in the same table). A task may set
+  `"max_tools": N` to fail a thread that made more than N tool calls (scored as check type
+  `max_tools`; v1 tasks do not use it).
+- **The suite picks the world**: `--suite v2` is every `tasks/v2/*.json` but its smoke starter, in the
+  v2 world; `--suite v2/<file>` one file; v1 suites load v1's world exactly as before. Tasks from both
+  worlds in one run are refused.
+
+```fish
+# the v2 world and every v2 task's expected values, no model
+python3 bench/threads/bench.py run --check --suite v2
+# the 8-task v2 starter (it joins `--suite v2` only when --tasks names v2.smoke.*)
+python3 bench/threads/bench.py run --suite v2 --tasks 'v2.smoke.*' --runs 1
+python3 bench/threads/bench.py run --suite v2/smoke
+# the whole v2 suite, three runs
+python3 bench/threads/bench.py run --suite v2 --runs 3
+```
+
+**Adding a task**: append it to a `tasks/v2/*.json` file (a new file is picked up by `--suite v2`),
+write its truth in `truths_v2.py` with `@truth` and a `v2_` name, computing from `q(...)` and checking
+against the engine's own figure, then `bench.py run --check --suite v2 --tasks 'v2.<id>'` prints what it
+expects and `python3 -m unittest discover bench/threads` checks its shape. Aim at what `WORLD.md`
+lists, but write the truth from the engine, not from the page.
+
+First pipeline run, 2026-10-16 (Qwen3.5 4B Q8_0, relay `0e5caa7`, the 8-task starter, one run): 6/8.
+The two failures are the model's: it looked for the Sep 3 note in this period only (Sep 3 is last
+month's), and it answered the overhead-press question with pounds beside kilograms and a claim that
+nothing was logged since March.
+
 ## Files
 
 - `bench.py`: the CLI.
@@ -310,7 +360,8 @@ What follows from it:
   fingerprint, snapshot and restore. `model.py`: the GGUF, the wrapper, the GPU lock and the
   free-memory check, the capture proxy. `runner.py`: tasks × runs, threads, scheduling, token usage.
   `grade.py`: the checks. `report.py`: statistics, `compare`, `RESULTS.md`. `seen.py`: what the
-  model sees, in its tokens. `truths.py`: the answer key.
+  model sees, in its tokens. `truths.py`: the answer key; `truths_v2.py`: v2's.
+- `worlds/v2/`: the v2 world (`generate.py`, its output, `facts.json`, `WORLD.md`). `tasks/v2/`: its tasks.
 - `tasks/*.json`: the suite. `--suite all` (the default) is every file but `smoke.json`, a 10-task
   starter that exercises every kind of check and runs only when named (`--suite smoke`).
 - `variants.json`, `results/`, `tests/`.

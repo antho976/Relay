@@ -6,6 +6,9 @@
 - Avex: `crates/relay-gym/tests/avex_export.json` with every date moved back exactly three weeks
   (weekdays kept), so it was exported on 2026-09-17 21:14, the evening before today.
 
+The v2 world (`worlds/v2/`, its WORLD.md) is loaded by `load(engine, "v2")` through the engine's own
+ops and checked against the facts its generator computed.
+
 `load()` fills a fresh engine and returns a manifest (counts, digests, a fingerprint of what the
 agent would read). `snapshot()` / `restore()` put the ledger back after a task that changed it.
 """
@@ -15,7 +18,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from . import REPO, TODAY
+from . import BENCH_DIR, REPO, TODAY
 
 AVEX_EXPORT = REPO / "crates/relay-gym/tests/avex_export.json"
 #: Every date in the Avex export moves back this far.
@@ -95,8 +98,13 @@ def fingerprint(engine):
     return h.hexdigest()
 
 
-def load(engine):
-    """Fill a fresh engine with the fixed world. Returns the manifest recorded with the results."""
+def load(engine, world="v1"):
+    """Fill a fresh engine with the fixed world (`v1`, the sample household, or `v2`). Returns the
+    manifest recorded with the results."""
+    if world == "v2":
+        return load_v2(engine)
+    if world != "v1":
+        raise ValueError(f"no world {world!r} (have: {', '.join(WORLDS)})")
     fx = engine.root / "fixtures"
     fx.mkdir(exist_ok=True)
     manifest = {}
@@ -125,6 +133,94 @@ def load(engine):
     manifest["fingerprint"] = fingerprint(engine)
     snapshot(engine)
     return manifest
+
+
+# ── v2: a messier household, its budget month starting on the 15th (worlds/v2/WORLD.md) ──────
+
+WORLDS = ("v1", "v2")
+V2_DIR = BENCH_DIR / "worlds" / "v2"
+
+
+def load_v2(engine, world_dir=V2_DIR):
+    """The v2 world, through the engine's own ops: `money.import` of the Tally backup (which carries
+    `month_start_day` 15), `money.invest.import` of Wealthsimple's holdings report and activities
+    export into the TFSA the backup already holds, `gym.import` of the Avex export. Then the engine
+    is read back and compared with `facts.json`, which the generator computed from the rows: a
+    world that reads differently from WORLD.md stops the run."""
+    world_dir = Path(world_dir)
+    facts = json.loads((world_dir / "facts.json").read_text())
+    if not engine.q("money.summary").get("empty", True):
+        raise RuntimeError("the throwaway engine's ledger is not empty")
+    manifest = {"world": "v2", "files": {}}
+    for name in ("tally-backup.json", "holdings-report.csv", "activities.csv", "avex_export.json"):
+        manifest["files"][name] = hashlib.sha256((world_dir / name).read_bytes()).hexdigest()
+    manifest["backup"] = engine.q("money.import", {"path": str(world_dir / "tally-backup.json")})
+    number = facts["invest"]["ws_number"]
+    ws = [a for a in engine.q("money.lists")["accounts"] if a["institution"].lower() == "wealthsimple"]
+    if len(ws) != 1:
+        raise RuntimeError(f"the backup should hold one Wealthsimple account, has {[a['name'] for a in ws]}")
+    for key, name in (("holdings", "holdings-report.csv"), ("activities", "activities.csv")):
+        got = engine.q("money.invest.import", {"path": str(world_dir / name), "accounts": [{"number": number, "account_id": ws[0]["id"]}]})
+        manifest[key] = {k: got.get(k) for k in ("kind", "accounts_created", "securities", "holdings", "activities", "prices", "values", "skipped")}
+    manifest["avex"] = engine.q("gym.import", {"path": str(world_dir / "avex_export.json")})
+
+    summary = engine.q("money.summary")
+    period = summary["period"]
+    if not (period["start"] <= TODAY < period["end_exclusive"]):
+        raise RuntimeError(f"the engine's budget period {period} does not hold {TODAY}: is libfaketime working?")
+    problems = check_v2(engine, facts)
+    if problems:
+        raise RuntimeError("the v2 world reads differently from worlds/v2/facts.json:\n  " + "\n  ".join(problems))
+    manifest["period"] = period
+    manifest["currency"] = summary["currency"]
+    manifest["gym_exported_at"] = engine.q("gym.summary")["imported"]["exported_at"]
+    manifest["fingerprint"] = fingerprint(engine)
+    snapshot(engine)
+    return manifest
+
+
+def check_v2(engine, facts):
+    """Where the engine's readings differ from `facts.json` (empty when they agree)."""
+    out = []
+
+    def same(what, got, want):
+        if got != want:
+            out.append(f"{what}: the engine reads {got!r}, facts.json says {want!r}")
+
+    s = engine.q("money.summary")
+    same("month_start_day", s["month_start_day"], facts["month_start_day"])
+    p0 = facts["periods"]["0"]
+    same("this period", (s["period"]["start"], s["period"]["end_exclusive"]), (p0["start"], p0["end_exclusive"]))
+    accounts = {a["name"]: a["balance"] for a in engine.q("money.lists")["accounts"]}
+    for name, balance in facts["accounts"].items():
+        same(f"balance of {name}", accounts.get(name), balance)
+    same("net worth", s["net_worth"], facts["net_worth"])
+    for off, want in facts["periods"].items():
+        page = engine.q("money.tx.list", {"period_offset": int(off), "limit": 5000})
+        same(f"period {off}", (page["period"]["start"], len(page["transactions"]), page["spent"], page["income"]),
+             (want["start"], want["entries"], want["spent"], want["income"]))
+    total = sum(len(engine.q("money.tx.list", {"period_offset": off, "limit": 5000})["transactions"]) for off in range(-14, 1))
+    same("entries in all (a bill the engine posted on loading would show here)", total, facts["transactions"])
+    budgets = {b["name"]: b for b in s["budgets"]}
+    for name, want in facts["budgets"].items():
+        if name == "(overall)":
+            same("overall pace", (s["pace"]["budget"], s["pace"]["spent"], s["pace"]["pace_delta"], s["pace"]["status"]),
+                 (want["budget"], want["spent"], want["pace_delta"], want["status"]))
+            continue
+        b = budgets.get(name) or {}
+        same(f"budget {name}", (b.get("budget"), b.get("spent"), b.get("left"), b.get("pace_delta"), b.get("status")),
+             (want["budget"], want["spent"], want["left"], want["pace_delta"], want["status"]))
+    g = engine.q("gym.summary")
+    a = facts["avex"]
+    same("Avex", (g["imported"]["exported_at"], g["unit"], g["totals"]["sessions"], g["totals"]["untracked"], g["totals"]["cardio"]),
+         (a["exported_at"], a["unit"], a["sessions"], a["untracked"], a["cardio"]))
+    inv = engine.q("money.invest.summary")
+    tfsa = [x for x in inv["accounts"] if x["institution"].lower() == "wealthsimple"]
+    i = facts["invest"]
+    same("investments", (inv["as_of"], tfsa[0]["value"] if tfsa else None, tfsa[0]["holdings"] if tfsa else None),
+         (i["as_of"], i["value"], i["holdings"]))
+    same("investment activities", len(engine.q("money.invest.list", {"limit": 1000})["activities"]), i["activities"])
+    return out
 
 
 def snapshot_path(engine):

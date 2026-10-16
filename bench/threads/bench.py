@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from relaybench import (ANCHOR, BENCH_DIR, MODEL_ID, REPO, RESULTS_DIR, TODAY, ZONE, default_relay_bin, log)  # noqa: E402
 from relaybench import engine as eng  # noqa: E402
 from relaybench import fixtures, grade, model, report, runner, seen, truths  # noqa: E402
+from relaybench import truths_v2  # noqa: E402,F401  (registers the v2 truths in truths.TRUTHS)
 
 DEFAULT_GGUF = Path.home() / "models" / "Qwen3.5-4B-Q8_0.gguf"
 VARIANTS = BENCH_DIR / "variants.json"
@@ -111,12 +112,13 @@ def check_tasks(tasks):
     return problems
 
 
-def cmd_check(args, variant, tasks):
+def cmd_check(args, variant, tasks, world="v1"):
     """Start the engine with the fixed world, run every task's truth, show what it expects. No model."""
     e = setup_engine(args, variant)
     try:
-        manifest = fixtures.load(e)
-        log(f"world loaded: {json.dumps({k: manifest[k] for k in ('sample', 'holdings', 'period', 'gym_exported_at')})}")
+        manifest = fixtures.load(e, world)
+        shown = ('sample', 'holdings', 'period', 'gym_exported_at') if world == "v1" else ('world', 'backup', 'holdings', 'activities', 'avex', 'period', 'gym_exported_at')
+        log(f"world loaded: {json.dumps({k: manifest[k] for k in shown})}")
         log(f"fingerprint {manifest['fingerprint']}")
         ctx = {"today": TODAY, "currency": manifest["currency"]}
         bad = 0
@@ -182,8 +184,12 @@ def cmd_run(args):
         for tid, p in problems.items():
             log(f"task {tid}: {'; '.join(p)}")
         raise SystemExit("fix the tasks above first")
+    try:
+        world = runner.world_of(tasks)
+    except ValueError as ex:
+        raise SystemExit(str(ex))
     if args.check:
-        return cmd_check(args, variant, tasks)
+        return cmd_check(args, variant, tasks, world)
 
     spec = model.ModelSpec(args.gguf, name=args.name, template=args.template, keep_template=args.keep_template,
                            server=args.server, parallel=args.parallel, capture=args.capture)
@@ -214,8 +220,8 @@ def cmd_run(args):
         e = setup_engine(args, variant, spec)
         result = None
         try:
-            manifest = fixtures.load(e)
-            log(f"world loaded, fingerprint {manifest['fingerprint'][:16]}; loading the model…")
+            manifest = fixtures.load(e, world)
+            log(f"world {world} loaded, fingerprint {manifest['fingerprint'][:16]}; loading the model…")
             t0 = time.monotonic()
             wait_ready(e)
             load_s = round(time.monotonic() - t0, 1)
@@ -338,7 +344,7 @@ def main(argv=None):
     r.add_argument("--server", help="llama-server (default: on PATH, else ~/.local/bin/llama-server)")
     r.add_argument("--name", help="a name for this run (default: <gguf>-<variant>)")
     r.add_argument("--runs", type=int, default=1, help="runs of each task (default 1)")
-    r.add_argument("--suite", default="all", help="tasks/<suite>.json, a comma list, or all (default)")
+    r.add_argument("--suite", default="all", help="tasks/<suite>.json, a comma list, or all (default); v2 for tasks/v2/ in the v2 world")
     r.add_argument("--tasks", action="append", help="task ids or globs, comma separated (repeatable)")
     r.add_argument("--split", choices=["dev", "holdout", "all"], default="all")
     r.add_argument("--variant", default="baseline", help="a product variant from variants.json")

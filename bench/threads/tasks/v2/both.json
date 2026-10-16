@@ -1,0 +1,52 @@
+[
+  {"id": "v2.both.portugal", "source": "both", "category": "compare", "difficulty": 3,
+   "prompt": "while i was in portugal in june, did i work out at all? and what was the most expensive thing i paid for over there?",
+   "truth": "v2_both_portugal",
+   "checks": [
+     {"type": "number", "of": "biggest", "tol": 0.01},
+     {"type": "text_any", "regex": ["\\bno\\b|\\bnon\\b|\\bnot\\b|n't\\b|\\bnever\\b|\\bnothing\\b|\\bpas\\b|\\baucun|hotel|untracked|lisb"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.both.gym_cost", "source": "both", "category": "aggregate", "difficulty": 3,
+   "prompt": "Bloc Shop is my gym. from aug 1 to aug 31, how much did each workout cost me?",
+   "truth": "v2_both_gym_cost",
+   "checks": [
+     {"type": "number", "of": "per_workout", "tol": 0.01},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.both.this_week", "source": "both", "category": "aggregate", "difficulty": 2,
+   "prompt": "quick recap of my week so far: how much did i spend and how many workouts?",
+   "truth": "v2_both_this_week",
+   "checks": [
+     {"type": "number", "of": "spent", "tol": 0.01},
+     {"type": "number", "of": "workouts", "tol": 0},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "max_tools": 2,
+   "mutates": false},
+  {"id": "v2.both.since_paycheque", "source": "both", "category": "time", "difficulty": 3,
+   "prompt": "since my last paycheque, how many times did I go to the gym and how much have I spent?",
+   "truth": "v2_both_since_paycheque",
+   "checks": [
+     {"type": "number", "of": "spent", "tol": 0.01},
+     {"type": "number", "of": "workouts", "tol": 0},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.both.health_last_month", "source": "both", "category": "compare", "difficulty": 2,
+   "prompt": "last month (aug 15 to sep 14), how much did I spend on health and how many workouts did I do?",
+   "truth": "v2_both_health_last_month",
+   "checks": [
+     {"type": "number", "of": "health", "tol": 0.01},
+     {"type": "number", "of": "workouts", "tol": 0},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false}
+]
