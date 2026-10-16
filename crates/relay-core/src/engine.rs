@@ -283,6 +283,8 @@ pub struct Ctx<'a> {
     /// What the op's read/external phase produced, for handlers registered with
     /// [`Engine::register_staged`]. Taken once, by the matching `finish` closure.
     staged: Option<Box<dyn Any + Send>>,
+    /// [`Ctx::thread`].
+    thread: Option<Id>,
 }
 
 impl<'a> Ctx<'a> {
@@ -346,6 +348,11 @@ impl<'a> Ctx<'a> {
     /// Run after the transaction commits (side effects that must not precede state).
     pub fn after_commit(&mut self, f: impl FnOnce(Arc<Engine>) + Send + 'static) {
         self.after_commit.push(Box::new(f));
+    }
+    /// The thread whose agent sent this request (`peer::Peer::Thread`, through the socket door),
+    /// else `None`: the person, the phone, a session, the engine itself.
+    pub fn thread(&self) -> Option<Id> {
+        self.thread
     }
     /// The value this op's read/external phase produced. Exactly one caller per request.
     fn take_staged<S: Any + Send>(&mut self) -> Result<S, BusError> {
@@ -921,16 +928,23 @@ impl Engine {
 
     /// The pipeline. Synchronous; holds the store lock for the handler's duration.
     pub fn dispatch(&self, req: Request, door: Door) -> Response {
-        self.dispatch_with_watch_state(req, door, None)
+        self.dispatch_with_watch_state(req, door, None, None)
+    }
+
+    /// [`Engine::dispatch`] for a request from thread `thread`'s agent: the socket door knows it
+    /// by the process that connected (`peer::Peer::Thread`), and the handler finds it in
+    /// [`Ctx::thread`]. Nothing a request carries can claim a thread.
+    pub fn dispatch_from_thread(&self, req: Request, door: Door, thread: Id) -> Response {
+        self.dispatch_with_watch_state(req, door, None, Some(thread))
     }
 
     pub(crate) fn dispatch_socket_watch(&self, req: Request, already_watching: bool) -> Response {
-        self.dispatch_with_watch_state(req, Door::Socket, Some(already_watching))
+        self.dispatch_with_watch_state(req, Door::Socket, Some(already_watching), None)
     }
 
-    fn dispatch_with_watch_state(&self, req: Request, door: Door, watching: Option<bool>) -> Response {
+    fn dispatch_with_watch_state(&self, req: Request, door: Door, watching: Option<bool>, thread: Option<Id>) -> Response {
         let id = req.id;
-        let mut response = match self.dispatch_inner(&req, door, watching) {
+        let mut response = match self.dispatch_inner(&req, door, watching, thread) {
             Ok(resp) => resp,
             Err(e) => Response::err(id, e),
         };
@@ -964,7 +978,7 @@ impl Engine {
         })
     }
 
-    fn dispatch_inner(&self, req: &Request, door: Door, watching: Option<bool>) -> Result<Response, BusError> {
+    fn dispatch_inner(&self, req: &Request, door: Door, watching: Option<bool>, thread: Option<Id>) -> Result<Response, BusError> {
         // envelope
         if req.v != ENVELOPE_V {
             return Err(BusError::envelope(format!(
@@ -1138,6 +1152,7 @@ impl Engine {
             on_behalf_of: None,
             after_commit: staged_after,
             staged,
+            thread,
         };
         let outcome = (h.call)(&mut ctx, &req.payload);
         let Ctx {

@@ -62,16 +62,31 @@ Avex's `useKg`), weights to a tenth and volumes whole.
 - A lift's **change** compares its best e1rm of the last 28 days with the best of the 28 before.
 - **Records** on the overview are the exercises Avex itself marked (`wasPr`), with that day's best
   set; a lift's history marks each session whose e1rm beat every earlier one.
+- **As of a day.** `gym.summary`, `gym.lifts` and `gym.lift.get` take an optional `today`
+  (`YYYY-MM-DD`): the weeks, the streak and each lift's 28 days count back from it instead of the
+  PC's today. A copy exported last week read as of today has an empty week and four weeks with a
+  hole in them; read as of the export's day it has the week the person last trained. `days_since_last`
+  never goes below 0.
+- **A lift without weight** (pull-ups, dips) has no best set and no e1rm; its row carries
+  `best_reps`, the most reps in one set.
+- **A workout knows its neighbours and each lift's last time.** `gym.session.get` gives `older_id`
+  and `newer_id` (the workouts either side, untracked ones too) and, per exercise, `previous`: that
+  lift in the last tracked workout before, in the shape of `gym.lift.get`'s history.
+- **Goals.** Avex's lift goal is `lift_1rm` (an older export says `lift_target`), measured by the
+  lift's best working e1rm; its `target_key` is Avex's exercise id. A lift goal's and a body-weight
+  goal's `target_value` are in the person's unit, and a lift goal carries `best`, that lift's best
+  set (found by exercise id, else by a unique part of its name). `totals.untracked` counts the
+  untracked workouts that `totals.sessions` leaves out.
 
 ## Ops (`crates/relay-bus/src/ops/gym.rs`)
 
 | op | who | what |
 | --- | --- | --- |
-| `gym.summary` | any | when it was exported, totals, this week and the twelve before, the streak, recent workouts, records, the lifts done most, open goals |
+| `gym.summary` | any | when it was exported, totals, this week and the twelve before, the streak, recent workouts, records, the lifts done most, open goals with each lift goal's best; optionally as of a day |
 | `gym.sessions` | any | workouts newest first, paged, optionally only those with a lift |
-| `gym.session.get` | any | one workout: every exercise and set with its e1rm, the journal |
-| `gym.lifts` | any | every lift, done most first, with its best set and its last four weeks |
-| `gym.lift.get` | any | one lift's history, a point per session, records marked |
+| `gym.session.get` | any | one workout: every exercise and set with its e1rm and the lift's last time before, the journal, the workouts either side |
+| `gym.lifts` | any | every lift, done most first, with its best set and its last four weeks; optionally as of a day |
+| `gym.lift.get` | any | one lift's history, a point per session, records marked; optionally as of a day |
 | `gym.cardio` | any | cardio entries newest first |
 | `gym.series` | any | a chart's numbers (below) |
 | `gym.import` | the person | read an export from a path on the PC; replaces the copy; emits `gym.changed` |
@@ -106,17 +121,37 @@ weeks it was not done and starts its axis near its lowest value, so progress sho
 `apps/relay-native/src/avex_pages.rs`, styled by `css/avex.css` on top of Tally's and Arbiter's
 classes.
 
-- **The sidebar's Avex key** sits under Arbiter's.
-- **Overview**: when the copy was exported, then this week (sessions of Avex's target, volume against
-  last week, the streak, the last workout), twelve weeks of volume, recent workouts and records beside
-  the lifts done most and open goals. With nothing imported, three steps and an Import key.
-- **Workouts**: by month, 60 at a time. A row opens the **Workout** page: its figures, the journal,
-  and each exercise's sets (warm-ups as W, RPE, AMRAP, the best set's e1rm in lime).
-- **Lifts**: every lift with its best set and its four-week change. A row opens the **Lift** page:
-  its best, its last four weeks, the e1rm over time with records marked, and every session.
-- **Data**: import a newer export, forget the copy, and what is here.
-- **The thread panel's Avex source** (beside Tally and Arbiter, and a chip in the message box):
-  Overview, Workouts and Lifts; the limits line says "Reads only".
+- **The sidebar's Avex key** sits under Arbiter's. Three tabs: Overview, Workouts, Lifts.
+- **How old the copy is.** Every page says when it was exported ("Exported Thu 8 Oct · 7 days ago").
+  A copy exported before this week is *stale*: the Overview, the Lifts pages and the panel read it as
+  of the export's day (the ops' `today`), so they show the week the person last trained rather than
+  an empty one. The Overview then says "This copy is 7 days old. Workouts since then are on your
+  phone.", names its strip "Week of Mon 5 Oct", and makes Import newer… its primary key.
+- **Overview**: this week (or the copy's last week): workouts of Avex's target, volume against the
+  week before (an empty week says so, never "−100%"), the streak, the last workout with its training
+  and cardio minutes; twelve weeks of volume; recent workouts and records beside open goals (a lift
+  goal with its best est. max against the target, and a meter until it is reached) and the lifts done
+  most. A ⋯ menu beside Import newer… holds **About this copy** (exported, imported, file, span,
+  workouts counted and untracked, sets, cardio, units) and **Forget the copy…**. With nothing
+  imported, three steps and an Import key.
+- **Workouts**: by month, 60 at a time, with the cardio and rest days between them by day. A row opens
+  the **Workout** page: a quiet "‹ Workouts" back, Earlier and Later keys (and Alt+← / Alt+→), its
+  figures, the journal, and one Exercises card: each exercise a sub-head over its sets (warm-ups as W,
+  RPE, AMRAP, the best set's e1rm in ink) and a line comparing it with the last time ("vs Thu 1 Oct:
+  +10 lb on the top set").
+- **Lifts**: grouped **Moving up** (more than 1% on the four weeks before), **Holding** and
+  **Slipping** (more than 1% down, or not done in six weeks). Each row shows "est. max" and the
+  change as a chip, the only colour on the row: green up, amber down. A lift without weight shows its
+  best reps. A row opens the **Lift** page: a sentence first ("Up 4.9% in four weeks, about +3 lb a
+  week. Last record Mon 5 Oct.", or how long since the last record), then best set, best est. max and
+  the four-week change, the e1rm over time with its highest and lowest values written on it, and every
+  session.
+- **The thread panel's Avex source** (beside Tally and Arbiter, and a chip in the message box): one
+  scroll with no tabs. The copy's week (as of the export when stale, with "Your last export, 7 days
+  old" and Import newer…), the last four workouts, the lifts moving most, and the newest three
+  records, each block with a quiet way into Avex. A row does not leave the thread: it drafts a
+  question into the open thread's message box in the person's words ("About Legs A on Thu 8 Oct: ")
+  for them to finish. The limits line says "Reads only".
 - The palette has each page and "Avex: import training history".
 - A display smoke run opens a workout or a lift with `RELAY_NATIVE_AVEX=<id or name>` beside
   `RELAY_NATIVE_PAGE=avex-workout` or `avex-lift`, and shows a thread panel's source with
@@ -125,11 +160,13 @@ classes.
 ## Tests
 
 `crates/relay-gym` tests the reader (the full export, the files it refuses), the readings (kg and lb,
-untracked sessions, warm-ups, records, streaks, Sunday weeks, every series grouping) and the store's
-round trip, against `crates/relay-gym/tests/avex_export.json`, a generated twelve-week export in
-Avex's format. `crates/relay-core/tests/gym.rs` imports it across the bus twice, reads every op back,
-refuses the weekly file, a Tally backup and a relative path, and refuses imports and resets to an
-agent.
+untracked sessions, warm-ups, records, streaks, Sunday weeks, every series grouping, a summary as of
+another day, a workout's neighbours and each lift's last time, best reps without weight, lift goals
+against their lift's best) and the store's round trip, against
+`crates/relay-gym/tests/avex_export.json`, a generated twelve-week export in Avex's format.
+`crates/relay-core/tests/gym.rs` imports it across the bus twice, reads every op back (the summary
+and the lifts as of the export's day too), refuses the weekly file, a Tally backup, a relative path
+and a `today` that is not a date, and refuses imports and resets to an agent.
 
 ## Later, if wanted
 

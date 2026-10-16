@@ -24,8 +24,21 @@ fn invalid(m: impl Into<String>) -> BusError {
 
 /// Runs `f` on the history, the PC's clock and whether anything was imported.
 fn read<T>(engine: &Engine, f: impl FnOnce(&History, &Clock, bool) -> T) -> Result<T, BusError> {
+    read_on(engine, Clock::system(), f)
+}
+
+fn read_on<T>(engine: &Engine, clock: Clock, f: impl FnOnce(&History, &Clock, bool) -> T) -> Result<T, BusError> {
     let (h, imported): (Arc<History>, bool) = gym::history(engine)?;
-    Ok(f(&h, &Clock::system(), imported))
+    Ok(f(&h, &clock, imported))
+}
+
+/// The PC's clock, on `day` when one is given.
+fn clock_on(day: Option<&str>) -> Result<Clock, BusError> {
+    let mut clock = Clock::system();
+    if let Some(d) = day {
+        clock.today = d.trim().parse().map_err(|_| invalid(format!("Not a date: {d} (YYYY-MM-DD)")))?;
+    }
+    Ok(clock)
 }
 
 fn file(path: &str) -> Result<(String, String), BusError> {
@@ -65,7 +78,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 pub fn register(e: &mut Engine) {
-    e.register_unlocked::<SummaryOp>(|ctx, _: Empty| read(ctx.engine(), views::summary));
+    e.register_unlocked::<SummaryOp>(|ctx, p| read_on(ctx.engine(), clock_on(p.today.as_deref())?, views::summary));
     e.register_unlocked::<Sessions>(|ctx, p| {
         let limit = p.limit.unwrap_or(50).clamp(1, 500) as usize;
         let (sessions, total) =
@@ -76,11 +89,14 @@ pub fn register(e: &mut Engine) {
         read(ctx.engine(), |h, c, _| views::session(h, c, p.id))?.ok_or_else(|| BusError::not_found("gym.not_found", format!("No workout {} in Avex's history", p.id)))
     });
     e.register_unlocked::<Lifts>(|ctx, p| {
-        read(ctx.engine(), |h, c, _| LiftsOut { unit: if h.meta.use_kg { "kg".into() } else { "lb".into() }, lifts: views::lifts(h, c, p.query.as_deref()) })
+        read_on(ctx.engine(), clock_on(p.today.as_deref())?, |h, c, _| LiftsOut {
+            unit: if h.meta.use_kg { "kg".into() } else { "lb".into() },
+            lifts: views::lifts(h, c, p.query.as_deref()),
+        })
     });
     e.register_unlocked::<LiftGet>(|ctx, p| {
         let limit = p.limit.unwrap_or(100).clamp(1, 2000) as usize;
-        read(ctx.engine(), |h, c, _| views::lift(h, c, &p.name, limit))?.map_err(|m| BusError::not_found("gym.not_found", m))
+        read_on(ctx.engine(), clock_on(p.today.as_deref())?, |h, c, _| views::lift(h, c, &p.name, limit))?.map_err(|m| BusError::not_found("gym.not_found", m))
     });
     e.register_unlocked::<Cardio>(|ctx, p| {
         let limit = p.limit.unwrap_or(50).clamp(1, 1000) as usize;

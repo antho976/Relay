@@ -68,7 +68,10 @@ pub struct Week {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "GymTotals")]
 pub struct Totals {
+    /// Tracked workouts: what every total counts.
     pub sessions: u32,
+    /// Workouts the person excluded in Avex: listed, and counted in nothing here.
+    pub untracked: u32,
     pub sets: i64,
     pub volume: f64,
     pub cardio: u32,
@@ -132,6 +135,9 @@ pub struct ExerciseView {
     pub volume: f64,
     pub best_e1rm: Option<f64>,
     pub sets: Vec<SetView>,
+    /// This lift the last time before, in a tracked workout, as gym.lift.get's history gives it;
+    /// absent the first time.
+    pub previous: Option<LiftPoint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -146,6 +152,10 @@ pub struct SessionDetail {
     pub tags: String,
     pub intensity: String,
     pub exercises: Vec<ExerciseView>,
+    /// The workout just before this one and the one just after, as gym.sessions lists them
+    /// (untracked ones too); absent at either end.
+    pub older_id: Option<i64>,
+    pub newer_id: Option<i64>,
 }
 
 /// A lift's best set: by estimated one-rep max, the heavier on a tie.
@@ -169,6 +179,9 @@ pub struct LiftRow {
     pub last_day: String,
     /// The best set ever, by estimated one-rep max.
     pub best: Option<Record>,
+    /// For a lift done without weight (pull-ups, dips), the most reps in one set; absent when it
+    /// has a `best`.
+    pub best_reps: Option<i64>,
     /// The best estimated one-rep max of the last 28 days.
     pub recent_e1rm: Option<f64>,
     /// That beside the best of the 28 days before, in percent.
@@ -215,16 +228,20 @@ pub struct CardioRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(rename = "GymGoalRow")]
 pub struct GoalRow {
+    /// Avex's kind: `lift_1rm` (an estimated one-rep max on a lift), `consistency`, …
     pub kind: String,
     /// What it is about: a lift's id, a measure.
     pub target_key: String,
-    /// A `lift_target`'s weight is in the person's unit like every other weight; any other
-    /// kind's figure is as Avex stores it.
+    /// A lift's or a body weight's target is in the person's unit like every other weight; any
+    /// other kind's figure is as Avex stores it.
     pub target_value: Option<f64>,
     pub created_day: String,
     pub completed_day: Option<String>,
     pub source: String,
     pub note: String,
+    /// For a lift goal, that lift's best set ever by estimated one-rep max: its `e1rm` against
+    /// `target_value` is how close the goal is. Absent when the lift has no working sets.
+    pub best: Option<Record>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -445,16 +462,29 @@ fn record(h: &History, s: &Session, e: &Exercise, best: &Set, clock: &Clock) -> 
     }
 }
 
-fn goal_row(g: &crate::model::Goal, kg: bool, clock: &Clock) -> GoalRow {
+/// A goal on one lift: Avex's `lift_1rm` (an older export says `lift_target`).
+fn lift_goal(kind: &str) -> bool {
+    matches!(kind, "lift_1rm" | "lift_target")
+}
+
+/// The lift a goal's `target_key` names: Avex's exercise id, else a unique part of a name.
+fn goal_lift(h: &History, key: &str) -> Option<String> {
+    let by_id = h.sessions.iter().rev().flat_map(|s| &s.exercises).find(|e| !key.is_empty() && e.exercise_id.eq_ignore_ascii_case(key));
+    by_id.map(|e| e.name.clone()).or_else(|| find_lift(h, key).ok())
+}
+
+fn goal_row(h: &History, g: &crate::model::Goal, clock: &Clock) -> GoalRow {
+    let kg = h.meta.use_kg;
     GoalRow {
         kind: g.kind.clone(),
         target_key: g.target_key.clone(),
-        // Avex keeps a lift's target in pounds, as it keeps every set.
-        target_value: g.target_value.map(|v| if g.kind == "lift_target" { weight(v, kg) } else { v }),
+        // Avex keeps a lift's target and a body weight in pounds, as it keeps every set.
+        target_value: g.target_value.map(|v| if lift_goal(&g.kind) || g.kind == "bodyweight" { weight(v, kg) } else { v }),
         created_day: date_of(g.created_at, &clock.tz).to_string(),
         completed_day: g.completed_at.map(|c| date_of(c, &clock.tz).to_string()),
         source: g.source.clone(),
         note: g.note.clone(),
+        best: if lift_goal(&g.kind) { goal_lift(h, &g.target_key).and_then(|name| lift_row(h, clock, &name)).and_then(|r| r.best) } else { None },
     }
 }
 
@@ -525,6 +555,7 @@ pub fn summary(h: &History, clock: &Clock, imported: bool) -> Summary {
     let rows: Vec<SessionRow> = tracked(h).map(|s| row(h, s, clock)).collect();
     let totals = Totals {
         sessions: rows.len() as u32,
+        untracked: h.sessions.iter().filter(|s| s.untracked).count() as u32,
         sets: rows.iter().fold(0, |sum: i64, r| sum.saturating_add(r.sets)),
         volume: volume(tracked(h).map(|s| s.volume_lb).sum(), kg),
         cardio: h.cardio.len() as u32,
@@ -532,7 +563,9 @@ pub fn summary(h: &History, clock: &Clock, imported: bool) -> Summary {
         first_day: rows.first().map(|r| r.day.clone()),
         last_day: rows.last().map(|r| r.day.clone()),
     };
-    let days_since_last = tracked(h).next_back().map(|s| (clock.today - date_of(s.started_at, &clock.tz)).get_days().into());
+    // Read as of an earlier day (the export's), a workout the phone dated a day later in its own
+    // zone is still "today".
+    let days_since_last = tracked(h).next_back().map(|s| i64::from((clock.today - date_of(s.started_at, &clock.tz)).get_days()).max(0));
     let mut records = Vec::new();
     for s in tracked(h).rev() {
         for e in s.exercises.iter().filter(|e| e.was_pr && !e.skipped) {
@@ -570,7 +603,7 @@ pub fn summary(h: &History, clock: &Clock, imported: bool) -> Summary {
         recent: h.sessions.iter().rev().take(5).map(|s| row(h, s, clock)).collect(),
         records,
         lifts,
-        goals: h.goals.iter().filter(|g| g.completed_at.is_none() && g.archived_at.is_none()).map(|g| goal_row(g, h.meta.use_kg, clock)).collect(),
+        goals: h.goals.iter().filter(|g| g.completed_at.is_none() && g.archived_at.is_none()).map(|g| goal_row(h, g, clock)).collect(),
     }
 }
 
@@ -590,7 +623,8 @@ pub fn sessions(h: &History, clock: &Clock, offset: usize, limit: usize, lift: O
 
 pub fn session(h: &History, clock: &Clock, id: i64) -> Option<SessionDetail> {
     let kg = h.meta.use_kg;
-    let s = h.sessions.iter().find(|s| s.id == id)?;
+    let at = h.sessions.iter().position(|s| s.id == id)?;
+    let s = &h.sessions[at];
     let exercises = s
         .exercises
         .iter()
@@ -628,6 +662,7 @@ pub fn session(h: &History, clock: &Clock, id: i64) -> Option<SessionDetail> {
                         seconds: set.duration_seconds,
                     })
                     .collect(),
+                previous: if e.skipped { None } else { points(h, clock, &lift_key(&e.name), at).pop() },
             }
         })
         .collect();
@@ -640,6 +675,8 @@ pub fn session(h: &History, clock: &Clock, id: i64) -> Option<SessionDetail> {
         tags: s.tags.clone(),
         intensity: s.intensity.clone(),
         exercises,
+        older_id: at.checked_sub(1).map(|i| h.sessions[i].id),
+        newer_id: h.sessions.get(at + 1).map(|n| n.id),
     })
 }
 
@@ -682,6 +719,7 @@ fn lift_row(h: &History, clock: &Clock, name: &str) -> Option<LiftRow> {
     let mut best: Option<Record> = None;
     let mut best_key = (0.0, 0.0);
     let (mut recent, mut before): (Option<f64>, Option<f64>) = (None, None);
+    let mut most_reps: Option<i64> = None;
     let mut shown = name.to_string();
     for s in tracked(h) {
         let day = date_of(s.started_at, &clock.tz);
@@ -694,6 +732,9 @@ fn lift_row(h: &History, clock: &Clock, name: &str) -> Option<LiftRow> {
             sessions += 1;
             sets += n;
             last_day = Some(day);
+            if let Some(r) = working(e).filter(|s| s.weight_lb.is_none()).map(|s| s.reps).max() {
+                most_reps = Some(most_reps.map_or(r, |m| m.max(r)));
+            }
             if let Some(b) = best_set(e) {
                 let k = (e1rm_lb(b).unwrap_or(0.0), b.weight_lb.unwrap_or(0.0));
                 if best.is_none() || k > best_key {
@@ -720,6 +761,7 @@ fn lift_row(h: &History, clock: &Clock, name: &str) -> Option<LiftRow> {
         sessions,
         sets,
         last_day: last_day?.to_string(),
+        best_reps: if best.is_none() { most_reps } else { None },
         best,
         recent_e1rm: recent.map(|v| weight(v, kg)),
         change_pct: match (recent, before) {
@@ -752,14 +794,13 @@ pub fn find_lift(h: &History, asked: &str) -> Result<String, String> {
     }
 }
 
-pub fn lift(h: &History, clock: &Clock, asked: &str, limit: usize) -> Result<LiftDetail, String> {
+/// The lift `key` names, a point per tracked session that did it, oldest first, among the sessions
+/// before index `before` in `h.sessions`.
+fn points(h: &History, clock: &Clock, key: &str, before: usize) -> Vec<LiftPoint> {
     let kg = h.meta.use_kg;
-    let name = find_lift(h, asked)?;
-    let row = lift_row(h, clock, &name).ok_or_else(|| format!("{name} has no working sets in Avex's history"))?;
-    let key = lift_key(&name);
     let mut history = Vec::new();
     let mut top = 0.0;
-    for s in tracked(h) {
+    for s in h.sessions.iter().take(before).filter(|s| !s.untracked) {
         for e in s.exercises.iter().filter(|e| !e.skipped && lift_key(&e.name) == key) {
             let sets = working(e).count() as i64;
             if sets == 0 {
@@ -785,6 +826,13 @@ pub fn lift(h: &History, clock: &Clock, asked: &str, limit: usize) -> Result<Lif
             });
         }
     }
+    history
+}
+
+pub fn lift(h: &History, clock: &Clock, asked: &str, limit: usize) -> Result<LiftDetail, String> {
+    let name = find_lift(h, asked)?;
+    let row = lift_row(h, clock, &name).ok_or_else(|| format!("{name} has no working sets in Avex's history"))?;
+    let mut history = points(h, clock, &lift_key(&name), h.sessions.len());
     history.reverse();
     history.truncate(limit);
     Ok(LiftDetail { row, unit: unit(h).into(), history })
@@ -982,12 +1030,81 @@ mod tests {
             created_at: 1_759_000_000_000, completed_at: None, archived_at: None, source: String::new(), note: String::new(),
         };
         let mut h = history(true);
-        h.goals = vec![goal("lift_target", 245.0), goal("sessions_per_week", 4.0)];
+        h.goals = vec![goal("lift_target", 245.0), goal("sessions_per_week", 4.0), goal("lift_1rm", 245.0)];
         let s = summary(&h, &clock(), true);
         assert_eq!(s.goals[0].target_value, Some(111.1));
         assert_eq!(s.goals[1].target_value, Some(4.0));
+        // Avex's own name for a lift goal, in pounds as well.
+        assert_eq!(s.goals[2].target_value, Some(111.1));
         h.meta.use_kg = false;
         assert_eq!(summary(&h, &clock(), true).goals[0].target_value, Some(245.0));
+    }
+
+    /// A lift goal carries that lift's best set, found by Avex's exercise id, else by name.
+    #[test]
+    fn a_lift_goal_reads_against_the_lifts_best() {
+        let goal = |key: &str| crate::model::Goal {
+            kind: "lift_1rm".into(), target_key: key.into(), target_value: Some(275.0), priority: 1,
+            created_at: 1_759_000_000_000, completed_at: None, archived_at: None, source: String::new(), note: String::new(),
+        };
+        let mut h = history(false);
+        h.goals = vec![goal("bench"), goal("row_bb"), goal("deadlift"), crate::model::Goal { kind: "consistency".into(), ..goal("bench") }];
+        h.sessions[3].exercises[0].exercise_id = "row_bb".into();
+        let s = summary(&h, &clock(), true);
+        let best = s.goals[0].best.as_ref().unwrap();
+        assert_eq!((best.lift.as_str(), best.weight, best.reps, best.e1rm), ("Bench Press", 245.0, 3, Some(269.5)));
+        assert_eq!(s.goals[1].best.as_ref().unwrap().lift, "Barbell Row");
+        assert!(s.goals[2].best.is_none(), "no deadlift in the history");
+        assert!(s.goals[3].best.is_none(), "not a lift goal");
+    }
+
+    /// Read as of the export's day, a copy a week old still has its last week to show.
+    #[test]
+    fn a_summary_reads_as_of_another_day() {
+        let h = history(false);
+        let later = Clock { tz: TimeZone::UTC, today: "2026-10-15".parse().unwrap() };
+        let s = summary(&h, &later, true);
+        assert_eq!((s.this_week.start.as_str(), s.this_week.sessions), ("2026-10-12", 0));
+        assert_eq!(s.days_since_last, Some(8));
+        let then = Clock { tz: TimeZone::UTC, today: "2026-10-08".parse().unwrap() };
+        let s = summary(&h, &then, true);
+        assert_eq!((s.this_week.start.as_str(), s.this_week.sessions), ("2026-10-05", 1));
+        assert_eq!(s.last_week.sessions, 1);
+        assert_eq!(s.days_since_last, Some(1));
+        // A day before the last workout reads it as today, never as a day to come.
+        let early = Clock { tz: TimeZone::UTC, today: "2026-10-06".parse().unwrap() };
+        assert_eq!(summary(&h, &early, true).days_since_last, Some(0));
+        assert_eq!((s.totals.sessions, s.totals.untracked), (3, 1));
+    }
+
+    #[test]
+    fn a_workout_knows_its_neighbours_and_each_lift_last_time() {
+        let h = history(false);
+        let first = session(&h, &clock(), 1).unwrap();
+        assert_eq!((first.older_id, first.newer_id), (None, Some(2)));
+        assert!(first.exercises[0].previous.is_none());
+        let second = session(&h, &clock(), 2).unwrap();
+        assert_eq!((second.older_id, second.newer_id), (Some(1), Some(3)));
+        let before = second.exercises[0].previous.as_ref().unwrap();
+        assert_eq!((before.session_id, before.top_weight, before.top_reps, before.e1rm), (1, Some(225.0), 5, Some(262.5)));
+        // A skipped lift has nothing to compare.
+        assert!(second.exercises[1].previous.is_none());
+        // The untracked bench is never anyone's last time.
+        let last = session(&h, &clock(), 4).unwrap();
+        assert_eq!(last.newer_id, None);
+        let untracked = session(&h, &clock(), 3).unwrap();
+        assert_eq!(untracked.exercises[0].previous.as_ref().unwrap().session_id, 2);
+    }
+
+    #[test]
+    fn a_bodyweight_lift_has_its_best_reps() {
+        let mut h = history(false);
+        let dips = |reps: Vec<i64>| Exercise { name: "Dips".into(), sets: reps.into_iter().map(|r| Set { reps: r, ..Set::default() }).collect(), ..Exercise::default() };
+        h.sessions[0].exercises.push(dips(vec![8, 10]));
+        h.sessions[1].exercises.push(dips(vec![12, 9]));
+        let rows = lifts(&h, &clock(), Some("dips"));
+        assert_eq!((rows[0].best.is_none(), rows[0].best_reps), (true, Some(12)));
+        assert_eq!(lifts(&h, &clock(), Some("bench"))[0].best_reps, None);
     }
 
     #[test]

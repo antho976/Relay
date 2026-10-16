@@ -67,11 +67,6 @@ textview.arbiter-secret, textview.arbiter-secret text { background: transparent;
 .threads-sources button.quiet { min-height: 26px; padding: 0 8px; border-radius: 8px; color: @faint; font-size: 14px; font-weight: 600; }
 .threads-sources button.quiet:hover { color: @ink; background: transparent; }
 .threads-sources button.quiet.selected { color: @ink; }
-button.threads-chip { min-height: 0; padding: 3px 10px; box-shadow: none; }
-button.threads-chip:hover { background: @wash; color: @ink; }
-button.threads-source-chip .threads-dot { background: @ink_dim; }
-button.threads-source-chip.selected { color: @ink; border-color: @line_focus; }
-button.threads-source-chip.selected .threads-dot { background: @live; }
 button.arbiter-panel-row { padding: 7px 4px; min-height: 0; border: 0; border-top: 1px solid @line_subtle; border-radius: 0; background: transparent; box-shadow: none; }
 button.arbiter-panel-row:hover { background: @wash; }
 .arbiter-proposal.arbiter-asking { border-color: alpha(@waiting, 0.45); }

@@ -30,6 +30,13 @@ fn an_export_comes_in_and_reads_back() {
     // One workout in the sample is untracked: listed, not counted.
     assert_eq!(summary["totals"]["sessions"].as_u64().unwrap(), sessions - 1);
     assert_eq!(summary["goals"].as_array().unwrap().len(), 1, "the met goal is not open");
+    assert_eq!(summary["totals"]["untracked"], 1);
+    assert_eq!(summary["goals"][0]["best"]["lift"], "Bench Press", "the goal's lift, by Avex's exercise id");
+    // As of the export's day, its week has workouts in it, whatever today is.
+    let then = ok(&engine, "gym.summary", json!({"today": "2026-10-08"}));
+    assert_eq!(then["this_week"]["start"], "2026-10-05");
+    assert!(then["this_week"]["sessions"].as_u64().unwrap() > 0, "{}", then["this_week"]);
+    assert_eq!(code(call_as(&engine, Actor::User, "gym.summary", json!({"today": "Oct 8"}))), "gym.invalid");
 
     let page = ok(&engine, "gym.sessions", json!({"limit": 3}));
     assert_eq!(page["sessions"].as_array().unwrap().len(), 3);
@@ -38,9 +45,16 @@ fn an_export_comes_in_and_reads_back() {
     let detail = ok(&engine, "gym.session.get", json!({"id": id}));
     assert_eq!(detail["row"]["id"], id);
     assert!(!detail["exercises"].as_array().unwrap().is_empty());
+    // The newest workout has an older neighbour and none newer, and its lifts were done before.
+    assert!(detail["older_id"].is_i64() && detail["newer_id"].is_null(), "{detail}");
+    assert!(detail["exercises"].as_array().unwrap().iter().any(|e| e["previous"]["session_id"].is_i64()));
 
     let lifts = ok(&engine, "gym.lifts", json!({"query": "bench"}));
     assert_eq!(lifts["lifts"][0]["name"], "Bench Press");
+    // Counted back from the export's day, the bench has both four-week spans to compare.
+    let then = ok(&engine, "gym.lifts", json!({"query": "bench", "today": "2026-10-08"}));
+    assert!(then["lifts"][0]["change_pct"].is_f64(), "{then}");
+    assert!(ok(&engine, "gym.lift.get", json!({"name": "bench", "today": "2026-10-08"}))["row"]["change_pct"].is_f64());
     let bench = ok(&engine, "gym.lift.get", json!({"name": "bench press", "limit": 5}));
     assert_eq!(bench["history"].as_array().unwrap().len(), 5);
     assert_eq!(code(call_as(&engine, Actor::User, "gym.lift.get", json!({"name": "press"}))), "gym.not_found", "several lifts say press");

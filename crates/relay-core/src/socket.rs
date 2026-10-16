@@ -688,6 +688,12 @@ const MAX_CONCURRENT_QUERIES: usize = 8;
 async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStream) -> Result<()> {
     // Who connected, once: a process never leaves the tree it was born in (RA-096, D165).
     let peer = crate::peer::identify(&stream, &engine);
+    // A thread's agent proposes for its own thread alone (`thread.propose`): its requests carry
+    // the thread to their handler, which nothing in a request can claim.
+    let thread = match peer {
+        crate::peer::Peer::Thread(id) => Some(id),
+        _ => None,
+    };
     // The blocking dispatch keeps this Arc until its ownership update completes,
     // even if the socket task is cancelled while that dispatch is in flight.
     let device_watch = Arc::new(WatchLease {
@@ -1268,6 +1274,11 @@ async fn handle_conn(engine: Arc<Engine>, recent: Arc<Recent>, stream: UnixStrea
             // one that never reaches the store. Answer it here rather than paying a trip to the
             // blocking pool and back for a map lookup and a write.
             engine.dispatch(req, Door::Socket)
+        } else if let Some(thread) = thread {
+            // A thread's agent reaches only its own ops (`threads::AGENT_OPS`), none of which
+            // the branches above answer.
+            let e = engine.clone();
+            tokio::task::spawn_blocking(move || e.dispatch_from_thread(req, Door::Socket, thread)).await?
         } else {
             dispatch_blocking(&engine, req).await?
         };

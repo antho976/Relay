@@ -1,0 +1,56 @@
+{
+  "baseline": {
+    "description": "The product as the relay binary under test builds it: nothing changed.",
+    "env": {},
+    "settings": {}
+  },
+  "classic": {
+    "description": "A local thread as Threads first shipped it, whatever the binary's default: Claude Code's prompt with Relay's after it, every agent op (Arbiter's too), JSON results.",
+    "env": {
+      "RELAY_THREADS_LOCAL": "classic"
+    },
+    "settings": {}
+  },
+  "lean": {
+    "description": "Relay's own short prompt in place of Claude Code's (--system-prompt), and only Tally's and Avex's tools.",
+    "env": {
+      "RELAY_THREADS_LOCAL": "lean"
+    },
+    "settings": {}
+  },
+  "readings": {
+    "description": "JSON results replaced by plain readings (relay-core readings.rs), nothing else changed.",
+    "env": {
+      "RELAY_THREADS_LOCAL": "readings"
+    },
+    "settings": {}
+  },
+  "lean-readings": {
+    "description": "lean, and reads answered as plain readings.",
+    "env": {
+      "RELAY_THREADS_LOCAL": "lean,readings"
+    },
+    "settings": {}
+  },
+  "lean-readings-prefetch": {
+    "description": "lean and readings, and Tally's and Avex's summaries as readings ahead of the first message.",
+    "env": {
+      "RELAY_THREADS_LOCAL": "lean,readings,prefetch"
+    },
+    "settings": {}
+  },
+  "lean-readings-docs": {
+    "description": "lean and readings, and tools described in plain words with an example call each.",
+    "env": {
+      "RELAY_THREADS_LOCAL": "lean,readings,docs"
+    },
+    "settings": {}
+  },
+  "lean-readings-prefetch-docs": {
+    "description": "lean, readings, prefetch and docs: every part of the small-model profile.",
+    "env": {
+      "RELAY_THREADS_LOCAL": "lean,readings,prefetch,docs"
+    },
+    "settings": {}
+  }
+}

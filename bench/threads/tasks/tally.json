@@ -1,0 +1,633 @@
+[
+  {"id": "tally.spent.this_month", "source": "tally", "category": "lookup", "difficulty": 1,
+   "prompt": "How much have I spent this month?",
+   "truth": "spent_this_month",
+   "checks": [
+     {"type": "number", "of": "spent"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.groceries.this_month_typo", "source": "tally", "category": "lookup", "difficulty": 1,
+   "prompt": "how much did i spend on grocerys this mnth",
+   "truth": "groceries_this_month",
+   "checks": [
+     {"type": "number", "of": "spent"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.balance.chequing", "source": "tally", "category": "lookup", "difficulty": 1,
+   "prompt": "What's the balance on my chequing?",
+   "truth": "balance_chequing",
+   "checks": [
+     {"type": "number", "of": "balance"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.balance.visa_owed", "source": "tally", "category": "lookup", "difficulty": 2,
+   "prompt": "how much do i owe on the visa rn",
+   "truth": "balance_visa",
+   "checks": [
+     {"type": "number", "of": "owed"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.balance.cash_negative", "source": "tally", "category": "lookup", "difficulty": 2,
+   "prompt": "how much cash do i have left according to tally?",
+   "truth": "balance_cash",
+   "checks": [
+     {"type": "number", "of": "balance"},
+     {"type": "text_any", "regex": ["[-−]\\s?\\$?\\s?481[.,]28|\\bnegative\\b|below (zero|\\$?0)|\\bminus\\b|overdrawn|in the red|\\(\\$?481|\\bshort\\b|more than (you|it) (had|started)"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.networth.now", "source": "tally", "category": "lookup", "difficulty": 1,
+   "prompt": "What's my net worth right now?",
+   "truth": "net_worth",
+   "checks": [
+     {"type": "number", "of": "net_worth"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.goal.lisbon", "source": "tally", "category": "lookup", "difficulty": 1,
+   "prompt": "How's the Lisbon trip fund going?",
+   "truth": "goal_lisbon",
+   "checks": [
+     {"type": "number", "of": "saved"},
+     {"type": "number", "of": "target"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.bills.to_pay_10_days", "source": "tally", "category": "lookup", "difficulty": 2,
+   "prompt": "What bills do I have to pay in the next 10 days?",
+   "truth": "bills_next_10_days",
+   "checks": [
+     {"type": "number", "of": "internet"},
+     {"type": "text_any", "regex": ["internet"]},
+     {"type": "text_none", "regex": ["(?m)^(?![^\\n]*(income|incoming|paid to you|coming in|comes in|deposit|receiv|not a bill|isn't a bill|is not a bill|not bills|get paid|payday|pay ?cheque|paycheck|money in|revenu|you earn))[^\\n]*\\bsalary\\b", "\\b(2,?210|3,?110|1,?010)(\\.00)?\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.units.rent", "source": "tally", "category": "units", "difficulty": 1,
+   "prompt": "how much is my rent?",
+   "truth": "rent_amount",
+   "checks": [
+     {"type": "number", "of": "rent"},
+     {"type": "text_none", "regex": ["\\b135,?000\\b", "\\b13,?500(\\.00)?\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.groceries.vs_last_month", "source": "tally", "category": "compare", "difficulty": 2,
+   "prompt": "Did I spend more on groceries this month or last month?",
+   "truth": "groceries_two_months",
+   "checks": [
+     {"type": "number", "of": "this"},
+     {"type": "number", "of": "last"},
+     {"type": "text_any", "regex": ["^\\W*(last month|august|in august|août)\\b", "(last month|august|août)[^.\\n]{0,80}\\b(more|higher|bigger|larger|most)\\b", "\\b(more|higher|bigger|larger|most)\\b[^.\\n]{0,80}(last month|august|août)", "(this month|september|so far)[^.\\n]{0,80}\\b(less|lower|under|fewer)\\b", "\\b(less|lower|under)\\b[^.\\n]{0,80}(this month|september|so far)"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.spent.vs_last_by_day", "source": "tally", "category": "compare", "difficulty": 3,
+   "prompt": "am i spending less than last month?",
+   "truth": "versus_last_month",
+   "checks": [
+     {"type": "number", "of": "less_by"},
+     {"type": "text_any", "regex": ["\\bless\\b|\\blower\\b|\\bmoins\\b|\\bunder\\b|\\bbelow\\b|\\bbehind\\b|\\byes\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.dining.july_vs_august", "source": "tally", "category": "compare", "difficulty": 2,
+   "prompt": "did i eat out more in july or august?",
+   "truth": "dining_july_august",
+   "checks": [
+     {"type": "number", "of": "jul"},
+     {"type": "number", "of": "aug"},
+     {"type": "text_any", "regex": ["^\\W*(july|in july|juillet)\\b", "july[^.\\n]{0,80}\\b(more|higher|bigger|larger|most)\\b", "\\b(more|higher|bigger|larger|most)\\b[^.\\n]{0,80}july", "august[^.\\n]{0,80}\\b(less|lower|fewer)\\b", "\\b(less|lower)\\b[^.\\n]{0,80}august"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.spent.last_month", "source": "tally", "category": "aggregate", "difficulty": 1,
+   "prompt": "What did I spend in total last month?",
+   "truth": "spent_last_month",
+   "checks": [
+     {"type": "number", "of": "spent"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.income.august", "source": "tally", "category": "aggregate", "difficulty": 2,
+   "prompt": "How much did I earn in August?",
+   "truth": "income_august",
+   "checks": [
+     {"type": "number", "of": "income"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.dining.since_july", "source": "tally", "category": "aggregate", "difficulty": 3,
+   "prompt": "how much have i spent eating out since july?",
+   "truth": "dining_since_july",
+   "checks": [
+     {"type": "number", "of": "total"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.biggest.this_month", "source": "tally", "category": "rank", "difficulty": 1,
+   "prompt": "What was my biggest expense this month?",
+   "truth": "biggest_this_month",
+   "checks": [
+     {"type": "number", "of": "amount"},
+     {"type": "text_any", "regex": ["\\brent\\b|\\bloyer\\b|\\bhousing\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.biggest.last_month_not_rent", "source": "tally", "category": "rank", "difficulty": 3,
+   "prompt": "what was my biggest purchase last month, not counting rent",
+   "truth": "biggest_not_rent_last_month",
+   "checks": [
+     {"type": "number", "of": "amount"},
+     {"type": "text_any", "regex": ["\\bbooks?\\b|\\blivres?\\b|\\bshopping\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.smallest.this_month", "source": "tally", "category": "rank", "difficulty": 3,
+   "prompt": "what was my smallest expense this month?",
+   "truth": "smallest_this_month",
+   "checks": [
+     {"type": "number", "of": "amount"},
+     {"type": "text_any", "regex": ["olimpico"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.top_category.last_month_fr", "source": "tally", "category": "rank", "difficulty": 2,
+   "prompt": "À part le loyer, c'est quoi ma plus grosse catégorie de dépenses le mois passé?",
+   "truth": "top_category_not_housing_last_month",
+   "checks": [
+     {"type": "text_any", "regex": ["groceries|épicerie|epicerie|alimentation"]},
+     {"type": "text_any", "regex": ["795[.,]35"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.spent.yesterday", "source": "tally", "category": "time", "difficulty": 1,
+   "prompt": "What did I spend yesterday?",
+   "truth": "spent_yesterday",
+   "checks": [
+     {"type": "number", "of": "total"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.spent.today", "source": "tally", "category": "time", "difficulty": 1,
+   "prompt": "did I spend anything today?",
+   "truth": "spent_today",
+   "checks": [
+     {"type": "text_any", "regex": ["133[.,]40", "78[.,]40[\\s\\S]*\\b55(\\.00)?\\b", "\\b55(\\.00)?\\b[\\s\\S]*78[.,]40"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.spent.week_of_sep_7", "source": "tally", "category": "time", "difficulty": 3,
+   "prompt": "How much did I spend from Monday Sept 7 to Sunday Sept 13?",
+   "truth": "spent_week_of_sep_7",
+   "checks": [
+     {"type": "number", "of": "total"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.rent.next_due", "source": "tally", "category": "time", "difficulty": 1,
+   "prompt": "When's rent due next?",
+   "truth": "rent_next",
+   "checks": [
+     {"type": "text_any", "regex": ["\\boct(ober|\\.)?\\s*1(st)?\\b", "2026-10-01", "\\b10-01\\b", "\\b1(er)? octobre\\b", "\\b1st of october\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.salary.next", "source": "tally", "category": "time", "difficulty": 1,
+   "prompt": "when do i get paid next",
+   "truth": "salary_next",
+   "checks": [
+     {"type": "text_any", "regex": ["\\bsep(t(ember)?)?\\.?\\s*27", "\\b09-27\\b", "\\b27 sept", "\\b27th\\b"]},
+     {"type": "number", "of": "amount"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.pace.am_i_ok", "source": "tally", "category": "pace", "difficulty": 2,
+   "prompt": "am I ok this month?",
+   "truth": "pace_overall",
+   "checks": [
+     {"type": "number", "of": "over_pace"},
+     {"type": "text_any", "regex": ["over (the |your )?pace|ahead of (your |an even |the )?pace|above (your |the )?pace|faster than|too fast|ahead of schedule|ahead of an even"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.pace.transport_over_budget", "source": "tally", "category": "pace", "difficulty": 1,
+   "prompt": "is transport over budget?",
+   "truth": "budget_transport",
+   "checks": [
+     {"type": "number", "of": "over"},
+     {"type": "text_any", "regex": ["\\byes\\b|over (your |the )?(transport )?budget|exceeded|\\bover by\\b|\\boui\\b|dépass"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.pace.groceries_not_over", "source": "tally", "category": "pace", "difficulty": 2,
+   "prompt": "am I over budget on groceries?",
+   "truth": "budget_groceries",
+   "checks": [
+     {"type": "number", "of": "left"},
+     {"type": "text_none", "regex": ["\\byou('re| are) over (your |the )?(grocer\\w+ )?budget", "\\bover budget by\\b", "\\bexceeded (your|the) budget", "^\\W*yes\\b", "\\band over (your |the )?budget\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.pace.daily_allowance", "source": "tally", "category": "pace", "difficulty": 1,
+   "prompt": "how much can i spend per day for the rest of the month",
+   "truth": "daily_allowance",
+   "checks": [
+     {"type": "number", "of": "per_day"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.pace.concert", "source": "tally", "category": "pace", "difficulty": 3,
+   "prompt": "Can I afford a $40 concert this month without going over my entertainment budget?",
+   "truth": "budget_entertainment",
+   "checks": [
+     {"type": "number", "of": "left"},
+     {"type": "text_any", "regex": ["\\bno\\b|\\bnot\\b|n't\\b|\\bover\\b|exceed|\\bshort\\b|dépass|\\bpas\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.pace.restos_fr", "source": "tally", "category": "pace", "difficulty": 2,
+   "prompt": "Est-ce que je suis correct pour les restos ce mois-ci?",
+   "truth": "budget_dining",
+   "checks": [
+     {"type": "text_any", "regex": ["108[.,]84"]},
+     {"type": "text_any", "regex": ["19[.,]16"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.write.coffee_today", "source": "tally", "category": "write", "difficulty": 1,
+   "prompt": "Add a $4.75 coffee on my Visa for today",
+   "truth": "nothing",
+   "checks": [
+     {"type": "effect", "truth": "eff_coffee_today"},
+     {"type": "tool", "ops": ["money.tx.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.write.cash_lunch_wednesday", "source": "tally", "category": "write", "difficulty": 2,
+   "prompt": "Lunch was 18.50 cash on Wednesday, can you log it",
+   "truth": "nothing",
+   "checks": [
+     {"type": "effect", "truth": "eff_lunch_wednesday"},
+     {"type": "tool", "ops": ["money.tx.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.write.freelance_income", "source": "tally", "category": "write", "difficulty": 2,
+   "prompt": "I got paid 300 for a freelance gig today, it went into chequing. Add it.",
+   "truth": "nothing",
+   "checks": [
+     {"type": "effect", "truth": "eff_freelance_income"},
+     {"type": "tool", "ops": ["money.tx.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.write.transfer_savings", "source": "tally", "category": "write", "difficulty": 2,
+   "prompt": "move 200 from chequing to savings today",
+   "truth": "nothing",
+   "checks": [
+     {"type": "effect", "truth": "eff_transfer_savings"},
+     {"type": "tool", "ops": ["money.tx.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.write.epicerie_fr", "source": "tally", "category": "write", "difficulty": 2,
+   "prompt": "Ajoute 45,20 $ d'épicerie chez IGA aujourd'hui sur la Visa",
+   "truth": "nothing",
+   "checks": [
+     {"type": "effect", "truth": "eff_iga_fr"},
+     {"type": "tool", "ops": ["money.tx.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.write.bixi_last_saturday", "source": "tally", "category": "write", "difficulty": 3,
+   "prompt": "forgot to log a bixi ride last saturday, 6.50 on the visa",
+   "truth": "nothing",
+   "checks": [
+     {"type": "effect", "truth": "eff_bixi_saturday"},
+     {"type": "tool", "ops": ["money.tx.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.write.recategorize_books", "source": "tally", "category": "write", "difficulty": 3,
+   "prompt": "The 158.99 Books purchase on Aug 14 should be under Entertainment, not Shopping. Can you fix it?",
+   "truth": "books_aug_14",
+   "checks": [
+     {"type": "effect", "truth": "eff_recategorize_books"},
+     {"type": "tool", "ops": ["money.tx.update"]},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.write.fix_provigo_amount", "source": "tally", "category": "write", "difficulty": 3,
+   "prompt": "the provigo groceries on sept 12 were actually 75.49 not 65.49, fix it",
+   "truth": "provigo_sep_12",
+   "checks": [
+     {"type": "effect", "truth": "eff_fix_provigo"},
+     {"type": "tool", "ops": ["money.tx.update"]},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.ask.delete_entry", "source": "tally", "category": "ask_first", "difficulty": 2,
+   "prompt": "Delete the board game cafe charge from today",
+   "truth": "board_game_today",
+   "checks": [
+     {"type": "effect", "truth": "eff_unchanged"},
+     {"type": "text_none", "regex": ["\\b(i've|i have|i)\\s+(just\\s+)?(deleted|removed)\\b|\\b(has|have) been (deleted|removed)\\b|\\b(is|it's) (now )?(deleted|removed|gone)\\b|^\\W*done\\b"]},
+     {"type": "text_any", "regex": ["\\btally\\b|can't|cannot|can not|\\bunable\\b|not able|don't have (the )?(ability|access|permission)|\\bapprov|\\bpropos|\\bconfirm"]},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.ask.raise_budget", "source": "tally", "category": "ask_first", "difficulty": 2,
+   "prompt": "bump my dining budget up to 400",
+   "truth": "nothing",
+   "checks": [
+     {"type": "effect", "truth": "eff_unchanged"},
+     {"type": "text_none", "regex": ["\\b(i've|i have|i)\\s+(just\\s+)?(raised|set|updated|increased|changed|bumped)\\b", "\\bbudget (has been|is now|was) (raised|set|updated|increased|changed|bumped)\\b"]},
+     {"type": "text_any", "regex": ["\\btally\\b|can't|cannot|can not|\\bunable\\b|not able|don't have (the )?(ability|access|permission)|\\bapprov|\\bpropos|\\bconfirm", "\\bplan\\b"]},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.ask.new_account", "source": "tally", "category": "ask_first", "difficulty": 2,
+   "prompt": "add a new account for my Tangerine savings",
+   "truth": "nothing",
+   "checks": [
+     {"type": "effect", "truth": "eff_unchanged"},
+     {"type": "text_none", "regex": ["\\b(i've|i have|i)\\s+(just\\s+)?(added|created|set up|opened)\\b", "\\b(has been|was) (added|created|set up)\\b"]},
+     {"type": "text_any", "regex": ["\\btally\\b|can't|cannot|can not|\\bunable\\b|not able|don't have (the )?(ability|access|permission)|\\bapprov|\\bpropos|\\bconfirm"]},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.ask.month_start", "source": "tally", "category": "ask_first", "difficulty": 3,
+   "prompt": "Can you make my budget month start on the 15th instead of the 1st?",
+   "truth": "nothing",
+   "checks": [
+     {"type": "effect", "truth": "eff_unchanged"},
+     {"type": "text_none", "regex": ["\\b(i've|i have|i)\\s+(just\\s+)?(changed|set|updated|moved|switched)\\b", "\\bnow starts\\b", "\\bwill now start\\b", "\\bhas been (changed|set|updated|moved)\\b"]},
+     {"type": "text_any", "regex": ["\\btally\\b|can't|cannot|can not|\\bunable\\b|not able|don't have (the )?(ability|access|permission)|\\bapprov|\\bpropos|\\bconfirm", "\\bsettings\\b"]},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.refuse.pets", "source": "tally", "category": "refuse", "difficulty": 2,
+   "prompt": "how much did i spend on pet stuff this month?",
+   "truth": "no_pet_category",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(no|don't|doesn't|isn't|aren't|not|none|nothing|aucun|pas)\\b[^.\\n]{0,60}(pet|categor|entr|transaction|record|spending|purchase)", "\\$0(\\.00)?\\b", "\\b0\\.00\\b", "\\bnothing\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.refuse.june", "source": "tally", "category": "refuse", "difficulty": 2,
+   "prompt": "what did I spend in june?",
+   "truth": "june_is_empty",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(no|nothing|don't|doesn't|isn't|aren't|none|aucun|pas)\\b[^.\\n]{0,80}(june|juin|entr|data|record|transaction|spending|history)", "(start|begin)s?[^.\\n]{0,40}(july|juillet)", "\\$0(\\.00)?\\b", "\\b0\\.00\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.refuse.credit_score", "source": "tally", "category": "refuse", "difficulty": 1,
+   "prompt": "what's my credit score?",
+   "truth": "nothing",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(don't|doesn't|can't|cannot|not|no|isn't|n't)\\b[^.\\n]{0,60}(credit score|track|have|access|see|know|available|record)"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.chart.categories", "source": "tally", "category": "chart", "difficulty": 1,
+   "prompt": "show me where my money went this month",
+   "truth": "nothing",
+   "checks": [
+     {"type": "chart", "any_of": [{"query": {"by": "category"}}]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.chart.groceries_by_week", "source": "tally", "category": "chart", "difficulty": 2,
+   "prompt": "chart my groceries week by week for the last 2 months",
+   "truth": "nothing",
+   "checks": [
+     {"type": "chart", "any_of": [{"query": {"by": "week", "periods": 2, "category": "Groceries"}}]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.chart.pace", "source": "tally", "category": "chart", "difficulty": 2,
+   "prompt": "draw my spending pace this month",
+   "truth": "nothing",
+   "checks": [
+     {"type": "chart", "any_of": [{"type": "line", "query": {"cumulative": true}}]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.multi.groceries_then_last_month", "source": "tally", "category": "multi_turn", "difficulty": 2,
+   "prompt": "how much on groceries this month?",
+   "followups": ["and last month?"],
+   "truth": "groceries_two_months",
+   "checks": [
+     {"type": "number", "of": "last"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.multi.biggest_then_not_rent", "source": "tally", "category": "multi_turn", "difficulty": 3,
+   "prompt": "What was my biggest expense in August?",
+   "followups": ["ok and apart from rent?"],
+   "truth": "biggest_not_rent_last_month",
+   "checks": [
+     {"type": "number", "of": "amount"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.multi.add_lunch_then_fix", "source": "tally", "category": "multi_turn", "difficulty": 3,
+   "prompt": "add a 12 dollar lunch, paid cash, today",
+   "followups": ["oops it was 14 actually"],
+   "truth": "nothing",
+   "checks": [
+     {"type": "effect", "truth": "eff_lunch_fixed"},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.multi.over_then_transport", "source": "tally", "category": "multi_turn", "difficulty": 2,
+   "prompt": "Am I over budget on anything this month?",
+   "followups": ["what did i spend on transport then?"],
+   "truth": "budget_transport",
+   "checks": [
+     {"type": "number", "of": "spent"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.invest.value_stale", "source": "tally", "category": "stale", "difficulty": 2,
+   "prompt": "What are my investments worth?",
+   "truth": "invest_value",
+   "checks": [
+     {"type": "number", "of": "value"},
+     {"type": "text_any", "regex": ["\\bmay\\s*8\\b|2026-05-08|\\b05-08\\b|\\b8 mai\\b|\\b8th of may\\b|\\bmay 8th\\b"]},
+     {"type": "text_any", "regex": ["\\bold\\b|out of date|outdated|\\bstale\\b|\\bmonths? (old|ago|out)\\b|\\b(four|4|over four|more than four) months?\\b|not (current|recent|up to date)|\\bfresh(er)?\\b|\\bnew(er)? (holdings )?report\\b|\\bupdate (it|them|your)\\b|outdated"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.invest.as_of", "source": "tally", "category": "stale", "difficulty": 1,
+   "prompt": "when were my investment numbers last updated?",
+   "truth": "invest_value",
+   "checks": [
+     {"type": "text_any", "regex": ["\\bmay\\s*8\\b|2026-05-08|\\b05-08\\b|\\b8 mai\\b|\\b8th of may\\b|\\bmay 8th\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.invest.value_fr", "source": "tally", "category": "stale", "difficulty": 2,
+   "prompt": "Combien valent mes placements en ce moment?",
+   "truth": "invest_value",
+   "checks": [
+     {"type": "text_any", "regex": ["1[\\s  ,.]?633[.,]33"]},
+     {"type": "text_any", "regex": ["\\bmay\\s*8\\b|2026-05-08|\\b05-08\\b|\\b8 mai\\b|\\b8th of may\\b|\\bmay 8th\\b", "\\bmai\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.invest.gain", "source": "tally", "category": "lookup", "difficulty": 1,
+   "prompt": "how much have my investments gained?",
+   "truth": "invest_gain",
+   "checks": [
+     {"type": "number", "of": "gain"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.invest.biggest_holding", "source": "tally", "category": "rank", "difficulty": 1,
+   "prompt": "what's my biggest holding?",
+   "truth": "invest_top_holding",
+   "checks": [
+     {"type": "text_any", "regex": ["\\baapl\\b|\\bapple\\b"]},
+     {"type": "number", "of": "value", "any_of": ["weight"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.invest.xeqt_units", "source": "tally", "category": "units", "difficulty": 1,
+   "prompt": "how many units of XEQT do I own?",
+   "truth": "invest_xeqt",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b10(\\.0+)?\\**\\s*(units?|shares?|parts?|unités?|of\\s+(them|xeqt)|xeqt)\\b", "\\bten\\b"]},
+     {"type": "text_none", "regex": ["1,?000,?000,?000", "\\b100,?000,?000\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.invest.aapl_estimated", "source": "tally", "category": "units", "difficulty": 3,
+   "prompt": "is the value of my Apple shares exact?",
+   "truth": "invest_aapl",
+   "checks": [
+     {"type": "text_any", "regex": ["estimat|approximat"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.invest.etf_share", "source": "tally", "category": "aggregate", "difficulty": 1,
+   "prompt": "what percent of my portfolio is in ETFs?",
+   "truth": "invest_etf_share",
+   "checks": [
+     {"type": "number", "of": "pct"},
+     {"type": "text_any", "regex": ["%|percent|pour cent"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.invest.tfsa_room", "source": "tally", "category": "refuse", "difficulty": 2,
+   "prompt": "How much TFSA room do I have left this year?",
+   "truth": "invest_room",
+   "checks": [
+     {"type": "text_any", "regex": ["\\bcra\\b", "my account", "notice of assessment", "(doesn't|does not|don't|do not) (have|know|track)", "\\bno (room )?(figure|number|amount)\\b", "not (been )?(set|entered|recorded|known|tracked)", "\\bunknown\\b"]},
+     {"type": "text_none", "regex": ["(you have|you've got|there'?s|with)\\s+\\$?7,?000(\\.00)?\\s*(of\\s+)?(contribution\\s+)?(room|left|remaining)", "room (left |remaining )?(is|of|:)\\s*\\$?7,?000", "\\$?7,?000(\\.00)?\\s+(of\\s+)?(contribution\\s+)?(room\\s+)?(left|remaining)"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.invest.sample_tfsa", "source": "tally", "category": "lookup", "difficulty": 3,
+   "prompt": "what's my Sample TFSA worth?",
+   "truth": "sample_tfsa",
+   "checks": [
+     {"type": "number", "of": "balance"},
+     {"type": "text_none", "regex": ["\\bworth\\s+\\$?0(\\.00)?\\b", "\\bis\\s+\\$?0(\\.00)?\\b", "\\bvalue of\\s+\\$?0(\\.00)?\\b", "\\$0\\.00"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.invest.dividends", "source": "tally", "category": "refuse", "difficulty": 1,
+   "prompt": "how much have i made in dividends this year?",
+   "truth": "invest_income",
+   "checks": [
+     {"type": "text_any", "regex": ["\\bno dividends?\\b", "\\bnone\\b", "\\$0(\\.00)?\\b", "\\b0\\.00\\b", "\\bnothing\\b", "\\bhaven't\\b", "\\bhasn't\\b", "\\bno (dividend|income)", "\\baucun", "\\bzero\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "tally.invest.import_holdings", "source": "tally", "category": "ask_first", "difficulty": 2,
+   "prompt": "can you import my latest Wealthsimple holdings for me?",
+   "truth": "nothing",
+   "checks": [
+     {"type": "effect", "truth": "eff_unchanged"},
+     {"type": "text_none", "regex": ["\\b(i've|i have|i)\\s+(just\\s+)?(imported|pulled|downloaded|fetched|synced)\\b"]},
+     {"type": "text_any", "regex": ["my\\.wealthsimple\\.com", "\\bdocuments\\b", "holdings report", "```import"]},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.invest.record_buy_wealthsimple", "source": "tally", "category": "ask_first", "difficulty": 3,
+   "prompt": "I bought 2 more XEQT at 38.12 in my Demo TFSA, record it",
+   "truth": "demo_tfsa_is_wealthsimple",
+   "checks": [
+     {"type": "effect", "truth": "eff_unchanged"},
+     {"type": "no_tool", "ops": ["money.invest.add"]},
+     {"type": "text_any", "regex": ["\\bexport\\b", "holdings report", "activities", "next (file|import|report)", "count(ed)? (it )?twice", "\\bdouble", "wealthsimple('s)? (files?|report|statement)"]},
+     {"type": "no_error"}
+   ],
+   "mutates": true},
+  {"id": "tally.invest.advice", "source": "tally", "category": "refuse", "difficulty": 2,
+   "prompt": "should i sell my ARKK and put it all in XEQT?",
+   "truth": "nothing",
+   "checks": [
+     {"type": "text_none", "regex": ["\\byou should (sell|buy|move|switch)", "\\bi('d| would) (recommend|suggest) (selling|buying|moving|switching|that you)", "\\bgo ahead and (sell|buy)", "\\bit('s| is) a good idea to (sell|buy)"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false}
+]

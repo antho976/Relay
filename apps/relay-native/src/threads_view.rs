@@ -30,7 +30,15 @@ const SUGGESTIONS: [(&str, &str); 4] = [
     ("Where did my money go this week?", "Spending by category"),
     ("Am I on pace this month?", "Each budget against the day of the month"),
     ("What bills are coming up?", "Due dates and whether you can cover them"),
-    ("Which entries have no category?", "It suggests one for each, you approve"),
+    ("Any duplicates or odd entries this month?", "Entries that look doubled or out of place"),
+];
+
+/// Avex's questions, when its export suggests fewer of its own ([`avex_suggestions`]).
+const AVEX_SUGGESTIONS: [(&str, &str); 4] = [
+    ("How is my week going?", "Workouts and volume against last week"),
+    ("Which lifts have stalled?", "Flat or down over four weeks"),
+    ("What are my latest records?", "Personal bests and the sets behind them"),
+    ("Am I training consistently?", "Weeks in a row and days a week"),
 ];
 
 /// The models a thread may run on: (id, caption). An empty id is Claude's own default.
@@ -55,11 +63,14 @@ const EFFORTS: [(&str, &str); 6] = [
     ("max", "Max effort"),
 ];
 
-/// The Tally panel's views: (key, caption).
-const PANEL_TABS: [(&str, &str); 4] = [("overview", "Overview"), ("entries", "Entries"), ("budgets", "Budgets"), ("invest", "Invest")];
+/// The Tally panel's views: (key, caption). Budgets are Overview's, all of them a key away.
+const PANEL_TABS: [(&str, &str); 3] = [("overview", "Overview"), ("entries", "Entries"), ("invest", "Invest")];
+/// How many budgets Overview shows before "Show all".
+const BUDGETS_SHOWN: usize = 5;
 
-/// The panel's sources, as the message box's chips name them: (key, caption, what it means).
-/// Choosing one shows its panel; the agent reaches all of them either way.
+/// The panel's sources, as the switch above it names them: (key, caption, what it means).
+/// Choosing one shows its panel, and a new thread's greeting and questions follow it; the agent
+/// reaches all of them either way.
 const SOURCES: [(&str, &str, &str); 3] = [
     ("tally", "Tally", "Show Tally beside the thread: the agent reads and changes your budget and investments"),
     ("arbiter", "Arbiter", "Show Arbiter beside the thread: the agent reads, backtests and proposes; orders follow each strategy's mode"),
@@ -106,7 +117,6 @@ struct View {
     input: gtk::TextView,
     hint: gtk::Label,
     send: gtk::Button,
-    source: gtk::Box,
     limits: gtk::Label,
     model: Picker,
     effort: Picker,
@@ -128,9 +138,8 @@ struct View {
     arbiter_panel_tabs: Vec<(&'static str, gtk::Button)>,
     avex_tabs: gtk::Box,
     avex_panel_tabs: Vec<(&'static str, gtk::Button)>,
-    /// The source switch above the panel's tabs, and the message box's chips.
+    /// The source switch above the panel's tabs: the one place a source is chosen.
     sources: Vec<(&'static str, gtk::Button)>,
-    chips: Vec<(&'static str, gtk::Button)>,
 }
 
 /// Where a tool call stands: called, answered, refused, or cut off by a stop with no answer.
@@ -215,6 +224,12 @@ struct State {
     panel_serial: Cell<u64>,
     /// `None` until the person opens or closes the panel; until then it follows the page width.
     panel_pinned: Cell<Option<bool>>,
+    /// Overview shows every budget, not the first [`BUDGETS_SHOWN`].
+    all_budgets: Cell<bool>,
+    /// A budget's editor is open over the panel: a read waits for it to close ([`edit_budget`]),
+    /// and `panel_stale` says one is waiting.
+    editing_budget: Cell<bool>,
+    panel_stale: Cell<bool>,
     narrow_page: Cell<bool>,
     listing: Cell<bool>,
     /// The list changed while it was being read: read it again.
@@ -264,7 +279,49 @@ pub fn install(ui: &Rc<Ui>) {
                 }
             });
         }
+        // RELAY_NATIVE_PANEL picks the Tally panel's view (`entries`, `invest`), shows every budget
+        // (`budgets`) or opens the first one's editor (`budget`); RELAY_NATIVE_DRAFT drafts words
+        // into the thread opened.
+        if let Ok(what) = std::env::var("RELAY_NATIVE_PANEL") {
+            glib::timeout_add_local_once(std::time::Duration::from_millis(3400), move || smoke_panel(&what));
+        }
+        if let Ok(words) = std::env::var("RELAY_NATIVE_DRAFT") {
+            let weak = Rc::downgrade(ui);
+            glib::timeout_add_local_once(std::time::Duration::from_millis(3800), move || {
+                if let Some(ui) = weak.upgrade() {
+                    draft(&ui, &words);
+                }
+            });
+        }
     }
+}
+
+/// A display smoke run's panel view ([`install`]): a Tally tab by key, or a budgets key.
+fn smoke_panel(what: &str) {
+    let Some(v) = view() else { return };
+    if let Some((_, tab)) = v.panel_tabs.iter().find(|(key, _)| *key == what) {
+        tab.emit_clicked();
+        return;
+    }
+    let class = if what == "budgets" { "threads-more" } else { "threads-budget-key" };
+    if let Some(key) = first_of(v.panel_body.upcast_ref(), class) {
+        key.emit_clicked();
+    }
+}
+
+/// The first key under `root` with `class`, depth first.
+fn first_of(root: &gtk::Widget, class: &str) -> Option<gtk::Button> {
+    let mut child = root.first_child();
+    while let Some(w) = child {
+        if w.has_css_class(class) {
+            return w.downcast::<gtk::Button>().ok();
+        }
+        if let Some(found) = first_of(&w, class) {
+            return Some(found);
+        }
+        child = w.next_sibling();
+    }
+    None
 }
 
 fn the_ui() -> Option<Rc<Ui>> {
@@ -409,7 +466,8 @@ pub fn page() -> gtk::Box {
     let working_text = label("Working…", "threads-working-text");
     working.append(&working_text);
 
-    // The message box: what you write, where it goes, and send or stop.
+    // The message box: what you write, the model and effort, what the agent may do, and send or
+    // stop. Where it looks is the panel's source switch, not chosen here a second time.
     let composer = gtk::Box::new(gtk::Orientation::Vertical, 8);
     composer.add_css_class("threads-composer");
     let input = gtk::TextView::new();
@@ -430,34 +488,14 @@ pub fn page() -> gtk::Box {
     field.add_overlay(&hint);
     composer.append(&field);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    // Tally, Arbiter or Avex: which panel shows beside the thread.
-    let source = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let mut chips = Vec::new();
-    for (key, caption, about) in SOURCES {
-        let chip = gtk::Button::new();
-        chip.add_css_class("threads-chip");
-        chip.add_css_class("threads-source-chip");
-        chip.set_widget_name(&format!("threads-chip-{key}"));
-        let inner = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        dot.add_css_class("threads-dot");
-        dot.set_valign(gtk::Align::Center);
-        inner.append(&dot);
-        inner.append(&label(caption, ""));
-        chip.set_child(Some(&inner));
-        chip.set_tooltip_text(Some(about));
-        source.append(&chip);
-        chips.push((key, chip));
-    }
-    row.append(&source);
     let model = picker("threads-model", "The model this thread's agent runs on", &MODELS, |value| choose(Some(value), None));
     row.append(&model.key);
     let effort = picker("threads-effort", "How hard the agent thinks before answering", &EFFORTS, |value| choose(None, Some(value)));
     row.append(&effort.key);
     // What the agent may do, said plainly: words, not a key.
-    let limits = label("Edits with Undo", "threads-limits");
+    let limits = label("Edits with Undo · asks first", "threads-limits");
     limits.set_valign(gtk::Align::Center);
-    limits.set_tooltip_text(Some("It adds and changes entries and investment activity, each with an Undo. Deleting, budgets and accounts stay yours."));
+    limits.set_tooltip_text(Some("It adds and changes entries and investment activity, each with an Undo. Before deleting, changing many at once, budgets or accounts, it asks you on a card."));
     row.append(&limits);
     let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     gap.set_hexpand(true);
@@ -498,7 +536,7 @@ pub fn page() -> gtk::Box {
     message_box.append(&composer);
 
     // An open thread's message box sits under the conversation, as wide as its column; its
-    // scroller keeps the chips' width from holding the window open.
+    // scroller keeps the pickers' width from holding the window open.
     let dock_slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
     dock_slot.add_css_class("threads-dock");
     let dock = gtk::ScrolledWindow::builder().child(&dock_slot).propagate_natural_height(true).build();
@@ -510,23 +548,24 @@ pub fn page() -> gtk::Box {
     body.set_shrink_start_child(false);
 
     // The panel: 340 pixels as it opens, 300 at the least. Its source, Tally, Arbiter or Avex,
-    // above that source's tabs.
+    // above that source's tabs: the one switch that says where the thread looks.
     let side = gtk::Box::new(gtk::Orientation::Vertical, 18);
     side.add_css_class("threads-panel");
     side.set_size_request(300, -1);
     let source_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     source_row.add_css_class("threads-sources");
     let mut sources = Vec::new();
-    for (key, caption, _) in SOURCES {
+    for (key, caption, about) in SOURCES {
         let tab = button(caption, "quiet");
         tab.set_widget_name(&format!("threads-source-{key}"));
+        tab.set_tooltip_text(Some(about));
         source_row.append(&tab);
         sources.push((key, tab));
     }
     side.append(&source_row);
     let tabs = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     tabs.add_css_class("view-tabs");
-    // Each tab as wide as its caption needs, the spare width shared: four fit in 300.
+    // Each tab as wide as its caption needs, the spare width shared.
     tabs.set_homogeneous(false);
     let mut panel_tabs = Vec::new();
     for (key, caption) in PANEL_TABS {
@@ -607,9 +646,9 @@ pub fn page() -> gtk::Box {
 
     let built = Rc::new(View {
         title, title_key, rename, middle, empty, empty_slot, empty_line, suggestions, dock, dock_slot, message_box,
-        notice, notice_text, input, hint, send: send_key, source, limits, model, effort, scroll, jump, column, pending,
+        notice, notice_text, input, hint, send: send_key, limits, model, effort, scroll, jump, column, pending,
         working, working_text, panel, panel_key, panel_body, panel_tabs,
-        tally_tabs: tabs, arbiter_tabs, arbiter_panel_tabs, avex_tabs, avex_panel_tabs, sources, chips,
+        tally_tabs: tabs, arbiter_tabs, arbiter_panel_tabs, avex_tabs, avex_panel_tabs, sources,
     });
     STATE.with(|s| {
         s.panel_tab.set("overview");
@@ -628,7 +667,7 @@ pub fn page() -> gtk::Box {
     root
 }
 
-/// The panel's source switch and the message box's chips, and Arbiter's and Avex's tabs.
+/// The panel's source switch, and Arbiter's and Avex's tabs.
 fn wire_sources(v: &Rc<View>) {
     for (key, tab) in &v.avex_panel_tabs {
         let key = *key;
@@ -648,29 +687,33 @@ fn wire_sources(v: &Rc<View>) {
             }
         });
     }
-    for (key, tab) in v.sources.iter().chain(&v.chips) {
+    for (key, tab) in &v.sources {
         let key = *key;
         tab.connect_clicked(move |_| set_source(key));
     }
 }
 
-/// Show `source`'s panel, open, and its chip lit.
+/// Show `source`'s panel, open, and lit on the switch. A new thread's greeting and questions
+/// follow it.
 fn set_source(source: &'static str) {
     let Some(v) = view() else { return };
-    STATE.with(|s| s.source.set(source));
+    let changed = STATE.with(|s| s.source.replace(source)) != source;
     show_source(&v);
     if !v.panel_key.is_active() {
         v.panel_key.set_active(true);
     }
-    if let Some(ui) = the_ui() {
-        refresh_panel(&ui);
+    let Some(ui) = the_ui() else { return };
+    refresh_panel(&ui);
+    if changed && current().is_none() {
+        glib::spawn_future_local(async move { greet(&ui).await });
     }
 }
 
-/// The source showing, on the switch, the tabs and the chips, and what the agent may do alone.
+/// The source showing, on the switch and the tabs, and what the agent may do alone.
 fn show_source(v: &View) {
     let source = STATE.with(|s| s.source.get());
-    for (key, tab) in v.sources.iter().chain(&v.chips) {
+    show_hint(v, current().is_none());
+    for (key, tab) in &v.sources {
         if *key == source {
             tab.add_css_class("selected");
         } else {
@@ -679,7 +722,7 @@ fn show_source(v: &View) {
     }
     v.tally_tabs.set_visible(source == "tally");
     v.arbiter_tabs.set_visible(source == "arbiter");
-    v.avex_tabs.set_visible(source == "avex");
+    v.avex_tabs.set_visible(source == "avex" && super::avex::PANEL_TABS.len() > 1);
     if source == "arbiter" {
         v.limits.set_text("Proposes, you approve");
         v.limits.set_tooltip_text(Some("It reads, backtests and proposes. Orders follow each strategy's mode, always within its limits, and only you change those."));
@@ -687,8 +730,8 @@ fn show_source(v: &View) {
         v.limits.set_text("Reads only");
         v.limits.set_tooltip_text(Some("It reads your training as last exported from Avex. It cannot change anything in Avex."));
     } else {
-        v.limits.set_text("Edits with Undo");
-        v.limits.set_tooltip_text(Some("It adds and changes entries and investment activity, each with an Undo. Deleting, budgets and accounts stay yours."));
+        v.limits.set_text("Edits with Undo · asks first");
+        v.limits.set_tooltip_text(Some("It adds and changes entries and investment activity, each with an Undo. Before deleting, changing many at once, budgets or accounts, it asks you on a card."));
     }
 }
 
@@ -804,8 +847,8 @@ fn wire(v: &Rc<View>, delete: &gtk::Button) {
 
 /// Size the conversation to its width: the column, the message box and a new thread's block share
 /// one width, at most [`COLUMN_MAX`], centred between gutters that narrow on a narrow page. They are
-/// placed by margins, not requests, so their content never widens them. The chips that matter
-/// least step aside first, and the questions stack under 600.
+/// placed by margins, not requests, so their content never widens them. What matters least in
+/// the message box steps aside first, and the questions stack under 600.
 fn fit(v: &View, width: i32) {
     let gutter = if width < 640 { 16 } else { 28 };
     let inner = (width - 2 * gutter).clamp(240, COLUMN_MAX);
@@ -816,7 +859,6 @@ fn fit(v: &View, width: i32) {
         part.set_margin_end(end);
     }
     v.limits.set_visible(width >= 640);
-    v.source.set_visible(width >= 520);
     v.effort.key.set_visible(width >= 420);
     let one = width < 600;
     if STATE.with(|s| s.one_column.replace(one)) != one {
@@ -850,7 +892,18 @@ fn place_composer(v: &View, empty: bool) {
         target.append(&v.message_box);
     }
     v.dock.set_visible(!empty);
-    let hint = if empty { "What do you want to know?" } else { "Ask about your money, or tell it what to change" };
+    show_hint(v, empty);
+}
+
+/// The message box's placeholder: an open question on a new thread, then what the source showing
+/// is about.
+fn show_hint(v: &View, empty: bool) {
+    let hint = match STATE.with(|s| s.source.get()) {
+        _ if empty => "What do you want to know?",
+        "avex" => "Ask about your training",
+        "arbiter" => "Ask about your strategies and orders",
+        _ => "Ask about your money, or tell it what to change",
+    };
     v.hint.set_text(hint);
     v.input.update_property(&[gtk::accessible::Property::Placeholder(hint)]);
 }
@@ -1139,14 +1192,51 @@ pub(crate) fn ask(ui: &Rc<Ui>, text: &str) {
     send(ui, text);
 }
 
-/// A new thread's words from the ledger: the month in a line, and the questions to start with.
-async fn greet(ui: &Rc<Ui>) {
-    let (summary, invest) = tokio::join!(ui.call("money.summary", json!({})), ui.call("money.invest.summary", json!({})));
-    let Some(v) = view().filter(|_| current().is_none()) else { return };
-    if let Ok(s) = &summary {
-        v.empty_line.set_text(&month_line(s));
+/// Put `text` in the open thread's message box, focused with the cursor at its end, without
+/// sending it: a question from the panel the person finishes or sends. What they had written
+/// stays, the draft on a line after it. With no thread open the words wait in a new thread's
+/// message box, still not sent: a draft such as "About Legs A on Thu 8 Oct: " is unfinished.
+pub(crate) fn draft(ui: &Rc<Ui>, text: &str) {
+    let Some(v) = view().filter(|_| current().is_some()) else {
+        new_thread(ui);
+        if let Some(v) = view() {
+            let buffer = v.input.buffer();
+            buffer.set_text(text);
+            buffer.place_cursor(&buffer.end_iter());
+        }
+        return;
+    };
+    if *ui.page.borrow() != PAGE {
+        ui.navigate(PAGE);
     }
-    let items = suggestions(summary.as_ref().ok(), invest.as_ref().ok());
+    let buffer = v.input.buffer();
+    let written = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
+    if written.trim().is_empty() {
+        buffer.set_text(text);
+    } else if !written.trim_end().ends_with(text.trim()) {
+        let mut end = buffer.end_iter();
+        buffer.insert(&mut end, &format!("{}{text}", if written.ends_with('\n') { "" } else { "\n" }));
+    }
+    buffer.place_cursor(&buffer.end_iter());
+    v.input.grab_focus();
+    v.input.scroll_mark_onscreen(&buffer.get_insert());
+}
+
+/// A new thread's words from the source showing: Tally's month or Avex's week in a line, and the
+/// questions to start with. Arbiter's thread starts with Tally's.
+async fn greet(ui: &Rc<Ui>) {
+    let source = STATE.with(|s| s.source.get());
+    let (line, items) = if source == "avex" {
+        let summary = ui.call("gym.summary", json!({})).await;
+        let today = super::pages::today();
+        (summary.as_ref().ok().map(|s| week_line(s, &today)), avex_suggestions(summary.as_ref().ok()))
+    } else {
+        let (summary, invest) = tokio::join!(ui.call("money.summary", json!({})), ui.call("money.invest.summary", json!({})));
+        (summary.as_ref().ok().map(month_line), suggestions(summary.as_ref().ok(), invest.as_ref().ok()))
+    };
+    // A thread opened, or another source chosen, while this read: it is not this greeting's.
+    let Some(v) = view().filter(|_| current().is_none() && STATE.with(|s| s.source.get()) == source) else { return };
+    v.empty_line.set_text(line.as_deref().unwrap_or(""));
     let same = STATE.with(|s| *s.suggested.borrow() == items);
     if !same {
         STATE.with(|s| *s.suggested.borrow_mut() = items);
@@ -1209,14 +1299,8 @@ fn suggestions(summary: Option<&Value>, invest: Option<&Value>) -> Vec<(String, 
                 .flatten()
                 .find(|b| b["type"] != "INCOME" && (0..=3).contains(&b["days_until"].as_i64().unwrap_or(99)));
             if let Some(b) = due {
-                let name = b["name"].as_str().unwrap_or("this bill");
-                let when = match b["days_until"].as_i64().unwrap_or(0) {
-                    0 => String::from("today"),
-                    1 => String::from("tomorrow"),
-                    _ => format!("on {}", human_date(b["next_date"].as_str().unwrap_or(""))),
-                };
                 let about = format!("{} · {}", fmt.format(b["amount"].as_i64().unwrap_or(0)), b["due_line"].as_str().unwrap_or(""));
-                out.push((format!("Can I cover {name} {when}?"), about));
+                out.push((cover_question(b), about));
             }
         }
     }
@@ -1232,6 +1316,109 @@ fn suggestions(summary: Option<&Value>, invest: Option<&Value>) -> Vec<(String, 
     for (ask, about) in SUGGESTIONS {
         if out.len() >= 4 {
             break;
+        }
+        out.push((ask.to_string(), about.to_string()));
+    }
+    out.truncate(4);
+    out
+}
+
+/// "Can I cover Hydro-Québec on Sun 18 Oct?": a bill from `money.summary`, as a question.
+fn cover_question(bill: &Value) -> String {
+    let when = match bill["days_until"].as_i64().unwrap_or(0) {
+        0 => String::from("today"),
+        1 => String::from("tomorrow"),
+        _ => format!("on {}", human_date(bill["next_date"].as_str().unwrap_or(""))),
+    };
+    format!("Can I cover {} {when}?", bill["name"].as_str().unwrap_or("this bill"))
+}
+
+/// The day Avex's export was written, `YYYY-MM-DD` (empty before one was imported).
+fn export_day(s: &Value) -> &str {
+    s["imported"]["exported_at"].as_str().and_then(|d| d.get(..10)).unwrap_or("")
+}
+
+/// Whole days from `from` to `to`, both `YYYY-MM-DD`; a daylight-saving hour does not shorten one.
+fn days_between(from: &str, to: &str) -> Option<i64> {
+    let (from, to) = (super::pages::date(from)?, super::pages::date(to)?);
+    Some((to.difference(&from).as_hours() as f64 / 24.0).round() as i64)
+}
+
+/// A week of `gym.summary`'s in words: "3 of 4 workouts, 46,330 lb lifted", or "no workouts".
+fn week_words(s: &Value, week: &Value) -> String {
+    let sessions = week["sessions"].as_i64().unwrap_or(0);
+    if sessions <= 0 {
+        return String::from("no workouts");
+    }
+    let target = s["imported"]["days_per_week"].as_i64().unwrap_or(0);
+    let count = if target > 0 { format!("{sessions} of {}", plural(target, "workout")) } else { plural(sessions, "workout") };
+    let volume = week["volume"].as_f64().unwrap_or(0.0).round() as i64;
+    format!("{count}, {} {} lifted", super::avex::group(volume), s["unit"].as_str().unwrap_or("lb"))
+}
+
+/// A new thread's line from Avex (`gym.summary`): the week its export reaches, and how old the
+/// copy is once that week is over, since this week then reads as empty. `today` is `YYYY-MM-DD`.
+fn week_line(s: &Value, today: &str) -> String {
+    if s["imported"].is_null() {
+        return String::from("Nothing from Avex yet. Export your training history in Avex, then import it from the panel.");
+    }
+    let day = export_day(s);
+    let when = human_date(day);
+    if day.is_empty() || day >= s["this_week"]["start"].as_str().unwrap_or("") {
+        let words = if s["this_week"]["sessions"].as_i64().unwrap_or(0) > 0 { week_words(s, &s["this_week"]) } else { String::from("no workouts yet") };
+        return match when.as_str() {
+            _ if day.is_empty() || day == today => format!("This week so far: {words}."),
+            "Yesterday" => format!("This week, to yesterday's export: {words}."),
+            _ => format!("This week, to your export on {when}: {words}."),
+        };
+    }
+    let age = days_between(day, today).filter(|d| *d >= 2).map(|d| format!(", {} ago", plural(d, "day"))).unwrap_or_default();
+    let from = if when == "Yesterday" { String::from("yesterday") } else { when };
+    // The week the export falls in, among the twelve the summary keeps.
+    let week = s["weeks"].as_array().into_iter().flatten().find(|w| {
+        let start = w["start"].as_str().unwrap_or("");
+        let end = super::pages::date(start).and_then(|d| d.add_days(7).ok()).and_then(|d| d.format("%Y-%m-%d").ok()).map(|d| d.to_string());
+        !start.is_empty() && start <= day && end.is_some_and(|end| day < end.as_str())
+    });
+    match week {
+        Some(w) => format!("Your Avex copy is from {from}{age}. That week: {}.", week_words(s, w)),
+        None => format!("Your Avex copy is from {from}{age}. Import a newer export to see the weeks since."),
+    }
+}
+
+/// The questions a new thread offers with Avex showing, from its export: the week it reaches,
+/// the lifts that stalled, the lift done most and the workout done last. At most four.
+fn avex_suggestions(summary: Option<&Value>) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut stale = false;
+    if let Some(s) = summary {
+        if s["imported"].is_null() {
+            return vec![(String::from("How do I bring my training in from Avex?"), String::from("Export it on the phone, then import it here"))];
+        }
+        let day = export_day(s);
+        stale = !day.is_empty() && day < s["this_week"]["start"].as_str().unwrap_or("");
+        let (ask, about) = AVEX_SUGGESTIONS[0];
+        if stale {
+            out.push((String::from("How did my last week of training go?"), format!("Your copy ends {}", human_date(day))));
+        } else {
+            out.push((ask.to_string(), about.to_string()));
+        }
+        out.push((AVEX_SUGGESTIONS[1].0.to_string(), AVEX_SUGGESTIONS[1].1.to_string()));
+        if let Some(lift) = s["lifts"].as_array().and_then(|l| l.first()).and_then(|l| l["name"].as_str()).filter(|n| !n.is_empty()) {
+            out.push((format!("How is my {lift} trending?"), String::from("Its estimated max, week by week")));
+        }
+        let last = s["recent"].as_array().into_iter().flatten().filter_map(|w| w["title"].as_str()).find(|t| !t.is_empty() && *t != "Freestyle");
+        if let Some(title) = last {
+            out.push((format!("Plan my next {title}"), String::from("Sets and weights from your last one")));
+        }
+    }
+    for (ask, about) in AVEX_SUGGESTIONS {
+        if out.len() >= 4 {
+            break;
+        }
+        // A stale copy has no "this week" to ask about.
+        if (stale && ask == AVEX_SUGGESTIONS[0].0) || out.iter().any(|(a, _)| a == ask) {
+            continue;
         }
         out.push((ask.to_string(), about.to_string()));
     }
@@ -1858,6 +2045,7 @@ fn doing(name: &str) -> &'static str {
         Some("money.invest.summary") => "Reading your investments…",
         Some("money.invest.list") => "Reading investment activity…",
         Some("money.invest.add") => "Recording investment activity…",
+        Some("thread.propose") => "Asking you first…",
         Some("bus.schema") => "Checking how a tool works…",
         _ => "Working…",
     }
@@ -1884,7 +2072,7 @@ fn show_step(mark: &gtk::Box, step: Step, writes: bool) {
 fn draw_tool(v: &View, parent: &gtk::Box, block: &Value) {
     let name = block["name"].as_str().unwrap_or("").to_string();
     let op = tool_op(&name).unwrap_or_default();
-    let writes = tool_writes(&name) || super::arbiter::tool_writes(&op);
+    let writes = tool_writes(&name) || super::arbiter::tool_writes(&op) || op == "thread.propose";
     let id = block["id"].as_str().map(str::to_string);
     let slot = gtk::Box::new(gtk::Orientation::Vertical, 2);
     let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -2042,7 +2230,7 @@ fn draw_tool_answer(v: &View, body: &Value) {
     });
     let Some((slot, mark, name, group)) = found else { return };
     let op = tool_op(&name).unwrap_or_default();
-    let writes = tool_writes(&name) || super::arbiter::tool_writes(&op);
+    let writes = tool_writes(&name) || super::arbiter::tool_writes(&op) || op == "thread.propose";
     show_step(&mark, step, writes);
     if let Some(g) = &group {
         refresh_group(g);
@@ -2068,6 +2256,14 @@ fn draw_tool_answer(v: &View, body: &Value) {
         } else {
             slot.append(&why);
         }
+        return;
+    }
+    if op == "thread.propose" {
+        // What the agent asked for becomes a card drawn from the ledger, never from its words:
+        // only the proposal's id is taken from its answer.
+        let Some(id) = serde_json::from_str::<Value>(body["text"].as_str().unwrap_or("")).ok().and_then(|a| a["id"].as_i64()) else { return };
+        clear(&slot);
+        slot.append(&super::ask::card(id));
         return;
     }
     if op.starts_with("arbiter.") {
@@ -2166,21 +2362,29 @@ fn entry_card(tx: &Value, op: &str) -> gtk::Box {
     let title = label(&format!("{verb} {kind}: {what}"), "threads-card-title");
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
     words.append(&title);
-    let mut detail = Vec::new();
-    if let Some(category) = tx["category"].as_str().filter(|_| !transfer) {
-        detail.push(category.to_string());
-    }
-    if let Some(date) = tx["date"].as_str() {
-        detail.push(human_date(date));
-    }
-    if let Some(account) = tx["account"].as_str().filter(|_| !transfer) {
-        detail.push(account.to_string());
+    // An edit answers with the entry as it was: the card says what it changed, before → after.
+    let was = &tx["previous"];
+    let edited = op == "money.tx.update" && was.is_object();
+    let mut detail = if edited { changes(was, tx) } else { Vec::new() };
+    if detail.is_empty() {
+        if let Some(category) = tx["category"].as_str().filter(|_| !transfer) {
+            detail.push(category.to_string());
+        }
+        if let Some(date) = tx["date"].as_str() {
+            detail.push(human_date(date));
+        }
+        if let Some(account) = tx["account"].as_str().filter(|_| !transfer) {
+            detail.push(account.to_string());
+        }
     }
     let about = label(&detail.join(" · "), "threads-card-detail");
     about.set_ellipsize(gtk::pango::EllipsizeMode::End);
     words.append(&about);
     card.append(&words);
-    let figure = label(&amount_text(tx), "money-amount");
+    let places = super::formatter().fraction_digits;
+    let amount_moved = edited && (minor(&was["amount"], places) != minor(&tx["amount"], places) || was["type"] != tx["type"]);
+    let shown = if amount_moved { format!("{} → {}", amount_text(was), amount_text(tx)) } else { amount_text(tx) };
+    let figure = label(&shown, "money-amount");
     figure.set_valign(gtk::Align::Center);
     if kind == "income" {
         figure.add_css_class("money-in");
@@ -2190,7 +2394,80 @@ fn entry_card(tx: &Value, op: &str) -> gtk::Box {
         STATE.with(|s| s.added.borrow_mut().insert(id));
         card.append(&undoable(&card, &title, &what, ("money.tx.delete", "money.tx.restore"), id));
     }
+    if let Some(key) = edited.then(|| edit_undo(&card, &title, &what, tx)).flatten() {
+        card.append(&key);
+    }
     card
+}
+
+/// What an edit changed, before → after; what it left alone (and the amount, which the figure
+/// shows) is not said.
+fn changes(was: &Value, now: &Value) -> Vec<String> {
+    let text = |v: &Value, key: &str| v[key].as_str().unwrap_or("").to_string();
+    let mut out = Vec::new();
+    if was["category"] != now["category"] {
+        out.push(format!("{} → {}", was["category"].as_str().unwrap_or("No category"), now["category"].as_str().unwrap_or("No category")));
+    }
+    if was["date"] != now["date"] {
+        out.push(format!("{} → {}", human_date(&text(was, "date")), human_date(&text(now, "date"))));
+    }
+    if was["account"] != now["account"] || was["to_account"] != now["to_account"] {
+        out.push(format!("{} → {}", text(was, "account"), text(now, "account")));
+    }
+    if was["note"] != now["note"] {
+        out.push(format!("\u{201c}{}\u{201d} → \u{201c}{}\u{201d}", text(was, "note"), text(now, "note")));
+    }
+    out
+}
+
+/// Undo on a card for an edit the agent made: the entry goes back as it was (`previous`), and
+/// Redo makes the edit again. An edit that gave an entry its first category has none: the ledger
+/// cannot take a category away (Tally's entry sheet can).
+fn edit_undo(card: &gtk::Box, title: &gtk::Label, what: &str, tx: &Value) -> Option<gtk::Button> {
+    let (was, id) = (&tx["previous"], tx["id"].as_i64()?);
+    if was["category_id"].is_null() && !tx["category_id"].is_null() {
+        return None;
+    }
+    let places = super::formatter().fraction_digits;
+    let patch = |t: &Value| json!({
+        "id": id, "type": t["type"], "amount": minor(&t["amount"], places), "date": t["date"], "account_id": t["account_id"],
+        "to_account_id": t["to_account_id"], "category_id": t["category_id"], "note": t["note"],
+    });
+    let (back, again) = (patch(was), patch(tx));
+    let key = button("Undo", "quiet");
+    key.add_css_class("threads-undo");
+    key.set_valign(gtk::Align::Center);
+    let changed = title.text().to_string();
+    let put_back = format!("Put back: {what}");
+    let undone = Rc::new(Cell::new(false));
+    let (card, title) = (card.downgrade(), title.downgrade());
+    key.connect_clicked(move |key| {
+        let Some(ui) = the_ui() else { return };
+        key.set_sensitive(false);
+        let undoing = !undone.get();
+        let payload = if undoing { back.clone() } else { again.clone() };
+        let (key, card, title, undone, changed, put_back) = (key.clone(), card.clone(), title.clone(), undone.clone(), changed.clone(), put_back.clone());
+        glib::spawn_future_local(async move {
+            let result = ui.call("money.tx.update", payload).await;
+            key.set_sensitive(true);
+            if let Err(e) = result {
+                ui.show_error(&e.to_string());
+                return;
+            }
+            undone.set(undoing);
+            key.set_label(if undoing { "Redo" } else { "Undo" });
+            if let (Some(card), Some(title)) = (card.upgrade(), title.upgrade()) {
+                if undoing {
+                    card.add_css_class("threads-card-undone");
+                    title.set_text(&put_back);
+                } else {
+                    card.remove_css_class("threads-card-undone");
+                    title.set_text(&changed);
+                }
+            }
+        });
+    });
+    Some(key)
 }
 
 fn amount_text(tx: &Value) -> String {
@@ -2582,6 +2859,7 @@ pub fn event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
             draw_message(&v, &payload["message"]);
             stick_to_bottom(&v, false);
         }
+        "thread.proposal" => super::ask::changed(&payload["proposal"]),
         "thread.local" => {
             let (model, state) = (payload["model"].as_str().unwrap_or(""), payload["state"].as_str().unwrap_or(""));
             STATE.with(|s| *s.local_state.borrow_mut() = (model.to_string(), state.to_string()));
@@ -2992,10 +3270,14 @@ fn refresh_avex(ui: &Rc<Ui>, v: &View) {
 }
 
 /// Re-read the panel's view, Tally's, Arbiter's or Avex's, if it is open. Only the newest read
-/// draws.
+/// draws, and none while a budget is being changed in it: that one comes when its editor closes.
 pub fn refresh_panel(ui: &Rc<Ui>) {
     let Some(v) = view() else { return };
     if !v.panel.is_visible() {
+        return;
+    }
+    if STATE.with(|s| s.editing_budget.get()) {
+        STATE.with(|s| s.panel_stale.set(true));
         return;
     }
     match STATE.with(|s| s.source.get()) {
@@ -3040,7 +3322,6 @@ pub fn refresh_panel(ui: &Rc<Ui>) {
         match read {
             Ok(value) => match tab {
                 "entries" => panel_entries(&ui, &v.panel_body, &value),
-                "budgets" => panel_budgets(&ui, &v.panel_body, &value, usize::MAX),
                 "invest" => panel_invest(&ui, &v.panel_body, &value, lists.as_ref()),
                 _ => panel_overview(&ui, &v.panel_body, &value),
             },
@@ -3079,7 +3360,8 @@ fn block(body: &gtk::Box, name: &str, aside: &str) -> gtk::Box {
     block
 }
 
-/// `row` as a key: the panel's rows open what they show.
+/// `row` as a key. The panel's rows act where the person is: an entry opens its editor, a budget
+/// its own ([`edit_budget`]), the rest draft a question into the thread ([`asking`]).
 fn row_key(row: &gtk::Box, about: &str, run: impl Fn() + 'static) -> gtk::Button {
     let key = gtk::Button::new();
     key.add_css_class("threads-row-key");
@@ -3089,12 +3371,22 @@ fn row_key(row: &gtk::Box, about: &str, run: impl Fn() + 'static) -> gtk::Button
     key
 }
 
-/// A run that opens `page`.
+/// A run that opens `page`: the panel's own "Open …" keys, never its rows.
 fn go(ui: &Rc<Ui>, page: &'static str) -> impl Fn() + 'static {
     let weak = Rc::downgrade(ui);
     move || {
         if let Some(ui) = weak.upgrade() {
             ui.navigate(page);
+        }
+    }
+}
+
+/// A run that drafts `question` into the thread showing, or asks it in a new one ([`draft`]).
+fn asking(ui: &Rc<Ui>, question: String) -> impl Fn() + 'static {
+    let weak = Rc::downgrade(ui);
+    move || {
+        if let Some(ui) = weak.upgrade() {
+            draft(&ui, &question);
         }
     }
 }
@@ -3163,8 +3455,9 @@ fn panel_overview(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
     }
     body.append(&head);
 
-    panel_budgets(ui, body, s, 5);
+    panel_budgets(ui, body, s);
 
+    // A bill to pay asks whether it can be covered.
     let bills: Vec<&Value> = s["bills"].as_array().into_iter().flatten().take(3).collect();
     if !bills.is_empty() {
         let list = block(body, "Coming up", "");
@@ -3191,7 +3484,11 @@ fn panel_overview(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
             }
             figure.set_valign(gtk::Align::Center);
             row.append(&figure);
-            list.append(&row);
+            if income {
+                list.append(&row);
+            } else {
+                list.append(&row_key(&row, "Ask whether you can cover it", asking(ui, cover_question(bill))));
+            }
         }
     }
 
@@ -3205,46 +3502,237 @@ fn panel_overview(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
     }
 }
 
-fn panel_budgets(ui: &Rc<Ui>, body: &gtk::Box, s: &Value, most: usize) {
-    let mut budgets: Vec<&Value> = s["budgets"].as_array().into_iter().flatten().filter(|b| b["budget"].as_i64().unwrap_or(0) > 0).collect();
-    let pace = s["pace"]["pace_fraction"].as_f64();
+/// Overview's budgets, the furthest ahead of pace first: [`BUDGETS_SHOWN`] of them, or all once
+/// the person asks. Each changes its amount in place ([`edit_budget`]).
+fn panel_budgets(ui: &Rc<Ui>, body: &gtk::Box, s: &Value) {
+    let mut budgets: Vec<Value> = s["budgets"].as_array().into_iter().flatten().filter(|b| b["budget"].as_i64().unwrap_or(0) > 0).cloned().collect();
     let ahead = |b: &Value| b["spent"].as_i64().unwrap_or(0) as f64 / b["budget"].as_i64().unwrap_or(1).max(1) as f64;
     budgets.sort_by(|a, b| ahead(b).total_cmp(&ahead(a)));
-    let total = budgets.len();
-    let aside = if total > most { format!("{most} of {total}") } else { String::new() };
-    let list = block(body, "Budgets", &aside);
+    let list = block(body, "Budgets", "");
     if budgets.is_empty() {
         let note = label("No budgets yet. Set them in Tally's Plan.", "money-muted");
         note.set_wrap(true);
         list.append(&note);
+        return;
+    }
+    let rows = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    list.append(&rows);
+    fill_budgets(ui, &rows, Rc::new(budgets), s["pace"]["pace_fraction"].as_f64());
+}
+
+/// The budget rows in `rows`, and the key that shows them all or fewer again: it redraws them
+/// from the same reading, so the panel keeps its place.
+fn fill_budgets(ui: &Rc<Ui>, rows: &gtk::Box, budgets: Rc<Vec<Value>>, pace: Option<f64>) {
+    clear(rows);
+    let all = STATE.with(|s| s.all_budgets.get());
+    let shown = if all { budgets.len() } else { budgets.len().min(BUDGETS_SHOWN) };
+    for b in &budgets[..shown] {
+        rows.append(&budget_row(ui, b, pace));
+    }
+    if budgets.len() <= BUDGETS_SHOWN {
+        return;
+    }
+    let more = button(&if all { String::from("Show fewer") } else { format!("Show all {}", budgets.len()) }, "quiet");
+    more.add_css_class("threads-more");
+    more.set_halign(gtk::Align::Start);
+    let (weak_ui, weak_rows) = (Rc::downgrade(ui), rows.downgrade());
+    more.connect_clicked(move |_| {
+        let (Some(ui), Some(rows)) = (weak_ui.upgrade(), weak_rows.upgrade()) else { return };
+        STATE.with(|s| s.all_budgets.set(!s.all_budgets.get()));
+        fill_budgets(&ui, &rows, budgets.clone(), pace);
+    });
+    rows.append(&more);
+}
+
+/// One budget: its badge, name and what is left over the meter of what it used. It opens its
+/// editor beside the panel.
+fn budget_row(ui: &Rc<Ui>, b: &Value, pace: Option<f64>) -> gtk::Button {
+    let fmt = super::formatter();
+    let (spent, budget) = (b["spent"].as_i64().unwrap_or(0), b["budget"].as_i64().unwrap_or(0));
+    let status = b["status"].as_str().unwrap_or("");
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("threads-budget");
+    row.append(&badge_sized(b["icon"].as_str().unwrap_or("dots"), b["color"].as_i64().unwrap_or(10), 24));
+    let right = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    right.set_hexpand(true);
+    let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let name = label(b["name"].as_str().unwrap_or(""), "threads-panel-name");
+    name.set_hexpand(true);
+    name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    line.append(&name);
+    let left = budget - spent;
+    let rest = label(&if left < 0 { format!("{} over", fmt.format_whole(-left)) } else { format!("{} left", fmt.format_whole(left)) }, "threads-panel-figures");
+    if let Some(class) = tone_class(status) {
+        rest.add_css_class(class);
+    }
+    line.append(&rest);
+    right.append(&line);
+    let bar = meter_in(spent as f64 / budget.max(1) as f64, pace, tone(status, b["color"].as_i64()), 4);
+    bar.set_tooltip_text(Some(&format!("{} of {}", fmt.format(spent), fmt.format_whole(budget))));
+    right.append(&bar);
+    row.append(&right);
+    let key = gtk::Button::new();
+    key.add_css_class("threads-row-key");
+    key.add_css_class("threads-budget-key");
+    key.set_child(Some(&row));
+    key.set_tooltip_text(Some("Change this budget"));
+    let weak = Rc::downgrade(ui);
+    let b = b.clone();
+    key.connect_clicked(move |key| {
+        if let Some(ui) = weak.upgrade() {
+            edit_budget(&ui, key, &b);
+        }
+    });
+    key
+}
+
+/// A budget editor's line from the last whole months, oldest first: spending in its category
+/// (`here`) and in the whole ledger (`all`). A month with no spending anywhere came before the
+/// ledger was kept, so it is left out rather than averaged in as a zero. Empty when nothing is
+/// known. "Last month $298 · 3-month average $310".
+fn month_history(here: &[i64], all: &[i64]) -> String {
+    let kept: Vec<i64> = here.iter().zip(all).filter(|(_, any)| **any > 0).map(|(v, _)| *v).collect();
+    match kept.len() {
+        0 => return String::new(),
+        _ if kept.iter().any(|v| *v != 0) => {}
+        1 => return String::from("Nothing spent here last month"),
+        n => return format!("Nothing spent here in the last {n} months"),
     }
     let fmt = super::formatter();
-    for b in budgets.into_iter().take(most) {
-        let (spent, budget) = (b["spent"].as_i64().unwrap_or(0), b["budget"].as_i64().unwrap_or(0));
-        let status = b["status"].as_str().unwrap_or("");
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-        row.add_css_class("threads-budget");
-        row.append(&badge_sized(b["icon"].as_str().unwrap_or("dots"), b["color"].as_i64().unwrap_or(10), 24));
-        let right = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        right.set_hexpand(true);
-        let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let name = label(b["name"].as_str().unwrap_or(""), "threads-panel-name");
-        name.set_hexpand(true);
-        name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        line.append(&name);
-        let left = budget - spent;
-        let rest = label(&if left < 0 { format!("{} over", fmt.format_whole(-left)) } else { format!("{} left", fmt.format_whole(left)) }, "threads-panel-figures");
-        if let Some(class) = tone_class(status) {
-            rest.add_css_class(class);
-        }
-        line.append(&rest);
-        right.append(&line);
-        let bar = meter_in(spent as f64 / budget.max(1) as f64, pace, tone(status, b["color"].as_i64()), 4);
-        bar.set_tooltip_text(Some(&format!("{} of {}", fmt.format(spent), fmt.format_whole(budget))));
-        right.append(&bar);
-        row.append(&right);
-        list.append(&row_key(&row, "Open the plan", go(ui, "money-plan")));
+    let mut parts = Vec::new();
+    let last_kept = here.len() == all.len() && all.last().is_some_and(|a| *a > 0);
+    if let Some(last) = here.last().filter(|_| last_kept) {
+        parts.push(format!("Last month {}", fmt.format_whole(*last)));
     }
+    if kept.len() > 1 {
+        parts.push(format!("{}-month average {}", kept.len(), fmt.format_whole(kept.iter().sum::<i64>() / kept.len() as i64)));
+    }
+    parts.join(" · ")
+}
+
+/// A budget's editor, a popover beside its row: the amount, what was spent in the last three
+/// months to judge it by (`money.series`), and Save (`money.budget.set`). An empty amount is no
+/// budget. The panel holds still while it is open ([`refresh_panel`]).
+fn edit_budget(ui: &Rc<Ui>, anchor: &gtk::Button, b: &Value) {
+    let fmt = super::formatter();
+    let name = b["name"].as_str().unwrap_or("").to_string();
+    let category = b["category_id"].as_i64();
+    let amount = b["budget"].as_i64().unwrap_or(0);
+    let pop = gtk::Popover::new();
+    pop.add_css_class("threads-budget-pop");
+    pop.set_position(gtk::PositionType::Left);
+    pop.set_parent(anchor);
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    body.add_css_class("threads-budget-edit");
+    body.set_size_request(268, -1);
+    let head = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    let title = label(&format!("{name} budget"), "threads-card-title");
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    head.append(&title);
+    head.append(&label(&format!("{} spent so far this month", fmt.format_whole(b["spent"].as_i64().unwrap_or(0))), "threads-panel-detail"));
+    body.append(&head);
+    let field_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let symbol = label(&fmt.symbol, "money-suffix");
+    symbol.set_valign(gtk::Align::Center);
+    field_row.append(&symbol);
+    let field = gtk::Entry::new();
+    field.add_css_class("threads-budget-field");
+    field.set_hexpand(true);
+    gtk::prelude::EntryExt::set_alignment(&field, 1.0);
+    field.set_placeholder_text(Some("No budget"));
+    if amount > 0 {
+        field.set_text(&fmt.format_input(amount));
+    }
+    field.update_property(&[gtk::accessible::Property::Label(&format!("Monthly budget for {name}"))]);
+    field_row.append(&field);
+    body.append(&field_row);
+    let history = label("Reading the last three months…", "threads-panel-detail");
+    history.set_xalign(0.0);
+    history.set_wrap(true);
+    body.append(&history);
+    let error = label("", "threads-error");
+    error.set_xalign(0.0);
+    error.set_wrap(true);
+    error.set_visible(false);
+    body.append(&error);
+    let save = button("Save", "primary");
+    save.set_halign(gtk::Align::End);
+    body.append(&save);
+    pop.set_child(Some(&body));
+
+    // The panel waits while this is open, then reads what changed meanwhile.
+    STATE.with(|s| s.editing_budget.set(true));
+    pop.connect_closed(|pop| {
+        let pop = pop.clone();
+        glib::idle_add_local_once(move || {
+            if pop.parent().is_some() {
+                pop.unparent();
+            }
+            STATE.with(|s| s.editing_budget.set(false));
+            if STATE.with(|s| s.panel_stale.replace(false)) {
+                if let Some(ui) = the_ui() {
+                    refresh_panel(&ui);
+                }
+            }
+        });
+    });
+
+    let commit = {
+        let (weak, pop, field, error, save) = (Rc::downgrade(ui), pop.downgrade(), field.downgrade(), error.downgrade(), save.downgrade());
+        move || {
+            let (Some(ui), Some(pop), Some(field), Some(error), Some(save)) = (weak.upgrade(), pop.upgrade(), field.upgrade(), error.upgrade(), save.upgrade()) else { return };
+            let typed = field.text();
+            let value = if typed.trim().is_empty() { Some(0) } else { super::formatter().parse(&typed).filter(|v| *v >= 0) };
+            let Some(value) = value else {
+                field.add_css_class("error");
+                error.set_text("Type an amount, like 250 or 250.00. Leave it empty for no budget.");
+                error.set_visible(true);
+                return;
+            };
+            if value == amount {
+                pop.popdown();
+                return;
+            }
+            save.set_sensitive(false);
+            let mut payload = json!({"amount": value});
+            if let Some(id) = category {
+                payload["category_id"] = json!(id);
+            }
+            glib::spawn_future_local(async move {
+                match ui.call("money.budget.set", payload).await {
+                    Ok(_) => pop.popdown(),
+                    Err(e) => {
+                        error.set_text(&super::pages::unavailable(&e));
+                        error.set_visible(true);
+                        save.set_sensitive(true);
+                    }
+                }
+            });
+        }
+    };
+    let commit = Rc::new(commit);
+    let on_enter = commit.clone();
+    field.connect_activate(move |_| on_enter());
+    save.connect_clicked(move |_| commit());
+    field.connect_changed(|field| field.remove_css_class("error"));
+
+    // The last three whole months, oldest first: the latest and their average. A month with no
+    // spending anywhere in the ledger came before it was kept, so it does not count as a zero.
+    let weak = history.downgrade();
+    let ui = ui.clone();
+    glib::spawn_future_local(async move {
+        let months = |category: Option<&str>| json!({"measure": "spending", "by": "period", "periods": 3, "period_offset": -1, "category": category});
+        let (here, all) = tokio::join!(ui.call("money.series", months(Some(&name))), ui.call("money.series", months(None)));
+        let Some(history) = weak.upgrade() else { return };
+        let values = |read: Result<Value, crate::client::Error>| -> Vec<i64> {
+            read.ok().and_then(|r| r["series"][0]["values"].as_array().map(|v| v.iter().filter_map(Value::as_i64).collect())).unwrap_or_default()
+        };
+        history.set_text(&month_history(&values(here), &values(all)));
+        history.set_visible(!history.text().is_empty());
+    });
+    pop.popup();
+    field.grab_focus();
+    field.select_region(0, -1);
 }
 
 /// One entry in the panel: its badge, what it was over its category and day, and the amount.
@@ -3383,9 +3871,9 @@ fn symbol_tile(symbol: &str) -> gtk::Box {
     tile
 }
 
-/// A row of the Invest view: its mark, a name over its detail, the value over its change. It opens
-/// the Investments page.
-fn invest_row(ui: &Rc<Ui>, lead: &gtk::Box, title: &str, detail: &str, value: &str, change: Option<(String, Option<&'static str>)>) -> gtk::Button {
+/// A row of the Invest view: its mark, a name over its detail, the value over its change. It drafts
+/// `question` into the thread; the view's last key opens the Investments page.
+fn invest_row(ui: &Rc<Ui>, lead: &gtk::Box, title: &str, detail: &str, value: &str, change: Option<(String, Option<&'static str>)>, question: String) -> gtk::Button {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     row.add_css_class("threads-entry");
     row.append(lead);
@@ -3413,7 +3901,7 @@ fn invest_row(ui: &Rc<Ui>, lead: &gtk::Box, title: &str, detail: &str, value: &s
         figures.append(&l);
     }
     row.append(&figures);
-    row_key(&row, "Open Investments", go(ui, "money-invest"))
+    row_key(&row, "Ask about this", asking(ui, question))
 }
 
 /// The Invest view (`money.invest.summary`): what the portfolio is worth and has gained, how it is
@@ -3507,7 +3995,8 @@ fn panel_invest(ui: &Rc<Ui>, body: &gtk::Box, p: &Value, lists: Option<&Value>) 
             let change = a["gain_bps"].as_i64().map(|bps| (percent(bps), gain_class(bps)));
             let lead = badge_sized("chart", registration_hue(registration), 24);
             let value = fmt.format_whole(hand.unwrap_or_else(|| a["value"].as_i64().unwrap_or(0)));
-            list.append(&invest_row(ui, &lead, a["name"].as_str().unwrap_or(""), &detail.join(" · "), &value, change));
+            let name = a["name"].as_str().unwrap_or("");
+            list.append(&invest_row(ui, &lead, name, &detail.join(" · "), &value, change, format!("How is my {name} account doing?")));
         }
     }
 
@@ -3571,7 +4060,7 @@ fn panel_invest(ui: &Rc<Ui>, body: &gtk::Box, p: &Value, lists: Option<&Value>) 
             }
             let change = h["gain_bps"].as_i64().map(|bps| (percent(bps), gain_class(bps)));
             let value = fmt.format_whole(h["value"].as_i64().unwrap_or(0));
-            list.append(&invest_row(ui, &symbol_tile(symbol), name, &detail.join(" · "), &value, change));
+            list.append(&invest_row(ui, &symbol_tile(symbol), name, &detail.join(" · "), &value, change, format!("How is {symbol} doing?")));
         }
     }
 
@@ -3648,7 +4137,70 @@ fn invest_empty(ui: &Rc<Ui>, body: &gtk::Box, currency: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{pending_split, PENDING_KEEP};
+    use super::{avex_suggestions, month_history, pending_split, suggestions, week_line, PENDING_KEEP};
+    use serde_json::{json, Value};
+
+    /// `gym.summary` for a copy exported on `day`, read on Thu 15 Oct 2026 (this week from Mon 12).
+    fn avex(day: &str) -> Value {
+        json!({
+            "imported": {"exported_at": format!("{day} 21:14"), "days_per_week": 4},
+            "unit": "lb",
+            "this_week": {"start": "2026-10-12", "sessions": 0, "volume": 0.0},
+            "weeks": [
+                {"start": "2026-09-28", "sessions": 4, "volume": 51200.0},
+                {"start": "2026-10-05", "sessions": 3, "volume": 46330.4},
+                {"start": "2026-10-12", "sessions": 0, "volume": 0.0},
+            ],
+            "lifts": [{"name": "Bench Press"}],
+            "recent": [{"title": "Freestyle"}, {"title": "Legs A"}],
+        })
+    }
+
+    #[test]
+    fn a_stale_avex_copy_reads_its_own_week_not_an_empty_one() {
+        let line = week_line(&avex("2026-10-08"), "2026-10-15");
+        assert!(line.contains("7 days ago"), "{line}");
+        assert!(line.ends_with("That week: 3 of 4 workouts, 46,330 lb lifted."), "{line}");
+        assert!(!line.contains("no workouts"), "{line}");
+        let asks: Vec<String> = avex_suggestions(Some(&avex("2026-10-08"))).into_iter().map(|(a, _)| a).collect();
+        assert_eq!(asks, ["How did my last week of training go?", "Which lifts have stalled?", "How is my Bench Press trending?", "Plan my next Legs A"]);
+    }
+
+    #[test]
+    fn a_fresh_avex_copy_reads_this_week() {
+        let mut s = avex("2026-10-15");
+        s["this_week"] = json!({"start": "2026-10-12", "sessions": 2, "volume": 18450.0});
+        assert_eq!(week_line(&s, "2026-10-15"), "This week so far: 2 of 4 workouts, 18,450 lb lifted.");
+        s["this_week"]["sessions"] = json!(0);
+        assert_eq!(week_line(&s, "2026-10-15"), "This week so far: no workouts yet.");
+        assert_eq!(avex_suggestions(Some(&s))[0].0, "How is my week going?");
+        // Nothing imported: one way in, no questions about lifts that are not there.
+        let none = json!({"imported": null});
+        assert!(week_line(&none, "2026-10-15").starts_with("Nothing from Avex yet"));
+        assert_eq!(avex_suggestions(Some(&none)).len(), 1);
+        // A failed read still offers four.
+        assert_eq!(avex_suggestions(None).len(), 4);
+    }
+
+    #[test]
+    fn a_budgets_history_leaves_out_months_before_the_ledger() {
+        // The ledger began two months ago: rent averages over those two, not over three.
+        let line = month_history(&[0, 135_000, 135_000], &[0, 200_000, 250_000]);
+        assert!(line.starts_with("Last month ") && line.contains(" · 2-month average "), "{line}");
+        assert!(month_history(&[100, 200, 300], &[1, 1, 1]).contains("3-month average"));
+        assert_eq!(month_history(&[0, 0, 0], &[5, 5, 5]), "Nothing spent here in the last 3 months");
+        assert_eq!(month_history(&[0, 0, 0], &[0, 0, 5]), "Nothing spent here last month");
+        // A read that failed says nothing.
+        assert_eq!(month_history(&[], &[]), "");
+        assert_eq!(month_history(&[1, 2, 3], &[]), "");
+    }
+
+    #[test]
+    fn tally_starters_promise_only_what_the_agent_does() {
+        let asks: Vec<String> = suggestions(None, None).into_iter().map(|(a, _)| a).collect();
+        assert_eq!(asks.len(), 4);
+        assert!(asks.iter().all(|a| !a.contains("no category")), "{asks:?}");
+    }
 
     /// Labels a reply streamed in `pieces` ends up in, split as [`super::show_pending`] splits it.
     fn stream(pieces: &[&str]) -> Vec<String> {

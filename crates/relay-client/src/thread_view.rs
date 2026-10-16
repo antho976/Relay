@@ -231,6 +231,7 @@ pub fn tool_caption(name: &str) -> String {
         "money.invest.summary" => "Read your investments".into(),
         "money.invest.list" => "Listed investment activity".into(),
         "money.invest.add" => "Recorded an investment activity".into(),
+        "thread.propose" => "Asked you first".into(),
         "gym.summary" => "Read your training".into(),
         "gym.sessions" => "Listed workouts".into(),
         "gym.session.get" => "Read a workout".into(),
