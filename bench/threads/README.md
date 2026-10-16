@@ -45,6 +45,18 @@ profile, once to find the write problem the category hold fixes), so its number 
 blind than its name. Still weakest: writes (70.8%: a wrong account or category, a French decimal
 comma read as thousands, an activity added to a Wealthsimple-filled account) and charts (72.2%).
 
+### v2, the harder suite (84 tasks × 3 runs, its own world; see "v2")
+
+| Model and setting | Pass [95% CI] | Dev | Holdout | Median s |
+|---|---|---|---|---|
+| Qwen3.5 4B, no thinking | 57.9% [51.8, 63.9] | 55.6% | 65.1% | 6.0 |
+| Qwen3.5 4B, thinking ≤512 (the default) | 66.3% [60.2, 71.8] | 63.5% | 74.6% | 15.6 |
+| Qwen3.5 9B, thinking ≤512 (one slot) | 72.2% [66.4, 77.4] | 67.7% | 85.7% | 12.1 |
+
+v1 is saturated (98.2%) and stays as the regression guard; v2 is where a change or a new model now
+shows. Weakest for the 4B: dates and periods from the 15th (36%), questions on both apps (20%),
+refusals around the note that gives orders (44%), totals (57%).
+
 ## Quick start
 
 ```fish
