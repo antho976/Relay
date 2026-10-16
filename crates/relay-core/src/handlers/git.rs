@@ -1674,6 +1674,41 @@ pub fn new_worktree_base(root: &Path, base: &str) -> Result<Option<String>, BusE
     Ok(Some(selected.to_string()))
 }
 
+/// What [`sync_to_base`] did to a checkout.
+#[derive(Debug, PartialEq, Eq)]
+pub enum BaseSync {
+    /// Already at the freshest base.
+    Current,
+    /// Fast-forwarded to this tip of the base.
+    Advanced(String),
+    /// Left as it is: the branch holds commits the base does not, or git refused the move.
+    Kept(String),
+}
+
+/// Bring a session's checkout up to the freshest `base` before a fresh conversation starts
+/// in it (`session.clear_restorable`). Only a fast-forward: a branch with work of its own is
+/// never moved, and uncommitted changes either carry over or make git refuse. A failed fetch
+/// falls back to the refs on disk; this is a convenience, never a reason to refuse the clear.
+pub fn sync_to_base(root: &Path, checkout: &Path, base: &str) -> Result<BaseSync, BusError> {
+    if let Err(error) = fetch_remote(root) {
+        tracing::warn!(root = %root.display(), %error, "fetch before clearing a session; using cached refs");
+    }
+    let repo = gix::open(checkout).map_err(gix_err("git.open_failed"))?;
+    let (name, tip) = freshest_base(&repo, base)?;
+    let head = repo.head_id().map_err(gix_err("git.head_missing"))?.detach();
+    if head == tip {
+        return Ok(BaseSync::Current);
+    }
+    if repo.merge_base(head, tip).ok().map(|id| id.detach()) != Some(head) {
+        return Ok(BaseSync::Kept(format!("the branch has commits {name} does not")));
+    }
+    let tip = tip.to_string();
+    Ok(match worktree::git_mutate(checkout, &["merge", "--ff-only", "--quiet", &tip]) {
+        Ok(_) => BaseSync::Advanced(format!("{name} {}", &tip[..tip.len().min(12)])),
+        Err(error) => BaseSync::Kept(error.to_string()),
+    })
+}
+
 /// A branch tip with the short name a person reads (`main`, `origin/main`).
 type Tip = (String, gix::ObjectId);
 

@@ -1370,6 +1370,26 @@ pub fn register(e: &mut Engine) {
     }, |ctx: &mut Ctx, _p, prepared| finish_launch(ctx, prepared));
 
     e.register_staged::<ClearRestorable, _>(|ctx, p| {
+        // A fresh conversation starts from fresh code: the session's own checkout is
+        // fast-forwarded to the freshest base first, so the brief it is handed reads the new
+        // state. Never the primary checkout, never one a live peer is working in, and never for a
+        // clear that is about to be refused.
+        let (root, checkout, base, skip) = ctx.read(|conn| {
+            let row = sessions::by_name(conn, &p.session)?;
+            let project = crate::handlers::workspace::get_project(conn, row.session.project_id)?;
+            let shared: bool = conn.prepare_cached(
+                "SELECT EXISTS(SELECT 1 FROM sessions WHERE worktree=?1 AND id!=?2
+                 AND state IN ('spawning','running','idle','blocked'))",
+            ).bus()?.query_row(params![row.session.worktree, row.session.id], |r| r.get(0)).bus()?;
+            let stopped = matches!(row.session.state, SessionState::Restorable | SessionState::Exited);
+            Ok((PathBuf::from(project.path), PathBuf::from(row.session.worktree), project.base_branch, shared || !stopped))
+        })?;
+        if !skip && root != checkout && checkout.is_dir() {
+            match crate::handlers::git::sync_to_base(&root, &checkout, &base) {
+                Ok(outcome) => tracing::info!(session = %p.session, ?outcome, "clearing a session: base sync"),
+                Err(error) => tracing::warn!(session = %p.session, %error, "clearing a session: base sync failed"),
+            }
+        }
         let mut prepared = stage_launch(ctx, &p.session, LaunchKind::Fresh, |row| {
             if !matches!(row.session.state, SessionState::Restorable | SessionState::Exited) {
                 return Err(BusError::conflict("session.state", format!("session {} is not restorable or exited", row.session.name)));

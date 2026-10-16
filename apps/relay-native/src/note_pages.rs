@@ -368,9 +368,9 @@ fn full_arrived(ui: &Rc<Ui>, id: i64) {
     }
 }
 
-/// The Notes paper, `@notes_paper` in css/notes.css, which paints it behind the text view at
-/// panel opacity. It is deliberately the same in every appearance mode; change both together.
-pub(crate) const NOTES_PAPER: &str = "#0c0c0e";
+/// A dark ink for text on a search match's yellow. The paper itself is `@notes_paper`, a
+/// terminal's ground per appearance mode (shell.rs).
+const NOTES_PAPER: &str = "#08090a";
 
 const NOTES_SCHEME: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
 <!-- Relay Notes: the Code editor's matte palette, with quieter Markdown. -->
