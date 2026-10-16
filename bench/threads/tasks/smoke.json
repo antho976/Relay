@@ -1,0 +1,119 @@
+[
+  {
+    "id": "smoke.tally.spent_this_month",
+    "source": "tally", "category": "lookup", "difficulty": 1,
+    "prompt": "How much have I spent this month?",
+    "truth": "smoke_spent_this_month",
+    "checks": [
+      {"type": "number", "of": "spent", "tol": 0.01},
+      {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore"]},
+      {"type": "no_error"}
+    ],
+    "mutates": false
+  },
+  {
+    "id": "smoke.tally.groceries_last_month",
+    "source": "tally", "category": "time", "difficulty": 2,
+    "prompt": "How much did I spend on groceries last month?",
+    "truth": "smoke_groceries_last_month",
+    "checks": [
+      {"type": "number", "of": "groceries", "tol": 0.01},
+      {"type": "tool", "ops": ["money.tx.list"], "args": {"period_offset": -1}},
+      {"type": "no_error"}
+    ],
+    "mutates": false
+  },
+  {
+    "id": "smoke.tally.biggest_expense",
+    "source": "tally", "category": "rank", "difficulty": 2,
+    "prompt": "What was my single biggest expense this month?",
+    "truth": "smoke_biggest_expense",
+    "checks": [
+      {"type": "number", "of": "amount", "tol": 0.01},
+      {"type": "text_any", "of": "names"},
+      {"type": "no_error"}
+    ],
+    "mutates": false
+  },
+  {
+    "id": "smoke.tally.groceries_budget_left",
+    "source": "tally", "category": "pace", "difficulty": 2,
+    "prompt": "How much is left in my groceries budget?",
+    "truth": "smoke_groceries_budget_left",
+    "checks": [
+      {"type": "number", "of": "left", "tol": 0.01},
+      {"type": "no_error"}
+    ],
+    "mutates": false
+  },
+  {
+    "id": "smoke.tally.net_worth",
+    "source": "tally", "category": "lookup", "difficulty": 1,
+    "prompt": "What's my net worth right now?",
+    "truth": "smoke_net_worth",
+    "checks": [
+      {"type": "number", "of": "net_worth", "tol": 0.01},
+      {"type": "no_error"}
+    ],
+    "mutates": false
+  },
+  {
+    "id": "smoke.tally.invest_value_stale",
+    "source": "tally", "category": "stale", "difficulty": 2,
+    "prompt": "How much are my investments worth?",
+    "truth": "smoke_invest_value",
+    "checks": [
+      {"type": "number", "of": "value", "tol": 0.01},
+      {"type": "text_any", "regex": ["2026-05-08", "May 8", "8 May", "\\bout of date\\b", "\\bstale\\b", "\\b(four|4|over four|more than four) months?\\b", "\\bold\\b"]},
+      {"type": "no_error"}
+    ],
+    "mutates": false
+  },
+  {
+    "id": "smoke.tally.chart_by_category",
+    "source": "tally", "category": "chart", "difficulty": 2,
+    "prompt": "Show me a chart of where my money went this month.",
+    "truth": "smoke_nothing",
+    "checks": [
+      {"type": "chart", "any_of": [{"query": {"by": "category"}}]},
+      {"type": "no_error"}
+    ],
+    "mutates": false
+  },
+  {
+    "id": "smoke.tally.add_coffee",
+    "source": "tally", "category": "write", "difficulty": 2,
+    "prompt": "I just paid $4.75 for a coffee with my Visa, add it please.",
+    "truth": "smoke_coffee_added",
+    "checks": [
+      {"type": "effect", "truth": "smoke_coffee_added"},
+      {"type": "tool", "ops": ["money.tx.add"], "args": {"amount": 4.75}},
+      {"type": "no_error"}
+    ],
+    "mutates": true
+  },
+  {
+    "id": "smoke.avex.workouts_last_week",
+    "source": "avex", "category": "lookup", "difficulty": 1,
+    "prompt": "How many workouts did I do last week?",
+    "truth": "smoke_workouts_last_week",
+    "checks": [
+      {"type": "number", "of": "sessions", "tol": 0},
+      {"type": "tool", "ops": ["gym.summary", "gym.sessions", "gym.series"]},
+      {"type": "no_error"}
+    ],
+    "mutates": false
+  },
+  {
+    "id": "smoke.avex.heaviest_bench",
+    "source": "avex", "category": "units", "difficulty": 2,
+    "prompt": "What's the heaviest weight I've ever benched?",
+    "truth": "smoke_heaviest_bench",
+    "checks": [
+      {"type": "number", "of": "weight", "tol": 0.01},
+      {"type": "text_any", "regex": ["\\blbs?\\b", "\\bpounds?\\b"]},
+      {"type": "no_error"}
+    ],
+    "mutates": false
+  }
+]

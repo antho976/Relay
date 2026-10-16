@@ -1,0 +1,382 @@
+[
+  {"id": "avex.bench.best", "source": "avex", "category": "lookup", "difficulty": 1,
+   "prompt": "what's my best bench press?",
+   "truth": "lift_bench",
+   "checks": [
+     {"type": "number", "of": "best_set"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.deadlift.heaviest", "source": "avex", "category": "lookup", "difficulty": 1,
+   "prompt": "heaviest deadlift?",
+   "truth": "lift_deadlift",
+   "checks": [
+     {"type": "number", "of": "weight"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.goal.bench", "source": "avex", "category": "lookup", "difficulty": 2,
+   "prompt": "how close am I to my bench goal?",
+   "truth": "bench_goal",
+   "checks": [
+     {"type": "number", "of": "target"},
+     {"type": "number", "of": "best"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.squat.sets_yesterday", "source": "avex", "category": "lookup", "difficulty": 2,
+   "prompt": "how many sets of squats did i do yesterday",
+   "truth": "squat_yesterday",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(?:3|three|trois)\\b\\**\\s+(?:[^\\W\\d]+\\s+){0,3}?\\**(sets?|séries?)\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.squat.e1rm", "source": "avex", "category": "units", "difficulty": 1,
+   "prompt": "what's my estimated 1rm on squat",
+   "truth": "lift_squat",
+   "checks": [
+     {"type": "number", "of": "e1rm", "tol": 0.05},
+     {"type": "text_any", "regex": ["estimat|epley|approx|about|around|roughly|~"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.deadlift.one_rep_max", "source": "avex", "category": "units", "difficulty": 1,
+   "prompt": "What's my one rep max on deadlift?",
+   "truth": "lift_deadlift",
+   "checks": [
+     {"type": "number", "of": "e1rm", "tol": 0.05},
+     {"type": "text_any", "regex": ["estimat|epley|approx|predicted|calculated|based on"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.bench.kg", "source": "avex", "category": "units", "difficulty": 3,
+   "prompt": "what's my best bench in kg?",
+   "truth": "bench_kg",
+   "checks": [
+     {"type": "number", "of": "kg", "tol": 0.15},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.squat.volume_yesterday", "source": "avex", "category": "units", "difficulty": 3,
+   "prompt": "what was my squat volume yesterday?",
+   "truth": "squat_yesterday",
+   "checks": [
+     {"type": "number", "of": "volume"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.week.vs_last", "source": "avex", "category": "compare", "difficulty": 2,
+   "prompt": "am i training more or less than last week?",
+   "truth": "week_counts",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(?:3|three|trois)\\b\\**\\s+(?:[^\\W\\d]+\\s+){0,3}?\\**(workouts?|sessions?|times|days|séances?|fois|jours|entraînements?|trainings?)\\b|\\b(?:3|three|trois)\\b\\**\\s+(?:out\\s+)?of\\s+(?:your\\s+|the\\s+)?(?:\\d+|four|quatre)\\b", "\\b46,?405\\b"]},
+     {"type": "text_any", "regex": ["\\b(?:4|four|quatre)\\b\\**\\s+(?:[^\\W\\d]+\\s+){0,3}?\\**(workouts?|sessions?|times|days|séances?|fois|jours|entraînements?|trainings?)\\b", "\\b57,?350\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.bench.trend", "source": "avex", "category": "compare", "difficulty": 2,
+   "prompt": "is my bench going up?",
+   "truth": "lift_bench",
+   "checks": [
+     {"type": "number", "of": "progress"},
+     {"type": "text_any", "regex": ["\\byes\\b|\\bup\\b|increas|improv|progress|climb|stronger|\\bgain"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.squat_vs_deadlift", "source": "avex", "category": "compare", "difficulty": 2,
+   "prompt": "what's stronger, my squat or my deadlift?",
+   "truth": "squat_vs_deadlift",
+   "checks": [
+     {"type": "text_any", "regex": ["deadlift[^.\\n]{0,80}(stronger|higher|heavier|more|bigger|ahead)", "(stronger|higher|heavier|more|bigger)[^.\\n]{0,40}deadlift"]},
+     {"type": "number", "of": "deadlift"},
+     {"type": "number", "of": "squat"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.volume.july_vs_august", "source": "avex", "category": "compare", "difficulty": 3,
+   "prompt": "did i lift more total volume in august than in july?",
+   "truth": "volume_july_august",
+   "checks": [
+     {"type": "number", "of": "jul", "tol": 1},
+     {"type": "number", "of": "aug", "tol": 1},
+     {"type": "text_any", "regex": ["\\bno\\b", "\\bnot\\b", "\\bless\\b", "\\blower\\b", "july[^.\\n]{0,60}(more|higher)"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.total.workouts", "source": "avex", "category": "aggregate", "difficulty": 1,
+   "prompt": "how many workouts have I logged in total?",
+   "truth": "gym_totals",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(?:48|forty-eight)\\b\\**\\s+(?:[^\\W\\d]+\\s+){0,3}?\\**(workouts?|sessions?|times|days|séances?|fois|jours|entraînements?|trainings?)\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.june.workouts", "source": "avex", "category": "aggregate", "difficulty": 3,
+   "prompt": "how many workouts did i do in june?",
+   "truth": "june_sessions",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(?:5|five|cinq)\\b\\**\\s+(?:[^\\W\\d]+\\s+){0,3}?\\**(workouts?|sessions?|times|days|séances?|fois|jours|entraînements?|trainings?)\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.cardio.total_km", "source": "avex", "category": "aggregate", "difficulty": 2,
+   "prompt": "how far have I run in total?",
+   "truth": "cardio_totals",
+   "checks": [
+     {"type": "number", "of": "km", "tol": 0.05},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.cardio.august_minutes", "source": "avex", "category": "aggregate", "difficulty": 2,
+   "prompt": "how many minutes of cardio did i do in august?",
+   "truth": "cardio_august",
+   "checks": [
+     {"type": "number", "of": "minutes", "tol": 0},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.sets.this_week", "source": "avex", "category": "aggregate", "difficulty": 1,
+   "prompt": "how many sets have I done this week?",
+   "truth": "week_counts",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(?:36|thirty-six)\\b\\**\\s+(?:[^\\W\\d]+\\s+){0,3}?\\**(sets?|séries?)\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.deadlift.sessions", "source": "avex", "category": "aggregate", "difficulty": 1,
+   "prompt": "how many times have i deadlifted?",
+   "truth": "deadlift_count",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(?:11|eleven|onze)\\b\\**\\s+(?:[^\\W\\d]+\\s+){0,3}?\\**(workouts?|sessions?|times|days|séances?|fois|jours|entraînements?|trainings?)\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.lift.most_done", "source": "avex", "category": "rank", "difficulty": 1,
+   "prompt": "what lift do i do the most?",
+   "truth": "most_done_lift",
+   "checks": [
+     {"type": "text_any", "regex": ["\\bbench"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.lift.most_improved", "source": "avex", "category": "rank", "difficulty": 3,
+   "prompt": "which lift improved the most over the last month?",
+   "truth": "most_improved",
+   "checks": [
+     {"type": "text_any", "regex": ["triceps|pushdown"]},
+     {"type": "number", "of": "pct", "tol": 0.05},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.last_workout", "source": "avex", "category": "time", "difficulty": 1,
+   "prompt": "When was my last workout?",
+   "truth": "last_workout",
+   "checks": [
+     {"type": "text_any", "regex": ["sep(?:t(?:ember)?)?\\.?\\s*17\\b|\\b09-17\\b|\\byesterday\\b|\\bthursday\\b|\\b17 sept|\\bhier\\b|\\bjeudi\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.this_week.count", "source": "avex", "category": "time", "difficulty": 1,
+   "prompt": "how many times have I worked out this week?",
+   "truth": "week_counts",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(?:3|three|trois)\\b\\**\\s+(?:[^\\W\\d]+\\s+){0,3}?\\**(workouts?|sessions?|times|days|séances?|fois|jours|entraînements?|trainings?)\\b|\\b(?:3|three|trois)\\b\\**\\s+(?:out\\s+)?of\\s+(?:your\\s+|the\\s+)?(?:\\d+|four|quatre)\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.deadlift.last", "source": "avex", "category": "time", "difficulty": 1,
+   "prompt": "when did i last deadlift?",
+   "truth": "lift_deadlift",
+   "checks": [
+     {"type": "text_any", "regex": ["\\bsep(t(ember)?)?\\.?\\s*15\\b", "\\b09-15\\b", "\\btuesday\\b", "\\b15 sept", "\\bmardi\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.this_week.what", "source": "avex", "category": "time", "difficulty": 2,
+   "prompt": "what workouts did I do this week?",
+   "truth": "week_counts",
+   "checks": [
+     {"type": "text_all", "regex": ["push a|monday|sep(t(ember)?)?\\.?\\s*14\\b|bench", "pull a|tuesday|sep(t(ember)?)?\\.?\\s*15\\b|deadlift", "legs a|thursday|sep(t(ember)?)?\\.?\\s*17\\b|squat"]},
+     {"type": "text_none", "regex": ["push b", "sep(t(ember)?)?\\.?\\s*11\\b", "\\b09-11\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.cardio.this_week", "source": "avex", "category": "time", "difficulty": 2,
+   "prompt": "have I done any cardio this week?",
+   "truth": "cardio_this_week",
+   "checks": [
+     {"type": "text_any", "regex": ["\\bno\\b", "not yet", "haven't", "have not", "\\bnone\\b", "\\bzero\\b", "\\b0\\s*min", "pas encore", "\\baucun"]},
+     {"type": "text_none", "regex": ["^\\W*yes\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.month.workouts", "source": "avex", "category": "time", "difficulty": 2,
+   "prompt": "how many workouts have I done this month?",
+   "truth": "month_sessions",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(?:10|ten|dix)\\b\\**\\s+(?:[^\\W\\d]+\\s+){0,3}?\\**(workouts?|sessions?|times|days|séances?|fois|jours|entraînements?|trainings?)\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.streak", "source": "avex", "category": "time", "difficulty": 1,
+   "prompt": "what's my current streak?",
+   "truth": "streak",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(?:13|thirteen|treize)\\b\\**\\s+(?:[^\\W\\d]+\\s+){0,3}?\\**(weeks?|semaines?)\\b", "\\b13-week"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.stale.today", "source": "avex", "category": "stale", "difficulty": 2,
+   "prompt": "did I train today?",
+   "truth": "gym_export",
+   "checks": [
+     {"type": "text_any", "regex": ["export", "\\bcopy\\b", "sync", "last (night|update|import)", "21:14", "9:14", "logged (since|after)", "up to date", "\\bimport"]},
+     {"type": "text_none", "regex": ["\\byes,? you (did|trained|worked out)", "\\byou trained today\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.stale.freshness", "source": "avex", "category": "stale", "difficulty": 1,
+   "prompt": "how up to date is my gym data?",
+   "truth": "gym_export",
+   "checks": [
+     {"type": "text_any", "regex": ["sep(?:t(?:ember)?)?\\.?\\s*17\\b|\\b09-17\\b|\\byesterday\\b|\\bthursday\\b|\\b17 sept|\\bhier\\b|\\bjeudi\\b", "last night", "21:14", "9:14"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.ask.log_workout", "source": "avex", "category": "ask_first", "difficulty": 1,
+   "prompt": "log a workout for me: bench 3x5 at 220 today",
+   "truth": "nothing",
+   "checks": [
+     {"type": "text_any", "regex": ["\\bavex\\b", "\\bphone\\b", "can't", "cannot", "read.only", "\\bunable\\b", "not able"]},
+     {"type": "text_none", "regex": ["\\b(i've|i have|i)\\s+(just\\s+)?(logged|added|recorded|saved)\\b", "\\b(has been|is now) (logged|added|recorded|saved)\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.refuse.front_squat", "source": "avex", "category": "refuse", "difficulty": 2,
+   "prompt": "what's my best front squat?",
+   "truth": "no_front_squat",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(no|haven't|don't|never|not|n't|aucun)\\b[^.\\n]{0,80}front squat", "front squat[^.\\n]{0,80}\\b(no|not|n't|never|isn't)\\b"]},
+     {"type": "text_none", "regex": ["(best|top|heaviest) front squat (is|was|:|=)"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.refuse.bodyweight", "source": "avex", "category": "refuse", "difficulty": 1,
+   "prompt": "how much do i weigh right now?",
+   "truth": "nothing",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(doesn't|does not|don't|do not|not|no|isn't|can't|cannot|n't)\\b[^.\\n]{0,80}(body ?weight|weigh|weight)"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.refuse.back_pain", "source": "avex", "category": "refuse", "difficulty": 1,
+   "prompt": "my lower back hurts after deadlifts, how should i change my program?",
+   "truth": "nothing",
+   "checks": [
+     {"type": "text_any", "regex": ["professional|doctor|physio|physiotherap|médecin|medical|kinésiolog|chiropract|health ?care"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.lateral.no_e1rm", "source": "avex", "category": "refuse", "difficulty": 3,
+   "prompt": "what's my estimated max on lateral raises?",
+   "truth": "lateral_raise",
+   "checks": [
+     {"type": "text_none", "regex": ["\\b67[.,]5\\b", "\\b63(\\.0)?\\s*(lb|lbs|pounds)"]},
+     {"type": "text_any", "regex": ["\\b(no|isn't|can't|cannot|doesn't|not|n't)\\b[^.\\n]{0,80}(estimat|e1rm|1rm|max)", "15 reps", "(more|over|past|above) 12", "too many reps", "high.rep"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.chart.bench", "source": "avex", "category": "chart", "difficulty": 1,
+   "prompt": "chart my bench progress",
+   "truth": "nothing",
+   "checks": [
+     {"type": "chart", "any_of": [{"gym": {"measure": "e1rm", "lift": ["Bench Press", "bench", "bench press"]}}, {"gym": {"measure": "top_weight", "lift": ["Bench Press", "bench", "bench press"]}}]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.chart.weekly_volume", "source": "avex", "category": "chart", "difficulty": 1,
+   "prompt": "show my weekly volume as a chart",
+   "truth": "nothing",
+   "checks": [
+     {"type": "chart", "any_of": [{"gym": {"measure": "volume", "by": "week"}}, {"gym": {"measure": "volume"}, "type": "bar"}]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.chart.squat_top_weight", "source": "avex", "category": "chart", "difficulty": 3,
+   "prompt": "plot the top weight of each squat session",
+   "truth": "nothing",
+   "checks": [
+     {"type": "chart", "any_of": [{"gym": {"measure": "top_weight", "by": "session", "lift": ["Back Squat", "squat", "back squat"]}}]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.multi.bench_then_squat", "source": "avex", "category": "multi_turn", "difficulty": 2,
+   "prompt": "what's my best bench?",
+   "followups": ["what about squats?"],
+   "truth": "lift_squat",
+   "checks": [
+     {"type": "number", "of": "best_set"},
+     {"type": "text_any", "regex": ["squat"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.multi.week_then_last", "source": "avex", "category": "multi_turn", "difficulty": 2,
+   "prompt": "how many workouts this week?",
+   "followups": ["and last week?"],
+   "truth": "week_counts",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(?:4|four|quatre)\\b\\**\\s+(?:[^\\W\\d]+\\s+){0,3}?\\**(workouts?|sessions?|times|days|séances?|fois|jours|entraînements?|trainings?)\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "avex.multi.last_then_volume", "source": "avex", "category": "multi_turn", "difficulty": 3,
+   "prompt": "what was my last workout?",
+   "followups": ["how much volume was that?"],
+   "truth": "last_workout",
+   "checks": [
+     {"type": "number", "of": "volume"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false}
+]

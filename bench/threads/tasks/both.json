@@ -1,0 +1,52 @@
+[
+  {"id": "both.gym.cost_and_august_visits", "source": "both", "category": "aggregate", "difficulty": 3,
+   "prompt": "how much does my gym membership cost, and how many times did I go in august?",
+   "truth": "gym_cost_august",
+   "checks": [
+     {"type": "number", "of": "cost"},
+     {"type": "text_any", "regex": ["\\b(?:15|fifteen|quinze)\\b\\**\\s+(?:[^\\W\\d]+\\s+){0,3}?\\**(workouts?|sessions?|times|days|séances?|fois|jours|entraînements?|trainings?|visits?)\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "both.week.recap", "source": "both", "category": "aggregate", "difficulty": 3,
+   "prompt": "quick recap of my week: spending and workouts",
+   "truth": "week_recap",
+   "checks": [
+     {"type": "number", "of": "spent"},
+     {"type": "text_any", "regex": ["\\b(?:3|three|trois)\\b\\**\\s+(?:[^\\W\\d]+\\s+){0,3}?\\**(workouts?|sessions?|times|days|séances?|fois|jours|entraînements?|trainings?)\\b|\\b(?:3|three|trois)\\b\\**\\s+(?:out\\s+)?of\\s+(?:your\\s+|the\\s+)?(?:\\d+|four|quatre)\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "both.gym.bill_and_last_workout", "source": "both", "category": "time", "difficulty": 1,
+   "prompt": "when's my next gym payment, and when did I last work out?",
+   "truth": "gym_bill_and_last_workout",
+   "checks": [
+     {"type": "text_any", "regex": ["\\boct(ober|\\.)?\\s*14\\b", "\\b10-14\\b", "\\b14 oct"]},
+     {"type": "text_any", "regex": ["sep(?:t(?:ember)?)?\\.?\\s*17\\b|\\b09-17\\b|\\byesterday\\b|\\bthursday\\b|\\b17 sept|\\bhier\\b|\\bjeudi\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "both.yesterday_fr", "source": "both", "category": "time", "difficulty": 2,
+   "prompt": "Combien j'ai dépensé hier, et est-ce que je me suis entraîné hier?",
+   "truth": "yesterday_both",
+   "checks": [
+     {"type": "text_any", "regex": ["44[.,]90"]},
+     {"type": "text_any", "regex": ["legs|jambes|squat|\\boui\\b|\\byes\\b"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "both.august.runs_and_transport", "source": "both", "category": "aggregate", "difficulty": 2,
+   "prompt": "how many runs did I do in august, and how much did I spend on transport that month?",
+   "truth": "runs_transport_august",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(?:5|five|cinq)\\b\\**\\s+(?:[^\\W\\d]+\\s+){0,3}?\\**(runs?|times|sessions?|courses?|fois)\\b"]},
+     {"type": "number", "of": "transport"},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false}
+]

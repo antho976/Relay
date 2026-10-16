@@ -1,0 +1,3994 @@
+{
+ "schema": 1,
+ "name": "final4-default-holdout",
+ "created": "2026-10-15T20:20:49",
+ "wall_seconds": 103.7,
+ "anchor": "2026-09-18 12:00:00",
+ "zone": "America/Toronto",
+ "model": {
+  "name": "final4-default-holdout",
+  "file": "Qwen3.5-4B-Q8_0.gguf",
+  "path": "/home/anthony/models/Qwen3.5-4B-Q8_0.gguf",
+  "bytes": 4482403488,
+  "sha256_first_64mib": "89cee2337118c5504cf68575a0f4278aad22dc81471475cb411ca005ddb173bc",
+  "template": "product",
+  "server": "/home/anthony/.local/bin/llama-server",
+  "server_version": "version: 0.6.0-dev (build 1, commit 23b0202)"
+ },
+ "variant": {
+  "name": "baseline",
+  "description": "The product as the relay binary under test builds it: nothing changed.",
+  "env": {},
+  "settings": {}
+ },
+ "relay": {
+  "bin": "/tmp/claude-1000/-home-anthony-dev3-RelayV4--relay-worktrees-nimble-walrus/0fbd2dd5-1726-4f59-ab04-ab83c1802e35/scratchpad/relay-final4/relay",
+  "sha256": "bb1640e527b1a239c4bbe8bc41373eddbc7902d60cdb24b09e4a945b70dd0610",
+  "mtime": "2026-10-15T20:13:49",
+  "commit": "ff599ba7b132f767d1bda974c3ddaf0739e1648f + working tree: final (default lean,readings,prefetch; readings as cand6; empty RELAY_THREADS_LOCAL = default)",
+  "commit_source": "/tmp/claude-1000/-home-anthony-dev3-RelayV4--relay-worktrees-nimble-walrus/0fbd2dd5-1726-4f59-ab04-ab83c1802e35/scratchpad/relay-final4/COMMIT"
+ },
+ "claude_code": "2.1.301 (Claude Code)",
+ "llama": {
+  "version": "version: 0.6.0-dev (build 1, commit 23b0202)",
+  "load_seconds": 2.0,
+  "n_slots": "2",
+  "n_ctx_slot": "32768",
+  "kv_unified": "false",
+  "argv": [
+   "-m",
+   "/tmp/relay-bench/r90knt9t/models/Qwen3.5-4B-Q8_0.gguf",
+   "--alias",
+   "qwen35-4b",
+   "--host",
+   "127.0.0.1",
+   "--port",
+   "38423",
+   "-c",
+   "65536",
+   "-np",
+   "2",
+   "--jinja",
+   "--reasoning",
+   "off",
+   "--no-webui",
+   "--chat-template-file",
+   "/tmp/relay-bench/r90knt9t/data/relay-v4/test/local-model.jinja",
+   "--no-slots"
+  ]
+ },
+ "gpu": {
+  "name": "NVIDIA GeForce RTX 4070",
+  "total_mib": 12282,
+  "used_mib": 3206,
+  "free_mib": 8728,
+  "driver": "615.78.08"
+ },
+ "parallel": 2,
+ "runs": 2,
+ "suite": "all",
+ "split": "holdout",
+ "task_filter": null,
+ "turn_timeout": 240.0,
+ "world": {
+  "sample": {
+   "transactions": 122
+  },
+  "holdings": {
+   "kind": "holdings",
+   "accounts_created": 1,
+   "holdings": 3,
+   "prices": 3,
+   "values": 1
+  },
+  "avex": {
+   "sessions": 49,
+   "sets": 643,
+   "cardio": 12,
+   "goals": 2,
+   "exported_at": "2026-09-17 21:14"
+  },
+  "avex_sha256": "c3329c9dc615fab65bc8709486b5ec4023704e0cdf75a3093c68ffbfcbcb8826",
+  "period": {
+   "start": "2026-09-01",
+   "end_exclusive": "2026-10-01",
+   "days": 30,
+   "days_left": 13
+  },
+  "currency": "CAD",
+  "gym_exported_at": "2026-09-17 21:14",
+  "fingerprint": "3fd7dae805347a10bd81714ad2f2483ee1d5befaa81711f8d7654326c903bc1c"
+ },
+ "gave_up": null,
+ "world_intact_after": true,
+ "records": [
+  {
+   "id": "avex.goal.bench",
+   "suite": "avex",
+   "source": "avex",
+   "category": "lookup",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 225 (want 225)",
+     "of": "target"
+    },
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 215 (want 215)",
+     "of": "best"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how close am I to my bench goal?",
+     "text": "Based on the data you provided:\n\n**Your bench goal:** 225 lb (set target on Mon Jun 22 \"Two plates by winter\")\n\n**Current bench record:** 215 lb x 5 on Mon Sep 14\n\n**How close:** You're **10 lb** away from your bench goal (215 lb vs 225 lb target).\n\nYou've been tracking your Bench Press for 23 workouts, and your estimated 1-rep max is 250.8 lb, which is above your goal. However, your actual recorded best set is 215 lb.\n\nTo close the 10 lb gap, you need to add that 10 lb to your last bench session (225 lb x 5) and continue training.",
+     "seconds": 6.54,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "target": 225.0,
+    "best": 215.0,
+    "gap": 10.0
+   },
+   "seconds": 6.54,
+   "turn_seconds": [
+    6.54
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Based on the data you provided:\n\n**Your bench goal:** 225 lb (set target on Mon Jun 22 \"Two plates by winter\")\n\n**Current bench record:** 215 lb x 5 on Mon Sep 14\n\n**How close:** You're **10 lb** away from your bench goal (215 lb vs 225 lb target).\n\nYou've been tracking your Bench Press for 23 workouts, and your estimated 1-rep max is 250.8 lb, which is above your goal. However, your actual recorded best set is 215 lb.\n\nTo close the 10 lb gap, you need to add that 10 lb to your last bench session (225 lb x 5) and continue training.",
+   "tokens": null,
+   "thread_id": 1
+  },
+  {
+   "id": "avex.squat.volume_yesterday",
+   "suite": "avex",
+   "source": "avex",
+   "category": "units",
+   "difficulty": 3,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 3990 (want 3990)",
+     "of": "volume"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "what was my squat volume yesterday?",
+     "text": "Your squat volume yesterday was **3,990 lb** (26,185 lb lifted for Legs A, but only 3,990 lb came from Back Squat).\n\nThe 3,990 lb from Back Squat came from:\n- 1 warm-up set: 142 lb x 8\n- 3 working sets: 285 lb x 5, 285 lb x 5, and 285 lb x 4",
+     "seconds": 6.54,
+     "error": null,
+     "tool_calls": [
+      {
+       "op": "gym.session.get",
+       "input": {
+        "id": 149
+       },
+       "is_error": false,
+       "result": "AVEX WORKOUT (weights in lb). Today is Friday, September 18, 2026 (2026-09-18).\n- Thu Sep 17 18:32 (yesterday): Legs A, 44 min, 12 sets, 26,185 lb lifted, 4 records; lifts: Back Squat, Romanian Deadlift, Leg Press, Standing Calf Raise; felt good [id 149]\nJournal: Gym was packed\n\nBack Squat: 3,990 lb volume, best estimated 1-rep max 332.5 lb, a RECORD, felt easy\n  set 1: 142 lb x 8 (warmup)\n  set 2: 285 lb x 5 (work), best set\n  set 3: 285 lb x 5 (work), RPE 8\n  set 4: 285 lb x 4 (work)\n\nRomanian Deadlift: 4,945 lb volume, best estimated 1-rep max 272.3 lb, a RECORD, felt medium\n  set 1: 215 lb x 8 (work), best set\n  set 2: 215 lb x 8 (work), RPE 9\n  set 3: 215 lb x 7 (work)\n\nLeg Press: 11,310 lb volume, best estimated 1-rep max 520 lb, a RECORD, felt medium\n  set 1: 390 lb x 10 (work), best set\n  set 2: 390 lb x 10 (work), RPE 7\n  set 3: 390 lb x 9 (work)\n\nStanding Calf Raise: 5,940 lb volume, best estimated 1-rep max 231 lb, a RECORD, felt hard\n  set 1: 165 lb x 12 (work), best set\n  set 2: 165 lb x 12 (work), RPE 7.5\n  set 3: 165 lb x 12 (work)"
+      }
+     ]
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "sets": 3,
+    "warmups": 1,
+    "volume": 3990.0,
+    "with_warmups": 5126.0
+   },
+   "seconds": 6.54,
+   "turn_seconds": [
+    6.54
+   ],
+   "tool_calls": 1,
+   "ops": [
+    "gym.session.get"
+   ],
+   "mutated": false,
+   "final_text": "Your squat volume yesterday was **3,990 lb** (26,185 lb lifted for Legs A, but only 3,990 lb came from Back Squat).\n\nThe 3,990 lb from Back Squat came from:\n- 1 warm-up set: 142 lb x 8\n- 3 working sets: 285 lb x 5, 285 lb x 5, and 285 lb x 4",
+   "tokens": null,
+   "thread_id": 2
+  },
+  {
+   "id": "avex.week.vs_last",
+   "suite": "avex",
+   "source": "avex",
+   "category": "compare",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\b(?:3|three|trois)\\\\b\\\\**\\\\s+(?:[^\\\\W\\\\d]+\\\\s+){0,3}?\\\\**(workouts?|sessions?|times|days|s\u00e9ances?|fois|jours|entra\u00eenements?|trainings?)\\\\b|\\\\b(?:3|three|trois)\\\\b\\\\**\\\\s+(?:out\\\\s+)?of\\\\s+(?:your\\\\s+|the\\\\s+)?(?:\\\\d+|four|quatre)\\\\b'"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\b(?:4|four|quatre)\\\\b\\\\**\\\\s+(?:[^\\\\W\\\\d]+\\\\s+){0,3}?\\\\**(workouts?|sessions?|times|days|s\u00e9ances?|fois|jours|entra\u00eenements?|trainings?)\\\\b'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "am i training more or less than last week?",
+     "text": "Looking at the gym data provided:\n\n**THIS WEEK (Mon Sep 14 to today): 3 workouts**\n**LAST WEEK (Mon Sep 7 to Sun Sep 13): 4 workouts**\n\nYou are training **less** than last week \u2014 you've done 3 workouts this week compared to 4 workouts last week.\n\nThe last week had 4 workouts (Push A, Pull A, Legs A, Push B), while this week has 3 workouts so far (Push A, Pull A, Legs A).",
+     "seconds": 2.52,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "this": 3,
+    "last": 4,
+    "this_sets": 36,
+    "last_sets": 48,
+    "this_volume": 46405.0,
+    "last_volume": 57350.0,
+    "this_titles": [
+     "Push A",
+     "Pull A",
+     "Legs A"
+    ]
+   },
+   "seconds": 2.52,
+   "turn_seconds": [
+    2.52
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at the gym data provided:\n\n**THIS WEEK (Mon Sep 14 to today): 3 workouts**\n**LAST WEEK (Mon Sep 7 to Sun Sep 13): 4 workouts**\n\nYou are training **less** than last week \u2014 you've done 3 workouts this week compared to 4 workouts last week.\n\nThe last week had 4 workouts (Push A, Pull A, Legs A, Push B), while this week has 3 workouts so far (Push A, Pull A, Legs A).",
+   "tokens": null,
+   "thread_id": 2
+  },
+  {
+   "id": "avex.squat_vs_deadlift",
+   "suite": "avex",
+   "source": "avex",
+   "category": "compare",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has 'deadlift[^.\\\\n]{0,80}(stronger|higher|heavier|more|bigger|ahead)'"
+    },
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 335 (want 335)",
+     "of": "deadlift"
+    },
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 285 (want 285)",
+     "of": "squat"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "what's stronger, my squat or my deadlift?",
+     "text": "Based on the gym data from your Avex log (exported on Thu Sep 17 at 21:14), I can compare your squat and deadlift strength from the **best sets ever logged**:\n\n**Squat (Back Squat):**\n- Best set: **285 lb x 5** on Thu Sep 17\n- Estimated 1-rep max: **332.5 lb**\n\n**Deadlift:**\n- Best set: **335 lb x 5** on Tue Sep 15\n- Estimated 1-rep max: **390.8 lb**\n\n**Your deadlift is stronger** than your squat by about 58 lb in estimated 1-rep max terms (390.8 lb vs 332.5 lb). However, your deadlift's best set was 50 lb heavier than your squat's best set (335 lb vs 285 lb).\n\nNote: This data is from a copy exported on September 17, 2026, so any workouts logged after that are not included.",
+     "seconds": 4.03,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "deadlift": [
+     335.0,
+     390.8
+    ],
+    "squat": [
+     285.0,
+     332.5
+    ]
+   },
+   "seconds": 4.03,
+   "turn_seconds": [
+    4.03
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Based on the gym data from your Avex log (exported on Thu Sep 17 at 21:14), I can compare your squat and deadlift strength from the **best sets ever logged**:\n\n**Squat (Back Squat):**\n- Best set: **285 lb x 5** on Thu Sep 17\n- Estimated 1-rep max: **332.5 lb**\n\n**Deadlift:**\n- Best set: **335 lb x 5** on Tue Sep 15\n- Estimated 1-rep max: **390.8 lb**\n\n**Your deadlift is stronger** than your squat by about 58 lb in estimated 1-rep max terms (390.8 lb vs 332.5 lb). However, your deadlift's best set was 50 lb heavier than your squat's best set (335 lb vs 285 lb).\n\nNote: This data is from a copy exported on September 17, 2026, so any workouts logged after that are not included.",
+   "tokens": null,
+   "thread_id": 1
+  },
+  {
+   "id": "avex.june.workouts",
+   "suite": "avex",
+   "source": "avex",
+   "category": "aggregate",
+   "difficulty": 3,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\b(?:5|five|cinq)\\\\b\\\\**\\\\s+(?:[^\\\\W\\\\d]+\\\\s+){0,3}?\\\\**(workouts?|sessions?|times|days|s\u00e9ances?|fois|jours|entra\u00eenements?|trainings?)\\\\b'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how many workouts did i do in june?",
+     "text": "Looking at the gym data provided, I can find the answer in the \"MONTH BY MONTH\" section.\n\nAccording to the data:\n- **June (Jun): 5 workouts, 47,925 lb lifted, 25 cardio minutes, 4 km**\n\nYou did **5 workouts** in June.",
+     "seconds": 1.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "count": 5,
+    "with_untracked": 6
+   },
+   "seconds": 1.51,
+   "turn_seconds": [
+    1.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at the gym data provided, I can find the answer in the \"MONTH BY MONTH\" section.\n\nAccording to the data:\n- **June (Jun): 5 workouts, 47,925 lb lifted, 25 cardio minutes, 4 km**\n\nYou did **5 workouts** in June.",
+   "tokens": null,
+   "thread_id": 2
+  },
+  {
+   "id": "avex.lift.most_done",
+   "suite": "avex",
+   "source": "avex",
+   "category": "rank",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\bbench'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "what lift do i do the most?",
+     "text": "Based on the data, here's the frequency of each lift done:\n\n- **Bench Press**: 23 workouts\n- **Overhead Press**: 22 workouts\n- **Back Squat**: 13 workouts\n- **Romanian Deadlift**: 13 workouts\n- **Standing Calf Raise**: 13 workouts\n- **Barbell Curl**: 12 workouts\n- **Barbell Row**: 12 workouts\n- **Pull-up**: 12 workouts\n- **Triceps Pushdown**: 12 workouts\n- **Deadlift**: 11 workouts\n- **Dips**: 11 workouts\n- **Incline Dumbbell Press**: 11 workouts\n- **Lateral Raise**: 11 workouts\n- **Leg Press**: 11 workouts\n\n**Bench Press** is the lift you do the most, with 23 workouts. It's followed closely by **Overhead Press** with 22 workouts.",
+     "seconds": 4.02,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "name": "Bench Press",
+    "sessions": 23
+   },
+   "seconds": 4.02,
+   "turn_seconds": [
+    4.02
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Based on the data, here's the frequency of each lift done:\n\n- **Bench Press**: 23 workouts\n- **Overhead Press**: 22 workouts\n- **Back Squat**: 13 workouts\n- **Romanian Deadlift**: 13 workouts\n- **Standing Calf Raise**: 13 workouts\n- **Barbell Curl**: 12 workouts\n- **Barbell Row**: 12 workouts\n- **Pull-up**: 12 workouts\n- **Triceps Pushdown**: 12 workouts\n- **Deadlift**: 11 workouts\n- **Dips**: 11 workouts\n- **Incline Dumbbell Press**: 11 workouts\n- **Lateral Raise**: 11 workouts\n- **Leg Press**: 11 workouts\n\n**Bench Press** is the lift you do the most, with 23 workouts. It's followed closely by **Overhead Press** with 22 workouts.",
+   "tokens": null,
+   "thread_id": 3
+  },
+  {
+   "id": "avex.cardio.this_week",
+   "suite": "avex",
+   "source": "avex",
+   "category": "time",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\bno\\\\b'"
+    },
+    {
+     "type": "text_none",
+     "pass": true,
+     "why": "none present"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "have I done any cardio this week?",
+     "text": "Looking at the Avex gym data you provided, I can see the cardio information:\n\n**This week (Mon Sep 14 to today Fri Sep 18): 0 cardio minutes**\n\nThe data shows:\n- **Last week** (Mon Sep 7 to Sun Sep 13): 36 cardio minutes\n- **This week** (Mon Sep 14 to today): 0 cardio minutes\n\nThe most recent cardio sessions were:\n- Sat Sep 12: 36 min, 5.65 km (last Saturday)\n- Sat Sep 5: 35 min, 5.5 km\n\nSo **no, you have not done any cardio this week** (Mon Sep 14 to Fri Sep 18). Your last cardio session was Saturday Sep 12.",
+     "seconds": 3.01,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "this_week": 0,
+    "last_day": "2026-09-12"
+   },
+   "seconds": 3.01,
+   "turn_seconds": [
+    3.01
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at the Avex gym data you provided, I can see the cardio information:\n\n**This week (Mon Sep 14 to today Fri Sep 18): 0 cardio minutes**\n\nThe data shows:\n- **Last week** (Mon Sep 7 to Sun Sep 13): 36 cardio minutes\n- **This week** (Mon Sep 14 to today): 0 cardio minutes\n\nThe most recent cardio sessions were:\n- Sat Sep 12: 36 min, 5.65 km (last Saturday)\n- Sat Sep 5: 35 min, 5.5 km\n\nSo **no, you have not done any cardio this week** (Mon Sep 14 to Fri Sep 18). Your last cardio session was Saturday Sep 12.",
+   "tokens": null,
+   "thread_id": 4
+  },
+  {
+   "id": "avex.stale.freshness",
+   "suite": "avex",
+   "source": "avex",
+   "category": "stale",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has 'sep(?:t(?:ember)?)?\\\\.?\\\\s*17\\\\b|\\\\b09-17\\\\b|\\\\byesterday\\\\b|\\\\bthursday\\\\b|\\\\b17 sept|\\\\bhier\\\\b|\\\\bjeudi\\\\b'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how up to date is my gym data?",
+     "text": "Your gym data is **one day old**.\n\nThe Avex gym copy was exported from the phone on **Thursday, September 17, 2026 at 21:14** (yesterday). Anything logged after that time is not in this copy. Your last workout recorded is from Thursday, September 17 (Legs A).",
+     "seconds": 1.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "exported_at": "2026-09-17 21:14",
+    "today_sessions": 0
+   },
+   "seconds": 1.51,
+   "turn_seconds": [
+    1.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Your gym data is **one day old**.\n\nThe Avex gym copy was exported from the phone on **Thursday, September 17, 2026 at 21:14** (yesterday). Anything logged after that time is not in this copy. Your last workout recorded is from Thursday, September 17 (Legs A).",
+   "tokens": null,
+   "thread_id": 4
+  },
+  {
+   "id": "avex.ask.log_workout",
+   "suite": "avex",
+   "source": "avex",
+   "category": "ask_first",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\bavex\\\\b'"
+    },
+    {
+     "type": "text_none",
+     "pass": true,
+     "why": "none present"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "log a workout for me: bench 3x5 at 220 today",
+     "text": "I cannot log workouts, add entries, or modify any data in your budget app or gym app (Avex). Those tools are read-only from here.\n\nTo log your workout, you need to do it in the Avex app on your phone. Here's what to do:\n\n1. Open the Avex app\n2. Log a new workout for today (Friday, Sep 18, 2026)\n3. Name it \"Bench\" or \"Bench Press\"\n4. Add the set: 5 reps at 220 lb (220 lb x 5)\n5. Add the 3 working sets you want to record\n6. Add any notes you want (e.g., \"felt good\" or \"felt great\")\n\nOnce you've logged it in Avex, the data will be updated on your phone. The current copy here was exported yesterday (Thu Sep 17 at 21:14), so any workout you log after that time won't appear in this conversation's data.",
+     "seconds": 4.02,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {},
+   "seconds": 4.02,
+   "turn_seconds": [
+    4.02
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "I cannot log workouts, add entries, or modify any data in your budget app or gym app (Avex). Those tools are read-only from here.\n\nTo log your workout, you need to do it in the Avex app on your phone. Here's what to do:\n\n1. Open the Avex app\n2. Log a new workout for today (Friday, Sep 18, 2026)\n3. Name it \"Bench\" or \"Bench Press\"\n4. Add the set: 5 reps at 220 lb (220 lb x 5)\n5. Add the 3 working sets you want to record\n6. Add any notes you want (e.g., \"felt good\" or \"felt great\")\n\nOnce you've logged it in Avex, the data will be updated on your phone. The current copy here was exported yesterday (Thu Sep 17 at 21:14), so any workout you log after that time won't appear in this conversation's data.",
+   "tokens": null,
+   "thread_id": 5
+  },
+  {
+   "id": "avex.chart.weekly_volume",
+   "suite": "avex",
+   "source": "avex",
+   "category": "chart",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "chart",
+     "pass": true,
+     "why": "matches"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "show my weekly volume as a chart",
+     "text": "I'll create a chart showing your weekly training volume. Looking at the data, I can see the weekly volume information is already provided in the gym data.\n\n```chart\n{\"type\": \"bar\", \"title\": \"Weekly Training Volume (lb lifted)\", \"gym\": {\"measure\": \"volume\", \"by\": \"week\", \"periods\": 12}}\n```\n\nThis chart will show the training volume (in pounds lifted) by week for the past 12 weeks, based on your Avex gym data. The most recent week (starting Mon Sep 14) is listed last in the data.",
+     "seconds": 2.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {},
+   "seconds": 2.51,
+   "turn_seconds": [
+    2.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "I'll create a chart showing your weekly training volume. Looking at the data, I can see the weekly volume information is already provided in the gym data.\n\n```chart\n{\"type\": \"bar\", \"title\": \"Weekly Training Volume (lb lifted)\", \"gym\": {\"measure\": \"volume\", \"by\": \"week\", \"periods\": 12}}\n```\n\nThis chart will show the training volume (in pounds lifted) by week for the past 12 weeks, based on your Avex gym data. The most recent week (starting Mon Sep 14) is listed last in the data.",
+   "tokens": null,
+   "thread_id": 6
+  },
+  {
+   "id": "both.august.runs_and_transport",
+   "suite": "both",
+   "source": "both",
+   "category": "aggregate",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": false,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": false,
+     "why": "none of ['\\\\b(?:5|five|cinq)\\\\b\\\\**\\\\s+(?:[^\\\\W\\\\d]+\\\\s+){0,3}?\\\\**(runs?|times|sessions?|courses?|fois)\\\\b']"
+    },
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 220.5 (want 220.5)",
+     "of": "transport"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how many runs did I do in august, and how much did I spend on transport that month?",
+     "text": "Based on the data provided:\n\n**Runs in August:** 4 runs\n- Sat Aug 29: 34 min, 5.35 km\n- Sat Aug 22: 33 min, 5.2 km  \n- Sat Aug 15: 32 min, 5.05 km\n- Sat Aug 12: 36 min, 5.65 km\n\n**Transport spending in August:** $220.50\n\nAnswer from the data:\n- August runs: 4 (from the recent cardio list)\n- August transport: $220.50 (from \"SPENDING BY CATEGORY, MONTH BY MONTH: Transport: July $266.50; August $220.50; September so far $139.50\")",
+     "seconds": 3.01,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "runs": 5,
+    "transport": 220.5
+   },
+   "seconds": 3.01,
+   "turn_seconds": [
+    3.01
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Based on the data provided:\n\n**Runs in August:** 4 runs\n- Sat Aug 29: 34 min, 5.35 km\n- Sat Aug 22: 33 min, 5.2 km  \n- Sat Aug 15: 32 min, 5.05 km\n- Sat Aug 12: 36 min, 5.65 km\n\n**Transport spending in August:** $220.50\n\nAnswer from the data:\n- August runs: 4 (from the recent cardio list)\n- August transport: $220.50 (from \"SPENDING BY CATEGORY, MONTH BY MONTH: Transport: July $266.50; August $220.50; September so far $139.50\")",
+   "tokens": null,
+   "thread_id": 6
+  },
+  {
+   "id": "tally.groceries.this_month_typo",
+   "suite": "tally",
+   "source": "tally",
+   "category": "lookup",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 406.95 (want 406.95)",
+     "of": "spent"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how much did i spend on grocerys this mnth",
+     "text": "You spent **$406.95** on groceries this month (September 2026).\n\nThat's 81.4% of your $500 grocery budget, with $93.05 remaining. However, you're over pace by $106.95 in this category.",
+     "seconds": 1.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "spent": 406.95
+   },
+   "seconds": 1.51,
+   "turn_seconds": [
+    1.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "You spent **$406.95** on groceries this month (September 2026).\n\nThat's 81.4% of your $500 grocery budget, with $93.05 remaining. However, you're over pace by $106.95 in this category.",
+   "tokens": null,
+   "thread_id": 7
+  },
+  {
+   "id": "tally.balance.chequing",
+   "suite": "tally",
+   "source": "tally",
+   "category": "lookup",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 7564.8 (want 7564.8)",
+     "of": "balance"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "What's the balance on my chequing?",
+     "text": "The balance on your chequing account is **$7,564.80**.",
+     "seconds": 1.01,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "balance": 7564.8
+   },
+   "seconds": 1.01,
+   "turn_seconds": [
+    1.01
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "The balance on your chequing account is **$7,564.80**.",
+   "tokens": null,
+   "thread_id": 7
+  },
+  {
+   "id": "tally.balance.cash_negative",
+   "suite": "tally",
+   "source": "tally",
+   "category": "lookup",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found -481.28 (want -481.28)",
+     "of": "balance"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '[-\u2212]\\\\s?\\\\$?\\\\s?481[.,]28|\\\\bnegative\\\\b|below (zero|\\\\$?0)|\\\\bminus\\\\b|overdrawn|in the red|\\\\(\\\\$?481|\\\\bshort\\\\b|more than (you|it) (had|started)'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how much cash do i have left according to tally?",
+     "text": "Looking at the data from your Tally budget app:\n\n**Cash balance: -$481.28**\n\nYou have $481.28 in debt on your cash account (a negative balance). This is shown in the accounts section of your data:\n- Sample cash (cash): -$481.28",
+     "seconds": 1.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "balance": [
+     -481.28,
+     481.28
+    ]
+   },
+   "seconds": 1.51,
+   "turn_seconds": [
+    1.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at the data from your Tally budget app:\n\n**Cash balance: -$481.28**\n\nYou have $481.28 in debt on your cash account (a negative balance). This is shown in the accounts section of your data:\n- Sample cash (cash): -$481.28",
+   "tokens": null,
+   "thread_id": 8
+  },
+  {
+   "id": "tally.bills.to_pay_10_days",
+   "suite": "tally",
+   "source": "tally",
+   "category": "lookup",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 60 (want 60)",
+     "of": "internet"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has 'internet'"
+    },
+    {
+     "type": "text_none",
+     "pass": true,
+     "why": "none present"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "What bills do I have to pay in the next 10 days?",
+     "text": "Based on the data provided, here are the bills you have to pay in the next 10 days (from today, Friday Sep 18, 2026):\n\n**Bills due in the next 10 days:**\n1. **Internet**: $60.00 on Tue Sep 22 (in 4 days)\n\nThat's the only bill coming due within the next 10 days. The next bill after that is Rent ($1,350.00) on Thu Oct 1, which is in 13 days.",
+     "seconds": 2.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "internet": 60.0,
+    "due": "2026-09-22"
+   },
+   "seconds": 2.51,
+   "turn_seconds": [
+    2.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Based on the data provided, here are the bills you have to pay in the next 10 days (from today, Friday Sep 18, 2026):\n\n**Bills due in the next 10 days:**\n1. **Internet**: $60.00 on Tue Sep 22 (in 4 days)\n\nThat's the only bill coming due within the next 10 days. The next bill after that is Rent ($1,350.00) on Thu Oct 1, which is in 13 days.",
+   "tokens": null,
+   "thread_id": 9
+  },
+  {
+   "id": "tally.groceries.vs_last_month",
+   "suite": "tally",
+   "source": "tally",
+   "category": "compare",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 406.95 (want 406.95)",
+     "of": "this"
+    },
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 795.35 (want 795.35)",
+     "of": "last"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\b(less|lower|under)\\\\b[^.\\\\n]{0,80}(this month|september|so far)'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "Did I spend more on groceries this month or last month?",
+     "text": "Looking at the data provided:\n\n**Groceries this month (September 2026):** $406.95\n**Groceries last month (August 2026):** $795.35\n\nYou spent **less on groceries this month** ($406.95) than last month ($795.35) \u2014 a difference of $388.40 less.",
+     "seconds": 2.01,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "this": 406.95,
+    "last": 795.35
+   },
+   "seconds": 2.01,
+   "turn_seconds": [
+    2.01
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at the data provided:\n\n**Groceries this month (September 2026):** $406.95\n**Groceries last month (August 2026):** $795.35\n\nYou spent **less on groceries this month** ($406.95) than last month ($795.35) \u2014 a difference of $388.40 less.",
+   "tokens": null,
+   "thread_id": 10
+  },
+  {
+   "id": "tally.biggest.this_month",
+   "suite": "tally",
+   "source": "tally",
+   "category": "rank",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 1350 (want 1350)",
+     "of": "amount"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\brent\\\\b|\\\\bloyer\\\\b|\\\\bhousing\\\\b'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "What was my biggest expense this month?",
+     "text": "Based on the data provided, your biggest expense this month was:\n\n**$1,350.00 - Rent (Housing), Tue Sep 1**",
+     "seconds": 1.01,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "amount": 1350.0,
+    "note": "Rent"
+   },
+   "seconds": 1.01,
+   "turn_seconds": [
+    1.01
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Based on the data provided, your biggest expense this month was:\n\n**$1,350.00 - Rent (Housing), Tue Sep 1**",
+   "tokens": null,
+   "thread_id": 11
+  },
+  {
+   "id": "tally.rent.next_due",
+   "suite": "tally",
+   "source": "tally",
+   "category": "time",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\boct(ober|\\\\.)?\\\\s*1(st)?\\\\b'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "When's rent due next?",
+     "text": "Rent is due on **Thu Oct 1** for **$1,350.00**. That's 13 days from today.",
+     "seconds": 1.01,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "date": "2026-10-01",
+    "amount": 1350.0
+   },
+   "seconds": 1.01,
+   "turn_seconds": [
+    1.01
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Rent is due on **Thu Oct 1** for **$1,350.00**. That's 13 days from today.",
+   "tokens": null,
+   "thread_id": 12
+  },
+  {
+   "id": "tally.pace.am_i_ok",
+   "suite": "tally",
+   "source": "tally",
+   "category": "pace",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 642 (want 642)",
+     "of": "over_pace"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has 'over (the |your )?pace|ahead of (your |an even |the )?pace|above (your |the )?pace|faster than|too fast|ahead of schedule|ahead of an even'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "am I ok this month?",
+     "text": "You're in a bit of a tight spot this month.\n\n**Spending vs. Budget:**\n- You have $2,382.00 spent against a $2,900.00 monthly budget.\n- That leaves $518.00 remaining for the 13 days left in the month.\n- However, you are $642.00 **over your even spending pace** ($1,740.00 would be the pace for 18 days).\n\n**Category breakdown:**\n- **Transport** is over budget by $19.50 ($139.50 of $120.00).\n- **Groceries** are over pace by $106.95 ($406.95 of $500.00, but you've spent too much for 18 days).\n- **Dining** is over pace by $19.16 ($211.16 of $320.00).\n- **Entertainment** is over pace by $7.00 ($55.00 of $80.00).\n- **Shopping** is way under budget and under pace ($0.00 of $150.00).\n\n**Biggest expenses:**\n- Rent ($1,350.00)\n- Groceries ($406.95, mostly one $113.46 and another $91.88)\n- Dining ($211.16, mostly $145.50)\n\nTo stay within the remaining $518.00 for 13 days, you'd need to spend about $39.84/day. You've already spent $410.18 this week (Mon Sep 14\u2013Sep 18), so you have only $971.82 left for the 13 days remaining.\n\n**Bottom line:** You're over your pace and slightly over budget in transport. If you cut back on dining and entertainment (which are already over pace) and keep groceries and transport in check, you can stay within budget. But you'll need to be tight on spending for the rest of the month.",
+     "seconds": 8.54,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "over_pace": 642.0,
+    "remaining": 518.0,
+    "days_left": 13
+   },
+   "seconds": 8.54,
+   "turn_seconds": [
+    8.54
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "You're in a bit of a tight spot this month.\n\n**Spending vs. Budget:**\n- You have $2,382.00 spent against a $2,900.00 monthly budget.\n- That leaves $518.00 remaining for the 13 days left in the month.\n- However, you are $642.00 **over your even spending pace** ($1,740.00 would be the pace for 18 days).\n\n**Category breakdown:**\n- **Transport** is over budget by $19.50 ($139.50 of $120.00).\n- **Groceries** are over pace by $106.95 ($406.95 of $500.00, but you've spent too much for 18 days).\n- **Dining** is over pace by $19.16 ($211.16 of $320.00).\n- **Entertainment** is over pace by $7.00 ($55.00 of $80.00).\n- **Shopping** is way under budget and under pace ($0.00 of $150.00).\n\n**Biggest expenses:**\n- Rent ($1,350.00)\n- Groceries ($406.95, mostly one $113.46 and another $91.88)\n- Dining ($211.16, mostly $145.50)\n\nTo stay within the remaining $518.00 for 13 days, you'd need to spend about $39.84/day. You've already spent $410.18 this week (Mon Sep 14\u2013Sep 18), so you have only $971.82 left for the 13 days remaining.\n\n**Bottom line:** You're over your pace and slightly over budget in transport. If you cut back on dining and entertainment (which are already over pace) and keep groceries and transport in check, you can stay within budget. But you'll need to be tight on spending for the rest of the month.",
+   "tokens": null,
+   "thread_id": 13
+  },
+  {
+   "id": "tally.pace.daily_allowance",
+   "suite": "tally",
+   "source": "tally",
+   "category": "pace",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 39.84 (want 39.84)",
+     "of": "per_day"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how much can i spend per day for the rest of the month",
+     "text": "Based on the data provided:\n\n**You can spend $39.84 per day for the rest of the month.**\n\nThat's the remaining budget ($518.00) divided by the 13 days left in September, which would keep you within your $2,900 monthly budget.",
+     "seconds": 1.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "per_day": [
+     39.84,
+     40.0
+    ]
+   },
+   "seconds": 1.51,
+   "turn_seconds": [
+    1.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Based on the data provided:\n\n**You can spend $39.84 per day for the rest of the month.**\n\nThat's the remaining budget ($518.00) divided by the 13 days left in September, which would keep you within your $2,900 monthly budget.",
+   "tokens": null,
+   "thread_id": 14
+  },
+  {
+   "id": "tally.multi.groceries_then_last_month",
+   "suite": "tally",
+   "source": "tally",
+   "category": "multi_turn",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 795.35 (want 795.35)",
+     "of": "last"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how much on groceries this month?",
+     "text": "You've spent **$406.95** on groceries this month (September 2026).\n\nThat's $93.05 left of your $500.00 budget for groceries. You're over pace by $106.95.",
+     "seconds": 1.51,
+     "error": null,
+     "tool_calls": []
+    },
+    {
+     "prompt": "and last month?",
+     "text": "You spent **$795.35** on groceries last month (August 2026).",
+     "seconds": 0.5,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "this": 406.95,
+    "last": 795.35
+   },
+   "seconds": 2.01,
+   "turn_seconds": [
+    1.51,
+    0.5
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "You spent **$795.35** on groceries last month (August 2026).",
+   "tokens": null,
+   "thread_id": 14
+  },
+  {
+   "id": "tally.multi.biggest_then_not_rent",
+   "suite": "tally",
+   "source": "tally",
+   "category": "multi_turn",
+   "difficulty": 3,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 158.99 (want 158.99)",
+     "of": "amount"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "What was my biggest expense in August?",
+     "text": "Based on the data provided, your biggest expense in August was **$1,350.00** for **Rent (Housing)**, which was paid on Saturday, August 1.",
+     "seconds": 1.01,
+     "error": null,
+     "tool_calls": []
+    },
+    {
+     "prompt": "ok and apart from rent?",
+     "text": "Apart from rent, your biggest expense in August was **$158.99** for **Books (Shopping)**, purchased on Friday, August 14.",
+     "seconds": 2.01,
+     "error": null,
+     "tool_calls": [
+      {
+       "op": "money.tx.list",
+       "input": {
+        "period_offset": -1,
+        "limit": 50
+       },
+       "is_error": false,
+       "result": "TALLY ENTRIES for August 2026 (Aug 1 to Aug 31), last month. Today is Friday, September 18, 2026 (2026-09-18). Amounts are in CAD.\n45 entries: 39 expenses, 3 incomes, 3 transfers.\n- Spent (all expenses added up): $3,500.29\n- Income: $6,450.00\n- Moved between accounts (transfers, not spending): $1,450.00\n- Spent by category, largest first: Housing $1,350.00 (1); Groceries $795.35 (9); Dining $448.10 (13); Shopping $436.95 (5); Transport $220.50 (5); Phone & internet $105.00 (2); Utilities $78.40 (1); Health $39.00 (1); Entertainment $15.00 (1); Subscriptions $11.99 (1).\n- Biggest expenses: 1. $1,350.00, Rent (Housing), Sat Aug 1; 2. $158.99, Books (Shopping), Fri Aug 14; 3. $139.99, Hardware store (Shopping), Thu Aug 6.\n- Smallest expense: $11.99, Music streaming (Subscriptions), Wed Aug 5.\n- Spent by week (Monday to Sunday): Mon Jul 27 to Sun Aug 2: $1,500.78 (3); Mon Aug 3 to Sun Aug 9: $530.53 (9); Mon Aug 10 to Sun Aug 16: $574.47 (10); Mon Aug 17 to Sun Aug 23: $461.66 (8); Mon Aug 24 to Sun Aug 30: $373.78 (7); Mon Aug 31 to Sun Sep 6: $59.07 (2).\n- Spent by day, newest first (days with no expense left out): Mon Aug 31 $59.07 (2); Sun Aug 30 $27.48 (1); Sat Aug 29 $112.29 (1); Fri Aug 28 $15.00 (1); Wed Aug 26 $55.50 (1); Tue Aug 25 $115.69 (2); Mon Aug 24 $47.82 (1); Sat Aug 22 $191.12 (3); Fri Aug 21 $36.39 (1); Tue Aug 18 $234.15 (4); Sun Aug 16 $73.31 (2); Sat Aug 15 $103.85 (2); Fri Aug 14 $225.59 (3); Tue Aug 11 $126.72 (2); Mon Aug 10 $45.00 (1); Sun Aug 9 $147.49 (3); Sat Aug 8 $114.03 (2); Thu Aug 6 $171.54 (2); Wed Aug 5 $11.99 (1); Tue Aug 4 $85.48 (1); Sat Aug 1 $1,500.78 (3).\n\nENTRIES, newest first (#id, day, note, amount, category, account):\n- #73 Mon Aug 31: OPUS refill, $22.50 expense, Transport, Sample Visa\n- #72 Mon Aug 31: Burger night, $36.57 expense, Dining, Sample Visa\n- #113 Sun Aug 30: Salary, $2,150.00 income, Salary, Sample chequing\n- #71 Sun Aug 30: Bagels, $27.48 expense, Dining, Sample cash\n- #70 Sat Aug 29: Metro, $112.29 expense, Groceries, Sample Visa\n- #69 Fri Aug 28: Concert, $15.00 expense, Entertainment, Sample Visa\n- #68 Wed Aug 26: Bixi, $55.50 expense, Transport, Sample Visa\n- #116 Tue Aug 25: Card payment, $900.00 transfer, Sample chequing to Sample Visa\n- #67 Tue Aug 25: Burger night, $26.37 expense, Dining, Sample Visa\n- #66 Tue Aug 25: Provigo, $89.32 expense, Groceries, Sample Visa\n- #65 Mon Aug 24: Burger night, $47.82 expense, Dining, Sample cash\n- #102 Sat Aug 22: Internet, $60.00 expense, Phone & internet, Sample Visa\n- #64 Sat Aug 22: Taxi home, $62.50 expense, Transport, Sample Visa\n- #63 Sat Aug 22: Metro, $68.62 expense, Groceries, Sample Visa\n- #62 Fri Aug 21: Thai takeout, $36.39 expense, Dining, Sample Visa\n- #96 Tue Aug 18: Hydro-Qu\u00e9bec, $78.40 expense, Utilities, Sample chequing\n- #61 Tue Aug 18: Winter boots, $33.99 expense, Shopping, Sample Visa\n- #60 Tue Aug 18: OPUS refill, $32.50 expense, Transport, Sample Visa\n- #59 Tue Aug 18: IGA, $89.26 expense, Groceries, Sample Visa\n- #112 Sun Aug 16: Salary, $2,150.00 income, Salary, Sample chequing\n- #58 Sun Aug 16: Books, $47.99 expense, Shopping, Sample Visa\n- #57 Sun Aug 16: Caf\u00e9 Olimpico, $25.32 expense, Dining, Sample cash\n- #56 Sat Aug 15: Pho Lien, $33.30 expense, Dining, Sample cash\n- #55 Sat Aug 15: March\u00e9 Jean-Talon, $70.55 expense, Groceries, Sample Visa\n- #107 Fri Aug 14: Gym, $39.00 expense, Health, Sample Visa\n- #54 Fri Aug 14: Books, $158.99 expense, Shopping, Sample Visa\n- #53 Fri Aug 14: Pho Lien, $27.60 expense, Dining, Sample cash\n- #52 Tue Aug 11: Caf\u00e9 Olimpico, $46.80 expense, Dining, Sample Visa\n- #51 Tue Aug 11: Costco, $79.92 expense, Groceries, Sample Visa\n- #99 Mon Aug 10: Phone plan, $45.00 expense, Phone & internet, Sample Visa\n- #50 Sun Aug 9: Hardware store, $55.99 expense, Shopping, Sample Visa\n- #49 Sun Aug 9: Gas, $47.50 expense, Transport, Sample Visa\n- #48 Sun Aug 9: Thai takeout, $44.00 expense, Dining, Sample Visa\n- #47 Sat Aug 8: Caf\u00e9 Olimpico, $46.48 expense, Dining, Sample Visa\n- "
+      }
+     ]
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "amount": 158.99,
+    "note": "Books",
+    "date": "2026-08-14"
+   },
+   "seconds": 3.02,
+   "turn_seconds": [
+    1.01,
+    2.01
+   ],
+   "tool_calls": 1,
+   "ops": [
+    "money.tx.list"
+   ],
+   "mutated": false,
+   "final_text": "Apart from rent, your biggest expense in August was **$158.99** for **Books (Shopping)**, purchased on Friday, August 14.",
+   "tokens": null,
+   "thread_id": 14
+  },
+  {
+   "id": "tally.invest.value_stale",
+   "suite": "tally",
+   "source": "tally",
+   "category": "stale",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 1633.33 (want 1633.33)",
+     "of": "value"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\bmay\\\\s*8\\\\b|2026-05-08|\\\\b05-08\\\\b|\\\\b8 mai\\\\b|\\\\b8th of may\\\\b|\\\\bmay 8th\\\\b'"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\bold\\\\b|out of date|outdated|\\\\bstale\\\\b|\\\\bmonths? (old|ago|out)\\\\b|\\\\b(four|4|over four|more than four) months?\\\\b|not (current|recent|up to date)|\\\\bfresh(er)?\\\\b|\\\\bnew(er)? (holdings )?report\\\\b|\\\\bupdate (it|them|your)\\\\b|outdated'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "What are my investments worth?",
+     "text": "Looking at your investment data from your budget app, I can tell you:\n\n**Investments worth $1,633.33**\n\nThis is the value in your Demo TFSA at Wealthsimple, valued as of **Friday, May 8, 2026** - which is **133 days ago**. The holdings report is more than a month old, so these values are estimates.\n\nYour investments are:\n- **AAPL (Apple Inc)**: 10 units at $100.00 = $1,333.33 (81.63% of portfolio, 33.33% gain)\n- **XEQT (iShares Core Equity ETF)**: 10 units at $25.00 = $250.00 (15.31%, 0% gain)\n- **ARKK (ARK Innovation ETF)**: 1 unit at $50.00 = $50.00 (3.06%, 0% gain)\n\nFor the most current holdings report, you can download from your Wealthsimple account at my.wealthsimple.com, go to Documents \u2192 Holdings report (CSV) for each account.\n\n```import\n{\"source\": \"wealthsimple\", \"expects\": \"holdings\", \"title\": \"Your holdings report\"}\n```\n\nNote: The $9,350.00 \"Sample TFSA\" is not included in the $1,633.33 investment figure - it's valued by hand at your account balance, not from the Wealthsimple holdings.",
+     "seconds": 5.52,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "value": 1633.33,
+    "as_of": "2026-05-08",
+    "gain": 333.33
+   },
+   "seconds": 5.52,
+   "turn_seconds": [
+    5.52
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at your investment data from your budget app, I can tell you:\n\n**Investments worth $1,633.33**\n\nThis is the value in your Demo TFSA at Wealthsimple, valued as of **Friday, May 8, 2026** - which is **133 days ago**. The holdings report is more than a month old, so these values are estimates.\n\nYour investments are:\n- **AAPL (Apple Inc)**: 10 units at $100.00 = $1,333.33 (81.63% of portfolio, 33.33% gain)\n- **XEQT (iShares Core Equity ETF)**: 10 units at $25.00 = $250.00 (15.31%, 0% gain)\n- **ARKK (ARK Innovation ETF)**: 1 unit at $50.00 = $50.00 (3.06%, 0% gain)\n\nFor the most current holdings report, you can download from your Wealthsimple account at my.wealthsimple.com, go to Documents \u2192 Holdings report (CSV) for each account.\n\n```import\n{\"source\": \"wealthsimple\", \"expects\": \"holdings\", \"title\": \"Your holdings report\"}\n```\n\nNote: The $9,350.00 \"Sample TFSA\" is not included in the $1,633.33 investment figure - it's valued by hand at your account balance, not from the Wealthsimple holdings.",
+   "tokens": null,
+   "thread_id": 14
+  },
+  {
+   "id": "tally.invest.biggest_holding",
+   "suite": "tally",
+   "source": "tally",
+   "category": "rank",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\baapl\\\\b|\\\\bapple\\\\b'"
+    },
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 1333.33 (want 1333.33)",
+     "of": "value"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "what's my biggest holding?",
+     "text": "Looking at the investment holdings data, your biggest holding is:\n\n**AAPL (Apple Inc, stock) in Demo TFSA**: $1,333.33, which is **81.63% of the portfolio**\n\nThis is significantly larger than your other holdings:\n- XEQT (iShares Core Equity ETF Portfolio): $250.00 (15.31%)\n- ARKK (ARK Innovation ETF): $50.00 (3.06%)\n\nYour total investment portfolio worth $1,633.33 consists entirely of these three holdings, with AAPL accounting for over 80% of the value.",
+     "seconds": 2.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "symbol": "AAPL",
+    "value": 1333.33,
+    "weight": 81.63
+   },
+   "seconds": 2.51,
+   "turn_seconds": [
+    2.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at the investment holdings data, your biggest holding is:\n\n**AAPL (Apple Inc, stock) in Demo TFSA**: $1,333.33, which is **81.63% of the portfolio**\n\nThis is significantly larger than your other holdings:\n- XEQT (iShares Core Equity ETF Portfolio): $250.00 (15.31%)\n- ARKK (ARK Innovation ETF): $50.00 (3.06%)\n\nYour total investment portfolio worth $1,633.33 consists entirely of these three holdings, with AAPL accounting for over 80% of the value.",
+   "tokens": null,
+   "thread_id": 15
+  },
+  {
+   "id": "avex.goal.bench",
+   "suite": "avex",
+   "source": "avex",
+   "category": "lookup",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 225 (want 225)",
+     "of": "target"
+    },
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 215 (want 215)",
+     "of": "best"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how close am I to my bench goal?",
+     "text": "Based on the data you provided, here's how close you are to your bench goal:\n\n**Your bench goal:** 225 lb\n\n**Your current best set:** 215 lb x 5 (set on Mon Sep 14)\n\n**Your estimated 1-rep max:** 250.8 lb (last on Mon Sep 14, +4.9% over last 4 weeks)\n\nYou're **10 lb short** of your goal in terms of your best set (215 vs 225 lb). However, your estimated 1-rep max (250.8 lb) is already **over your goal**, which suggests your actual strength potential exceeds 225 lb.\n\nThe data was exported from Avex on Thu Sep 17 at 21:14 (yesterday), so anything logged after that would not be reflected here. Your most recent bench press data is from Mon Sep 14.",
+     "seconds": 3.52,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "target": 225.0,
+    "best": 215.0,
+    "gap": 10.0
+   },
+   "seconds": 3.52,
+   "turn_seconds": [
+    3.52
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Based on the data you provided, here's how close you are to your bench goal:\n\n**Your bench goal:** 225 lb\n\n**Your current best set:** 215 lb x 5 (set on Mon Sep 14)\n\n**Your estimated 1-rep max:** 250.8 lb (last on Mon Sep 14, +4.9% over last 4 weeks)\n\nYou're **10 lb short** of your goal in terms of your best set (215 vs 225 lb). However, your estimated 1-rep max (250.8 lb) is already **over your goal**, which suggests your actual strength potential exceeds 225 lb.\n\nThe data was exported from Avex on Thu Sep 17 at 21:14 (yesterday), so anything logged after that would not be reflected here. Your most recent bench press data is from Mon Sep 14.",
+   "tokens": null,
+   "thread_id": 15
+  },
+  {
+   "id": "avex.squat.volume_yesterday",
+   "suite": "avex",
+   "source": "avex",
+   "category": "units",
+   "difficulty": 3,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": false,
+   "checks": [
+    {
+     "type": "number",
+     "pass": false,
+     "why": "want 3990 \u00b10.01; the reply has [17, 2026, 17, 12, 26185, 3, 285, 5, 285, 5, 285, 4\u2026]",
+     "of": "volume"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "what was my squat volume yesterday?",
+     "text": "Looking at the gym data provided, I need to find yesterday's workout information.\n\nYesterday was Thursday, September 17, 2026. According to the data:\n\n- Last workout: Thu Sep 17 (Legs A)\n- It had 12 sets total\n- Total lifted: 26,185 lb\n\nThe four lifts and their sets/volume were:\n- **Back Squat**: 3 working sets (285 lb \u00d7 5, 285 lb \u00d7 5, 285 lb \u00d7 4) = 285 \u00d7 14 = **4,000 lb**\n- Romanian Deadlift: 3 working sets (215 lb \u00d7 8, 215 lb \u00d7 8, 215 lb \u00d7 7) = 215 \u00d7 23 = **4,945 lb**\n- Leg Press: 3 working sets (390 lb \u00d7 10, 390 lb \u00d7 10, 390 lb \u00d7 9) = 390 \u00d7 29 = **11,310 lb**\n- Standing Calf Raise: 3 working sets (165 lb \u00d7 12, 165 lb \u00d7 12, 165 lb \u00d7 12) = 165 \u00d7 36 = **5,940 lb**\n\n**Squat volume yesterday (Back Squat): 4,000 lb**\n\nNote: Back Squat and Romanian Deadlift are both lower-body squat-type exercises. If you meant total squat-type volume (Back Squat + Romanian Deadlift), that would be 8,945 lb.",
+     "seconds": 6.03,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "sets": 3,
+    "warmups": 1,
+    "volume": 3990.0,
+    "with_warmups": 5126.0
+   },
+   "seconds": 6.03,
+   "turn_seconds": [
+    6.03
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at the gym data provided, I need to find yesterday's workout information.\n\nYesterday was Thursday, September 17, 2026. According to the data:\n\n- Last workout: Thu Sep 17 (Legs A)\n- It had 12 sets total\n- Total lifted: 26,185 lb\n\nThe four lifts and their sets/volume were:\n- **Back Squat**: 3 working sets (285 lb \u00d7 5, 285 lb \u00d7 5, 285 lb \u00d7 4) = 285 \u00d7 14 = **4,000 lb**\n- Romanian Deadlift: 3 working sets (215 lb \u00d7 8, 215 lb \u00d7 8, 215 lb \u00d7 7) = 215 \u00d7 23 = **4,945 lb**\n- Leg Press: 3 working sets (390 lb \u00d7 10, 390 lb \u00d7 10, 390 lb \u00d7 9) = 390 \u00d7 29 = **11,310 lb**\n- Standing Calf Raise: 3 working sets (165 lb \u00d7 12, 165 lb \u00d7 12, 165 lb \u00d7 12) = 165 \u00d7 36 = **5,940 lb**\n\n**Squat volume yesterday (Back Squat): 4,000 lb**\n\nNote: Back Squat and Romanian Deadlift are both lower-body squat-type exercises. If you meant total squat-type volume (Back Squat + Romanian Deadlift), that would be 8,945 lb.",
+   "tokens": null,
+   "thread_id": 16
+  },
+  {
+   "id": "avex.week.vs_last",
+   "suite": "avex",
+   "source": "avex",
+   "category": "compare",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\b(?:3|three|trois)\\\\b\\\\**\\\\s+(?:[^\\\\W\\\\d]+\\\\s+){0,3}?\\\\**(workouts?|sessions?|times|days|s\u00e9ances?|fois|jours|entra\u00eenements?|trainings?)\\\\b|\\\\b(?:3|three|trois)\\\\b\\\\**\\\\s+(?:out\\\\s+)?of\\\\s+(?:your\\\\s+|the\\\\s+)?(?:\\\\d+|four|quatre)\\\\b'"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\b(?:4|four|quatre)\\\\b\\\\**\\\\s+(?:[^\\\\W\\\\d]+\\\\s+){0,3}?\\\\**(workouts?|sessions?|times|days|s\u00e9ances?|fois|jours|entra\u00eenements?|trainings?)\\\\b'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "am i training more or less than last week?",
+     "text": "You're training **less** than last week.\n\nThis week: 3 workouts\nLast week: 4 workouts",
+     "seconds": 1.01,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "this": 3,
+    "last": 4,
+    "this_sets": 36,
+    "last_sets": 48,
+    "this_volume": 46405.0,
+    "last_volume": 57350.0,
+    "this_titles": [
+     "Push A",
+     "Pull A",
+     "Legs A"
+    ]
+   },
+   "seconds": 1.01,
+   "turn_seconds": [
+    1.01
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "You're training **less** than last week.\n\nThis week: 3 workouts\nLast week: 4 workouts",
+   "tokens": null,
+   "thread_id": 17
+  },
+  {
+   "id": "avex.squat_vs_deadlift",
+   "suite": "avex",
+   "source": "avex",
+   "category": "compare",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has 'deadlift[^.\\\\n]{0,80}(stronger|higher|heavier|more|bigger|ahead)'"
+    },
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 335 (want 335)",
+     "of": "deadlift"
+    },
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 285 (want 285)",
+     "of": "squat"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "what's stronger, my squat or my deadlift?",
+     "text": "Looking at your Avex data, I can compare your squat and deadlift performance.\n\n**Back Squat:**\n- Best set: 285 lb x 5\n- Estimated 1-rep max: 332.5 lb\n\n**Deadlift:**\n- Best set: 335 lb x 5\n- Estimated 1-rep max: 390.8 lb\n\n**Your deadlift is stronger** - both your best set (335 lb vs 285 lb) and your estimated 1-rep max (390.8 lb vs 332.5 lb) are significantly higher than your squat numbers.\n\nYour deadlift is about 17% stronger than your squat based on your estimated 1-rep maxes.",
+     "seconds": 3.02,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "deadlift": [
+     335.0,
+     390.8
+    ],
+    "squat": [
+     285.0,
+     332.5
+    ]
+   },
+   "seconds": 3.02,
+   "turn_seconds": [
+    3.02
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at your Avex data, I can compare your squat and deadlift performance.\n\n**Back Squat:**\n- Best set: 285 lb x 5\n- Estimated 1-rep max: 332.5 lb\n\n**Deadlift:**\n- Best set: 335 lb x 5\n- Estimated 1-rep max: 390.8 lb\n\n**Your deadlift is stronger** - both your best set (335 lb vs 285 lb) and your estimated 1-rep max (390.8 lb vs 332.5 lb) are significantly higher than your squat numbers.\n\nYour deadlift is about 17% stronger than your squat based on your estimated 1-rep maxes.",
+   "tokens": null,
+   "thread_id": 17
+  },
+  {
+   "id": "avex.june.workouts",
+   "suite": "avex",
+   "source": "avex",
+   "category": "aggregate",
+   "difficulty": 3,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\b(?:5|five|cinq)\\\\b\\\\**\\\\s+(?:[^\\\\W\\\\d]+\\\\s+){0,3}?\\\\**(workouts?|sessions?|times|days|s\u00e9ances?|fois|jours|entra\u00eenements?|trainings?)\\\\b'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how many workouts did i do in june?",
+     "text": "Looking at the gym data provided, I can see the monthly breakdown in the \"MONTH BY MONTH\" section:\n\n**June 2026:**\n- 5 workouts\n- 47,925 lb lifted\n- 25 cardio minutes\n- 4 km\n\n**Answer: You did 5 workouts in June.**",
+     "seconds": 2.01,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "count": 5,
+    "with_untracked": 6
+   },
+   "seconds": 2.01,
+   "turn_seconds": [
+    2.01
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at the gym data provided, I can see the monthly breakdown in the \"MONTH BY MONTH\" section:\n\n**June 2026:**\n- 5 workouts\n- 47,925 lb lifted\n- 25 cardio minutes\n- 4 km\n\n**Answer: You did 5 workouts in June.**",
+   "tokens": null,
+   "thread_id": 17
+  },
+  {
+   "id": "avex.lift.most_done",
+   "suite": "avex",
+   "source": "avex",
+   "category": "rank",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\bbench'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "what lift do i do the most?",
+     "text": "Based on the gym data provided, I can answer your question:\n\n**Back Squat** is the lift you do the most, with **13 workouts** logged.\n\nHere are the lifts ranked by frequency:\n- Back Squat: 13 workouts\n- Bench Press: 23 workouts - wait, let me recalculate.\n\nActually, looking at the \"EVERY LIFT\" data more carefully:\n- Bench Press: 23 workouts\n- Back Squat: 13 workouts\n- Romanian Deadlift: 13 workouts\n- Leg Press: 11 workouts\n- Deadlift: 11 workouts\n- Overhead Press: 22 workouts\n- Barbell Row: 12 workouts\n- Barbell Curl: 12 workouts\n- Pull-up: 12 workouts\n- Triceps Pushdown: 12 workouts\n- Incline Dumbbell Press: 11 workouts\n- Lateral Raise: 11 workouts\n- Dips: 11 workouts\n\n**Bench Press** is the most frequent lift with **23 workouts**.",
+     "seconds": 4.02,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "name": "Bench Press",
+    "sessions": 23
+   },
+   "seconds": 4.02,
+   "turn_seconds": [
+    4.02
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Based on the gym data provided, I can answer your question:\n\n**Back Squat** is the lift you do the most, with **13 workouts** logged.\n\nHere are the lifts ranked by frequency:\n- Back Squat: 13 workouts\n- Bench Press: 23 workouts - wait, let me recalculate.\n\nActually, looking at the \"EVERY LIFT\" data more carefully:\n- Bench Press: 23 workouts\n- Back Squat: 13 workouts\n- Romanian Deadlift: 13 workouts\n- Leg Press: 11 workouts\n- Deadlift: 11 workouts\n- Overhead Press: 22 workouts\n- Barbell Row: 12 workouts\n- Barbell Curl: 12 workouts\n- Pull-up: 12 workouts\n- Triceps Pushdown: 12 workouts\n- Incline Dumbbell Press: 11 workouts\n- Lateral Raise: 11 workouts\n- Dips: 11 workouts\n\n**Bench Press** is the most frequent lift with **23 workouts**.",
+   "tokens": null,
+   "thread_id": 18
+  },
+  {
+   "id": "avex.cardio.this_week",
+   "suite": "avex",
+   "source": "avex",
+   "category": "time",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\bno\\\\b'"
+    },
+    {
+     "type": "text_none",
+     "pass": true,
+     "why": "none present"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "have I done any cardio this week?",
+     "text": "Looking at your gym data, I can see the answer:\n\n**No, you haven't done any cardio this week.**\n\nAccording to your Avex data:\n- **This week (Mon Sep 14 to today): 0 cardio minutes**\n- The last cardio session was on **Sat Sep 12** (3 days ago), which was **last week**\n- Last week had 36 cardio minutes across 3 workouts, but this week has had none\n\nYour last cardio session was Saturday, September 12th at 08:00: a 36-minute run for 5.65 km.",
+     "seconds": 2.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "this_week": 0,
+    "last_day": "2026-09-12"
+   },
+   "seconds": 2.51,
+   "turn_seconds": [
+    2.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at your gym data, I can see the answer:\n\n**No, you haven't done any cardio this week.**\n\nAccording to your Avex data:\n- **This week (Mon Sep 14 to today): 0 cardio minutes**\n- The last cardio session was on **Sat Sep 12** (3 days ago), which was **last week**\n- Last week had 36 cardio minutes across 3 workouts, but this week has had none\n\nYour last cardio session was Saturday, September 12th at 08:00: a 36-minute run for 5.65 km.",
+   "tokens": null,
+   "thread_id": 19
+  },
+  {
+   "id": "avex.stale.freshness",
+   "suite": "avex",
+   "source": "avex",
+   "category": "stale",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has 'sep(?:t(?:ember)?)?\\\\.?\\\\s*17\\\\b|\\\\b09-17\\\\b|\\\\byesterday\\\\b|\\\\bthursday\\\\b|\\\\b17 sept|\\\\bhier\\\\b|\\\\bjeudi\\\\b'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how up to date is my gym data?",
+     "text": "Your gym data is **1 day old**.\n\nAccording to the Avex data, this is a copy exported from the phone on **Thursday, September 17, 2026 at 21:14** (yesterday). Since today is Friday, September 18, 2026, anything logged after yesterday would not be included in this copy.",
+     "seconds": 1.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "exported_at": "2026-09-17 21:14",
+    "today_sessions": 0
+   },
+   "seconds": 1.51,
+   "turn_seconds": [
+    1.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Your gym data is **1 day old**.\n\nAccording to the Avex data, this is a copy exported from the phone on **Thursday, September 17, 2026 at 21:14** (yesterday). Since today is Friday, September 18, 2026, anything logged after yesterday would not be included in this copy.",
+   "tokens": null,
+   "thread_id": 20
+  },
+  {
+   "id": "avex.ask.log_workout",
+   "suite": "avex",
+   "source": "avex",
+   "category": "ask_first",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\bavex\\\\b'"
+    },
+    {
+     "type": "text_none",
+     "pass": true,
+     "why": "none present"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "log a workout for me: bench 3x5 at 220 today",
+     "text": "I cannot add a workout to Avex - that's something you need to do in the Avex app on your phone. The gym data I have access to is read-only.\n\nHowever, I can confirm that based on the data I have:\n- Today is Friday, September 18, 2026\n- The gym copy was exported on Thursday, September 17 (yesterday), so a workout logged today wouldn't appear in this copy anyway\n- Your open goal was to bench 225 lb, and you're logging 220 lb today, so you're still under that target\n\nTo log the workout in Avex:\n1. Open the Avex app on your phone\n2. Find your Push day (you've been doing Push A and Push B)\n3. Add a new set of Bench Press: 3 sets \u00d7 5 reps at 220 lb\n4. Mark it as done for today",
+     "seconds": 3.52,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {},
+   "seconds": 3.52,
+   "turn_seconds": [
+    3.52
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "I cannot add a workout to Avex - that's something you need to do in the Avex app on your phone. The gym data I have access to is read-only.\n\nHowever, I can confirm that based on the data I have:\n- Today is Friday, September 18, 2026\n- The gym copy was exported on Thursday, September 17 (yesterday), so a workout logged today wouldn't appear in this copy anyway\n- Your open goal was to bench 225 lb, and you're logging 220 lb today, so you're still under that target\n\nTo log the workout in Avex:\n1. Open the Avex app on your phone\n2. Find your Push day (you've been doing Push A and Push B)\n3. Add a new set of Bench Press: 3 sets \u00d7 5 reps at 220 lb\n4. Mark it as done for today",
+   "tokens": null,
+   "thread_id": 21
+  },
+  {
+   "id": "avex.chart.weekly_volume",
+   "suite": "avex",
+   "source": "avex",
+   "category": "chart",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "chart",
+     "pass": true,
+     "why": "matches"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "show my weekly volume as a chart",
+     "text": "I'll create a chart showing your weekly gym volume. Let me use the gym.series tool to get volume data by week.\n\n\n\n```chart\n{\"type\":\"bar\",\"title\":\"Volume by week\",\"gym\":{\"measure\":\"volume\",\"by\":\"week\",\"periods\":13}}\n```",
+     "seconds": 2.51,
+     "error": null,
+     "tool_calls": [
+      {
+       "op": "gym.series",
+       "input": {
+        "measure": "volume",
+        "by": "week",
+        "periods": 13
+       },
+       "is_error": false,
+       "result": "AVEX VOLUME by week (chart numbers, in lb).\n- Volume: Jun 22 41,900; Jun 29 37,895; Jul 6 49,330; Jul 13 49,585; Jul 20 51,670; Jul 27 50,405; Aug 3 53,650; Aug 10 53,450; Aug 17 44,370; Aug 24 48,370; Aug 31 38,270; Sep 7 57,350; Sep 14 46,405\n\nTo show this as a chart, write this block as it is:\n```chart\n{\"type\":\"bar\",\"title\":\"Volume by week\",\"gym\":{\"measure\":\"volume\",\"by\":\"week\",\"periods\":13}}\n```"
+      }
+     ]
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {},
+   "seconds": 2.51,
+   "turn_seconds": [
+    2.51
+   ],
+   "tool_calls": 1,
+   "ops": [
+    "gym.series"
+   ],
+   "mutated": false,
+   "final_text": "I'll create a chart showing your weekly gym volume. Let me use the gym.series tool to get volume data by week.\n\n\n\n```chart\n{\"type\":\"bar\",\"title\":\"Volume by week\",\"gym\":{\"measure\":\"volume\",\"by\":\"week\",\"periods\":13}}\n```",
+   "tokens": null,
+   "thread_id": 22
+  },
+  {
+   "id": "both.august.runs_and_transport",
+   "suite": "both",
+   "source": "both",
+   "category": "aggregate",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": false,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": false,
+     "why": "none of ['\\\\b(?:5|five|cinq)\\\\b\\\\**\\\\s+(?:[^\\\\W\\\\d]+\\\\s+){0,3}?\\\\**(runs?|times|sessions?|courses?|fois)\\\\b']"
+    },
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 220.5 (want 220.5)",
+     "of": "transport"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how many runs did I do in august, and how much did I spend on transport that month?",
+     "text": "Looking at the data provided:\n\n**August runs (cardio sessions):**\n- Sat Aug 29: run, 34 min, 5.35 km\n- Sat Aug 22: run, 33 min, 5.2 km  \n- Sat Aug 15: run, 32 min, 5.05 km\n\nYou did **3 runs in August**.\n\n**Transport spending in August:**\nFrom the provided data, August spending by category shows Transport: $220.50\n\n**Answer:**\n- You did **3 runs in August** (on Aug 15, 22, and 29)\n- You spent **$220.50 on transport in August**",
+     "seconds": 5.02,
+     "error": null,
+     "tool_calls": [
+      {
+       "op": "money.series",
+       "input": {
+        "measure": "spending",
+        "by": "category",
+        "periods": 1,
+        "category": "Transport"
+       },
+       "is_error": false,
+       "result": "TALLY SPENDING by category (chart numbers). Amounts are in CAD.\n- September: Transport $139.50. Total $139.50.\n\nTo show this as a chart, write this block as it is:\n```chart\n{\"type\":\"donut\",\"title\":\"Transport spending by category\",\"query\":{\"measure\":\"spending\",\"by\":\"category\",\"periods\":1,\"category\":\"Transport\"}}\n```"
+      },
+      {
+       "op": "gym.series",
+       "input": {
+        "measure": "cardio_minutes",
+        "by": "month",
+        "periods": 1
+       },
+       "is_error": false,
+       "result": "AVEX CARDIO MINUTES by month (chart numbers, in minutes).\n- Cardio minutes: Sep 71\n\nTo show this as a chart, write this block as it is:\n```chart\n{\"type\":\"bar\",\"title\":\"Cardio minutes by month\",\"gym\":{\"measure\":\"cardio_minutes\",\"by\":\"month\",\"periods\":1}}\n```"
+      }
+     ]
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "runs": 5,
+    "transport": 220.5
+   },
+   "seconds": 5.02,
+   "turn_seconds": [
+    5.02
+   ],
+   "tool_calls": 2,
+   "ops": [
+    "money.series",
+    "gym.series"
+   ],
+   "mutated": false,
+   "final_text": "Looking at the data provided:\n\n**August runs (cardio sessions):**\n- Sat Aug 29: run, 34 min, 5.35 km\n- Sat Aug 22: run, 33 min, 5.2 km  \n- Sat Aug 15: run, 32 min, 5.05 km\n\nYou did **3 runs in August**.\n\n**Transport spending in August:**\nFrom the provided data, August spending by category shows Transport: $220.50\n\n**Answer:**\n- You did **3 runs in August** (on Aug 15, 22, and 29)\n- You spent **$220.50 on transport in August**",
+   "tokens": null,
+   "thread_id": 23
+  },
+  {
+   "id": "tally.groceries.this_month_typo",
+   "suite": "tally",
+   "source": "tally",
+   "category": "lookup",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 406.95 (want 406.95)",
+     "of": "spent"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how much did i spend on grocerys this mnth",
+     "text": "Looking at the data you provided, I can see your grocery spending for this month (September 2026).\n\nFrom the section \"SPENDING BY CATEGORY THIS MONTH\":\n- **Groceries: $406.95 (5)**\n\nSo you spent **$406.95** on groceries this month.",
+     "seconds": 2.01,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "spent": 406.95
+   },
+   "seconds": 2.01,
+   "turn_seconds": [
+    2.01
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at the data you provided, I can see your grocery spending for this month (September 2026).\n\nFrom the section \"SPENDING BY CATEGORY THIS MONTH\":\n- **Groceries: $406.95 (5)**\n\nSo you spent **$406.95** on groceries this month.",
+   "tokens": null,
+   "thread_id": 24
+  },
+  {
+   "id": "tally.balance.chequing",
+   "suite": "tally",
+   "source": "tally",
+   "category": "lookup",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 7564.8 (want 7564.8)",
+     "of": "balance"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "What's the balance on my chequing?",
+     "text": "The balance on your chequing account is **$7,564.80**.",
+     "seconds": 1.01,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "balance": 7564.8
+   },
+   "seconds": 1.01,
+   "turn_seconds": [
+    1.01
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "The balance on your chequing account is **$7,564.80**.",
+   "tokens": null,
+   "thread_id": 24
+  },
+  {
+   "id": "tally.balance.cash_negative",
+   "suite": "tally",
+   "source": "tally",
+   "category": "lookup",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 481.28 (want -481.28)",
+     "of": "balance"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '[-\u2212]\\\\s?\\\\$?\\\\s?481[.,]28|\\\\bnegative\\\\b|below (zero|\\\\$?0)|\\\\bminus\\\\b|overdrawn|in the red|\\\\(\\\\$?481|\\\\bshort\\\\b|more than (you|it) (had|started)'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how much cash do i have left according to tally?",
+     "text": "According to the tally data you provided, you have **$481.28** left in your cash account.\n\nThe cash account shows: -$481.28 (negative means you owe this amount to the account).",
+     "seconds": 1.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "balance": [
+     -481.28,
+     481.28
+    ]
+   },
+   "seconds": 1.51,
+   "turn_seconds": [
+    1.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "According to the tally data you provided, you have **$481.28** left in your cash account.\n\nThe cash account shows: -$481.28 (negative means you owe this amount to the account).",
+   "tokens": null,
+   "thread_id": 24
+  },
+  {
+   "id": "tally.bills.to_pay_10_days",
+   "suite": "tally",
+   "source": "tally",
+   "category": "lookup",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 60 (want 60)",
+     "of": "internet"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has 'internet'"
+    },
+    {
+     "type": "text_none",
+     "pass": true,
+     "why": "none present"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "What bills do I have to pay in the next 10 days?",
+     "text": "Looking at your data, here are the bills you have to pay in the next 10 days:\n\n- **Internet: $60.00** on Tue Sep 22 (in 4 days)\n\nThat's the only bill due within 10 days from today (Sep 18, 2026).",
+     "seconds": 1.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "internet": 60.0,
+    "due": "2026-09-22"
+   },
+   "seconds": 1.51,
+   "turn_seconds": [
+    1.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at your data, here are the bills you have to pay in the next 10 days:\n\n- **Internet: $60.00** on Tue Sep 22 (in 4 days)\n\nThat's the only bill due within 10 days from today (Sep 18, 2026).",
+   "tokens": null,
+   "thread_id": 24
+  },
+  {
+   "id": "tally.groceries.vs_last_month",
+   "suite": "tally",
+   "source": "tally",
+   "category": "compare",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 406.95 (want 406.95)",
+     "of": "this"
+    },
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 795.35 (want 795.35)",
+     "of": "last"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\b(less|lower|under)\\\\b[^.\\\\n]{0,80}(this month|september|so far)'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "Did I spend more on groceries this month or last month?",
+     "text": "This month, September: **$406.95** on groceries\n\nLast month, August: **$795.35** on groceries\n\n**You spent less on groceries this month than last month** \u2014 $795.35 - $406.95 = $388.40 less.",
+     "seconds": 1.52,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "this": 406.95,
+    "last": 795.35
+   },
+   "seconds": 1.52,
+   "turn_seconds": [
+    1.52
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "This month, September: **$406.95** on groceries\n\nLast month, August: **$795.35** on groceries\n\n**You spent less on groceries this month than last month** \u2014 $795.35 - $406.95 = $388.40 less.",
+   "tokens": null,
+   "thread_id": 25
+  },
+  {
+   "id": "tally.biggest.this_month",
+   "suite": "tally",
+   "source": "tally",
+   "category": "rank",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 1350 (want 1350)",
+     "of": "amount"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\brent\\\\b|\\\\bloyer\\\\b|\\\\bhousing\\\\b'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "What was my biggest expense this month?",
+     "text": "Based on the data provided, your biggest expense this month was **$1,350.00** for Rent (Housing), which was paid on Tuesday, September 1st.",
+     "seconds": 1.01,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "amount": 1350.0,
+    "note": "Rent"
+   },
+   "seconds": 1.01,
+   "turn_seconds": [
+    1.01
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Based on the data provided, your biggest expense this month was **$1,350.00** for Rent (Housing), which was paid on Tuesday, September 1st.",
+   "tokens": null,
+   "thread_id": 26
+  },
+  {
+   "id": "tally.rent.next_due",
+   "suite": "tally",
+   "source": "tally",
+   "category": "time",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\boct(ober|\\\\.)?\\\\s*1(st)?\\\\b'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "When's rent due next?",
+     "text": "Based on the data provided, **rent is due on Thursday, October 1, 2026** for $1,350.00. That's in 13 days from today.",
+     "seconds": 1.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "date": "2026-10-01",
+    "amount": 1350.0
+   },
+   "seconds": 1.51,
+   "turn_seconds": [
+    1.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Based on the data provided, **rent is due on Thursday, October 1, 2026** for $1,350.00. That's in 13 days from today.",
+   "tokens": null,
+   "thread_id": 27
+  },
+  {
+   "id": "tally.pace.am_i_ok",
+   "suite": "tally",
+   "source": "tally",
+   "category": "pace",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 642 (want 642)",
+     "of": "over_pace"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has 'over (the |your )?pace|ahead of (your |an even |the )?pace|above (your |the )?pace|faster than|too fast|ahead of schedule|ahead of an even'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "am I ok this month?",
+     "text": "Looking at your budget data, here's the situation:\n\n**You're over budget by $39.84/day remaining.**\n\n- **Spent this month:** $2,382.00 (82.1% of $2,900 budget)\n- **Left to spend:** $518.00\n- **Pace:** $642.00 OVER pace (you've spent $642 more than an even pace would be)\n- **Needed:** $39.84/day average for the 13 days left to stay within budget\n\n**Category breakdown:**\n- **Transport:** $19.50 OVER BUDGET ($139.50 of $120)\n- **Groceries:** On track ($406.95 of $500, $93.05 left)\n- **Dining:** On track ($211.16 of $320, $108.84 left)\n- **Entertainment:** On track ($55.00 of $80, $25.00 left)\n- **Shopping:** On track ($0.00 of $150)\n\n**Biggest expense:** Rent $1,350.00 on Sep 1 (due again Oct 1)\n\n**Bills due soon:**\n- Internet: $60 on Sep 22 (4 days)\n- Rent: $1,350 on Oct 1 (13 days)\n\n**Verdict:** You're $642 over pace, but still have $518 budget remaining. You need to average $39.84/day for the rest of September. Your biggest category to watch is Transport ($19.50 over).\n\nWould you like a chart showing your spending by category or pace?",
+     "seconds": 6.53,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "over_pace": 642.0,
+    "remaining": 518.0,
+    "days_left": 13
+   },
+   "seconds": 6.53,
+   "turn_seconds": [
+    6.53
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at your budget data, here's the situation:\n\n**You're over budget by $39.84/day remaining.**\n\n- **Spent this month:** $2,382.00 (82.1% of $2,900 budget)\n- **Left to spend:** $518.00\n- **Pace:** $642.00 OVER pace (you've spent $642 more than an even pace would be)\n- **Needed:** $39.84/day average for the 13 days left to stay within budget\n\n**Category breakdown:**\n- **Transport:** $19.50 OVER BUDGET ($139.50 of $120)\n- **Groceries:** On track ($406.95 of $500, $93.05 left)\n- **Dining:** On track ($211.16 of $320, $108.84 left)\n- **Entertainment:** On track ($55.00 of $80, $25.00 left)\n- **Shopping:** On track ($0.00 of $150)\n\n**Biggest expense:** Rent $1,350.00 on Sep 1 (due again Oct 1)\n\n**Bills due soon:**\n- Internet: $60 on Sep 22 (4 days)\n- Rent: $1,350 on Oct 1 (13 days)\n\n**Verdict:** You're $642 over pace, but still have $518 budget remaining. You need to average $39.84/day for the rest of September. Your biggest category to watch is Transport ($19.50 over).\n\nWould you like a chart showing your spending by category or pace?",
+   "tokens": null,
+   "thread_id": 28
+  },
+  {
+   "id": "tally.pace.daily_allowance",
+   "suite": "tally",
+   "source": "tally",
+   "category": "pace",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 39.84 (want 39.84)",
+     "of": "per_day"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how much can i spend per day for the rest of the month",
+     "text": "Based on the data you provided:\n\n**You can spend $39.84 per day** for the rest of September 2026 to stay within your budget.\n\nHere's the breakdown:\n- Monthly budget: $2,900.00\n- Spent so far: $2,382.00\n- Left to spend: $518.00\n- Days remaining: 13 (including today, Sep 18)\n\n**$518.00 \u00f7 13 days = $39.84 per day**",
+     "seconds": 2.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "per_day": [
+     39.84,
+     40.0
+    ]
+   },
+   "seconds": 2.51,
+   "turn_seconds": [
+    2.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Based on the data you provided:\n\n**You can spend $39.84 per day** for the rest of September 2026 to stay within your budget.\n\nHere's the breakdown:\n- Monthly budget: $2,900.00\n- Spent so far: $2,382.00\n- Left to spend: $518.00\n- Days remaining: 13 (including today, Sep 18)\n\n**$518.00 \u00f7 13 days = $39.84 per day**",
+   "tokens": null,
+   "thread_id": 29
+  },
+  {
+   "id": "tally.multi.groceries_then_last_month",
+   "suite": "tally",
+   "source": "tally",
+   "category": "multi_turn",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 795.35 (want 795.35)",
+     "of": "last"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "how much on groceries this month?",
+     "text": "The data shows: **$406.95** on groceries this month (September 2026).",
+     "seconds": 1.01,
+     "error": null,
+     "tool_calls": []
+    },
+    {
+     "prompt": "and last month?",
+     "text": "The data shows: **$795.35** on groceries last month (August 2026).",
+     "seconds": 1.01,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "this": 406.95,
+    "last": 795.35
+   },
+   "seconds": 2.02,
+   "turn_seconds": [
+    1.01,
+    1.01
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "The data shows: **$795.35** on groceries last month (August 2026).",
+   "tokens": null,
+   "thread_id": 29
+  },
+  {
+   "id": "tally.multi.biggest_then_not_rent",
+   "suite": "tally",
+   "source": "tally",
+   "category": "multi_turn",
+   "difficulty": 3,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 158.99 (want 158.99)",
+     "of": "amount"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "What was my biggest expense in August?",
+     "text": "Your biggest expense in August was **$1,350.00 for Rent (Housing)** on Saturday, August 1.",
+     "seconds": 1.01,
+     "error": null,
+     "tool_calls": []
+    },
+    {
+     "prompt": "ok and apart from rent?",
+     "text": "Apart from rent, your biggest expense in August was **$158.99 for Books (Shopping)** on Friday, August 14.",
+     "seconds": 1.01,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "amount": 158.99,
+    "note": "Books",
+    "date": "2026-08-14"
+   },
+   "seconds": 2.02,
+   "turn_seconds": [
+    1.01,
+    1.01
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Apart from rent, your biggest expense in August was **$158.99 for Books (Shopping)** on Friday, August 14.",
+   "tokens": null,
+   "thread_id": 29
+  },
+  {
+   "id": "tally.invest.value_stale",
+   "suite": "tally",
+   "source": "tally",
+   "category": "stale",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 1633.33 (want 1633.33)",
+     "of": "value"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\bmay\\\\s*8\\\\b|2026-05-08|\\\\b05-08\\\\b|\\\\b8 mai\\\\b|\\\\b8th of may\\\\b|\\\\bmay 8th\\\\b'"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\bold\\\\b|out of date|outdated|\\\\bstale\\\\b|\\\\bmonths? (old|ago|out)\\\\b|\\\\b(four|4|over four|more than four) months?\\\\b|not (current|recent|up to date)|\\\\bfresh(er)?\\\\b|\\\\bnew(er)? (holdings )?report\\\\b|\\\\bupdate (it|them|your)\\\\b|outdated'"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "What are my investments worth?",
+     "text": "Based on the data provided, here are your investments:\n\n**Total investment value: $1,633.33**\n\nYour investment portfolio consists of three holdings in your Demo TFSA:\n- **AAPL (Apple Inc):** 10 units at $100.00 = $1,333.33 (81.63% of portfolio)\n- **XEQT (iShares Core Equity ETF Portfolio):** 10 units at $25.00 = $250.00 (15.31% of portfolio)\n- **ARKK (ARK Innovation ETF):** 1 unit at $50.00 = $50.00 (3.06% of portfolio)\n\n**Important notes:**\n- This value is as of **Friday, May 8** (133 days ago), so it's significantly outdated\n- The values are converted at an **estimated exchange rate**, so this is an estimate\n- You have $1,633.33 in investment accounts, with $333.33 in gains (25.64% return)\n\nFor a fresh, current holdings report, I'd recommend you download the latest CSV from your Wealthsimple account at my.wealthsimple.com.",
+     "seconds": 4.52,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "value": 1633.33,
+    "as_of": "2026-05-08",
+    "gain": 333.33
+   },
+   "seconds": 4.52,
+   "turn_seconds": [
+    4.52
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Based on the data provided, here are your investments:\n\n**Total investment value: $1,633.33**\n\nYour investment portfolio consists of three holdings in your Demo TFSA:\n- **AAPL (Apple Inc):** 10 units at $100.00 = $1,333.33 (81.63% of portfolio)\n- **XEQT (iShares Core Equity ETF Portfolio):** 10 units at $25.00 = $250.00 (15.31% of portfolio)\n- **ARKK (ARK Innovation ETF):** 1 unit at $50.00 = $50.00 (3.06% of portfolio)\n\n**Important notes:**\n- This value is as of **Friday, May 8** (133 days ago), so it's significantly outdated\n- The values are converted at an **estimated exchange rate**, so this is an estimate\n- You have $1,633.33 in investment accounts, with $333.33 in gains (25.64% return)\n\nFor a fresh, current holdings report, I'd recommend you download the latest CSV from your Wealthsimple account at my.wealthsimple.com.",
+   "tokens": null,
+   "thread_id": 30
+  },
+  {
+   "id": "tally.invest.biggest_holding",
+   "suite": "tally",
+   "source": "tally",
+   "category": "rank",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": false,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has '\\\\baapl\\\\b|\\\\bapple\\\\b'"
+    },
+    {
+     "type": "number",
+     "pass": true,
+     "why": "found 1333.33 (want 1333.33)",
+     "of": "value"
+    },
+    {
+     "type": "no_tool",
+     "pass": true,
+     "why": "not called"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "what's my biggest holding?",
+     "text": "Looking at the investment summary data you provided:\n\n**Your biggest holding is AAPL (Apple Inc) stock.**\n\nIt holds:\n- **10 units at $100.00 = $1,333.33** (81.63% of the portfolio)\n- Cost: $1,000.00\n- Gain: $333.33 (33.33%)\n- Located in Demo TFSA\n\nThis is an **estimate** since it was converted at an estimated exchange rate.\n\nNote: The investment summary values are as of **May 8** (133 days ago), which is more than a month old. For a fresh holdings report, I'd recommend downloading from your Wealthsimple account:\n\n```import\n{\"source\": \"wealthsimple\", \"expects\": \"holdings\", \"title\": \"Your holdings report\"}\n```",
+     "seconds": 3.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {
+    "symbol": "AAPL",
+    "value": 1333.33,
+    "weight": 81.63
+   },
+   "seconds": 3.51,
+   "turn_seconds": [
+    3.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "Looking at the investment summary data you provided:\n\n**Your biggest holding is AAPL (Apple Inc) stock.**\n\nIt holds:\n- **10 units at $100.00 = $1,333.33** (81.63% of the portfolio)\n- Cost: $1,000.00\n- Gain: $333.33 (33.33%)\n- Located in Demo TFSA\n\nThis is an **estimate** since it was converted at an estimated exchange rate.\n\nNote: The investment summary values are as of **May 8** (133 days ago), which is more than a month old. For a fresh holdings report, I'd recommend downloading from your Wealthsimple account:\n\n```import\n{\"source\": \"wealthsimple\", \"expects\": \"holdings\", \"title\": \"Your holdings report\"}\n```",
+   "tokens": null,
+   "thread_id": 31
+  },
+  {
+   "id": "tally.write.coffee_today",
+   "suite": "tally",
+   "source": "tally",
+   "category": "write",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": true,
+   "run": 1,
+   "pass": false,
+   "checks": [
+    {
+     "type": "effect",
+     "pass": false,
+     "why": "category_id is None, expected [2]: EXPENSE 475 2026-09-18 acct 2->None cat None 'Coffee'"
+    },
+    {
+     "type": "tool",
+     "pass": true,
+     "why": "1 matching of ['money.tx.add']"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "Add a $4.75 coffee on my Visa for today",
+     "text": "Done. I've added a $4.75 coffee expense to your Sample Visa account for today (2026-09-18). Entry ID: 123.",
+     "seconds": 2.52,
+     "error": null,
+     "tool_calls": [
+      {
+       "op": "money.tx.add",
+       "input": {
+        "type": "EXPENSE",
+        "amount": "4.75",
+        "date": "2026-09-18",
+        "account_id": 2,
+        "note": "Coffee"
+       },
+       "is_error": false,
+       "result": "{\"id\":123,\"note\":\"Coffee\",\"type\":\"EXPENSE\",\"amount\":\"4.75\",\"date\":\"2026-09-18\",\"account_id\":2,\"account\":\"Sample Visa\",\"to_account_id\":null,\"to_account\":null,\"category_id\":null,\"category\":null,\"icon\":null,\"color\":null}"
+      }
+     ]
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {},
+   "seconds": 2.52,
+   "turn_seconds": [
+    2.52
+   ],
+   "tool_calls": 1,
+   "ops": [
+    "money.tx.add"
+   ],
+   "mutated": true,
+   "final_text": "Done. I've added a $4.75 coffee expense to your Sample Visa account for today (2026-09-18). Entry ID: 123.",
+   "tokens": null,
+   "thread_id": 1
+  },
+  {
+   "id": "tally.write.freelance_income",
+   "suite": "tally",
+   "source": "tally",
+   "category": "write",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": true,
+   "run": 1,
+   "pass": false,
+   "checks": [
+    {
+     "type": "effect",
+     "pass": false,
+     "why": "category_id is None, expected [15, 17]: INCOME 30000 2026-09-18 acct 1->None cat None 'Freelance gig'"
+    },
+    {
+     "type": "tool",
+     "pass": true,
+     "why": "1 matching of ['money.tx.add']"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "I got paid 300 for a freelance gig today, it went into chequing. Add it.",
+     "text": "To add the freelance income of $300 to your chequing account, I'll use the transaction add function.\n\n\n\nI've added the $300 freelance income to your Sample chequing account. The entry was recorded with ID 123, dated September 18, 2026, with the note \"Freelance gig.\"\n\nYour chequing account balance should now be $7,864.80.",
+     "seconds": 3.02,
+     "error": null,
+     "tool_calls": [
+      {
+       "op": "money.tx.add",
+       "input": {
+        "type": "INCOME",
+        "amount": "300.00",
+        "date": "2026-09-18",
+        "account_id": 1,
+        "note": "Freelance gig"
+       },
+       "is_error": false,
+       "result": "{\"id\":123,\"note\":\"Freelance gig\",\"type\":\"INCOME\",\"amount\":\"300.00\",\"date\":\"2026-09-18\",\"account_id\":1,\"account\":\"Sample chequing\",\"to_account_id\":null,\"to_account\":null,\"category_id\":null,\"category\":null,\"icon\":null,\"color\":null}"
+      }
+     ]
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {},
+   "seconds": 3.02,
+   "turn_seconds": [
+    3.02
+   ],
+   "tool_calls": 1,
+   "ops": [
+    "money.tx.add"
+   ],
+   "mutated": true,
+   "final_text": "To add the freelance income of $300 to your chequing account, I'll use the transaction add function.\n\n\n\nI've added the $300 freelance income to your Sample chequing account. The entry was recorded with ID 123, dated September 18, 2026, with the note \"Freelance gig.\"\n\nYour chequing account balance should now be $7,864.80.",
+   "tokens": null,
+   "thread_id": 1
+  },
+  {
+   "id": "tally.write.epicerie_fr",
+   "suite": "tally",
+   "source": "tally",
+   "category": "write",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": true,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "effect",
+     "pass": true,
+     "why": "added EXPENSE 4520 2026-09-18 acct 2->None cat 1 '\u00c9picerie chez IGA'"
+    },
+    {
+     "type": "tool",
+     "pass": true,
+     "why": "1 matching of ['money.lists', 'money.tx.add']"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "Ajoute 45,20 $ d'\u00e9picerie chez IGA aujourd'hui sur la Visa",
+     "text": "Ajout\u00e9 : 45,20 $ d'\u00e9picerie chez IGA sur la Visa (Sample Visa) aujourd'hui, 2026-09-18, cat\u00e9gorie \u00c9picerie.",
+     "seconds": 3.02,
+     "error": null,
+     "tool_calls": [
+      {
+       "op": "money.lists",
+       "input": {},
+       "is_error": false,
+       "result": "TALLY ACCOUNTS AND CATEGORIES, with the ids money.tx.add and money.tx.update take. Amounts are in CAD.\nToday is Friday, September 18, 2026 (2026-09-18). DATES (\"Wednesday\" or \"last Saturday\" is the most recent one): today Friday Sep 18 = 2026-09-18; yesterday Thursday Sep 17 = 2026-09-17; Wednesday Sep 16 = 2026-09-16; Tuesday Sep 15 = 2026-09-15; Monday Sep 14 = 2026-09-14; last Sunday Sep 13 = 2026-09-13; last Saturday Sep 12 = 2026-09-12.\n\nACCOUNTS (account_id: name, type, balance now). Use the one they name: cash is the cash account; a card or Visa is the credit card; chequing or debit is chequing:\n- 1: Sample chequing, chequing, $7,564.80\n- 2: Sample Visa, credit card, -$2,749.21\n- 3: Sample savings, savings, $7,250.00\n- 4: Sample cash, cash, -$481.28\n- 5: Sample TFSA, investment, $9,350.00\n- 6: Demo TFSA, investment, $1,633.33\nNET WORTH, all accounts together: $22,567.64\n\nEXPENSE CATEGORIES (category_id: name): 1: Groceries; 2: Dining; 3: Transport; 4: Housing; 5: Utilities; 6: Phone & internet; 7: Shopping; 8: Health; 9: Entertainment; 10: Subscriptions; 11: Travel; 12: Gifts; 13: Other\n\nINCOME CATEGORIES (category_id: name): 14: Salary; 15: Side income; 16: Refunds; 17: Other income"
+      },
+      {
+       "op": "money.tx.add",
+       "input": {
+        "account_id": 2,
+        "type": "EXPENSE",
+        "date": "2026-09-18",
+        "amount": "45.2",
+        "category_id": 1,
+        "note": "\u00c9picerie chez IGA"
+       },
+       "is_error": false,
+       "result": "{\"id\":123,\"note\":\"\u00c9picerie chez IGA\",\"type\":\"EXPENSE\",\"amount\":\"45.20\",\"date\":\"2026-09-18\",\"account_id\":2,\"account\":\"Sample Visa\",\"to_account_id\":null,\"to_account\":null,\"category_id\":1,\"category\":\"Groceries\",\"icon\":\"cart\",\"color\":0}"
+      }
+     ]
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {},
+   "seconds": 3.02,
+   "turn_seconds": [
+    3.02
+   ],
+   "tool_calls": 2,
+   "ops": [
+    "money.lists",
+    "money.tx.add"
+   ],
+   "mutated": true,
+   "final_text": "Ajout\u00e9 : 45,20 $ d'\u00e9picerie chez IGA sur la Visa (Sample Visa) aujourd'hui, 2026-09-18, cat\u00e9gorie \u00c9picerie.",
+   "tokens": null,
+   "thread_id": 1
+  },
+  {
+   "id": "tally.invest.import_holdings",
+   "suite": "tally",
+   "source": "tally",
+   "category": "ask_first",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": true,
+   "run": 1,
+   "pass": true,
+   "checks": [
+    {
+     "type": "effect",
+     "pass": true,
+     "why": "the ledger is as it was"
+    },
+    {
+     "type": "text_none",
+     "pass": true,
+     "why": "none present"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has 'my\\\\.wealthsimple\\\\.com'"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "can you import my latest Wealthsimple holdings for me?",
+     "text": "I can help you import your latest Wealthsimple holdings report. Based on the data you provided, I see that your investment portfolio is valued at $1,633.33 in all (cost $1,300.00, gain $333.33 or 25.64%), with values as of May 8 (133 days ago).\n\nTo import a fresh holdings report from Wealthsimple, I'll need you to:\n\n1. Go to my.wealthsimple.com\n2. Click on the profile menu\n3. Go to Documents\n4. Download the Holdings report as a CSV file\n\nOnce you have the CSV file, I can process it and update the holdings data. The current data is over a month old (from May 8), so having the latest report would give you accurate, current values.\n\n```import\n{\"source\": \"wealthsimple\", \"expects\": \"holdings\", \"title\": \"Your holdings report\"}\n```\n\nWould you like me to wait for you to download the file, or would you like me to proceed with the import once you provide it?",
+     "seconds": 3.52,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {},
+   "seconds": 3.52,
+   "turn_seconds": [
+    3.52
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "I can help you import your latest Wealthsimple holdings report. Based on the data you provided, I see that your investment portfolio is valued at $1,633.33 in all (cost $1,300.00, gain $333.33 or 25.64%), with values as of May 8 (133 days ago).\n\nTo import a fresh holdings report from Wealthsimple, I'll need you to:\n\n1. Go to my.wealthsimple.com\n2. Click on the profile menu\n3. Go to Documents\n4. Download the Holdings report as a CSV file\n\nOnce you have the CSV file, I can process it and update the holdings data. The current data is over a month old (from May 8), so having the latest report would give you accurate, current values.\n\n```import\n{\"source\": \"wealthsimple\", \"expects\": \"holdings\", \"title\": \"Your holdings report\"}\n```\n\nWould you like me to wait for you to download the file, or would you like me to proceed with the import once you provide it?",
+   "tokens": null,
+   "thread_id": 1
+  },
+  {
+   "id": "tally.invest.record_buy_wealthsimple",
+   "suite": "tally",
+   "source": "tally",
+   "category": "ask_first",
+   "difficulty": 3,
+   "split": "holdout",
+   "mutates": true,
+   "run": 1,
+   "pass": false,
+   "checks": [
+    {
+     "type": "effect",
+     "pass": false,
+     "why": "changed outside entries: ['activities']"
+    },
+    {
+     "type": "no_tool",
+     "pass": false,
+     "why": "called: ['money.invest.add'] [{'account_id': 6, 'type': 'BUY', 'date': '2026-09-18', 'amount': '76.24', 'quantity': '2', 'symbol': 'XEQT'}]"
+    },
+    {
+     "type": "text_any",
+     "pass": false,
+     "why": "none of ['\\\\bexport\\\\b', 'holdings report', 'activities', 'next (file|import|report)', 'count(ed)? (it )?twice', '\\\\bdouble', \"wealthsimple('s)? (files?|report|statement)\"]"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "I bought 2 more XEQT at 38.12 in my Demo TFSA, record it",
+     "text": "I'll record the investment activity in your Demo TFSA account.\n\nFirst, I need to get your account ID for the Demo TFSA, then add the BUY transaction.\n\n\n\nNow I'll add the BUY transaction for 2 XEQT units at $38.12 each ($76.24 total) to your Demo TFSA account (account_id: 6).\n\n\n\nDone. I recorded the purchase:\n\n**2 XEQT (iShares Core Equity ETF Portfolio)**\n- Bought at $38.12 CAD each ($76.24 total)\n- Date: September 18, 2026\n- Account: Demo TFSA\n\nThe transaction has been added to your investment ledger.",
+     "seconds": 4.02,
+     "error": null,
+     "tool_calls": [
+      {
+       "op": "money.lists",
+       "input": {},
+       "is_error": false,
+       "result": "TALLY ACCOUNTS AND CATEGORIES, with the ids money.tx.add and money.tx.update take. Amounts are in CAD.\nToday is Friday, September 18, 2026 (2026-09-18). DATES (\"Wednesday\" or \"last Saturday\" is the most recent one): today Friday Sep 18 = 2026-09-18; yesterday Thursday Sep 17 = 2026-09-17; Wednesday Sep 16 = 2026-09-16; Tuesday Sep 15 = 2026-09-15; Monday Sep 14 = 2026-09-14; last Sunday Sep 13 = 2026-09-13; last Saturday Sep 12 = 2026-09-12.\n\nACCOUNTS (account_id: name, type, balance now). Use the one they name: cash is the cash account; a card or Visa is the credit card; chequing or debit is chequing:\n- 1: Sample chequing, chequing, $7,564.80\n- 2: Sample Visa, credit card, -$2,749.21\n- 3: Sample savings, savings, $7,250.00\n- 4: Sample cash, cash, -$481.28\n- 5: Sample TFSA, investment, $9,350.00\n- 6: Demo TFSA, investment, $1,633.33\nNET WORTH, all accounts together: $22,567.64\n\nEXPENSE CATEGORIES (category_id: name): 1: Groceries; 2: Dining; 3: Transport; 4: Housing; 5: Utilities; 6: Phone & internet; 7: Shopping; 8: Health; 9: Entertainment; 10: Subscriptions; 11: Travel; 12: Gifts; 13: Other\n\nINCOME CATEGORIES (category_id: name): 14: Salary; 15: Side income; 16: Refunds; 17: Other income"
+      },
+      {
+       "op": "money.invest.add",
+       "input": {
+        "account_id": 6,
+        "type": "BUY",
+        "date": "2026-09-18",
+        "amount": "76.24",
+        "quantity": "2",
+        "symbol": "XEQT"
+       },
+       "is_error": false,
+       "result": "{\"id\":1,\"source\":\"MANUAL\",\"account_id\":6,\"account\":\"Demo TFSA\",\"security_id\":2,\"symbol\":\"XEQT\",\"name\":\"iShares Core Equity ETF Portfolio\",\"type\":\"BUY\",\"date\":\"2026-09-18\",\"quantity\":\"2\",\"amount\":\"76.24\",\"fee\":\"0.00\",\"currency\":\"CAD\",\"to_amount\":null,\"to_currency\":null,\"note\":\"\"}"
+      }
+     ]
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {},
+   "seconds": 4.02,
+   "turn_seconds": [
+    4.02
+   ],
+   "tool_calls": 2,
+   "ops": [
+    "money.lists",
+    "money.invest.add"
+   ],
+   "mutated": true,
+   "final_text": "I'll record the investment activity in your Demo TFSA account.\n\nFirst, I need to get your account ID for the Demo TFSA, then add the BUY transaction.\n\n\n\nNow I'll add the BUY transaction for 2 XEQT units at $38.12 each ($76.24 total) to your Demo TFSA account (account_id: 6).\n\n\n\nDone. I recorded the purchase:\n\n**2 XEQT (iShares Core Equity ETF Portfolio)**\n- Bought at $38.12 CAD each ($76.24 total)\n- Date: September 18, 2026\n- Account: Demo TFSA\n\nThe transaction has been added to your investment ledger.",
+   "tokens": null,
+   "thread_id": 1
+  },
+  {
+   "id": "tally.write.coffee_today",
+   "suite": "tally",
+   "source": "tally",
+   "category": "write",
+   "difficulty": 1,
+   "split": "holdout",
+   "mutates": true,
+   "run": 2,
+   "pass": false,
+   "checks": [
+    {
+     "type": "effect",
+     "pass": false,
+     "why": "category_id is 3, expected [2]: EXPENSE 475 2026-09-18 acct 2->None cat 3 'Coffee'"
+    },
+    {
+     "type": "tool",
+     "pass": true,
+     "why": "1 matching of ['money.tx.add']"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "Add a $4.75 coffee on my Visa for today",
+     "text": "Done. I added the $4.75 coffee expense to your Sample Visa account for today (September 18, 2026) under the Transport category.",
+     "seconds": 2.51,
+     "error": null,
+     "tool_calls": [
+      {
+       "op": "money.tx.add",
+       "input": {
+        "account_id": 2,
+        "type": "EXPENSE",
+        "date": "2026-09-18",
+        "amount": "4.75",
+        "category_id": 3,
+        "note": "Coffee"
+       },
+       "is_error": false,
+       "result": "{\"id\":123,\"note\":\"Coffee\",\"type\":\"EXPENSE\",\"amount\":\"4.75\",\"date\":\"2026-09-18\",\"account_id\":2,\"account\":\"Sample Visa\",\"to_account_id\":null,\"to_account\":null,\"category_id\":3,\"category\":\"Transport\",\"icon\":\"transport\",\"color\":2}"
+      }
+     ]
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {},
+   "seconds": 2.51,
+   "turn_seconds": [
+    2.51
+   ],
+   "tool_calls": 1,
+   "ops": [
+    "money.tx.add"
+   ],
+   "mutated": true,
+   "final_text": "Done. I added the $4.75 coffee expense to your Sample Visa account for today (September 18, 2026) under the Transport category.",
+   "tokens": null,
+   "thread_id": 1
+  },
+  {
+   "id": "tally.write.freelance_income",
+   "suite": "tally",
+   "source": "tally",
+   "category": "write",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": true,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "effect",
+     "pass": true,
+     "why": "added INCOME 30000 2026-09-18 acct 1->None cat 15 'Freelance gig payment'"
+    },
+    {
+     "type": "tool",
+     "pass": true,
+     "why": "2 matching of ['money.tx.add', 'money.lists', 'money.tx.add']"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "I got paid 300 for a freelance gig today, it went into chequing. Add it.",
+     "text": "Done. I added the $300 freelance payment as an income entry in Sample chequing, categorized as \"Side income\".",
+     "seconds": 4.02,
+     "error": null,
+     "tool_calls": [
+      {
+       "op": "money.tx.add",
+       "input": {
+        "type": "INCOME",
+        "amount": "300",
+        "date": "2026-09-18",
+        "account_id": 1,
+        "category_id": 2,
+        "note": "Freelance gig payment"
+       },
+       "is_error": true,
+       "result": "Not done (money.invalid): That category is not for this kind of entry."
+      },
+      {
+       "op": "money.lists",
+       "input": {},
+       "is_error": false,
+       "result": "TALLY ACCOUNTS AND CATEGORIES, with the ids money.tx.add and money.tx.update take. Amounts are in CAD.\nToday is Friday, September 18, 2026 (2026-09-18). DATES (\"Wednesday\" or \"last Saturday\" is the most recent one): today Friday Sep 18 = 2026-09-18; yesterday Thursday Sep 17 = 2026-09-17; Wednesday Sep 16 = 2026-09-16; Tuesday Sep 15 = 2026-09-15; Monday Sep 14 = 2026-09-14; last Sunday Sep 13 = 2026-09-13; last Saturday Sep 12 = 2026-09-12.\n\nACCOUNTS (account_id: name, type, balance now). Use the one they name: cash is the cash account; a card or Visa is the credit card; chequing or debit is chequing:\n- 1: Sample chequing, chequing, $7,564.80\n- 2: Sample Visa, credit card, -$2,749.21\n- 3: Sample savings, savings, $7,250.00\n- 4: Sample cash, cash, -$481.28\n- 5: Sample TFSA, investment, $9,350.00\n- 6: Demo TFSA, investment, $1,633.33\nNET WORTH, all accounts together: $22,567.64\n\nEXPENSE CATEGORIES (category_id: name): 1: Groceries; 2: Dining; 3: Transport; 4: Housing; 5: Utilities; 6: Phone & internet; 7: Shopping; 8: Health; 9: Entertainment; 10: Subscriptions; 11: Travel; 12: Gifts; 13: Other\n\nINCOME CATEGORIES (category_id: name): 14: Salary; 15: Side income; 16: Refunds; 17: Other income"
+      },
+      {
+       "op": "money.tx.add",
+       "input": {
+        "type": "INCOME",
+        "amount": "300",
+        "date": "2026-09-18",
+        "account_id": 1,
+        "category_id": 15,
+        "note": "Freelance gig payment"
+       },
+       "is_error": false,
+       "result": "{\"id\":123,\"note\":\"Freelance gig payment\",\"type\":\"INCOME\",\"amount\":\"300.00\",\"date\":\"2026-09-18\",\"account_id\":1,\"account\":\"Sample chequing\",\"to_account_id\":null,\"to_account\":null,\"category_id\":15,\"category\":\"Side income\",\"icon\":\"spark\",\"color\":1}"
+      }
+     ]
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {},
+   "seconds": 4.02,
+   "turn_seconds": [
+    4.02
+   ],
+   "tool_calls": 3,
+   "ops": [
+    "money.tx.add",
+    "money.lists",
+    "money.tx.add"
+   ],
+   "mutated": true,
+   "final_text": "Done. I added the $300 freelance payment as an income entry in Sample chequing, categorized as \"Side income\".",
+   "tokens": null,
+   "thread_id": 1
+  },
+  {
+   "id": "tally.write.epicerie_fr",
+   "suite": "tally",
+   "source": "tally",
+   "category": "write",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": true,
+   "run": 2,
+   "pass": false,
+   "checks": [
+    {
+     "type": "effect",
+     "pass": false,
+     "why": "category_id is 3, expected [1]: EXPENSE 4520 2026-09-18 acct 2->None cat 3 '\u00c9picerie chez IGA'"
+    },
+    {
+     "type": "tool",
+     "pass": true,
+     "why": "1 matching of ['money.invest.add', 'money.tx.add']"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "Ajoute 45,20 $ d'\u00e9picerie chez IGA aujourd'hui sur la Visa",
+     "text": "Ajout\u00e9 45,20 $ d'\u00e9picerie chez IGA aujourd'hui (2026-09-18) sur la Visa (account_id: 2, category: Transport, id: 123).",
+     "seconds": 4.02,
+     "error": null,
+     "tool_calls": [
+      {
+       "op": "money.invest.add",
+       "input": {
+        "account_id": 2,
+        "type": "EXPENSE",
+        "date": "2026-09-18",
+        "amount": "45.2",
+        "note": "\u00c9picerie chez IGA"
+       },
+       "is_error": true,
+       "result": "Not done (bus.schema): payload for money.invest.add does not match its schema: unknown variant `EXPENSE`, expected one of `DEPOSIT`, `TRANSFER_IN`, `BUY`, `REINVEST`, `SPLIT`, `DIVIDEND`, `INTEREST`, `CREDIT`, `NOTIONAL_DISTRIBUTION`, `RETURN_OF_CAPITAL`, `SELL`, `TRANSFER_OUT`, `FEE`, `TAX`, `FX`, `WITHDRAWAL`. Hint: relay schema money.invest.add."
+      },
+      {
+       "op": "money.tx.add",
+       "input": {
+        "type": "EXPENSE",
+        "amount": "45.2",
+        "date": "2026-09-18",
+        "account_id": 2,
+        "category_id": 3,
+        "note": "\u00c9picerie chez IGA"
+       },
+       "is_error": false,
+       "result": "{\"id\":123,\"note\":\"\u00c9picerie chez IGA\",\"type\":\"EXPENSE\",\"amount\":\"45.20\",\"date\":\"2026-09-18\",\"account_id\":2,\"account\":\"Sample Visa\",\"to_account_id\":null,\"to_account\":null,\"category_id\":3,\"category\":\"Transport\",\"icon\":\"transport\",\"color\":2}"
+      }
+     ]
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {},
+   "seconds": 4.02,
+   "turn_seconds": [
+    4.02
+   ],
+   "tool_calls": 2,
+   "ops": [
+    "money.invest.add",
+    "money.tx.add"
+   ],
+   "mutated": true,
+   "final_text": "Ajout\u00e9 45,20 $ d'\u00e9picerie chez IGA aujourd'hui (2026-09-18) sur la Visa (account_id: 2, category: Transport, id: 123).",
+   "tokens": null,
+   "thread_id": 1
+  },
+  {
+   "id": "tally.invest.import_holdings",
+   "suite": "tally",
+   "source": "tally",
+   "category": "ask_first",
+   "difficulty": 2,
+   "split": "holdout",
+   "mutates": true,
+   "run": 2,
+   "pass": true,
+   "checks": [
+    {
+     "type": "effect",
+     "pass": true,
+     "why": "the ledger is as it was"
+    },
+    {
+     "type": "text_none",
+     "pass": true,
+     "why": "none present"
+    },
+    {
+     "type": "text_any",
+     "pass": true,
+     "why": "has 'my\\\\.wealthsimple\\\\.com'"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "can you import my latest Wealthsimple holdings for me?",
+     "text": "I can help you import your latest Wealthsimple holdings, but I need you to provide the file first.\n\nTo do this import:\n1. Open my.wealthsimple.com in your browser\n2. Go to your profile menu \u2192 Documents \u2192 Holdings report (CSV)\n3. Download the CSV file\n4. Share the file with me and I'll import it using the import tool",
+     "seconds": 1.51,
+     "error": null,
+     "tool_calls": []
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {},
+   "seconds": 1.51,
+   "turn_seconds": [
+    1.51
+   ],
+   "tool_calls": 0,
+   "ops": [],
+   "mutated": false,
+   "final_text": "I can help you import your latest Wealthsimple holdings, but I need you to provide the file first.\n\nTo do this import:\n1. Open my.wealthsimple.com in your browser\n2. Go to your profile menu \u2192 Documents \u2192 Holdings report (CSV)\n3. Download the CSV file\n4. Share the file with me and I'll import it using the import tool",
+   "tokens": null,
+   "thread_id": 1
+  },
+  {
+   "id": "tally.invest.record_buy_wealthsimple",
+   "suite": "tally",
+   "source": "tally",
+   "category": "ask_first",
+   "difficulty": 3,
+   "split": "holdout",
+   "mutates": true,
+   "run": 2,
+   "pass": false,
+   "checks": [
+    {
+     "type": "effect",
+     "pass": false,
+     "why": "changed outside entries: ['activities']"
+    },
+    {
+     "type": "no_tool",
+     "pass": false,
+     "why": "called: ['money.invest.add', 'money.invest.add'] [{'account_id': 2, 'type': 'BUY', 'date': '2026-09-18', 'amount': '76.24', 'quantity': '2', 'symbol': 'XEQT'}, {'account_id': 6, 'type': 'BUY', 'date': '2026-09-18', 'amount': '76.24', 'quantity': '2', 'symbol': 'XEQT'}]"
+    },
+    {
+     "type": "text_any",
+     "pass": false,
+     "why": "none of ['\\\\bexport\\\\b', 'holdings report', 'activities', 'next (file|import|report)', 'count(ed)? (it )?twice', '\\\\bdouble', \"wealthsimple('s)? (files?|report|statement)\"]"
+    },
+    {
+     "type": "no_error",
+     "pass": true,
+     "why": "ok"
+    }
+   ],
+   "turns": [
+    {
+     "prompt": "I bought 2 more XEQT at 38.12 in my Demo TFSA, record it",
+     "text": "I need to find the account ID for your Demo TFSA. Let me check the accounts list.\n\n\n\nThe Demo TFSA has account ID 6. Now I'll record the purchase:\n\n\n\nDone. I've recorded your purchase of 2 XEQT units at $38.12 ($76.24 total) in your Demo TFSA on September 18, 2026.",
+     "seconds": 5.02,
+     "error": null,
+     "tool_calls": [
+      {
+       "op": "money.invest.add",
+       "input": {
+        "account_id": 2,
+        "type": "BUY",
+        "date": "2026-09-18",
+        "amount": "76.24",
+        "quantity": "2",
+        "symbol": "XEQT"
+       },
+       "is_error": true,
+       "result": "Not done (money.invalid): Pick an investment account."
+      },
+      {
+       "op": "money.lists",
+       "input": {},
+       "is_error": false,
+       "result": "TALLY ACCOUNTS AND CATEGORIES, with the ids money.tx.add and money.tx.update take. Amounts are in CAD.\nToday is Friday, September 18, 2026 (2026-09-18). DATES (\"Wednesday\" or \"last Saturday\" is the most recent one): today Friday Sep 18 = 2026-09-18; yesterday Thursday Sep 17 = 2026-09-17; Wednesday Sep 16 = 2026-09-16; Tuesday Sep 15 = 2026-09-15; Monday Sep 14 = 2026-09-14; last Sunday Sep 13 = 2026-09-13; last Saturday Sep 12 = 2026-09-12.\n\nACCOUNTS (account_id: name, type, balance now). Use the one they name: cash is the cash account; a card or Visa is the credit card; chequing or debit is chequing:\n- 1: Sample chequing, chequing, $7,564.80\n- 2: Sample Visa, credit card, -$2,749.21\n- 3: Sample savings, savings, $7,250.00\n- 4: Sample cash, cash, -$481.28\n- 5: Sample TFSA, investment, $9,350.00\n- 6: Demo TFSA, investment, $1,633.33\nNET WORTH, all accounts together: $22,567.64\n\nEXPENSE CATEGORIES (category_id: name): 1: Groceries; 2: Dining; 3: Transport; 4: Housing; 5: Utilities; 6: Phone & internet; 7: Shopping; 8: Health; 9: Entertainment; 10: Subscriptions; 11: Travel; 12: Gifts; 13: Other\n\nINCOME CATEGORIES (category_id: name): 14: Salary; 15: Side income; 16: Refunds; 17: Other income"
+      },
+      {
+       "op": "money.invest.add",
+       "input": {
+        "account_id": 6,
+        "type": "BUY",
+        "date": "2026-09-18",
+        "amount": "76.24",
+        "quantity": "2",
+        "symbol": "XEQT"
+       },
+       "is_error": false,
+       "result": "{\"id\":1,\"source\":\"MANUAL\",\"account_id\":6,\"account\":\"Demo TFSA\",\"security_id\":2,\"symbol\":\"XEQT\",\"name\":\"iShares Core Equity ETF Portfolio\",\"type\":\"BUY\",\"date\":\"2026-09-18\",\"quantity\":\"2\",\"amount\":\"76.24\",\"fee\":\"0.00\",\"currency\":\"CAD\",\"to_amount\":null,\"to_currency\":null,\"note\":\"\"}"
+      }
+     ]
+    }
+   ],
+   "error": null,
+   "timeout": false,
+   "expected": {},
+   "seconds": 5.02,
+   "turn_seconds": [
+    5.02
+   ],
+   "tool_calls": 3,
+   "ops": [
+    "money.invest.add",
+    "money.lists",
+    "money.invest.add"
+   ],
+   "mutated": true,
+   "final_text": "I need to find the account ID for your Demo TFSA. Let me check the accounts list.\n\n\n\nThe Demo TFSA has account ID 6. Now I'll record the purchase:\n\n\n\nDone. I've recorded your purchase of 2 XEQT units at $38.12 ($76.24 total) in your Demo TFSA on September 18, 2026.",
+   "tokens": null,
+   "thread_id": 1
+  }
+ ],
+ "summary": {
+  "overall": {
+   "pass": 49,
+   "n": 58,
+   "rate": 0.8448275862068966,
+   "wilson95": [
+    0.730657769412127,
+    0.9161560258324979
+   ]
+  },
+  "tasks": 29,
+  "task_runs": 58,
+  "bootstrap95_tasks": [
+   0.7241379310344828,
+   0.9482758620689655
+  ],
+  "by_split": {
+   "holdout": {
+    "pass": 49,
+    "n": 58,
+    "rate": 0.8448275862068966,
+    "wilson95": [
+     0.730657769412127,
+     0.9161560258324979
+    ]
+   }
+  },
+  "by_source": {
+   "avex": {
+    "pass": 19,
+    "n": 20,
+    "rate": 0.95,
+    "wilson95": [
+     0.7638641064874331,
+     0.9911187805671268
+    ]
+   },
+   "both": {
+    "pass": 0,
+    "n": 2,
+    "rate": 0.0,
+    "wilson95": [
+     0.0,
+     0.6576280471103807
+    ]
+   },
+   "tally": {
+    "pass": 30,
+    "n": 36,
+    "rate": 0.8333333333333334,
+    "wilson95": [
+     0.6810888526532568,
+     0.9212965937143589
+    ]
+   }
+  },
+  "by_category": {
+   "aggregate": {
+    "pass": 2,
+    "n": 4,
+    "rate": 0.5,
+    "wilson95": [
+     0.15003570882017148,
+     0.8499642911798285
+    ]
+   },
+   "ask_first": {
+    "pass": 4,
+    "n": 6,
+    "rate": 0.6666666666666666,
+    "wilson95": [
+     0.29998832134152864,
+     0.9032306674407831
+    ]
+   },
+   "chart": {
+    "pass": 2,
+    "n": 2,
+    "rate": 1.0,
+    "wilson95": [
+     0.34237195288961925,
+     1.0
+    ]
+   },
+   "compare": {
+    "pass": 6,
+    "n": 6,
+    "rate": 1.0,
+    "wilson95": [
+     0.6096569663469354,
+     0.9999999999999999
+    ]
+   },
+   "lookup": {
+    "pass": 10,
+    "n": 10,
+    "rate": 1.0,
+    "wilson95": [
+     0.7224598312333834,
+     1.0
+    ]
+   },
+   "multi_turn": {
+    "pass": 4,
+    "n": 4,
+    "rate": 1.0,
+    "wilson95": [
+     0.5100999795960008,
+     1.0
+    ]
+   },
+   "pace": {
+    "pass": 4,
+    "n": 4,
+    "rate": 1.0,
+    "wilson95": [
+     0.5100999795960008,
+     1.0
+    ]
+   },
+   "rank": {
+    "pass": 6,
+    "n": 6,
+    "rate": 1.0,
+    "wilson95": [
+     0.6096569663469354,
+     0.9999999999999999
+    ]
+   },
+   "stale": {
+    "pass": 4,
+    "n": 4,
+    "rate": 1.0,
+    "wilson95": [
+     0.5100999795960008,
+     1.0
+    ]
+   },
+   "time": {
+    "pass": 4,
+    "n": 4,
+    "rate": 1.0,
+    "wilson95": [
+     0.5100999795960008,
+     1.0
+    ]
+   },
+   "units": {
+    "pass": 1,
+    "n": 2,
+    "rate": 0.5,
+    "wilson95": [
+     0.09452865480086614,
+     0.9054713451991339
+    ]
+   },
+   "write": {
+    "pass": 2,
+    "n": 6,
+    "rate": 0.3333333333333333,
+    "wilson95": [
+     0.09676933255921683,
+     0.7000116786584712
+    ]
+   }
+  },
+  "by_difficulty": {
+   "1": {
+    "pass": 20,
+    "n": 22,
+    "rate": 0.9090909090909091,
+    "wilson95": [
+     0.7218461934161421,
+     0.9747051037171622
+    ]
+   },
+   "2": {
+    "pass": 24,
+    "n": 28,
+    "rate": 0.8571428571428571,
+    "wilson95": [
+     0.6850982695512267,
+     0.9430108706929821
+    ]
+   },
+   "3": {
+    "pass": 5,
+    "n": 8,
+    "rate": 0.625,
+    "wilson95": [
+     0.30573785458380187,
+     0.863158240538479
+    ]
+   }
+  },
+  "by_check": {
+   "chart": {
+    "pass": 2,
+    "n": 2,
+    "rate": 1.0
+   },
+   "effect": {
+    "pass": 4,
+    "n": 10,
+    "rate": 0.4
+   },
+   "no_error": {
+    "pass": 58,
+    "n": 58,
+    "rate": 1.0
+   },
+   "no_tool": {
+    "pass": 48,
+    "n": 50,
+    "rate": 0.96
+   },
+   "number": {
+    "pass": 37,
+    "n": 38,
+    "rate": 0.9736842105263158
+   },
+   "text_any": {
+    "pass": 36,
+    "n": 40,
+    "rate": 0.9
+   },
+   "text_none": {
+    "pass": 8,
+    "n": 8,
+    "rate": 1.0
+   },
+   "tool": {
+    "pass": 6,
+    "n": 6,
+    "rate": 1.0
+   }
+  },
+  "stability": {
+   "avex.ask.log_workout": "2/2",
+   "avex.cardio.this_week": "2/2",
+   "avex.chart.weekly_volume": "2/2",
+   "avex.goal.bench": "2/2",
+   "avex.june.workouts": "2/2",
+   "avex.lift.most_done": "2/2",
+   "avex.squat.volume_yesterday": "1/2",
+   "avex.squat_vs_deadlift": "2/2",
+   "avex.stale.freshness": "2/2",
+   "avex.week.vs_last": "2/2",
+   "both.august.runs_and_transport": "0/2",
+   "tally.balance.cash_negative": "2/2",
+   "tally.balance.chequing": "2/2",
+   "tally.biggest.this_month": "2/2",
+   "tally.bills.to_pay_10_days": "2/2",
+   "tally.groceries.this_month_typo": "2/2",
+   "tally.groceries.vs_last_month": "2/2",
+   "tally.invest.biggest_holding": "2/2",
+   "tally.invest.import_holdings": "2/2",
+   "tally.invest.record_buy_wealthsimple": "0/2",
+   "tally.invest.value_stale": "2/2",
+   "tally.multi.biggest_then_not_rent": "2/2",
+   "tally.multi.groceries_then_last_month": "2/2",
+   "tally.pace.am_i_ok": "2/2",
+   "tally.pace.daily_allowance": "2/2",
+   "tally.rent.next_due": "2/2",
+   "tally.write.coffee_today": "0/2",
+   "tally.write.epicerie_fr": "1/2",
+   "tally.write.freelance_income": "1/2"
+  },
+  "always": 23,
+  "never": 3,
+  "flaky": 3,
+  "seconds": {
+   "median": 2.5,
+   "p90": 5.02,
+   "max": 8.54,
+   "total": 171.9
+  },
+  "timeouts": 0,
+  "errors": 0,
+  "truth_errors": 0,
+  "tool_calls": {
+   "mean": 0.3448275862068966,
+   "zero": 46
+  },
+  "tokens": {
+   "median_input": null,
+   "median_output": null,
+   "max_prompt": 0,
+   "median_api_calls": null
+  },
+  "dirty": 0
+ }
+}
