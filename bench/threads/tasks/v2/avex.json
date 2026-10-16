@@ -1,0 +1,249 @@
+[
+  {"id": "v2.avex.lookup.last_workout", "source": "avex", "category": "lookup", "difficulty": 1,
+   "prompt": "when did I last work out?",
+   "truth": "v2_last_workout",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(?:sep(?:t(?:ember)?)?)\\.?\\s*15(?:st|nd|rd|th)?\\b|\\b15(?:st|nd|rd|th|er)?\\s+(?:of\\s+)?(?:(?:sep(?:t(?:ember)?)?)|(?:sept(?:embre)?))|09-15|tuesday|mardi|3 days ago|il y a 3 jours"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "max_tools": 1,
+   "mutates": false},
+  {"id": "v2.avex.lookup.workouts_last_week", "source": "avex", "category": "lookup", "difficulty": 1,
+   "prompt": "how many times did i train last week",
+   "truth": "v2_workouts_last_week",
+   "checks": [
+     {"type": "number", "of": "n", "tol": 0},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "max_tools": 1,
+   "mutates": false},
+  {"id": "v2.avex.lookup.squat_best", "source": "avex", "category": "lookup", "difficulty": 1,
+   "prompt": "what's my best squat?",
+   "truth": "v2_squat_best",
+   "checks": [
+     {"type": "number", "any_of": ["best"], "tol": 0.05},
+     {"type": "text_any", "regex": ["\\bkg\\b|kilo"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "max_tools": 1,
+   "mutates": false},
+  {"id": "v2.avex.cardio.this_week", "source": "avex", "category": "lookup", "difficulty": 1,
+   "prompt": "how many minutes of cardio have i done this week?",
+   "truth": "v2_cardio_this_week",
+   "checks": [
+     {"type": "number", "of": "minutes", "tol": 0},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "max_tools": 1,
+   "mutates": false},
+  {"id": "v2.avex.cardio.last_ride", "source": "avex", "category": "lookup", "difficulty": 1,
+   "prompt": "how far was my last bike ride?",
+   "truth": "v2_last_ride",
+   "checks": [
+     {"type": "number", "of": "km", "tol": 0.05},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "max_tools": 1,
+   "mutates": false},
+  {"id": "v2.avex.streak.fr", "source": "avex", "category": "lookup", "difficulty": 1,
+   "prompt": "ça fait combien de semaines d'affilée que je m'entraîne?",
+   "truth": "v2_streak_now",
+   "checks": [
+     {"type": "number", "of": "weeks", "tol": 0},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "max_tools": 1,
+   "mutates": false},
+  {"id": "v2.avex.lookup.most_improved", "source": "avex", "category": "rank", "difficulty": 1,
+   "prompt": "which lift has improved the most lately?",
+   "truth": "v2_most_improved",
+   "checks": [
+     {"type": "text_any", "regex": ["lateral|lat[ée]ral|[ée]l[ée]vation"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "max_tools": 1,
+   "mutates": false},
+  {"id": "v2.avex.switch.how_is_bench", "source": "avex", "category": "lookup", "difficulty": 2,
+   "prompt": "how's my bench going?",
+   "truth": "v2_bench_switch",
+   "checks": [
+     {"type": "text_any", "regex": ["dumbbell|halt[èe]re"]},
+     {"type": "number", "any_of": ["numbers"], "tol": 0.05},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.switch.last_barbell", "source": "avex", "category": "time", "difficulty": 2,
+   "prompt": "when was the last time I did barbell bench?",
+   "truth": "v2_bench_switch",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(?:jun(?:e)?)\\.?\\s*15(?:st|nd|rd|th)?\\b|\\b15(?:st|nd|rd|th|er)?\\s+(?:of\\s+)?(?:(?:jun(?:e)?)|(?:juin))|06-15"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.switch.why", "source": "avex", "category": "lookup", "difficulty": 3,
+   "prompt": "why did i stop doing barbell bench press?",
+   "truth": "v2_bench_why",
+   "checks": [
+     {"type": "text_any", "regex": ["shoulder|[ée]paule"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.cardio.ten_k", "source": "avex", "category": "lookup", "difficulty": 2,
+   "prompt": "what was my 10k race time?",
+   "truth": "v2_ten_k",
+   "checks": [
+     {"type": "number", "of": "minutes", "tol": 0},
+     {"type": "text_any", "regex": ["\\b(?:may)\\.?\\s*24(?:st|nd|rd|th)?\\b|\\b24(?:st|nd|rd|th|er)?\\s+(?:of\\s+)?(?:(?:may)|(?:mai))|05-24"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.cardio.outdoor_runs", "source": "avex", "category": "aggregate", "difficulty": 3,
+   "prompt": "how many outdoor runs have I logged, and how many km is that in total? not the treadmill",
+   "truth": "v2_runs",
+   "checks": [
+     {"type": "number", "of": "n", "tol": 0},
+     {"type": "number", "of": "km", "tol": 0.1},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.cardio.hikes", "source": "avex", "category": "lookup", "difficulty": 2,
+   "prompt": "did I go hiking at all? where?",
+   "truth": "v2_hikes",
+   "checks": [
+     {"type": "text_all", "regex": ["sintra", "sept vall|seven (?:hanging )?valleys|\\b(?:jul(?:y)?)\\.?\\s*1(?:st|nd|rd|th)?\\b|\\b1(?:st|nd|rd|th|er)?\\s+(?:of\\s+)?(?:(?:jul(?:y)?)|(?:juil(?:let)?))|07-01"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.untracked.days", "source": "avex", "category": "lookup", "difficulty": 2,
+   "prompt": "which workouts did I mark as untracked?",
+   "truth": "v2_untracked",
+   "checks": [
+     {"type": "text_all", "regex": ["\\b(?:feb(?:ruary)?)\\.?\\s*21(?:st|nd|rd|th)?\\b|\\b21(?:st|nd|rd|th|er)?\\s+(?:of\\s+)?(?:(?:feb(?:ruary)?)|(?:f[ée]v(?:rier)?))|02-21", "\\b(?:jun(?:e)?)\\.?\\s*25(?:st|nd|rd|th)?\\b|\\b25(?:st|nd|rd|th|er)?\\s+(?:of\\s+)?(?:(?:jun(?:e)?)|(?:juin))|06-25", "\\b(?:aug(?:ust)?)\\.?\\s*8(?:st|nd|rd|th)?\\b|\\b8(?:st|nd|rd|th|er)?\\s+(?:of\\s+)?(?:(?:aug(?:ust)?)|(?:ao[uû]t))|08-08"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.untracked.hotel", "source": "avex", "category": "lookup", "difficulty": 2,
+   "prompt": "did the hotel gym workout in lisbon count toward my streak?",
+   "truth": "v2_hotel_session",
+   "checks": [
+     {"type": "text_any", "regex": ["\\bno\\b|\\bnon\\b|\\bnot\\b|n't\\b|\\bnever\\b|\\bnothing\\b|\\bpas\\b|\\baucun|untracked"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.deload.when", "source": "avex", "category": "time", "difficulty": 2,
+   "prompt": "when was my last deload week?",
+   "truth": "v2_deload",
+   "checks": [
+     {"type": "text_any", "regex": ["\\b(?:apr(?:il)?)\\.?\\s*13(?:st|nd|rd|th)?\\b|\\b13(?:st|nd|rd|th|er)?\\s+(?:of\\s+)?(?:(?:apr(?:il)?)|(?:avr(?:il)?))|04-13"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.deload.volume_drop", "source": "avex", "category": "compare", "difficulty": 3,
+   "prompt": "how much less volume did i lift in my deload week than the week before it?",
+   "truth": "v2_deload",
+   "checks": [
+     {"type": "number", "any_of": ["drop", "drop_pct"], "tol": 1},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.units.ohp_lb", "source": "avex", "category": "units", "difficulty": 2,
+   "prompt": "what's my best overhead press in pounds?",
+   "truth": "v2_ohp_lb",
+   "checks": [
+     {"type": "number", "any_of": ["lb"], "tol": 0.3},
+     {"type": "text_any", "regex": ["\\blbs?\\b|pound|livre"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.goal.deadlift", "source": "avex", "category": "compare", "difficulty": 2,
+   "prompt": "have i hit my deadlift goal yet?",
+   "truth": "v2_deadlift_goal",
+   "checks": [
+     {"type": "number", "any_of": ["numbers"], "tol": 0.05},
+     {"type": "text_any", "regex": ["estimat|e1rm|1rm|one-rep|projected|predicted|not actually|never (?:actually )?(?:lifted|pulled)|haven'?t (?:actually )?(?:lifted|pulled)"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.plateau.which", "source": "avex", "category": "compare", "difficulty": 3,
+   "prompt": "which of my lifts is stuck? like hasn't gotten better in months",
+   "truth": "v2_plateau",
+   "checks": [
+     {"type": "text_any", "regex": ["overhead|\\bOHP\\b|militaire|d[ée]velopp[ée] (?:militaire|[ée]paules)"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.plateau.ohp_heavier", "source": "avex", "category": "compare", "difficulty": 3,
+   "prompt": "what's the heaviest i've pressed overhead since march, and is that better than my best?",
+   "truth": "v2_ohp_since_march",
+   "checks": [
+     {"type": "number", "of": "heaviest_since_march", "tol": 0.05},
+     {"type": "text_any", "regex": ["\\bno\\b|\\bnon\\b|\\bnot\\b|n't\\b|\\bnever\\b|\\bnothing\\b|\\bpas\\b|\\baucun|same|equal|égal"]},
+     {"type": "text_any", "regex": ["\\bkg\\b|kilo"]},
+     {"type": "text_none", "regex": ["(?:nothing (?:has been |was )?(?:logged|recorded)|no (?:overhead press |ohp )?(?:sessions?|workouts?|sets?|data|entries) (?:logged |recorded )?|not (?:been )?(?:logged|recorded|tracked)|haven'?t (?:logged|recorded|tracked|done) (?:any |it |overhead press |ohp )?)\\s*since (?:march|mars)"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.test.heaviest_deadlift", "source": "avex", "category": "lookup", "difficulty": 3,
+   "prompt": "what's the heaviest deadlift i've ever pulled?",
+   "truth": "v2_heaviest_deadlift",
+   "checks": [
+     {"type": "number", "of": "heaviest", "tol": 0.05},
+     {"type": "text_any", "regex": ["\\b(?:mar(?:ch)?)\\.?\\s*28(?:st|nd|rd|th)?\\b|\\b28(?:st|nd|rd|th|er)?\\s+(?:of\\s+)?(?:(?:mar(?:ch)?)|(?:mars))|03-28|test"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.vacation.gap", "source": "avex", "category": "time", "difficulty": 3,
+   "prompt": "how long was my break from the gym this summer? from my last workout before to the first one back",
+   "truth": "v2_vacation_gap",
+   "checks": [
+     {"type": "number", "of": "days", "tol": 0},
+     {"type": "text_all", "regex": ["\\b(?:jun(?:e)?)\\.?\\s*18(?:st|nd|rd|th)?\\b|\\b18(?:st|nd|rd|th|er)?\\s+(?:of\\s+)?(?:(?:jun(?:e)?)|(?:juin))|06-18", "\\b(?:jul(?:y)?)\\.?\\s*6(?:st|nd|rd|th)?\\b|\\b6(?:st|nd|rd|th|er)?\\s+(?:of\\s+)?(?:(?:jul(?:y)?)|(?:juil(?:let)?))|07-06"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.vacation.streak_before", "source": "avex", "category": "time", "difficulty": 3,
+   "prompt": "how many weeks in a row had i been training before my trip broke the streak?",
+   "truth": "v2_streak_before_trip",
+   "checks": [
+     {"type": "number", "of": "weeks", "tol": 0},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false},
+  {"id": "v2.avex.multi.lift_chain", "source": "avex", "category": "multi_turn", "difficulty": 3,
+   "prompt": "what's my best squat?",
+   "followups": ["and deadlift?", "how far is my squat from my goal?", "and the deadlift goal?", "so which one should i focus on?"],
+   "truth": "v2_multi_lift_chain",
+   "checks": [
+     {"type": "number", "any_of": ["deadlift"], "tol": 0.05, "turn": 1},
+     {"type": "number", "any_of": ["squat_gap"], "tol": 0.05, "turn": 2},
+     {"type": "text_any", "regex": ["186|past|passed|already|exceed|beyond|surpass|d[ée]pass"], "turn": 3},
+     {"type": "text_any", "regex": ["squat"]},
+     {"type": "no_tool", "ops": ["money.tx.add", "money.tx.update", "money.tx.restore", "money.invest.add", "thread.propose"]},
+     {"type": "no_error"}
+   ],
+   "mutates": false}
+]

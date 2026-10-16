@@ -102,18 +102,28 @@ pub struct LocalStyle {
     pub prefetch: bool,
     /// Tools described in plain words with an example call each, by the MCP door.
     pub docs: bool,
+    /// The model thinks before it answers (`think`), within this many tokens (`think:512`); -1 is
+    /// no limit. Off, the server answers at once (`local_models`).
+    pub think: Option<i32>,
 }
 
 impl LocalStyle {
-    pub const CLASSIC: LocalStyle = LocalStyle { lean: false, readings: false, prefetch: false, docs: false };
-    /// What a local thread runs with when nothing overrides it: on the bench's dev split, Qwen3.5
-    /// 4B answered 73% with none of it and 92% with these three; `docs` moved nothing.
-    pub const DEFAULT: LocalStyle = LocalStyle { lean: true, readings: true, prefetch: true, docs: false };
+    pub const CLASSIC: LocalStyle = LocalStyle { lean: false, readings: false, prefetch: false, docs: false, think: None };
+    /// What a local thread runs with when nothing overrides it: on the bench, Qwen3.5 4B answered
+    /// 74.5% with none of it, 95.2% with these three parts, and 98.2% thinking within 512 tokens
+    /// (a median answer 7 s against 3 s; with no limit 98.5%, and slower at the tail). `docs`
+    /// moved nothing.
+    pub const DEFAULT: LocalStyle = LocalStyle { lean: true, readings: true, prefetch: true, docs: false, think: Some(512) };
 
-    /// `lean,readings` and the like; `classic` (or nothing known) is none of them.
+    /// `lean,readings` and the like; `classic` (or nothing known) is none of them. `think` or
+    /// `think:<tokens>` turns thinking on.
     pub fn parse(spec: &str) -> LocalStyle {
         let has = |part: &str| spec.split(',').any(|p| p.trim().eq_ignore_ascii_case(part));
-        LocalStyle { lean: has("lean"), readings: has("readings"), prefetch: has("prefetch"), docs: has("docs") }
+        let think = spec.split(',').map(str::trim).find_map(|p| {
+            let lower = p.to_ascii_lowercase();
+            if lower == "think" { Some(-1) } else { lower.strip_prefix("think:").and_then(|n| n.parse::<i32>().ok()).filter(|n| *n >= 0) }
+        });
+        LocalStyle { lean: has("lean"), readings: has("readings"), prefetch: has("prefetch"), docs: has("docs"), think }
     }
 
     /// `RELAY_THREADS_LOCAL`, else (unset or empty) [`LocalStyle::DEFAULT`].
@@ -169,11 +179,13 @@ yourself when a tool gives the result (`net_worth` for all accounts together, `s
 changed. To delete entries or investment activities, change more than 3 entries, set budgets, or add, \
 rename or archive accounts, call thread.propose with one action and why; the person approves it on a \
 card. Say what you proposed: it is not done until Relay tells you it was approved. Answer briefly, lead with the number they asked for, and never \
-invent figures the tools did not give you.
+invent figures the tools did not give you. Tally and Avex hold only what the person logged in them: \
+when something is missing or zero, say it is not logged in Tally (or in the Avex copy), never that it \
+did not happen.
 
 To show a chart, write a fenced block with the language `chart` holding one JSON object. Give it a \
 `title`, a `type` (`bar`, `line` or `donut`) and a `query` for money.series (`measure`: spending, \
-income or net; `by`: category, week, day or period; `periods`: how many budget periods to compare; \
+income or net; `by`: category, week, day or period; `periods`: how many budget periods (months) to compare, even by week; \
 optional `category` by name and `cumulative`). Relay draws it from the ledger and redraws it when the \
 ledger changes, so never put numbers in it you read yourself. Example:\n\
 ```chart\n{\"type\": \"bar\", \"title\": \"Groceries by week\", \"query\": {\"by\": \"week\", \"periods\": 2, \"category\": \"Groceries\"}}\n```\n\
@@ -283,6 +295,9 @@ const LOCAL_PROMPT: &str = "You are the assistant in Relay Threads. You talk wit
 about their own data, which you read with the relay tools:
 - Tally, their budget app (money.* tools): spending, budgets, bills, accounts, goals and investments.
 - Avex, their gym app (gym.* tools): workouts, lifts and cardio.
+These are apps they fill in by hand, not their bank or their whole life: the data holds only what \
+they logged. When something is missing or zero, say it is not logged (\"no income logged in Tally \
+this month\"), never that it did not happen.
 
 How to answer:
 1. Read the data with a tool before you answer. Never answer about their data from memory and never \
@@ -300,7 +315,7 @@ last month; accounts and net worth; bills and goals.
 - money.tx.list: the entries of one month with their totals. period_offset 0 is this month, -1 last \
 month, -2 the month before; it adds them up by category, week and day. query finds entries by note, \
 category or account.
-- money.lists: the ids of accounts and categories, needed to add or change an entry.
+- money.lists: the names of accounts and categories, and what goes in each category.
 - money.invest.summary: investments (value, gain, holdings, contribution room). money.invest.list: \
 their buys, sells and dividends.
 - gym.summary: start here for training. Totals, this week and last week, week by week and month by \
@@ -323,7 +338,9 @@ estimated exchange rate is an estimate: say so.
 
 Changes:
 - You may add an entry with money.tx.add (type, amount like \"42.18\", date as YYYY-MM-DD from the \
-dates list, account_id and, for an expense or income, always a category_id, both from money.lists) and change one with money.tx.update (its id from money.tx.list). \
+dates list, the account by name as the person said it, and for an expense or income always a \
+category by its name in money.lists) and change one with money.tx.update (its id from money.tx.list). \
+In French a comma before the last two digits is the decimal point: \"45,20 $\" is 45.20. \
 Say plainly what you changed. When the amount or the account is unclear, ask first. \
 money.tx.restore brings back a deleted entry. money.invest.add records an investment activity, but \
 not in an account Wealthsimple's files fill.
@@ -333,11 +350,12 @@ card. Say what you proposed: it is not done until Relay tells you it was approve
 the day the budget month starts, are theirs.
 - Avex's data is read only: changes happen in Avex on the phone.
 
-Charts: when they ask to show, chart, plot, draw or graph something, answer with a chart: a fenced \
+Charts: when they ask to show, chart, plot, draw or graph something, or where their money went, \
+answer with a chart: a fenced \
 block with the language `chart` holding one JSON object. Relay \
 draws it from the data, so never put numbers in it yourself. `type` is bar, line or donut. A money \
 chart has `query`: `measure` (spending, income or net), `by` (category, week, day or period), \
-`periods` (how many months), and optionally `category` by name and `cumulative` (a running total, \
+`periods` (how many months, even by week: \"the last 2 months by week\" is periods 2), and optionally `category` by name and `cumulative` (a running total, \
 for pace):\n\
 ```chart\n{\"type\": \"bar\", \"title\": \"Groceries by week\", \"query\": {\"by\": \"week\", \"periods\": 2, \"category\": \"Groceries\"}}\n```\n\
 ```chart\n{\"type\": \"donut\", \"title\": \"Where the money went this month\", \"query\": {\"by\": \"category\"}}\n```\n\
@@ -1294,11 +1312,14 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--append-system-prompt" || a == PROMPT));
         let args = agent_args("{}", None, None, None, false);
         assert!(args.windows(2).any(|w| w[0] == "--append-system-prompt" && w[1] == PROMPT));
-        assert_eq!(LocalStyle::parse(" lean, Readings"), LocalStyle { lean: true, readings: true, prefetch: false, docs: false });
+        assert_eq!(LocalStyle::parse(" lean, Readings"), LocalStyle { lean: true, readings: true, prefetch: false, docs: false, think: None });
+        assert_eq!(LocalStyle::parse("lean,think").think, Some(-1));
+        assert_eq!(LocalStyle::parse("lean,think:512").think, Some(512));
+        assert_eq!(LocalStyle::parse("lean,think:x").think, None);
         assert_eq!(LocalStyle::parse("classic"), LocalStyle::CLASSIC);
         assert_eq!(LocalStyle::parse("lean,readings,prefetch").door(), "lean,readings");
         assert_eq!(LocalStyle::CLASSIC.door(), "");
-        assert_eq!(LocalStyle::DEFAULT, LocalStyle::parse("lean,readings,prefetch"));
+        assert_eq!(LocalStyle::DEFAULT, LocalStyle::parse("lean,readings,prefetch,think:512"));
     }
 
     #[test]

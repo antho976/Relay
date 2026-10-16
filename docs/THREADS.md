@@ -511,6 +511,40 @@ totals over a period 41% → 87%, charts 44% → 72%; a median task 16.6 s → 3
 move (75.0% → 70.8%, within noise): the model still now and then picks the wrong account or
 category, or reads "45,20 $" as 45,200.
 
+Then Relay took over what both the 4B and the 9B still got wrong (2026-10-16):
+
+- **Names, not ids.** A small model gives `money.tx.add` and `money.tx.update` (and the edits it
+  proposes) the account and category by name, "cash", "the Visa", "Dining"; the door finds the ids
+  (`mcp.rs`, `resolve_names`: the whole name, a unique part of one, or for an account a word for
+  its type) or sends the write back with the names it may use. `money.lists` gives each default
+  category's examples: coffee is Dining, Bixi is Transport.
+- **No double-counted buys.** A thread's agent may not record investment activity in an account
+  Wealthsimple's files fill (`money.import_filled`); every model tried. Readings mark those accounts.
+- **Readings fill the gaps:** each exercise's volume, a lift with no estimated max because every set
+  was over 12 reps, cardio counted by month, and `periods` counting months even by week.
+- **Only what was logged.** Tally and Avex hold what the person entered, not their bank or their
+  life: readings say "none logged in Tally" for a zero, and both prompts say a missing figure is not
+  logged, never that it did not happen (found by Antho testing the 4B).
+
+The whole bench again with the 4B: 89.8% → 95.2% [92.3, 97.0], Δ +5.4 [+1.8, +9.3]; holdout 95.4%;
+writes 70.8% → 95.8%. That is the 9B's 95.8% on the build before, at the 4B's speed.
+
+Then thinking (2026-10-16). The server had run with thinking off, which is most of a small model's
+wait; `think` or `think:<tokens>` in the profile turns it on (`--reasoning on`, with
+`--reasoning-budget`), and Claude Code's reply budget grows to fit. With two more rules in first,
+each budget answered "Over budget?" and "Ahead of pace?" separately, and `money.invest.add`
+naming the accounts Wealthsimple fills, the 4B over the whole bench:
+
+| Thinking | Pass | Median s | p90 s |
+|---|---|---|---|
+| off | 95.2% [92.3, 97.0] | 3.0 | 6.5 |
+| within 512 tokens (**the default**) | 98.2% [96.1, 99.2] | 7.0 | 13.6 |
+| no limit | 98.5% [96.5, 99.4] | 7.0 | 21.6 |
+
+512 tokens against none: +3.0 [+0.6, +5.7]; no limit against 512: +0.3 [−0.6, +1.5], with a slower
+tail. Timings are with three questions at once; a thread alone answers faster. `no-think` in
+`bench/threads/variants.json` is the profile before this.
+
 `RELAY_THREADS_LOCAL` in the engine's environment, a comma list of those parts or `classic` for
 none, overrides the default, to measure a new model or a change (`bench/threads/variants.json`).
 A thread on Claude is unchanged.

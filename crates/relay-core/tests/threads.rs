@@ -475,3 +475,21 @@ with open(d + "/answers.tmp", "w") as out:
     json.dump(answers, out)
 os.replace(d + "/answers.tmp", d + "/answers.json")
 "#;
+
+#[test]
+fn a_thread_agent_records_no_activity_in_an_account_wealthsimple_fills() {
+    let engine = engine();
+    let filled = ok(&engine, "money.account.add", json!({"name": "Demo TFSA", "type": "INVESTMENT", "opening_balance": 0, "registration": "TFSA", "institution": "Wealthsimple"}));
+    let own = ok(&engine, "money.account.add", json!({"name": "Questrade RRSP", "type": "INVESTMENT", "opening_balance": 0, "registration": "RRSP", "institution": "Questrade"}));
+    let thread = ok(&engine, "thread.create", json!({}))["id"].clone();
+    let deposit = |account: &Value| json!({"account_id": account["id"], "type": "DEPOSIT", "date": "2026-09-18", "amount": 10_000});
+
+    // The next export brings it: recorded here too, it would count twice.
+    let refused = from_agent(&engine, &thread, "money.invest.add", deposit(&filled));
+    assert_eq!(code(refused), "money.import_filled");
+    assert!(ok(&engine, "money.invest.list", json!({}))["activities"].as_array().unwrap().is_empty());
+    // Another institution's account, and the person themselves, may.
+    from_agent(&engine, &thread, "money.invest.add", deposit(&own)).into_result().unwrap();
+    ok(&engine, "money.invest.add", deposit(&filled));
+    assert_eq!(ok(&engine, "money.invest.list", json!({}))["activities"].as_array().unwrap().len(), 2);
+}

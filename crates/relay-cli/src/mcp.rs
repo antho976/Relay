@@ -448,6 +448,15 @@ async fn tools(instance: Instance, actor: &Actor, token: Option<&str>) -> Result
     // nobody at all (D104).
     let selection = selection();
     let style = Style::from_env();
+    // A small model told only in a reading which accounts it must not record activity in tries
+    // anyway: the tool itself names them.
+    let filled = if style.readings && selected(selection.as_deref(), "money.invest.add") {
+        let mut request = Request::new(actor.clone(), "money.lists", json!({}));
+        if let Some(token) = token { request = request.with_token(token); }
+        client.call(&request, |_| {}).await.ok().filter(|r| r.ok).and_then(|r| r.result).map(|lists| filled_by_wealthsimple(&lists)).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let tools = listed.into_iter().filter_map(|info| {
         if info["implemented"] != true { return None; }
         let name = info["name"].as_str()?;
@@ -462,7 +471,7 @@ async fn tools(instance: Instance, actor: &Actor, token: Option<&str>) -> Result
         };
         admitted.then(|| {
             let tool = if style.docs { small_model_tool(entry) } else { op_tool(entry) };
-            if style.readings { with_category_required(tool) } else { tool }
+            if style.readings { never_into(by_names(tool), &filled) } else { tool }
         })
     }).collect::<Vec<_>>();
 
@@ -526,6 +535,23 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
     let (in_units, out_units) = (units::has_units(&schema["payload"]), units::has_units(&schema["result"]));
     let ledger = if in_units || out_units { ledger_digits(&mut client, actor, token).await } else { 2 };
     let style = Style::from_env();
+    if style.readings && names_in(name, &arguments) {
+        // A small model names the account and category as the person did; the door finds their
+        // ids, or sends the write back with the names it may use. A proposed batch of edits
+        // names them the same way, entry by entry.
+        let lists = read(&mut client, actor, token, "money.lists", json!({})).await.unwrap_or_else(|| json!({}));
+        let resolved = if name == "thread.propose" {
+            arguments.pointer_mut("/action/money.tx.update").and_then(Value::as_array_mut)
+                .map_or(Ok(()), |items| items.iter_mut().try_for_each(|item| resolve_names(item, &lists)))
+        } else {
+            resolve_names(&mut arguments, &lists)
+        };
+        if let Err(why) = resolved {
+            let text = format!("Not done: {why}. Call {name} again with one of those names.");
+            return Ok(json!({"content":[{"type":"text","text":text}],"isError":true}));
+        }
+        LISTS_READ.store(true, Ordering::Relaxed);
+    }
     if in_units {
         if let Err(why) = units::to_engine(&mut arguments, &schema["payload"], ledger) {
             return Ok(refusal(json!({"kind":"invalid","code":"bus.schema","message":why}), None, &style));
@@ -539,7 +565,7 @@ async fn call_tool(instance: Instance, actor: &Actor, token: Option<&str>, name:
         if let Some(text) = reading(&mut client, actor, token, "money.lists", &json!({}), &lists).await {
             LISTS_READ.store(true, Ordering::Relaxed);
             let text = format!("Not done yet: {why}. The accounts and categories are read here for you: pick the ones the \
-                person named, then call {name} again with their ids.\n\n{text}");
+                person named, then call {name} again with their names.\n\n{text}");
             return Ok(json!({"content":[{"type":"text","text":text}],"isError":true}));
         }
     }
@@ -586,7 +612,7 @@ fn held(op: &str, arguments: &Value, lists_read: bool) -> Option<&'static str> {
         _ => false,
     };
     if op == "money.tx.add" && arguments["type"] != "TRANSFER" && !given("category_id") {
-        Some("an expense or income needs its category_id")
+        Some("an expense or income needs its category")
     } else if takes_ids && !lists_read {
         Some("the account and category ids come from money.lists, not yet read")
     } else {
@@ -594,22 +620,149 @@ fn held(op: &str, arguments: &Value, lists_read: bool) -> Option<&'static str> {
     }
 }
 
-/// `money.tx.add` as a small model is shown it: the category is a field it must give, null only
-/// for a transfer, since a field marked optional is one it leaves out.
-fn with_category_required(mut tool: Value) -> Value {
-    if tool["name"] != "money.tx.add" {
+/// The accounts Wealthsimple's files fill, by name: activity recorded in one by hand would count
+/// twice once the next export brings it, and the engine refuses it from an agent.
+fn filled_by_wealthsimple(lists: &Value) -> Vec<String> {
+    lists["accounts"].as_array().map(|accounts| accounts.iter()
+        .filter(|a| a["archived"] != true && a["institution"].as_str().is_some_and(|i| i.trim().eq_ignore_ascii_case("wealthsimple")))
+        .filter_map(|a| a["name"].as_str().map(str::to_string))
+        .collect()).unwrap_or_default()
+}
+
+/// `money.invest.add` as a small model is shown it: the accounts it is never for, named.
+fn never_into(mut tool: Value, filled: &[String]) -> Value {
+    if tool["name"] != "money.invest.add" || filled.is_empty() {
         return tool;
     }
+    let about = tool["description"].as_str().unwrap_or("").to_string();
+    tool["description"] = json!(format!(
+        "{about}. NEVER for {}: Wealthsimple's files fill {}, so the next export brings the activity and recording it here would count \
+         it twice. For those, say the next export brings it.",
+        filled.join(", "), if filled.len() == 1 { "it" } else { "them" }
+    ));
+    tool
+}
+
+/// The writes a small model makes by naming the account and category instead of their ids.
+const NAMED: [&str; 2] = ["money.tx.add", "money.tx.update"];
+/// Each name a small model gives, and the id field the door fills from it.
+const NAMES: [(&str, &str); 3] = [("account", "account_id"), ("to_account", "to_account_id"), ("category", "category_id")];
+
+/// Whether a small model's call names an account or a category the door must turn into an id.
+fn names_in(op: &str, arguments: &Value) -> bool {
+    let named = |item: &Value| NAMES.iter().any(|(key, _)| item.get(*key).is_some());
+    if op == "thread.propose" {
+        return arguments.pointer("/action/money.tx.update").and_then(Value::as_array).is_some_and(|items| items.iter().any(named));
+    }
+    NAMED.contains(&op) && named(arguments)
+}
+
+/// `money.tx.add` and `money.tx.update` as a small model is shown them: the account and the
+/// category by name ("cash", "the Visa", "Dining"), not by id, which it picks wrong from a list;
+/// and an entry's category required, null only for a transfer, since a field marked optional is
+/// one it leaves out.
+fn by_names(mut tool: Value) -> Value {
+    let Some(op) = NAMED.iter().find(|op| tool["name"] == **op) else {
+        return tool;
+    };
+    let adding = *op == "money.tx.add";
     let schema = &mut tool["inputSchema"];
-    if let Some(category) = schema["properties"].get_mut("category_id") {
-        category["description"] = json!("Required for an expense or income: its id from money.lists. null for a transfer.");
+    if let Some(props) = schema["properties"].as_object_mut() {
+        for (_, id) in NAMES {
+            props.remove(id);
+        }
+        props.insert("account".into(), json!({"type": if adding { json!("string") } else { json!(["string", "null"]) },
+            "description": "The account by its name in money.lists, or as the person said it: \"cash\", \"the Visa\", \"chequing\"."}));
+        props.insert("to_account".into(), json!({"type": ["string", "null"], "description": "Transfers only: the account the money goes to, by name."}));
+        props.insert("category".into(), json!({"type": ["string", "null"],
+            "description": if adding { "Required for an expense or income: the category by its name in money.lists, e.g. \"Dining\". null for a transfer." }
+                           else { "To move the entry to another category: its name in money.lists, e.g. \"Dining\"." }}));
     }
     if let Some(required) = schema["required"].as_array_mut() {
-        if !required.iter().any(|r| r == "category_id") {
-            required.push(json!("category_id"));
+        required.retain(|r| !NAMES.iter().any(|(_, id)| r == id));
+        if adding {
+            required.extend([json!("account"), json!("category")]);
         }
     }
     tool
+}
+
+/// A name as compared: lower case, accents and a leading "the", "my" or "ma" gone.
+fn plain(name: &str) -> String {
+    let folded: String = name.trim().to_lowercase().chars().map(|c| match c {
+        'é' | 'è' | 'ê' | 'ë' => 'e', 'à' | 'â' | 'ä' => 'a', 'î' | 'ï' => 'i', 'ô' | 'ö' => 'o', 'ù' | 'û' | 'ü' => 'u', 'ç' => 'c',
+        c => c,
+    }).collect();
+    let mut rest = folded.as_str();
+    for lead in ["the ", "my ", "ma ", "mon ", "la ", "le "] {
+        rest = rest.strip_prefix(lead).unwrap_or(rest);
+    }
+    rest.trim().to_string()
+}
+
+/// The account type a word means when no account carries it in its name: "cash", "card" and so on.
+fn account_type_of(word: &str) -> Option<&'static str> {
+    let has = |words: &[&str]| words.iter().any(|w| word.split(|c: char| !c.is_alphanumeric()).any(|part| part == *w));
+    if has(&["cash", "comptant", "argent"]) {
+        Some("CASH")
+    } else if has(&["visa", "mastercard", "amex", "card", "credit", "carte"]) {
+        Some("CREDIT")
+    } else if has(&["chequing", "checking", "debit", "cheque", "cheques", "bank"]) {
+        Some("CHEQUING")
+    } else if has(&["savings", "epargne"]) {
+        Some("SAVINGS")
+    } else {
+        None
+    }
+}
+
+/// The one row of `rows` that `wanted` names: its whole name, else the only name holding it, else
+/// the only name it holds; for an account, else the only one of the type it says.
+fn find_named<'a>(rows: &[&'a Value], wanted: &str, accounts: bool) -> Option<&'a Value> {
+    let wanted = plain(wanted);
+    let name = |row: &Value| plain(row["name"].as_str().unwrap_or(""));
+    let only = |hits: Vec<&'a Value>| (hits.len() == 1).then(|| hits[0]);
+    if wanted.is_empty() {
+        return None;
+    }
+    rows.iter().copied().find(|r| name(r) == wanted)
+        .or_else(|| only(rows.iter().copied().filter(|r| name(r).contains(&wanted)).collect()))
+        .or_else(|| only(rows.iter().copied().filter(|r| !name(r).is_empty() && wanted.contains(&name(r))).collect()))
+        .or_else(|| {
+            let ty = accounts.then(|| account_type_of(&wanted)).flatten()?;
+            only(rows.iter().copied().filter(|r| r["type"] == ty).collect())
+        })
+}
+
+/// The ids of the account and category a small model named, written into `arguments` in place of
+/// the names; or why not, with the names it may use.
+fn resolve_names(arguments: &mut Value, lists: &Value) -> Result<(), String> {
+    let live = |key: &str| -> Vec<&Value> {
+        lists[key].as_array().map(|rows| rows.iter().filter(|r| r["archived"] != true).collect()).unwrap_or_default()
+    };
+    let accounts = live("accounts");
+    let kind = arguments["type"].as_str().filter(|t| *t != "TRANSFER").map(str::to_string);
+    let categories: Vec<&Value> = live("categories").into_iter().filter(|c| kind.as_ref().is_none_or(|k| c["kind"] == k.as_str())).collect();
+    let Some(args) = arguments.as_object_mut() else { return Ok(()) };
+    for (key, id) in NAMES {
+        let Some(given) = args.remove(key) else { continue };
+        let wanted = match &given {
+            Value::Null => continue,
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        };
+        let (rows, what) = if key == "category" { (&categories, "category") } else { (&accounts, "account") };
+        match find_named(rows, &wanted, key != "category") {
+            Some(row) => {
+                args.insert(id.into(), row["id"].clone());
+            }
+            None => {
+                let names: Vec<&str> = rows.iter().filter_map(|r| r["name"].as_str()).collect();
+                return Err(format!("no {what} is named \"{wanted}\"; the {what} names are: {}", names.join(", ")));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A refusal as a tool error: in words for a model given readings, else the bus's JSON.
@@ -853,21 +1006,71 @@ mod tests {
     }
 
     #[test]
+    fn a_small_model_is_told_which_accounts_take_no_activity() {
+        let lists = json!({"accounts": [
+            {"id": 6, "name": "Demo TFSA", "type": "INVESTMENT", "institution": "Wealthsimple"},
+            {"id": 7, "name": "Sample TFSA", "type": "INVESTMENT", "institution": ""},
+            {"id": 8, "name": "Old WS", "type": "INVESTMENT", "institution": "wealthsimple", "archived": true},
+        ]});
+        assert_eq!(filled_by_wealthsimple(&lists), ["Demo TFSA"]);
+        let tool = never_into(op_tool(Registry::global().get("money.invest.add").unwrap()), &filled_by_wealthsimple(&lists));
+        assert!(tool["description"].as_str().unwrap().contains("NEVER for Demo TFSA"));
+        let other = never_into(op_tool(Registry::global().get("money.tx.add").unwrap()), &["Demo TFSA".into()]);
+        assert!(!other["description"].as_str().unwrap().contains("NEVER"));
+    }
+
+    #[test]
+    fn a_small_model_names_the_account_and_category() {
+        let lists = json!({
+            "accounts": [
+                {"id": 1, "name": "Sample chequing", "type": "CHEQUING"}, {"id": 2, "name": "Sample Visa", "type": "CREDIT"},
+                {"id": 3, "name": "Sample savings", "type": "SAVINGS"}, {"id": 4, "name": "Sample cash", "type": "CASH"},
+                {"id": 5, "name": "Old card", "type": "CREDIT", "archived": true},
+            ],
+            "categories": [
+                {"id": 1, "name": "Groceries", "kind": "EXPENSE"}, {"id": 2, "name": "Dining", "kind": "EXPENSE"},
+                {"id": 9, "name": "Salary", "kind": "INCOME"}, {"id": 10, "name": "Side income", "kind": "INCOME"},
+            ],
+        });
+        let mut lunch = json!({"type": "EXPENSE", "amount": "18.50", "account": "cash", "category": "dining"});
+        resolve_names(&mut lunch, &lists).unwrap();
+        assert_eq!((&lunch["account_id"], &lunch["category_id"], lunch.get("account")), (&json!(4), &json!(2), None));
+        for (said, id) in [("the Visa", 2), ("my credit card", 2), ("Sample chequing", 1), ("épargne", 3), ("debit", 1)] {
+            let mut entry = json!({"type": "EXPENSE", "account": said, "category": "Groceries"});
+            resolve_names(&mut entry, &lists).unwrap();
+            assert_eq!(entry["account_id"], id, "{said}");
+        }
+        let mut transfer = json!({"type": "TRANSFER", "account": "chequing", "to_account": "savings", "category": null});
+        resolve_names(&mut transfer, &lists).unwrap();
+        assert_eq!((&transfer["account_id"], &transfer["to_account_id"], transfer.get("category_id")), (&json!(1), &json!(3), None));
+        // A category of the other kind, or a name nothing holds, is sent back with the names.
+        let why = resolve_names(&mut json!({"type": "EXPENSE", "account": "cash", "category": "Salary"}), &lists).unwrap_err();
+        assert!(why.contains("Groceries, Dining") && !why.contains("Salary,"), "{why}");
+        assert!(resolve_names(&mut json!({"type": "EXPENSE", "account": "Tangerine", "category": "Dining"}), &lists).unwrap_err().contains("Sample cash"));
+        assert!(resolve_names(&mut json!({"type": "INCOME", "account": "chequing", "category": "income"}), &lists).is_ok(), "the only income name holding it");
+        assert!(names_in("thread.propose", &json!({"action": {"money.tx.update": [{"id": 54, "category": "Entertainment"}]}})));
+        assert!(!names_in("thread.propose", &json!({"action": {"money.tx.delete": [{"id": 54}]}})));
+        assert!(names_in("money.tx.update", &json!({"id": 54, "category": "Dining"})) && !names_in("money.summary", &json!({"category": "x"})));
+    }
+
+    #[test]
     fn a_small_models_write_waits_for_the_ids_and_a_category() {
         let coffee = json!({"type": "EXPENSE", "amount": "4.50", "account_id": 2, "category_id": 4});
         assert!(held("money.tx.add", &coffee, false).is_some(), "ids not read yet");
         assert!(held("money.tx.add", &coffee, true).is_none());
         let uncategorized = json!({"type": "EXPENSE", "amount": "4.50", "account_id": 2});
-        assert!(held("money.tx.add", &uncategorized, true).unwrap().contains("category_id"));
+        assert!(held("money.tx.add", &uncategorized, true).unwrap().contains("category"));
         assert!(held("money.tx.add", &json!({"type": "TRANSFER", "account_id": 1, "to_account_id": 3}), true).is_none());
         assert!(held("money.tx.update", &json!({"id": 7, "category_id": 3}), false).is_some());
         assert!(held("money.tx.update", &json!({"id": 7, "amount": "5"}), false).is_none(), "a new amount needs no id");
         assert!(held("money.tx.update", &json!({"id": 7, "category_id": null}), false).is_none());
         assert!(held("money.summary", &json!({}), false).is_none() && held("thread.propose", &json!({}), false).is_none());
-        let tool = with_category_required(op_tool(Registry::global().get("money.tx.add").unwrap()));
-        assert!(tool["inputSchema"]["required"].as_array().unwrap().iter().any(|r| r == "category_id"));
-        let other = with_category_required(op_tool(Registry::global().get("money.tx.update").unwrap()));
-        assert!(!other["inputSchema"]["required"].as_array().unwrap().iter().any(|r| r == "category_id"));
+        let tool = by_names(op_tool(Registry::global().get("money.tx.add").unwrap()));
+        let required: Vec<&str> = tool["inputSchema"]["required"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(required.contains(&"account") && required.contains(&"category") && !required.contains(&"account_id"), "{required:?}");
+        assert!(tool["inputSchema"]["properties"].get("category_id").is_none());
+        let other = by_names(op_tool(Registry::global().get("money.tx.update").unwrap()));
+        assert!(other["inputSchema"]["properties"].get("category").is_some() && !other["inputSchema"]["required"].as_array().unwrap().iter().any(|r| r == "category"));
     }
 
     #[test]

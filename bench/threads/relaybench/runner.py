@@ -47,29 +47,51 @@ def split_of(task_id):
 
 #: Suites `all` leaves out: the smoke starter repeats questions the suite asks.
 NOT_IN_ALL = {"smoke"}
+#: The second suite, in its own world (worlds/v2): tasks/v2/*.json.
+V2 = "v2"
 
 
-def suite_files(suite):
+def suite_files(suite, ids=None):
     """`all` (every tasks/*.json but the smoke starter), a suite name (tasks/<name>.json), a comma
-    list of names, or paths."""
+    list of names, or paths. `v2` is every tasks/v2/*.json but its smoke starter, which joins it when
+    `ids` name a `v2.smoke.` task; `v2/<name>` is one of them."""
     if suite in (None, "", "all"):
         return sorted(Path(p) for p in glob.glob(str(TASKS_DIR / "*.json")) if Path(p).stem not in NOT_IN_ALL)
     out = []
     for part in suite.split(","):
         part = part.strip()
         p = Path(part)
-        out.append(p if p.suffix == ".json" and p.exists() else TASKS_DIR / f"{part}.json")
+        if part == V2:
+            smoke = any(i.strip().startswith(f"{V2}.smoke") for chunk in (ids or []) for i in chunk.split(","))
+            out += sorted(Path(f) for f in glob.glob(str(TASKS_DIR / V2 / "*.json")) if smoke or Path(f).stem not in NOT_IN_ALL)
+        else:
+            out.append(p if p.suffix == ".json" and p.exists() else TASKS_DIR / f"{part}.json")
     return out
+
+
+def suite_name(path):
+    """`tally` for tasks/tally.json, `v2/tally` for tasks/v2/tally.json."""
+    path = Path(path).resolve()
+    return f"{path.parent.name}/{path.stem}" if path.parent == (TASKS_DIR / V2).resolve() else path.stem
+
+
+def world_of(tasks):
+    """The world the tasks are asked in: `v2` for tasks/v2/, `v1` (the sample household) otherwise.
+    Raises when they are from both."""
+    worlds = {V2 if (t.get("suite") or "").startswith(V2 + "/") else "v1" for t in tasks}
+    if len(worlds) > 1:
+        raise ValueError("these tasks are from two worlds (v1 and v2): run them as separate suites")
+    return worlds.pop() if worlds else "v1"
 
 
 def load_tasks(suite="all", ids=None, split="all"):
     tasks, seen = [], {}
-    for path in suite_files(suite):
+    for path in suite_files(suite, ids):
         for task in json.loads(Path(path).read_text()):
             if task["id"] in seen:
                 raise ValueError(f"task {task['id']} is in both {seen[task['id']]} and {path.name}")
             seen[task["id"]] = path.name
-            task = dict(task, suite=path.stem, split=split_of(task["id"]))
+            task = dict(task, suite=suite_name(path), split=split_of(task["id"]))
             tasks.append(task)
     if ids:
         pats = [p.strip() for chunk in ids for p in chunk.split(",") if p.strip()]
