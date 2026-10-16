@@ -99,10 +99,10 @@ fun DiffBlock(hunks: List<Hunk>, modifier: Modifier = Modifier) {
 
 private const val MAX_COLUMNS = 2000
 
-private val ADD_TEXT = Color(0xFF73C991)
-private val DEL_TEXT = Color(0xFFE5675B)
-private val ADD_WASH = Color(0x1F73C991)
-private val DEL_WASH = Color(0x1FE5675B)
+internal val ADD_TEXT = Color(0xFF73C991)
+internal val DEL_TEXT = Color(0xFFE5675B)
+internal val ADD_WASH = Color(0x1F73C991)
+internal val DEL_WASH = Color(0x1FE5675B)
 
 @Composable
 private fun DiffRow(line: DiffLine, style: TextStyle, width: Dp) {

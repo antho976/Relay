@@ -28,6 +28,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,14 +41,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -54,6 +62,10 @@ import com.quietsoftware.relay.core.term.Keys
 import com.quietsoftware.relay.data.SessionChat
 import com.quietsoftware.relay.data.TerminalFeed
 import com.quietsoftware.relay.ui.Nav
+import com.quietsoftware.relay.ui.code.ADD_TEXT
+import com.quietsoftware.relay.ui.code.ADD_WASH
+import com.quietsoftware.relay.ui.code.DEL_TEXT
+import com.quietsoftware.relay.ui.code.DEL_WASH
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
 import com.quietsoftware.relay.ui.kit.Field
@@ -73,7 +85,12 @@ import com.quietsoftware.relay.ui.threads.WorkingLamp
 import com.quietsoftware.relay.ui.threads.dayOf
 import com.quietsoftware.relay.ui.threads.humanDay
 import com.quietsoftware.relay.ui.threads.said
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -82,10 +99,12 @@ import java.time.LocalDate
 
 /**
  * One terminal agent as a conversation, drawn as a thread is: the person's messages, the agent's
- * words, and what it did as quiet lines that open to show the answer. Typing goes to the agent's
- * terminal through the PC, as on the terminal screen; when the agent stops to ask (a permission,
- * a menu), its question is read off the bottom of its screen and answered with keys. The terminal
- * itself is one tap away in the header, for whatever a conversation cannot show.
+ * words and reasoning, its edits as diffs, and its other steps as quiet lines that open to show
+ * the whole command and the answer. Typing goes to the agent's terminal through the PC, as on the
+ * terminal screen. The agent's screen is followed while it runs, so whenever it shows a menu (a
+ * permission, a question, a plan to approve, a slash command's picker) the menu is answered here
+ * with keys, whatever the hooks reported; the screen itself opens under the conversation from the
+ * header. The terminal screen stays one tap away, and nothing here needs it opened first.
  */
 @Composable
 fun ChatScreen(name: String, nav: Nav) {
@@ -108,22 +127,35 @@ fun ChatScreen(name: String, nav: Nav) {
     val focus = remember { FocusRequester() }
     var menu by remember { mutableStateOf(false) }
     var mailing by remember { mutableStateOf(false) }
+    var peek by rememberSaveable(name) { mutableStateOf(false) }
     var text by rememberSaveable(name) { mutableStateOf("") }
 
     val ready = session?.attachable == true && s.online
     val working = session?.state == "running" || session?.state == "spawning"
     val held = session?.state == "blocked"
-    val pieces = remember(messages, sending, working) { chatPieces(messages, sending, working, LocalDate.now()) }
-    val doing = remember(pieces, working) { if (working) doingNow(pieces) else null }
+    // Held at a prompt, the turn is still open: its last call waits on the answer, it was not cut off.
+    val pieces = remember(messages, sending, working, held) { chatPieces(messages, sending, working || held, LocalDate.now()) }
+    val askTool = remember(pieces) { waitsOnAsk(pieces) }
+
+    // The agent's own screen, followed while it can be answered: a menu on it is a question even
+    // when no hook said so (a slash command's picker leaves the agent "running"). Only the cards
+    // that draw it read the text, so a redraw on the PC does not recompose the conversation.
+    val screen = remember(name) { mutableStateOf<String?>(null) }
+    if (ready) WatchScreen(nav, name, screen)
+    val onScreen by remember(screen) { derivedStateOf { screen.value?.let(::screenAsks) == true } }
+    val unread by remember(screen) { derivedStateOf { screen.value == null } }
+    val asking = ready && (onScreen || askTool || (held && unread))
+    val doing = remember(pieces, working, asking) { if (working && !asking) doingNow(pieces) else null }
 
     KeepScreenOn(s.prefs.keepScreenOn)
 
     fun send() {
         val typed = text.trim()
         if (typed.isEmpty()) {
-            // Empty: Esc stops an agent mid-turn; otherwise it is the Enter a prompt waits for.
-            chat.key(if (working) Keys.ESC else Keys.ENTER)
-            if (working) nav.shell.toast("Asked ${session?.provider ?: "the agent"} to stop")
+            // Empty: Esc stops an agent mid-turn; otherwise (a menu up, a prompt) it is the Enter it waits for.
+            val stop = working && !asking
+            chat.key(if (stop) Keys.ESC else Keys.ENTER)
+            if (stop) nav.shell.toast("Asked ${session?.provider ?: "the agent"} to stop")
             return
         }
         text = ""
@@ -138,13 +170,18 @@ fun ChatScreen(name: String, nav: Nav) {
     Page {
         Column(Modifier.fillMaxSize()) {
             Header(session, name, onBack = nav::back, onDetails = { nav.session(name) }, onMenu = { menu = true }) {
+                if (ready) IconKey("focus", { peek = !peek }, size = 18.dp, tint = if (peek) c.ink else c.ink2)
                 IconKey("terminal", { nav.console(name) }, size = 18.dp, tint = c.ink2)
             }
             Banner(status, session, s.online, life)
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                val openTerminal = @Composable { Key("Open the terminal", { nav.console(name) }, glyph = "terminal", compact = true) }
+                // The agent's screen here before the terminal: it answers what the conversation cannot show yet.
+                val openTerminal = @Composable {
+                    if (ready && !peek) Key("Show its screen", { peek = true }, glyph = "focus", compact = true)
+                    else Key("Open the terminal", { nav.console(name) }, glyph = "terminal", compact = true)
+                }
                 when {
-                    pieces.isNotEmpty() -> Conversation(pieces, doing, held && ready, chat, nav, s.online)
+                    pieces.isNotEmpty() || asking -> Conversation(pieces, doing, asking, screen, chat, s.online)
                     error != null && status != TerminalFeed.Status.Saved -> Empty(
                         "terminal", "Can't read the conversation",
                         said(error!!.error, "The PC's Relay is older than this app: update it to see agents as a conversation. The terminal works meanwhile."),
@@ -152,19 +189,20 @@ fun ChatScreen(name: String, nav: Nav) {
                     )
                     found == false -> Empty(
                         "terminal", "Nothing said yet",
-                        "The conversation shows here once ${session?.provider ?: "the agent"} starts. The terminal shows everything meanwhile.",
+                        "The conversation shows here once ${session?.provider ?: "the agent"} starts. Its screen shows everything meanwhile.",
                         action = openTerminal,
                     )
                     status == TerminalFeed.Status.Connecting -> Empty("terminal", "Reading the conversation")
                     else -> Empty("terminal", "Nothing said yet", if (s.online) null else "The PC is away, and this phone has not read this agent before.", action = openTerminal)
                 }
             }
+            if (peek && ready) ScreenPanel(screen) { peek = false }
             QuickKeys(chat, ready)
             ChatComposer(
                 text,
                 { text = it },
                 ready,
-                working,
+                working && !asking,
                 placeholder = when {
                     session == null -> "This agent is closed"
                     !s.online -> "Needs the PC to talk to the agent"
@@ -180,6 +218,7 @@ fun ChatScreen(name: String, nav: Nav) {
     LifecycleSheets(life)
     if (menu) {
         DevSheet({ menu = false }, name, session?.let { "${it.provider} · ${it.role}" }) { close ->
+            if (ready) SheetRow(if (peek) "Hide the agent's screen" else "Show the agent's screen", "focus", { close { peek = !peek } })
             SheetRow("Open the terminal", "terminal", { close { nav.console(name) } })
             session?.let { ss ->
                 SheetRow("Changes", "commit", { close { nav.git(ss.projectId, ss.worktree.ifBlank { null }, name) } })
@@ -212,7 +251,14 @@ fun ChatScreen(name: String, nav: Nav) {
 /** Where a tool call stands: answered, failed, still running, or cut off with no answer. */
 internal enum class Step { Running, Done, Failed, Cut }
 
-internal data class Call(val key: String, val name: String, val summary: String, val step: Step, val answer: String?)
+/** [detail] is what the one-line summary leaves out: an edit's `-`/`+` lines, the whole command, the questions. */
+internal data class Call(val key: String, val name: String, val summary: String, val step: Step, val answer: String?, val detail: String? = null)
+
+/** A call that changes files: drawn with its diff, never folded among the steps. */
+internal fun isEdit(name: String) = name == "Edit" || name == "MultiEdit" || name == "Write" || name == "NotebookEdit" || name == "apply_patch"
+
+/** A call that asks the person something: its question or plan is shown, not folded. */
+internal fun isAsk(name: String) = name == "AskUserQuestion" || name == "ExitPlanMode" || name == "request_user_input"
 
 internal sealed interface ChatPiece {
     val key: String
@@ -220,6 +266,8 @@ internal sealed interface ChatPiece {
     data class Day(override val key: String, val label: String) : ChatPiece
     data class User(override val key: String, val text: String, val sending: Boolean) : ChatPiece
     data class Reply(override val key: String, val text: String) : ChatPiece
+    /** The model's reasoning, where its provider logged it in words. */
+    data class Thought(override val key: String, val text: String) : ChatPiece
     data class Tool(override val key: String, val call: Call) : ChatPiece
     /** Three or more steps in a row, folded under one line: "Ran 3 commands, read 2 files". */
     data class Steps(override val key: String, val calls: List<Call>) : ChatPiece
@@ -229,6 +277,7 @@ internal sealed interface ChatPiece {
 
 private fun JsonObject.str(key: String) = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
 
+/** [working]: the agent's turn is still open (running, or held at a prompt), so its last unanswered calls are waiting, not cut off. */
 internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessage>, working: Boolean, today: LocalDate): List<ChatPiece> {
     val answers = HashMap<String, Pair<Boolean, String>>()
     for (m in messages) if (m.role == "tool") {
@@ -269,6 +318,10 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
                         flush()
                         out += ChatPiece.Reply("m:${m.id}:$i", it.trim())
                     }
+                    "thinking" -> o.str("text").takeIf { it.isNotBlank() }?.let {
+                        flush()
+                        out += ChatPiece.Thought("m:${m.id}:$i", it.trim())
+                    }
                     "tool_use" -> {
                         val id = o.str("id")
                         val answer = answers[id]
@@ -277,7 +330,13 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
                             working && index > lastUser -> Step.Running
                             else -> Step.Cut
                         }
-                        steps += Call("t:${id.ifEmpty { "${m.id}:$i" }}", o.str("name"), o.str("summary"), step, answer?.second)
+                        val call = Call("t:${id.ifEmpty { "${m.id}:$i" }}", o.str("name"), o.str("summary"), step, answer?.second, o.str("detail").ifBlank { null })
+                        if (isEdit(call.name) || isAsk(call.name)) {
+                            flush()
+                            out += ChatPiece.Tool(call.key, call)
+                        } else {
+                            steps += call
+                        }
                     }
                 }
             }
@@ -295,6 +354,14 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
     for (m in sending) out += ChatPiece.User("m:${m.id}", m.text, sending = true)
     return out
 }
+
+/** The agent's last step is a question or a plan still waiting on the person. */
+internal fun waitsOnAsk(pieces: List<ChatPiece>): Boolean =
+    (pieces.lastOrNull { it !is ChatPiece.User } as? ChatPiece.Tool)?.call?.let { isAsk(it.name) && it.step == Step.Running } == true
+
+/** An edit's size: the lines it put in and took out. */
+internal fun diffCounts(lines: List<String>): Pair<Int, Int> =
+    lines.count { it.startsWith("+") && !it.startsWith("+++") } to lines.count { it.startsWith("-") && !it.startsWith("---") }
 
 /** What the working row says: the step running now, in words. */
 private fun doingNow(pieces: List<ChatPiece>): String {
@@ -319,6 +386,8 @@ private fun verb(name: String): Verb = when {
     name == "WebSearch" || name == "web_search" -> Verb("Searched the web for", "Searching the web for", "ran", "web search", "web searches", "search")
     name == "Task" || name == "Agent" -> Verb("Asked a subagent:", "A subagent is on", "started", "subagent", "subagents", "user")
     name == "TodoWrite" || name == "update_plan" -> Verb("Updated the plan", "Updating the plan", "made", "plan update", "plan updates", "check")
+    name == "AskUserQuestion" || name == "request_user_input" -> Verb("Asked you", "Asking you", "asked", "question", "questions", "user")
+    name == "ExitPlanMode" -> Verb("Proposed a plan", "Proposing a plan", "proposed", "plan", "plans", "brief")
     name.startsWith("mcp__relay__") -> name.removePrefix("mcp__relay__").replace('_', '.').let { Verb("Relay: $it", "Relay: $it", "made", "Relay call", "Relay calls", "dashboard") }
     name.startsWith("mcp__") -> name.removePrefix("mcp__").replace("__", ": ").let { Verb("Used $it", "Using $it", "used", "tool", "tools", "plugins") }
     else -> Verb("Used $name", "Using $name", "used", "tool", "tools", "code")
@@ -347,7 +416,7 @@ private fun transcriptText(messages: List<ThreadMessage>): String = messages.map
 // ---- Drawing it ----
 
 @Composable
-private fun Conversation(pieces: List<ChatPiece>, doing: String?, asking: Boolean, chat: SessionChat, nav: Nav, online: Boolean) {
+private fun Conversation(pieces: List<ChatPiece>, doing: String?, asking: Boolean, screen: State<String?>, chat: SessionChat, online: Boolean) {
     val state = rememberLazyListState()
     // Newest at the bottom, and kept in view as it grows while the person reads the end.
     val shown = remember(pieces) { pieces.asReversed() }
@@ -355,7 +424,7 @@ private fun Conversation(pieces: List<ChatPiece>, doing: String?, asking: Boolea
     LazyColumn(Modifier.fillMaxSize(), state = state, reverseLayout = true, horizontalAlignment = Alignment.CenterHorizontally) {
         val cell = Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(horizontal = 16.dp)
         item(key = "end") { Box(Modifier.height(12.dp)) }
-        if (asking) item(key = "ask") { AskCard(chat, nav, online, cell.padding(top = 14.dp)) }
+        if (asking) item(key = "ask") { AskCard(chat, screen, online, cell.padding(top = 14.dp)) }
         if (doing != null) item(key = "doing") { WorkingRow(doing, cell.padding(top = 12.dp)) }
         items(shown, key = { it.key }) { p -> PieceView(p, cell, online) }
         item(key = "start") { Box(Modifier.height(8.dp)) }
@@ -369,7 +438,14 @@ private fun PieceView(p: ChatPiece, cell: Modifier, online: Boolean) {
         is ChatPiece.Day -> T(p.label, cell.padding(top = 18.dp, bottom = 2.dp), Relay.type.caption.copy(textAlign = TextAlign.Center), c.ink3)
         is ChatPiece.User -> UserBubble(p.text, p.sending, online, cell.padding(top = 18.dp))
         is ChatPiece.Reply -> SelectionContainer(cell.padding(top = 12.dp)) { Markdown(p.text) }
-        is ChatPiece.Tool -> Box(cell.padding(top = 2.dp)) { ToolLine(p.call) }
+        is ChatPiece.Thought -> Box(cell.padding(top = 10.dp, bottom = 2.dp)) { ThoughtView(p) }
+        is ChatPiece.Tool -> Box(cell.padding(top = 2.dp)) {
+            when {
+                isEdit(p.call.name) -> EditView(p.call)
+                isAsk(p.call.name) -> ToolLine(p.call, startOpen = true)
+                else -> ToolLine(p.call)
+            }
+        }
         is ChatPiece.Steps -> Box(cell.padding(top = 2.dp)) { StepsView(p) }
         is ChatPiece.Note -> T(p.text, cell.padding(top = 14.dp), Relay.type.caption.copy(textAlign = TextAlign.Center), c.ink3)
         is ChatPiece.Error -> Row(cell.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -419,36 +495,142 @@ private fun StepMark(step: Step, glyph: String) {
     }
 }
 
-/** A tool call as one quiet line, the command or file in mono; it opens to show the answer's head. */
+/**
+ * A tool call as one quiet line, the command or file in mono. It opens to show what the line
+ * leaves out (the whole command, the questions asked, the plan) and the answer's head.
+ */
 @Composable
-private fun ToolLine(call: Call) {
+private fun ToolLine(call: Call, startOpen: Boolean = false) {
     val c = Relay.colors
     val v = verb(call.name)
-    var open by rememberSaveable(call.key) { mutableStateOf(false) }
+    var open by rememberSaveable(call.key) { mutableStateOf(startOpen) }
     val answer = call.answer?.trim().orEmpty()
+    val detail = call.detail?.trim().orEmpty()
+    val more = answer.isNotEmpty() || detail.isNotEmpty()
     Column {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 30.dp).clip(Radii.icon).clickable(enabled = answer.isNotEmpty(), onClickLabel = if (open) "Hide the answer" else "Show the answer") { open = !open }.padding(end = 6.dp),
+            Modifier.fillMaxWidth().heightIn(min = 30.dp).clip(Radii.icon).clickable(enabled = more, onClickLabel = if (open) "Fold the step" else "Show the step") { open = !open }.padding(end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
             StepMark(call.step, v.glyph)
             T(v.did, style = Relay.type.caption, color = if (call.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
             if (call.summary.isNotBlank()) T(call.summary, Modifier.weight(1f), Relay.type.mono, c.ink2, maxLines = 1) else Box(Modifier.weight(1f))
-            if (answer.isNotEmpty()) Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.inkDim)
+            if (more) Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.inkDim)
         }
         AnimatedVisibility(open) {
-            SelectionContainer {
-                Box(
-                    Modifier.padding(start = 21.dp, top = 2.dp, bottom = 6.dp).fillMaxWidth().heightIn(max = 260.dp)
-                        .clip(Radii.keycap).background(c.screen).border(1.dp, c.edge, Radii.keycap)
-                        .verticalScroll(rememberScrollState()).padding(10.dp),
-                ) {
-                    T(answer, style = Relay.type.mono.copy(fontSize = 11.sp, lineHeight = 15.sp), color = if (call.step == Step.Failed) c.heldText else c.ink2)
+            Column(Modifier.padding(start = 21.dp, top = 2.dp, bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (detail.isNotEmpty()) {
+                    if (call.name == "ExitPlanMode") {
+                        Box(Modifier.fillMaxWidth().clip(Radii.keycap).border(1.dp, c.edge, Radii.keycap).padding(12.dp)) { Markdown(detail, style = Relay.type.ui) }
+                    } else {
+                        CodeBox(detail, c.ink, maxHeight = 320.dp)
+                    }
                 }
+                if (answer.isNotEmpty()) CodeBox(answer, if (call.step == Step.Failed) c.heldText else c.ink2, maxHeight = 260.dp)
             }
         }
     }
+}
+
+/** Monospaced text on the console's black, wrapped to the phone's width, scrolling past [maxHeight]. */
+@Composable
+private fun CodeBox(text: String, color: Color, maxHeight: Dp) {
+    val c = Relay.colors
+    SelectionContainer {
+        Box(
+            Modifier.fillMaxWidth().heightIn(max = maxHeight)
+                .clip(Radii.keycap).background(c.screen).border(1.dp, c.edge, Radii.keycap)
+                .verticalScroll(rememberScrollState()).padding(10.dp),
+        ) {
+            T(text, style = Relay.type.mono.copy(fontSize = 11.sp, lineHeight = 15.sp), color = color)
+        }
+    }
+}
+
+/** Reasoning: a few lines in quiet italics beside a rule, opening to all of it. */
+@Composable
+private fun ThoughtView(p: ChatPiece.Thought) {
+    val c = Relay.colors
+    var open by rememberSaveable(p.key) { mutableStateOf(false) }
+    val long = remember(p.text) { p.text.length > THOUGHT_PREVIEW_CHARS || p.text.lines().size > THOUGHT_PREVIEW_LINES }
+    val style = Relay.type.ui.copy(fontSize = 13.5.sp, lineHeight = 20.sp, fontStyle = FontStyle.Italic)
+    val rule = c.edge
+    Column(
+        Modifier.fillMaxWidth()
+            .drawBehind { drawRect(rule, size = Size(2.dp.toPx(), size.height)) }
+            .clip(Radii.icon)
+            .clickable(enabled = long, onClickLabel = if (open) "Fold the reasoning" else "Show all the reasoning") { open = !open }
+            .padding(start = 12.dp, end = 6.dp, top = 2.dp, bottom = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            T("Thinking", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
+            if (long) Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.inkDim)
+        }
+        if (open || !long) Markdown(p.text, style = style, color = c.ink3)
+        else T(p.text, style = style, color = c.ink3, maxLines = THOUGHT_PREVIEW_LINES)
+    }
+}
+
+private const val THOUGHT_PREVIEW_LINES = 3
+private const val THOUGHT_PREVIEW_CHARS = 240
+private const val EDIT_PREVIEW_LINES = 12
+
+/**
+ * An edit as the PC's Git panel draws one, shown rather than folded: the file and its size on one
+ * line, the lines taken out in red and put in in green, wrapped to the phone, the first dozen
+ * with the rest a tap away. A failed edit says why underneath.
+ */
+@Composable
+private fun EditView(call: Call) {
+    val c = Relay.colors
+    val v = verb(call.name)
+    val lines = remember(call.detail) { call.detail?.trimEnd()?.lines().orEmpty() }
+    val (added, removed) = remember(lines) { diffCounts(lines) }
+    var all by rememberSaveable(call.key) { mutableStateOf(false) }
+    val answer = call.answer?.trim().orEmpty()
+    Column(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 30.dp).padding(end = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            StepMark(call.step, v.glyph)
+            T(v.did, style = Relay.type.caption, color = if (call.step == Step.Failed) c.heldText else c.ink3, maxLines = 1)
+            T(call.summary, Modifier.weight(1f), Relay.type.mono, c.ink2, maxLines = 1)
+            if (added > 0) T("+$added", style = Relay.type.mono.copy(fontSize = 11.sp), color = ADD_TEXT, maxLines = 1)
+            if (removed > 0) T("−$removed", style = Relay.type.mono.copy(fontSize = 11.sp), color = DEL_TEXT, maxLines = 1)
+        }
+        if (lines.isNotEmpty()) {
+            val shown = if (all) lines else lines.take(EDIT_PREVIEW_LINES)
+            SelectionContainer(Modifier.padding(start = 21.dp, top = 2.dp)) {
+                Column(Modifier.fillMaxWidth().clip(Radii.keycap).background(c.screen).border(1.dp, c.edge, Radii.keycap).padding(vertical = 6.dp)) {
+                    for (line in shown) DiffText(line)
+                }
+            }
+            if (lines.size > EDIT_PREVIEW_LINES) {
+                T(
+                    if (all) "Show less" else "Show all ${lines.size} lines",
+                    Modifier.padding(start = 21.dp).heightIn(min = TOUCH).clip(Radii.icon).clickable(role = Role.Button) { all = !all }.padding(horizontal = 4.dp, vertical = 12.dp),
+                    Relay.type.caption,
+                    c.ink2,
+                )
+            }
+        }
+        if (call.step == Step.Failed && answer.isNotEmpty()) {
+            T(answer, Modifier.padding(start = 21.dp, top = 4.dp), Relay.type.caption, c.heldText, maxLines = 6)
+        }
+    }
+}
+
+@Composable
+private fun DiffText(line: String) {
+    val c = Relay.colors
+    val (ink, wash) = when {
+        line.startsWith("@@") || line.startsWith("***") -> c.ink3 to Color.Transparent
+        line.startsWith("+") -> ADD_TEXT to ADD_WASH
+        line.startsWith("-") -> DEL_TEXT to DEL_WASH
+        line.startsWith("…") -> c.ink3 to Color.Transparent
+        else -> c.ink2 to Color.Transparent
+    }
+    T(line, Modifier.fillMaxWidth().background(wash).padding(horizontal = 10.dp, vertical = 1.dp), Relay.type.mono.copy(fontSize = 11.sp, lineHeight = 15.sp), ink)
 }
 
 /** Steps in a row: from three, one line counting them, opening to show each. */
@@ -483,6 +665,22 @@ private fun StepsView(g: ChatPiece.Steps) {
 private val OPTION = Regex("""^\s*(?:[❯›>]\s*)?(\d)[.)]\s+(.+?)\s*$""")
 private val FRAME = Regex("""[│┃╭╮╰╯─━┌┐└┘├┤]""")
 
+/** A menu's highlighted choice, as Claude Code (❯) and Codex (›) mark it: what tells a menu from a numbered list. */
+private val PICKED = Regex("""^\s*[❯›]\s*\d[.)]\s+\S""")
+private val YES_NO = Regex("""\((?:y/n|Y/n|y/N)\)|\[(?:y/n|Y/n|y/N)\]""")
+
+/**
+ * The bottom of the agent's screen asks the person something: a menu of two or more choices with
+ * one highlighted, or a y/n question. Only the last lines count, where a prompt is drawn.
+ */
+internal fun screenAsks(screen: String): Boolean {
+    val tail = screen.lines().map { FRAME.replace(it, " ").trimEnd() }.filter { it.isNotBlank() }.takeLast(ASK_TAIL)
+    val menu = tail.any { PICKED.containsMatchIn(it) } && tail.mapNotNull { OPTION.matchEntire(it)?.groupValues?.get(1) }.distinct().size >= 2
+    return menu || tail.takeLast(4).any { YES_NO.containsMatchIn(it) }
+}
+
+private const val ASK_TAIL = 24
+
 /** The question at the bottom of the agent's screen and its numbered answers, frame lines taken out. */
 internal fun askOf(screen: String): Pair<List<String>, List<Pair<String, String>>> {
     val lines = screen.lines().map { FRAME.replace(it, " ").trimEnd() }.dropLastWhile { it.isBlank() }
@@ -494,21 +692,17 @@ internal fun askOf(screen: String): Pair<List<String>, List<Pair<String, String>
 }
 
 /**
- * The agent is held at a question in its terminal: the question as its screen shows it, and a
- * key per answer. A number picks the answer as it would at the PC; Esc declines. The screen is
- * the terminal's own, streamed while the card shows: a TUI draws its prompt with cursor moves,
- * so only an emulator knows what it looks like.
+ * The agent is waiting on the person: the question as its screen shows it, and a key per
+ * answer. A number picks the answer as it would at the PC; the arrows and Enter work a menu the
+ * card could not read; Esc declines. The screen is the terminal's own, followed by
+ * [WatchScreen]: a TUI draws its prompt with cursor moves, so only an emulator knows what it
+ * looks like.
  */
 @Composable
-private fun AskCard(chat: SessionChat, nav: Nav, online: Boolean, modifier: Modifier) {
+private fun AskCard(chat: SessionChat, screen: State<String?>, online: Boolean, modifier: Modifier) {
     val c = Relay.colors
-    val feed = rememberFeed(nav.relay, chat.name)
-    val version by feed.version.collectAsStateWithLifecycle()
-    val status by feed.status.collectAsStateWithLifecycle()
-    val screen = remember(version, status) {
-        if (status == TerminalFeed.Status.Connecting) null else synchronized(feed.lock) { feed.terminal.plainText(feed.terminal.rows) }
-    }
-    val (question, options) = remember(screen) { askOf(screen.orEmpty()) }
+    val text = screen.value
+    val (question, options) = remember(text) { askOf(text.orEmpty()) }
     Column(
         modifier.clip(Radii.card).background(c.slab).border(1.dp, c.held.copy(alpha = .45f), Radii.card).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -517,30 +711,83 @@ private fun AskCard(chat: SessionChat, nav: Nav, online: Boolean, modifier: Modi
             Dot(c.held, 6.dp)
             T("Waiting for you", style = Relay.type.ui, color = c.heldText, weight = androidx.compose.ui.text.font.FontWeight.Medium)
         }
-        if (screen == null) T("Reading the agent's screen…", style = Relay.type.caption, color = c.ink3)
+        if (text == null) T("Reading the agent's screen…", style = Relay.type.caption, color = c.ink3)
         else if (question.isNotEmpty()) T(question.joinToString("\n"), style = Relay.type.mono.copy(fontSize = 11.5.sp, lineHeight = 16.sp), color = c.ink2)
         if (options.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 for ((n, label) in options) {
                     Row(
                         Modifier.fillMaxWidth().heightIn(min = TOUCH).alpha(if (online) 1f else .5f).clip(Radii.keycap).background(c.wash)
-                            .clickable(enabled = online, role = Role.Button, onClickLabel = label) { chat.key(n) }.padding(horizontal = 12.dp),
+                            .clickable(enabled = online, role = Role.Button, onClickLabel = label) { chat.key(n) }.padding(horizontal = 12.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         T(n, style = Relay.type.mono, color = c.ink3)
-                        T(label, Modifier.weight(1f), Relay.type.ui, c.ink, maxLines = 2)
+                        T(label, Modifier.weight(1f), Relay.type.ui, c.ink, maxLines = 3)
                     }
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (options.isEmpty()) {
                 Key("Yes", { chat.key("y") }, enabled = online, compact = true)
                 Key("No", { chat.key("n") }, enabled = online, compact = true)
-                Key("Enter", { chat.key(Keys.ENTER) }, enabled = online, compact = true)
+            } else {
+                Key("↑", { chat.key(ARROW_UP) }, enabled = online, compact = true)
+                Key("↓", { chat.key(ARROW_DOWN) }, enabled = online, compact = true)
             }
+            Key("Enter", { chat.key(Keys.ENTER) }, enabled = online, compact = true)
             Key("Esc", { chat.key(Keys.ESC) }, kind = KeyKind.Quiet, enabled = online, compact = true)
+        }
+    }
+}
+
+/**
+ * Follows the agent's terminal while this is on screen and writes the text of its rows into
+ * [into]: at most [SCREEN_READS_PER_S] reads a second however fast the PC redraws, read off the
+ * main thread. The feed is the one the terminal screen shares, so opening that keeps the stream.
+ */
+@Composable
+private fun WatchScreen(nav: Nav, name: String, into: MutableState<String?>) {
+    val feed = rememberFeed(nav.relay, name)
+    LaunchedEffect(feed) {
+        try {
+            combine(feed.version, feed.status) { _, status -> status }.conflate().collect { status ->
+                val text = if (status == TerminalFeed.Status.Connecting) null
+                else withContext(Dispatchers.Default) { synchronized(feed.lock) { feed.terminal.plainText(feed.terminal.rows) } }
+                if (text != into.value) into.value = text
+                delay(1_000L / SCREEN_READS_PER_S)
+            }
+        } finally {
+            into.value = null
+        }
+    }
+}
+
+private const val SCREEN_READS_PER_S = 8
+
+/** The agent's screen under the conversation, as plain text, the newest line in view: for what no card reads. */
+@Composable
+private fun ScreenPanel(screen: State<String?>, onClose: () -> Unit) {
+    val c = Relay.colors
+    val text = screen.value
+    val vs = rememberScrollState()
+    // Kept on the newest line unless the person scrolled up to read.
+    var follow by remember { mutableStateOf(true) }
+    LaunchedEffect(vs.isScrollInProgress) { if (!vs.isScrollInProgress) follow = vs.value >= vs.maxValue - 8 }
+    LaunchedEffect(text, vs.maxValue) { if (follow) vs.scrollTo(vs.maxValue) }
+    Column(Modifier.fillMaxWidth().background(c.screen)) {
+        Box(Modifier.fillMaxWidth().height(1.dp).background(c.edge))
+        Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Dot(if (text == null) c.waiting else c.live, 5.dp)
+            T(if (text == null) "Reading the agent's screen…" else "The agent's screen", Modifier.weight(1f), Relay.type.caption, c.ink3, maxLines = 1)
+            IconKey("close", onClose, size = 14.dp, tint = c.ink3)
+        }
+        Box(
+            Modifier.fillMaxWidth().heightIn(max = 240.dp).verticalScroll(vs).horizontalScroll(rememberScrollState())
+                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+        ) {
+            T(text.orEmpty(), style = TextStyle(fontFamily = Fonts.FiraMono, fontSize = 10.5.sp, lineHeight = 13.sp), color = c.termFg)
         }
     }
 }
@@ -549,13 +796,23 @@ private fun AskCard(chat: SessionChat, nav: Nav, online: Boolean, modifier: Modi
 
 private class ChatKey(val label: String, val spoken: String, val data: String)
 
-/** The keys an agent CLI still asks for in a conversation: stop, the mode switch, a menu's arrows. */
+/** Arrows as a normal-mode cursor sends them: with no screen to ask, both CLIs read these. */
+private const val ARROW_UP = "\u001b[A"
+private const val ARROW_DOWN = "\u001b[B"
+private const val ARROW_RIGHT = "\u001b[C"
+private const val ARROW_LEFT = "\u001b[D"
+
+/** The keys an agent CLI still asks for in a conversation: stop, the mode switch, a menu's arrows and ticks. */
 private val CHAT_KEYS = listOf(
     ChatKey("Esc", "Escape", Keys.ESC),
     ChatKey("⇧Tab", "Shift Tab: switch mode", Keys.SHIFT_TAB),
-    ChatKey("↑", "Up", "\u001b[A"),
-    ChatKey("↓", "Down", "\u001b[B"),
+    ChatKey("↑", "Up", ARROW_UP),
+    ChatKey("↓", "Down", ARROW_DOWN),
+    ChatKey("←", "Left: the question before", ARROW_LEFT),
+    ChatKey("→", "Right: the next question", ARROW_RIGHT),
     ChatKey("⏎", "Enter", Keys.ENTER),
+    ChatKey("Tab", "Tab", Keys.TAB),
+    ChatKey("Space", "Space: tick a choice", " "),
     ChatKey("/", "Slash", "/"),
     ChatKey("^C", "Control C", Keys.CTRL_C),
 )
