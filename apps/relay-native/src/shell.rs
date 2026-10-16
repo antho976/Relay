@@ -1319,10 +1319,14 @@ impl Ui {
             let plate = top_up((alpha + 0.02).min(1.));
             css += &format!("\n@define-color plate alpha({},{plate:.3});", colors[crate::fonts::SCREEN]);
             css += &format!("\n@define-color page_fill alpha({},{page});", colors[0]);
-            // The Notes paper, one layer in a window with no page stack (css/notes.css); a
-            // tab over the chrome's @console tops that up to the same coverage.
-            css += &format!("\n@define-color notes_paper alpha({},{page});", crate::pages::NOTES_PAPER);
-            css += &format!("\n@define-color notes_paper_top alpha({},{:.3});", crate::pages::NOTES_PAPER, top_up(alpha));
+            // The Notes paper is a terminal in one layer, for a window with no page stack
+            // (css/notes.css): the @plate's screen over its @wall, each weighted by what it
+            // covers, at the same `page` coverage. A tab over the chrome's @console tops that
+            // up to the same coverage.
+            let screen_share = if page > 0. { plate / page } else { 1. };
+            let paper = format!("mix({},{},{screen_share:.3})", colors[0], colors[crate::fonts::SCREEN]);
+            css += &format!("\n@define-color notes_paper alpha({paper},{page});");
+            css += &format!("\n@define-color notes_paper_top alpha({paper},{:.3});", top_up(alpha));
             css += &format!("\n@define-color backbox_chrome alpha({},{});", colors[1], alpha.max(0.84));
             let dim = dim.ok().and_then(|v| v["value"].as_f64()).unwrap_or(0.28).clamp(0., 0.85);
             // The picture, decoded off the GTK thread (base64 and a full-size JPEG or PNG) and

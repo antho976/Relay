@@ -1,13 +1,13 @@
 /* notes area styles: loaded after theme.css, so rules here override it. */
 /* Notes is a desktop text editor in the KWrite mould: menu bar, toolbar, library,
    tabbed documents on one paper surface, a find bar and a status bar. */
-/* The paper is deliberately the same in every appearance mode, so it is not a palette token;
-   NOTES_PAPER (note_pages.rs) holds the same value. shell.rs redefines it as see-through as a
-   page in the main window (a terminal's plate), so the wallpaper shows through it alike; the
-   bars and the library are chrome, at panel opacity. @notes_paper_top is what the open tab adds
-   over the tab strip's @console to match the paper. */
-@define-color notes_paper #0c0c0e;
-@define-color notes_paper_top #0c0c0e;
+/* The paper is a terminal's ground: shell.rs redefines it per appearance mode as the terminal
+   plate's @screen over its @wall, as see-through as a page in the main window, so the wallpaper
+   shows through it alike; the bars and the library are chrome, at panel opacity.
+   @notes_paper_top is what the open tab adds over the tab strip's @console to match the paper.
+   These defaults are Dark's screen. */
+@define-color notes_paper #08090a;
+@define-color notes_paper_top #08090a;
 
 /* ---- titlebar: menu bar · document name · window keys ---- */
 .notes-chrome { min-height: 30px; background: @console; border-bottom: 1px solid @edge; }
@@ -92,11 +92,12 @@ button.notes-customize-reset { min-height: 26px; padding: 0 10px; border-radius:
 .notes-split > separator { min-width: 1px; margin: 0; padding: 0; border: 0; background: @edge; }
 .notes-library { background: @console; }
 .notes-library scrolledwindow, .notes-library viewport { background: transparent; }
-/* The picker is the search field's twin: same height, ground, stroke, radius and hover, its
-   folder where the field has its magnifier; open, it takes the field's focus ring. */
+/* The picker is the search field's twin: same height, stroke, radius and hover, its folder
+   where the field has its magnifier; open, it takes the field's focus ring. Both are glass, the
+   terminal pages' project pill (theme.css, .workspace-strip), so the library shows through. */
 .notes-picker { padding: 10px 8px 6px; }
-.notes-picker .workspace-picker > button { min-height: 32px; padding: 0 9px 0 10px; border: 1px solid @strong; border-radius: 10px; background: @wall_solid; color: @ink; box-shadow: none; transition: border-color 120ms ease-out, box-shadow 120ms ease-out; }
-.notes-picker .workspace-picker > button:hover { border-color: @line_emphasis; }
+.notes-picker .workspace-picker > button { min-height: 32px; padding: 0 9px 0 10px; border: 1px solid @glass_line; border-radius: 10px; background: @glass_control; color: @ink; box-shadow: none; transition: border-color 120ms ease-out, box-shadow 120ms ease-out, background 120ms ease-out; }
+.notes-picker .workspace-picker > button:hover { background: @glass_hover; border-color: @glass_line_hover; }
 .notes-picker .workspace-picker > button:checked { border-color: alpha(@ink, 0.42); box-shadow: 0 0 0 3px alpha(@ink, 0.07); }
 .notes-picker .workspace-picker > button:focus-visible { outline: 2px solid alpha(@ink, 0.35); outline-offset: 0; }
 .notes-picker .workspace-picker-label { margin-left: 2px; color: @ink; font-size: 13px; font-weight: 500; }
@@ -109,7 +110,9 @@ button.notes-library-key,
 button.notes-library-key:hover,
 .notes-library-key > button:hover,
 .notes-library-key > button:checked { background: alpha(@ink, 0.08); color: @ink; }
-entry.search.notes-library-search { margin: 0 2px 0 0; background: @wall_solid; }
+entry.search.notes-library-search { margin: 0 2px 0 0; border-color: @glass_line; background: @glass_control; transition: border-color 120ms ease-out, box-shadow 120ms ease-out, background 120ms ease-out; }
+entry.search.notes-library-search:hover { background: @glass_hover; border-color: @glass_line_hover; }
+entry.search.notes-library-search:focus-within { border-color: alpha(@ink, 0.42); }
 /* Rows: a title line (name, pin, date) over one line of preview. Hover washes the row and the
    open note fills it, rounded like every row in Relay, with no rail at its edge. */
 list.notes-list { background: transparent; padding: 0 8px 10px; }

@@ -1292,6 +1292,36 @@ fn clear_restorable_fresh_starts_the_same_terminal_without_saved_context() {
 }
 
 #[test]
+fn clear_restorable_fast_forwards_to_the_base_but_keeps_a_branch_with_its_own_work() {
+    let f = fixture();
+    let provider = fake_discovery_provider(&f.root, "claude", "claude 1.0.0");
+    ok(&f.engine, "settings.set", json!({"path": "providers.claude.path", "value": provider}));
+    let mut checkouts = Vec::new();
+    for _ in 0..2 {
+        let created = ok(&f.engine, "session.create", json!({"project_id": 1, "provider": "claude"}));
+        let name = created["name"].as_str().unwrap().to_string();
+        ok(&f.engine, "session.spawn", json!({"session": name}));
+        checkouts.push((name, PathBuf::from(created["worktree"].as_str().unwrap())));
+    }
+    let (own_work, own) = &checkouts[1];
+    std::fs::write(own.join("mine.txt"), "unmerged\n").unwrap();
+    git(own, &["add", "mine.txt"]);
+    git(own, &["-c", "core.hooksPath=/dev/null", "commit", "-qm", "work of its own"]);
+    let own_head = head(own, "HEAD");
+    git(&f.repo, &["commit", "--allow-empty", "-qm", "merged elsewhere"]);
+    f.engine.shutdown();
+
+    let (fresh, checkout) = &checkouts[0];
+    ok(&f.engine, "session.clear_restorable", json!({"session": fresh}));
+    assert_eq!(head(checkout, "HEAD"), head(&f.repo, "main"), "Clear left the branch behind its base");
+    ok(&f.engine, "session.clear_restorable", json!({"session": own_work}));
+    assert_eq!(head(own, "HEAD"), own_head, "Clear moved a branch with unmerged work");
+    for (name, _) in &checkouts {
+        ok(&f.engine, "session.close", json!({"session": name}));
+    }
+}
+
+#[test]
 fn allocated_assignments_survive_partial_launch_and_omitted_spawn_prompt() {
     let f = fixture();
     let provider = fake_discovery_provider(&f.root, "claude", "claude 1.0.0");
