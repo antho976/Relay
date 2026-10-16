@@ -46,7 +46,7 @@ pub fn extras(op: &str, result: &Value) -> Vec<(&'static str, Value)> {
         ],
         "gym.summary" => {
             let mut reads = vec![
-                ("gym.lifts", json!({})), ("gym.cardio", json!({})), by_month("sessions"), by_month("volume"), by_month("cardio_minutes"), by_month("distance"),
+                ("gym.lifts", json!({})), ("gym.cardio", json!({"limit": SUMMARY_CARDIO})), by_month("sessions"), by_month("volume"), by_month("cardio_minutes"), by_month("distance"),
                 ("gym.sessions", json!({"limit": 14})),
             ];
             if let Some(id) = result["recent"].get(0).and_then(|x| x["id"].as_i64()) {
@@ -56,6 +56,8 @@ pub fn extras(op: &str, result: &Value) -> Vec<(&'static str, Value)> {
         }
         // An account valued by hand is worth its balance, which the portfolio does not carry.
         "money.invest.summary" => vec![("money.lists", json!({}))],
+        // Which accounts Wealthsimple's files fill, which an activity does not say.
+        "money.invest.list" => vec![("money.lists", json!({}))],
         // A workout list does not say its unit; a week's volume does.
         "gym.sessions" => vec![("gym.series", json!({"periods": 1}))],
         _ => Vec::new(),
@@ -72,13 +74,13 @@ pub fn render(op: &str, payload: &Value, result: &Value, extras: &[Option<Value>
         "money.lists" => money_lists(result, ctx),
         "money.series" => money_series(payload, result, ctx),
         "money.invest.summary" => invest_summary(result, extra(0), ctx),
-        "money.invest.list" => invest_list(result, ctx),
+        "money.invest.list" => invest_list(result, extra(0), ctx),
         "gym.summary" => gym_summary(result, extra(0), extra(1), [extra(2), extra(3), extra(4), extra(5)], extra(6), extra(7), ctx),
         "gym.sessions" => gym_sessions(payload, result, extra(0).map_or("", |series| s(series, "unit")), ctx),
         "gym.session.get" => gym_session(result, ctx),
-        "gym.lifts" => gym_lifts(result, ctx),
+        "gym.lifts" => gym_lifts(payload, result, ctx),
         "gym.lift.get" => gym_lift(result, ctx),
-        "gym.cardio" => gym_cardio(result, ctx),
+        "gym.cardio" => gym_cardio(payload, result, ctx),
         "gym.series" => gym_series(payload, result),
         _ => return None,
     };
@@ -95,16 +97,17 @@ accounts and net worth, bills to pay, goals and investments. Example: {}".into()
         "money.tx.list" => "The entries of one budget month, each with its id, added up by category, by week and by day. \
 period_offset: 0 this month, -1 last month, -2 the month before. query: a word to find in the note, category or account. \
 Example: {\"period_offset\": -1, \"query\": \"Provigo\"}".into(),
-        "money.lists" => "The account ids and category ids that money.tx.add and money.tx.update need, and the dates of the last \
-two weeks. Example: {}".into(),
+        "money.lists" => "The accounts and categories (each name with its id) that money.tx.add and money.tx.update need, what \
+goes in each category, and the dates of the last two weeks. Example: {}".into(),
         "money.tx.add" => format!("Add an expense, income or transfer. amount is a decimal string; date is the day it happened as \
-YYYY-MM-DD; account_id and category_id come from money.lists; a TRANSFER has to_account_id and no category. Example: \
-{{\"type\": \"EXPENSE\", \"amount\": \"18.50\", \"date\": \"{today}\", \"account_id\": 1, \"category_id\": 2, \"note\": \"Lunch\"}}"),
-        "money.tx.update" => "Change an entry, by its id from money.tx.list; give only the fields that change. Example: \
-{\"id\": 91, \"amount\": \"75.49\"}".into(),
+YYYY-MM-DD; account and category are names, as the person said them or as money.lists has them; a TRANSFER has \
+to_account and no category. Example: \
+{{\"type\": \"EXPENSE\", \"amount\": \"18.50\", \"date\": \"{today}\", \"account\": \"cash\", \"category\": \"Dining\", \"note\": \"Lunch\"}}"),
+        "money.tx.update" => "Change an entry, by its id from money.tx.list; give only the fields that change, an account or \
+category by name. Example: {\"id\": 91, \"amount\": \"75.49\"}, or {\"id\": 91, \"category\": \"Groceries\"}".into(),
         "money.tx.restore" => "Bring back a deleted entry, by its id. Example: {\"id\": 91}".into(),
-        "money.series" => "The numbers behind a money chart, with their total. Example: {\"by\": \"period\", \"periods\": 3, \
-\"category\": \"Dining\"} gives Dining in each of the last 3 months.".into(),
+        "money.series" => format!("The numbers behind a money chart, with their total. Example: {{\"by\": \"period\", \"periods\": 3, \
+\"category\": \"Dining\"}} gives Dining in each of the last 3 months. {SERIES_PERIODS}"),
         "money.invest.summary" => "Investments worked out: value, cost, gain, as of when, each account and holding, and \
 contribution room. Example: {}".into(),
         "money.invest.list" => "Investment activities (buys, sells, dividends, deposits), newest first. Example: {}".into(),
@@ -125,6 +128,11 @@ Example: {\"query\": \"squat\"}".into(),
         _ => return None,
     })
 }
+
+/// What money.series' `periods` counts. Asked for "the last 2 months by week", both models in the
+/// bench asked for 8 periods, counting weeks.
+const SERIES_PERIODS: &str = "periods counts months (budget periods), even when by is week or day: \"the last 2 months by \
+week\" is {\"by\": \"week\", \"periods\": 2}, not 8: it does not count weeks.";
 
 /// Fields a small model is better without: a `today` it could set wrongly, and a `limit` that
 /// would cut the entries a reading adds up.
@@ -409,9 +417,21 @@ fn capitalised(text: &str) -> String {
     chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
 }
 
-/// "$42.10 on 3 expenses", or "nothing".
+/// What a Tally reading is, said on its first line: a model took no income logged for no income.
+const TALLY_IS: &str = "Only what the person has logged in their Tally app: not their bank, not everything they did.";
+/// What an Avex reading is, likewise.
+const AVEX_IS: &str = "Only what their Avex export holds: not everything they did.";
+/// A figure with nothing behind it, said so: "none logged in Tally", never a bare "$0.00".
+const NONE_LOGGED: &str = "none logged in Tally";
+
+/// An amount, or "none logged in Tally" for nothing.
+fn logged(minor: i64, m: &Money) -> String {
+    if minor == 0 { NONE_LOGGED.into() } else { m.fmt(minor) }
+}
+
+/// "$42.10 on 3 expenses", or "none logged in Tally".
 fn spent_phrase((sum, n): (i64, i64), m: &Money) -> String {
-    if n == 0 { "nothing spent".into() } else { format!("{} on {}", m.fmt(sum), plural(n, "expense", "expenses")) }
+    if n == 0 { NONE_LOGGED.into() } else { format!("{} on {}", m.fmt(sum), plural(n, "expense", "expenses")) }
 }
 
 fn entry_name(t: &Value) -> &str {
@@ -428,17 +448,17 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
     let m = Money::of(if s(r, "currency").is_empty() { &ctx.currency } else { s(r, "currency") });
     let [this_month, last_month, _] = pages;
     let mut o = String::new();
-    let _ = writeln!(o, "TALLY (budget app). {} Amounts are in {}.", today_line(today), m.code);
+    let _ = writeln!(o, "TALLY (budget app). {} Amounts are in {}. {TALLY_IS}", today_line(today), m.code);
     let _ = writeln!(o, "{}", calendar(today));
     if r["empty"] == true {
-        let _ = writeln!(o, "The ledger is empty: nothing has been recorded yet.");
+        let _ = writeln!(o, "The ledger is empty: nothing has been logged in Tally yet.");
         return o;
     }
     let period = &r["period"];
     let (days, left) = (int(period, "days"), int(period, "days_left"));
     let _ = writeln!(o, "\nTHIS MONTH: {}, day {} of {days}, {} left counting today.", period_name(period, today), days - left + 1, plural(left, "day", "days"));
-    let _ = writeln!(o, "- Spent so far (all expenses): {}", m.fmt(int(r, "spent")));
-    let _ = writeln!(o, "- Income so far: {}", m.fmt(int(r, "income")));
+    let _ = writeln!(o, "- Spent so far (all expenses): {}", logged(int(r, "spent"), &m));
+    let _ = writeln!(o, "- Income so far: {}", logged(int(r, "income"), &m));
     let pace = &r["pace"];
     if pace.is_object() && s(pace, "status") != "NO_BUDGET" {
         let budget = int(pace, "budget");
@@ -504,7 +524,7 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
         let weeks: Vec<String> = (2..6).filter_map(|back| {
             let start = this_monday.checked_sub(jiff::Span::new().days(7 * back)).ok()?;
             let end = start.checked_add(jiff::Span::new().days(6)).ok()?;
-            Some(format!("{} to {}: {}", day(start, today), day(end, today), m.fmt(spent_between(pages.iter().flatten().flat_map(|p| list(p, "transactions")), start, end).0)))
+            Some(format!("{} to {}: {}", day(start, today), day(end, today), logged(spent_between(pages.iter().flatten().flat_map(|p| list(p, "transactions")), start, end).0, &m)))
         }).collect();
         let _ = writeln!(o, "- Weeks before (Monday to Sunday): {}.", weeks.join("; "));
     }
@@ -524,7 +544,8 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
                 };
                 format!("NOT over budget: {} left. {}", m.fmt(left), capitalised(&pace))
             };
-            let _ = writeln!(o, "- {}: {} of {}. {stand}.", s(b, "name"), m.fmt(spent), m.fmt(budget));
+            let spent = if spent == 0 { format!("{NONE_LOGGED} this month, budget {}", m.fmt(budget)) } else { format!("{} of {}", m.fmt(spent), m.fmt(budget)) };
+            let _ = writeln!(o, "- {}: {spent}. {stand}.", s(b, "name"));
         }
     }
 
@@ -534,18 +555,21 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
         for (name, amount, n) in &e.by_category {
             let _ = writeln!(o, "- {name}: {} ({n})", m.fmt(*amount));
         }
+        if e.by_category.is_empty() {
+            let _ = writeln!(o, "- {NONE_LOGGED} this month");
+        }
         if !e.expenses.is_empty() {
             let _ = writeln!(o, "Biggest expenses this month: {}.", e.largest(3, &m, today));
         }
         if let Some(small) = e.extreme(false, &m, today) {
             let _ = writeln!(o, "Smallest expense this month: {small}.");
         }
-        let _ = writeln!(o, "Entries this month: {}.", e.counts());
+        let _ = writeln!(o, "Entries this month: {}.", if e.rows.is_empty() { format!("{NONE_LOGGED} yet") } else { e.counts() });
     }
     if let Some(page) = last_month {
         let e = Entries::of(page);
         let _ = writeln!(o, "\nLAST MONTH: {}.", period_name(&page["period"], today));
-        let _ = writeln!(o, "- Spent: {}. Income: {}.", m.fmt(e.spent), m.fmt(e.income));
+        let _ = writeln!(o, "- Spent: {}. Income: {}.", logged(e.spent, &m), logged(e.income, &m));
         if !e.expenses.is_empty() {
             let _ = writeln!(o, "- Biggest expenses: {}.", e.largest(3, &m, today));
         }
@@ -564,7 +588,9 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
 
     let bills = list(r, "bills");
     let to_pay: Vec<&Value> = bills.iter().filter(|b| s(b, "type") == "EXPENSE").collect();
-    if !to_pay.is_empty() {
+    if to_pay.is_empty() {
+        let _ = writeln!(o, "\nBILLS TO PAY: none set up in Tally.");
+    } else {
         let _ = writeln!(o, "\nBILLS TO PAY (expenses only, next first):");
         for b in &to_pay {
             let _ = writeln!(o, "- {}: {} on {} ({})", s(b, "name"), m.fmt(int(b, "amount")), day_of(s(b, "next_date"), today), ago_of(s(b, "next_date"), today));
@@ -579,7 +605,9 @@ fn money_summary(r: &Value, pages: [Option<&Value>; 3], series: [Option<&Value>;
     }
 
     let goals = list(r, "goals");
-    if !goals.is_empty() {
+    if goals.is_empty() {
+        let _ = writeln!(o, "\nGOALS: none set up in Tally.");
+    } else {
         let _ = writeln!(o, "\nGOALS:");
         for g in goals {
             let _ = writeln!(o, "- {} ({} goal): {} of {}. {}", s(g, "name"), word(s(g, "kind")), m.fmt(int(g, "saved")), m.fmt(int(g, "target")), s(g, "line"));
@@ -600,7 +628,7 @@ fn month_by_month(o: &mut String, pages: [Option<&Value>; 3], series: [Option<&V
             let label = label.as_str().unwrap_or("");
             let (spent, earned) = (out.get(i).and_then(Value::as_i64).unwrap_or(0), inn.get(i).and_then(Value::as_i64).unwrap_or(0));
             let now = if i + 1 == labels.len() { " so far" } else { "" };
-            if spent == 0 && earned == 0 { format!("{label}: nothing recorded") } else { format!("{label}{now}: spent {}, income {}", m.fmt(spent), m.fmt(earned)) }
+            if spent == 0 && earned == 0 { format!("{label}{now}: {NONE_LOGGED}") } else { format!("{label}{now}: spent {}, income {}", logged(spent, m), logged(earned, m)) }
         }).collect();
         let _ = writeln!(o, "\nMONTH BY MONTH (budget periods, oldest first): {}.", months.join("; "));
     }
@@ -619,8 +647,8 @@ fn month_by_month(o: &mut String, pages: [Option<&Value>; 3], series: [Option<&V
         let cells: Vec<String> = months.iter().enumerate().map(|(i, (month, e))| {
             let now = if i + 1 == months.len() { " so far" } else { "" };
             match e.by_category.iter().find(|(n, _, _)| n == name) {
-                Some((_, amount, _)) => format!("{month}{now} {}", m.fmt(*amount)),
-                None => format!("{month}{now} {}", m.fmt(0)),
+                Some((_, amount, _)) => format!("{month}{now} {}", logged(*amount, m)),
+                None => format!("{month}{now} {NONE_LOGGED}"),
             }
         }).collect();
         let total: i64 = months.iter().filter_map(|(_, e)| e.by_category.iter().find(|(n, _, _)| n == name).map(|(_, a, _)| *a)).sum();
@@ -644,7 +672,8 @@ fn accounts(o: &mut String, rows: &[Value], net_worth: Option<&Value>, m: &Money
             kind = format!("{kind}, at {}", s(a, "institution"));
         }
         let owed = if s(a, "type") == "CREDIT" && int(a, "balance") < 0 { " owed" } else { "" };
-        let _ = writeln!(o, "- {} ({kind}): {}{owed}", s(a, "name"), m.fmt(int(a, "balance")));
+        let filled = if import_filled(a) { format!("; {FILLED}") } else { String::new() };
+        let _ = writeln!(o, "- {} ({kind}): {}{owed}{filled}", s(a, "name"), m.fmt(int(a, "balance")));
     }
     if let Some(n) = net_worth.and_then(Value::as_i64) {
         let _ = writeln!(o, "- NET WORTH, all accounts together: {}", m.fmt(n));
@@ -662,7 +691,7 @@ fn tx_list(payload: &Value, r: &Value, ctx: &Ctx) -> String {
         n => format!("{n} months ahead"),
     };
     let mut o = String::new();
-    let _ = writeln!(o, "TALLY ENTRIES for {}, {which}. {} Amounts are in {}.", period_name(&r["period"], today), today_line(today), m.code);
+    let _ = writeln!(o, "TALLY ENTRIES for {}, {which}. {} Amounts are in {}. {TALLY_IS}", period_name(&r["period"], today), today_line(today), m.code);
     let mut filters = Vec::new();
     if let Some(q) = payload["query"].as_str().filter(|q| !q.trim().is_empty()) {
         filters.push(format!("matching \"{}\"", q.trim()));
@@ -684,12 +713,12 @@ fn tx_list(payload: &Value, r: &Value, ctx: &Ctx) -> String {
     }
     let e = Entries::of(r);
     if e.rows.is_empty() {
-        let _ = writeln!(o, "No entries.");
+        let _ = writeln!(o, "No entries: {NONE_LOGGED} in {}{}.", period_name(&r["period"], today), if filters.is_empty() { "" } else { " that matches" });
         return o;
     }
     let _ = writeln!(o, "{}.", e.counts());
-    let _ = writeln!(o, "- Spent (all expenses added up): {}", m.fmt(e.spent));
-    let _ = writeln!(o, "- Income: {}", m.fmt(e.income));
+    let _ = writeln!(o, "- Spent (all expenses added up): {}", logged(e.spent, &m));
+    let _ = writeln!(o, "- Income: {}", logged(e.income, &m));
     if e.moved != 0 {
         let _ = writeln!(o, "- Moved between accounts (transfers, not spending): {}", m.fmt(e.moved));
     }
@@ -745,25 +774,64 @@ fn tx_list(payload: &Value, r: &Value, ctx: &Ctx) -> String {
     o
 }
 
+/// What goes in each of Tally's default categories (`relay_money::model::DEFAULT_CATEGORIES`), for
+/// a model filing an entry: it put coffee under Subscriptions and a Bixi ride under Travel. A
+/// category the person named themselves gets no examples.
+const CATEGORY_EXAMPLES: &[(&str, &str)] = &[
+    ("Groceries", "supermarket, grocery store, food to cook at home"),
+    ("Dining", "restaurants, cafés, coffee, lunch, takeout, bars"),
+    ("Transport", "transit, bus, metro, Bixi, taxi, Uber, gas, parking"),
+    ("Housing", "rent, mortgage, condo fees, home insurance"),
+    ("Utilities", "hydro, electricity, heating, water"),
+    ("Phone & internet", "phone plan, internet"),
+    ("Shopping", "clothes, electronics, household things, online orders"),
+    ("Health", "pharmacy, doctor, dentist, physio, glasses"),
+    ("Entertainment", "movies, concerts, shows, games, outings"),
+    ("Subscriptions", "streaming and app plans, memberships billed every month"),
+    ("Travel", "flights, hotels, trips away from home"),
+    ("Gifts", "presents, donations"),
+    ("Other", "only what fits no other category"),
+    ("Salary", "pay from an employer"),
+    ("Side income", "freelance work, selling things"),
+    ("Refunds", "money back for a return or a reimbursement"),
+    ("Other income", "only income that fits no other category"),
+];
+
+fn category_examples(name: &str) -> Option<&'static str> {
+    CATEGORY_EXAMPLES.iter().find(|(n, _)| n.eq_ignore_ascii_case(name.trim())).map(|(_, e)| *e)
+}
+
+/// An account Wealthsimple's files fill: its activity comes with the next export, and the engine
+/// refuses a thread's money.invest.add into it (`money.import_filled`).
+fn import_filled(a: &Value) -> bool {
+    s(a, "institution").trim().eq_ignore_ascii_case("wealthsimple")
+}
+
+const FILLED: &str = "filled from Wealthsimple's files: don't record activity here, the next export brings it";
+
 fn money_lists(r: &Value, ctx: &Ctx) -> String {
     let m = Money::of(if s(r, "currency").is_empty() { &ctx.currency } else { s(r, "currency") });
     let mut o = String::new();
-    let _ = writeln!(o, "TALLY ACCOUNTS AND CATEGORIES, with the ids money.tx.add and money.tx.update take. Amounts are in {}.", m.code);
+    let _ = writeln!(o, "TALLY ACCOUNTS AND CATEGORIES (as set up in their Tally app) for money.tx.add and money.tx.update: each name, with its id beside it. Amounts are in {}.", m.code);
     let _ = writeln!(o, "{} {}", today_line(ctx.today), calendar(ctx.today));
-    let _ = writeln!(o, "\nACCOUNTS (account_id: name, type, balance now). Use the one they name: cash is the cash account; a card or Visa is the credit card; chequing or debit is chequing:");
+    let _ = writeln!(o, "\nACCOUNTS (name (account_id): type, balance now). Use the one they name: cash is the cash account; a card or Visa is the credit card; chequing or debit is chequing:");
     for a in list(r, "accounts").iter().filter(|a| a["archived"] != true) {
-        let _ = writeln!(o, "- {}: {}, {}, {}", int(a, "id"), s(a, "name"), word(s(a, "type")), m.fmt(int(a, "balance")));
+        let filled = if import_filled(a) { format!("; {FILLED}") } else { String::new() };
+        let _ = writeln!(o, "- {} (account_id {}): {}, balance {}{filled}", s(a, "name"), int(a, "id"), word(s(a, "type")), m.fmt(int(a, "balance")));
     }
     if let Some(n) = r["net_worth"].as_i64() {
         let _ = writeln!(o, "NET WORTH, all accounts together: {}", m.fmt(n));
     }
     for (kind, title) in [("EXPENSE", "EXPENSE CATEGORIES"), ("INCOME", "INCOME CATEGORIES")] {
-        let names: Vec<String> = list(r, "categories").iter()
+        let rows: Vec<String> = list(r, "categories").iter()
             .filter(|c| s(c, "kind") == kind && c["archived"] != true)
-            .map(|c| format!("{}: {}", int(c, "id"), s(c, "name")))
+            .map(|c| match category_examples(s(c, "name")) {
+                Some(e) => format!("- {} (category_id {}): {e}", s(c, "name"), int(c, "id")),
+                None => format!("- {} (category_id {})", s(c, "name"), int(c, "id")),
+            })
             .collect();
-        if !names.is_empty() {
-            let _ = writeln!(o, "\n{title} (category_id: name): {}", names.join("; "));
+        if !rows.is_empty() {
+            let _ = writeln!(o, "\n{title} (name (category_id): what goes there):\n{}", rows.join("\n"));
         }
     }
     o
@@ -773,13 +841,13 @@ fn money_series(payload: &Value, r: &Value, ctx: &Ctx) -> String {
     let m = Money::of(if s(r, "currency").is_empty() { &ctx.currency } else { s(r, "currency") });
     let labels: Vec<&str> = list(r, "labels").iter().map(|l| l.as_str().unwrap_or("")).collect();
     let mut o = String::new();
-    let _ = writeln!(o, "TALLY {} by {} (chart numbers). Amounts are in {}.", s(r, "measure").to_ascii_uppercase(), s(r, "by"), m.code);
+    let _ = writeln!(o, "TALLY {} by {} (chart numbers). Amounts are in {}. {TALLY_IS}", s(r, "measure").to_ascii_uppercase(), s(r, "by"), m.code);
     for series in list(r, "series") {
         let values: Vec<String> = list(series, "values").iter().zip(&labels)
-            .map(|(v, l)| format!("{l} {}", v.as_i64().map_or_else(|| "none".into(), |v| m.fmt(v))))
+            .map(|(v, l)| format!("{l} {}", logged(v.as_i64().unwrap_or(0), &m)))
             .collect();
         let total: i64 = list(series, "values").iter().filter_map(Value::as_i64).sum();
-        let _ = writeln!(o, "- {}: {}. Total {}.", s(series, "name"), values.join("; "), m.fmt(total));
+        let _ = writeln!(o, "- {}: {}. Total {}.", s(series, "name"), values.join("; "), logged(total, &m));
     }
     let mut query = payload.clone();
     if let Some(q) = query.as_object_mut() {
@@ -787,6 +855,7 @@ fn money_series(payload: &Value, r: &Value, ctx: &Ctx) -> String {
     }
     let kind = if payload["cumulative"] == true { "line" } else if s(r, "by") == "category" && list(r, "series").len() == 1 { "donut" } else { "bar" };
     let what = match payload["category"].as_str() { Some(c) => format!("{c} {}", s(r, "measure")), None => capitalised(s(r, "measure")) };
+    let _ = writeln!(o, "\n{SERIES_PERIODS}");
     chart_block(&mut o, serde_json::json!({"type": kind, "title": format!("{what} by {}", s(r, "by")), "query": query}));
     o
 }
@@ -855,9 +924,9 @@ fn invest_summary(r: &Value, lists: Option<&Value>, ctx: &Ctx) -> String {
     let today = ctx.today;
     let m = Money::of(if s(r, "currency").is_empty() { &ctx.currency } else { s(r, "currency") });
     let mut o = String::new();
-    let _ = writeln!(o, "TALLY INVESTMENTS. {} Amounts are in {}.", today_line(today), m.code);
+    let _ = writeln!(o, "TALLY INVESTMENTS. {} Amounts are in {}. {TALLY_IS}", today_line(today), m.code);
     if r["empty"] == true {
-        let _ = writeln!(o, "No investment account has holdings or activity yet.");
+        let _ = writeln!(o, "No investment account has holdings or activity logged in Tally yet.");
         return o;
     }
     if let Some(as_of) = date(s(r, "as_of")) {
@@ -870,7 +939,7 @@ fn invest_summary(r: &Value, lists: Option<&Value>, ctx: &Ctx) -> String {
     let _ = writeln!(o, "- Cost (book value): {}", m.fmt(int(r, "book")));
     let _ = writeln!(o, "- Gain: {}{gain_pct}", m.fmt(int(r, "gain")));
     let _ = writeln!(o, "- Cash: {}", m.fmt(int(r, "cash")));
-    let _ = writeln!(o, "- Income (dividends, interest) in the last 12 months: {}", m.fmt(int(r, "income_12m")));
+    let _ = writeln!(o, "- Income (dividends, interest) in the last 12 months: {}", logged(int(r, "income_12m"), &m));
     for issue in list(r, "issues").iter().filter_map(Value::as_str) {
         let _ = writeln!(o, "- Note: {issue}");
     }
@@ -906,6 +975,9 @@ fn invest_summary(r: &Value, lists: Option<&Value>, ctx: &Ctx) -> String {
         }
         if int(a, "holdings") == 0 && int(a, "book") == 0 && int(a, "cash") == 0 {
             line.push_str("; valued by hand: its balance in money.lists is what it is worth");
+        }
+        if import_filled(a) {
+            let _ = write!(line, "; {FILLED}");
         }
         let _ = writeln!(o, "{line}");
     }
@@ -950,13 +1022,16 @@ fn invest_summary(r: &Value, lists: Option<&Value>, ctx: &Ctx) -> String {
     o
 }
 
-fn invest_list(r: &Value, ctx: &Ctx) -> String {
+fn invest_list(r: &Value, lists: Option<&Value>, ctx: &Ctx) -> String {
     let today = ctx.today;
     let rows = list(r, "activities");
     let mut o = String::new();
-    let _ = writeln!(o, "TALLY INVESTMENT ACTIVITY, newest first. {}", today_line(today));
+    let _ = writeln!(o, "TALLY INVESTMENT ACTIVITY, newest first. {} {TALLY_IS}", today_line(today));
+    for a in lists.map_or(&[][..], |l| list(l, "accounts")).iter().filter(|a| a["archived"] != true && import_filled(a)) {
+        let _ = writeln!(o, "- {}: {FILLED}.", s(a, "name"));
+    }
     if rows.is_empty() {
-        let _ = writeln!(o, "No activities.");
+        let _ = writeln!(o, "No activities: {NONE_LOGGED}.");
         return o;
     }
     let _ = writeln!(o, "{}.", plural(rows.len() as i64, "activity", "activities"));
@@ -994,6 +1069,42 @@ fn set(weight_v: &Value, reps: &Value, unit: &str) -> String {
         Some(w) => format!("{} {unit} x {reps}", weight(w)),
         None => format!("bodyweight x {reps}"),
     }
+}
+
+/// What a lift with a weighted best set but no estimate says in place of one: Epley's estimate is
+/// made only from sets of 1 to 12 reps, so a best set without one means every set was over 12.
+const NO_E1RM: &str = "no estimated max: every set was over 12 reps (an estimate needs a set of 1 to 12 reps)";
+
+/// An exercise's working sets (warm-ups left out, as Avex counts them), their volume (the
+/// exercise's own figure when it has one, else weight x reps added up) and its warm-ups.
+fn working_sets(e: &Value) -> (Vec<&Value>, f64, usize) {
+    let sets = list(e, "sets");
+    let work: Vec<&Value> = sets.iter().filter(|x| s(x, "kind") != "warmup" && int(x, "reps") > 0).collect();
+    let volume = e["volume"].as_f64().unwrap_or_else(|| work.iter().map(|x| num(x, "weight") * int(x, "reps") as f64).sum());
+    (work, volume, sets.iter().filter(|x| s(x, "kind") == "warmup").count())
+}
+
+/// "3 working sets, volume 3,990 lb": volume only when a working set had a weight.
+fn work_phrase(work: &[&Value], volume: f64, unit: &str) -> String {
+    let n = plural(work.len() as i64, "working set", "working sets");
+    if volume > 0.0 { format!("{n}, volume {} {unit}", weight(volume)) } else { n }
+}
+
+/// One exercise of a workout as one line: its working sets, their volume, and each set.
+fn exercise_line(e: &Value, unit: &str) -> String {
+    if e["skipped"] == true {
+        return format!("- {}: skipped", s(e, "name"));
+    }
+    let (work, volume, warm) = working_sets(e);
+    let sets: Vec<String> = work.iter().map(|x| set(&x["weight"], &x["reps"], unit)).collect();
+    let mut line = format!("- {}: {}", s(e, "name"), work_phrase(&work, volume, unit));
+    if !sets.is_empty() {
+        let _ = write!(line, "; {}", sets.join(", "));
+    }
+    if warm > 0 {
+        let _ = write!(line, "; plus {} not counted", plural(warm as i64, "warm-up set", "warm-up sets"));
+    }
+    line
 }
 
 /// One workout as one line.
@@ -1037,14 +1148,16 @@ fn lift_line(l: &Value, unit: &str, today: Date) -> String {
                 Some(e) => {
                     let _ = write!(line, ", estimated 1-rep max {} {unit}{}", weight(e), other_unit(e, unit));
                 }
-                None => line.push_str(", no estimated 1-rep max (it is estimated only from sets of 1 to 12 reps)"),
+                None => {
+                    let _ = write!(line, ", {NO_E1RM}");
+                }
             }
         }
         None => match l["best_reps"].as_i64() {
             Some(reps) => {
-                let _ = write!(line, " bodyweight, no weighted best set; most reps in one set: {reps}");
+                let _ = write!(line, " bodyweight, no weighted best set, so no estimated max; most reps in one set: {reps}");
             }
-            None => line.push_str(" bodyweight or timed only, no weighted best set"),
+            None => line.push_str(" bodyweight or timed only, no weighted best set, so no estimated max"),
         },
     }
     let _ = write!(line, "; done in {} ({}), last on {}", plural(int(l, "sessions"), "workout", "workouts"), plural(int(l, "sets"), "set", "sets"), day_of(s(l, "last_day"), today));
@@ -1066,7 +1179,7 @@ fn exported_phrase(imported: &Value, today: Date) -> String {
 
 /// Where the copy comes from and how old it is; `None` when nothing was imported.
 fn gym_header(o: &mut String, imported: &Value, unit: &str, today: Date) -> bool {
-    let _ = writeln!(o, "AVEX (gym app; weights in {unit}). {}", today_line(today));
+    let _ = writeln!(o, "AVEX (gym app; weights in {unit}). {} {AVEX_IS}", today_line(today));
     if !imported.is_object() {
         let _ = writeln!(o, "Nothing has been imported yet: export it in Avex (Settings, Export, Training history, JSON), copy avex_export.json to this computer, and import it on the Avex page's Data tab.");
         return false;
@@ -1091,14 +1204,21 @@ fn gym_summary(r: &Value, lifts: Option<&Value>, cardio: Option<&Value>, months:
         n => format!(" {} the person excluded in Avex (untracked) {} not counted.", plural(n, "workout", "workouts"), if n == 1 { "is" } else { "are" }),
     };
     let _ = writeln!(
-        o, "\nALL TIME ({} to {}): {}, {}, {} {unit} lifted, {} ({} minutes).{untracked}",
+        o, "\nALL TIME ({} to {}): {}, {}, {} {unit} lifted, {}.{untracked}",
         day_of(s(t, "first_day"), today), day_of(s(t, "last_day"), today), plural(int(t, "sessions"), "workout", "workouts"),
-        plural(int(t, "sets"), "set", "sets"), weight(num(t, "volume")), plural(int(t, "cardio"), "cardio session", "cardio sessions"), int(t, "cardio_minutes")
+        plural(int(t, "sets"), "set", "sets"), weight(num(t, "volume")),
+        match int(t, "cardio") { 0 => "no cardio in this Avex copy".to_string(), n => format!("{} ({} minutes)", plural(n, "cardio session", "cardio sessions"), int(t, "cardio_minutes")) }
     );
-    let week = |w: &Value| format!(
-        "{}, {}, {} {unit} lifted, {} active minutes, {} cardio minutes",
-        plural(int(w, "sessions"), "workout", "workouts"), plural(int(w, "sets"), "set", "sets"), weight(num(w, "volume")), int(w, "active_minutes"), int(w, "cardio_minutes")
-    );
+    let week = |w: &Value| {
+        let cardio = match int(w, "cardio_minutes") { 0 => "no cardio".to_string(), c => format!("{c} cardio minutes") };
+        match int(w, "sessions") {
+            0 => format!("no workouts in this Avex copy, {cardio}"),
+            n => format!(
+                "{}, {}, {} {unit} lifted, {} active minutes, {cardio}",
+                plural(n, "workout", "workouts"), plural(int(w, "sets"), "set", "sets"), weight(num(w, "volume")), int(w, "active_minutes")
+            ),
+        }
+    };
     // Which workouts each week held, from the newest ones the summary lists.
     let named = |from: Option<Date>, to: Option<Date>| -> String {
         let (Some(from), Some(to)) = (from, to) else { return String::new() };
@@ -1116,7 +1236,7 @@ fn gym_summary(r: &Value, lifts: Option<&Value>, cardio: Option<&Value>, months:
         if seen.is_empty() { String::new() } else { format!(" Workouts: {}.", seen.join("; ")) }
     };
     let this = &r["this_week"];
-    let _ = writeln!(o, "THIS WEEK ({} to today): {} so far.{}", day_of(s(this, "start"), today), week(this), named(date(s(this, "start")), Some(today)));
+    let _ = writeln!(o, "THIS WEEK ({} to today), so far: {}.{}", day_of(s(this, "start"), today), week(this), named(date(s(this, "start")), Some(today)));
     let last = &r["last_week"];
     let last_end = date(s(last, "start")).and_then(|d| d.checked_add(jiff::Span::new().days(6)).ok());
     let _ = writeln!(o, "LAST WEEK ({} to {}): {}.{}", day_of(s(last, "start"), today), last_end.map(|d| day(d, today)).unwrap_or_default(), week(last), named(date(s(last, "start")), last_end));
@@ -1136,9 +1256,16 @@ fn gym_summary(r: &Value, lifts: Option<&Value>, cardio: Option<&Value>, months:
     if let Some(c) = cardio {
         let moving: Vec<&Value> = list(c, "entries").iter().filter(|x| s(x, "kind") != "rest").collect();
         let km: f64 = moving.iter().filter_map(|x| x["distance_km"].as_f64()).sum();
-        let _ = writeln!(o, "Cardio in all: {}, {} minutes, {} km.", plural(moving.len() as i64, "session", "sessions"), moving.iter().map(|x| int(x, "minutes")).sum::<i64>(), (km * 100.0).round() / 100.0);
+        if moving.is_empty() {
+            let _ = writeln!(o, "Cardio in all: no cardio in this Avex copy.");
+        } else {
+            let _ = writeln!(o, "Cardio in all: {}, {} minutes, {} km.", plural(moving.len() as i64, "session", "sessions"), moving.iter().map(|x| int(x, "minutes")).sum::<i64>(), (km * 100.0).round() / 100.0);
+        }
     }
     gym_months(&mut o, months, unit);
+    if let Some(c) = cardio {
+        cardio_months(&mut o, list(c, "entries"), list(c, "entries").len() as u64 >= SUMMARY_CARDIO, today);
+    }
 
     let _ = writeln!(o, "\nWEEK BY WEEK (week starting Monday):");
     for w in list(r, "weeks") {
@@ -1151,19 +1278,11 @@ fn gym_summary(r: &Value, lifts: Option<&Value>, cardio: Option<&Value>, months:
     if let Some(detail) = last_workout {
         let row = &detail["row"];
         let _ = writeln!(
-            o, "\nLAST WORKOUT IN DETAIL ({}, {}: {} in all, {} {unit} lifted in all):",
+            o, "\nLAST WORKOUT IN DETAIL ({}, {}: {} in all, {} {unit} lifted in all). A lift's volume is weight x reps added up over its working sets; warm-ups are not counted:",
             day_of(s(row, "day"), today), s(row, "title"), plural(int(row, "sets"), "set", "sets"), weight(num(row, "volume"))
         );
         for e in list(detail, "exercises") {
-            if e["skipped"] == true {
-                let _ = writeln!(o, "- {}: skipped", s(e, "name"));
-                continue;
-            }
-            let sets = list(e, "sets");
-            let work: Vec<String> = sets.iter().filter(|x| s(x, "kind") != "warmup").map(|x| set(&x["weight"], &x["reps"], unit)).collect();
-            let warm = sets.len() - work.len();
-            let warm = if warm > 0 { format!(", plus {} not counted", plural(warm as i64, "warm-up set", "warm-up sets")) } else { String::new() };
-            let _ = writeln!(o, "- {}: {} ({}){warm}", s(e, "name"), plural(work.len() as i64, "working set", "working sets"), work.join(", "));
+            let _ = writeln!(o, "{}", exercise_line(e, unit));
         }
     }
     let all = lifts.map(|l| list(l, "lifts")).filter(|l| !l.is_empty()).unwrap_or_else(|| list(r, "lifts"));
@@ -1190,7 +1309,9 @@ fn gym_summary(r: &Value, lifts: Option<&Value>, cardio: Option<&Value>, months:
         }
     }
     let goals = list(r, "goals");
-    if !goals.is_empty() {
+    if goals.is_empty() {
+        let _ = writeln!(o, "\nOPEN GOALS: none in this Avex copy.");
+    } else {
         let _ = writeln!(o, "\nOPEN GOALS:");
         for g in goals {
             let target = g["target_value"].as_f64().map(|v| if s(g, "kind") == "lift_target" { format!(" {} {unit}", weight(v)) } else { format!(" {}", weight(v)) }).unwrap_or_default();
@@ -1215,10 +1336,13 @@ fn gym_months(o: &mut String, months: [Option<&Value>; 4], unit: &str) {
     let shown: Vec<String> = labels.iter().enumerate().map(|(i, label)| {
         let at = |x: &Vec<Value>| x.get(i).and_then(Value::as_f64).unwrap_or(0.0);
         let now = if i + 1 == labels.len() { " so far" } else { "" };
-        format!(
-            "{}{now}: {}, {} {unit} lifted, {} cardio minutes, {} km",
-            label.as_str().unwrap_or(""), plural(at(&n) as i64, "workout", "workouts"), weight(at(&v)), weight(at(&c)), (at(&d) * 100.0).round() / 100.0
-        )
+        let label = label.as_str().unwrap_or("");
+        let cardio = if at(&c) > 0.0 { format!("{} cardio minutes, {} km", weight(at(&c)), (at(&d) * 100.0).round() / 100.0) } else { "no cardio".into() };
+        match at(&n) as i64 {
+            0 if at(&c) == 0.0 => format!("{label}{now}: nothing in this Avex copy"),
+            0 => format!("{label}{now}: no workouts, {cardio}"),
+            n => format!("{label}{now}: {}, {} {unit} lifted, {cardio}", plural(n, "workout", "workouts"), weight(at(&v))),
+        }
     }).collect();
     let _ = writeln!(o, "\nMONTH BY MONTH (calendar months, oldest first): {}.", shown.join("; "));
 }
@@ -1227,13 +1351,17 @@ fn gym_sessions(payload: &Value, r: &Value, unit: &str, ctx: &Ctx) -> String {
     let today = ctx.today;
     let rows = list(r, "sessions");
     let mut o = String::new();
-    let _ = writeln!(o, "AVEX WORKOUTS, newest first (weights in {}). {}", if unit.is_empty() { "their unit" } else { unit }, today_line(today));
+    let _ = writeln!(o, "AVEX WORKOUTS, newest first (weights in {}). {} {AVEX_IS}", if unit.is_empty() { "their unit" } else { unit }, today_line(today));
     if let Some(lift) = payload["lift"].as_str().filter(|l| !l.trim().is_empty()) {
         let _ = writeln!(o, "Only workouts with {}.", lift.trim());
     }
     let total = int(r, "total");
     let from = payload["offset"].as_i64().unwrap_or(0);
-    let _ = writeln!(o, "{} in all; showing {} to {}.", plural(total, "workout", "workouts"), if rows.is_empty() { 0 } else { from + 1 }, from + rows.len() as i64);
+    if total == 0 {
+        let _ = writeln!(o, "No workouts in this Avex copy.");
+    } else {
+        let _ = writeln!(o, "{} in all; showing {} to {}.", plural(total, "workout", "workouts"), if rows.is_empty() { 0 } else { from + 1 }, from + rows.len() as i64);
+    }
     for x in rows {
         let _ = writeln!(o, "{}", session_line(x, unit, today));
     }
@@ -1246,7 +1374,7 @@ fn gym_session(r: &Value, ctx: &Ctx) -> String {
     let unit = s(r, "unit");
     let row = &r["row"];
     let mut o = String::new();
-    let _ = writeln!(o, "AVEX WORKOUT (weights in {unit}). {}", today_line(today));
+    let _ = writeln!(o, "AVEX WORKOUT (weights in {unit}), from their Avex export. {}", today_line(today));
     let _ = writeln!(o, "{}", session_line(row, unit, today));
     if !s(r, "journal").is_empty() {
         let _ = writeln!(o, "Journal: {}", s(r, "journal"));
@@ -1256,9 +1384,19 @@ fn gym_session(r: &Value, ctx: &Ctx) -> String {
             let _ = writeln!(o, "\n{}: skipped", s(e, "name"));
             continue;
         }
-        let mut head = format!("\n{}: {} {unit} volume", s(e, "name"), weight(num(e, "volume")));
-        if let Some(b) = e["best_e1rm"].as_f64() {
-            let _ = write!(head, ", best estimated 1-rep max {} {unit}", weight(b));
+        let (work, volume, warm) = working_sets(e);
+        let mut head = format!("\n{}: {}", s(e, "name"), work_phrase(&work, volume, unit));
+        if warm > 0 {
+            let _ = write!(head, " (plus {} not counted)", plural(warm as i64, "warm-up set", "warm-up sets"));
+        }
+        match e["best_e1rm"].as_f64() {
+            Some(b) => {
+                let _ = write!(head, ", best estimated 1-rep max {} {unit}", weight(b));
+            }
+            None if work.iter().any(|x| x["weight"].is_number()) && work.iter().filter(|x| x["weight"].is_number()).all(|x| int(x, "reps") > 12) => {
+                let _ = write!(head, ", {NO_E1RM}");
+            }
+            None => {}
         }
         if e["was_pr"] == true {
             head.push_str(", a RECORD");
@@ -1284,10 +1422,13 @@ fn gym_session(r: &Value, ctx: &Ctx) -> String {
     o
 }
 
-fn gym_lifts(r: &Value, ctx: &Ctx) -> String {
+fn gym_lifts(payload: &Value, r: &Value, ctx: &Ctx) -> String {
     let unit = s(r, "unit");
     let mut o = String::new();
-    let _ = writeln!(o, "AVEX LIFTS, done most first (weights in {unit}; best set ever, by estimated 1-rep max). {}", today_line(ctx.today));
+    let _ = writeln!(o, "AVEX LIFTS, done most first (weights in {unit}; best set ever, by estimated 1-rep max). {} {AVEX_IS}", today_line(ctx.today));
+    if list(r, "lifts").is_empty() {
+        let _ = writeln!(o, "No lifts in this Avex copy{}.", payload["query"].as_str().map(|q| format!(" matching \"{q}\"")).unwrap_or_default());
+    }
     lift_lines(&mut o, list(r, "lifts"), unit, ctx.today);
     o
 }
@@ -1301,6 +1442,10 @@ fn lift_lines(o: &mut String, rows: &[Value], unit: &str, today: Date) {
     if let Some((l, b)) = heaviest {
         let _ = writeln!(o, "Heaviest set of any lift: {} {} on {}.", s(l, "name"), set(&b["weight"], &b["reps"], unit), day_of(s(b, "day"), today));
     }
+    let high_rep: Vec<&str> = rows.iter().filter(|l| l.get("best").is_some_and(|b| b.is_object() && b["e1rm"].is_null())).map(|l| s(l, "name")).collect();
+    if !high_rep.is_empty() {
+        let _ = writeln!(o, "No estimated max, because every set was over 12 reps (never give these another lift's estimate): {}.", high_rep.join(", "));
+    }
     let mut changes: Vec<(&str, f64)> = rows.iter().filter_map(|l| Some((s(l, "name"), l["change_pct"].as_f64()?))).collect();
     changes.sort_by(|a, b| b.1.total_cmp(&a.1));
     if !changes.is_empty() {
@@ -1313,11 +1458,15 @@ fn gym_lift(r: &Value, ctx: &Ctx) -> String {
     let today = ctx.today;
     let unit = s(r, "unit");
     let mut o = String::new();
-    let _ = writeln!(o, "AVEX LIFT HISTORY (weights in {unit}). {}", today_line(today));
+    let _ = writeln!(o, "AVEX LIFT HISTORY (weights in {unit}), from their Avex export. {}", today_line(today));
     let _ = writeln!(o, "{}", lift_line(&r["row"], unit, today));
     let _ = writeln!(o, "\nEACH WORKOUT, newest first (heaviest working set, estimated 1-rep max, sets, volume):");
     for p in list(r, "history") {
-        let e1rm = p["e1rm"].as_f64().map(|e| format!(", estimated 1-rep max {} {unit}", weight(e))).unwrap_or_default();
+        let e1rm = match p["e1rm"].as_f64() {
+            Some(e) => format!(", estimated 1-rep max {} {unit}", weight(e)),
+            None if p["top_weight"].is_number() => ", no estimated max (over 12 reps)".into(),
+            None => String::new(),
+        };
         let record = if p["record"] == true { ", a RECORD" } else { "" };
         let _ = writeln!(
             o, "- {} ({}): {}{e1rm}, {}, {} {unit} volume{record}",
@@ -1345,18 +1494,95 @@ fn cardio_line(x: &Value, today: Date) -> String {
     line
 }
 
-fn gym_cardio(r: &Value, ctx: &Ctx) -> String {
+/// How many entries gym.cardio gives when its payload names no limit.
+const CARDIO_LIMIT: u64 = 50;
+/// How many the gym summary reads, so its months are whole.
+const SUMMARY_CARDIO: u64 = 1000;
+
+/// "5 runs", "1 bike ride", "2 rowing sessions": Avex's cardio kind counted.
+fn cardio_count(kind: &str, n: i64) -> String {
+    match kind.trim().to_ascii_lowercase().as_str() {
+        k @ ("run" | "walk" | "swim" | "hike") => plural(n, k, &format!("{k}s")),
+        "bike" | "ride" | "cycling" => plural(n, "bike ride", "bike rides"),
+        "" => plural(n, "cardio session", "cardio sessions"),
+        k => plural(n, &format!("{k} session"), &format!("{k} sessions")),
+    }
+}
+
+/// Minutes as "41 min" or "2 h 41 min".
+fn duration(minutes: i64) -> String {
+    match (minutes / 60, minutes % 60) {
+        (0, m) => format!("{m} min"),
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m} min"),
+    }
+}
+
+/// Cardio counted month by month, oldest first, each kind on its own: "- August: 5 runs, 2 h 41
+/// min, 26.1 km". A small model miscounts a month's runs from a list. `partial` when the entries
+/// were cut at a limit, so the oldest month may be missing some.
+fn cardio_months(o: &mut String, rows: &[Value], partial: bool, today: Date) {
+    // (year, month) → each kind's (name, count, minutes, km), in the order first met.
+    type Kinds = Vec<(String, i64, i64, f64)>;
+    let mut months: BTreeMap<(i16, i8), Kinds> = BTreeMap::new();
+    for x in rows.iter().filter(|x| s(x, "kind") != "rest") {
+        let Some(d) = date(s(x, "day")) else { continue };
+        let kinds = months.entry((d.year(), d.month())).or_default();
+        let kind = s(x, "kind").trim().to_ascii_lowercase();
+        let at = match kinds.iter().position(|k| k.0 == kind) {
+            Some(i) => i,
+            None => {
+                kinds.push((kind, 0, 0, 0.0));
+                kinds.len() - 1
+            }
+        };
+        kinds[at].1 += 1;
+        kinds[at].2 += int(x, "minutes");
+        kinds[at].3 += num(x, "distance_km");
+    }
+    if months.is_empty() {
+        return;
+    }
+    let _ = writeln!(o, "\nCARDIO BY MONTH (calendar months, oldest first; each run counted; a month not listed has no cardio in this Avex copy):");
+    let oldest = months.keys().next().copied();
+    for ((year, month), mut kinds) in months {
+        kinds.sort_by_key(|k| std::cmp::Reverse(k.1));
+        let cells: Vec<String> = kinds.iter().map(|(kind, n, minutes, km)| {
+            let mut cell = format!("{}, {}", cardio_count(kind, *n), duration(*minutes));
+            if *km > 0.0 {
+                let _ = write!(cell, ", {} km", (km * 100.0).round() / 100.0);
+            }
+            cell
+        }).collect();
+        let first = jiff::civil::date(year, month, 1);
+        let name = if year == today.year() { first.strftime("%B").to_string() } else { first.strftime("%B %Y").to_string() };
+        let now = if year == today.year() && month == today.month() { " so far" } else { "" };
+        let cut = if partial && oldest == Some((year, month)) { " (older entries were not read, so this month may have more)" } else { "" };
+        let _ = writeln!(o, "- {name}{now}: {}{cut}", cells.join("; "));
+    }
+}
+
+fn gym_cardio(payload: &Value, r: &Value, ctx: &Ctx) -> String {
     let rows = list(r, "entries");
     let mut o = String::new();
-    let _ = writeln!(o, "AVEX CARDIO AND REST DAYS, newest first. {}", today_line(ctx.today));
+    let _ = writeln!(o, "AVEX CARDIO AND REST DAYS, newest first. {} {AVEX_IS}", today_line(ctx.today));
+    if rows.is_empty() {
+        let _ = writeln!(o, "No cardio and no rest days in this Avex copy.");
+        return o;
+    }
     let moving: Vec<&Value> = rows.iter().filter(|x| s(x, "kind") != "rest").collect();
     let km: f64 = moving.iter().filter_map(|x| x["distance_km"].as_f64()).sum();
+    let limit = payload["limit"].as_u64().unwrap_or(CARDIO_LIMIT) as usize;
+    let partial = rows.len() >= limit;
     let _ = writeln!(
-        o, "{}, {} minutes, {} km in all{}.",
+        o, "{}, {} minutes, {} km in all{}{}.",
         plural(moving.len() as i64, "cardio session", "cardio sessions"), moving.iter().map(|x| int(x, "minutes")).sum::<i64>(),
         (km * 100.0).round() / 100.0,
-        match rows.len() - moving.len() { 0 => String::new(), n => format!("; {} rest days", n) }
+        match rows.len() - moving.len() { 0 => String::new(), n => format!("; {} rest days", n) },
+        if partial { format!(" (the newest {} entries only: a larger limit reads older ones)", rows.len()) } else { String::new() }
     );
+    cardio_months(&mut o, rows, partial, ctx.today);
+    let _ = writeln!(o, "\nEACH ENTRY:");
     for x in rows {
         let _ = writeln!(o, "{}", cardio_line(x, ctx.today));
     }
@@ -1367,7 +1593,7 @@ fn gym_series(payload: &Value, r: &Value) -> String {
     let labels: Vec<&str> = list(r, "labels").iter().map(|l| l.as_str().unwrap_or("")).collect();
     let mut o = String::new();
     let lift = r["lift"].as_str().map(|l| format!(" of {l}")).unwrap_or_default();
-    let _ = writeln!(o, "AVEX {}{lift} by {} (chart numbers, in {}).", s(r, "measure").replace('_', " ").to_ascii_uppercase(), s(r, "by"), s(r, "unit"));
+    let _ = writeln!(o, "AVEX {}{lift} by {} (chart numbers, in {}). {AVEX_IS}", s(r, "measure").replace('_', " ").to_ascii_uppercase(), s(r, "by"), s(r, "unit"));
     for series in list(r, "series") {
         let values: Vec<String> = list(series, "values").iter().zip(&labels)
             .map(|(v, l)| format!("{l} {}", v.as_f64().map_or_else(|| "none".into(), weight)))
@@ -1439,7 +1665,7 @@ mod tests {
     fn a_month_of_entries_names_its_totals_and_extremes() {
         let text = render("money.tx.list", &json!({}), &page(), &[], &ctx()).unwrap();
         for want in [
-            "TALLY ENTRIES for October 2026 (Oct 1 to Oct 31), this month. Today is Thursday, October 15, 2026 (2026-10-15). Amounts are in CAD.",
+            "TALLY ENTRIES for October 2026 (Oct 1 to Oct 31), this month. Today is Thursday, October 15, 2026 (2026-10-15). Amounts are in CAD. Only what the person has logged in their Tally app: not their bank, not everything they did.\n",
             "6 entries: 4 expenses, 1 income, 1 transfer.",
             "- Spent (all expenses added up): $1,549.11",
             "- Income: $2,150.00",
@@ -1494,7 +1720,7 @@ mod tests {
         let extras = [Some(page()), Some(last), None, Some(spending), Some(income), None, Some(lists)];
         let text = render("money.summary", &json!({}), &summary(), &extras, &ctx()).unwrap();
         for want in [
-            "TALLY (budget app). Today is Thursday, October 15, 2026 (2026-10-15). Amounts are in CAD.",
+            "TALLY (budget app). Today is Thursday, October 15, 2026 (2026-10-15). Amounts are in CAD. Only what the person has logged in their Tally app: not their bank, not everything they did.\n",
             "THIS MONTH: October 2026 (Oct 1 to Oct 31), day 15 of 31, 17 days left counting today.",
             "- Spent so far (all expenses): $2,425.26",
             "- Monthly budget: $2,900.00. Left to spend: $474.74 (83.6% of the budget used).",
@@ -1503,22 +1729,22 @@ mod tests {
             "- Compared with last month at the same day: last month had spent $90.00 by Tue Sep 15 (its day 15); this month $2,425.26: $2,335.26 MORE than last month by this day.",
             "- Dining: $336.61 of $320.00. OVER BUDGET by $16.61.",
             "- Groceries: $382.17 of $500.00. NOT over budget: $117.83 left. Over pace by $140.23.",
-            "- Entertainment: $0.00 of $80.00. NOT over budget: $80.00 left. Under pace by $38.71.",
+            "- Entertainment: none logged in Tally this month, budget $80.00. NOT over budget: $80.00 left. Under pace by $38.71.",
             "- money.tx.list's period_offset: 0 = October 2026, -1 = September 2026.",
-            "- Weeks before (Monday to Sunday): Mon Sep 28 to Sun Oct 4: $1,364.98; Mon Sep 21 to Sun Sep 27: $0.00;",
+            "- Weeks before (Monday to Sunday): Mon Sep 28 to Sun Oct 4: $1,364.98; Mon Sep 21 to Sun Sep 27: none logged in Tally;",
             "- Housing: $1,350.00 (1)",
             "Biggest expenses this month: 1. $1,350.00, Rent (Housing), Thu Oct 1; 2. $157.99",
             "Smallest expense this month: $14.98, no note (Dining), Fri Oct 2.",
             "DATES (\"Wednesday\" or \"last Saturday\" is the most recent one): today Thursday Oct 15 = 2026-10-15; yesterday Wednesday Oct 14 = 2026-10-14; Tuesday Oct 13 = 2026-10-13; Monday Oct 12 = 2026-10-12; last Sunday Oct 11 = 2026-10-11; last Saturday Oct 10 = 2026-10-10; last Friday Oct 9 = 2026-10-09.",
             "- Spent today, Thursday Oct 15: $26.14 on 1 expense",
-            "- Spent yesterday, Wednesday Oct 14: nothing spent",
+            "- Spent yesterday, Wednesday Oct 14: none logged in Tally",
             "- This week so far (Mon Oct 12 to today): $26.14 on 1 expense",
             "- Last week (Mon Oct 5 to Sun Oct 11): $157.99 on 1 expense",
             "LAST MONTH: September 2026 (Sep 1 to Sep 30).",
-            "- Spent: $90.00. Income: $0.00.",
-            "MONTH BY MONTH (budget periods, oldest first): August: nothing recorded; September: spent $3,643.52, income $6,450.00; October so far: spent $2,425.26, income $2,150.00.",
+            "- Spent: $90.00. Income: none logged in Tally.",
+            "MONTH BY MONTH (budget periods, oldest first): August: none logged in Tally; September: spent $3,643.52, income $6,450.00; October so far: spent $2,425.26, income $2,150.00.",
             "- Dining: September $90.00; October so far $41.12; these 2 months together $131.12",
-            "- Housing: September $0.00; October so far $1,350.00",
+            "- Housing: September none logged in Tally; October so far $1,350.00",
             "- Visa (credit card): -$3,078.67 owed",
             "- NET WORTH, all accounts together: $22,264.30",
             "- Hydro: $78.40 on Sun Oct 18 (in 3 days)",
@@ -1532,17 +1758,95 @@ mod tests {
         // Without its extras it still reads, without the parts they give.
         let bare = render("money.summary", &json!({}), &summary(), &[None, None], &ctx()).unwrap();
         assert!(!bare.contains("LAST MONTH") && bare.contains("NET WORTH"));
+        assert!(!text.lines().any(|l| l.ends_with(": $0.00")), "nothing logged reads as such, not as $0.00:\n{text}");
         assert!(!text.contains("account_id"), "ids are money.lists' to give, with which account is which");
     }
 
     #[test]
-    fn lists_give_the_ids_writes_take() {
-        let lists = json!({"currency": "CAD", "net_worth": 100, "accounts": [{"id": 1, "name": "Chequing", "type": "CHEQUING", "balance": 100, "archived": false}],
-                           "categories": [{"id": 2, "name": "Dining", "kind": "EXPENSE", "archived": false}, {"id": 14, "name": "Salary", "kind": "INCOME", "archived": false}]});
+    fn lists_give_the_names_and_ids_writes_take() {
+        let lists = json!({"currency": "CAD", "net_worth": 100,
+                           "accounts": [{"id": 1, "name": "Chequing", "type": "CHEQUING", "balance": 100, "archived": false, "institution": ""},
+                                        {"id": 6, "name": "WS TFSA", "type": "INVESTMENT", "balance": 0, "archived": false, "registration": "TFSA", "institution": "wealthsimple "}],
+                           "categories": [{"id": 2, "name": "Dining", "kind": "EXPENSE", "archived": false}, {"id": 3, "name": "Transport", "kind": "EXPENSE", "archived": false},
+                                          {"id": 10, "name": "Subscriptions", "kind": "EXPENSE", "archived": false}, {"id": 11, "name": "Travel", "kind": "EXPENSE", "archived": false},
+                                          {"id": 20, "name": "Climbing", "kind": "EXPENSE", "archived": false}, {"id": 14, "name": "Salary", "kind": "INCOME", "archived": false}]});
         let text = render("money.lists", &json!({}), &lists, &[], &ctx()).unwrap();
-        assert!(text.contains("- 1: Chequing, chequing, $1.00"), "{text}");
-        assert!(text.contains("EXPENSE CATEGORIES (category_id: name): 2: Dining"), "{text}");
-        assert!(text.contains("INCOME CATEGORIES (category_id: name): 14: Salary"), "{text}");
+        for want in [
+            "TALLY ACCOUNTS AND CATEGORIES (as set up in their Tally app) for money.tx.add and money.tx.update: each name, with its id beside it.",
+            "- Chequing (account_id 1): chequing, balance $1.00\n",
+            "- WS TFSA (account_id 6): investment, balance $0.00; filled from Wealthsimple's files: don't record activity here, the next export brings it",
+            "EXPENSE CATEGORIES (name (category_id): what goes there):\n- Dining (category_id 2): restaurants, cafés, coffee, lunch, takeout, bars\n",
+            "- Transport (category_id 3): transit, bus, metro, Bixi, taxi, Uber, gas, parking",
+            "- Subscriptions (category_id 10): streaming and app plans, memberships billed every month",
+            "- Travel (category_id 11): flights, hotels, trips away from home",
+            "- Climbing (category_id 20)\n",
+            "INCOME CATEGORIES (name (category_id): what goes there):\n- Salary (category_id 14): pay from an employer",
+        ] {
+            assert!(text.contains(want), "missing {want:?} in\n{text}");
+        }
+        // Every default category has its examples, and nothing else does.
+        for c in &relay_money::model::DEFAULT_CATEGORIES {
+            assert!(category_examples(c.name).is_some(), "{}", c.name);
+        }
+        assert_eq!(CATEGORY_EXAMPLES.len(), relay_money::model::DEFAULT_CATEGORIES.len());
+    }
+
+    #[test]
+    fn wealthsimple_accounts_say_not_to_record_activity_wherever_they_appear() {
+        let mut s = summary();
+        s["accounts"].as_array_mut().unwrap().push(json!({"id": 7, "name": "WS TFSA", "type": "INVESTMENT", "balance": 500000, "archived": false, "registration": "TFSA", "institution": "Wealthsimple"}));
+        let text = render("money.summary", &json!({}), &s, &[], &ctx()).unwrap();
+        assert!(text.contains("- WS TFSA (investment, TFSA, at Wealthsimple): $5,000.00; filled from Wealthsimple's files: don't record activity here, the next export brings it"), "{text}");
+        assert_eq!(text.matches("filled from Wealthsimple").count(), 1, "one clause per account: {text}");
+        let portfolio = json!({"currency": "CAD", "empty": false, "value": 500000, "book": 400000, "gain": 100000,
+                               "accounts": [{"id": 7, "name": "WS TFSA", "registration": "TFSA", "institution": "Wealthsimple", "value": 500000, "book": 400000, "gain": 100000, "cash": 0, "holdings": 2},
+                                            {"id": 8, "name": "Desjardins RRSP", "registration": "RRSP", "institution": "Desjardins", "value": 0, "book": 0, "gain": 0, "cash": 0, "holdings": 0}]});
+        let text = render("money.invest.summary", &json!({}), &portfolio, &[None], &ctx()).unwrap();
+        assert!(text.contains("- WS TFSA (TFSA, Wealthsimple): value $5,000.00, cost $4,000.00, gain $1,000.00, cash $0.00, 2 holdings; filled from Wealthsimple's files"), "{text}");
+        assert_eq!(text.matches("filled from Wealthsimple").count(), 1, "{text}");
+        let lists = json!({"accounts": [{"id": 7, "name": "WS TFSA", "type": "INVESTMENT", "archived": false, "institution": "Wealthsimple"},
+                                        {"id": 8, "name": "Desjardins RRSP", "type": "INVESTMENT", "archived": false, "institution": "Desjardins"}]});
+        let activity = json!({"activities": [{"id": 3, "account_id": 7, "account": "WS TFSA", "type": "BUY", "date": "2026-10-01", "symbol": "XEQT", "quantity": 200_000_000, "amount": 7624, "fee": 0, "currency": "CAD", "note": ""}]});
+        assert_eq!(extras("money.invest.list", &activity).len(), 1);
+        let text = render("money.invest.list", &json!({}), &activity, &[Some(lists)], &ctx()).unwrap();
+        assert!(text.contains("- WS TFSA: filled from Wealthsimple's files: don't record activity here, the next export brings it."), "{text}");
+        assert!(!text.contains("Desjardins"), "{text}");
+    }
+
+    #[test]
+    fn nothing_logged_reads_as_nothing_logged_not_as_nothing_done() {
+        let mut r = summary();
+        r["income"] = json!(0);
+        r["bills"] = json!([]);
+        r["goals"] = json!([]);
+        let empty = json!({"period": {"start": "2026-10-01", "end_exclusive": "2026-11-01"}, "transactions": []});
+        let text = render("money.summary", &json!({}), &r, &[Some(empty.clone())], &ctx()).unwrap();
+        for want in [
+            "- Income so far: none logged in Tally\n", "SPENDING BY CATEGORY THIS MONTH (every category, largest first; entries in brackets):\n- none logged in Tally this month\n",
+            "Entries this month: none logged in Tally yet.", "BILLS TO PAY: none set up in Tally.", "GOALS: none set up in Tally.",
+        ] {
+            assert!(text.contains(want), "missing {want:?} in\n{text}");
+        }
+        let text = render("money.tx.list", &json!({"period_offset": -1}), &empty, &[], &ctx()).unwrap();
+        assert!(text.contains("No entries: none logged in Tally in October 2026 (Oct 1 to Oct 31)."), "{text}");
+        let text = render("money.tx.list", &json!({"query": "Provigo"}), &empty, &[], &ctx()).unwrap();
+        assert!(text.contains("No entries: none logged in Tally in October 2026 (Oct 1 to Oct 31) that matches."), "{text}");
+        let text = render("money.invest.list", &json!({}), &json!({"activities": []}), &[], &ctx()).unwrap();
+        assert!(text.contains("No activities: none logged in Tally."), "{text}");
+        let series = json!({"measure": "income", "by": "period", "labels": ["September", "October"], "series": [{"name": "Income", "values": [0, 0]}]});
+        let text = render("money.series", &json!({"measure": "income"}), &series, &[], &ctx()).unwrap();
+        assert!(text.contains("- Income: September none logged in Tally; October none logged in Tally. Total none logged in Tally."), "{text}");
+        let text = render("gym.sessions", &json!({}), &json!({"sessions": [], "total": 0}), &[], &ctx()).unwrap();
+        assert!(text.contains("Only what their Avex export holds: not everything they did.\nNo workouts in this Avex copy."), "{text}");
+        let text = render("gym.cardio", &json!({}), &json!({"entries": []}), &[], &ctx()).unwrap();
+        assert!(text.contains("No cardio and no rest days in this Avex copy."), "{text}");
+        let text = render("gym.lifts", &json!({"query": "curl"}), &json!({"unit": "lb", "lifts": []}), &[], &ctx()).unwrap();
+        assert!(text.contains("No lifts in this Avex copy matching \"curl\"."), "{text}");
+        let r = json!({"imported": {"exported_at": "2026-10-08 21:14"}, "unit": "lb", "totals": {"sessions": 2, "cardio": 0}, "goals": []});
+        let text = render("gym.summary", &json!({}), &r, &[None, Some(json!({"entries": []}))], &ctx()).unwrap();
+        for want in ["lb lifted, no cardio in this Avex copy.", "Cardio in all: no cardio in this Avex copy.", "OPEN GOALS: none in this Avex copy."] {
+            assert!(text.contains(want), "missing {want:?} in\n{text}");
+        }
     }
 
     #[test]
@@ -1596,18 +1900,25 @@ mod tests {
         let mut pull_up = lift("Pull-up", None);
         pull_up["best_reps"] = json!(12);
         let lifts = json!({"unit": "lb", "lifts": [lift("Bench Press", Some(215.0)), lift("Deadlift", Some(335.0)), lift("Dips", None), pull_up]});
-        let cardio = json!({"entries": [{"day": "2026-10-03", "time": "08:00", "kind": "run", "minutes": 36, "distance_km": 5.65, "effort": "easy", "note": ""}]});
-        let month = |values: [f64; 2]| json!({"labels": ["Sep", "Oct"], "series": [{"values": values}]});
-        let detail = json!({"row": session(149, "2026-10-08"), "exercises": [{"name": "Back Squat", "sets": [{"weight": 142.0, "reps": 8, "kind": "warmup"}, {"weight": 285.0, "reps": 5, "kind": "work"}, {"weight": 285.0, "reps": 4, "kind": "work"}]}]});
+        let cardio = json!({"entries": [{"day": "2026-10-03", "time": "08:00", "kind": "run", "minutes": 36, "distance_km": 5.65, "effort": "easy", "note": ""},
+                                        {"day": "2026-08-30", "time": "08:00", "kind": "rest", "minutes": 0, "distance_km": null, "effort": "", "note": ""},
+                                        {"day": "2026-08-20", "time": "08:00", "kind": "run", "minutes": 35, "distance_km": 5.5, "effort": "", "note": ""},
+                                        {"day": "2026-08-12", "time": "08:00", "kind": "Bike", "minutes": 40, "distance_km": 15.0, "effort": "", "note": ""},
+                                        {"day": "2026-08-05", "time": "08:00", "kind": "run", "minutes": 30, "distance_km": 5.0, "effort": "", "note": ""}]});
+        let month = |values: [f64; 2]| json!({"labels": ["Aug", "Sep", "Oct"], "series": [{"values": [0.0, values[0], values[1]]}]});
+        let detail = json!({"row": session(149, "2026-10-08"), "exercises": [
+            {"name": "Back Squat", "sets": [{"weight": 142.0, "reps": 8, "kind": "warmup"}, {"weight": 285.0, "reps": 5, "kind": "work"}, {"weight": 285.0, "reps": 4, "kind": "work"}]},
+            {"name": "Leg Press", "volume": 3990.0, "sets": [{"weight": 285.0, "reps": 5, "kind": "work"}, {"weight": 285.0, "reps": 5, "kind": "work"}, {"weight": 285.0, "reps": 4, "kind": "work"}]},
+            {"name": "Dips", "volume": 0.0, "sets": [{"weight": null, "reps": 14, "kind": "work"}]}]});
         let sessions = json!({"sessions": [session(149, "2026-10-08"), session(147, "2026-10-05"), session(146, "2026-10-02")], "total": 3});
         let extras = [Some(lifts), Some(cardio), Some(month([15.0, 5.0])), Some(month([180000.0, 60000.0])), Some(month([0.0, 36.0])), Some(month([0.0, 5.65])), Some(sessions), Some(detail)];
         let text = render("gym.summary", &json!({}), &r, &extras, &ctx()).unwrap();
         for want in [
-            "AVEX (gym app; weights in lb). Today is Thursday, October 15, 2026 (2026-10-15).",
+            "AVEX (gym app; weights in lb). Today is Thursday, October 15, 2026 (2026-10-15). Only what their Avex export holds: not everything they did.\n",
             "exported from the phone on Thu Oct 8 at 21:14 (7 days ago): anything logged after that is not here.",
             "ALL TIME (Mon Jul 13 to Thu Oct 8): 48 workouts, 561 sets, 622,650 lb lifted, 12 cardio sessions (366 minutes).",
-            "THIS WEEK (Mon Oct 12 to today): 0 workouts, 0 sets",
-            "LAST WEEK (Mon Oct 5 to Sun Oct 11): 3 workouts, 36 sets, 46,405 lb lifted, 129 active minutes, 0 cardio minutes. Workouts: Mon Oct 5 Legs A; Thu Oct 8 Legs A.",
+            "THIS WEEK (Mon Oct 12 to today), so far: no workouts in this Avex copy, no cardio.",
+            "LAST WEEK (Mon Oct 5 to Sun Oct 11): 3 workouts, 36 sets, 46,405 lb lifted, 129 active minutes, no cardio. Workouts: Mon Oct 5 Legs A; Thu Oct 8 Legs A.",
             "TODAY: no workout in this copy. It was exported on Thu Oct 8 at 21:14 (7 days ago), so a workout logged after that would not be here.",
             "These are the only lifts ever logged: Bench Press, Deadlift, Dips, Pull-up. Any other lift has never been logged.",
             "Last workout: Thu Oct 8 (7 days ago).",
@@ -1615,12 +1926,16 @@ mod tests {
             "- Thu Oct 8 18:32 (7 days ago): Legs A, 44 min, 12 sets, 26,185 lb lifted, 4 records; lifts: Back Squat, Leg Press; felt good [id 149]",
             "- Deadlift: best set 335 lb x 5 (152 kg) on Mon Oct 5, estimated 1-rep max 250.8 lb (113.8 kg)",
             "- Dips: bodyweight or timed only",
-            "- Pull-up: bodyweight, no weighted best set; most reps in one set: 12;",
+            "- Pull-up: bodyweight, no weighted best set, so no estimated max; most reps in one set: 12;",
             "Most improved first (estimated max, last 4 weeks vs the 4 before): Bench Press +4.9%",
-            "Cardio in all: 1 session, 36 minutes, 5.65 km.",
-            "MONTH BY MONTH (calendar months, oldest first): Sep: 15 workouts, 180,000 lb lifted, 0 cardio minutes, 0 km; Oct so far: 5 workouts, 60,000 lb lifted, 36 cardio minutes, 5.65 km.",
-            "LAST WORKOUT IN DETAIL (Thu Oct 8, Legs A: 12 sets in all, 26,185 lb lifted in all):",
-            "- Back Squat: 2 working sets (285 lb x 5, 285 lb x 4), plus 1 warm-up set not counted",
+            "Cardio in all: 4 sessions, 141 minutes, 31.15 km.",
+            "MONTH BY MONTH (calendar months, oldest first): Aug: nothing in this Avex copy; Sep: 15 workouts, 180,000 lb lifted, no cardio; Oct so far: 5 workouts, 60,000 lb lifted, 36 cardio minutes, 5.65 km.",
+            "OPEN GOALS:\n- lift target bench",
+            "LAST WORKOUT IN DETAIL (Thu Oct 8, Legs A: 12 sets in all, 26,185 lb lifted in all). A lift's volume is weight x reps added up over its working sets; warm-ups are not counted:",
+            "- Back Squat: 2 working sets, volume 2,565 lb; 285 lb x 5, 285 lb x 4; plus 1 warm-up set not counted\n",
+            "- Leg Press: 3 working sets, volume 3,990 lb; 285 lb x 5, 285 lb x 5, 285 lb x 4\n",
+            "- Dips: 1 working set; bodyweight x 14\n",
+            "CARDIO BY MONTH (calendar months, oldest first; each run counted; a month not listed has no cardio in this Avex copy):\n- August: 2 runs, 1 h 5 min, 10.5 km; 1 bike ride, 40 min, 15 km\n- October so far: 1 run, 36 min, 5.65 km\n",
             "Heaviest set of any lift: Deadlift 335 lb x 5 on Mon Oct 5.",
             "- lift target bench 225 lb, set Mon Jul 13 \"Two plates\"",
         ] {
@@ -1640,9 +1955,10 @@ mod tests {
         assert!(text.contains("1 workout the person excluded in Avex (untracked) is not counted."), "{text}");
         assert!(text.contains("- lift target bench 225 lb, set Mon Jul 13; best so far 215 lb x 5 on Mon Oct 5, estimated 1-rep max 250.8 lb"), "{text}");
         let detail = json!({"row": session(149, "2026-10-08"), "unit": "lb", "older_id": 148, "newer_id": null,
-                            "exercises": [{"name": "Bench Press", "volume": 3010.0, "sets": [], "previous": {"day": "2026-10-02", "top_weight": 190.0, "top_reps": 8}}]});
+                            "exercises": [{"name": "Bench Press", "volume": 3010.0, "sets": [{"weight": 215.0, "reps": 7, "kind": "work"}, {"weight": 215.0, "reps": 7, "kind": "work"}],
+                                           "previous": {"day": "2026-10-02", "top_weight": 190.0, "top_reps": 8}}]});
         let text = render("gym.session.get", &json!({"id": 149}), &detail, &[], &ctx()).unwrap();
-        assert!(text.contains("Bench Press: 3,010 lb volume; the time before, Fri Oct 2: 190 lb x 8"), "{text}");
+        assert!(text.contains("Bench Press: 2 working sets, volume 3,010 lb; the time before, Fri Oct 2: 190 lb x 8"), "{text}");
     }
 
     #[test]
@@ -1655,13 +1971,67 @@ mod tests {
                                            "sets": [{"weight": 142.0, "reps": 8, "rpe": null, "kind": "warmup", "best": false}, {"weight": 285.0, "reps": 5, "rpe": 8.0, "kind": "work", "best": true}]},
                                           {"name": "Dips", "skipped": false, "was_pr": false, "difficulty": "", "volume": 0.0, "best_e1rm": null, "sets": [{"weight": null, "reps": 14, "kind": "work"}]}]});
         let text = render("gym.session.get", &json!({"id": 149}), &detail, &[], &ctx()).unwrap();
-        for want in ["Journal: Gym was packed", "Back Squat: 3,990 lb volume, best estimated 1-rep max 332.5 lb, a RECORD, felt easy", "  set 2: 285 lb x 5 (work), RPE 8, best set", "  set 1: bodyweight x 14 (work)"] {
+        for want in [
+            "Journal: Gym was packed", "Back Squat: 1 working set, volume 3,990 lb (plus 1 warm-up set not counted), best estimated 1-rep max 332.5 lb, a RECORD, felt easy",
+            "  set 2: 285 lb x 5 (work), RPE 8, best set", "\nDips: 1 working set\n", "  set 1: bodyweight x 14 (work)",
+        ] {
             assert!(text.contains(want), "missing {want:?} in\n{text}");
         }
         let cardio = json!({"entries": [{"day": "2026-10-03", "time": "08:00", "kind": "run", "minutes": 36, "distance_km": 5.65, "effort": "easy", "note": ""},
                                         {"day": "2026-10-04", "time": "", "kind": "rest", "minutes": 0, "distance_km": null, "effort": "", "note": ""}]});
         let text = render("gym.cardio", &json!({}), &cardio, &[], &ctx()).unwrap();
         assert!(text.contains("1 cardio session, 36 minutes, 5.65 km in all; 1 rest days.") && text.contains("- Sat Oct 3 08:00: run, 36 min, 5.65 km, easy"), "{text}");
+        assert!(text.contains("CARDIO BY MONTH (calendar months, oldest first; each run counted; a month not listed has no cardio in this Avex copy):\n- October so far: 1 run, 36 min, 5.65 km\n"), "{text}");
+    }
+
+    #[test]
+    fn cardio_is_counted_month_by_month_and_says_when_the_list_was_cut() {
+        let run = |day: &str, minutes: i64, km: f64| json!({"day": day, "time": "07:00", "kind": "run", "minutes": minutes, "distance_km": km, "effort": "", "note": ""});
+        let mut entries = vec![run("2026-09-02", 30, 5.0), json!({"day": "2026-08-31", "time": "", "kind": "swim", "minutes": 25, "distance_km": null, "effort": "", "note": ""})];
+        entries.extend([("2026-08-29", 32, 5.2), ("2026-08-22", 35, 5.4), ("2026-08-15", 31, 5.1), ("2026-08-08", 33, 5.3), ("2026-08-01", 30, 5.1)].map(|(d, m, k)| run(d, m, k)));
+        entries.push(json!({"day": "2025-12-30", "time": "", "kind": "elliptical", "minutes": 20, "distance_km": null, "effort": "", "note": ""}));
+        let r = json!({"entries": entries});
+        let text = render("gym.cardio", &json!({}), &r, &[], &ctx()).unwrap();
+        for want in [
+            "- December 2025: 1 elliptical session, 20 min\n",
+            "- August: 5 runs, 2 h 41 min, 26.1 km; 1 swim, 25 min\n",
+            "- September: 1 run, 30 min, 5 km\n",
+        ] {
+            assert!(text.contains(want), "missing {want:?} in\n{text}");
+        }
+        assert!(!text.contains("may have more"), "{text}");
+        // Cut at the limit asked: the oldest month may be missing entries, and says so.
+        let cut = render("gym.cardio", &json!({"limit": 8}), &r, &[], &ctx()).unwrap();
+        assert!(cut.contains("(the newest 8 entries only: a larger limit reads older ones)"), "{cut}");
+        assert!(cut.contains("- December 2025: 1 elliptical session, 20 min (older entries were not read, so this month may have more)"), "{cut}");
+        assert_eq!(duration(60), "1 h");
+    }
+
+    #[test]
+    fn a_lift_done_only_over_12_reps_says_it_has_no_estimated_max() {
+        let mut lateral = lift("Lateral Raise", Some(45.0));
+        lateral["best"]["reps"] = json!(15);
+        lateral["best"]["e1rm"] = Value::Null;
+        lateral["change_pct"] = Value::Null;
+        let lifts = json!({"unit": "lb", "lifts": [lift("Bench Press", Some(215.0)), lateral.clone()]});
+        let text = render("gym.lifts", &json!({}), &lifts, &[], &ctx()).unwrap();
+        for want in [
+            "- Lateral Raise: best set 45 lb x 15 (20.4 kg) on Mon Oct 5, no estimated max: every set was over 12 reps (an estimate needs a set of 1 to 12 reps); done in",
+            "No estimated max, because every set was over 12 reps (never give these another lift's estimate): Lateral Raise.",
+        ] {
+            assert!(text.contains(want), "missing {want:?} in\n{text}");
+        }
+        let r = json!({"imported": {"exported_at": "2026-10-08 21:14"}, "unit": "lb", "totals": {}});
+        let summary = render("gym.summary", &json!({}), &r, &[Some(lifts)], &ctx()).unwrap();
+        assert!(summary.contains("- Lateral Raise: best set 45 lb x 15 (20.4 kg) on Mon Oct 5, no estimated max: every set was over 12 reps"), "{summary}");
+        let detail = json!({"row": lateral, "unit": "lb", "history": [{"day": "2026-10-05", "session_id": 147, "top_weight": 45.0, "top_reps": 15, "e1rm": null, "sets": 3, "volume": 2025.0, "record": false}]});
+        let text = render("gym.lift.get", &json!({"name": "lateral"}), &detail, &[], &ctx()).unwrap();
+        assert!(text.contains("- Lateral Raise: best set 45 lb x 15 (20.4 kg) on Mon Oct 5, no estimated max: every set was over 12 reps"), "{text}");
+        assert!(text.contains("- Mon Oct 5 (10 days ago): 45 lb x 15, no estimated max (over 12 reps), 3 sets, 2,025 lb volume"), "{text}");
+        let workout = json!({"row": session(147, "2026-10-05"), "unit": "lb",
+                             "exercises": [{"name": "Lateral Raise", "volume": 2025.0, "best_e1rm": null, "sets": [{"weight": 45.0, "reps": 15, "kind": "work"}, {"weight": 45.0, "reps": 15, "kind": "work"}, {"weight": 45.0, "reps": 15, "kind": "work"}]}]});
+        let text = render("gym.session.get", &json!({"id": 147}), &workout, &[], &ctx()).unwrap();
+        assert!(text.contains("Lateral Raise: 3 working sets, volume 2,025 lb, no estimated max: every set was over 12 reps"), "{text}");
     }
 
     #[test]
@@ -1669,6 +2039,9 @@ mod tests {
         let series = json!({"currency": "CAD", "measure": "spending", "by": "week", "labels": ["Week 1", "Week 2"], "series": [{"name": "September", "values": [15799, 1000]}]});
         let text = render("money.series", &json!({"by": "week", "periods": 1, "category": "Groceries", "today": "2026-10-15"}), &series, &[], &ctx()).unwrap();
         assert!(text.contains("- September: Week 1 $157.99; Week 2 $10.00. Total $167.99."), "{text}");
+        let periods = "periods counts months (budget periods), even when by is week or day: \"the last 2 months by week\" is {\"by\": \"week\", \"periods\": 2}";
+        assert!(text.contains(periods), "{text}");
+        assert!(description("money.series", ctx().today).unwrap().contains(periods));
         let block = text.split("```chart\n").nth(1).and_then(|b| b.split("\n```").next()).expect("a chart block");
         let chart: Value = serde_json::from_str(block).unwrap();
         assert_eq!(chart, json!({"type": "bar", "title": "Groceries spending by week", "query": {"by": "week", "periods": 1, "category": "Groceries"}}));

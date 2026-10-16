@@ -340,6 +340,19 @@ fn register_invest(e: &mut Engine) {
         Ok(InvestListOut { activities: ledger(ctx.engine(), |l| l.invest_list(&q))? })
     });
     e.register::<InvestAdd>(|ctx, p| {
+        // An account Wealthsimple's files fill gets this activity from the next export: one a
+        // thread's agent recorded too would count twice (INVESTMENTS.md). The person may still.
+        if ctx.thread().is_some() {
+            let filled = ledger(ctx.engine(), |l| l.accounts())?
+                .into_iter()
+                .any(|a| a.id == p.account_id && a.institution.trim().eq_ignore_ascii_case("wealthsimple"));
+            if filled {
+                return Err(BusError::refused(
+                    "money.import_filled",
+                    "This account is filled from Wealthsimple's files: the next holdings report or activities export brings this activity, and recording it here too would count it twice",
+                ));
+            }
+        }
         let input = ActivityInput {
             account_id: p.account_id, r#type: p.r#type, date: p.date, symbol: p.symbol, currency: p.currency, quantity: p.quantity,
             amount: p.amount, fee: p.fee, note: p.note, to_amount: p.to_amount, to_currency: p.to_currency,
