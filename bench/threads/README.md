@@ -35,6 +35,9 @@ to be added to `local_models::MODELS`.
 | Small-model profile, ask first, Avex/Tally rework (`a24ed13`) | 89.8% [86.1, 92.6] | 90.7% | 87.4% | 3.0 |
 | The same build on Qwen3.5 9B Q5_K_M (one slot) | 95.8% [93.1, 97.5] | 96.3% | 94.3% | 2.5 |
 | Relay-side fixes: names for ids, nothing logged, no double-counted buys (`6d3e804`) | 95.2% [92.3, 97.0] | 95.1% | 95.4% | 3.5 |
+| Over-budget yes/no, accounts named in the tool (`0e5caa7`), no thinking | 95.2% [92.3, 97.0] | 95.5% | 94.3% | 3.0 |
+| The same, thinking within 512 tokens (the default from here) | 98.2% [96.1, 99.2] | 98.8% | 96.6% | 7.0 |
+| The same, thinking with no limit | 98.5% [96.5, 99.4] | 98.8% | 97.7% | 7.0 |
 
 Δ +15.3 points, bootstrap 95% over tasks [+8.7, +22.5]. What changed is in `docs/THREADS.md`
 ("Small models"). The holdout split was looked at twice while the profile was built (once for the

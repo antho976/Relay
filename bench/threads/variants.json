@@ -1,6 +1,6 @@
 {
   "baseline": {
-    "description": "The product as the relay binary under test builds it: nothing changed.",
+    "description": "The product as the relay binary under test builds it: nothing changed (from 0e5caa7 on, a local thread thinks within 512 tokens).",
     "env": {},
     "settings": {}
   },
@@ -64,6 +64,13 @@
     "description": "The default small-model profile, with the model thinking before it answers, within 512 tokens.",
     "env": {
       "RELAY_THREADS_LOCAL": "lean,readings,prefetch,think:512"
+    },
+    "settings": {}
+  },
+  "no-think": {
+    "description": "The small-model profile without thinking: the default before 2026-10-16.",
+    "env": {
+      "RELAY_THREADS_LOCAL": "lean,readings,prefetch"
     },
     "settings": {}
   }
