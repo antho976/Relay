@@ -5,8 +5,11 @@
 //! `assistant {blocks}`, `tool {tool_use_id, is_error, text}`, `error {text}`, and `note {text}`
 //! for a quiet line (an interrupt, a compaction).
 //!
-//! Only what a person reads is kept: a tool call carries its name and a one-line `summary`
-//! (the command, the file), never its whole input, and a tool's answer is cut to its head.
+//! Only what a person reads is kept: a tool call carries its name, a one-line `summary` (the
+//! command, the file) and a `detail` cut to its head (the whole command, an edit as `-`/`+`
+//! lines, a patch, a question and its choices), never its raw input; a tool's answer is cut to
+//! its head. The model's reasoning, where the provider logged it in words, is a `thinking`
+//! block.
 
 use relay_bus::ops::session::{TranscriptMessage, TranscriptOut};
 use relay_bus::types::Provider;
@@ -22,6 +25,9 @@ const MAX_READ: u64 = 8 * 1024 * 1024;
 /// A tool's answer is shown folded; its head is all a phone needs.
 const MAX_ANSWER: usize = 2000;
 const MAX_SUMMARY: usize = 300;
+/// What a call did, opened under its line: enough of a diff or a script to read on a phone.
+const MAX_DETAIL: usize = 4000;
+const MAX_THINKING: usize = 6000;
 /// The cursor's low bits are the byte offset; the 12 above them name the file it is in, so the
 /// whole stays under 2^53 and reads exactly as a JSON number anywhere.
 const OFFSET_BITS: u32 = 40;
@@ -196,14 +202,22 @@ fn claude_record(record: &Value, at: u64, worktree: &Path, out: &mut Vec<Transcr
             }
             let kept: Vec<Value> = blocks.iter().filter_map(|block| match block.get("type").and_then(Value::as_str) {
                 Some("text") => { let text = text_of(block); (!text.trim().is_empty()).then(|| json!({"type": "text", "text": text})) }
+                // Redacted reasoning is logged with its signature and no words: nothing to show.
+                Some("thinking") => block.get("thinking").and_then(Value::as_str).filter(|text| !text.trim().is_empty())
+                    .map(|text| json!({"type": "thinking", "text": cut(text, MAX_THINKING)})),
                 Some("tool_use") => {
                     let name = block.get("name").and_then(Value::as_str).unwrap_or_default();
-                    Some(json!({
+                    let input = block.get("input").unwrap_or(&Value::Null);
+                    let mut call = json!({
                         "type": "tool_use",
                         "id": block.get("id").and_then(Value::as_str).unwrap_or_default(),
                         "name": name,
-                        "summary": claude_summary(name, block.get("input").unwrap_or(&Value::Null), worktree),
-                    }))
+                        "summary": claude_summary(name, input, worktree),
+                    });
+                    if let Some(detail) = claude_detail(name, input).filter(|detail| !detail.trim().is_empty()) {
+                        call["detail"] = json!(cut_lines(&detail, MAX_DETAIL));
+                    }
+                    Some(call)
                 }
                 _ => None,
             }).collect();
@@ -274,6 +288,69 @@ fn claude_summary(name: &str, input: &Value, worktree: &Path) -> String {
     text.map(|text| line_of(&text)).unwrap_or_default()
 }
 
+/// What a call did, in full enough to check it: an edit as the lines it took out (`-`) and put
+/// in (`+`), a file written as its lines, the whole command, a question with its choices.
+/// `None` where the one-line summary already says it all.
+fn claude_detail(name: &str, input: &Value) -> Option<String> {
+    let field = |key: &str| input.get(key).and_then(Value::as_str);
+    match name {
+        "Edit" => Some(edit_lines(field("old_string")?, field("new_string").unwrap_or_default())),
+        "MultiEdit" => Some(input.get("edits")?.as_array()?.iter()
+            .map(|edit| edit_lines(edit.get("old_string").and_then(Value::as_str).unwrap_or_default(), edit.get("new_string").and_then(Value::as_str).unwrap_or_default()))
+            .collect::<Vec<_>>().join("\n@@\n")),
+        "Write" => Some(edit_lines("", field("content")?)),
+        "NotebookEdit" => Some(edit_lines("", field("new_source")?)),
+        // The summary is the first line: a heredoc or a chain of commands needs the rest.
+        "Bash" => {
+            let command = field("command")?;
+            let description = field("description").filter(|text| !text.trim().is_empty());
+            (command.trim().contains('\n') || command.chars().count() > 60 || description.is_some())
+                .then(|| match description { Some(text) => format!("# {}\n{command}", text.trim()), None => command.to_string() })
+        }
+        "Task" | "Agent" => field("prompt").map(str::to_string),
+        "ExitPlanMode" => field("plan").map(str::to_string),
+        "AskUserQuestion" => Some(input.get("questions")?.as_array()?.iter().map(|question| {
+            let mut text = question.get("question").and_then(Value::as_str).unwrap_or_default().to_string();
+            for (i, option) in question.get("options").and_then(Value::as_array).into_iter().flatten().enumerate() {
+                let label = option.get("label").and_then(Value::as_str).unwrap_or_default();
+                match option.get("description").and_then(Value::as_str).filter(|text| !text.is_empty()) {
+                    Some(about) => text.push_str(&format!("\n{}. {label} — {about}", i + 1)),
+                    None => text.push_str(&format!("\n{}. {label}", i + 1)),
+                }
+            }
+            text
+        }).collect::<Vec<_>>().join("\n\n")),
+        "TodoWrite" => Some(input.get("todos")?.as_array()?.iter().map(|todo| {
+            let mark = match todo.get("status").and_then(Value::as_str) { Some("completed") => "[x]", Some("in_progress") => "[~]", _ => "[ ]" };
+            format!("{mark} {}", todo.get("content").and_then(Value::as_str).unwrap_or_default())
+        }).collect::<Vec<_>>().join("\n")),
+        _ => None,
+    }
+}
+
+/// An edit as a diff with no context: every line it took out, then every line it put in.
+fn edit_lines(old: &str, new: &str) -> String {
+    let taken = old.lines().map(|line| format!("-{line}"));
+    taken.chain(new.lines().map(|line| format!("+{line}"))).collect::<Vec<_>>().join("\n")
+}
+
+/// `text` cut to about `max` characters at a line's end, saying how many lines were left out.
+fn cut_lines(text: &str, max: usize) -> String {
+    if text.chars().count() <= max { return text.to_string(); }
+    let mut kept = 0;
+    let mut out = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+    for line in &lines {
+        let n = line.chars().count() + 1;
+        if kept + n > max && !out.is_empty() { break; }
+        out.push(if n > max { cut(line, max) } else { (*line).to_string() });
+        kept += n;
+    }
+    let left = lines.len() - out.len();
+    if left > 0 { out.push(format!("… {left} more line{}", if left == 1 { "" } else { "s" })); }
+    out.join("\n")
+}
+
 fn relative(path: &str, worktree: &Path) -> String {
     Path::new(path).strip_prefix(worktree).map(|rest| rest.to_string_lossy().into_owned()).unwrap_or_else(|_| path.to_string())
 }
@@ -298,15 +375,25 @@ fn codex_record(record: &Value, at: u64, out: &mut Vec<TranscriptMessage>) {
                 .filter_map(|part| part.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("");
             if !text.trim().is_empty() { out.push(message(id, "assistant", json!({"blocks": [{"type": "text", "text": text}]}), record)); }
         }
+        // Codex logs its reasoning as a summary in words, the rest encrypted.
+        ("response_item", "reasoning") => {
+            let text = payload.get("summary").and_then(Value::as_array).into_iter().flatten()
+                .filter_map(|part| part.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n\n");
+            if !text.trim().is_empty() { out.push(message(id, "assistant", json!({"blocks": [{"type": "thinking", "text": cut(&text, MAX_THINKING)}]}), record)); }
+        }
         ("response_item", "function_call" | "custom_tool_call" | "local_shell_call") => {
             let (summary, patch) = codex_summary(payload);
             let name = if patch { "apply_patch" } else { payload.get("name").and_then(Value::as_str).unwrap_or(if kind == "local_shell_call" { "shell" } else { "tool" }) };
-            out.push(message(id, "assistant", json!({"blocks": [{
+            let mut call = json!({
                 "type": "tool_use",
                 "id": str_of("call_id"),
                 "name": name,
                 "summary": summary,
-            }]}), record));
+            });
+            if let Some(detail) = codex_detail(payload).filter(|detail| !detail.trim().is_empty() && detail.trim() != summary) {
+                call["detail"] = json!(cut_lines(&detail, MAX_DETAIL));
+            }
+            out.push(message(id, "assistant", json!({"blocks": [call]}), record));
         }
         ("response_item", "function_call_output" | "custom_tool_call_output") => {
             let (text, failed) = codex_output(payload.get("output").unwrap_or(&Value::Null));
@@ -345,6 +432,38 @@ fn codex_summary(payload: &Value) -> (String, bool) {
         if let Some(Ok(cmd)) = serde_json::Deserializer::from_str(rest).into_iter::<String>().next() { return (line_of(&cmd), false); }
     }
     (line_of(input), false)
+}
+
+/// What a Codex call did in full: the patch it applied, or the whole command it ran.
+fn codex_detail(payload: &Value) -> Option<String> {
+    let command = |value: &Value| match value {
+        Value::Array(parts) => Some(parts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")),
+        Value::String(text) => Some(text.clone()),
+        _ => None,
+    };
+    if let Some(found) = payload.pointer("/action/command").and_then(command) { return Some(found); }
+    let raw = payload.get("arguments").and_then(Value::as_str).or_else(|| payload.get("input").and_then(Value::as_str))?;
+    if let Some(patch) = patch_of(raw) { return Some(patch); }
+    let Ok(arguments) = serde_json::from_str::<Value>(raw) else {
+        // A code-mode script: the command it runs, whole.
+        let at = raw.find("\"cmd\":")?;
+        return serde_json::Deserializer::from_str(raw[at + 6..].trim_start()).into_iter::<String>().next()?.ok();
+    };
+    ["command", "cmd"].iter().find_map(|key| arguments.get(*key).and_then(command))
+        .or_else(|| arguments.get("input").and_then(Value::as_str).and_then(patch_of))
+}
+
+/// The `*** Begin Patch` … `*** End Patch` in `text`, whether written out or escaped in a script's string.
+fn patch_of(text: &str) -> Option<String> {
+    let start = text.find("*** Begin Patch")?;
+    let rest = &text[start..];
+    // Unended, it runs to the end of the string that holds it.
+    let unended = || rest.char_indices().find(|(i, c)| *c == '"' && !rest[..*i].ends_with('\\')).map_or(rest.len(), |(i, _)| i);
+    let end = rest.find("*** End Patch").map_or_else(unended, |at| at + "*** End Patch".len());
+    let patch = &rest[..end];
+    let patch = if patch.contains('\n') { patch.to_string() } else { patch.replace("\\n", "\n").replace("\\\"", "\"").replace("\\t", "\t") };
+    // The markers frame it; the files and lines are what a person reads.
+    Some(patch.lines().filter(|line| !matches!(line.trim(), "*** Begin Patch" | "*** End Patch")).collect::<Vec<_>>().join("\n"))
 }
 
 /// A tool's answer and whether it failed: Codex writes it as text, as `{output, metadata}`
@@ -390,7 +509,7 @@ mod tests {
             json!({"type": "user", "uuid": "m", "isMeta": true, "message": {"content": "context"}}),
             json!({"type": "user", "uuid": "r", "message": {"content": "<system-reminder>x</system-reminder>"}}),
             json!({"type": "assistant", "uuid": "a1", "message": {"content": [{"type": "thinking", "thinking": "hm"}]}}),
-            json!({"type": "assistant", "uuid": "a2", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": "/wt/src/main.rs", "old_string": "a"}}]}}),
+            json!({"type": "assistant", "uuid": "a2", "message": {"content": [{"type": "thinking", "thinking": "", "signature": "x"}, {"type": "tool_use", "id": "t1", "name": "Edit", "input": {"file_path": "/wt/src/main.rs", "old_string": "a\nb", "new_string": "c"}}]}}),
             json!({"type": "user", "uuid": "u2", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "ok"}]}]}}),
             json!({"type": "assistant", "uuid": "s", "isSidechain": true, "message": {"content": [{"type": "text", "text": "subagent"}]}}),
             json!({"type": "assistant", "uuid": "a3", "message": {"content": [{"type": "text", "text": "Done."}]}}),
@@ -399,13 +518,31 @@ mod tests {
         ])).unwrap();
         let out = read(Provider::Claude, &path, wt, None, 200).unwrap();
         let got: Vec<(&str, &str)> = out.messages.iter().map(|m| (m.id.as_str(), m.role.as_str())).collect();
-        assert_eq!(got, [("u1", "user"), ("a2", "assistant"), ("u2:0", "tool"), ("a3", "assistant"), ("u3", "user"), ("u4:0", "note")]);
+        assert_eq!(got, [("u1", "user"), ("a1", "assistant"), ("a2", "assistant"), ("u2:0", "tool"), ("a3", "assistant"), ("u3", "user"), ("u4:0", "note")]);
         assert_eq!(out.messages[0].body["text"], "fix the build");
         assert_eq!(out.messages[0].created_at, "2026-10-13T10:00:00Z");
-        assert_eq!(out.messages[1].body["blocks"][0]["summary"], "src/main.rs");
-        assert_eq!(out.messages[2].body["text"], "ok");
-        assert_eq!(out.messages[4].body["text"], "/compact");
+        assert_eq!(out.messages[1].body["blocks"], json!([{"type": "thinking", "text": "hm"}]));
+        // Redacted reasoning has no words to show; the edit carries what it changed.
+        assert_eq!(out.messages[2].body["blocks"].as_array().unwrap().len(), 1);
+        assert_eq!(out.messages[2].body["blocks"][0]["summary"], "src/main.rs");
+        assert_eq!(out.messages[2].body["blocks"][0]["detail"], "-a\n-b\n+c");
+        assert_eq!(out.messages[3].body["text"], "ok");
+        assert_eq!(out.messages[5].body["text"], "/compact");
         assert!(out.found && !out.reset);
+    }
+
+    #[test]
+    fn a_call_carries_what_the_summary_leaves_out() {
+        let detail = |name: &str, input: Value| claude_detail(name, &input);
+        assert_eq!(detail("Bash", json!({"command": "ls"})), None);
+        assert_eq!(detail("Bash", json!({"command": "cat <<EOF\nx\nEOF", "description": "Show x"})).unwrap(), "# Show x\ncat <<EOF\nx\nEOF");
+        assert_eq!(detail("Write", json!({"file_path": "/a", "content": "one\ntwo\n"})).unwrap(), "+one\n+two");
+        assert_eq!(detail("MultiEdit", json!({"edits": [{"old_string": "a", "new_string": "b"}, {"old_string": "c", "new_string": ""}]})).unwrap(), "-a\n+b\n@@\n-c");
+        assert_eq!(detail("AskUserQuestion", json!({"questions": [{"question": "Which?", "options": [{"label": "A", "description": "first"}, {"label": "B"}]}]})).unwrap(), "Which?\n1. A — first\n2. B");
+        assert_eq!(detail("TodoWrite", json!({"todos": [{"content": "x", "status": "completed"}, {"content": "y", "status": "pending"}]})).unwrap(), "[x] x\n[ ] y");
+        let long = (0..2000).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let cut = cut_lines(&long, 100);
+        assert!(cut.starts_with("line 0\nline 1\n") && cut.ends_with("more lines"), "{cut}");
     }
 
     #[test]
@@ -459,21 +596,26 @@ mod tests {
             json!({"type": "response_item", "payload": {"type": "function_call", "call_id": "c2", "name": "shell", "arguments": "{\"command\":[\"bash\",\"-lc\",\"ls\"]}"}}),
             json!({"type": "response_item", "payload": {"type": "function_call_output", "call_id": "c2", "output": "{\"output\":\"nope\",\"metadata\":{\"exit_code\":2}}"}}),
             json!({"type": "response_item", "payload": {"type": "reasoning", "summary": []}}),
+            json!({"type": "response_item", "payload": {"type": "reasoning", "summary": [{"type": "summary_text", "text": "**Checking** the tests"}]}}),
             json!({"type": "event_msg", "payload": {"type": "agent_message", "message": "Added."}}),
             json!({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Added."}]}}),
         ])).unwrap();
         let out = read(Provider::Codex, &path, Path::new("/wt"), None, 200).unwrap();
         let roles: Vec<&str> = out.messages.iter().map(|m| m.role.as_str()).collect();
-        assert_eq!(roles, ["user", "assistant", "tool", "assistant", "assistant", "tool", "assistant"]);
+        assert_eq!(roles, ["user", "assistant", "tool", "assistant", "assistant", "tool", "assistant", "assistant"]);
         assert_eq!(out.messages[0].body["text"], "add a test");
         assert_eq!(out.messages[1].body["blocks"][0]["summary"], "cargo test -p x");
         assert_eq!(out.messages[2].body["text"], "ok");
         assert_eq!(out.messages[3].body["blocks"][0]["summary"], "/wt/src/a.rs and 1 more");
         assert_eq!(out.messages[3].body["blocks"][0]["name"], "apply_patch");
+        assert_eq!(out.messages[3].body["blocks"][0]["detail"], "*** Update File: /wt/src/a.rs\n@@\n*** Add File: /wt/b.rs");
+        assert_eq!(out.messages[1].body["blocks"][0].get("detail"), None);
         assert_eq!(out.messages[4].body["blocks"][0]["summary"], "bash -lc ls");
+        assert_eq!(out.messages[4].body["blocks"][0].get("detail"), None);
         assert_eq!(out.messages[5].body["is_error"], true);
         assert_eq!(out.messages[5].body["text"], "nope");
-        assert_eq!(out.messages[6].body["blocks"][0]["text"], "Added.");
+        assert_eq!(out.messages[6].body["blocks"], json!([{"type": "thinking", "text": "**Checking** the tests"}]));
+        assert_eq!(out.messages[7].body["blocks"][0]["text"], "Added.");
         assert!(out.cursor < 1 << 53);
     }
 

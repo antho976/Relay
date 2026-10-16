@@ -3,6 +3,7 @@ package com.quietsoftware.relay.ui.dev
 import com.quietsoftware.relay.core.model.ThreadMessage
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
@@ -24,7 +25,7 @@ class ChatTest {
             msg("u", "user", """{"text":"fix the build"}"""),
             tool("1", "Bash", "cargo build"), answer("1"),
             tool("2", "Read", "src/main.rs"), answer("2"),
-            tool("3", "Edit", "src/main.rs"), answer("3", error = true),
+            tool("3", "Grep", "fn main"), answer("3", error = true),
             tool("4", "Bash", "cargo build"), answer("4"),
             msg("w", "assistant", """{"blocks":[{"type":"text","text":"Fixed."}]}"""),
             tool("5", "Bash", "cargo test"),
@@ -33,10 +34,59 @@ class ChatTest {
         assertEquals(listOf(ChatPiece.User::class, ChatPiece.Steps::class, ChatPiece.Reply::class, ChatPiece.Tool::class), pieces.map { it::class })
         val steps = (pieces[1] as ChatPiece.Steps).calls
         assertEquals(listOf(Step.Done, Step.Done, Step.Failed, Step.Done), steps.map { it.step })
-        assertEquals("Ran 2 commands, read 1 file, edited 1 file", stepsLine(steps))
+        assertEquals("Ran 2 commands, read 1 file, ran 1 search", stepsLine(steps))
         assertEquals(Step.Running, (pieces[3] as ChatPiece.Tool).call.step)
         // The same log once the agent stopped: the unanswered call was cut off.
         assertEquals(Step.Cut, (chatPieces(log, emptyList(), working = false, today = today)[3] as ChatPiece.Tool).call.step)
+    }
+
+    @Test
+    fun reasoningAndEditsStandAloneWithWhatTheyChanged() {
+        val log = listOf(
+            msg("u", "user", """{"text":"rename it"}"""),
+            msg("a", "assistant", """{"blocks":[{"type":"thinking","text":"The name is used twice."},{"type":"tool_use","id":"t1","name":"Read","summary":"a.rs"}]}"""),
+            answer("1"),
+            msg("b", "assistant", """{"blocks":[{"type":"tool_use","id":"t2","name":"Edit","summary":"a.rs","detail":"-old\n+new\n+more"}]}"""),
+            answer("2"),
+            tool("3", "Bash", "cargo build"), answer("3"),
+        )
+        val pieces = chatPieces(log, emptyList(), working = false, today = today)
+        assertEquals(listOf(ChatPiece.User::class, ChatPiece.Thought::class, ChatPiece.Tool::class, ChatPiece.Tool::class, ChatPiece.Tool::class), pieces.map { it::class })
+        assertEquals("The name is used twice.", (pieces[1] as ChatPiece.Thought).text)
+        val edit = (pieces[3] as ChatPiece.Tool).call
+        assertEquals("-old\n+new\n+more", edit.detail)
+        assertEquals(2 to 1, diffCounts(edit.detail!!.lines()))
+        assertEquals(null, (pieces[4] as ChatPiece.Tool).call.detail)
+    }
+
+    @Test
+    fun aQuestionStillOpenWaitsOnThePersonEvenWhileHeld() {
+        val log = listOf(
+            msg("u", "user", """{"text":"plan it"}"""),
+            msg("a", "assistant", """{"blocks":[{"type":"tool_use","id":"t1","name":"ExitPlanMode","summary":"","detail":"1. Do it"}]}"""),
+        )
+        // Held at the prompt, the call waits; with the turn over, it was cut off.
+        val held = chatPieces(log, emptyList(), working = true, today = today)
+        assertEquals(Step.Running, (held.last() as ChatPiece.Tool).call.step)
+        assertTrue(waitsOnAsk(held))
+        assertFalse(waitsOnAsk(chatPieces(log, emptyList(), working = false, today = today)))
+    }
+
+    @Test
+    fun aMenuOnScreenAsksAndANumberedListDoesNot() {
+        val menu = """
+            Select model
+            ❯ 1. Default (recommended)
+              2. Opus
+              3. Haiku
+        """.trimIndent()
+        assertTrue(screenAsks(menu))
+        assertTrue(screenAsks("Codex wants to run a command\n› 1. Yes, proceed\n  2. No"))
+        assertTrue(screenAsks("Overwrite the file? (y/n)"))
+        assertFalse(screenAsks("Done. Next:\n1. Add a test\n2. Ship it\n\n> \n  ⏵⏵ accept edits on"))
+        assertFalse(screenAsks(""))
+        // A message of the person's, echoed with the prompt mark, is not a menu.
+        assertFalse(screenAsks("❯ 1. fix the build\n\n> "))
     }
 
     @Test
