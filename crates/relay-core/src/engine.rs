@@ -537,6 +537,9 @@ pub struct Engine {
     pub(crate) resource_disk_refresh: std::sync::Mutex<(bool, Option<Instant>)>,
     /// Who holds which Android device (`device_lease`). Its own lock; never the store's.
     pub(crate) device_leases: crate::device_lease::Leases,
+    /// Which new worktrees are waiting on a build-seed copy or build (`build_seed`). Its own
+    /// lock; never the store's.
+    pub(crate) build_seeds: crate::build_seed::Seeds,
     /// Serializes skill-folder refreshes (`skills::refresh_all`).
     pub(crate) skill_refresh: crate::skills::Refresher,
     /// The Money space's ledger (`money.db` beside the store), opened on first use.
@@ -588,6 +591,7 @@ impl Engine {
                 resource_disk: std::sync::Mutex::new(HashMap::new()),
                 resource_disk_refresh: std::sync::Mutex::new((false, None)),
                 device_leases: Default::default(),
+                build_seeds: Default::default(),
                 skill_refresh: Default::default(),
                 money: Default::default(),
                 threads: Default::default(),

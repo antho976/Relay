@@ -69,6 +69,7 @@ debug = "line-tables-only"
 | Session list refresh after `session.changed` | event → sidebar repainted | ≤ 1 frame | `session.list` 13.7 µs; the GTK rebuild is unmeasured |
 | Board load | open board → cards painted | ≤ 100 ms at 400 tasks | `task.list` 333 µs at 40 tasks |
 | New session | create → first output on screen | ≤ 1 s (the worktree checkout is the work) | create 26 ms, first output 8 ms |
+| First build in a new session's worktree | first `cargo test --no-run` → done | dependencies never compiled twice; only the project's own crates | 126.5 s cold → 70.4 s seeded, copy 0.7 s (`FIXES-2026-10-16.md`) |
 | Native cold start | launch → first frame → connected and interactive | first frame ≤ 500 ms, interactive ≤ 1 s | per-page CPU in `runs/*/native/` |
 | Engine start | `relay serve` → socket answering | ≤ 20 ms on a populated store | 4.6 ms |
 | At rest, N quiet sessions | 30 s idle | **0 % CPU, 0 wakeups** in engine *and* client | engine 0/0 (2026-09-19); client not yet zero (§5) |

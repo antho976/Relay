@@ -57,7 +57,10 @@ never poll. Android devices are shared between sessions: an `adb install`, `adb 
 `gradlew install*` takes a lease on the device, and while a peer holds one yours is refused with \
 `device.busy` naming who is using it, for what, and since when — `bus.wait` on \
 `device.lease.released`, then retry, rather than retrying in a loop. `device.list` shows each \
-device's holder; `device.claim` holds a device across several steps and `device.release` frees it. When a guardrail refuses something you cannot progress without, do not work around \
+device's holder; `device.claim` holds a device across several steps and `device.release` frees it. A new \
+worktree's `target/` arrives as a copy of the project's prebuilt dependencies: a first `cargo` \
+command may wait a few seconds for it, or be refused with `build.seeding` while Relay builds them \
+once for every new session — `bus.wait` on `build.seed.ready`, then retry. When a guardrail refuses something you cannot progress without, do not work around \
 it: call `guardrail.request` with the `kind` and `value` its hint names and a `reason`, then \
 `bus.wait` for `guardrail.request_resolved` matching your `request_id` and retry once approved; \
 only the user can approve it. Work on `task` first; `tasks` is the remaining ordered queue. Report each current \
