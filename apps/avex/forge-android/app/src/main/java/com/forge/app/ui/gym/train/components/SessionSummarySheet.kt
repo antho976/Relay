@@ -167,8 +167,8 @@ fun SessionSummarySheet(
                         BodyHeatmap(
                             setsByMuscle = summary.setsByMuscle,
                             accent = accent,
-                            faint = outline.copy(alpha = 0.34f),
-                            silhouette = outline.copy(alpha = 0.26f),
+                            faint = outline.copy(alpha = 0.35f),
+                            silhouette = outline.copy(alpha = 0.25f),
                             labelColor = muted,
                             modifier = Modifier.fillMaxWidth().statsEntrance(0)
                         )

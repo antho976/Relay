@@ -112,6 +112,14 @@ object AutoCoachPlanner {
         reason != null &&
             (reason.startsWith(LEARNING_HOLD_PREFIX) || reason.startsWith("Still learning your baseline"))
 
+    /** The session tally a learning hold quoted ("2 of 4 sessions logged"), or null for any other
+     *  reason, or an older wording with no tally. */
+    fun learningHoldCount(reason: String?): Int? =
+        if (!isLearningHold(reason)) null
+        else LEARNING_HOLD_COUNT.find(reason!!)?.groupValues?.get(1)?.toIntOrNull()
+
+    private val LEARNING_HOLD_COUNT = Regex("""(\d+) of \d+ sessions""")
+
     /** A training gap at least this long means "ease back in", not "restructure". */
     private const val GAP_HOLD_DAYS = 14
     /** Per-muscle net applied-volume drift cap, in sets (hardening 11). */

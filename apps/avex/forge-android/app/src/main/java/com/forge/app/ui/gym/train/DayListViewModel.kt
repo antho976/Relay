@@ -5,7 +5,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.prefs.SettingsRepository
-import com.forge.app.data.repo.CustomizationRepository
 import com.forge.app.data.repo.WorkoutRepository
 import com.forge.app.program.Program
 import com.forge.app.ui.gym.train.state.DayListItem
@@ -22,7 +21,6 @@ import javax.inject.Inject
 @HiltViewModel
 class DayListViewModel @Inject constructor(
     private val workoutRepo: WorkoutRepository,
-    private val customizationRepo: CustomizationRepository,
     private val sessionDao: SessionDao,
     private val settingsRepo: SettingsRepository,
     private val programRepository: com.forge.app.data.repo.ProgramRepository,
@@ -75,7 +73,6 @@ class DayListViewModel @Inject constructor(
     }
 
     val state: StateFlow<DayListUiState> = combine(
-        customizationRepo.observeAllDayNames(),
         workoutRepo.observeActiveSession(),
         // TRACKED: all three things derived from this — each day's last-trained date, today's
         // trained keys, and the next-up resolution — are schedule signals. A session the user
@@ -87,9 +84,8 @@ class DayListViewModel @Inject constructor(
             settingsRepo.scheduleMode,
             settingsRepo.weeklySchedule
         ) { _, mode, schedule -> mode to schedule }
-    ) { dayNames, activeSession, recentSessions, dayColors, modeSchedule ->
+    ) { activeSession, recentSessions, dayColors, modeSchedule ->
         val (scheduleMode, schedule) = modeSchedule
-        val nameByKey = dayNames.associate { it.dayKey to it.customName }
         val lastFinishedByKey = recentSessions
             .filter { it.finishedAt != null }
             .groupBy { it.dayKey }
@@ -125,7 +121,7 @@ class DayListViewModel @Inject constructor(
             days = Program.days.map { plan ->
                 DayListItem(
                     plan = plan,
-                    displayName = nameByKey[plan.key] ?: plan.defaultName,
+                    displayName = plan.defaultName,
                     lastFinishedAt = lastFinishedByKey[plan.key],
                     isActive = activeSession?.dayKey == plan.key,
                     isNextUp = plan.key == nextUpKey,

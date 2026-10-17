@@ -76,6 +76,8 @@ fun DayListScreen(
     onConnectWatch: () -> Unit = {},
     /** Stats → Body lens → the profile, to log a weigh-in. */
     onOpenProfile: () -> Unit = {},
+    /** Stats → a lift's plateau read → its call on the Coach tab; null without that tab. */
+    onOpenCoach: (() -> Unit)? = null,
     initialTab: Int = 0,
     /** Top-bar heading — "Stats" / "PRs" when hosting those sub-screens, "GYM" by default. */
     title: String = "GYM",
@@ -114,7 +116,8 @@ fun DayListScreen(
                     onOpenProfile = onOpenProfile,
                     onOpenHistory = onOpenHistory,
                     onOpenNotes = onOpenNotes,
-                    onOpenRecap = onOpenRecap
+                    onOpenRecap = onOpenRecap,
+                    onOpenCoach = onOpenCoach
                 )
                 else -> TrainTab(
                     onOpenDay = onOpenDay,

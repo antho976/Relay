@@ -57,6 +57,9 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.ui.common.window.Dialog
 import com.forge.app.domain.timer.RestTimerState
 import com.forge.app.ui.theme.ForgeMotion
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 
 /**
  * Floating timer circle. Tap = open controls, long-press = +30s quick-extend (#96).
@@ -154,7 +157,7 @@ fun RestTimerBubble(
             // single flat colour. The accent now lives in the ring, not the whole fill.
             .background(face)
             // Hairline rim to separate the disc from the background gradient at any accent.
-            .border(width = 1.dp, color = onBg.copy(alpha = 0.08f), shape = CircleShape)
+            .border(width = 1.dp, color = onBg.copy(alpha = 0.15f), shape = CircleShape)
             // Countdown ring: a depleting accent arc on a faint track — the hero of the design.
             .drawBehind {
                 val sw = 4.dp.toPx()
@@ -163,7 +166,7 @@ fun RestTimerBubble(
                 // Faint full-circle track so remaining rest reads as a shrinking arc on a track
                 // rather than an arc appearing/vanishing.
                 drawArc(
-                    color = onBg.copy(alpha = 0.10f),
+                    color = onBg.copy(alpha = 0.15f),
                     startAngle = -90f,
                     sweepAngle = 360f,
                     useCenter = false,
@@ -184,7 +187,7 @@ fun RestTimerBubble(
                     )
                     // Paused: the remaining arc goes dashed and dim so the held state reads instantly.
                     isPaused -> drawArc(
-                        color = accent.copy(alpha = 0.45f),
+                        color = accent.copy(alpha = 0.6f),
                         startAngle = -90f,
                         sweepAngle = 360f * animFraction,
                         useCenter = false,
@@ -225,30 +228,35 @@ fun RestTimerBubble(
             .semantics(mergeDescendants = true) { contentDescription = restA11y },
         contentAlignment = Alignment.Center
     ) {
-        if (state.isFinished) {
-            Text(
-                "✓",
-                style = MaterialTheme.typography.titleLarge,
-                color = accent,
-                fontWeight = FontWeight.Bold
-            )
-        } else {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        // A fixed 64dp instrument, so its figure clamps its own scaling (§14): at 2x "1:05" ran
+        // past the ring and "REST" was cut off at the disc's edge. At 1.3x both fit inside it.
+        val d = LocalDensity.current
+        CompositionLocalProvider(LocalDensity provides Density(d.density, d.fontScale.coerceAtMost(1.3f))) {
+            if (state.isFinished) {
                 Text(
-                    formatTime(state.secondsRemaining),
-                    // Tabular figures keep the digits from jittering as the seconds count down.
-                    style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
-                    color = if (!isPaused) onBg else onBg.copy(alpha = 0.6f),
-                    fontWeight = FontWeight.SemiBold
+                    "✓",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = accent,
+                    fontWeight = FontWeight.Bold
                 )
-                Text(
-                    if (isPaused) "PAUSED" else "REST",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted,
-                    fontSize = 8.sp,
-                    letterSpacing = 1.5.sp,
-                    fontWeight = FontWeight.Medium
-                )
+            } else {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        formatTime(state.secondsRemaining),
+                        // Tabular figures keep the digits from jittering as the seconds count down.
+                        style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+                        color = if (!isPaused) onBg else onBg.copy(alpha = 0.6f),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        if (isPaused) "PAUSED" else "REST",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted,
+                        fontSize = 8.sp,
+                        letterSpacing = 1.5.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
             }
         }
     }

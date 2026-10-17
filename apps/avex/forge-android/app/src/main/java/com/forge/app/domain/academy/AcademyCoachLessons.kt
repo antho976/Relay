@@ -30,12 +30,12 @@ internal object AcademyCoachLessons {
             Paragraph(
                 "Every Monday the coach runs the same loop. It reads what you logged, proposes a " +
                     "few changes, waits for you to take or skip each one, and two weeks later judges " +
-                    "whether each change actually worked."
+                    "whether each change worked."
             ),
             Bullets(
                 listOf(
                     "Nothing changes without a reason you can read",
-                    "Any change undoes in one tap",
+                    "Any change can be undone in one tap",
                     "Every applied change gets a verdict after its two-week watch",
                     "When it has too little to go on, it says nothing rather than guess"
                 )
@@ -57,8 +57,8 @@ internal object AcademyCoachLessons {
             Heading("Trust is earned"),
             Paragraph(
                 "At first it only proposes. The kinds of change that keep working earn the right to " +
-                    "apply themselves, one type at a time, and every one of those still undoes. A " +
-                    "bad run, or you undoing its work, takes that right away again. Never a single miss."
+                    "apply themselves, one kind at a time, and each of those can still be undone. A " +
+                    "bad run, or you undoing its work, takes that right away again. A single miss does not."
             ),
             Figure(
                 "fig.trust",
@@ -72,7 +72,7 @@ internal object AcademyCoachLessons {
                     "Your own edits always win, and become rules it plans around"
                 )
             ),
-            Callout("The point is that you could do all of this yourself. The coach just saves you the time.")
+            Callout("The point is that you could do all of this yourself. The coach saves you the time.")
         )
     )
 
@@ -105,7 +105,7 @@ internal object AcademyCoachLessons {
             Example(
                 key = "readiness_today",
                 label = "Today",
-                fallback = "log a few sessions with a check-in and today's number shows here"
+                fallback = "Log a few sessions with a check-in and today's number shows here"
             ),
             Figure(
                 "fig.readiness_sum",
@@ -128,8 +128,8 @@ internal object AcademyCoachLessons {
             Heading("Your answers count"),
             Paragraph(
                 "In the research, how you say you feel holds up at least as well as what a watch " +
-                    "measures. You often know before your watch does. No watch at all changes nothing " +
-                    "about how you are coached."
+                    "measures. You often know before your watch does. Without a watch, you are coached " +
+                    "the same way."
             ),
             Callout("A bad night is a reason to train a little lighter, not a reason to skip.")
         ),
@@ -161,14 +161,14 @@ internal object AcademyCoachLessons {
         ),
         blocks = listOf(
             Paragraph(
-                "Going hard forever does not fail straight away. It fails slowly. Tiredness builds " +
+                "Going hard forever does not fail straight away. It fails slowly. Fatigue builds " +
                     "faster than fitness, so your numbers drift down while sessions feel harder. A " +
                     "block is the fix: a run of weeks that build up, then back off."
             ),
             Heading("Four phases"),
             Bullets(
                 listOf(
-                    "Build: sets go up at moderate effort, where most of the growth comes from",
+                    "Accumulate: sets climb at moderate effort, which is where most of the growth comes from",
                     "Intensify: fewer sets, heavier weights",
                     "Peak: volume drops so you arrive fresh enough to lift near your best",
                     "Deload: an easy week before the next block starts higher"
@@ -180,8 +180,8 @@ internal object AcademyCoachLessons {
             ),
             Heading("Why the easy week works"),
             Paragraph(
-                "Tiredness clears faster than fitness fades. Cut the work for a week and the " +
-                    "tiredness goes while the fitness stays, so what you built finally shows. The " +
+                "Fatigue clears faster than fitness fades. Cut the work for a week and the " +
+                    "fatigue goes while the fitness stays, so what you built finally shows. The " +
                     "research on deload weeks as such is thin. What is well supported is that easing " +
                     "off before a test improves it."
             ),
@@ -199,7 +199,7 @@ internal object AcademyCoachLessons {
                 "Two goals that share your recovery go better one after the other."
             ),
             Paragraph(
-                "When two of your goals compete, the coach suggests an order and holds the other at " +
+                "When two of your goals compete, the coach suggests which comes first and holds the other at " +
                     "maintenance. It also picks one project at a time, like a lagging muscle or a " +
                     "gap between opposite muscles, with a reason and a finish line. You can end a " +
                     "block or drop a project whenever it stops fitting your life."
@@ -237,17 +237,17 @@ internal object AcademyCardio {
         id = "cardio.zone2",
         track = LessonTrack.CARDIO,
         title = "Easy cardio, and why lifters need it",
-        summary = "The hardest pace you can hold while still talking in full sentences. It helps you recover between sets.",
+        summary = "Hold the hardest pace that still lets you talk in full sentences. It helps you recover between sets.",
         unlock = LessonUnlock(
             label = "When the coach first prescribes cardio",
-            detail = "Conditioning enters the plan once there's a lifting week to build it around.",
+            detail = "Conditioning enters the plan once there is a lifting week to build it around.",
             byYou = false
         ),
         blocks = listOf(
             Paragraph(
                 "Between sets, your body clears what the last set left behind and refuels for the " +
-                    "next. That job runs on your aerobic system. The better it is, the more of your " +
-                    "third and fourth sets is left."
+                    "next. That job runs on your aerobic system. The fitter it is, the more you have " +
+                    "left for your third and fourth sets."
             ),
             Bullets(
                 listOf(
@@ -277,7 +277,7 @@ internal object AcademyCardio {
                     "wall. Heart rate creeping up while your pace stays the same is called drift, and " +
                     "it usually means heat, not enough fluid, or just time on your feet."
             ),
-            Heading("Knowing it's working"),
+            Heading("Signs it is working"),
             Bullets(
                 listOf(
                     "The same route at the same effort gets faster",
@@ -308,7 +308,7 @@ internal object AcademyCardio {
         summary = "One interval session a week is enough. Keep it away from heavy leg days and your lifting barely notices.",
         unlock = LessonUnlock(
             label = "When intervals are first prescribed",
-            detail = "Rationed on top of your base, never the default answer.",
+            detail = "Added sparingly on top of your easy base, never by default.",
             byYou = false
         ),
         blocks = listOf(
@@ -320,19 +320,19 @@ internal object AcademyCardio {
             Heading("The interference effect"),
             Paragraph(
                 "Hard endurance work alongside lifting can blunt strength and power gains. The " +
-                    "detail that usually gets dropped is where it bites: explosive lifts, long runs, " +
+                    "detail that usually gets dropped is where it bites: explosive lifts, long runs " +
                     "and hard cardio right before heavy legs. Spaced sensibly, the cost is small."
             ),
             Figure(
                 "fig.interference",
-                "Illustrative ranking of how much each kind of cardio gets in the way of lifting."
+                "Illustrative: how much each kind of cardio costs your lifting."
             ),
             Bullets(
                 listOf(
                     "One hard session a week, on top of an easy base you already have",
                     "At least a day away from heavy squats or deadlifts",
                     "Cycling gets in the way of leg strength less than running does",
-                    "Warm up and cool down, both are part of the session",
+                    "Warm up and cool down: both are part of the session",
                     "Drop intervals completely in a deload week"
                 )
             ),
@@ -342,8 +342,8 @@ internal object AcademyCardio {
             ),
             Heading("What the coach does"),
             Paragraph(
-                "It places hard sessions away from heavy leg days, and takes yesterday's cardio out " +
-                    "of today's readiness once. If the two start competing, it moves a session."
+                "It places hard sessions away from heavy leg days, and counts yesterday's cardio " +
+                    "once in today's readiness. If the two start competing, it moves a session."
             ),
             Callout("Where you put it is most of the answer. You rarely have to pick one or the other.")
         ),

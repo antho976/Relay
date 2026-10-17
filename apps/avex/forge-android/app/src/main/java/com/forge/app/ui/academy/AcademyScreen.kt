@@ -50,6 +50,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.academy.AcademyRegistry
 import com.forge.app.domain.academy.LessonTrack
+import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.LocalTouchExplorationEnabled
 import com.forge.app.ui.common.bounceClick
@@ -147,8 +148,8 @@ fun AcademyContent(
                 val lessons = state.lessonsIn(track)
                 if (lessons.isEmpty()) return@forEach
                 item("chapter-${track.code}", contentType = "chapter") {
-                    Spacer(Modifier.height(44.dp))
-                    ChapterHeading(track, onBg, muted)
+                    Spacer(Modifier.height(32.dp))
+                    ChapterHeading(track, muted)
                     Spacer(Modifier.height(8.dp))
                 }
                 lessons.forEach { lesson ->
@@ -270,7 +271,7 @@ private fun FeaturedRotator(
                     listOfNotNull(
                         if (featured.size > 1 && position >= 0) "${position + 1} of ${featured.size}" else null,
                         "${lesson.lesson.readMinutes} min"
-                    ).joinToString(" · "),
+                    ).joinToString(" · ").uppercase(),
                     style = MaterialTheme.typography.labelMedium,
                     color = muted.copy(alpha = 0.65f)
                 )
@@ -280,17 +281,16 @@ private fun FeaturedRotator(
     }
 }
 
-/** A chapter's name as a real heading, and the one line it was written with. */
+/**
+ * A chapter's name on the app's mono section anchor, and the one line it was written with. It was a
+ * serif heading until 2026-10-17, which gave the contents three serif sizes under the masthead and
+ * made the Academy the one tab whose sections did not open the way Home's, Stats' and Coach's do.
+ */
 @Composable
-private fun ChapterHeading(track: LessonTrack, onBg: Color, muted: Color) {
+private fun ChapterHeading(track: LessonTrack, muted: Color) {
     Column(Modifier.fillMaxWidth()) {
-        Text(
-            track.displayName,
-            style = MaterialTheme.typography.headlineSmall,
-            color = onBg,
-            modifier = Modifier.semantics { heading() }
-        )
-        Spacer(Modifier.height(4.dp))
+        EditorialHeader(track.displayName, muted = muted, accent = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(2.dp))
         Text(chapterLine(track), style = MaterialTheme.typography.bodySmall, color = muted)
     }
 }
@@ -345,7 +345,7 @@ private fun ContentsRow(
                     Spacer(Modifier.width(10.dp))
                 }
                 Text(
-                    "${lesson.readMinutes} min",
+                    "${lesson.readMinutes} min".uppercase(),
                     style = MaterialTheme.typography.labelSmall,
                     color = muted.copy(alpha = 0.65f)
                 )
@@ -376,7 +376,7 @@ private fun ForYouMark(accent: Color, muted: Color) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(6.dp).clip(CircleShape).background(accent))
         Spacer(Modifier.width(6.dp))
-        Text("For you", style = MaterialTheme.typography.labelMedium, color = muted)
+        Text("FOR YOU", style = MaterialTheme.typography.labelMedium, color = muted)
     }
 }
 

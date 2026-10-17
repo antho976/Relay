@@ -32,7 +32,7 @@ import com.forge.app.ui.common.ForgeChoiceChip
 import com.forge.app.ui.common.ForgeSlidingSegments
 import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.forgeItemMotion
-import com.forge.app.ui.gym.train.components.GymSearchRow
+import com.forge.app.ui.common.ForgeSearchRow
 import com.forge.app.ui.theme.LocalForgeSettings
 
 /**
@@ -114,7 +114,7 @@ fun SessionHistoryScreen(
 
                     Spacer(Modifier.height(18.dp))
                     // ── Search: the filled rounded search row ──────────
-                    GymSearchRow(
+                    ForgeSearchRow(
                         query = viewModel.queryText,
                         onQueryChange = viewModel::setQuery,
                         placeholder = "Search day, exercise or note",

@@ -8,11 +8,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.domain.academy.inUnit
 import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.theme.LocalForgeSettings
 
 /**
  * One lesson, on its own page. A retired id (from a coach reason written before the 2026-09-26
@@ -26,7 +29,9 @@ fun LessonScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val lesson = state.lesson
+    // Example weights in the copy print in the reader's own unit (LessonUnits).
+    val unit = LocalForgeSettings.current.weightUnit
+    val lesson = remember(state.lesson, unit) { state.lesson?.inUnit(unit) }
 
     if (lesson == null) {
         // A retired or mistyped id. §12's error state: a quiet inline line wording the consequence,

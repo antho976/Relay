@@ -168,6 +168,7 @@ fun HubScreen(
                     onOpenCardioSession = { cardioId -> nav.navigate(Routes.cardioSession(cardioId)) },
                     onConnectWatch = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } },
                     onOpenProfile = { pushOnce(Routes.PROFILE) },
+                    onOpenCoach = if (BottomTab.COACH in tabs) ({ goToTab(BottomTab.COACH) }) else null,
                     initialTab = 1,
                     title = "Stats"
                 )

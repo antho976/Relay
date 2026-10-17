@@ -64,7 +64,6 @@ import com.forge.app.domain.units.MAX_HOLD_SECONDS
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.service.wear.toProtocol
 import com.forge.app.domain.units.formatHold
-import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.parser.WeightParser
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.domain.units.normalizeDecimalInput
@@ -141,7 +140,8 @@ fun SetInputRow(
     fill: SetFill? = null,
     /** The eased target to open the first set on while easing back in (see [nextSetSeedLb]). */
     rampSeedLb: Double? = null,
-    /** Easing back in after a break: last session's set is shown as "last", not as one to beat. */
+    /** The day asks for less than last session (easing back in after a break, or a lighter
+     *  target): last session's set is shown as "last", not as one to beat. */
     easingBack: Boolean = false,
     targetsMet: Boolean = false,
     advanceLabel: String = "",
@@ -398,19 +398,20 @@ fun SetInputRow(
                 priorSetForActiveRow?.let { prior ->
                     // Plate exercises read as a plate count, never the lb equivalent (#9) — so
                     // tapping autofills the plate COUNT into the plate field, not its poundage.
+                    // Free weights drop the unit: the WEIGHT · LB header above already names it,
+                    // and "28.6 lb" wrapped the hint to two lines in its 72dp column.
                     val priorDisplay = prior.weightLb?.let { lb ->
-                        if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, weightUnit)
+                        if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else weightInputValue(lb, weightUnit)
                     } ?: prior.weightText
-                    Text(
-                        // The ghost to beat — tap to autofill the weight only so the user
-                        // pushes for one extra rep rather than copying the exact same set.
-                        // Back from a break that set is from before it, and the coach asked for
-                        // less: it reads as where you were, not as the number to beat.
-                        "${if (easingBack) "last" else "beat"} $priorDisplay × ${prior.reps}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = onBg.copy(alpha = 0.7f),
-                        fontSize = 9.sp,
-                        textAlign = TextAlign.End,
+                    // The ghost to beat — tap to autofill the weight only so the user
+                    // pushes for one extra rep rather than copying the exact same set.
+                    // Back from a break that set is from before it, and the coach asked for
+                    // less: it reads as where you were, not as the number to beat.
+                    // Two lines by design: on one, the mono "beat 28.6 × 8" broke wherever the
+                    // 72dp column ran out, which was usually just before the reps.
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.Bottom,
                         modifier = Modifier
                             .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                             .clickableLabeled(
@@ -421,7 +422,16 @@ fun SetInputRow(
                                 } ?: prior.weightText
                                 // Reps intentionally left for the user — aim for one more.
                             }
-                    )
+                    ) {
+                        val caption = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp)
+                        Text(if (easingBack) "last" else "beat", style = caption, color = muted)
+                        Text(
+                            "$priorDisplay × ${prior.reps}",
+                            style = caption,
+                            color = onBg.copy(alpha = 0.7f),
+                            textAlign = TextAlign.End
+                        )
+                    }
                 }
             }
             }

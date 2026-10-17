@@ -41,6 +41,18 @@ interface CoachDao {
     @Query("SELECT * FROM coach_decision WHERE week_id = :weekId ORDER BY id")
     suspend fun decisionsFor(weekId: String): List<CoachDecision>
 
+    /**
+     * What the latest pass has open (proposed, not yet applied or skipped), by target key: an
+     * exercise id for swaps and rep shifts. Stats links a lift's plateau read to its call while one
+     * is open. Proposed only, so a coach that is off (its calls are written shadow) links nothing.
+     */
+    @Query("""
+        SELECT DISTINCT target_key FROM coach_decision
+        WHERE status = 'proposed'
+          AND week_id = (SELECT week_id FROM coach_pass ORDER BY ran_at DESC LIMIT 1)
+    """)
+    fun observeOpenCallTargets(): kotlinx.coroutines.flow.Flow<List<String>>
+
     /** Coach history, newest first (Settings → Coach page, Phase 4). */
     @Query("SELECT * FROM coach_pass ORDER BY ran_at DESC LIMIT :limit")
     suspend fun recentPasses(limit: Int = 26): List<CoachPass>

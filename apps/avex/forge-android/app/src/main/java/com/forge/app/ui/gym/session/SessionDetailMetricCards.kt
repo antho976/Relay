@@ -50,6 +50,7 @@ import com.forge.app.ui.common.rememberDrawProgressState
 import com.forge.app.ui.common.staggeredProgress
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
+import com.forge.app.ui.common.ForgeDisclosureCaret
 
 // ─── Open section anchor + style toggle ────────────────────────────────────────
 
@@ -212,7 +213,7 @@ private fun ExerciseDrillRow(
                     style = MaterialTheme.typography.titleSmall,
                     color = if (expanded) onBg else muted
                 )
-                Text(if (expanded) "▾" else "▸", style = MaterialTheme.typography.labelMedium, color = muted)
+                ForgeDisclosureCaret(expanded, tint = muted)
             }
             val share = if (rawMax > 0) (value / rawMax).toFloat() else 0f
             // The fill is drawn rather than sized with fillMaxWidth(fraction), so the reveal is a
@@ -329,7 +330,7 @@ private fun ExercisePicker(
                 style = MaterialTheme.typography.bodyMedium, color = onBg,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
             )
-            Text("▾", style = MaterialTheme.typography.labelMedium, color = muted)
+            ForgeDisclosureCaret(expanded = open, tint = muted)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             items.forEachIndexed { i, name ->

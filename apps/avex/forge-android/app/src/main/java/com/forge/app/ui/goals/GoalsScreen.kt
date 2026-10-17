@@ -38,6 +38,7 @@ import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.rowShape
 import com.forge.app.ui.common.forgeItemMotion
+import com.forge.app.ui.common.ForgeSearchRow
 
 /**
  * The aggregated Goals list. Adding and editing happen on the routed [GoalEditorScreen] (a full
@@ -156,7 +157,7 @@ fun GoalsScreen(
 
             if (searchVisible) {
                 item(key = "search") {
-                    GoalSearchRow(query, { query = it }, "Search goals")
+                    ForgeSearchRow(query, { query = it }, "Search goals")
                     Spacer(Modifier.height(16.dp))
                 }
             }

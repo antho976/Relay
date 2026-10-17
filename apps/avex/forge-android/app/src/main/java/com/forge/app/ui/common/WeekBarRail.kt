@@ -107,7 +107,7 @@ fun WeekBarRail(
                     // read and the rest step down to muted, so the accent means "you are here".
                     selected = selectedIndex == null || selectedIndex == i || dragging,
                     onClick = onSelect?.let { select -> { select(i) } },
-                    readout = "$name, ${sets.getOrElse(i) { 0 }} sets",
+                    readout = sets.getOrElse(i) { 0 }.let { n -> "$name, $n ${if (n == 1) "set" else "sets"}" },
                     // Dragging is invisible to TalkBack, so a reorderable bar also carries the
                     // move as named actions.
                     moveActions = if (!reorderable) emptyList() else buildList {

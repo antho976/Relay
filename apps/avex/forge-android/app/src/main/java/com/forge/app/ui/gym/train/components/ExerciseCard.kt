@@ -39,6 +39,7 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.gym.train.state.ExerciseUiState
+import com.forge.app.ui.gym.train.state.chasesLastSession
 import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -100,6 +101,9 @@ fun ExerciseCard(
     onPinNote: (String) -> Unit = {},
     onToggleSetDifficultyTag: (setId: Long, currentTag: String?) -> Unit = { _, _ -> },
     onSetRpe: (setId: Long, rpe: Double?) -> Unit = { _, _ -> },
+    /** The set logged moments ago that can still be taken back; its row shows "undo". */
+    undoableSetId: Long? = null,
+    onUndoSet: () -> Unit = {},
     onAddSet: () -> Unit = {},
     onOpenChart: () -> Unit = {},
     advanceLabel: String = "",
@@ -361,7 +365,8 @@ fun ExerciseCard(
                             onEdit = { w, r -> onEditSet(set.id, w, r) },
                             onLongPress = { onLogSameAsLast(set.id) },
                             onToggleDifficultyTag = { tag -> onToggleSetDifficultyTag(set.id, tag) },
-                            onSetRpe = { rpe -> onSetRpe(set.id, rpe) }
+                            onSetRpe = { rpe -> onSetRpe(set.id, rpe) },
+                            onUndo = if (set.id == undoableSetId) onUndoSet else null
                         )
                     }
                     // Air between set rows, no rule (grouped-surface pass, 2026-09-27).
@@ -398,7 +403,10 @@ fun ExerciseCard(
                         todayLastSet = lastLogged,
                         fill = fill,
                         rampSeedLb = state.suggestedTargetLb.takeIf { easingBack },
-                        easingBack = easingBack,
+                        // A lighter day (low readiness, a reset) asks for less than last session too,
+                        // so its sets read "last", not "beat": "try 32.5 lb" over "beat 33.2 × 10"
+                        // gave two opposite instructions for the same set.
+                        easingBack = easingBack || !state.chasesLastSession,
                         targetsMet = targetsMet,
                         advanceLabel = advanceLabel,
                         // "I'm done" path — only meaningful once you've logged something and haven't hit

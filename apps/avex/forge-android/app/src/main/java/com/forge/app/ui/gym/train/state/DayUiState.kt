@@ -173,15 +173,16 @@ data class DayUiState(
             exercises.firstOrNull { it.plan.id == id }
         }
 
-    /** "Beat the ghost": logged sets that surpassed the same-position set from last session. */
+    /** "Beat the ghost": logged sets that surpassed the same-position set from last session. Only
+     *  lifts that are [ExerciseUiState.chasesLastSession] take part. */
     val ghostBeats: Int
-        get() = exercises.sumOf { ex ->
+        get() = exercises.filter { it.chasesLastSession }.sumOf { ex ->
             ex.loggedSets.withIndex().count { (i, s) -> beatsPriorSet(s, ex.priorSets.getOrNull(i)) }
         }
 
     /** Logged sets that HAVE a last-session counterpart to be judged against (the duel's denominator). */
     val ghostComparable: Int
-        get() = exercises.sumOf { ex ->
+        get() = exercises.filter { it.chasesLastSession }.sumOf { ex ->
             ex.loggedSets.indices.count { i -> ex.priorSets.getOrNull(i) != null }
         }
 }
@@ -353,3 +354,13 @@ data class TimeFitApplied(
     val skippedIds: List<String>,
     val skippedNames: List<String>
 )
+
+/**
+ * False when today's suggestion for this lift is lighter than last session (low readiness, a reset):
+ * the coach asked for less, so last session's sets are where you were, not numbers to beat. Such a
+ * lift shows its prior set as "last" and stays out of the header's duel, which otherwise scored every
+ * set of a lighter day as a loss ("BEAT 0 OF 4 SETS"). Half a pound, the Up Next threshold, separates
+ * a real change from kg and plate rounding.
+ */
+val ExerciseUiState.chasesLastSession: Boolean
+    get() = (suggestedDeltaLb ?: 0.0) > -0.5

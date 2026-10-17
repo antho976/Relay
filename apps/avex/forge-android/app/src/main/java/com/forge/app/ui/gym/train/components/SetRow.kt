@@ -125,6 +125,9 @@ fun SetRow(
     onLongPress: (() -> Unit)? = null,
     onToggleDifficultyTag: ((String?) -> Unit)? = null,
     onSetRpe: ((Double?) -> Unit)? = null,
+    /** Non-null for the few seconds after this set was logged: the LAST cell offers "undo" under
+     *  its delta. It replaced a "Set logged · Undo" snackbar that covered the controls below. */
+    onUndo: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val weightUnit = LocalForgeSettings.current.weightUnit
@@ -184,7 +187,7 @@ fun SetRow(
     val deltaColor = when {
         deltaPositive -> ForgeLastGreen
         deltaNegative -> muted.copy(alpha = 0.7f)
-        else -> muted.copy(alpha = 0.5f)
+        else -> muted.copy(alpha = 0.65f)
     }
 
     if (isEditing) {
@@ -336,7 +339,19 @@ fun SetRow(
         val deltaCell: @Composable (Modifier) -> Unit = { m ->
         // Delta col — trend icon + value, green when you beat last session. Suppressed for timed
         // holds (no weight×reps delta; a hold's progress is its longer time, shown as the ghost).
-        Box(modifier = m, contentAlignment = Alignment.CenterEnd) {
+        // Just after logging, the whole cell is the undo target with "undo" under the delta. The
+        // RPE chip already holds the row at 48dp, so the link comes and goes without the row
+        // changing height.
+        Column(
+            modifier = m.then(
+                if (onUndo != null) Modifier
+                    .sizeIn(minHeight = 48.dp)
+                    .clickableLabeled("Undo set $setIndex") { onUndo() }
+                else Modifier
+            ),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.Center
+        ) {
             if (!isTimed) deltaLabel?.let {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (deltaPositive || deltaNegative) {
@@ -352,13 +367,19 @@ fun SetRow(
                     Text(it, style = MaterialTheme.typography.labelSmall, color = deltaColor, fontSize = 9.sp)
                 }
             }
+            if (onUndo != null) {
+                Text("undo", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            }
         }
         }
         Column(
             modifier = tapMod
                 .semantics(mergeDescendants = true) {
                     contentDescription = rowDescription
-                    customActions = listOf(CustomAccessibilityAction("Delete set") { onDelete(); true })
+                    customActions = listOfNotNull(
+                        CustomAccessibilityAction("Delete set") { onDelete(); true },
+                        onUndo?.let { undo -> CustomAccessibilityAction("Undo set") { undo(); true } }
+                    )
                 }
                 .fillMaxWidth()
                 .graphicsLayer {
@@ -398,7 +419,7 @@ fun SetRow(
                     Text(
                         "(${formatWeight(plateLbField, weightUnit)})",
                         style = MaterialTheme.typography.labelSmall,
-                        color = muted.copy(alpha = 0.8f),
+                        color = muted.copy(alpha = 0.7f),
                         fontSize = 11.sp
                     )
                 } else {
@@ -447,7 +468,10 @@ fun SetRow(
             FlowRow(
                 modifier = Modifier.padding(start = SetTable.SET_COL_W, top = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                // The RPE chip's 48dp target is the line's tallest item; centring keeps each label
+                // level with its value instead of top-aligned above a chip that sits lower.
+                itemVerticalAlignment = Alignment.CenterVertically
             ) {
                 StackedCellLabel(if (isTimed) "HOLD" else "REPS", muted)
                 repsCell(Modifier)
@@ -491,7 +515,7 @@ private fun SwipeDeleteBackground(active: Boolean) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(if (active) MaterialTheme.colorScheme.error.copy(alpha = 0.85f) else Color.Transparent)
+            .background(if (active) MaterialTheme.colorScheme.error else Color.Transparent)
     )
 }
 

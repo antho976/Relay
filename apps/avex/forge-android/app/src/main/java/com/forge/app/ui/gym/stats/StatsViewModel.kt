@@ -37,7 +37,8 @@ class StatsViewModel @Inject constructor(
     engineInputs: com.forge.app.data.repo.EngineInputSignals,
     private val healthConnect: com.forge.app.data.health.HealthConnectManager,
     private val clock: com.forge.app.core.time.Clock,
-    vacationRepo: com.forge.app.data.repo.VacationRepository
+    vacationRepo: com.forge.app.data.repo.VacationRepository,
+    coachDao: com.forge.app.data.db.dao.CoachDao
 ) : ViewModel() {
 
     private val _body = MutableStateFlow<StatsBodyUi?>(null)
@@ -157,8 +158,9 @@ class StatsViewModel @Inject constructor(
         statsRepo.observeGymStats(),
         engineFlow,
         settingsRepo.userSex,
-        restDays
-    ) { snapshot, engine, sex, rest ->
+        restDays,
+        coachDao.observeOpenCallTargets()
+    ) { snapshot, engine, sex, rest, openCalls ->
         StatsUiState(
             isLoading = false,
             recentPrs = snapshot.recentPrs,
@@ -169,6 +171,7 @@ class StatsViewModel @Inject constructor(
             weeklyTonnage = snapshot.weeklyTonnage,
             balanceRatios = engine?.ratios.orEmpty().map(::balanceRatioUi),
             plateauFlags = engine?.plateaus.orEmpty().mapNotNull(::plateauFlagOf).associateBy { it.exerciseId },
+            coachCallLiftIds = openCalls.toSet(),
             bodyweightPoints = snapshot.bodyweightPoints,
             userSex = sex,
             readinessPulse = engine?.fatigue?.let { buildReadinessPulse(it, engine.deloadScoreThreshold) },

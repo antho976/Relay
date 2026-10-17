@@ -157,6 +157,9 @@ class DayViewModel @Inject constructor(
 
     internal var undoClearJob: Job? = null
 
+    /** Stamps this sitting's segment while the screen is open (see [startSegmentHeartbeat]). */
+    internal var segmentHeartbeatJob: Job? = null
+
     /** The lift the swiped-away set's row was logging, so its Undo can't land under a swap. */
     internal var deletedSetExerciseId: String? = null
 
@@ -208,8 +211,7 @@ class DayViewModel @Inject constructor(
             workoutRepo.closeStaleSession()
             val active = workoutRepo.activeSession()
             if (active != null && active.dayKey != dayKey) {
-                val otherName = customizationRepo.getDayName(active.dayKey)?.customName
-                    ?: Program.days.firstOrNull { it.key == active.dayKey }?.defaultName
+                val otherName = Program.days.firstOrNull { it.key == active.dayKey }?.defaultName
                     ?: active.dayKey
                 _state.update { it.copy(isLoading = false, crossDaySession = CrossDaySessionInfo(active.dayKey, otherName)) }
                 return@launch

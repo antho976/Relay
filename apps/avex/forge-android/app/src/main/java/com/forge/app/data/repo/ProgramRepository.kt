@@ -266,10 +266,11 @@ class ProgramRepository @Inject constructor(
         val generated = ProgramGenerator.generate(
             genParams, available, liked + bias.prefer, disliked, recent, effectiveSeed
         )
+        val oldDays = dao.days()
         val days = ArrayList<ProgramDay>()
         val slots = ArrayList<ProgramSlot>()
         generated.forEachIndexed { i, gd ->
-            days += ProgramDay(gd.key, i, gd.name, gd.word, gd.accentHex, gd.archetype)
+            days += ProgramDay(gd.key, i, keptDayName(oldDays, gd.key, gd.archetype) ?: gd.name, gd.word, gd.accentHex, gd.archetype)
             gd.exercises.forEachIndexed { j, ge ->
                 slots += ProgramSlot("${gd.key}-$j", gd.key, j, ge.libId, ge.sets, bias.repsFor(gd.key, ge.libId) ?: ge.reps)
             }
@@ -289,7 +290,7 @@ class ProgramRepository @Inject constructor(
         settings.setProgramGenerationIntent(intent)
         // The day keys being replaced, so the weekday carry-over only places days that are truly new
         // (a same-keys regenerate must not fill a weekday the user deliberately left off).
-        val oldKeys = dao.days().map { it.id }
+        val oldKeys = oldDays.map { it.id }
         // One transaction so a crash can't leave the fresh program bound to stale overlays (seam
         // finding 13): replace the program; drop the now-invalid customization overlay AND the
         // coach-applied swaps (their learning is already folded into the baseline above — see
@@ -695,4 +696,20 @@ class ProgramRepository @Inject constructor(
             "Wrist circles — 10 each direction"
         )
     }
+}
+
+/**
+ * The name a regenerated day keeps from the program it replaces, or null to take the generator's.
+ *
+ * The generator names a day by its key alone, so a stored name that differs on the same key is the
+ * user's: a rename in the plan builder, or a legacy override that migration 39→40 folded into
+ * `program_day.name`. Those overrides used to sit in their own table and outlive every regenerate;
+ * dropping the name here would undo a rename at the next deload, restore or rotation, none of which
+ * the user asked for. A day whose type changed (the builder turned "upper-a" into a leg day) is a
+ * different day and takes the generator's name.
+ */
+internal fun keptDayName(oldDays: List<ProgramDay>, key: String, archetype: String): String? {
+    val old = oldDays.firstOrNull { it.id == key } ?: return null
+    if (!old.archetype.substringBefore('-').equals(archetype.substringBefore('-'), ignoreCase = true)) return null
+    return old.name.takeIf { it.isNotBlank() }
 }

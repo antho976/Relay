@@ -25,6 +25,10 @@ interface SessionSegmentDao {
     @Query("UPDATE session_segment SET ended_at = :endedAt WHERE session_id = :sessionId AND ended_at IS NULL")
     suspend fun closeOpen(sessionId: Long, endedAt: Long)
 
+    /** The open sitting's heartbeat. A closed segment is left alone, so a late beat can't move it. */
+    @Query("UPDATE session_segment SET last_seen_at = :at WHERE id = :id AND ended_at IS NULL")
+    suspend fun touch(id: Long, at: Long)
+
     /** Close one segment at a best-effort time (dangling-segment cleanup after process death). */
     @Query("UPDATE session_segment SET ended_at = :endedAt WHERE id = :id")
     suspend fun close(id: Long, endedAt: Long)

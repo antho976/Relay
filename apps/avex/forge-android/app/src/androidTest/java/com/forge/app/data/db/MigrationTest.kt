@@ -4,6 +4,7 @@ import androidx.room.testing.MigrationTestHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -355,12 +356,57 @@ class MigrationTest {
     }
 
     @Test
-    fun migrateFullChain12To38_runsEveryStepInOrder() {
+    fun migrate38To39_addsTheSittingHeartbeat() {
+        // An open workout and its sittings, one closed and one still running, ride through untouched.
+        helper.createDatabase(dbName, 38).use { db ->
+            db.execSQL(
+                "INSERT INTO session (id, day_key, started_at, finished_at, total_volume_lb, pr_count, set_count, " +
+                    "deload_marked_here, tags, session_type, is_untracked, journal, intensity, active_seconds) " +
+                    "VALUES (7, 'upper-a', 1000, NULL, NULL, 0, 0, 0, '', 'normal', 0, '', '', 0)"
+            )
+            db.execSQL("INSERT INTO session_segment (id, session_id, started_at, ended_at) VALUES (1, 7, 1000, 61000)")
+            db.execSQL("INSERT INTO session_segment (id, session_id, started_at, ended_at) VALUES (2, 7, 90000, NULL)")
+        }
+        val db = helper.runMigrationsAndValidate(dbName, 39, true, MIGRATION_38_39)
+        db.query("SELECT id, session_id, started_at, ended_at, last_seen_at FROM session_segment ORDER BY id").use {
+            assertEquals(2, it.count)
+            it.moveToFirst()
+            assertEquals(listOf(1L, 7L, 1000L, 61000L), (0..3).map(it::getLong))
+            assertTrue(it.isNull(4))
+            it.moveToNext()
+            assertEquals(listOf(2L, 7L, 90000L), (0..2).map(it::getLong))
+            assertTrue(it.isNull(3))
+            assertTrue(it.isNull(4))
+        }
+    }
+
+    @Test
+    fun migrate39To40_foldsLegacyDayNamesIntoTheProgram() {
+        helper.createDatabase(dbName, 39).use { db ->
+            db.execSQL("INSERT INTO program_day (id, position, name, word, accent_hex, archetype) VALUES ('upper-a', 0, 'Upper A', 'PUSH', '#FFFFFF', 'upper-a')")
+            db.execSQL("INSERT INTO program_day (id, position, name, word, accent_hex, archetype) VALUES ('lower-a', 1, 'Lower A', 'QUADS', '#000000', 'lower-a')")
+            db.execSQL("INSERT INTO day_name_override (day_key, custom_name) VALUES ('upper-a', 'Chest day')")
+            // A blank override never showed as a name, so it must not blank the day's.
+            db.execSQL("INSERT INTO day_name_override (day_key, custom_name) VALUES ('lower-a', '  ')")
+        }
+        val db = helper.runMigrationsAndValidate(dbName, 40, true, MIGRATION_39_40)
+        db.query("SELECT id, position, name, word, accent_hex, archetype FROM program_day ORDER BY position").use {
+            assertEquals(2, it.count)
+            it.moveToFirst()
+            assertEquals(listOf("upper-a", "0", "Chest day", "PUSH", "#FFFFFF", "upper-a"), (0..5).map(it::getString))
+            it.moveToNext()
+            assertEquals(listOf("lower-a", "1", "Lower A", "QUADS", "#000000", "lower-a"), (0..5).map(it::getString))
+        }
+        db.query("SELECT * FROM day_name_override").use { assertEquals(0, it.count) }
+    }
+
+    @Test
+    fun migrateFullChain12To40_runsEveryStepInOrder() {
         // The pairwise tests above each validate one hop. This runs the WHOLE locked chain in a
         // single pass — a real v12 install upgrading straight to today's schema — so a gap or an
         // out-of-order/incompatible step between any two versions is caught, not just each hop alone.
         helper.createDatabase(dbName, 12).close()
-        helper.runMigrationsAndValidate(dbName, 38, true, *ALL_MIGRATIONS)
+        helper.runMigrationsAndValidate(dbName, 40, true, *ALL_MIGRATIONS)
     }
 
     @Test

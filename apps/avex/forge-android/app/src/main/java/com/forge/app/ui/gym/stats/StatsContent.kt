@@ -82,6 +82,8 @@ fun StatsContent(
     onOpenHistory: () -> Unit = {},
     onOpenNotes: () -> Unit = {},
     onOpenRecap: () -> Unit = {},
+    /** Swipes to the Coach tab; null when it isn't shown (coach off, or freestyle). */
+    onOpenCoach: (() -> Unit)? = null,
     viewModel: StatsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -214,7 +216,8 @@ fun StatsContent(
 
                 when (lens) {
                     StatsLens.STRENGTH -> strengthLens(
-                        state, weightUnit, c, focusLift, focusNonce, focusShownNonce, { focusShownNonce = it }, onOpenProfile,
+                        state, weightUnit, c, focusLift, focusNonce, focusShownNonce, { focusShownNonce = it },
+                        onOpenProfile, onOpenCoach,
                         onOpenLift = { id ->
                             focusLift = id; focusNonce++; lens = StatsLens.STRENGTH
                             // Items above the lens content: "title" (0), "hero" (1), "lens" (2) -> "str-lifts" is 3.
@@ -286,6 +289,7 @@ private fun LazyListScope.strengthLens(
     focusShownNonce: Int,
     onFocusShown: (Int) -> Unit,
     onLogBodyweight: () -> Unit,
+    onOpenCoach: (() -> Unit)?,
     onOpenLift: (String) -> Unit
 ) {
     if (state.e1rmLifts.isEmpty()) {
@@ -300,7 +304,7 @@ private fun LazyListScope.strengthLens(
         ) {
             E1rmComparisonList(
                 state.e1rmLifts, state.recentPrs, state.strengthCurves, weightUnit, c, focusLift, focusNonce,
-                state.plateauFlags, focusShownNonce, onFocusShown
+                state.plateauFlags, state.coachCallLiftIds, onOpenCoach, focusShownNonce, onFocusShown
             )
         }
     }

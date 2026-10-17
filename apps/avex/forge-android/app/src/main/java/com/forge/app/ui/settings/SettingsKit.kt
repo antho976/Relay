@@ -16,6 +16,9 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.FlowRowScope
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -39,7 +42,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Add
@@ -56,22 +58,15 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.RadioButtonDefaults
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.TopAppBarScrollBehavior
+import androidx.compose.material3.Typography
 import androidx.compose.material3.minimumInteractiveComponentSize
-import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -84,11 +79,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -99,7 +94,16 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.ForgeGroupCaption
+import com.forge.app.ui.common.ForgeGroupLabel
+import com.forge.app.ui.common.ForgeSwitch
+import com.forge.app.ui.common.ForgeTopBar
+import com.forge.app.ui.common.GROUP_INNER
+import com.forge.app.ui.common.GROUP_OUTER
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.selectableColors
 import com.forge.app.ui.common.toggleableLabeled
 import com.forge.app.ui.common.window.DropdownMenu
 import com.forge.app.ui.theme.ForgeMotion
@@ -114,26 +118,35 @@ import kotlin.math.roundToInt
  * kit is the native-grade replacement, kept inside Avex's warm world:
  *
  * - Rows live in **grouped containers**: each row is its own `surfaceContainerHigh` slab with 4dp
- *   corners, 2dp apart, and the group clip rounds the outer corners to 16dp. The gap separates rows
- *   without a single divider, and every slab is a tap target, so the fill is earned.
- * - **Sans everywhere.** [SettingsTheme] re-maps the mono label styles to sans for this screen only,
+ *   corners, 2dp apart, and the group clip rounds the outer corners. The gap separates rows without
+ *   a single divider, and every slab is a tap target, so the fill is earned.
+ * - **Sans controls.** [SettingsTheme] re-maps the mono label styles to sans for this screen only,
  *   so every Material control (buttons, chips, menus) reads in the same voice as the rows. The serif
- *   survives where it carries the brand: the collapsing page title and the live preview figures.
- * - **Accent means state**: a switch that is on, the picked radio, the primary button.
- * - Real controls: M3 switches, radios and filter chips, a sliding segmented control, drawn icons.
+ *   carries the page title and the live preview figures.
+ * - **Accent means state**: a switch that is on, the picked row, a selected segment.
+ * - Real controls: switches, filter chips, a sliding segmented control, drawn icons.
+ *
+ * **One family (2026-10-17).** The measures, chrome and anchors are the app's own grouped-surface
+ * kit's (`ui/common/ForgeGroups.kt`): the 24dp gutter, its corners and seams, the [ForgeTopBar] back
+ * capsule with the title on the page, mono group anchors, [ForgeSwitch], the selectable ring and
+ * wash for a pick, a light primary button. Settings had its own of each and read as another app.
  */
 
 // ── Tokens ───────────────────────────────────────────────────────────────────────────────────────
 
-/** Page margin: screen edge to the group's edge. */
-internal val KitGutter = 16.dp
+// The measures are the app's grouped-surface kit's (`ui/common/ForgeGroups.kt`), so a Settings
+// group and an onboarding or editor group are the same object. Settings ran its own 16dp gutter,
+// 16dp corners and 16dp row inset until 2026-10-17, and read as another app beside Home.
 
-/** Inside a row: its edge to its content. Group headers and footers align to the same inset. */
-internal val KitRowPad = 16.dp
+/** Page margin: screen edge to the group's edge. The app's 24dp page gutter. */
+internal val KitGutter = 24.dp
 
-private val KitOuterRadius = 16.dp
-private val KitInnerRadius = 4.dp
-private val KitGap = 2.dp
+/** Inside a row: its edge to its content. */
+internal val KitRowPad = ROW_H
+
+private val KitOuterRadius = GROUP_OUTER
+private val KitInnerRadius = GROUP_INNER
+private val KitGap = GROUP_SEAM
 
 /** Space between two groups on a page. */
 internal val KitGroupSpacing = 28.dp
@@ -141,6 +154,10 @@ internal val KitGroupSpacing = 28.dp
 internal val KitGroupShape = RoundedCornerShape(KitOuterRadius)
 private val KitInnerShape = RoundedCornerShape(KitInnerRadius)
 private val PillShape = RoundedCornerShape(50)
+
+/** [com.forge.app.ui.common.ForgeSlidingSegments]' shapes: a track on the group's corner, the thumb nested 4dp inside it. */
+private val SegmentTrackShape = RoundedCornerShape(KitOuterRadius)
+private val SegmentThumbShape = RoundedCornerShape(KitOuterRadius - 4.dp)
 
 /**
  * The shape a row clips itself to. Inside a [SettingsGroup] it is the small inner radius and the
@@ -176,6 +193,13 @@ private fun kitTileColor(): Color = MaterialTheme.colorScheme.surfaceContainerHi
 // ── Theme ────────────────────────────────────────────────────────────────────────────────────────
 
 /**
+ * The app's own type scale, captured before [SettingsTheme] swaps the mono label rungs for sans.
+ * The group anchors read it, so a Settings section opens on the same mono small-caps anchor as
+ * every other page while the Material controls under it keep their sans labels.
+ */
+private val LocalAppTypography = staticCompositionLocalOf<Typography?> { null }
+
+/**
  * The Settings voice: the app's theme with its three mono label styles swapped for sans. Material
  * draws button, chip, menu and segmented labels in `labelLarge`, which is mono app-wide, and that
  * alone made every control here look typed. Scoped to Settings, so no other screen moves.
@@ -188,43 +212,36 @@ internal fun SettingsTheme(content: @Composable () -> Unit) {
         val small = base.bodySmall.copy(fontWeight = FontWeight.Medium, letterSpacing = 0.3.sp)
         base.copy(labelLarge = base.titleSmall, labelMedium = small, labelSmall = small)
     }
-    MaterialTheme(
-        colorScheme = MaterialTheme.colorScheme,
-        shapes = MaterialTheme.shapes,
-        typography = typography,
-        content = content
-    )
+    CompositionLocalProvider(LocalAppTypography provides (LocalAppTypography.current ?: base)) {
+        MaterialTheme(
+            colorScheme = MaterialTheme.colorScheme,
+            shapes = MaterialTheme.shapes,
+            typography = typography,
+            content = content
+        )
+    }
 }
 
 // ── Page scaffolds ───────────────────────────────────────────────────────────────────────────────
 
 /**
- * The large collapsing title every Settings page opens on: serif at full size, settling into the
- * sans bar title as the page scrolls under it.
+ * The page's name: the serif title Stats and Coach open on, at the same size, scrolling away with
+ * the page. The bar above it carries only the back capsule ([ForgeTopBar]), as on every other page.
  */
 @Composable
-internal fun SettingsTopBar(title: String, onBack: () -> Unit, scrollBehavior: TopAppBarScrollBehavior) {
-    LargeTopAppBar(
-        title = { SettingsTopBarTitle(title) },
-        navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-            }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = Color.Transparent,
-            scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-            navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
-            titleContentColor = MaterialTheme.colorScheme.onSurface
-        ),
-        scrollBehavior = scrollBehavior
+private fun SettingsPageTitle(title: String) {
+    Text(
+        title,
+        style = MaterialTheme.typography.headlineLarge,
+        color = MaterialTheme.colorScheme.onBackground,
+        modifier = Modifier.padding(top = 4.dp).semantics { heading() }
     )
 }
 
+/** Room under a page's last group: the gesture bar plus a little air. */
 @Composable
-private fun SettingsTopBarTitle(title: String) {
-    Text(title, modifier = Modifier.semantics { heading() })
-}
+private fun settingsBottomPad(): Dp =
+    WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 40.dp
 
 /** A Settings page whose content is a short, fixed column of groups. */
 @Composable
@@ -234,26 +251,18 @@ internal fun SettingsScaffold(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    val behavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
-    Scaffold(
-        modifier = modifier.nestedScroll(behavior.nestedScrollConnection),
-        topBar = { SettingsTopBar(title, onBack, behavior) },
-        containerColor = Color.Transparent
-    ) { inner ->
+    Column(modifier.fillMaxSize()) {
+        ForgeTopBar(onBack = onBack)
         Column(
             Modifier
                 .fillMaxSize()
-                .padding(top = inner.calculateTopPadding())
                 .verticalScroll(rememberScrollState())
-                .padding(
-                    start = KitGutter,
-                    end = KitGutter,
-                    top = 8.dp,
-                    bottom = inner.calculateBottomPadding() + 40.dp
-                ),
-            verticalArrangement = Arrangement.spacedBy(KitGroupSpacing),
-            content = content
-        )
+                .padding(start = KitGutter, end = KitGutter, top = 4.dp, bottom = settingsBottomPad()),
+            verticalArrangement = Arrangement.spacedBy(KitGroupSpacing)
+        ) {
+            SettingsPageTitle(title)
+            content()
+        }
     }
 }
 
@@ -267,58 +276,46 @@ internal fun SettingsLazyScaffold(
     verticalArrangement: Arrangement.Vertical = Arrangement.Top,
     content: LazyListScope.() -> Unit
 ) {
-    val behavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
-    Scaffold(
-        modifier = modifier.nestedScroll(behavior.nestedScrollConnection),
-        topBar = { SettingsTopBar(title, onBack, behavior) },
-        containerColor = Color.Transparent
-    ) { inner ->
+    Column(modifier.fillMaxSize()) {
+        ForgeTopBar(onBack = onBack)
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize().padding(top = inner.calculateTopPadding()),
-            contentPadding = PaddingValues(
-                start = KitGutter,
-                end = KitGutter,
-                top = 8.dp,
-                bottom = inner.calculateBottomPadding() + 40.dp
-            ),
-            verticalArrangement = verticalArrangement,
-            content = content
-        )
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = KitGutter, end = KitGutter, top = 4.dp, bottom = settingsBottomPad()),
+            verticalArrangement = verticalArrangement
+        ) {
+            item(key = "settings_page_title") {
+                Box(Modifier.padding(bottom = KitGroupSpacing)) { SettingsPageTitle(title) }
+            }
+            content()
+        }
     }
 }
 
 // ── Groups ───────────────────────────────────────────────────────────────────────────────────────
 
-/** The label over a group: sans, medium weight, aligned with the rows' content. */
+/**
+ * The anchor over a group: the app's mono small-caps [ForgeGroupLabel], set in the app's own type
+ * scale (see [LocalAppTypography]) and inset like an onboarding group's, with an optional reading on
+ * the right.
+ */
 @Composable
 internal fun SettingsGroupHeader(title: String, modifier: Modifier = Modifier, trailing: String? = null) {
-    Row(
-        modifier.fillMaxWidth().padding(start = KitRowPad, end = KitRowPad, bottom = 10.dp),
-        verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f).semantics { heading() }
-        )
-        if (trailing != null) {
-            Text(trailing, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+    val app = LocalAppTypography.current ?: MaterialTheme.typography
+    Box(modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, bottom = 10.dp)) {
+        MaterialTheme(typography = app) { ForgeGroupLabel(title, trailing) }
     }
 }
 
 /** The note under a group. Set [isError] for the quiet inline error line. */
 @Composable
 internal fun SettingsGroupFooter(text: String, modifier: Modifier = Modifier, isError: Boolean = false) {
-    Text(
-        text,
-        style = MaterialTheme.typography.bodySmall,
-        color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.fillMaxWidth().padding(start = KitRowPad, end = KitRowPad, top = 10.dp)
-    )
+    val m = modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 10.dp)
+    if (isError) {
+        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = m)
+    } else {
+        ForgeGroupCaption(text, m)
+    }
 }
 
 /**
@@ -488,7 +485,9 @@ internal fun SettingsAdaptiveRow(
         val trail = trailM.firstOrNull()?.measure(Constraints(maxWidth = (width - leadW).coerceAtLeast(0)))
         val trailW = trail?.let { it.width + gap } ?: 0
         val beside = width - leadW - trailW
-        val needed = if (supporting != null) maxOf(titlePx, width / 2) else titlePx
+        // A description keeps a bit under half the row: at the app's 24dp gutter an exact half sent
+        // the rest-timer steppers under their text on a 411dp phone, where they fit beside it.
+        val needed = if (supporting != null) maxOf(titlePx, width * 9 / 20) else titlePx
         if (trail == null || (!stackAll && beside >= needed)) {
             val text = textM.first().measure(Constraints(maxWidth = beside.coerceAtLeast(0)))
             val h = maxOf(lead?.height ?: 0, text.height, trail?.height ?: 0).coerceAtLeast(c.minHeight)
@@ -554,16 +553,19 @@ internal fun SettingsCompactButton(label: String, onClick: (() -> Unit)? = null)
 /** How an icon tile is tinted. [Danger] is for the one row whose tap erases something. */
 internal enum class TileTone { Neutral, Accent, Danger }
 
-/** The 40dp icon tile a row leads with. Decorative: the row's title speaks for it. */
+/**
+ * The 40dp icon tile a row leads with, drawn like the app's [com.forge.app.ui.common.ForgeGlyphBadge]
+ * (muted glyph on the raised tile, accent when picked). Decorative: the row's title speaks for it.
+ */
 @Composable
 internal fun SettingsIconTile(icon: ImageVector, tone: TileTone = TileTone.Neutral) {
     val (container, tint) = when (tone) {
-        TileTone.Neutral -> kitTileColor() to MaterialTheme.colorScheme.onSurface
+        TileTone.Neutral -> kitTileColor() to MaterialTheme.colorScheme.onSurfaceVariant
         TileTone.Accent -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.primary
         TileTone.Danger -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.error
     }
     Box(
-        Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(container),
+        Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(container),
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
@@ -661,29 +663,15 @@ internal fun SettingsInfoRow(title: String, supporting: String? = null, icon: Im
     }
 }
 
-@Composable
-private fun kitSwitchColors() = SwitchDefaults.colors(
-    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-    checkedTrackColor = MaterialTheme.colorScheme.primary,
-    checkedBorderColor = MaterialTheme.colorScheme.primary,
-    checkedIconColor = MaterialTheme.colorScheme.primary,
-    uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
-    uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-    uncheckedBorderColor = MaterialTheme.colorScheme.outline,
-    uncheckedIconColor = MaterialTheme.colorScheme.surfaceContainerHighest
-)
-
-/** The Material switch as Settings draws it. Drawn only: the row it sits in owns the tap. */
+/**
+ * The app's [ForgeSwitch], as every other screen draws it. Drawn only: the row it sits in owns the
+ * tap and announces the state, so the switch keeps out of the semantics tree.
+ */
 @Composable
 internal fun SettingsSwitch(checked: Boolean) {
-    Switch(
-        checked = checked,
-        onCheckedChange = null,
-        thumbContent = if (checked) {
-            { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(SwitchDefaults.IconSize)) }
-        } else null,
-        colors = kitSwitchColors()
-    )
+    Box(Modifier.clearAndSetSemantics { }) {
+        ForgeSwitch(checked = checked, onCheckedChange = null)
+    }
 }
 
 /** Title, supporting line and a switch; the whole row toggles. */
@@ -742,7 +730,11 @@ internal fun SettingsMainSwitch(title: String, checked: Boolean, onCheckedChange
     }
 }
 
-/** One option of a pick-one list: optional tile, title, description, a radio. Whole row selects. */
+/**
+ * One option of a pick-one list: optional tile, title, description. Whole row selects. The pick is
+ * drawn the way every pick-one group in the app is (onboarding's answers, the editors): the accent
+ * wash under an accent ring, its corners rounded out so it lifts from the group. No radio dot.
+ */
 @Composable
 internal fun SettingsRadioRow(
     title: String,
@@ -751,19 +743,23 @@ internal fun SettingsRadioRow(
     icon: ImageVector? = null,
     onClick: () -> Unit
 ) {
-    SettingsRowContainer(
-        interaction = Modifier.selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+    val (ring, wash) = selectableColors(selected)
+    val shape = if (selected) KitGroupShape else LocalKitRowShape.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(kitRowColor())
+            .background(wash)
+            .border(1.5.dp, if (selected) ring else Color.Transparent, shape)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .heightIn(min = 56.dp)
+            .padding(horizontal = KitRowPad, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         if (icon != null) SettingsIconTile(icon, if (selected) TileTone.Accent else TileTone.Neutral)
         SettingsRowText(title, supporting)
-        RadioButton(
-            selected = selected,
-            onClick = null,
-            colors = RadioButtonDefaults.colors(
-                selectedColor = MaterialTheme.colorScheme.primary,
-                unselectedColor = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        )
     }
 }
 
@@ -861,7 +857,7 @@ internal fun SettingsSegmented(
         ForgeMotion.snappy(),
         label = "segment"
     )
-    val labelStyle = MaterialTheme.typography.labelLarge
+    val labelStyle = MaterialTheme.typography.bodyMedium
     val compactWidth = if (compact) segmentedCompactWidth(options) else null
     // The pick takes the app's selection formula: the accent wash under an accent edge.
     val thumb = MaterialTheme.colorScheme.primaryContainer
@@ -905,7 +901,7 @@ private fun SegmentedTrack(
     Box(
         modifier
             .then(if (compactWidth != null) Modifier.width(compactWidth) else Modifier.fillMaxWidth())
-            .clip(PillShape)
+            .clip(SegmentTrackShape)
             .background(MaterialTheme.colorScheme.surfaceContainerLowest)
             .padding(4.dp)
             .selectableGroup()
@@ -921,9 +917,9 @@ private fun SegmentedTrack(
                         placeable.placeRelative((position() * cell).roundToInt(), 0)
                     }
                 }
-                .clip(PillShape)
+                .clip(SegmentThumbShape)
                 .background(thumb)
-                .border(1.dp, MaterialTheme.colorScheme.primary, PillShape)
+                .border(1.dp, MaterialTheme.colorScheme.primary, SegmentThumbShape)
         )
         Row(Modifier.fillMaxWidth()) {
             options.forEachIndexed { i, label ->
@@ -932,7 +928,7 @@ private fun SegmentedTrack(
                     Modifier
                         .weight(1f)
                         .heightIn(min = 40.dp)
-                        .clip(PillShape)
+                        .clip(SegmentThumbShape)
                         .selectable(selected = picked, role = Role.RadioButton, onClick = { onSelect(i) })
                         .padding(horizontal = 8.dp, vertical = 8.dp),
                     contentAlignment = Alignment.Center
@@ -963,7 +959,7 @@ private fun SegmentedGrid(
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
+            .clip(SegmentTrackShape)
             .background(MaterialTheme.colorScheme.surfaceContainerLowest)
             .padding(4.dp)
             .selectableGroup()
@@ -978,9 +974,9 @@ private fun SegmentedGrid(
                         Modifier
                             .weight(1f)
                             .heightIn(min = 44.dp)
-                            .clip(PillShape)
+                            .clip(SegmentThumbShape)
                             .background(if (picked) thumb else Color.Transparent)
-                            .then(if (picked) Modifier.border(1.dp, MaterialTheme.colorScheme.primary, PillShape) else Modifier)
+                            .then(if (picked) Modifier.border(1.dp, MaterialTheme.colorScheme.primary, SegmentThumbShape) else Modifier)
                             .selectable(selected = picked, role = Role.RadioButton, onClick = { onSelect(i) })
                             .padding(horizontal = 8.dp, vertical = 8.dp),
                         contentAlignment = Alignment.Center
@@ -1002,7 +998,7 @@ private fun SegmentedGrid(
 /** How wide a compact [SettingsSegmented] draws: equal cells as wide as the widest label, measured. */
 @Composable
 private fun segmentedCompactWidth(options: List<String>): Dp {
-    val style = MaterialTheme.typography.labelLarge
+    val style = MaterialTheme.typography.bodyMedium
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     return remember(options, style, measurer, density) {
@@ -1192,7 +1188,7 @@ internal fun SettingsPill(text: String, tone: PillTone = PillTone.Neutral, dot: 
 internal enum class ButtonKind { Primary, Tonal, Outlined, Danger }
 
 /**
- * The Settings button. [ButtonKind.Primary] is the page's one do-it-now and takes the accent;
+ * The Settings button. [ButtonKind.Primary] is the page's one do-it-now, light-filled like the app's;
  * [ButtonKind.Tonal] is its sidekick; [ButtonKind.Danger] erases or replaces something.
  */
 @Composable
@@ -1214,11 +1210,13 @@ internal fun SettingsButton(
     }
     val scheme = MaterialTheme.colorScheme
     when (kind) {
+        // Light, as the app's filled capsule is everywhere else (`ForgePrimaryCapsule`): the accent
+        // is spent on state here, and a red button read as a different app's.
         ButtonKind.Primary -> Button(
             onClick = onClick, enabled = enabled, modifier = modifier.heightIn(min = 48.dp), contentPadding = padding,
             colors = ButtonDefaults.buttonColors(
-                containerColor = scheme.primary,
-                contentColor = scheme.onPrimary,
+                containerColor = scheme.onBackground,
+                contentColor = scheme.background,
                 disabledContainerColor = scheme.onSurface.copy(alpha = 0.15f),
                 disabledContentColor = scheme.onSurface.copy(alpha = 0.35f)
             ),
@@ -1397,7 +1395,7 @@ internal fun SettingsSheet(
                 .padding(start = KitGutter, end = KitGutter, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            Column(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     title,
                     style = MaterialTheme.typography.headlineSmall,

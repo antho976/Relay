@@ -13,11 +13,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Icon
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -28,7 +23,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -45,9 +39,7 @@ import com.forge.app.domain.units.distanceUnitLabel
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.ExerciseIcons
-import com.forge.app.ui.common.ForgeChromeIconButton
 import com.forge.app.ui.common.ForgeGlyphBadge
-import com.forge.app.ui.common.GROUP_OUTER
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.experiment.CardMark
 import com.forge.app.ui.nav.NavIcons
@@ -407,52 +399,3 @@ internal fun CustomGoalRow(
     )
 }
 
-// ─── Search (Goals list + the editor's exercise picker) ─────────────────────
-
-/**
- * The grouped-surface search row: one filled, fully rounded member with a leading magnifier, the
- * query typed inline, and a clear capsule once there is something to clear. It replaced two outlined
- * M3 fields (2026-09-27) so the app's searches read as the same filled control as its forms.
- */
-@Composable
-internal fun GoalSearchRow(query: String, onQueryChange: (String) -> Unit, placeholder: String) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val onBg = MaterialTheme.colorScheme.onBackground
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(GROUP_OUTER))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .padding(start = 18.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Icon(Icons.Filled.Search, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
-        BasicTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            textStyle = MaterialTheme.typography.bodyLarge.copy(color = onBg),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            singleLine = true,
-            modifier = Modifier
-                .weight(1f)
-                .padding(vertical = 14.dp)
-                .semantics { contentDescription = placeholder },
-            decorationBox = { inner ->
-                Box {
-                    // A placeholder may sit under the muted floor: a ghost affordance, not content.
-                    if (query.isEmpty()) {
-                        Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = muted.copy(alpha = 0.6f))
-                    }
-                    inner()
-                }
-            }
-        )
-        if (query.isNotEmpty()) {
-            ForgeChromeIconButton(Icons.Filled.Close, "Clear search", { onQueryChange("") }, tint = muted)
-        } else {
-            // Holds the row's height steady so it does not jump when the clear capsule appears.
-            Spacer(Modifier.size(48.dp))
-        }
-    }
-}
