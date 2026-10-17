@@ -42,14 +42,17 @@ class ProgressionAdvisorTest {
         fastStep: Boolean = false,
         consolidate: Boolean = false,
         phase: BlockPhase? = null,
-        weightUnit: WeightUnit = WeightUnit.LB
+        weightUnit: WeightUnit = WeightUnit.LB,
+        lifeScale: Double = 1.0,
+        lifeNote: String? = null
     ) = ProgressionAdvisor.suggestNextLoad(
         exerciseId = "ua1", exerciseName = "DB Bench Press",
         prevSets = sets, prevEffort = effort,
         repsText = reps, unit = unit, plateLb = 15.0,
         intensity = intensity, readiness = readiness, dbMaxLb = dbMaxLb,
         fastStep = fastStep, consolidate = consolidate,
-        phase = phase, weightUnit = weightUnit
+        phase = phase, weightUnit = weightUnit,
+        lifeScale = lifeScale, lifeNote = lifeNote
     )
 
     private fun lowReadiness(percent: Int = -4) =
@@ -288,7 +291,30 @@ class ProgressionAdvisorTest {
         val s = suggest(listOf(set(45.0, 10)), EffortRating.JUST_RIGHT, readiness = lowReadiness(-4))
         assertNotNull(s)
         assertEquals(45.0, s!!.targetWeightLb, 0.0001) // (45 + 2.5) × 0.96 = 45.6 → grid 45
-        assertTrue(s.reason.contains("eased 4% — readiness low"))
+        assertTrue(s.reason.contains("eased 4%, readiness low"))
+    }
+
+    // ── The comeback ramp after a layoff ───────────────────────────────────────
+
+    @Test
+    fun theFirstSessionBackIsEasedAndSaysWhy() {
+        // Mid-range last time, so the cue is the same-weight one: 100 × 0.97 × 0.9 = 87.3 → 85.
+        val s = suggest(
+            listOf(set(100.0, 8)), EffortRating.JUST_RIGHT, reps = "8-12", unit = ExerciseUnit.WEIGHT,
+            readiness = lowReadiness(-3), lifeScale = 0.9, lifeNote = "first session back after 3 weeks"
+        )
+        assertNotNull(s)
+        assertEquals(85.0, s!!.targetWeightLb, 0.0001)
+        // The reason names the comeback and the whole ease, not "readiness low".
+        assertTrue(s.reason, s.reason.contains("eased 13%, first session back after 3 weeks"))
+        assertTrue(s.reason, !s.reason.contains("readiness low"))
+    }
+
+    @Test
+    fun noRampLeavesTheSuggestionAsItWas() {
+        val plain = suggest(listOf(set(45.0, 10)), EffortRating.JUST_RIGHT, readiness = lowReadiness(-4))
+        val ramp1 = suggest(listOf(set(45.0, 10)), EffortRating.JUST_RIGHT, readiness = lowReadiness(-4), lifeScale = 1.0)
+        assertEquals(plain, ramp1)
     }
 
     @Test

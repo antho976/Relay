@@ -72,11 +72,11 @@ object ReadinessAdvisor {
             percent -= t.readinessSickPenalty
             parts += "you flagged being unwell"
         }
-        lifeEvents.layoff?.let { layoff ->
-            if (layoff.returning) {
-                percent -= t.readinessComebackPenalty
-                parts += "first week back after ${layoff.days} days"
-            }
+        // Away counts as much as returning: the first session back is the one still "away" until it
+        // is finished, and it is the one that most needs the ease.
+        lifeEvents.rampNote?.let { note ->
+            percent -= t.readinessComebackPenalty
+            parts += note
         }
 
         // ── Recovery spacing (v1 rule, kept) ──────────────────────────────────────

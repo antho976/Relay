@@ -102,7 +102,7 @@
 2 em-dash data/repo/PdfExportRepository.kt em dash in string
 20 em-dash data/repo/ProgramRepository.kt em dash in string
 10 em-dash domain/adapt/InsightEngine.kt em dash in string
-12 em-dash domain/adapt/ProgressionAdvisor.kt em dash in string
+10 em-dash domain/adapt/ProgressionAdvisor.kt em dash in string
 3 em-dash domain/coach/AutoCoachPlanner.kt em dash in string
 1 em-dash domain/coach/GoalPortfolio.kt em dash in string
 4 em-dash domain/coach/OutcomeWatcher.kt em dash in string

@@ -90,7 +90,17 @@ class LifeEventsTest {
         assertFalse(layoff.returning)
         assertEquals(21, layoff.days)
         assertTrue(s.easeOff)
-        assertTrue(LifeEvents.explain(s)!!.contains("21 days"))
+        assertTrue(LifeEvents.explain(s)!!.contains("3 weeks"))
+        // The session about to be planned is the first one back: it eases from the start.
+        assertEquals(LifeEvents.RAMP_SCALE, s.loadScale, 0.0001)
+        assertEquals("first session back after 3 weeks", s.rampNote)
+    }
+
+    @Test
+    fun gapsUnderThreeWeeksReadInDaysAndLongerOnesInWeeks() {
+        assertEquals("16 days", LifeEvents.gapPhrase(16))
+        assertEquals("3 weeks", LifeEvents.gapPhrase(21))
+        assertEquals("13 weeks", LifeEvents.gapPhrase(94))
     }
 
     @Test

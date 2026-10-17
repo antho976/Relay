@@ -115,6 +115,14 @@ object ProgressionAdvisor {
         phase: com.forge.app.domain.coach.BlockPhase? = null,
         /** The unit the user lifts in: targets snap to its grid, not a pound grid. */
         weightUnit: WeightUnit = WeightUnit.LB,
+        /**
+         * The comeback ramp after a layoff ([com.forge.app.domain.coach.LifeEvents.State.loadScale]),
+         * 1.0 when there is none. Composed with today's scale the same way the pre-session brief
+         * composes it, so the brief and the "try" weight on the card are the same number.
+         */
+        lifeScale: Double = 1.0,
+        /** Why [lifeScale] is under 1.0 ("first session back after 3 weeks"), for the reason line. */
+        lifeNote: String? = null,
         t: AdaptThresholds = AdaptThresholds()
     ): Recommendation.WeightChange? {
         if (unit == ExerciseUnit.BODYWEIGHT) return null
@@ -122,23 +130,32 @@ object ProgressionAdvisor {
         val working = prevSets.filter { !it.isAssisted && it.weightLb != null }
         val prevMax = working.maxOfOrNull { it.weightLb!! } ?: return null
 
-        val dayScale: Double
-        val dayNote: String?
+        val todayScale: Double
+        val todayNote: String?
         when {
             intensity != IntensityIntent.NORMAL -> {
-                dayScale = intensityScale(intensity, t)
-                dayNote = "intensity adjusted"
+                todayScale = intensityScale(intensity, t)
+                todayNote = "intensity adjusted"
             }
             readiness != null -> {
-                dayScale = 1 + readiness.percent / 100.0
-                dayNote = if (readiness.percent < 0) "eased ${-readiness.percent}% — readiness low"
-                else "+${readiness.percent}% — readiness high"
+                todayScale = 1 + readiness.percent / 100.0
+                todayNote = if (readiness.percent < 0) "eased ${-readiness.percent}%, readiness low"
+                else "+${readiness.percent}%, readiness high"
             }
             else -> {
-                dayScale = 1.0
-                dayNote = null
+                todayScale = 1.0
+                todayNote = null
             }
         }
+        // A layoff ramp outranks the day's own note: the comeback is the reason the weight moved,
+        // and readiness already counts it among its parts, so "readiness low" would blame the wrong
+        // thing. The note states the whole ease the card's weight carries.
+        val easing = lifeScale < 1.0 - SCALE_EPSILON
+        val dayScale = todayScale * lifeScale
+        val dayNote = if (easing) {
+            val eased = kotlin.math.round((1.0 - dayScale) * 100).toInt()
+            listOfNotNull("eased $eased%", lifeNote).joinToString(", ")
+        } else todayNote
         // The block's ambition and today's answer, composed once (H-02). No block leaves this
         // exactly as it was: `composedLoadScale(null, x) == x` for any scale in range.
         val scale = com.forge.app.domain.coach.BlockPhase.composedLoadScale(phase, dayScale)

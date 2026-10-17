@@ -137,7 +137,9 @@ internal suspend fun DayViewModel.buildExerciseUi(
         dbMaxLb = dbMaxLb,
         // Doubling the step only makes sense on the DB grid; PLATES move whole plates anyway.
         fastStep = stepMode == com.forge.app.domain.coach.StepMode.FASTER && effectiveUnit == com.forge.app.program.ExerciseUnit.DUMBBELL,
-        consolidate = stepMode == com.forge.app.domain.coach.StepMode.CONSOLIDATE
+        consolidate = stepMode == com.forge.app.domain.coach.StepMode.CONSOLIDATE,
+        lifeScale = life.loadScale,
+        lifeNote = life.rampNote
     )
 
     // Bodyweight movements have no weight to suggest, so they get a rep-progression cue instead (CO5).

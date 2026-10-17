@@ -99,6 +99,14 @@ class DayViewModel @Inject constructor(
      */
     internal var blockPhase: com.forge.app.domain.coach.BlockPhase? = null
 
+    /**
+     * The athlete's life state today, for the comeback ramp after a layoff. Loaded beside readiness
+     * (which reads the same state) and composed into every weight suggestion, so the card's "try"
+     * weight carries the same ease as the pre-session brief.
+     */
+    internal var life: com.forge.app.domain.coach.LifeEvents.State =
+        com.forge.app.domain.coach.LifeEvents.State.NONE
+
     /** The rest interval being measured right now: opened on set log, closed by the next set. */
     internal var openRestEvent: OpenRestEvent? = null
 
@@ -276,10 +284,12 @@ class DayViewModel @Inject constructor(
         // days; an explicit intensity pick outranks it. Refresh the cards once it lands so
         // already-built chips pick it up.
         viewModelScope.launch {
-            readiness = adaptationRepo.readinessScale()
+            life = adaptationRepo.lifeEvents()
+            readiness = adaptationRepo.readinessScale(life = life)
             blockPhase = runCatching { blockRepo.active() }.getOrNull()
                 ?.let { com.forge.app.domain.coach.BlockPhase.fromCode(it.phase) }
-            if ((readiness != null || blockPhase != null) && _state.value.exercises.isNotEmpty()) {
+            val eased = life.loadScale < 1.0
+            if ((readiness != null || blockPhase != null || eased) && _state.value.exercises.isNotEmpty()) {
                 refreshExercises()
             }
         }
