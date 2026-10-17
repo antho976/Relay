@@ -183,6 +183,8 @@ internal fun ColumnScope.TonnageTrendContent(
 ) {
     if (weeklyTonnage.size < 2) return
     val display = weeklyTonnage.map { toDisplayWeight(it.volumeLb, weightUnit) }
+    // Twelve weeks away is twelve zeros: a flat line at the floor reads as broken, not as a fact.
+    if (display.all { it <= 0.0 }) return
     val lo = display.min()
     val hi = display.max()
     val unit = unitLabel(weightUnit)
