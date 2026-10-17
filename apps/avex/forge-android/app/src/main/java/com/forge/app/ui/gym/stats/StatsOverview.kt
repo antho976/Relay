@@ -35,6 +35,7 @@ import com.forge.app.ui.common.rowShape
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
 import com.forge.app.ui.gym.stats.components.BodyHeatmap
+import com.forge.app.ui.gym.stats.components.musclesReadout
 import com.forge.app.ui.gym.stats.state.PrRecord
 import com.forge.app.ui.gym.stats.state.StatsUiState
 import java.text.SimpleDateFormat
@@ -108,9 +109,13 @@ internal fun ColumnScope.StatsHeroContent(state: StatsUiState, weightUnit: Weigh
         Spacer(Modifier.width(16.dp))
         // The map counts a rolling 7 days, while the figures beside it are the calendar week, so it
         // says so rather than sitting silently under "This week".
-        Column(Modifier.width(108.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        val mapSets = state.weeklySetsByMuscle.associate { it.muscle to it.sets }
+        Column(
+            Modifier.width(108.dp).chartReadout("Last 7 days: ${musclesReadout(mapSets)}."),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             BodyHeatmap(
-                setsByMuscle = state.weeklySetsByMuscle.associate { it.muscle to it.sets },
+                setsByMuscle = mapSets,
                 accent = c.accent,
                 faint = c.outline.copy(alpha = 0.35f),
                 silhouette = c.outline.copy(alpha = 0.25f),

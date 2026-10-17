@@ -61,6 +61,7 @@ import com.forge.app.ui.gym.session.state.SessionDetailData
 import com.forge.app.ui.gym.session.state.SessionMetric
 import com.forge.app.ui.gym.session.state.SetDetail
 import com.forge.app.ui.gym.stats.components.BodyHeatmap
+import com.forge.app.ui.gym.stats.components.musclesReadout
 import com.forge.app.ui.gym.stats.state.MuscleSetCount
 import com.forge.app.ui.theme.ForgeError
 import com.forge.app.ui.theme.ForgeSuccess
@@ -148,7 +149,7 @@ private fun CompactBodyMap(
     Box(
         modifier
             .clip(RoundedCornerShape(8.dp))
-            .semantics { contentDescription = "Muscles worked, tap to enlarge"; role = Role.Button }
+            .semantics { contentDescription = "Muscles worked: ${musclesReadout(setsBy)}. Tap to enlarge."; role = Role.Button }
             .clickable { enlarged = true }
     ) {
         BodyHeatmap(

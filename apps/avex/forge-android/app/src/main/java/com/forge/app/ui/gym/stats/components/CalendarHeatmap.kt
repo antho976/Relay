@@ -2,6 +2,9 @@ package com.forge.app.ui.gym.stats.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -125,6 +128,7 @@ internal fun CalendarHeatmap(
     // locale at class load and never followed a language change.
     val locale = com.forge.app.ui.common.currentLocale()
     val rangeFmt = remember(locale) { DateTimeFormatter.ofPattern("d MMM", locale) }
+    val dayFmt = remember(locale) { DateTimeFormatter.ofPattern("EEEE d MMMM", locale) }
     val rangeLabel = remember(firstWeek, lastWeek, startMonday, today, rangeFmt) {
         val start = startMonday.plusWeeks(firstWeek.coerceAtLeast(0).toLong())
         val end = startMonday.plusWeeks(lastWeek.toLong()).plusDays(6).let { if (it.isAfter(today)) today else it }
@@ -179,8 +183,12 @@ internal fun CalendarHeatmap(
                                         else Modifier.background(color)
                                     )
                                     .then(
+                                        // A lit day says which day and how much, so TalkBack can open it
+                                        // by name rather than as one of a hundred unlabelled buttons.
                                         if (onDayTap != null && sets > 0)
-                                            Modifier.bounceClick { onDayTap(date) }
+                                            Modifier
+                                                .semantics { contentDescription = "${dayFmt.format(date)}, ${if (sets == 1) "1 set" else "$sets sets"}" }
+                                                .bounceClick(role = Role.Button) { onDayTap(date) }
                                         else Modifier
                                     )
                             )
