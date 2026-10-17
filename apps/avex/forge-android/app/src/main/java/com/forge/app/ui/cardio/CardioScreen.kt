@@ -528,7 +528,7 @@ private fun LazyListScope.progressLens(
         item("progress-empty") {
             Spacer(Modifier.height(SECTION_GAP))
             InlineEmptyHint(
-                text = "Pace and load read out after your second session.",
+                text = "Pace and records read out after your second session.",
                 color = muted,
                 modifier = Modifier.padding(horizontal = 24.dp)
             )
