@@ -198,6 +198,11 @@ class DayViewModel @Inject constructor(
             // Only one session is active at a time. If a *different* day's workout is still in
             // progress, prompt (resume it, or discard & start this one) instead of silently
             // resuming the wrong day's sets under this plan.
+            //
+            // A workout untouched for half a day is filed to history first, exactly as the start below
+            // would file it. Asked first, the prompt offered "Discard & start" on last night's
+            // session, and discarding deletes its logged sets.
+            workoutRepo.closeStaleSession()
             val active = workoutRepo.activeSession()
             if (active != null && active.dayKey != dayKey) {
                 val otherName = customizationRepo.getDayName(active.dayKey)?.customName

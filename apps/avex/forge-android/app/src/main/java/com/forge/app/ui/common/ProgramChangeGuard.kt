@@ -56,6 +56,9 @@ class ProgramChangeGuard @Inject constructor(
         affectsSession: (Session) -> Boolean = { true },
         action: suspend () -> Unit
     ) {
+        // A workout untouched for half a day goes to history first, as a start would file it, so the
+        // regenerate below can't discard yesterday's logged sets behind a "discard workout?" prompt.
+        workoutRepo.closeStaleSession()
         val active = workoutRepo.activeSession()
         if (active == null || !affectsSession(active)) {
             action()
