@@ -149,9 +149,13 @@ class RecapViewModel @Inject constructor(
         val yearRecap = if (yearSessions.isNotEmpty()) {
             val topEx = recapTopExercise(loggedExerciseDao.sessionExerciseRowsSince(yearStart))
             val totalVol = yearSessions.sumOf { it.totalVolumeLb ?: 0.0 }
-            // Divide by calendar weeks elapsed this year, not sessions/7 (which wildly inflated it).
+            // Divide by calendar weeks elapsed this year, not sessions/7 (which wildly inflated it),
+            // counted from the later of January 1 and the year's first session: someone who started
+            // (or came back) in September had their weekly average diluted by eight empty months.
+            val firstThisYear = yearSessions.minOf { Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate() }
+            val from = maxOf(LocalDate.of(thisYear, 1, 1), firstThisYear)
             val weeksElapsed = (java.time.temporal.ChronoUnit.DAYS
-                .between(LocalDate.of(thisYear, 1, 1), LocalDate.now(zone)) / 7.0).coerceAtLeast(1.0)
+                .between(from, LocalDate.now(zone)) / 7.0).coerceAtLeast(1.0)
             val avgWeekly = totalVol / weeksElapsed
             val bestMonth = yearSessions
                 .groupBy { Instant.ofEpochMilli(it.startedAt).atZone(zone).month.name.lowercase().replaceFirstChar { c -> c.uppercase() } }
