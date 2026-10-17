@@ -75,6 +75,20 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.LocalForgeSettings
 
+/**
+ * The weight (lb) the next set's field opens on. Before today's first set it is last session's set
+ * in the same position. After it, today's last set moved by last session's step between the same
+ * two positions, so a change made today carries through the sets while a pyramid keeps its shape.
+ * Null when there is no weight to seed (bodyweight, or nothing to go on).
+ */
+internal fun nextSetSeedLb(todayLast: LoggedSet?, priorForRow: LoggedSet?, priorBefore: LoggedSet?): Double? {
+    val todayLb = todayLast?.weightLb?.takeIf { !todayLast.isAssisted } ?: return priorForRow?.weightLb
+    val rowLb = priorForRow?.weightLb
+    val beforeLb = priorBefore?.weightLb
+    return if (rowLb != null && beforeLb != null) (todayLb + (rowLb - beforeLb)).takeIf { it > 0.0 } ?: todayLb
+    else todayLb
+}
+
 // Hoisted so it isn't recompiled on every weight keystroke. Matches a full "WxR"
 // entry (e.g. a pasted "45x10" or "22,5x10") so it splits into both fields at once.
 private val WEIGHT_REPS_REGEX = Regex("""^([0-9]*[.,]?[0-9]+)\s*[xX]\s*([0-9]+)$""")
@@ -96,6 +110,10 @@ fun SetInputRow(
      *  never changes across one. */
     exerciseKey: String = "",
     priorSetForActiveRow: LoggedSet? = null,
+    /** Last session's set BEFORE the active row's, for carrying today's change through the sets. */
+    priorSetBeforeActiveRow: LoggedSet? = null,
+    /** This session's most recent logged set, null before the first. */
+    todayLastSet: LoggedSet? = null,
     targetsMet: Boolean = false,
     advanceLabel: String = "",
     /** Full-width outlined button shown above LOG SET when [onFinishEarly] is set — ends the
@@ -129,9 +147,15 @@ fun SetInputRow(
     // Prefill weight + reps with what you did on THIS set last time (#8) — your previous numbers,
     // not the plan target. Plate exercises seed a plate count. First time on the exercise → empty
     // weight + the plan's target reps. Re-seeds per set (keyed on the set number + the seed value).
-    val seedWeight = priorSetForActiveRow?.let { p ->
-        p.weightLb?.let { lb -> if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, weightUnit) } ?: p.weightText
-    } ?: prefillWeight.orEmpty()
+    //
+    // From the second set on, TODAY leads: the weight is today's last set moved by however much
+    // last session moved between these two sets. Straight sets carry today's weight, a pyramid or
+    // back-off keeps its shape, and a session that went up 2.5 on set one stays up on every set
+    // instead of re-seeding last time's lighter number, which took a +2.5 tap per set.
+    val seedLb = nextSetSeedLb(todayLastSet, priorSetForActiveRow, priorSetBeforeActiveRow)
+    val seedWeight = seedLb?.let { lb -> if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, weightUnit) }
+        ?: priorSetForActiveRow?.weightText
+        ?: prefillWeight.orEmpty()
     val seedReps = priorSetForActiveRow?.reps?.toString() ?: targetReps?.toString().orEmpty()
     // Re-seed only when the SET NUMBER changes (a new set), not when the derived seed value shifts —
     // keying on the volatile seed would wipe a half-typed entry if the prior baseline changed (#11).
@@ -227,9 +251,8 @@ fun SetInputRow(
      */
     fun untouchedSeedOrTyped(): String {
         val typed = weight.trim()
-        val priorLb = priorSetForActiveRow?.weightLb
-        return if (!isPlates && weightUnit != WeightUnit.LB && priorLb != null && typed == seedWeight)
-            toDisplayWeight(priorLb, weightUnit).toString()
+        return if (!isPlates && weightUnit != WeightUnit.LB && seedLb != null && typed == seedWeight)
+            toDisplayWeight(seedLb, weightUnit).toString()
         else typed
     }
 

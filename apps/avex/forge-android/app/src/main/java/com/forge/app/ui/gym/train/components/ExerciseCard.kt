@@ -361,6 +361,8 @@ fun ExerciseCard(
                         nextSetNumber = state.loggedSets.size + 1,
                         exerciseKey = state.effectiveExerciseId,
                         priorSetForActiveRow = state.priorSets.getOrNull(state.loggedSets.size),
+                        priorSetBeforeActiveRow = state.priorSets.getOrNull(state.loggedSets.size - 1),
+                        todayLastSet = lastLogged,
                         targetsMet = targetsMet,
                         advanceLabel = advanceLabel,
                         // "I'm done" path — only meaningful once you've logged something and haven't hit
