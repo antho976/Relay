@@ -9,6 +9,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -420,7 +421,7 @@ internal fun InlineRestTimer(timer: RestTimerState, onTap: () -> Unit, onSkip: (
     }
 
     Row(
-        modifier = Modifier.fillMaxWidth().clickableLabeled("Open the rest timer") { onTap() }.padding(vertical = 10.dp),
+        modifier = Modifier.fillMaxWidth().clickableLabeled("Open the rest timer") { onTap() }.padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
@@ -444,15 +445,23 @@ internal fun InlineRestTimer(timer: RestTimerState, onTap: () -> Unit, onSkip: (
         HorizontalDivider(modifier = Modifier.weight(1f), color = muted.copy(alpha = 0.25f))
         // One-tap end-rest — the common "I'm ready, move on" action without opening a dialog.
         // Always "done" (you finish the rest normally, not "skip" it).
+        // A 48dp target of its own: as 9sp text with 2dp of padding inside a row whose tap opens the
+        // controls, a near miss opened the dialog instead of ending the rest.
         if (onSkip != null) {
-            Text(
-                "done",
-                style = MaterialTheme.typography.labelSmall,
-                color = (if (isReady) readyColor else muted).copy(alpha = 0.8f),
-                fontSize = 9.sp,
-                letterSpacing = 1.sp,
-                modifier = Modifier.clickableLabeled("End rest") { onSkip() }.padding(start = 2.dp)
-            )
+            Box(
+                modifier = Modifier
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .clickableLabeled("End rest") { onSkip() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "done",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isReady) readyColor else muted,
+                    fontSize = 9.sp,
+                    letterSpacing = 1.sp
+                )
+            }
         }
     }
 }
