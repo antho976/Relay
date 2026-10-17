@@ -457,10 +457,14 @@ private fun account(providers: List<ProviderInfo>?, name: String): String {
     }
 }
 
+/** A model id as the pickers name it: Claude's by name, the provider's default, or the id itself. */
+internal fun modelName(id: String): String =
+    if (id.isBlank()) "Provider default" else MODELS.firstOrNull { it.first == id }?.second ?: id
+
 /** The provider's default, Claude's models by name, or any model id. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Models(provider: String, model: String, onModel: (String) -> Unit) {
+internal fun Models(provider: String, model: String, onModel: (String) -> Unit) {
     val named = if (provider == "claude") MODELS.filter { it.first.isNotEmpty() } else emptyList()
     var other by rememberSaveable(provider) { mutableStateOf(model.isNotEmpty() && named.none { it.first == model }) }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
