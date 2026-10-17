@@ -543,33 +543,34 @@ internal fun SessionHero(
                 "EASING BACK IN · ${state.easingBackNote.uppercase()}",
                 style = MaterialTheme.typography.labelSmall,
                 color = muted,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
             )
         } else if (state.ghostComparable > 0) {
         // "Beat the ghost" running scoreboard — the duel vs last session, live as you log.
             val beats = state.ghostBeats
             val total = state.ghostComparable
             val winning = beats * 2 >= total
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    if (winning) "BEATING LAST SESSION" else "VS LAST SESSION",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (winning) ForgeLastGreen else muted,
-                    fontSize = 9.sp
-                )
-                Text(
-                    "$beats / $total sets",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (winning) ForgeLastGreen else muted,
-                    fontSize = 9.sp
-                )
-            }
+            // On the content's 24dp gutter, under EXERCISE 01 / 06, not 10dp left of it. One line
+            // that says what the count is: "0 / 1 sets" read as a score with no rule and no plural.
+            Text(
+                ghostScoreLine(beats, total),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (winning) ForgeLastGreen else muted,
+                fontSize = 9.sp,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+            )
         }
     }
+}
+
+/**
+ * The live "beat the ghost" line: how many of today's sets so far beat the same set last session.
+ * Winning (half or more) leads with it; otherwise it names the duel and the count still to chase.
+ */
+internal fun ghostScoreLine(beats: Int, total: Int): String {
+    val sets = if (total == 1) "SET" else "SETS"
+    return if (beats * 2 >= total) "BEATING LAST SESSION · $beats OF $total $sets"
+    else "VS LAST SESSION · BEAT $beats OF $total $sets"
 }
 
 /** Whether two instants fall on the same calendar day in the device's zone. */
