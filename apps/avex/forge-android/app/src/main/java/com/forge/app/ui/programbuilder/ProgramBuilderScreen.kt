@@ -33,6 +33,8 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -324,35 +326,44 @@ fun ProgramBuilderScreen(
         }
     }
 
+    // The two confirms read like the app's others (the workout guard, Settings): surface fill (§5), the
+    // act named on a filled button, the safe answer plain. Discarding unsaved edits can't be undone,
+    // so its button takes the error fill; both were accent text buttons the weight of Cancel.
+    val scheme = MaterialTheme.colorScheme
     if (showDiscard) {
         AlertDialog(
             onDismissRequest = { showDiscard = false },
+            containerColor = scheme.surface,
             title = { Text("Discard changes?") },
             text = { Text("Your edits to this plan haven't been saved.") },
             confirmButton = {
-                TextButton(onClick = {
-                    showDiscard = false
-                    if (viewOrigin) { viewModel.discardEdits(); viewing = true } else onClose()
-                }) { Text("Discard") }
+                Button(
+                    onClick = {
+                        showDiscard = false
+                        if (viewOrigin) { viewModel.discardEdits(); viewing = true } else onClose()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = scheme.error, contentColor = scheme.onError)
+                ) { Text("Discard edits") }
             },
-            dismissButton = { TextButton(onClick = { showDiscard = false }) { Text("Keep editing") } }
+            dismissButton = { TextButton(onClick = { showDiscard = false }) { Text("Keep editing", color = scheme.onSurface) } }
         )
     }
 
     if (showFreestyleSwitch) {
         AlertDialog(
             onDismissRequest = { showFreestyleSwitch = false },
+            containerColor = scheme.surface,
             title = { Text("Switch to following a plan?") },
             text = {
                 Text("Saving this plan turns off Go with the flow and starts you on it. You can switch " +
                     "back to free logging anytime in Settings → Program.")
             },
             confirmButton = {
-                TextButton(onClick = { showFreestyleSwitch = false; viewModel.save { onSaved() } }) {
+                Button(onClick = { showFreestyleSwitch = false; viewModel.save { onSaved() } }) {
                     Text("Save & follow")
                 }
             },
-            dismissButton = { TextButton(onClick = { showFreestyleSwitch = false }) { Text("Cancel") } }
+            dismissButton = { TextButton(onClick = { showFreestyleSwitch = false }) { Text("Cancel", color = scheme.onSurface) } }
         )
     }
 }
