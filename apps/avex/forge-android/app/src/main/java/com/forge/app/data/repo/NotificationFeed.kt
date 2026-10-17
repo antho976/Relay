@@ -28,7 +28,6 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import java.time.Instant
 import java.time.ZoneId
-import java.time.format.FormatStyle
 
 /** What a notice does when its row is tapped. [None] renders the row passive (DESIGN §2③). */
 sealed interface NoticeAction {
@@ -204,13 +203,14 @@ class NotificationFeed @Inject constructor(
      * then what's waiting on a decision, then what happened, then housekeeping, then the invite.
      */
     val notices: Flow<List<AppNotice>> = combine(
-        // Paired with the day so "yesterday at 9:10 PM" re-reads at midnight, not on the next write.
-        combine(workoutRepo.observeActiveSession(), timeSignals.dayStarts()) { session, dayStart -> session to dayStart },
+        // Paired with the day so "yesterday at 9:10 PM" re-reads at midnight, not on the next write,
+        // and with the clock setting so the time reads like every other clock in the app.
+        combine(workoutRepo.observeActiveSession(), timeSignals.dayStarts(), settings.timeFormat24h, ::Triple),
         coachBrief,
         settings.unreadMilestones,
         settings.systemNotices,
         settings.weightUnit,
-    ) { (active, dayStartMs), brief, milestones, systemNotices, weightUnit ->
+    ) { (active, dayStartMs, use24h), brief, milestones, systemNotices, weightUnit ->
         buildList {
             // A session whose day was dropped by a program regenerate can't be resumed — the same
             // guard Home's CTA uses, so the feed never offers a day that no longer exists.
@@ -222,7 +222,7 @@ class NotificationFeed @Inject constructor(
                         glyph = NoticeGlyph.SESSION,
                         eyebrow = "IN PROGRESS",
                         title = Program.days.firstOrNull { it.key == dayKey }?.defaultName ?: "Workout",
-                        detail = "${sessionStartedLine(active.startedAt, dayStartMs)} Picks up where you stopped.",
+                        detail = "${sessionStartedLine(active.startedAt, dayStartMs, use24h)} Picks up where you stopped.",
                         action = NoticeAction.ResumeSession(dayKey),
                         // Ends by being finished or abandoned, not by being swept out of a list.
                         dismissible = false,
@@ -468,12 +468,14 @@ class NotificationFeed @Inject constructor(
         internal fun sessionStartedLine(
             startedAtMs: Long,
             dayStartMs: Long,
+            use24h: Boolean,
             zone: ZoneId = ZoneId.systemDefault(),
             locale: Locale = Locale.getDefault()
         ): String {
             val started = Instant.ofEpochMilli(startedAtMs).atZone(zone)
             val today = Instant.ofEpochMilli(dayStartMs).atZone(zone).toLocalDate()
-            val time = started.format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale))
+            // Settings → Format → Clock, not the locale's default, like every other clock the app draws.
+            val time = started.format(DateTimeFormatter.ofPattern(com.forge.app.domain.units.clockPattern(use24h), locale))
             return when (started.toLocalDate()) {
                 today -> "Started at $time."
                 today.minusDays(1) -> "Started yesterday at $time."
