@@ -39,6 +39,7 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.gym.train.state.ExerciseUiState
+import com.forge.app.ui.gym.train.state.chasesLastSession
 import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -405,7 +406,7 @@ fun ExerciseCard(
                         // A lighter day (low readiness, a reset) asks for less than last session too,
                         // so its sets read "last", not "beat": "try 32.5 lb" over "beat 33.2 × 10"
                         // gave two opposite instructions for the same set.
-                        easingBack = easingBack || (state.suggestedDeltaLb ?: 0.0) <= -0.5,
+                        easingBack = easingBack || !state.chasesLastSession,
                         targetsMet = targetsMet,
                         advanceLabel = advanceLabel,
                         // "I'm done" path — only meaningful once you've logged something and haven't hit
