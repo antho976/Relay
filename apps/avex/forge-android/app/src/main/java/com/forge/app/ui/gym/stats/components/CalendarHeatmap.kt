@@ -41,11 +41,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.forge.app.ui.common.bounceClick
 import kotlinx.coroutines.delay
-import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.time.temporal.TemporalAdjusters
 
 /**
  * Today's local date that stays current while the page is composed: re-read on resume and when the
@@ -82,7 +80,8 @@ internal fun rememberToday(): LocalDate {
 private const val WEEKS_PER_PAGE = 13
 
 /**
- * GitHub-contributions-style adherence grid: one cell per day (weeks as columns, Mon→Sun rows),
+ * GitHub-contributions-style adherence grid: one cell per day (weeks as columns, the user's week
+ * down each one),
  * tinted by that day's set count. Glanceable "did I show up?" — the most-beloved consistency view.
  * Paged with chevron arrows a page ([WEEKS_PER_PAGE] weeks) at a time rather than free-scrolled — a
  * horizontal scroll nested in the vertically-scrolling Stats page fought the finger — and opens on
@@ -102,8 +101,11 @@ internal fun CalendarHeatmap(
     restRing: Color = faint
 ) {
     val today = rememberToday()
-    val startMonday = remember(today, weeks) {
-        today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).minusWeeks((weeks - 1).toLong())
+    // Columns are the user's weeks (Settings → Format → week starts), the same weeks Stats' "This
+    // week" figures count, so a column never splits the week the figures above it describe.
+    val firstDayMonday = com.forge.app.ui.theme.LocalForgeSettings.current.firstDayMonday
+    val startMonday = remember(today, weeks, firstDayMonday) {
+        com.forge.app.core.time.userWeekStart(today, firstDayMonday).minusWeeks((weeks - 1).toLong())
     }
     // Normalize intensity against the busiest day IN THE VISIBLE WINDOW, not all-time — otherwise one
     // huge day from before the window washes every recent day out to near-faint.
