@@ -229,14 +229,24 @@ internal fun SettingsTheme(content: @Composable () -> Unit) {
  * the page. The bar above it carries only the back capsule ([ForgeTopBar]), as on every other page.
  */
 @Composable
-private fun SettingsPageTitle(title: String) {
-    Text(
-        title,
-        style = MaterialTheme.typography.headlineLarge,
-        color = MaterialTheme.colorScheme.onBackground,
-        modifier = Modifier.padding(top = 4.dp).semantics { heading() }
-    )
+private fun SettingsPageTitle(title: String, subtitle: String? = null) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            title,
+            style = MaterialTheme.typography.headlineLarge,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.padding(top = 4.dp).semantics { heading() }
+        )
+        // The mono line History's title carries its count on, in the app's own label voice.
+        if (subtitle != null) {
+            Text(subtitle, style = appTypography().labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
+
+/** The app's type scale under [SettingsTheme]: its label rungs are still mono here. */
+@Composable
+internal fun appTypography(): Typography = LocalAppTypography.current ?: MaterialTheme.typography
 
 /** Room under a page's last group: the gesture bar plus a little air. */
 @Composable
@@ -272,6 +282,8 @@ internal fun SettingsLazyScaffold(
     title: String,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    /** A mono reading under the title, as History carries its count. */
+    subtitle: String? = null,
     listState: LazyListState = rememberLazyListState(),
     verticalArrangement: Arrangement.Vertical = Arrangement.Top,
     content: LazyListScope.() -> Unit
@@ -285,7 +297,7 @@ internal fun SettingsLazyScaffold(
             verticalArrangement = verticalArrangement
         ) {
             item(key = "settings_page_title") {
-                Box(Modifier.padding(bottom = KitGroupSpacing)) { SettingsPageTitle(title) }
+                Box(Modifier.padding(bottom = KitGroupSpacing)) { SettingsPageTitle(title, subtitle) }
             }
             content()
         }
@@ -301,7 +313,7 @@ internal fun SettingsLazyScaffold(
  */
 @Composable
 internal fun SettingsGroupHeader(title: String, modifier: Modifier = Modifier, trailing: String? = null) {
-    val app = LocalAppTypography.current ?: MaterialTheme.typography
+    val app = appTypography()
     Box(modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, bottom = 10.dp)) {
         MaterialTheme(typography = app) { ForgeGroupLabel(title, trailing) }
     }

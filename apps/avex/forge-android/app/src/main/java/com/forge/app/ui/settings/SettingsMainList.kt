@@ -6,31 +6,31 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.rounded.DeleteForever
-import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.SearchOff
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import com.forge.app.data.db.entities.VacationPeriod
 import com.forge.app.ui.common.clickableLabeled
-import com.forge.app.ui.nav.NavIcons
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 /**
- * The Settings root: a search pill over six groups, every row carrying its live value so the page
- * answers "how is this set up" before a tap. While a query is typed the groups give way to one
- * ranked list of hits, each of which goes straight to its page or action.
+ * The Settings root: an index of every page, in the app's own list voice (History's), not a phone's
+ * settings app. Three groups under mono anchors, each row a page's name over its live value in the
+ * mono reading voice, so the page answers "how is this set up" before a tap. Factory reset stands
+ * apart, and the two pages about Avex itself close the page as buttons rather than rows.
+ *
+ * While a query is typed the groups give way to one ranked list of hits, each of which goes
+ * straight to its page or action.
  */
 @Composable
 internal fun MainList(
@@ -49,7 +49,12 @@ internal fun MainList(
     onResetTarget: (ResetTarget) -> Unit,
     onOpenResetMenu: () -> Unit,
     /** The Backup row's live value (see [backupSubtitle]); null keeps the row's description. */
-    backupStatus: String? = null
+    backupStatus: String? = null,
+    /** Readings that live on their own flows rather than [SettingsUiState]. */
+    customCardioCount: Int = 0,
+    holidayStatus: String = "None planned",
+    /** Space used, once measured; null until then. */
+    storageUsed: String? = null
 ) {
     // Built once per query rather than on every recomposition, and holding targets rather than
     // lambdas so a fresh callback from the caller never invalidates it.
@@ -67,77 +72,76 @@ internal fun MainList(
             SearchAction.COACH -> onOpenCoachBrief()
         }
     }
+    val page: @Composable (SettingsPage) -> Unit = { p ->
+        IndexRow(p.title, rowSubtitle(p, state)) { onOpenPage(p) }
+    }
     SettingsLazyScaffold(
         title = "Settings",
+        subtitle = "Avex ${com.forge.app.BuildConfig.VERSION_NAME}",
         onBack = onBack,
-        listState = listState,
-        // The hits are one lazy item each, 2dp apart like a group's rows, so while searching the
-        // group spacing is placed by hand instead of between every item.
-        verticalArrangement = if (searchQuery.isBlank()) Arrangement.spacedBy(KitGroupSpacing) else Arrangement.Top
+        listState = listState
     ) {
+        // The title already leaves a group's space under it, so the gaps are placed per item: an
+        // arrangement would double the one above the search, and the hits sit 2dp apart.
+        val group = Modifier.padding(top = KitGroupSpacing)
         item("search") { SettingsSearchBar(searchQuery, "Search settings", onSearchChange) }
         if (searchQuery.isBlank()) {
-            // First, on its own: the watch is the one setting that changes what the rest of the app
-            // can show, and it sat third in a group named after the coach.
-            item("devices") {
-                SettingsGroup("Devices") {
-                    PageRow(SettingsPage.Recovery, state, onOpenPage)
-                }
-            }
-            item("general") {
-                SettingsGroup("General") {
-                    PageRow(SettingsPage.Appearance, state, onOpenPage)
-                    PageRow(SettingsPage.Format, state, onOpenPage)
-                    PageRow(SettingsPage.Notifications, state, onOpenPage)
-                    PageRow(SettingsPage.Security, state, onOpenPage)
-                }
-            }
+            // What shapes the training first: the plan, the coach that adjusts it, how a session
+            // runs, which movements it draws on, and the weeks it should leave alone.
             item("training") {
-                SettingsGroup("Training") {
-                    PageRow(SettingsPage.Program, state, onOpenPage)
-                    PageRow(SettingsPage.Session, state, onOpenPage)
-                    PageRow(SettingsPage.ExercisePrefs, state, onOpenPage)
-                    PageRow(SettingsPage.CardioActivities, state, onOpenPage)
-                }
-            }
-            item("coach") {
-                SettingsGroup("Coach & recovery") {
+                SettingsGroup("Training", group) {
+                    page(SettingsPage.Program)
                     // Coach configuration only; the brief and its record live on the Coach tab.
                     // Freestyle has no plan to coach, so the row goes with the tab.
-                    if (!state.freestyleMode) PageRow(SettingsPage.Coach, state, onOpenPage)
-                    PageRow(SettingsPage.Vacation, state, onOpenPage)
+                    if (!state.freestyleMode) page(SettingsPage.Coach)
+                    page(SettingsPage.Session)
+                    page(SettingsPage.ExercisePrefs)
+                    IndexRow(SettingsPage.CardioActivities.title, cardioReading(customCardioCount)) {
+                        onOpenPage(SettingsPage.CardioActivities)
+                    }
+                    IndexRow(SettingsPage.Vacation.title, holidayStatus) { onOpenPage(SettingsPage.Vacation) }
+                }
+            }
+            item("app") {
+                SettingsGroup("App & devices", group) {
+                    // The watch leads: it is the one setting that changes what the rest of the app
+                    // can show.
+                    page(SettingsPage.Recovery)
+                    page(SettingsPage.Appearance)
+                    page(SettingsPage.Format)
+                    page(SettingsPage.Notifications)
+                    page(SettingsPage.Security)
                 }
             }
             item("data") {
-                SettingsGroup("Data") {
+                SettingsGroup("Data", group) {
                     // The backup's state, not what the page is for: the date of the last copy, or
                     // that it failed, is the one thing worth knowing before a phone gets lost.
-                    SettingsNavigationRow(
-                        SettingsPage.Backup.title,
-                        backupStatus ?: rowSubtitle(SettingsPage.Backup, state),
-                        pageGlyph(SettingsPage.Backup)
-                    ) { onOpenPage(SettingsPage.Backup) }
-                    SettingsNavigationRow("Export data", "Sessions · weekly · full backup · PDF", SettingsIcons.Export, onClick = onOpenDataDialog)
-                    SettingsNavigationRow("Import data", "Strong · Hevy · FitNotes · CSV", SettingsIcons.Import, onClick = onImportData)
-                    PageRow(SettingsPage.Storage, state, onOpenPage)
+                    IndexRow(SettingsPage.Backup.title, backupStatus ?: rowSubtitle(SettingsPage.Backup, state)) {
+                        onOpenPage(SettingsPage.Backup)
+                    }
+                    IndexRow("Export data", "Sessions · weekly · full backup · PDF", onClick = onOpenDataDialog)
+                    IndexRow("Import data", "Strong · Hevy · FitNotes · CSV", onClick = onImportData)
+                    IndexRow(SettingsPage.Storage.title, storageUsed?.let { "$it used" } ?: rowSubtitle(SettingsPage.Storage, state)) {
+                        onOpenPage(SettingsPage.Storage)
+                    }
+                    // One entry for the targeted resets; factory reset stands apart below.
+                    IndexRow("Reset…", "Sessions · trophies · cardio · settings", onClick = onOpenResetMenu)
                 }
             }
-            item("reset") {
-                SettingsGroup("Reset") {
-                    // One entry for the targeted resets, and factory reset kept apart and marked.
-                    SettingsNavigationRow("Reset…", "Sessions, trophies, cardio or settings", Icons.Rounded.RestartAlt, onClick = onOpenResetMenu)
-                    SettingsNavigationRow(
-                        ResetTarget.FACTORY.label,
-                        "Erase everything Avex stores on this phone",
-                        Icons.Rounded.DeleteForever,
-                        tone = TileTone.Danger
-                    ) { onResetTarget(ResetTarget.FACTORY) }
+            item("factory") {
+                // No reading: what it erases is the confirm dialog's to say, in a sentence.
+                SettingsGroup(modifier = group) {
+                    IndexRow(ResetTarget.FACTORY.label, null, danger = true) {
+                        onResetTarget(ResetTarget.FACTORY)
+                    }
                 }
             }
             item("about") {
-                SettingsGroup("About") {
-                    PageRow(SettingsPage.WhatsNew, state, onOpenPage)
-                    PageRow(SettingsPage.About, state, onOpenPage)
+                // About Avex rather than about your training, so not one more group of rows.
+                SettingsButtonBar(group) {
+                    SettingsButton(SettingsPage.WhatsNew.title, kind = ButtonKind.Tonal) { onOpenPage(SettingsPage.WhatsNew) }
+                    SettingsButton(SettingsPage.About.title, kind = ButtonKind.Tonal) { onOpenPage(SettingsPage.About) }
                 }
             }
         } else {
@@ -145,7 +149,7 @@ internal fun MainList(
             // the setting lives.
             if (results.isEmpty()) {
                 item("empty") {
-                    SettingsGroup(modifier = Modifier.padding(top = KitGroupSpacing)) {
+                    SettingsGroup(modifier = group) {
                         SettingsEmptyBlock(
                             Icons.Rounded.SearchOff,
                             "No settings match “$q”",
@@ -159,30 +163,82 @@ internal fun MainList(
                 item("results", contentType = "results-header") {
                     SettingsGroupHeader(
                         "${results.size} ${if (results.size == 1) "result" else "results"}",
-                        Modifier.padding(top = KitGroupSpacing)
+                        group
                     )
                 }
                 itemsIndexed(results, key = { _, r -> r.key }, contentType = { _, _ -> "result" }) { i, r ->
-                    KitLazyRow(i, results.size) { SearchResultRow(r, q) { openResult(r) } }
+                    KitLazyRow(i, results.size) {
+                        IndexRow(highlightMatch(r.name, q), r.where, label = r.name) { openResult(r) }
+                    }
                 }
             }
         }
     }
 }
 
-/** A root row for a sub-page: its glyph, its name, its live value. */
+/**
+ * A root row: the name, and under it the page's live value in the app's mono reading voice (the
+ * voice History's dates and Coach's readings use). The whole slab is the tap; there is no chevron,
+ * since a filled row on this page is already a promise of one.
+ */
 @Composable
-private fun PageRow(page: SettingsPage, state: SettingsUiState, onOpenPage: (SettingsPage) -> Unit) {
-    SettingsNavigationRow(page.title, rowSubtitle(page, state), pageGlyph(page)) { onOpenPage(page) }
+private fun IndexRow(
+    title: AnnotatedString,
+    reading: String?,
+    label: String = title.text,
+    danger: Boolean = false,
+    onClick: () -> Unit
+) {
+    SettingsRowContainer(interaction = Modifier.clickableLabeled(label, onClick = onClick)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+            )
+            if (reading != null) {
+                Text(reading, style = appTypography().labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
 }
 
-/** One resolved search hit: its display fields, a leading glyph and where it goes ([page], or
- *  [action] when it fires one). [key] is stable per entry across queries. */
+@Composable
+private fun IndexRow(title: String, reading: String?, danger: Boolean = false, onClick: () -> Unit) =
+    IndexRow(AnnotatedString(title), reading, danger = danger, onClick = onClick)
+
+/** The Cardio activities row's value: how many sports the user has added to the built-in list. */
+internal fun cardioReading(count: Int): String = when (count) {
+    0 -> "None added"
+    1 -> "1 added"
+    else -> "$count added"
+}
+
+private val HOLIDAY_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d")
+
+/**
+ * The Holidays row's value on [today]: the holiday under way and when it ends, else the next one to
+ * start, else none. Periods are inclusive "yyyy-MM-dd" ranges; a malformed one is skipped.
+ */
+internal fun holidayReading(periods: List<VacationPeriod>, today: LocalDate): String {
+    val ranges = periods.mapNotNull { p ->
+        runCatching { LocalDate.parse(p.startDate) to LocalDate.parse(p.endDate) }.getOrNull()
+    }
+    ranges.filter { (s, e) -> !today.isBefore(s) && !today.isAfter(e) }.maxByOrNull { it.second }?.let { (_, e) ->
+        return "Away until ${e.format(HOLIDAY_FMT)}"
+    }
+    ranges.filter { (s, _) -> s.isAfter(today) }.minByOrNull { it.first }?.let { (s, _) ->
+        return "Next from ${s.format(HOLIDAY_FMT)}"
+    }
+    return "None planned"
+}
+
+/** One resolved search hit: its display fields and where it goes ([page], or [action] when it
+ *  fires one). [key] is stable per entry across queries. */
 private class SearchResult(
     val key: String,
     val name: String,
     val where: String,
-    val glyph: ImageVector,
     val rank: Int,
     val page: SettingsPage? = null,
     val action: SearchAction? = null,
@@ -193,21 +249,21 @@ private class SearchResult(
 private fun searchHits(ql: String, freestyleMode: Boolean): List<SearchResult> = buildList {
     PAGE_ENTRIES.forEachIndexed { i, pe ->
         if (ql in pe.page.title.lowercase() || ql in pe.tags) {
-            add(SearchResult("page-$i", pe.page.title, pageSection(pe.page), pageGlyph(pe.page), searchRank(pe.page.title, ql), page = pe.page))
+            add(SearchResult("page-$i", pe.page.title, pageSection(pe.page), searchRank(pe.page.title, ql), page = pe.page))
         }
     }
     ALL_ITEMS.forEachIndexed { i, item ->
         if (ql in item.name.lowercase() || ql in item.tags) {
             add(SearchResult(
                 "item-$i", item.name, item.section?.let { "${item.page.title} · ${it.title}" } ?: item.page.title,
-                pageGlyph(item.page), searchRank(item.name, ql), page = item.page, section = item.section
+                searchRank(item.name, ql), page = item.page, section = item.section
             ))
         }
     }
     ACTION_ENTRIES.forEachIndexed { i, e ->
         val hidden = e.action == SearchAction.COACH && freestyleMode
         if (!hidden && (ql in e.name.lowercase() || ql in e.tags)) {
-            add(SearchResult("action-$i", e.name, e.where, actionGlyph(e.action), searchRank(e.name, ql), action = e.action))
+            add(SearchResult("action-$i", e.name, e.where, searchRank(e.name, ql), action = e.action))
         }
     }
 }.sortedWith(compareBy({ it.rank }, { it.name.lowercase() }))
@@ -224,39 +280,12 @@ private fun searchRank(name: String, ql: String): Int {
 
 /** The group a page sits in on the root list, a page hit's breadcrumb. */
 private fun pageSection(page: SettingsPage): String = when (page) {
-    SettingsPage.Appearance, SettingsPage.Format, SettingsPage.Notifications, SettingsPage.Security -> "General"
-    SettingsPage.Program, SettingsPage.Session, SettingsPage.ExercisePrefs, SettingsPage.CardioActivities -> "Training"
-    SettingsPage.Recovery -> "Devices"
-    SettingsPage.Coach, SettingsPage.Vacation -> "Coach & recovery"
+    SettingsPage.Program, SettingsPage.Coach, SettingsPage.Session, SettingsPage.ExercisePrefs,
+    SettingsPage.CardioActivities, SettingsPage.Vacation -> "Training"
+    SettingsPage.Recovery, SettingsPage.Appearance, SettingsPage.Format, SettingsPage.Notifications,
+    SettingsPage.Security -> "App & devices"
     SettingsPage.Backup, SettingsPage.Storage -> "Data"
     SettingsPage.WhatsNew, SettingsPage.PrivacyPolicy, SettingsPage.About -> "About"
-}
-
-/** A page's glyph, shared by its root row and its search hits. */
-internal fun pageGlyph(page: SettingsPage): ImageVector = when (page) {
-    SettingsPage.Appearance -> SettingsIcons.Appearance
-    SettingsPage.Format -> SettingsIcons.Units
-    SettingsPage.Session -> SettingsIcons.Session
-    SettingsPage.Notifications -> SettingsIcons.Notifications
-    SettingsPage.Security -> SettingsIcons.Security
-    SettingsPage.Program -> SettingsIcons.Program
-    SettingsPage.Coach -> NavIcons.Coach
-    SettingsPage.Recovery -> SettingsIcons.Wearable
-    SettingsPage.ExercisePrefs -> SettingsIcons.Likes
-    SettingsPage.CardioActivities -> NavIcons.Cardio
-    SettingsPage.Vacation -> SettingsIcons.Holiday
-    SettingsPage.Backup -> SettingsIcons.Backup
-    SettingsPage.Storage -> SettingsIcons.Storage
-    SettingsPage.WhatsNew -> SettingsIcons.WhatsNew
-    SettingsPage.PrivacyPolicy, SettingsPage.About -> Icons.Rounded.Info
-}
-
-private fun actionGlyph(action: SearchAction): ImageVector = when (action) {
-    SearchAction.DATA -> SettingsIcons.Export
-    SearchAction.IMPORT -> SettingsIcons.Import
-    SearchAction.COACH -> NavIcons.Coach
-    SearchAction.RESET -> Icons.Rounded.RestartAlt
-    SearchAction.FACTORY -> Icons.Rounded.DeleteForever
 }
 
 /** Bold the matched span within a result name so it's clear WHY the row surfaced. */
@@ -268,23 +297,6 @@ private fun highlightMatch(name: String, query: String): AnnotatedString = build
         append(name.substring(0, idx))
         withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(name.substring(idx, idx + query.length)) }
         append(name.substring(idx + query.length))
-    }
-}
-
-/** A search hit: the page glyph, the name with its matched span bold, and where it lives. */
-@Composable
-private fun SearchResultRow(result: SearchResult, query: String, onClick: () -> Unit) {
-    SettingsRowContainer(interaction = Modifier.clickableLabeled(result.name, onClick = onClick)) {
-        SettingsIconTile(result.glyph)
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(highlightMatch(result.name, query), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-            Text("In ${result.where}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Icon(
-            Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
@@ -335,9 +347,9 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
         if (s.galleryLockEnabled) add("gallery lock")
         if (s.privacyMode) add("privacy mode")
     }.joinToString(" · ").replaceFirstChar { it.uppercase() }.ifEmpty { "No lock set" }
-    SettingsPage.Recovery -> "Watch app · Health Connect · sleep, heart, steps"
+    SettingsPage.Recovery -> "Health Connect · watch app"
     SettingsPage.ExercisePrefs -> when {
-        s.liked.isEmpty() && s.disliked.isEmpty() -> "Prefer or hide any movement"
+        s.liked.isEmpty() && s.disliked.isEmpty() -> "None set"
         else -> "${s.liked.size} preferred · ${s.disliked.size} hidden"
     }
     // The count lives on its own StateFlow, not SettingsUiState, so the row shows what it is for.

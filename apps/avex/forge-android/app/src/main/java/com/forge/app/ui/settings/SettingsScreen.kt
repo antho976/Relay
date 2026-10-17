@@ -288,6 +288,13 @@ fun SettingsScreen(
     // Read once per Settings visit: the weekly worker may have run, or failed, since the last one.
     LaunchedEffect(Unit) { viewModel.refreshAutoBackupInfo() }
     val backupStatus = backupSubtitle(backupOn, backupSavedAt, backupFailed)
+    // The root's other live values, read from the flows their own pages already use. Storage is a
+    // walk of the app's files on the IO dispatcher, measured once per visit like the backup above.
+    val customCardio by viewModel.customCardioTypes.collectAsStateWithLifecycle()
+    val vacations by viewModel.vacations.collectAsStateWithLifecycle()
+    val storage by viewModel.storage.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { viewModel.refreshStorage() }
+    val holidayStatus = remember(vacations) { holidayReading(vacations, java.time.LocalDate.now()) }
 
     SettingsTheme {
         AnimatedContent(
@@ -319,7 +326,10 @@ fun SettingsScreen(
                     onImportData = { showImportDialog = true },
                     onResetTarget = { confirmReset = it },
                     onOpenResetMenu = { showResetMenu = true },
-                    backupStatus = backupStatus
+                    backupStatus = backupStatus,
+                    customCardioCount = customCardio.size,
+                    holidayStatus = holidayStatus,
+                    storageUsed = storage?.let { formatBytes(it.totalBytes) }
                 )
                 SettingsPage.Appearance -> AppearancePage(state, viewModel, back)
                 SettingsPage.Format -> FormatPage(state, viewModel, back)
