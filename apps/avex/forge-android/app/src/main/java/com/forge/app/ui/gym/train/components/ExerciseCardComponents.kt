@@ -70,6 +70,7 @@ import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.gym.train.state.ExerciseUiState
 import com.forge.app.ui.common.ForgeDisclosureCaret
+import kotlin.math.roundToInt
 
 /**
  * A YouTube search for how to perform [exerciseName] — no per-exercise link curation needed.
@@ -255,8 +256,10 @@ internal fun LastSessionStrip(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
     val weightUnit = LocalForgeSettings.current.weightUnit
-    // Count the volume up to its new total when a set lands, instead of snapping.
-    val animatedVolume by animateIntAsState(targetValue = toDisplayWeight(currentVolumeLb, weightUnit).toInt(), label = "volume")
+    // Count the volume up to its new total when a set lands, instead of snapping. Rounded, not
+    // truncated, like formatVolume: 28.6 × 8 is 228.8 and used to read "228 lb".
+    val volume = toDisplayWeight(currentVolumeLb, weightUnit)
+    val animatedVolume by animateIntAsState(targetValue = if (volume.isFinite()) volume.roundToInt() else 0, label = "volume")
 
     // Tick once a second so the elapsed time advances live — but only when a session has
     // actually started. Without the guard the loop recomposes the strip every second even
