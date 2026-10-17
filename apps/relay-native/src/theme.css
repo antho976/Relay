@@ -314,7 +314,7 @@ window.notes-window { padding: 0; margin: 0; border: 0; box-shadow: none; backgr
 .task-metadata flowboxchild { padding: 0; }
 
 /* The title bar's palette key, drawn as the search field it stands for. */
-button.command-search { min-width: 300px; min-height: 34px; padding: 0 6px 0 12px; margin-right: 10px; border: 1px solid @strong; border-radius: 10px; background: @raised; color: @faint; font-weight: 400; }
+button.command-search { min-width: 160px; min-height: 34px; padding: 0 6px 0 12px; margin-right: 10px; border: 1px solid @strong; border-radius: 10px; background: @raised; color: @faint; font-weight: 400; }
 button.command-search:hover { border-color: @line_emphasis; background: @raised; color: @secondary; }
 button.command-search image { color: @faint; }
 .command-search-text { font-size: 13px; }
