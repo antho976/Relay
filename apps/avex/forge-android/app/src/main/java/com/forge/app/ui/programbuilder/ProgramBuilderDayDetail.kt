@@ -177,8 +177,9 @@ fun ProgramBuilderDayDetail(
                         .bounceCombinedClick(onClickLabel = "Rename day", onClick = { onDialog(DayDialog.Rename) })
                         .padding(vertical = 4.dp)
                 ) {
+                    // The user's own name wraps (§14); the 24-character cap bounds it.
                     Text(day.name, style = MaterialTheme.typography.headlineSmall, color = onBg,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        modifier = Modifier.weight(1f, fill = false))
                     Box(
                         Modifier.size(36.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHigh),
                         contentAlignment = Alignment.Center
