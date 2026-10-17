@@ -1,5 +1,7 @@
 package com.quietsoftware.relay.ui.dev
 
+import android.content.Intent
+import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -53,12 +55,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboard
@@ -163,6 +171,12 @@ fun ChatScreen(name: String, nav: Nav) {
     fun update(id: Long, change: (Attachment) -> Attachment) {
         val i = attached.indexOfFirst { it.id == id }
         if (i >= 0) attached[i] = change(attached[i])
+    }
+    // Dictation through the phone's own recognizer: what was said joins what is typed.
+    val canSpeak = remember { Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).resolveActivity(context.packageManager) != null }
+    val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val said = r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.trim()
+        if (!said.isNullOrEmpty()) type(field.text.trimEnd().let { if (it.isEmpty()) said else "$it $said" })
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_PICTURES)) { uris ->
         for (uri in uris.take(MAX_PICTURES - attached.size)) {
@@ -277,6 +291,9 @@ fun ChatScreen(name: String, nav: Nav) {
             ) {
                 Chip("", "Attach a photo or a screenshot", ready && attached.size < MAX_PICTURES, glyph = "file-image") {
                     picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
+                if (canSpeak) Chip("", "Dictate a message", ready, icon = { MicGlyph(15.dp, c.ink2) }) {
+                    speech.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM))
                 }
                 Chip("/", "The agent's commands", ready) {
                     if (text.isBlank()) type("/")
@@ -1076,7 +1093,7 @@ private fun ChatComposer(
 
 /** A key of the agent's under the message box, drawn as a thread's chips are: a pill in a full-size target. */
 @Composable
-private fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String? = null, trailing: String? = null, onClick: () -> Unit) {
+private fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String? = null, trailing: String? = null, icon: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
     val c = Relay.colors
     val haptic = LocalHapticFeedback.current
     Box(
@@ -1088,15 +1105,38 @@ private fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String?
     ) {
         Row(
             Modifier.alpha(if (enabled) 1f else .45f).heightIn(min = 30.dp).clip(Radii.pill).background(c.slab).border(1.dp, c.strong, Radii.pill)
-                .padding(start = if (glyph != null) 8.dp else 10.dp, end = if (trailing != null || label.isEmpty()) 8.dp else 10.dp),
+                .padding(start = if (glyph != null || icon != null) 8.dp else 10.dp, end = if (trailing != null || label.isEmpty()) 8.dp else 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
             glyph?.let { Glyph(it, if (label.isEmpty()) 15.dp else 13.dp, if (label.isEmpty()) c.ink2 else c.ink3) }
+            icon?.invoke()
             if (label.isNotEmpty()) T(label, style = Relay.type.caption, color = c.ink2, maxLines = 1, weight = FontWeight.Medium)
             trailing?.let { Glyph(it, 11.dp, c.ink3) }
         }
     }
+}
+
+/** A microphone on the glyphs' 16-unit grid: its capsule, the cradle under it, the stand. */
+@Composable
+private fun MicGlyph(size: Dp, tint: Color) {
+    Box(
+        Modifier.size(size).drawWithCache {
+            val u = this.size.minDimension / 16f
+            val stroke = Stroke(width = 1.3f * u, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            val capsule = Path().apply { addRoundRect(RoundRect(5.75f * u, 1.75f * u, 10.25f * u, 9.75f * u, 2.25f * u, 2.25f * u)) }
+            val cradle = Path().apply {
+                moveTo(3.5f * u, 7.5f * u)
+                cubicTo(3.5f * u, 13f * u, 12.5f * u, 13f * u, 12.5f * u, 7.5f * u)
+                moveTo(8f * u, 11.6f * u)
+                lineTo(8f * u, 14.25f * u)
+            }
+            onDrawBehind {
+                drawPath(capsule, tint, style = stroke)
+                drawPath(cradle, tint, style = stroke)
+            }
+        },
+    )
 }
 
 /**

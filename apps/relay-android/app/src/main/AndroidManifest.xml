@@ -18,6 +18,13 @@
     <!-- Wake-on-LAN's broadcast reaches only the network the phone is on. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
+    <!-- The phone's speech recognizer, for dictating to an agent; without one the key is not shown. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
+
     <application
         android:name=".RelayApp"
         android:allowBackup="true"
