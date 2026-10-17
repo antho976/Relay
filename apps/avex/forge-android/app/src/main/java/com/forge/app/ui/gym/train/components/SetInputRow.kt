@@ -64,7 +64,6 @@ import com.forge.app.domain.units.MAX_HOLD_SECONDS
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.service.wear.toProtocol
 import com.forge.app.domain.units.formatHold
-import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.parser.WeightParser
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.domain.units.normalizeDecimalInput
@@ -385,8 +384,10 @@ fun SetInputRow(
                 priorSetForActiveRow?.let { prior ->
                     // Plate exercises read as a plate count, never the lb equivalent (#9) — so
                     // tapping autofills the plate COUNT into the plate field, not its poundage.
+                    // Free weights drop the unit: the WEIGHT · LB header above already names it,
+                    // and "28.6 lb" wrapped the hint to two lines in its 72dp column.
                     val priorDisplay = prior.weightLb?.let { lb ->
-                        if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, weightUnit)
+                        if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else weightInputValue(lb, weightUnit)
                     } ?: prior.weightText
                     Text(
                         // The ghost to beat — tap to autofill the weight only so the user
