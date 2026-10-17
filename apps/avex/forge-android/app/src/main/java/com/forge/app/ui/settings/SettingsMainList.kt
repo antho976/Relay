@@ -47,7 +47,9 @@ internal fun MainList(
     onOpenDataDialog: () -> Unit,
     onImportData: () -> Unit,
     onResetTarget: (ResetTarget) -> Unit,
-    onOpenResetMenu: () -> Unit
+    onOpenResetMenu: () -> Unit,
+    /** The Backup row's live value (see [backupSubtitle]); null keeps the row's description. */
+    backupStatus: String? = null
 ) {
     // Built once per query rather than on every recomposition, and holding targets rather than
     // lambdas so a fresh callback from the caller never invalidates it.
@@ -108,7 +110,13 @@ internal fun MainList(
             }
             item("data") {
                 SettingsGroup("Data") {
-                    PageRow(SettingsPage.Backup, state, onOpenPage)
+                    // The backup's state, not what the page is for: the date of the last copy, or
+                    // that it failed, is the one thing worth knowing before a phone gets lost.
+                    SettingsNavigationRow(
+                        SettingsPage.Backup.title,
+                        backupStatus ?: rowSubtitle(SettingsPage.Backup, state),
+                        pageGlyph(SettingsPage.Backup)
+                    ) { onOpenPage(SettingsPage.Backup) }
                     SettingsNavigationRow("Export data", "Sessions · weekly · full backup · PDF", SettingsIcons.Export, onClick = onOpenDataDialog)
                     SettingsNavigationRow("Import data", "Strong · Hevy · FitNotes · CSV", SettingsIcons.Import, onClick = onImportData)
                     PageRow(SettingsPage.Storage, state, onOpenPage)
@@ -340,6 +348,17 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
     SettingsPage.WhatsNew -> "Version ${com.forge.app.BuildConfig.VERSION_NAME}"
     SettingsPage.PrivacyPolicy -> "Offline use · permissions · deletion"
     SettingsPage.About -> "Privacy, gestures, licenses"
+}
+
+/**
+ * The Backup row's value: whether the weekly copy is on, and when the last one landed. A failure
+ * leads, since it is the line that needs a tap.
+ */
+internal fun backupSubtitle(enabled: Boolean, savedAt: String?, failed: Boolean): String = when {
+    failed -> "Last backup failed · back up now"
+    !enabled -> if (savedAt != null) "Weekly copy off · last $savedAt" else "Weekly copy off"
+    savedAt != null -> "Weekly · last copy $savedAt"
+    else -> "Weekly · no copy yet"
 }
 
 /** "2:30" for a rest time in seconds. */

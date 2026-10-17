@@ -282,6 +282,13 @@ fun SettingsScreen(
     }
     BackHandler(enabled = currentPage != null || searchQuery.isNotBlank()) { goBack() }
 
+    val backupOn by viewModel.autoBackupEnabled.collectAsStateWithLifecycle()
+    val backupSavedAt by viewModel.autoBackupSavedAt.collectAsStateWithLifecycle()
+    val backupFailed by viewModel.autoBackupFailed.collectAsStateWithLifecycle()
+    // Read once per Settings visit: the weekly worker may have run, or failed, since the last one.
+    LaunchedEffect(Unit) { viewModel.refreshAutoBackupInfo() }
+    val backupStatus = backupSubtitle(backupOn, backupSavedAt, backupFailed)
+
     SettingsTheme {
         AnimatedContent(
             targetState = SettingsDestination(currentPage, programSection, returnTo),
@@ -311,7 +318,8 @@ fun SettingsScreen(
                     onOpenDataDialog = { showDataDialog = true },
                     onImportData = { showImportDialog = true },
                     onResetTarget = { confirmReset = it },
-                    onOpenResetMenu = { showResetMenu = true }
+                    onOpenResetMenu = { showResetMenu = true },
+                    backupStatus = backupStatus
                 )
                 SettingsPage.Appearance -> AppearancePage(state, viewModel, back)
                 SettingsPage.Format -> FormatPage(state, viewModel, back)
