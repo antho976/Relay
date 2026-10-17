@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -188,6 +189,22 @@ fun SetRow(
 
     if (isEditing) {
         val canConfirm = editWeight.isNotBlank() && editReps.toIntOrNull()?.let { it > 0 } == true
+        // One confirm for the ✓ and the keyboard's Done. Done used to only hide the keyboard, and a
+        // lifter who pressed it and walked off left the edit unsaved behind a 36dp check mark.
+        fun confirmEdit() {
+            if (!canConfirm) return
+            val typed = editWeight.trim()
+            val storedLb = set.weightLb
+            // Untouched free-weight field: hand back the FULL-PRECISION display value rather
+            // than the rounded field text, so the display→lb round-trip on save can't drift
+            // the stored weight (e.g. an imported 135 lb lift shown as "9.6 st" must stay
+            // 135 lb when only the reps change). LB/plates need no conversion, so keep as-is.
+            val weightOut = if (!isPlates && weightUnit != WeightUnit.LB &&
+                storedLb != null && typed == editSeed
+            ) toDisplayWeight(storedLb, weightUnit).toString() else typed
+            onEdit(weightOut, editReps.toInt())
+            isEditing = false
+        }
         Row(
             modifier = modifier.fillMaxWidth().padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -210,25 +227,12 @@ fun SetRow(
                 onValueChange = { if (it.all { c -> c.isDigit() }) editReps = it.take(MAX_REPS_DIGITS) },
                 label = "Reps",
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { confirmEdit() }),
                 modifier = Modifier.width(SetTable.REPS_COL_W + 24.dp)
             )
             Spacer(Modifier.width(6.dp))
             IconButton(
-                onClick = {
-                    if (canConfirm) {
-                        val typed = editWeight.trim()
-                        val storedLb = set.weightLb
-                        // Untouched free-weight field: hand back the FULL-PRECISION display value rather
-                        // than the rounded field text, so the display→lb round-trip on save can't drift
-                        // the stored weight (e.g. an imported 135 lb lift shown as "9.6 st" must stay
-                        // 135 lb when only the reps change). LB/plates need no conversion, so keep as-is.
-                        val weightOut = if (!isPlates && weightUnit != WeightUnit.LB &&
-                            storedLb != null && typed == editSeed
-                        ) toDisplayWeight(storedLb, weightUnit).toString() else typed
-                        onEdit(weightOut, editReps.toInt())
-                        isEditing = false
-                    }
-                },
+                onClick = { confirmEdit() },
                 modifier = Modifier.size(36.dp),
                 enabled = canConfirm
             ) {
@@ -579,7 +583,8 @@ private fun InlineEditField(
     onValueChange: (String) -> Unit,
     label: String,
     keyboardOptions: KeyboardOptions,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    keyboardActions: KeyboardActions = KeyboardActions.Default
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -590,6 +595,7 @@ private fun InlineEditField(
         textStyle = MaterialTheme.typography.titleMedium.copy(color = onBg),
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
         modifier = modifier.semantics { contentDescription = label },
         decorationBox = { inner ->
             Column(
