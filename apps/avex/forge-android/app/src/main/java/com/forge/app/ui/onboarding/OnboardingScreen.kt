@@ -462,9 +462,14 @@ fun OnboardingScreen(
                             "screen, or generate one anytime in Settings → Program."
                         PLAN_FREESTYLE -> "You'll start with no fixed plan, just logging your workouts. " +
                             "Switch to a plan anytime in Settings → Program."
-                        else -> "You'll start with a basic bodyweight program and default settings, with " +
-                            "no plan tailored to your gym or goals. Set your equipment and goal, and " +
-                            "generate a personalized program, anytime in Settings → Program."
+                        // Skipping keeps what was already answered, so the promise depends on how far in it is.
+                        else -> if (equipment.isNotEmpty() || goal.isNotEmpty())
+                            "Your plan is built from what you've answered so far, with defaults for the rest. " +
+                                "Change any of it anytime in Settings → Program."
+                        else
+                            "You'll start with a basic bodyweight program and default settings, with " +
+                                "no plan tailored to your gym or goals. Set your equipment and goal, and " +
+                                "generate a personalized program, anytime in Settings → Program."
                     }
                 )
             },
@@ -475,14 +480,24 @@ fun OnboardingScreen(
                     // Honor a mode the user already picked; default to generated for the usual
                     // early skip where nothing was chosen yet.
                     val effectiveMode = planMode.ifEmpty { PLAN_GENERATED }
+                    // Built from the answers so far, each defaulted only while still blank. Skipping
+                    // on step six used to throw away the goal, experience, day count, gym, sore
+                    // spots, minutes and weekdays already given, and generate a bodyweight plan
+                    // for someone who had just picked a full gym.
                     viewModel.complete(
                         planMode = effectiveMode, name = name.trim(), useKg = useKg, sex = sex ?: "",
                         useMiles = if (distanceTouched) useMilesChoice else null,
-                        bodyweightLb = bwLb, goal = "build_muscle", daysPerWeek = 4,
-                        equipment = setOf(Equipment.BODYWEIGHT_ONLY.name), experience = "intermediate",
+                        bodyweightLb = bwLb,
+                        goal = goal.ifEmpty { "build_muscle" },
+                        daysPerWeek = daysPerWeek.takeIf { it in 1..7 } ?: 4,
+                        equipment = equipment.ifEmpty { setOf(Equipment.BODYWEIGHT_ONLY.name) },
+                        experience = experience.ifEmpty { "intermediate" },
+                        problemAreas = problemAreas, seed = previewSeed,
+                        plateWeightLb = plateWeightLb, frozenIds = frozenIds,
                         // Skipping never reaches the coach row, so the mode's own default stands.
                         coachEnabled = coachChoice ?: (effectiveMode == PLAN_GENERATED),
-                        appLock = appLock
+                        appLock = appLock, sessionMinutes = sessionMinutes,
+                        trainingWeekdays = weekdays.takeIf { fixedDays == true && it.isNotEmpty() }
                     )
                     onFinished(effectiveMode)
                 }) { Text("Skip anyway") }
