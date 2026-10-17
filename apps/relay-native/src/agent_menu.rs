@@ -16,6 +16,8 @@ struct Agents {
     /// Sessions the user closed whose close has not answered yet. Kept off the wall even if a
     /// stale list or event still carries them.
     closing: BTreeSet<String>,
+    /// Panes picked with Shift+click on their headers; Close in any of their menus closes them all.
+    selected: BTreeSet<String>,
     /// Sessions (or launch placeholders) with a start in flight, and the step they are on.
     launching: BTreeMap<String, String>,
     /// One settings key per pane, kept across header rebuilds so an open popover survives the
@@ -220,23 +222,85 @@ impl Ui {
         self.apply_session_event("session.changed", session);
     }
 
-    /// Close an agent: its pane leaves now, the engine is told after, and the pane comes back
-    /// only if the engine refuses.
-    pub(super) fn close_agent(self: &Rc<Self>, name: String, payload: Value) {
+    /// Close agents with the same options: each pane leaves now, the engine is told after, and a
+    /// pane comes back only if the engine refuses. Several are closed one after another, so their
+    /// worktree and branch removals do not race on the shared repository. Uncommitted work in any
+    /// of them is asked about once, for all of them.
+    pub(super) fn close_agents(self: &Rc<Self>, names: Vec<String>, payload: Value) {
         let clicked = Instant::now();
-        with(|a| a.closing.insert(name.clone()));
-        self.sessions.borrow_mut().retain(|s| text(s, "name") != name);
+        with(|a| {
+            for name in &names {
+                a.closing.insert(name.clone());
+                a.selected.remove(name);
+            }
+        });
+        self.sessions.borrow_mut().retain(|s| !names.iter().any(|n| n == text(s, "name")));
         self.reconcile();
-        tracing::debug!(session = %name, elapsed_us = clicked.elapsed().as_micros() as u64, "close: pane removed");
+        tracing::debug!(count = names.len(), elapsed_us = clicked.elapsed().as_micros() as u64, "close: panes removed");
         let ui = self.clone();
         glib::spawn_future_local(async move {
-            let result = ui.call("session.close", payload.clone()).await;
-            tracing::debug!(session = %name, elapsed_ms = clicked.elapsed().as_millis() as u64, ok = result.is_ok(), "close: engine answered");
-            if matches!(result, Err(crate::client::Error::Timeout)) {
-                // Removing a large worktree can outlast the request: the close is still running,
-                // and its session.changed(closed) settles it. The pane comes back only if that
-                // never arrives.
-                ui.show_error(&format!("Still closing {name}: removing its worktree takes a while."));
+            let mut dirty = Vec::new();
+            for name in names {
+                let mut payload = payload.clone();
+                payload["session"] = json!(name);
+                let answer = ui.close_answer(&name, &payload).await;
+                tracing::debug!(session = %name, elapsed_ms = clicked.elapsed().as_millis() as u64, "close: engine answered");
+                if let Some(refusal) = answer {
+                    dirty.push((name, refusal));
+                }
+            }
+            if dirty.is_empty() {
+                return;
+            }
+            // Removing a worktree would delete uncommitted work. The popover is gone by now, so
+            // the question is asked here; only a yes deletes it (RA-405).
+            let dialog = match dirty.as_slice() {
+                // The agent wrote after the close began: the engine stopped it and kept its
+                // worktree, so there is no agent left to keep, only the worktree.
+                [(name, (true, message))] => gtk::AlertDialog::builder()
+                    .message(format!("{name} has already been stopped, and its uncommitted work kept"))
+                    .detail(format!("{message}. Discarding the changes removes the worktree and deletes them for good."))
+                    .buttons(["Keep the worktree", "Discard changes"]),
+                [(name, (false, message))] => gtk::AlertDialog::builder()
+                    .message(format!("Discard {name}'s uncommitted changes?"))
+                    .detail(format!(
+                        "{message}. Closing with its worktree removed deletes them for good. To keep them, commit or stash them, or close it keeping the worktree."
+                    ))
+                    .buttons(["Keep the agent", "Discard changes and close"]),
+                _ => gtk::AlertDialog::builder()
+                    .message(format!("Discard uncommitted changes in {} agents?", dirty.len()))
+                    .detail(format!(
+                        "{}.\n\nThe others are closed. Closing these with their worktrees removed deletes their changes for good; keeping them keeps the agents and their worktrees.",
+                        dirty.iter().map(|(name, (_, message))| format!("{name}: {message}")).collect::<Vec<_>>().join("\n")
+                    ))
+                    .buttons(["Keep them", "Discard changes and close all"]),
+            }
+            .cancel_button(0)
+            .default_button(0)
+            .modal(true)
+            .build();
+            if dialog.choose_future(Some(&ui.window)).await.ok() == Some(1) {
+                let mut payload = payload;
+                payload["discard_changes"] = json!(true);
+                ui.close_agents(dirty.into_iter().map(|(name, _)| name).collect(), payload);
+            } else {
+                ui.refresh();
+            }
+        });
+    }
+
+    /// The engine half of one close, once its pane has left. Settles everything but a dirty
+    /// worktree, which comes back as (already stopped, the engine's words) for the caller to ask
+    /// about.
+    async fn close_answer(self: &Rc<Self>, name: &str, payload: &Value) -> Option<(bool, String)> {
+        let result = self.call("session.close", payload.clone()).await;
+        if matches!(result, Err(crate::client::Error::Timeout)) {
+            // Removing a large worktree can outlast the request: the close is still running,
+            // and its session.changed(closed) settles it. The pane comes back only if that
+            // never arrives. Watched on the side, so the next close in a batch is not held up.
+            self.show_error(&format!("Still closing {name}: removing its worktree takes a while."));
+            let (ui, name) = (self.clone(), name.to_string());
+            glib::spawn_future_local(async move {
                 for _ in 0..120 {
                     glib::timeout_future_seconds(5).await;
                     if !is_closing(&name) {
@@ -246,56 +310,27 @@ impl Ui {
                 with(|a| a.closing.remove(&name));
                 ui.show_error(&format!("{name} has not finished closing; check its worktree before closing it again."));
                 ui.refresh();
-                return;
+            });
+            return None;
+        }
+        with(|a| a.closing.remove(name));
+        match result {
+            Ok(_) => {
+                self.sidebar_sessions.borrow_mut().retain(|s| text(s, "name") != name);
+                self.render_projects();
+                self.render_status_counts();
+                None
             }
-            with(|a| a.closing.remove(&name));
-            match result {
-                Ok(_) => {
-                    ui.sidebar_sessions.borrow_mut().retain(|s| text(s, "name") != name);
-                    ui.render_projects();
-                    ui.render_status_counts();
-                }
-                // Removing the worktree would delete uncommitted work. The popover is gone by
-                // now, so the question is asked here; only a yes deletes it (RA-405).
-                Err(Error::Bus(error)) if error.code == "worktree.dirty" => {
-                    // The agent wrote after the close began: the engine stopped it and kept its
-                    // worktree, so there is no agent left to keep, only the worktree.
-                    let stopped = error.details.as_ref().and_then(|d| d["stopped"].as_bool()) == Some(true);
-                    let dialog = if stopped {
-                        gtk::AlertDialog::builder()
-                            .message(format!("{name} has already been stopped, and its uncommitted work kept"))
-                            .detail(format!(
-                                "{}. Discarding the changes removes the worktree and deletes them for good.",
-                                error.message
-                            ))
-                            .buttons(["Keep the worktree", "Discard changes"])
-                    } else {
-                        gtk::AlertDialog::builder()
-                            .message(format!("Discard {name}'s uncommitted changes?"))
-                            .detail(format!(
-                                "{}. Closing with its worktree removed deletes them for good. To keep them, commit or stash them, or close it keeping the worktree.",
-                                error.message
-                            ))
-                            .buttons(["Keep the agent", "Discard changes and close"])
-                    }
-                    .cancel_button(0)
-                    .default_button(0)
-                    .modal(true)
-                    .build();
-                    if dialog.choose_future(Some(&ui.window)).await.ok() == Some(1) {
-                        let mut payload = payload;
-                        payload["discard_changes"] = json!(true);
-                        ui.close_agent(name, payload);
-                    } else {
-                        ui.refresh();
-                    }
-                }
-                Err(error) => {
-                    ui.show_error(&format!("Could not close {name}: {error}"));
-                    ui.refresh();
-                }
+            Err(Error::Bus(error)) if error.code == "worktree.dirty" => {
+                let stopped = error.details.as_ref().and_then(|d| d["stopped"].as_bool()) == Some(true);
+                Some((stopped, error.message))
             }
-        });
+            Err(error) => {
+                self.show_error(&format!("Could not close {name}: {error}"));
+                self.refresh();
+                None
+            }
+        }
     }
 
     /// Start, park, wake or resume from the pane header. Starts show their progress on the pane
@@ -512,6 +547,63 @@ impl Ui {
             // Moved within its box, never re-parented: an open popover stays open.
             pane.actions.reorder_child_after(&key, Some(&last));
         }
+    }
+
+    // ------------------------------------------------------------------ selection
+
+    /// Shift+click on a pane's header adds it to the selection or takes it out; a plain click
+    /// on any header clears it. Keys in the header take their own clicks first.
+    pub(super) fn install_pane_selection(self: &Rc<Self>, pane: &Rc<Pane>, name: &str) {
+        let click = gtk::GestureClick::new();
+        click.set_button(gtk::gdk::BUTTON_PRIMARY);
+        let weak = Rc::downgrade(self);
+        let name = name.to_string();
+        click.connect_pressed(move |gesture, _, _, _| {
+            let Some(ui) = weak.upgrade() else { return };
+            if gesture.current_event_state().contains(gtk::gdk::ModifierType::SHIFT_MASK) {
+                // Claimed, so a Shift+click does not also start dragging the pane.
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                ui.toggle_selected(&name);
+            } else if !with(|a| a.selected.is_empty()) {
+                ui.clear_selection();
+            }
+        });
+        pane.header.add_controller(click);
+        if with(|a| a.selected.contains(pane.name())) {
+            pane.root.add_css_class("selected");
+        }
+    }
+
+    fn toggle_selected(&self, name: &str) {
+        let on = with(|a| if a.selected.remove(name) { false } else { a.selected.insert(name.to_string()) });
+        if let Some(pane) = self.panes.borrow().get(name) {
+            if on { pane.root.add_css_class("selected") } else { pane.root.remove_css_class("selected") }
+        }
+    }
+
+    pub(super) fn clear_selection(&self) {
+        let names = with(|a| std::mem::take(&mut a.selected));
+        let panes = self.panes.borrow();
+        for name in names {
+            if let Some(pane) = panes.get(&name) {
+                pane.root.remove_css_class("selected");
+            }
+        }
+    }
+
+    /// The selected panes still on this wall, in wall order; the selection is the batch only
+    /// while it includes `name`, the pane whose menu is open.
+    fn selection_with(&self, name: &str) -> Vec<String> {
+        let selected = with(|a| a.selected.clone());
+        if !selected.contains(name) {
+            return Vec::new();
+        }
+        let sessions = self.sessions.borrow();
+        let here = |n: &String| sessions.iter().any(|s| text(s, "name") == n && s["placeholder"] != true);
+        let mut names: Vec<String> = self.ordered.borrow().iter().filter(|n| selected.contains(*n) && here(n)).cloned().collect();
+        let rest: Vec<String> = selected.iter().filter(|n| !names.contains(n) && here(n)).cloned().collect();
+        names.extend(rest);
+        names
     }
 
     // ------------------------------------------------------------------ settings popover
@@ -769,11 +861,32 @@ impl Ui {
             foot.append(&fresh);
             foot.append(&confirm);
         }
-        let close = row_key("power", "Close session…", "Stop the agent and take it off the wall; the worktree is kept unless you choose otherwise, and the branch unless its work is already merged");
+        // Shift+clicked panes: Close here closes every one of them, with the same options.
+        let batch = self.selection_with(&name);
+        let batch = if batch.len() > 1 { batch } else { Vec::new() };
+        if !batch.is_empty() {
+            let picked = row_key("close", &format!("Clear selection ({} agents)", batch.len()), "Deselect the Shift+clicked panes; Close then closes only this agent");
+            let weak = Rc::downgrade(self);
+            let p = popover.downgrade();
+            picked.connect_clicked(move |_| {
+                if let Some(p) = p.upgrade() {
+                    p.popdown();
+                }
+                if let Some(ui) = weak.upgrade() {
+                    ui.clear_selection();
+                }
+            });
+            foot.append(&picked);
+        }
+        let close = if batch.is_empty() {
+            row_key("power", "Close session…", "Stop the agent and take it off the wall; the worktree is kept unless you choose otherwise, and the branch unless its work is already merged")
+        } else {
+            row_key("power", &format!("Close {} sessions…", batch.len()), "Stop every selected agent and take them off the wall; worktrees are kept unless you choose otherwise, and branches unless their work is already merged")
+        };
         close.add_css_class("agent-menu-danger");
         let confirm = gtk::Revealer::new();
         let options = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        let remove = gtk::CheckButton::with_label("Also remove the worktree");
+        let remove = gtk::CheckButton::with_label(if batch.is_empty() { "Also remove the worktree" } else { "Also remove their worktrees" });
         let purge = gtk::CheckButton::with_label("Purge build output");
         purge.set_sensitive(false);
         let p = purge.clone();
@@ -785,15 +898,21 @@ impl Ui {
         });
         options.append(&remove);
         options.append(&purge);
+        let question = if batch.is_empty() {
+            "Stop this agent and close its pane? Its branch is kept unless its work is already merged.".to_string()
+        } else {
+            format!("Stop these {} agents and close their panes? {}. Each branch is kept unless its work is already merged.", batch.len(), batch.join(", "))
+        };
         let weak = Rc::downgrade(self);
         let n = name.clone();
         let p = popover.downgrade();
-        confirm_strip(&confirm, "Stop this agent and close its pane? Its branch is kept unless its work is already merged.", "Close", Some(&options), move |_| {
+        confirm_strip(&confirm, &question, "Close", Some(&options), move |_| {
             if let Some(p) = p.upgrade() {
                 p.popdown();
             }
             if let Some(ui) = weak.upgrade() {
-                ui.close_agent(n.clone(), json!({"session": n, "remove_worktree": remove.is_active(), "purge_build": purge.is_active()}));
+                let names = if batch.is_empty() { vec![n.clone()] } else { batch.clone() };
+                ui.close_agents(names, json!({"session": n, "remove_worktree": remove.is_active(), "purge_build": purge.is_active()}));
             }
         });
         let c = confirm.clone();
