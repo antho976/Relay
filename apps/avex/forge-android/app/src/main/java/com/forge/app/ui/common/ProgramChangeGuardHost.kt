@@ -1,6 +1,9 @@
 package com.forge.app.ui.common
 
 import com.forge.app.ui.common.window.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -20,8 +23,10 @@ fun ProgramChangeGuardHost(
 ) {
     val pending by viewModel.guard.pending.collectAsState()
     pending?.let { p ->
+        val scheme = MaterialTheme.colorScheme
         AlertDialog(
             onDismissRequest = { viewModel.cancel() },
+            containerColor = scheme.surface,
             title = { Text("Workout in progress") },
             text = {
                 Text(
@@ -34,11 +39,17 @@ fun ProgramChangeGuardHost(
                             "This can't be undone."
                 )
             },
+            // The confirm deletes logged sets for good, so it is the error-filled button naming the
+            // act, the way every irreversible confirm in Settings reads; it was an accent text
+            // button the same weight as Cancel. Keeping the workout is the plain, safe answer.
             confirmButton = {
-                TextButton(onClick = { viewModel.confirm() }) { Text("Discard & continue") }
+                Button(
+                    onClick = { viewModel.confirm() },
+                    colors = ButtonDefaults.buttonColors(containerColor = scheme.error, contentColor = scheme.onError)
+                ) { Text("Discard workout") }
             },
             dismissButton = {
-                TextButton(onClick = { viewModel.cancel() }) { Text("Cancel") }
+                TextButton(onClick = { viewModel.cancel() }) { Text("Keep workout", color = scheme.onSurface) }
             }
         )
     }
