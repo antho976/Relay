@@ -1,5 +1,6 @@
 package com.forge.app.ui.cardio
 
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -604,6 +605,8 @@ private fun WatchInviteSection(onConnect: () -> Unit, onDismiss: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
                 .align(Alignment.End)
+                // The words stay small; the press area is the 48dp a thumb needs (§14).
+                .minimumInteractiveComponentSize()
                 .clickableLabeled("Hide the watch prompt", onClick = onDismiss)
                 .padding(vertical = 10.dp, horizontal = 4.dp)
         )
