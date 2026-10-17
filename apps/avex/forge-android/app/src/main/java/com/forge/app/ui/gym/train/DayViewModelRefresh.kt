@@ -36,6 +36,11 @@ internal suspend fun DayViewModel.refreshExercises() {
     val previousBonusById = _state.value.exercises.associate { it.plan.id to it.bonusSets }
     val previousFinishedEarlyById = _state.value.exercises.associate { it.plan.id to it.finishedEarly }
     val previousOrderById = _state.value.exercises.mapIndexed { i, e -> e.plan.id to i }.toMap()
+    // A first build (the screen reopened, or the app came back after the system reclaimed it) takes
+    // the session's early-done and added-set marks from where they outlive this ViewModel.
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { wearFocusHolder.load() }
+    val storedBonus = wearFocusHolder.bonusSetsFor(sessionId)
+    val storedEarly = wearFocusHolder.earlyDoneFor(sessionId)
 
     val allPlans = programCustomRepo.effectivePlanForSession(dayKey, bySlotId.keys)
 
@@ -55,8 +60,8 @@ internal suspend fun DayViewModel.refreshExercises() {
                     plateLb = plateLb,
                     dbMaxLb = dbMaxLb,
                     weightUnit = weightUnit,
-                    bonusSets = previousBonusById[plan.id] ?: 0,
-                    finishedEarly = previousFinishedEarlyById[plan.id] ?: false
+                    bonusSets = previousBonusById[plan.id] ?: storedBonus[plan.id] ?: 0,
+                    finishedEarly = previousFinishedEarlyById[plan.id] ?: (plan.id in storedEarly)
                 )
             }
         }.awaitAll()
@@ -69,7 +74,7 @@ internal suspend fun DayViewModel.refreshExercises() {
             { allPlans.indexOfFirst { p -> p.id == it.plan.id } }
         )
     )
-    // The three memory-only fields (expanded, bonus sets, finished early) were captured before the
+    // The three screen-held fields (expanded, bonus sets, finished early) were captured before the
     // suspending reads above, so a "+ SET" or "Done with this exercise" tap made while the rebuild
     // ran would be reverted by publishing them back. Re-read them from the list as it is AT WRITE
     // TIME, inside the update (which retries on contention), as refreshExercise does.
