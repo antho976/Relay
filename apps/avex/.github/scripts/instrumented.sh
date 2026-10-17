@@ -90,7 +90,7 @@ if [ -n "$apksigner" ]; then
   echo "Signature present."
 fi
 
-install_release_apk "$apk"
+install_release_apk "$apk" "$APP_ID"
 echo "::endgroup::"
 
 echo "::group::Cold-launch the release build"

@@ -148,6 +148,9 @@ class ForgeApp : Application(), Configuration.Provider {
         } finally { validator.close() }
         if (opened) {
             RestoreApply.confirm(filesDir, liveDb)
+            // The restored database hands out its own session ids again; marks kept for an id from
+            // before the restore would attach to the next session that reuses it.
+            com.forge.app.service.wear.clearSessionMarks(this)
             // One-shot flag so MainActivity can confirm the restore landed on this launch — the swap
             // runs at boot before any UI exists, and the staging path restarts the process silently
             // otherwise. Only written for a fully clean, opened restore so we never claim

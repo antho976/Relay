@@ -124,6 +124,8 @@ class ResetRepository @Inject constructor(
         // interrupted reset finishes this at boot too, and a weekly backup racing the reset cannot
         // land a copy of the old data after this sweep (BackupRepository.autoBackup checks it).
         backupRepo.deleteLocalCopies()
+        // The workout marks file ("done early", added sets) names a session and its slots.
+        com.forge.app.service.wear.clearSessionMarks(context)
         // Every record Avex ever wrote to Health Connect, of every type, by time range rather than
         // by key: the tables are already gone, and a range delete is scoped by the provider to
         // this app's own records, so nothing of another app's is touched. Before the preference

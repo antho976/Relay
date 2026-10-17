@@ -31,9 +31,17 @@ elif args == ["shell", "pm", "path", "android"]:
         print("package:/system/framework/framework-res.apk")
 elif args == ["shell", "service", "check", "activity"]:
     print("Service activity: " + ("not found" if scenario == "no_activity" else "found"))
+elif args[:1] == ["uninstall"]:
+    state["installed"] = False
+    if scenario != "stale_install":
+        print("Failure [DELETE_FAILED_INTERNAL_ERROR]")
+        code = 1
 elif args[:1] == ["install"]:
     state["installs"] += 1
-    if scenario == "bad_apk":
+    if scenario == "stale_install" and state["installed"]:
+        print("Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.example signatures do not match newer version; ignoring!]")
+        code = 1
+    elif scenario == "bad_apk":
         print("Failure [INSTALL_PARSE_FAILED_NO_CERTIFICATES]")
         code = 1
     elif scenario == "install_race" and state["installs"] == 1 or scenario == "repeated_race":
@@ -54,7 +62,9 @@ class EmulatorReadyTest(unittest.TestCase):
             adb.write_text(FAKE_ADB)
             adb.chmod(0o755)
             state = root / "state.json"
-            state.write_text(json.dumps(dict(scenario=scenario, probes=0, installs=0, commands=[])))
+            state.write_text(json.dumps(dict(
+                scenario=scenario, probes=0, installs=0, commands=[], installed=scenario == "stale_install"
+            )))
             env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}", ADB_STATE=str(state))
             # Skip only the cadence delay. The helper's real deadline and command timeout still run.
             result = subprocess.run(
@@ -81,6 +91,19 @@ class EmulatorReadyTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout)
         self.assertEqual(2, state["installs"])
         self.assertEqual(4, state["probes"])
+
+    def test_leftover_install_from_the_cached_avd_is_removed_first(self):
+        result, state = self.run_scenario("stale_install", "install_release_apk app.apk com.example")
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertEqual(1, state["installs"])
+        self.assertLess(state["commands"].index(["uninstall", "com.example"]),
+                        state["commands"].index(["install", "-r", "-d", "app.apk"]))
+
+    def test_nothing_to_uninstall_still_installs(self):
+        result, state = self.run_scenario("ready", "install_release_apk app.apk com.example")
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertIn(["uninstall", "com.example"], state["commands"])
+        self.assertEqual(1, state["installs"])
 
     def test_real_apk_error_fails_without_retry(self):
         result, state = self.run_scenario("bad_apk")

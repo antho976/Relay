@@ -87,6 +87,19 @@ object LifeEvents {
         val loadScale: Double get() = if (layoff?.let { it.away || it.returning } == true) RAMP_SCALE else 1.0
 
         /**
+         * [loadScale] for a lift last trained in a session that started at [lastBoutStartedAtMs].
+         *
+         * The ramp eases the load the athlete left at, once. A bout logged since the return already
+         * carries the ease, and the card builds today's weight from that bout, so easing it again
+         * compounded through the ramp week: three full-body sessions back read 100, 85, 72, 62 lb.
+         * A lift not trained since the return still steps down from its pre-gap bout.
+         */
+        fun loadScaleFrom(lastBoutStartedAtMs: Long?): Double {
+            val returnedAt = layoff?.returnedAtMs ?: return loadScale
+            return if (lastBoutStartedAtMs != null && lastBoutStartedAtMs >= returnedAt) 1.0 else loadScale
+        }
+
+        /**
          * Why [loadScale] is under 1.0, in the coach's words, or null when it isn't. One home for the
          * ramp's reason, so the day screen's "try" weight and the brief name the same cause.
          */

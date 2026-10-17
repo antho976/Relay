@@ -396,7 +396,7 @@ fun FreestyleLogScreen(
                                 viewModel.clearDraft()
                                 pendingDraft = null
                                 viewModel.offerUndo("Unsaved workout discarded") {
-                                    viewModel.saveDraft(draft)
+                                    viewModel.restoreDraft(draft)
                                     pendingDraft = draft
                                 }
                             }

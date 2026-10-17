@@ -42,22 +42,35 @@ object ExerciseSearch {
         Equipment.SMITH_MACHINE, Equipment.EZ_BAR, Equipment.TRAP_BAR, Equipment.RESISTANCE_BAND
     )
 
+    // Compiled once: [words] runs several times per exercise on every keystroke.
+    private val SEPARATORS = Regex("[-.()/,]")
+    private val UP = Regex("\\b(pull|chin|push) up")
+    private val DOWN = Regex("\\b(pull|push) down")
+    private val SKULL = Regex("\\bskull crusher")
+
     /** Lowercase words, with "-", "." and brackets read as spaces and "pull up" read as "pullup". */
     private fun words(text: String): List<String> {
         val spaced = text.lowercase()
-            .replace(Regex("[-.()/,]"), " ")
-            .replace(Regex("\\b(pull|chin|push) up"), "$1up")
-            .replace(Regex("\\b(pull|push) down"), "$1down")
-            .replace(Regex("\\bskull crusher"), "skullcrusher")
+            .replace(SEPARATORS, " ")
+            .replace(UP, "$1up")
+            .replace(DOWN, "$1down")
+            .replace(SKULL, "skullcrusher")
         return spaced.split(' ').filter { it.isNotBlank() }
     }
 
     private fun alternatives(word: String): Set<String> =
-        GROUPS.firstOrNull { word in it }?.plus(word) ?: setOf(word)
+        GROUPS.firstOrNull { word in it }?.minus(word) ?: emptySet()
 
-    /** True when every query word, in any of its forms, is a prefix of a word in [haystack]. */
+    /**
+     * True when every query word is in [haystack]: as typed, the start of a word (or inside one,
+     * from three letters); as one of its gym synonyms, a whole word. A synonym matched as a prefix
+     * made "lats" find every Lateral Raise through "lat".
+     */
     private fun allWordsIn(query: List<String>, haystack: List<String>): Boolean =
-        query.all { q -> alternatives(q).any { alt -> haystack.any { it.startsWith(alt) || (alt.length >= 3 && it.contains(alt)) } } }
+        query.all { q ->
+            haystack.any { it.startsWith(q) || (q.length >= 3 && it.contains(q)) } ||
+                alternatives(q).any { alt -> alt in haystack }
+        }
 
     /** 2 = the name alone matches, 1 = it matches with muscle and implement, 0 = no match. */
     fun score(def: ExerciseDef, query: String): Int {

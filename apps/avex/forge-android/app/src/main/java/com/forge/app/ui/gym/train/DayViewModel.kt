@@ -160,6 +160,9 @@ class DayViewModel @Inject constructor(
     /** Stamps this sitting's segment while the screen is open (see [startSegmentHeartbeat]). */
     internal var segmentHeartbeatJob: Job? = null
 
+    /** The lift the swiped-away set's row was logging, so its Undo can't land under a swap. */
+    internal var deletedSetExerciseId: String? = null
+
     /** In-flight "I have N minutes" fit or its undo — one at a time, so two quick taps can't
      *  interleave their skip writes and leave a mix of both fits behind. */
     internal var timeFitJob: Job? = null
@@ -201,6 +204,11 @@ class DayViewModel @Inject constructor(
             // Only one session is active at a time. If a *different* day's workout is still in
             // progress, prompt (resume it, or discard & start this one) instead of silently
             // resuming the wrong day's sets under this plan.
+            //
+            // A workout untouched for half a day is filed to history first, exactly as the start below
+            // would file it. Asked first, the prompt offered "Discard & start" on last night's
+            // session, and discarding deletes its logged sets.
+            workoutRepo.closeStaleSession()
             val active = workoutRepo.activeSession()
             if (active != null && active.dayKey != dayKey) {
                 val otherName = Program.days.firstOrNull { it.key == active.dayKey }?.defaultName

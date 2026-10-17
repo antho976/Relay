@@ -37,7 +37,7 @@ class WearFocusHolder @Inject constructor(@ApplicationContext private val contex
         val bonusSets: Map<String, Int> = emptyMap()
     )
 
-    private val prefs by lazy { context.getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
+    private val prefs by lazy { context.getSharedPreferences(SESSION_MARKS_PREFS, Context.MODE_PRIVATE) }
 
     private val marks = MutableStateFlow<Marks?>(null)
     @Volatile private var loaded = false
@@ -98,9 +98,20 @@ class WearFocusHolder @Inject constructor(@ApplicationContext private val contex
     }
 
     private companion object {
-        const val PREFS = "session_marks"
         const val KEY = "marks"
     }
+}
+
+/**
+ * The marks' preferences file. They are keyed by session id alone, so whatever replaces the
+ * database clears it: a restored backup hands out its own ids again, and the next session to reuse
+ * one would open with the old session's exercises already filed under DONE and its added sets.
+ */
+internal const val SESSION_MARKS_PREFS = "session_marks"
+
+/** Forget every stored mark. For boot paths that run before the holder is ever read. */
+internal fun clearSessionMarks(context: Context) {
+    runCatching { context.getSharedPreferences(SESSION_MARKS_PREFS, Context.MODE_PRIVATE).edit().clear().commit() }
 }
 
 /**

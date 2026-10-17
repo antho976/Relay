@@ -121,6 +121,22 @@ class LifeEventsTest {
     }
 
     @Test
+    fun theRampEasesALiftOnceNotEverySessionOfTheWeek() {
+        // Back 4 days ago after a 26-day gap, again 2 days ago.
+        val s = assess(sessions = listOf(session(30), session(4), session(2)))
+        // A lift last trained before the gap steps down from it.
+        assertEquals(LifeEvents.RAMP_SCALE, s.loadScaleFrom(now - 30 * day), 0.0001)
+        // One trained in a session back already carries the ease; easing it again compounded.
+        assertEquals(1.0, s.loadScaleFrom(now - 4 * day), 0.0001)
+        assertEquals(1.0, s.loadScaleFrom(now - 2 * day), 0.0001)
+        // Never trained: nothing to compound, the ramp still speaks.
+        assertEquals(LifeEvents.RAMP_SCALE, s.loadScaleFrom(null), 0.0001)
+        // Still away: every bout is from before the gap.
+        val away = assess(sessions = listOf(session(30), session(28)))
+        assertEquals(LifeEvents.RAMP_SCALE, away.loadScaleFrom(now - 28 * day), 0.0001)
+    }
+
+    @Test
     fun rampExpiresAfterAWeekOfTraining() {
         // Back 10 days ago after a long gap — the ramp window has passed.
         val s = assess(sessions = listOf(session(40), session(38), session(10), session(2)))

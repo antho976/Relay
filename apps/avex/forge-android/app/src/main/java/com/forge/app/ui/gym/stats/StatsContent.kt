@@ -95,6 +95,10 @@ fun StatsContent(
     // re-expands its row after a manual collapse.
     var focusLift by rememberSaveable { mutableStateOf<String?>(null) }
     var focusNonce by rememberSaveable { mutableStateOf(0) }
+    // The focus request whose row has already been scrolled into view. Kept here, beside the nonce,
+    // because the row itself leaves composition on every lens switch, pager swipe and rotation, and a
+    // row-level flag came back true each time and yanked the page back to a lift opened long before.
+    var focusShownNonce by rememberSaveable { mutableStateOf(0) }
     // The expanding row is the "str-lifts" card, ABOVE the Records card being tapped, so the page is
     // scrolled up to it or the tap would appear to do nothing.
     val listState = rememberLazyListState()
@@ -212,7 +216,8 @@ fun StatsContent(
 
                 when (lens) {
                     StatsLens.STRENGTH -> strengthLens(
-                        state, weightUnit, c, focusLift, focusNonce, onOpenProfile, onOpenCoach,
+                        state, weightUnit, c, focusLift, focusNonce, focusShownNonce, { focusShownNonce = it },
+                        onOpenProfile, onOpenCoach,
                         onOpenLift = { id ->
                             focusLift = id; focusNonce++; lens = StatsLens.STRENGTH
                             // Items above the lens content: "title" (0), "hero" (1), "lens" (2) -> "str-lifts" is 3.
@@ -281,6 +286,8 @@ private fun LazyListScope.strengthLens(
     c: StatsColors,
     focusLift: String?,
     focusNonce: Int,
+    focusShownNonce: Int,
+    onFocusShown: (Int) -> Unit,
     onLogBodyweight: () -> Unit,
     onOpenCoach: (() -> Unit)?,
     onOpenLift: (String) -> Unit
@@ -297,7 +304,7 @@ private fun LazyListScope.strengthLens(
         ) {
             E1rmComparisonList(
                 state.e1rmLifts, state.recentPrs, state.strengthCurves, weightUnit, c, focusLift, focusNonce,
-                state.plateauFlags, state.coachCallLiftIds, onOpenCoach
+                state.plateauFlags, state.coachCallLiftIds, onOpenCoach, focusShownNonce, onFocusShown
             )
         }
     }

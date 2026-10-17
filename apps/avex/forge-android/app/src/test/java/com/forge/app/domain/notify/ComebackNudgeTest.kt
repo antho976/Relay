@@ -11,8 +11,12 @@ class ComebackNudgeTest {
 
     @Test
     fun speaksInTheFirstSecondAndFourthWeekOfALapseThenStops() {
-        val spoken = (7..70).filter { nudge(it) != null }.map { it / 7 }.toSet()
-        assertEquals(setOf(1, 2, 4), spoken)
+        // Whatever weekday the last session fell on, the first Monday that sees a lapse is 8 to 14
+        // days after it, and each later Monday is a week further on.
+        for (first in 8..14) {
+            val spoken = (0 until 10).filter { nudge(first + 7 * it) != null }.map { it + 1 }
+            assertEquals("last session $first days before the first Monday", listOf(1, 2, 4), spoken)
+        }
     }
 
     @Test

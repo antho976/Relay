@@ -70,7 +70,7 @@ class FreestyleLogViewModel @Inject constructor(
      * The app's one Undo snackbar, for a removed set or exercise. The removal already happened on
      * screen; [restore] puts it back if the user taps Undo inside the window.
      */
-    fun offerUndo(message: String, restore: () -> Unit) {
+    fun offerUndo(message: String, restore: suspend () -> Unit) {
         snackbar.showUndo(message) { restore() }
     }
 
@@ -127,9 +127,16 @@ class FreestyleLogViewModel @Inject constructor(
      * The house rule GoalsViewModel documents: any write whose caller immediately navigates.
      */
     internal fun saveDraft(draft: FreestyleDraft) {
-        viewModelScope.launch {
-            withContext(NonCancellable) { settingsRepo.saveFreestyleDraft(draft.toJson()) }
-        }
+        viewModelScope.launch { restoreDraft(draft) }
+    }
+
+    /**
+     * [saveDraft] in the caller's own coroutine, for an Undo. The undo runs on the app's snackbar
+     * scope and outlives this screen: launched on [viewModelScope], an Undo tapped after leaving
+     * landed on a cleared scope and never ran, and the discarded workout was gone for good.
+     */
+    internal suspend fun restoreDraft(draft: FreestyleDraft) {
+        withContext(NonCancellable) { settingsRepo.saveFreestyleDraft(draft.toJson()) }
     }
 
     /** Drop the saved draft — used for "start fresh" and once the log is empty. */
