@@ -638,6 +638,7 @@ fun OverviewScreen(
                     else -> ", $r planned rest days"
                 },
                 rest = state.weekRestDays,
+                dayWords = state.weekDayWords,
                 modifier = Modifier.fillMaxWidth()
             )
 

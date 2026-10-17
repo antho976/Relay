@@ -103,6 +103,10 @@ internal fun buildOverviewUiState(
         nextUpDayKey = stats.nextUpDayKey,
         weekDaysTrained = stats.weekDaysTrained,
         weekRestDays = stats.weekRestDays,
+        // A slot naming a day the program no longer has gets no word, rather than a raw key.
+        weekDayWords = stats.weekPlannedDays.mapNotNull { (i, key) ->
+            Program.dayOrNull(key)?.word?.takeIf { it.isNotBlank() }?.let { i to it }
+        }.toMap(),
         recentItems = recentItems
     )
 }

@@ -49,6 +49,19 @@ class ScheduleHistoryTest {
     }
 
     @Test
+    fun plannedDayNamesTheSlotInForceOnlyOnTrainingDays() {
+        var h = ScheduleHistory.record(emptyList(), monday.toEpochDay(), weekday, fourDay)
+        h = ScheduleHistory.record(h, day(14).toEpochDay(), weekday, threeDay)
+        assertEquals("upper-a", ScheduleHistory.plannedDayOn(h, day(0)))
+        assertEquals("lower-a", ScheduleHistory.plannedDayOn(h, day(1)))
+        assertNull("rest day", ScheduleHistory.plannedDayOn(h, day(2)))
+        assertEquals("judged by the newer schedule", "fb-b", ScheduleHistory.plannedDayOn(h, day(16)))
+        assertNull("before the history", ScheduleHistory.plannedDayOn(h, monday.minusDays(1)))
+        h = ScheduleHistory.record(h, day(21).toEpochDay(), WeeklySchedule.MODE_SEQUENCE, threeDay)
+        assertNull("sequence mode fixes no day", ScheduleHistory.plannedDayOn(h, day(21)))
+    }
+
+    @Test
     fun sequenceModePlansNoRest() {
         var h = ScheduleHistory.record(emptyList(), monday.toEpochDay(), weekday, fourDay)
         h = ScheduleHistory.record(h, day(7).toEpochDay(), WeeklySchedule.MODE_SEQUENCE, fourDay)

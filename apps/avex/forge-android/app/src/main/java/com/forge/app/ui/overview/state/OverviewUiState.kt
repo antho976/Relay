@@ -75,6 +75,8 @@ data class OverviewUiState(
     val weekDaysTrained: Set<Int> = emptySet(),
     /** Planned rest days this week, same indices as [weekDaysTrained]; empty without fixed weekdays. */
     val weekRestDays: Set<Int> = emptySet(),
+    /** The planned day's word (PUSH, PULL, LEGS…) per training day, same indices; empty without fixed weekdays. */
+    val weekDayWords: Map<Int, String> = emptyMap(),
     /** Custom name for the next-up day set by the user, or null if using the program default. */
     val customDayName: String? = null,
     /** Combined gym + cardio, sorted newest first, capped at 3. */

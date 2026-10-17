@@ -373,6 +373,12 @@ private class SparklineGeometry {
  * gap. The filled open cell keeps meaning "a training day, not done (yet)". All seven stay: hiding
  * rest days would make the strip a different width every week and the day letters stop lining up
  * with the calendar underneath the user's thumb.
+ *
+ * ## Day words (2026-10-17)
+ *
+ * When the schedule fixes days to weekdays, each training day prints its session's word under the
+ * cell (PUSH, PULL, LEGS), so the week reads as the plan and not only as a tally. Rest days carry
+ * the moon instead of a word. Without fixed weekdays nothing is printed: the plan names no day.
  */
 @Composable
 fun WeekStrip(
@@ -384,7 +390,9 @@ fun WeekStrip(
     reading: String,
     modifier: Modifier = Modifier,
     /** Planned rest days, same indices as [trained]. A rest day you trained anyway draws as trained. */
-    rest: Set<Int> = emptySet()
+    rest: Set<Int> = emptySet(),
+    /** The planned session's word (PUSH, PULL…) per training day, same indices; printed under its cell. */
+    dayWords: Map<Int, String> = emptyMap()
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val onBg = MaterialTheme.colorScheme.onBackground
@@ -468,6 +476,20 @@ fun WeekStrip(
                             modifier = Modifier.size(16.dp)
                         )
                     }
+                }
+                // Under the cell, not in it: the cell already carries the check, the moon or the
+                // today ring, and a five-letter word inside a 34dp square would crowd all three.
+                // Rest days get no word — the moon says it. Columns align at the top, so a row
+                // with some words and some blanks keeps its cells on one line.
+                dayWords[i]?.takeIf { !isRest }?.let { word ->
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        word,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isToday) onBg else muted,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
                 }
             }
         }
