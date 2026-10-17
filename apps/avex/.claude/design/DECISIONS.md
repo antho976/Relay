@@ -8,6 +8,36 @@ an entry whenever a rule is added, changed or retired.
 
 ---
 
+## 2026-10-17 — Settings comes back into the family: the app's grouped measures, chrome and anchors
+
+Antho: Settings "looks nice but too different from the rest". The 2026-09-26 kit was right about the
+problem it solved (an Operate surface that read like a terminal) and kept its own measures for every
+answer to it, so beside Home, Stats, Coach and onboarding it read as a different app: a 16dp gutter
+where every other page has 24, 16dp group corners where `ForgeGroups` has 12, sans group headers
+where every other page opens a section on a mono small-caps anchor, a stock M3 switch, radio dots
+and filled Material glyphs where the app has `ForgeSwitch`, the ring-and-wash pick and muted line
+glyphs, a red primary button where the app's filled capsule is light, and a collapsing bar that
+named the screen where every other page carries only a back capsule.
+
+**Changed.** The kit keeps its API and its anatomy (grouped slabs, no dividers, live values, real
+controls, sans control labels) and takes the shared measures: `KitGutter` 24, `KitRowPad` = `ROW_H`,
+corners and seams from `ForgeGroups`; headers are `ForgeGroupLabel`, footers `ForgeGroupCaption`;
+the bar is `ForgeTopBar` and the serif title (`headlineLarge`, as Stats and Coach) scrolls with the
+page; `SettingsSwitch` draws `ForgeSwitch`; a picked radio row wears `selectableColors` and rounds
+out like an onboarding answer; segmented tracks take the group corner; icon tiles draw like
+`ForgeGlyphBadge`; Primary is light. §4.6's exception for Settings is retired. One sentence-shaped
+group header ("Your data stays on this device") became "Privacy", since a mono anchor is never a
+sentence.
+
+**Not changed.** Every setting, its copy, behaviour and search entry; the live previews.
+
+**Same pass, elsewhere.** Academy chapters open on `EditorialHeader` instead of a serif heading and
+its mono meta is uppercase; the reader's next lesson sits under a NEXT eyebrow. Onboarding's weekday
+picker is one group of seven cells (loose chips wrapped Sunday onto its own line), and its session
+length anchor stopped being a mono question.
+
+---
+
 ## 2026-09-26 — Settings leaves the editorial language for a native settings kit
 
 Antho, reviewing Settings end to end: it read as dated and not professional ("the reset and data
