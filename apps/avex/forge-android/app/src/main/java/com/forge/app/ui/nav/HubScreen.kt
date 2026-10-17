@@ -201,8 +201,6 @@ fun HubScreen(
                     },
                     onConnectWatch = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
                 )
-                // Coach and Academy sit furthest from Home, so each carries the top-bar back arrow
-                // to it; the system Back already goes there (the BackHandler above).
                 // No back arrow on a tab: the bar below is the navigation, and system Back already
                 // returns Home (the BackHandler above). The page names itself instead.
                 BottomTab.COACH -> CoachScreen(
@@ -211,7 +209,7 @@ fun HubScreen(
                     onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
                 )
                 BottomTab.ACADEMY -> AcademyScreen(
-                    onBack = { goTo(homeIndex) },
+                    onBack = null,
                     onOpenLesson = { nav.navigate(Routes.lesson(it)) }
                 )
             }

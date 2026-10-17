@@ -247,7 +247,7 @@ fun ForgeNavHost(
                 onPendingConsumed = { pendingHubPage = null },
                 // Counted from the same feed the bell reads, so a kind switched off in Settings
                 // drops out of both at once and they can never disagree.
-                academyUnread = notices.count { it.kind == com.forge.app.data.repo.NoticeKind.ACADEMY }
+                academyUnread = com.forge.app.data.repo.NotificationFeed.newLessonCount(notices)
             )
         }
         composable(Routes.FREESTYLE_LOG) {
@@ -388,7 +388,8 @@ fun ForgeNavHost(
                 onOpenLesson = { lessonId ->
                     nav.popBackStack()
                     nav.navigate(Routes.lesson(lessonId))
-                }
+                },
+                onOpenAcademy = { nav.popBackStack(Routes.OVERVIEW, false); pendingHubPage = BottomTab.ACADEMY }
             )
         }
         composable(Routes.COACH_BRIEF) {

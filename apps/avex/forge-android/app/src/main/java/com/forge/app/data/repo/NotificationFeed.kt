@@ -37,6 +37,9 @@ sealed interface NoticeAction {
     /** Opens one Academy lesson. The row exists because its coach moment fired, not on a schedule. */
     data class OpenLesson(val lessonId: String) : NoticeAction
 
+    /** Opens the Academy tab, from the one row that stands for several new lessons. */
+    data object OpenAcademy : NoticeAction
+
     /** Opens the OS app-notification settings. Not app navigation, so the screen handles it. */
     data object EnableNotifications : NoticeAction
     data object None : NoticeAction
@@ -301,7 +304,7 @@ class NotificationFeed @Inject constructor(
         // Sorted by kind rather than appended, so a new kind's place in the feed is decided by its
         // position in the enum (§4.8) instead of by where its builder happened to be called. The
         // sort is stable and the existing rows were already in kind order, so nothing else moves.
-        (rows + academy).sortedBy { it.kind.ordinal }
+        (rows + groupLessons(academy)).sortedBy { it.kind.ordinal }
     }.combine(settings.disabledNoticeKinds) { rows, disabled ->
         // A kind switched off on Settings → Notifications never reaches the feed. Applied last so a
         // notice is still QUEUED while its kind is off — switching it back on brings the row back
@@ -371,6 +374,12 @@ class NotificationFeed @Inject constructor(
             ({ settings.setLessonNoticeDismissed(lessonId, dismissed = false) })
         }
 
+        id.startsWith(PREFIX_LESSON_GROUP) -> {
+            val lessonIds = id.removePrefix(PREFIX_LESSON_GROUP).split(',').filter { it.isNotBlank() }
+            lessonIds.forEach { settings.setLessonNoticeDismissed(it, dismissed = true) }
+            ({ lessonIds.forEach { settings.setLessonNoticeDismissed(it, dismissed = false) } })
+        }
+
         id.startsWith(PREFIX_SYSTEM) -> {
             val noticeId = id.removePrefix(PREFIX_SYSTEM)
             val previous = settings.systemNotices.first().firstOrNull { it.id == noticeId }
@@ -431,6 +440,38 @@ class NotificationFeed @Inject constructor(
         private const val PREFIX_MILESTONE = "milestone."
         private const val PREFIX_SYSTEM = "system."
         private const val PREFIX_LESSON = "lesson."
+        private const val PREFIX_LESSON_GROUP = "lessons:"
+
+        /**
+         * Two or more new lessons become ONE row (2026-10-16). Each lesson had its own, so a fresh
+         * install opened on a bell reading 9+ that was mostly the Academy tab's own badge repeated.
+         * The arrival banners still play one per lesson; only the feed folds them.
+         */
+        /** New lessons waiting, counting each one inside a grouped row: the Academy tab's badge. */
+        fun newLessonCount(notices: List<AppNotice>): Int = notices.sumOf { n ->
+            when {
+                n.kind != NoticeKind.ACADEMY -> 0
+                n.id.startsWith(PREFIX_LESSON_GROUP) -> n.id.removePrefix(PREFIX_LESSON_GROUP).split(',').count { it.isNotBlank() }
+                else -> 1
+            }
+        }
+
+        internal fun groupLessons(academy: List<AppNotice>): List<AppNotice> {
+            if (academy.size < 2) return academy
+            val titles = academy.map { it.title }
+            return listOf(
+                AppNotice(
+                    id = PREFIX_LESSON_GROUP + academy.joinToString(",") { it.id.removePrefix(PREFIX_LESSON) },
+                    kind = NoticeKind.ACADEMY,
+                    glyph = NoticeGlyph.ACADEMY,
+                    eyebrow = "NEW LESSONS",
+                    title = "${academy.size} new lessons in the Academy",
+                    detail = if (titles.size == 2) "${titles[0]} and ${titles[1]}"
+                    else "${titles[0]}, ${titles[1]} and ${titles.size - 2} more",
+                    action = NoticeAction.OpenAcademy,
+                )
+            )
+        }
         private const val PREFIX_CHECKIN = "checkin."
 
         private fun eyebrowFor(noticeId: String): String = when (noticeId) {
