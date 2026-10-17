@@ -218,6 +218,34 @@ object RestAdvisor {
         ).seconds
     }
 
+    /**
+     * What the timer has learned, in words, for the Session settings: each role it has enough rests
+     * for, at the time it now prescribes before effort adjusts it. Null until either role has
+     * [AdaptThresholds.minRestSamples]; the settings footer already says the timer learns.
+     */
+    fun paceReading(
+        tuning: RestTuning,
+        compoundBase: Int,
+        isolationBase: Int,
+        t: AdaptThresholds = AdaptThresholds()
+    ): String? {
+        // Each learned role as its phrase and the rests behind it; a role short of samples is left out
+        // of both, so the count matches what the line claims.
+        fun role(r: MovementRole, base: Int, name: String): Pair<String, Int>? {
+            val n = tuning.sampleCounts[r] ?: 0
+            val factor = tuning.factors[r]?.coerceAtMost(1.0) ?: return null
+            if (n < t.minRestSamples) return null
+            val seconds = roundTo(base * factor, t.restRoundSeconds)
+            return (if (seconds < base) "$name about ${mmss(seconds)}" else "$name the full ${mmss(base)}") to n
+        }
+        val parts = listOfNotNull(
+            role(MovementRole.COMPOUND, compoundBase, "compounds"),
+            role(MovementRole.ISOLATION, isolationBase, "isolations")
+        )
+        if (parts.isEmpty()) return null
+        return "Your pace so far: ${parts.joinToString(", ") { it.first }}, from ${parts.sumOf { it.second }} rests."
+    }
+
     private fun median(values: List<Double>): Double {
         val sorted = values.sorted()
         val mid = sorted.size / 2
