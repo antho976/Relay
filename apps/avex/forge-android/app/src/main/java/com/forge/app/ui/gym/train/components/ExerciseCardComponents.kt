@@ -1,5 +1,6 @@
 package com.forge.app.ui.gym.train.components
 
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateIntAsState
@@ -124,7 +125,7 @@ internal fun CollapsedRow(
             fontSize = 9.sp,
             modifier = Modifier.width(28.dp).padding(top = 5.dp)
         )
-        Column(modifier = Modifier.weight(1f).clickable { onToggle() }) {
+        Column(modifier = Modifier.weight(1f).clickableLabeled("Expand or collapse ${state.effectiveName}") { onToggle() }) {
             val nameText = buildAnnotatedString {
                 append(state.effectiveName)
                 if (isNow) withStyle(SpanStyle(fontSize = 10.sp, color = accent)) { append("  ● NOW") }
@@ -168,17 +169,19 @@ internal fun CollapsedRow(
             // Swap-aware, like the name beside it: the demo search should describe the movement the
             // card is actually showing, not the one the slot started as.
             val machine = state.effectiveUnit == ExerciseUnit.PLATES
-            // 18dp glyphs but a 44dp touch target (a11y minimum) — the icon centers inside a larger box.
+            // 18dp glyphs on a 48dp touch target (§14): the icon centers inside the larger box.
             Box(
-                modifier = Modifier.size(44.dp)
-                    .clickable { runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName, machine)) } },
+                modifier = Modifier.size(48.dp)
+                    .clickableLabeled("Watch a demo of ${state.effectiveName}") {
+                        runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName, machine)) }
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(TrainIcons.Video, contentDescription = "Watch a demo",
                     tint = muted.copy(alpha = 0.55f), modifier = Modifier.size(18.dp))
             }
             Box(
-                modifier = Modifier.size(44.dp).clickable { onOpenSwapPicker() },
+                modifier = Modifier.size(48.dp).clickableLabeled("Swap ${state.effectiveName}") { onOpenSwapPicker() },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(TrainIcons.Swap, contentDescription = "Swap",
@@ -361,7 +364,7 @@ internal fun ActionChip(icon: ImageVector, label: String, onClick: () -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier.clickable { onClick() }.padding(horizontal = 8.dp, vertical = 4.dp)
+        modifier = Modifier.heightIn(min = 48.dp).clickableLabeled(label) { onClick() }.padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
         Icon(icon, contentDescription = label, tint = muted, modifier = Modifier.size(15.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
@@ -406,8 +409,7 @@ internal fun RestBetweenSets(seconds: Int) {
     if (seconds <= 0) return
     val readyColor = ForgeLastGreen
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val m = seconds / 60; val s = seconds % 60
-    val label = if (m > 0) "$m:${"%02d".format(s)}" else "0:${"%02d".format(s)}"
+    val label = com.forge.app.domain.units.clockText(seconds.toLong())
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -427,10 +429,10 @@ internal fun InlineRestTimer(timer: RestTimerState, onTap: () -> Unit, onSkip: (
     val isReady = timer.isFinished
     val timeColor = if (isReady) readyColor else muted
 
-    fun Int.toTimerLabel(): String {
-        val m = this / 60; val s = this % 60
-        return if (m > 0) "$m:${"%02d".format(s)}" else "%02d".format(s)
-    }
+    // Under a minute it reads bare seconds ("45"), as it always has; the digits are padded by
+    // hand so a locale with its own numerals doesn't mix them into a clock.
+    fun Int.toTimerLabel(): String =
+        if (this >= 60) com.forge.app.domain.units.clockText(toLong()) else toString().padStart(2, '0')
 
     Row(
         modifier = Modifier.fillMaxWidth().clickableLabeled("Open the rest timer") { onTap() }.padding(vertical = 4.dp),
@@ -584,7 +586,7 @@ internal fun UpNextBubble(
         Row(
             modifier = Modifier
                 .groupMember(0, memberCount)
-                .clickable { expanded = !expanded }
+                .clickableLabeled(if (expanded) "Hide what's up next" else "Show what's up next") { expanded = !expanded }
                 .padding(horizontal = ROW_H, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)

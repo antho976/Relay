@@ -196,7 +196,7 @@ fun ExerciseCard(
                     style = heroStyle,
                     color = onBg,
                     textDecoration = if (state.skipped) TextDecoration.LineThrough else TextDecoration.None,
-                    modifier = Modifier.clickable { onOpenSwapPicker() }
+                    modifier = Modifier.clickableLabeled("Swap ${state.effectiveName}") { onOpenSwapPicker() }
                 )
 
                 // Plan line — the whole brief for this exercise in ONE line: what to do, what you
