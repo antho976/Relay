@@ -83,7 +83,10 @@ internal fun ColumnScope.E1rmComparisonList(
     /** Bumps on every record tap so re-tapping the same [focusLift] re-expands its row. */
     focusNonce: Int = 0,
     /** The coach's plateau read per exercise id (see [StatsUiState.plateauFlags]). */
-    plateaus: Map<String, PlateauFlagUi> = emptyMap()
+    plateaus: Map<String, PlateauFlagUi> = emptyMap(),
+    /** The [focusNonce] whose row has been scrolled into view already; held by the caller. */
+    focusShownNonce: Int = 0,
+    onFocusShown: (Int) -> Unit = {}
 ) {
     val maxE1 = lifts.maxOf { it.currentE1rm }.coerceAtLeast(1.0)
     // The comparison bars glide in on first appearance, staggered down the list — the same motion
@@ -106,6 +109,8 @@ internal fun ColumnScope.E1rmComparisonList(
             c = c,
             isFocused = lift.exerciseId == focusLift,
             focusNonce = focusNonce,
+            focusShown = focusShownNonce >= focusNonce,
+            onFocusShown = { onFocusShown(focusNonce) },
             plateau = plateaus[lift.exerciseId]
         )
     }
@@ -150,6 +155,9 @@ private fun E1rmDrillRow(
     c: StatsColors,
     isFocused: Boolean,
     focusNonce: Int,
+    /** This focus request has already been scrolled to; a re-entry must not scroll again. */
+    focusShown: Boolean,
+    onFocusShown: () -> Unit,
     plateau: PlateauFlagUi?
 ) {
     val display = remember(lift.history, weightUnit) { lift.history.map { toDisplayWeight(it, weightUnit) } }
@@ -165,16 +173,16 @@ private fun E1rmDrillRow(
     // first screenful of rows opened below the fold, so the tap seemed to do nothing.
     val bringIntoView = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
     // A row first composed already focused (a lift past the trim, whose focus opened the full list)
-    // starts with the nonce consumed and expanded by its initial state, but still has to be shown.
-    var arrivedFocused by remember { mutableStateOf(isFocused) }
+    // starts with the nonce consumed and expanded by its initial state, but still has to be shown,
+    // once: whether it has been is held above the row, which leaves composition on every lens switch.
     LaunchedEffect(focusNonce) {
         val fresh = isFocused && focusNonce > consumedNonce
         if (fresh) {
             consumedNonce = focusNonce
             if (expandable) expanded = true
         }
-        if (fresh || arrivedFocused) {
-            arrivedFocused = false
+        if (isFocused && !focusShown) {
+            onFocusShown()
             // After the expansion and the card's own scroll have laid out.
             kotlinx.coroutines.delay(ForgeMotion.DurationStandard.toLong())
             bringIntoView.bringIntoView()
