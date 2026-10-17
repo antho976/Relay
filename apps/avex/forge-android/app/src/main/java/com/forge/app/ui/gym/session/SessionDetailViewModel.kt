@@ -94,5 +94,8 @@ class SessionDetailViewModel @Inject constructor(
         }
     }
 
+    /** A plain transient line on the app's snackbar. */
+    fun showMessage(text: String) = snackbar.show(text)
+
     fun clearExportPath() { _exportPath.value = null }
 }

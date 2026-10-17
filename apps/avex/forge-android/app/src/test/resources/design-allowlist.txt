@@ -195,7 +195,6 @@
 2 snackbar-host ui/gym/train/DayScreen.kt SnackbarHostState
 2 snackbar-host ui/programbuilder/ProgramBuilderDayDetail.kt SnackbarHostState
 2 snackbar-host ui/programbuilder/ProgramBuilderScreen.kt SnackbarHostState
-2 toast ui/gym/session/SessionDetailScreen.kt Toast
 1 unlabelled-clickable ui/common/BounceClick.kt .clickable(
 1 unlabelled-clickable ui/gym/session/SessionDetailComponents.kt .clickable(
 1 unlabelled-clickable ui/gym/session/SessionDetailMetricCards.kt .clickable(
