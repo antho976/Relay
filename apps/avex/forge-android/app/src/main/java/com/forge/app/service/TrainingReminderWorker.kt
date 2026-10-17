@@ -41,7 +41,8 @@ class TrainingReminderWorker @AssistedInject constructor(
     private val sessionDao: SessionDao,
     private val settingsRepo: SettingsRepository,
     private val statsRepo: StatsRepository,
-    private val programRepo: com.forge.app.data.repo.ProgramRepository
+    private val programRepo: com.forge.app.data.repo.ProgramRepository,
+    private val vacationRepo: com.forge.app.data.repo.VacationRepository
 ) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result {
@@ -53,6 +54,10 @@ class TrainingReminderWorker @AssistedInject constructor(
 
         val zone = ZoneId.systemDefault()
         val today = LocalDate.now(zone)
+        // A declared holiday is time off the user asked for: no "time to train" every morning of it.
+        // The Monday come-back nudge already honoured it; the daily one did not.
+        val periods = runCatching { vacationRepo.observeAll().first() }.getOrDefault(emptyList())
+        if (com.forge.app.domain.vacation.VacationCalendar.onVacation(periods)(today)) return Result.success()
         val dayStart = today.atStartOfDay(zone).toInstant().toEpochMilli()
         val dayEnd = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         // TRACKED: an untracked workout still suppressed the day's nudge and fed the schedule
