@@ -754,7 +754,7 @@ private fun AddSetPill(onAdd: (() -> Unit)?) {
     val outline = MaterialTheme.colorScheme.outline
     Box(
         modifier = Modifier
-            .sizeIn(minHeight = 40.dp)
+            .sizeIn(minHeight = 48.dp)
             .clip(RoundedCornerShape(50))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .then(if (onAdd != null) Modifier.clickableLabeled("Add a set") { onAdd() } else Modifier)
@@ -816,14 +816,14 @@ private fun StepperPill(
     ) {
         Box(
             modifier = Modifier
-                .sizeIn(minWidth = 44.dp, minHeight = 40.dp)
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                 .clickableLabeled("Decrease $label") { onMinus() },
             contentAlignment = Alignment.Center
         ) { Text("−", style = MaterialTheme.typography.titleMedium, color = onBg) }
         Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
         Box(
             modifier = Modifier
-                .sizeIn(minWidth = 44.dp, minHeight = 40.dp)
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                 .clickableLabeled("Increase $label") { onPlus() },
             contentAlignment = Alignment.Center
         ) { Text("+", style = MaterialTheme.typography.titleMedium, color = onBg) }
