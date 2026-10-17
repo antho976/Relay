@@ -2,6 +2,7 @@ package com.forge.app.ui.gym.freestyle
 
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.WeightUnit
+import com.forge.app.service.wear.toProtocol
 import com.forge.app.domain.units.formatHold
 import com.forge.app.domain.units.parseHold
 import com.forge.app.domain.units.parseToLb
@@ -172,12 +173,12 @@ internal fun stepRepsText(cur: String, delta: Int): String =
 internal fun stepHoldText(cur: String, deltaSec: Int): String =
     holdText(((parseHold(cur) ?: 0) + deltaSec).coerceAtLeast(0))
 
-/** The weight stepper's increment in the display unit. Half a stone keeps a single-decimal field clean. */
-internal fun weightStepFor(unit: WeightUnit): Double = when (unit) {
-    WeightUnit.KG -> 2.5
-    WeightUnit.ST -> 0.5
-    else -> 5.0
-}
+/**
+ * The weight stepper's increment in the display unit, from the ONE shared step table the day
+ * screen and the watch read (WeightSteps), not a third copy that could drift from them.
+ */
+internal fun weightStepFor(unit: WeightUnit): Double =
+    com.forge.shared.weight.WeightSteps.weightStep(unit.toProtocol(), isPlates = false)
 
 /** Keep digits + a single colon (mm:ss) for a hold field (GYMAP-51). A stray second colon would make
  *  [parseHold] reject the value and the set would never count. */
