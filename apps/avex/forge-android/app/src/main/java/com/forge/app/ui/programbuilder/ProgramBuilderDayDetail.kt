@@ -350,7 +350,8 @@ fun ProgramBuilderDayDetail(
             },
             title = "Swap ${swapExercise.name}",
             confirmLabel = "Swap",
-            singleSelect = true
+            singleSelect = true,
+            preferMuscle = ExerciseLibrary.byId(swapExercise.libId)?.muscle
         )
     }
 }
