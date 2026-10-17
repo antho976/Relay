@@ -79,6 +79,12 @@ internal fun sanitizeReps(reps: Int): Int = reps.coerceIn(0, MAX_LOGGED_REPS)
  */
 internal const val MAX_LOGGED_WEIGHT_LB = 2000.0
 
+/**
+ * An open session untouched for this long is abandoned rather than paused: no gym session idles
+ * twelve hours between sets, and an evening workout left open is closed before the next morning's.
+ */
+internal const val STALE_SESSION_MS = 12L * 60 * 60 * 1000
+
 /** Clamp a set's weight to a sane, non-poisoning range at the write boundary. Pure + testable. */
 internal fun sanitizeWeightLb(weightLb: Double?): Double? = weightLb?.coerceIn(0.0, MAX_LOGGED_WEIGHT_LB)
 
@@ -161,6 +167,14 @@ class WorkoutRepository @Inject constructor(
      * now ([com.forge.app.data.db.SessionWrites.startOrResume]); the loser resumes the winner's row.
      */
     suspend fun startOrResumeSession(dayKey: String): StartedSession = startMutex.withLock {
+        // An open session nobody has touched for half a day was abandoned, not paused. Resuming it
+        // poured today's sets into a workout dated weeks ago (the streak, the week's stats and the
+        // coach's layoff read all take its start date), so it is closed to history first, at its
+        // last logged activity, and today starts fresh.
+        sessionDao.getActiveSession()?.let { active ->
+            val sets = loggedSetDao.allForSession(active.id)
+            if (clock.nowMs() - lastActivityMs(active, sets) >= STALE_SESSION_MS) closeAbandoned(active, sets)
+        }
         sessionDao.getActiveSession()?.let { active ->
             // Don't resume a "zombie" session whose day the program no longer has — resuming it would
             // load the wrong day's plan (Program.day() falls back to the first day) and log under a stale
@@ -615,7 +629,19 @@ class WorkoutRepository @Inject constructor(
         if (validDayKeys.isEmpty()) return null
         val active = sessionDao.getActiveSession() ?: return null
         if (active.dayKey in validDayKeys) return null
-        val sets = loggedSetDao.allForSession(active.id)
+        return closeAbandoned(active, loggedSetDao.allForSession(active.id))
+    }
+
+    /** When [active] was last worked on: its newest logged set, or its start when it has none. */
+    private fun lastActivityMs(active: Session, sets: List<LoggedSet>): Long =
+        (sets.maxOfOrNull { it.completedAt } ?: active.startedAt).coerceAtLeast(active.startedAt)
+
+    /**
+     * Close a session nobody is coming back to, without losing work: an empty one is discarded, one
+     * with logged sets is finished to history at its last activity. Shared by the zombie path
+     * ([resolveOrphanSession]) and the stale path in [startOrResumeSession].
+     */
+    private suspend fun closeAbandoned(active: Session, sets: List<LoggedSet>): OrphanResolution? {
         if (sets.isEmpty()) {
             discardSession(active.id)
             return OrphanResolution(finishedToHistory = false)
@@ -623,7 +649,7 @@ class WorkoutRepository @Inject constructor(
         // Resolution can run days after the session was abandoned, so its finish time is the LAST
         // logged-set activity, not `now`: `finished_at` drives the streak's trained days and the
         // weekly stats/export bucketing, and stamping resolution time credited the wrong day/week.
-        val lastActivityMs = sets.maxOf { it.completedAt }.coerceAtLeast(active.startedAt)
+        val lastActivityMs = lastActivityMs(active, sets)
         // Same conditional-stamp + targeted-totals shape as finishSession, in one transaction: a
         // concurrent finish, tag or journal write is neither overwritten by a stale whole-row copy
         // nor finished twice.
