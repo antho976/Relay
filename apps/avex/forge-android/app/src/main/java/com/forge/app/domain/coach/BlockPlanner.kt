@@ -28,6 +28,9 @@ object BlockPlanner {
     /** A block shorter than this can't express a phase progression. */
     const val MIN_WEEKS = 3
 
+    /** Empty weeks in a row that make a layoff ([LifeEvents.LAYOFF_MIN_DAYS] in whole weeks). */
+    private const val LAYOFF_WEEKS = LifeEvents.LAYOFF_MIN_DAYS / 7
+
     /**
      * Start a block. The shape is deliberately simple and explainable: accumulate for most of it,
      * intensify near the end, and finish with a planned deload week.
@@ -85,11 +88,23 @@ object BlockPlanner {
         // Each elapsed week is the one being COMPLETED, starting with the week last advanced into.
         var out = block
         var stepped = 0
+        var heldRun = 0
         for (k in 0 until weeksElapsed) {
             if (!out.isActive || stepped > block.plannedWeeks) return out
             val completed = firstCompleted?.plusWeeks(k.toLong())
             val held = completed != null && out.phase != BlockPhase.DELOAD.code && !trainedInWeek(completed)
-            if (held) continue
+            if (held) {
+                // Holding alone still lands a lifter on the test week: one session in an Intensify
+                // week steps the block to Peak, and the weeks away then hold it there. A run of
+                // empty weeks as long as a layoff means the build has to be redone, so a block past
+                // Accumulate starts over from week 1.
+                heldRun++
+                if (heldRun >= LAYOFF_WEEKS && out.phase != BlockPhase.ACCUMULATE.code) {
+                    out = out.copy(phase = BlockPhase.ACCUMULATE.code, weekIndex = 1)
+                }
+                continue
+            }
+            heldRun = 0
             out = step(out, weekId, nowMs, fatigueScore, t)
             stepped++
         }

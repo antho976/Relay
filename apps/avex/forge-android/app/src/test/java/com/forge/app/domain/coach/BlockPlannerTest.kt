@@ -97,6 +97,23 @@ class BlockPlannerTest {
     }
 
     @Test
+    fun aLayoffPastAccumulateStartsTheBuildOverInsteadOfReturningOnTheTestWeek() {
+        // In Intensify (week 3), one session that week steps the block to Peak; then three weeks
+        // away. Holding alone would open the first week back on "Test week".
+        val intensifying = walk(start(weeks = 5), 2)
+        assertEquals(BlockPhase.INTENSIFY.code, intensifying.phase)
+        val monW03 = java.time.LocalDate.of(2026, 1, 12)
+        val back = BlockPlanner.advance(intensifying, "2026-W07", now, trainedInWeek = { it == monW03 })
+        assertTrue(back.isActive)
+        assertEquals(BlockPhase.ACCUMULATE.code, back.phase)
+        assertEquals(1, back.weekIndex)
+        assertEquals("2026-W07", back.lastAdvancedWeek)
+        // A single missed week is a week off, not a layoff: the block holds where it was.
+        val oneOff = BlockPlanner.advance(intensifying, "2026-W05", now, trainedInWeek = { it == monW03 })
+        assertEquals(BlockPhase.PEAK.code, oneOff.phase)
+    }
+
+    @Test
     fun aMissedDeloadWeekStillServesTheDeload() {
         // Rest is what a deload week asks for, so missing it does not hold the block in it forever.
         val deloading = walk(start(weeks = 5), 4)
