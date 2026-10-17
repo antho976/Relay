@@ -44,16 +44,15 @@ import com.forge.app.program.ExerciseLibrary
 
 /**
  * Pure, testable filter for the exercise picker. Hides owner-only plate-count stations
- * ([ExerciseDef.curatedOnly]) and anything already on the list ([exclude]); matches [query] against
- * the name or muscle group (case-insensitive). Blank query returns the whole eligible pool.
+ * ([ExerciseDef.curatedOnly]) and anything already on the list ([exclude]); matches [query] through
+ * [com.forge.app.program.ExerciseSearch] (every word, gym shorthand understood, name matches first).
+ * Blank query returns the whole eligible pool.
  */
-fun filterLibrary(query: String, exclude: Set<String>): List<ExerciseDef> {
-    val q = query.trim().lowercase()
-    return ExerciseLibrary.all.filter { def ->
-        !def.curatedOnly && def.id !in exclude &&
-            (q.isEmpty() || def.name.lowercase().contains(q) || def.muscle.displayName.lowercase().contains(q))
-    }
-}
+fun filterLibrary(query: String, exclude: Set<String>): List<ExerciseDef> =
+    com.forge.app.program.ExerciseSearch.filter(
+        ExerciseLibrary.all.filter { def -> !def.curatedOnly && def.id !in exclude },
+        query
+    )
 
 /**
  * The picked ids, as something a `Bundle` can hold.

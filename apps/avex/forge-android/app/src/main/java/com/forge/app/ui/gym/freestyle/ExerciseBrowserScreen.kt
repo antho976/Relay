@@ -86,13 +86,14 @@ fun browseLibrary(
      *  finds the existing custom id instead of offering to create a second one. */
     custom: List<ExerciseDef> = emptyList()
 ): List<ExerciseDef> {
-    val q = query.trim().lowercase()
-    return (ExerciseLibrary.all + custom).filter { def ->
+    val eligible = (ExerciseLibrary.all + custom).filter { def ->
         !def.curatedOnly && def.id !in exclude &&
             (muscle == null || def.muscle == muscle) &&
-            (!favoritesOnly || def.id in favorites) &&
-            (q.isEmpty() || def.name.lowercase().contains(q) || def.muscle.displayName.lowercase().contains(q))
+            (!favoritesOnly || def.id in favorites)
     }
+    // The shared rule (com.forge.app.program.ExerciseSearch): a miss here offers to create the move,
+    // so a search that cannot read "DB" or "RDL" made duplicates of library lifts.
+    return com.forge.app.program.ExerciseSearch.filter(eligible, query)
 }
 
 /** A user-created move as a browser tile: only its identity and muscle exist, the rest is nominal. */
