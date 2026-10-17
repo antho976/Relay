@@ -379,6 +379,7 @@ private fun DayViewModel.leaveAndResume() {
     viewModelScope.launch {
         // Close THIS sitting's segment so its active time is banked; reopening the day starts a
         // fresh segment and the live readout resumes from the running total.
+        segmentHeartbeatJob?.cancel()
         _state.value.sessionId?.let { workoutRepo.closeOpenSegments(it, clock.nowMs()) }
         restTimer.stop()
         stopSessionService()
@@ -430,11 +431,11 @@ internal suspend fun DayViewModel.beginSessionForThisDay() {
     // A just-created session can't have segments yet — skip those queries (screen-open latency).
     val now = clock.nowMs()
     val priorActiveMs = if (started.created) {
-        workoutRepo.openSessionSegment(sessionId, now)
+        startSegmentHeartbeat(workoutRepo.openSessionSegment(sessionId, now))
         0L
     } else {
         workoutRepo.closeDanglingSegments(sessionId)
-        workoutRepo.openSessionSegment(sessionId, now)
+        startSegmentHeartbeat(workoutRepo.openSessionSegment(sessionId, now))
         workoutRepo.closedSegmentMs(sessionId)
     }
 
@@ -453,3 +454,24 @@ internal suspend fun DayViewModel.beginSessionForThisDay() {
     // The notification belongs to a screen that is still open.
     if (!leaving) startSessionService(resolvedName)
 }
+
+/**
+ * Stamp this sitting's segment every [SEGMENT_HEARTBEAT_MS] while the workout screen's ViewModel
+ * lives. If the process dies, the next launch closes the segment at the later of its last set and
+ * this stamp (WorkoutRepository.closeDanglingSegments), so a kill mid-rest loses at most one beat
+ * instead of everything since the last set. The DAO ignores a beat on a closed segment.
+ */
+internal fun DayViewModel.startSegmentHeartbeat(segmentId: Long) {
+    segmentHeartbeatJob?.cancel()
+    segmentHeartbeatJob = viewModelScope.launch {
+        while (true) {
+            kotlinx.coroutines.delay(SEGMENT_HEARTBEAT_MS)
+            // A failed beat costs one interval of accuracy, nothing more; never take the screen down.
+            runCatching { workoutRepo.touchSessionSegment(segmentId, clock.nowMs()) }
+                .onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+        }
+    }
+}
+
+/** One row update every 30s while a workout is open: the most time a process death can now drop. */
+internal const val SEGMENT_HEARTBEAT_MS = 30_000L

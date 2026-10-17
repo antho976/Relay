@@ -157,6 +157,9 @@ class DayViewModel @Inject constructor(
 
     internal var undoClearJob: Job? = null
 
+    /** Stamps this sitting's segment while the screen is open (see [startSegmentHeartbeat]). */
+    internal var segmentHeartbeatJob: Job? = null
+
     /** In-flight "I have N minutes" fit or its undo — one at a time, so two quick taps can't
      *  interleave their skip writes and leave a mix of both fits behind. */
     internal var timeFitJob: Job? = null
