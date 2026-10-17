@@ -1,66 +1,13 @@
 package com.forge.app.ui.coach
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import com.forge.app.data.repo.CoachRecord
-import com.forge.app.ui.common.statsEntrance
+
 
 /**
- * One reading in WHERE YOU STAND: the question on the left, the answer on the right, and the
- * evidence for that answer under both. Pure data so the wording is testable without Compose.
+ * One reading the Today panel draws: what is being read, the answer, and the evidence for that
+ * answer under it. Pure data so the wording is testable without Compose.
  */
 internal data class StandingLine(val label: String, val value: String, val sub: String?)
-
-/**
- * WHERE YOU STAND — the four answers a reader wants from the coach without opening its
- * instruments: how today looks, how the week's load looks, which way the lifts are going, and
- * whether the coach's changes have been worth taking.
- *
- * Each is one line with its reason under it, and each speaks only from real data. Below a gate the
- * line says how far along the gate is, never "not enough data". Under advanced tracking the Signals
- * region below draws recovery load and the lifts in full, so this region keeps only the two readings
- * nothing else on the page carries: readiness and the record.
- */
-internal fun LazyListScope.coachNow(state: CoachViewModel.UiState, c: CoachColors) {
-    val lines = standingLines(state)
-    if (lines.isEmpty()) return
-    item("now") {
-        Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(1)) {
-            Spacer(Modifier.height(30.dp))
-            CoachAnchor("Where you stand", c)
-            Spacer(Modifier.height(8.dp))
-            lines.forEach { StandingRow(it, c) }
-        }
-    }
-}
-
-/** True when [coachNow] draws anything, so a deep link knows there is a reading to land on. */
-internal fun hasStanding(state: CoachViewModel.UiState): Boolean = standingLines(state).isNotEmpty()
-
-internal fun standingLines(state: CoachViewModel.UiState): List<StandingLine> = buildList {
-    readinessLine(state)?.let(::add)
-    if (!state.advanced) {
-        recoveryLine(state)?.let(::add)
-        liftsLine(state)?.let(::add)
-    }
-    state.timeline?.record?.let(::recordLine)?.let(::add)
-}
 
 /** Today's readiness, as the change it makes to the day's weight targets and why. */
 internal fun readinessLine(state: CoachViewModel.UiState): StandingLine? {
@@ -93,7 +40,7 @@ internal fun readinessLine(state: CoachViewModel.UiState): StandingLine? {
 
 /**
  * Recovery load as one word, in the same bands the Stats pulse and the weekly review use, with the
- * checks that crossed their line as the reason. The meter and every check live under Signals.
+ * checks that crossed their line as the reason. The meter draws under it on the Today panel.
  */
 internal fun recoveryLine(state: CoachViewModel.UiState): StandingLine? {
     val watch = state.watch ?: return null
@@ -132,7 +79,7 @@ internal fun recoveryLine(state: CoachViewModel.UiState): StandingLine? {
     }
 }
 
-/** Which way the watched lifts are going, counted with the same call the Signals rows make. */
+/** Which way the watched lifts are going, counted with the same call each lift tile makes. */
 internal fun liftsLine(state: CoachViewModel.UiState): StandingLine? {
     val lifts = state.watch?.trackedLifts.orEmpty()
     if (lifts.isEmpty()) return null
@@ -193,50 +140,6 @@ internal fun recordLine(record: CoachRecord): StandingLine? {
             else -> null
         }
     )
-}
-
-@Composable
-private fun StandingRow(line: StandingLine, c: CoachColors) {
-    // One node for TalkBack: the question, the answer and the reason read as one sentence.
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .semantics(mergeDescendants = true) {}
-            .padding(vertical = COACH_ROW_PAD + 4.dp)
-    ) {
-        val label = @Composable { mod: Modifier ->
-            Text(line.label, style = MaterialTheme.typography.bodyMedium, color = c.muted, modifier = mod)
-        }
-        val value = @Composable { mod: Modifier, align: TextAlign ->
-            Text(
-                line.value,
-                style = MaterialTheme.typography.titleSmall,
-                color = c.onBg,
-                textAlign = align,
-                modifier = mod
-            )
-        }
-        // Side by side the answer sits flush right; past ~130% the pair stacks rather than
-        // squeezing the answer onto three lines. Nothing on this page truncates.
-        if (LocalDensity.current.fontScale > 1.3f) {
-            label(Modifier)
-            value(Modifier, TextAlign.Start)
-        } else {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
-            ) {
-                label(Modifier.weight(1f))
-                Spacer(Modifier.width(12.dp))
-                value(Modifier.weight(1f, fill = false), TextAlign.End)
-            }
-        }
-        if (line.sub != null) {
-            Spacer(Modifier.height(2.dp))
-            Text(line.sub, style = MaterialTheme.typography.bodySmall, color = c.muted)
-        }
-    }
 }
 
 private fun plural(n: Int, word: String) = "$n $word${if (n == 1) "" else "s"}"

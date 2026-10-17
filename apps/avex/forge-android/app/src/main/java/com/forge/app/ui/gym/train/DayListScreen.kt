@@ -86,11 +86,11 @@ fun DayListScreen(
     Scaffold(
         topBar = {
             Column {
-                // Back capsule only when pushed as a deep route; a hub page has system back.
                 if (onBack != null) ForgeTopBar(onBack = onBack)
-                // Stats draws its own title inside its list so it scrolls away with the page.
+                // Stats draws its own title inside its list so it scrolls away with the page. The
+                // back bar already holds the status bar; without one the spacer does.
                 if (initialTab == 1) {
-                    Spacer(Modifier.windowInsetsPadding(TopAppBarDefaults.windowInsets))
+                    if (onBack == null) Spacer(Modifier.windowInsetsPadding(TopAppBarDefaults.windowInsets))
                 } else Text(
                     title,
                     style = MaterialTheme.typography.headlineLarge,

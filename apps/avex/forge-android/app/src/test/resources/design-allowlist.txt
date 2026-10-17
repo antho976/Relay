@@ -28,7 +28,6 @@
 1 alpha ui/gym/freestyle/ExerciseBrowserScreen.kt 0.3
 1 alpha ui/gym/stats/StatsAdherence.kt 0.18
 1 alpha ui/gym/stats/StatsBody.kt 0.30
-1 alpha ui/gym/stats/StatsInterest.kt 0.12
 1 alpha ui/gym/stats/StatsStrength.kt 0.12
 1 alpha ui/gym/stats/components/Sparkline.kt 0.12
 1 alpha ui/gym/stats/components/Sparkline.kt 0.5

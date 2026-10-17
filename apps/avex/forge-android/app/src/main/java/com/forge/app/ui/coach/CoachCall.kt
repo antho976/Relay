@@ -1,23 +1,19 @@
 package com.forge.app.ui.coach
 
 import com.forge.app.domain.units.formatWeight
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -81,13 +77,23 @@ private fun String.withoutSubject(name: String): String {
     return stripped.ifBlank { this }.replaceFirstChar { it.uppercaseChar() }
 }
 
+/** A decision type as the word a person would use. Machine ids never render. */
+internal fun callKind(type: String): String? = when (type) {
+    "deload" -> "Deload"
+    "swap" -> "Rotation"
+    "rep_shift" -> "Rep range"
+    "volume_up", "volume_down" -> "Volume"
+    "weight_nudge", "progression" -> "Load"
+    "revert" -> "Undo"
+    else -> null
+}
+
 /**
- * An open call: the ONE element on this page with a body.
+ * An open call: a panel still asking the user for something.
  *
- * Everything else on the account is passive and therefore bare. A surface here is not decoration,
- * it is rank made visible — the only entry still asking the user for something is the only entry
- * that looks like it can be acted on. When it resolves it loses the body and becomes a stamped
- * line on the same spine, which is the page's one authored moment.
+ * The lift at the title rung with its kind of change beside it, the change itself at the serif
+ * rung, the reason, the evidence at full width, and Apply with Skip. When it resolves it leaves the
+ * panel and becomes a stamped row in the record.
  */
 @Composable
 internal fun CoachCallTile(
@@ -98,12 +104,18 @@ internal fun CoachCallTile(
     onSkip: (Long) -> Unit
 ) {
     val copy = callCopy(d)
-    CoachTile(c) {
-        Text(copy.subject, style = MaterialTheme.typography.titleMedium, color = c.onBg)
+    CoachPanel(c) {
+        Row(verticalAlignment = Alignment.Top) {
+            Text(copy.subject, style = MaterialTheme.typography.titleMedium, color = c.onBg, modifier = Modifier.weight(1f))
+            callKind(d.type)?.let {
+                Spacer(Modifier.width(12.dp))
+                Text(it.uppercase(), style = MaterialTheme.typography.labelSmall, color = c.muted, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
         Spacer(Modifier.height(4.dp))
-        // The change is the tile's one big thing. A numeric swing is short and takes the 28sp
-        // rung; a rotation names a whole exercise and steps down to 22 so it does not wrap to
-        // three lines on a 360dp screen. Size is the hierarchy here — colour is not spent on it.
+        // The change is the panel's one big thing. A numeric swing is short and takes the 28sp
+        // rung; a rotation names a whole exercise and steps down to 22 so it does not wrap to three
+        // lines on a 360dp screen. Size is the hierarchy here; colour is not spent on it.
         Text(
             copy.change,
             style = if (copy.change.length <= 18) MaterialTheme.typography.headlineMedium
@@ -111,47 +123,22 @@ internal fun CoachCallTile(
             color = c.onBg
         )
         Spacer(Modifier.height(10.dp))
-        Text(
-            copy.reason,
-            style = MaterialTheme.typography.bodyMedium,
-            color = c.muted
-        )
+        Text(copy.reason, style = MaterialTheme.typography.bodyMedium, color = c.muted)
 
         CallEvidence(d, state, c)
 
         Spacer(Modifier.height(18.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            // Every open call commits the same way. Demoting the second one to the outlined rung
-            // put a 1.1:1 border on the tile fill and left a primary action with no visible edge,
-            // which is a worse failure than the one it was avoiding. Two filled capsules on one
-            // screen are two decisions owed, and the count of them is information, not noise.
             ForgePrimaryCapsule(
                 label = "Apply",
                 onClick = { onApply(d.id) },
                 modifier = Modifier.weight(1f)
             )
-            Spacer(Modifier.width(8.dp))
-            CoachAction("Skip", c.muted, "Skip this change") { onSkip(d.id) }
+            Spacer(Modifier.width(12.dp))
+            CoachAction("Skip", c.onBg, "Skip this change") { onSkip(d.id) }
             Spacer(Modifier.width(8.dp))
         }
     }
-}
-
-/**
- * The page's one body: a filled surface, spent only on an entry still asking the user for
- * something. Everything passive on the account is bare, so a fill here is not decoration, it is
- * rank made visible.
- */
-@Composable
-internal fun CoachTile(c: CoachColors, content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(c.tile)
-            .padding(horizontal = 18.dp, vertical = 18.dp),
-        content = content
-    )
 }
 
 /**

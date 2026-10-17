@@ -10,6 +10,40 @@ Also lists what may not be touched, and the known defects to fix opportunistical
 
 ---
 
+## Coach ledger, advanced-tracking pop-up, and tab pages without a back arrow (2026-10-17)
+
+Antho: "the coach page both basic and advanced needs a tear down and a remake ... it sucks I hate
+it", and "add the back arrows back at the top left of a page". Removed in the redesign
+(`MAP.md` Coach):
+
+- **The ledger spine** (`Modifier.ledgerSpine`, `EntryNode`, the node-on-a-rule entries). Every
+  region read as the same grey column, so a call owed today weighed the same as a reading. Replaced
+  by a Today panel and sections on the grouped-surface kit. The ledger's time axis survives as the
+  RECORD rail, which draws outcomes rather than entries.
+- **WHERE YOU STAND as four text rows.** Readiness and recovery moved into the Today panel with
+  their marks; the lift count into Today (Simple) or the lift grid (Detailed); the record count
+  into RECORD.
+- **`CoachAdvancedPrompt`, the pop-up offering advanced tracking**, and its remind-later /
+  ignore preference handling on the page. The Simple / Detailed switch under the title is always
+  visible, so there is nothing left to offer. `coachAdvancedPromptAfter` stays in prefs, unread.
+- **`Hide advanced tracking →` at the foot.** The switch at the top replaces it.
+- **Tabs without a back arrow** (2026-10-16, `cfc540c2`). Cardio, Stats, Coach and Academy carry
+  the top-left `←` to Home again; system Back already did the same.
+
+## Profile gallery preview: three tall frames, the first in accent (2026-10-17)
+
+Antho: "gallery stands out too much it's big, full of red". The empty state was three portrait
+frames a third of the page wide, the first washed and ringed in the accent with an accent camera.
+Now: one neutral row (muted glyph badge, what to do, the front/side/back tip); with photos, four
+small thumbnails and a neutral add slot. Do not bring back the accent lead frame.
+
+## Stats Records ordered by load (2026-10-17)
+
+Antho: "redo the record section in stats". The heaviest-first list kept the same heavy lifts on top
+forever and buried a record set last week. Records now lead with a 12-week strip of when the
+standing records were set, open newest first with a fresh (≤14 days) record flagged, and switch to
+Heaviest on the segmented control.
+
 ## App icon set redrawn and cut from 30 to 23 (2026-09-26)
 
 Every icon is still the Avex mark, varied only in colour, material and backdrop. The mark was

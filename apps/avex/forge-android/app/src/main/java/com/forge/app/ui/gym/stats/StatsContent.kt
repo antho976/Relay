@@ -317,7 +317,7 @@ private fun LazyListScope.strengthLens(
     // The hall of fame lives here — records ARE strength, and a tap expands that lift's row above.
     if (state.hallOfFame.isNotEmpty()) {
         item("str-records") {
-            StatsCard(c, title = "Records", caption = "Your heaviest set on each lift.", index = 4) {
+            StatsCard(c, title = "Records", caption = "Your heaviest set on each lift, and when you set it.", index = 4) {
                 // Only lifts with a drill row (top e1RM lifts with 2+ sessions) can open one.
                 RecordsContent(
                     state.hallOfFame, weightUnit, c, onOpenLift,
@@ -388,7 +388,7 @@ private fun LazyListScope.effortLens(state: StatsUiState, c: StatsColors) {
     // Inside the Volume lens now, so no empty hint of its own: the volume sections speak for the lens.
     if (state.rpeDistribution.isEmpty()) return
     item("effort-rpe") {
-        StatsCard(c, title = "Effort (RPE)", caption = "Where your working sets actually land.", index = 5) {
+        StatsCard(c, title = "Effort", caption = "RPE 10 is a set to failure. Each step down is one more rep left.", index = 5) {
             RpeHistogramContent(state.rpeDistribution, state.avgRpe, c)
         }
     }

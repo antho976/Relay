@@ -1,47 +1,26 @@
 /*
- * THESIS: The coaching relationship as one running account, newest first, where an open proposal
- * and a five-week-old outcome are the same kind of object. It refuses the three-lens dashboard
- * that split "what changed", "why", and "did it work" across three taps and left no screen able
- * to answer how training is going.
+ * The Coach page, rebuilt 2026-10-17 (Antho: "needs a tear down and a remake ... I want a full
+ * redesign"). Direction: a Today panel, then sections, on the app's grouped-surface kit. The surface
+ * brief under .impeccable/surfaces/ holds the direction contract.
  *
- * OWN-WORLD: Avex's warm near-black ground and its three type voices, plus this surface's own
- * vocabulary — a spine running the left margin as the time axis, a node per entry carrying its
- * lifecycle, and a stamp carrying its outcome. Every passive entry is bare; a filled body is spent
- * only on an entry still asking the user for something, so the fills on screen ARE the decisions
- * owed, and a week that asks nothing has none.
- *
- * STORY: The user sees what the coach is asking for now, understands it from evidence attached to
- * the ask itself, decides, and can keep scrolling into everything it has ever done and whether it
- * worked.
- *
- * FIRST VIEWPORT: THIS WEEK on the spine, then the call as a filled tile — the lift at the title
- * rung, the change itself at the serif rung, the reason under it, the evidence at full width, and
- * Apply paired with Skip. No count, no inbox, no lens pills.
- *
- * FORM: The Ledger, first on the ordered grounded list; surface seed key cacfe66a.
- *
- * FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the
- * verdict, DESIGN.md, and every shipping raster carrying its provenance.
+ * It replaced the ledger: one grey column on a spine where this week's call, last month's outcome,
+ * the readings and the block were all the same weight of text. Now the page answers in the order a
+ * person asks: what today means for my targets, what the coach wants this week and the trend it
+ * read, and whether its calls have held. Detailed adds the instruments behind those answers.
  */
 package com.forge.app.ui.coach
 
-import com.forge.app.ui.common.ForgeTopBar
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -49,51 +28,42 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.forge.app.domain.units.WeightUnit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.ui.common.ForgeSlidingSegments
+import com.forge.app.ui.common.ForgeTopBar
 import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 
 /**
- * Where a deep link into the Coach page lands.
- *
- * The page used to be three lenses and these were the lens ids. There are no lenses now, so an
- * old "what it's watching" or "learning timeline" link resolves to a scroll position on the one
- * column instead of a tab — the content it pointed at is on screen either way.
+ * Where a deep link into the Coach page lands. Both open at the top now: the Today panel IS the
+ * live reading the old "what it's watching" link pointed at. Kept so the routes still resolve.
  */
 enum class CoachEntryPoint { ACCOUNT, WHERE_YOU_STAND }
 
 /**
- * The Coach page as one running account.
+ * The Coach page.
  *
- * Reading order is the account's own: this week's calls, each carrying the evidence it was made
- * from and its own Apply; then every week before it, stamped with what became of it; then the
- * live reading the coach works from; then the longer arcs; then the standing balance of what it
- * has learned. One column, no lenses, nothing folded behind a tap.
- *
- * How much of that column is drawn is the ONE preference the page reads (Settings → Coach →
- * Advanced tracking). Off, which is the default, it is the account and what is next: the calls
- * and what became of them, which is all most people open it for. On, the readings behind the
- * calls come back. The coach itself behaves the same either way. While it is off the page offers
- * it once in a pop-up ([CoachAdvancedPrompt]) so nobody has to find it in Settings first.
+ * Simple (the default) is Today, This week, the Record and what unlocks next: everything the Monday
+ * ritual needs. Detailed adds the instruments: each lift's trend, the training block, the inputs
+ * the coach reads and what it has learned. The switch sits under the title and writes the same
+ * preference as Settings → Coach → Advanced tracking; the coach behaves the same either way.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CoachScreen(
-    // The top-bar back arrow: to Home as a hub pager page, pop as a route. Null draws no bar.
+    // The top-left back arrow: to Home as a hub page, pop as a route.
     onBack: (() -> Unit)? = null,
-    entryPoint: CoachEntryPoint = CoachEntryPoint.ACCOUNT,
-    // Lands on Settings → Recovery; the unconnected inputs carry it as a Connect pill.
+    @Suppress("UNUSED_PARAMETER") entryPoint: CoachEntryPoint = CoachEntryPoint.ACCOUNT,
+    // Lands on Settings → Recovery; an unconnected input carries it as a Connect pill.
     onConnectHealth: (() -> Unit)? = null,
     viewModel: CoachViewModel = hiltViewModel(),
     isVisible: Boolean = true
@@ -107,89 +77,44 @@ fun CoachScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val weightUnit = LocalForgeSettings.current.weightUnit
     val c = rememberCoachColors()
-    val listState = rememberLazyListState()
     // One clock for the whole page, so every countdown and stamp on it agrees.
     val now = remember(state.brief, state.timeline) { System.currentTimeMillis() }
 
-    // A deep link that used to open the Signals lens scrolls to the reading it meant, once, after
-    // the first read lands: WHERE YOU STAND, then Signals under advanced tracking. Everything else
-    // opens at the top of the account, and so does that link when nothing below the account reads.
-    // One-shot per link: the effect re-runs on rotation and whenever advanced tracking is toggled,
-    // and must not pull the reader back from wherever they have scrolled since.
-    var deepLinkHandled by rememberSaveable(entryPoint) { mutableStateOf(false) }
-    LaunchedEffect(state.loading, state.advanced, entryPoint) {
-        if (!state.loading && !deepLinkHandled && entryPoint == CoachEntryPoint.WHERE_YOU_STAND) {
-            deepLinkHandled = true
-            if (state.advanced || hasStanding(state)) {
-                // The title and the offer, when the page draws them, sit above the account.
-                val lead = (if (onBack == null) 1 else 0) + 1
-                listState.scrollToItem(accountItemCount(state) + lead)
-            }
-        }
-    }
-
-    Box(Modifier.fillMaxSize()) {
-        Scaffold(
-            topBar = {
-                // The top bar never names the screen, it only carries the back arrow. Without one
-                // the bar has NO content and is not drawn at all: an empty app bar above the account
-                // is a void to scroll past.
-                if (onBack != null) {
-                    ForgeTopBar(onBack = onBack)
-                }
-            },
-            containerColor = Color.Transparent
-        ) { inner ->
-            when {
-                // No spinners: the local read is instant, so the page appears with its entrance cascade.
-                state.loading -> Box(Modifier.fillMaxSize().padding(inner))
-                state.freestyle -> CoachMessage(
-                    "Freestyle logging leaves the coach no plan to watch. Build or generate one and it " +
-                        "starts from your first session.",
-                    c,
-                    Modifier.padding(inner)
-                )
-                // Both reads failed: a load error, not a fresh account.
-                state.brief == null && state.watch == null -> CoachMessage(
-                    "Couldn't read the coach's notes right now. Come back in a bit.",
-                    c,
-                    Modifier.padding(inner)
-                )
-                else -> CoachLedger(
-                    state = state,
-                    weightUnit = weightUnit,
-                    now = now,
-                    actions = CoachActions(
-                        apply = viewModel::apply,
-                        skip = viewModel::skip,
-                        undo = viewModel::undo,
-                        applyAll = viewModel::applyAll,
-                        startBlock = viewModel::startBlock,
-                        endBlock = viewModel::endBlock,
-                        connectHealth = onConnectHealth,
-                        setAdvanced = viewModel::setAdvanced
-                    ),
-                    listState = listState,
-                    // The top bar already holds the status bar off the account.
-                    reserveStatusBar = onBack == null,
-                    modifier = Modifier.padding(inner),
-                    showTitle = onBack == null,
-                    // The offer waits for a page that has an account to read, and for the hub to be
-                    // showing this page. It sits in the column, under the title, so nothing it
-                    // offers can cover what the page already says.
-                    advancedPrompt = {
-                        CoachAdvancedPrompt(
-                            visible = isVisible && !state.loading && !state.freestyle && !state.advanced &&
-                                (state.brief != null || state.watch != null) &&
-                                System.currentTimeMillis() >= state.advancedPromptAfter,
-                            onTurnOn = { viewModel.setAdvanced(true) },
-                            onRemindLater = viewModel::remindAdvancedLater,
-                            onIgnore = viewModel::ignoreAdvancedPrompt,
-                            inline = true
-                        )
-                    }
-                )
-            }
+    Scaffold(
+        topBar = { ForgeTopBar(onBack = onBack) },
+        containerColor = Color.Transparent
+    ) { inner ->
+        when {
+            // No spinners: the local read is instant, so the page appears with its entrance cascade.
+            state.loading -> Box(Modifier.fillMaxSize().padding(inner))
+            state.freestyle -> CoachMessage(
+                "Freestyle logging leaves the coach no plan to watch. Build or generate one and it " +
+                    "starts from your first session.",
+                c,
+                Modifier.padding(inner)
+            )
+            // Both reads failed: a load error, not a fresh account.
+            state.brief == null && state.watch == null -> CoachMessage(
+                "Couldn't read the coach's notes right now. Come back in a bit.",
+                c,
+                Modifier.padding(inner)
+            )
+            else -> CoachPage(
+                state = state,
+                weightUnit = weightUnit,
+                now = now,
+                actions = CoachActions(
+                    apply = viewModel::apply,
+                    skip = viewModel::skip,
+                    undo = viewModel::undo,
+                    applyAll = viewModel::applyAll,
+                    startBlock = viewModel::startBlock,
+                    endBlock = viewModel::endBlock,
+                    connectHealth = onConnectHealth,
+                    setAdvanced = viewModel::setAdvanced
+                ),
+                modifier = Modifier.padding(inner)
+            )
         }
     }
 }
@@ -198,8 +123,7 @@ fun CoachScreen(
  * Everything the page can do, gathered so the column takes one parameter instead of many.
  *
  * Goals and projects are deliberately absent: their engine, repositories and ViewModel actions all
- * remain, but nothing on the Coach page renders them any more (Antho, 2026-08-20). `GoalPickerDialog`
- * and `CoachViewModel.addGoal` / `startProject` are kept for whichever surface picks them up next.
+ * remain, but nothing on the Coach page renders them (Antho, 2026-08-20).
  */
 internal data class CoachActions(
     val apply: (Long) -> Unit = {},
@@ -213,52 +137,41 @@ internal data class CoachActions(
 )
 
 /**
- * The ledger column itself, free of the ViewModel so the golden screenshots render the same thing
- * the app does rather than a test's own copy of it.
+ * The page column, free of the ViewModel so the golden screenshots render exactly what the app does.
  */
 @Composable
-internal fun CoachLedger(
+internal fun CoachPage(
     state: CoachViewModel.UiState,
     weightUnit: WeightUnit,
     now: Long,
     actions: CoachActions,
     modifier: Modifier = Modifier,
-    listState: LazyListState = rememberLazyListState(),
-    reserveStatusBar: Boolean = true,
-    /** The page names itself as a hub tab, like Stats; pushed as a route the top bar's back says enough. */
-    showTitle: Boolean = false,
-    advancedPrompt: (@Composable () -> Unit)? = null
+    listState: LazyListState = rememberLazyListState()
 ) {
     val c = rememberCoachColors()
-    val statusBar = if (reserveStatusBar) WindowInsets.statusBars.asPaddingValues().calculateTopPadding() else 0.dp
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxSize(),
-        // Hosted as a hub pager page there is no app bar to hold the status bar off the content,
-        // so the account was opening hard against the clock. It reserves that space itself.
-        contentPadding = PaddingValues(top = statusBar + 20.dp, bottom = 64.dp)
+        contentPadding = PaddingValues(top = 4.dp, bottom = 64.dp)
     ) {
-        if (showTitle) {
-            item("coach-title") {
-                Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER)) {
-                    Text("Coach", style = MaterialTheme.typography.headlineLarge, color = c.onBg)
-                    // While the baseline forms the page has no call to show, so it says how far off
-                    // the first one is instead of leaving a quiet page to explain itself.
-                    val toGo = state.brief?.sessionsToGo ?: 0
-                    if (toGo > 0) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "Learning your baseline. $toGo more ${if (toGo == 1) "session" else "sessions"} before the first call.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = c.muted
-                        )
-                    }
-                    Spacer(Modifier.height(16.dp))
-                }
+        item("head") {
+            Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(0)) {
+                Text(
+                    "Coach",
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = c.onBg,
+                    modifier = Modifier.semantics { heading() }
+                )
+                Spacer(Modifier.height(16.dp))
+                ForgeSlidingSegments(
+                    options = listOf("Simple", "Detailed"),
+                    selectedIndex = if (state.advanced) 1 else 0,
+                    onSelect = { actions.setAdvanced(it == 1) }
+                )
             }
         }
-        advancedPrompt?.let { prompt -> item("advanced-prompt") { prompt() } }
-        coachAccount(
+        coachToday(state = state, c = c)
+        coachThisWeek(
             state = state,
             weightUnit = weightUnit,
             c = c,
@@ -268,56 +181,15 @@ internal fun CoachLedger(
             onUndo = actions.undo,
             onApplyAll = actions.applyAll
         )
-        // Where you stand reads on every account; under advanced tracking it keeps only what the
-        // instruments below do not already draw.
-        coachNow(state = state, c = c)
-        // The readings behind the calls draw only under advanced tracking. What is NEXT stays on
-        // every account: it is the one line that turns a quiet page forward, and it is short.
         if (state.advanced) {
-            coachStand(
-                state = state,
-                weightUnit = weightUnit,
-                c = c
-            )
-            coachBlock(
-                state = state,
-                c = c,
-                onStartBlock = actions.startBlock,
-                onEndBlock = actions.endBlock
-            )
-            coachInputs(
-                state = state,
-                c = c,
-                onConnectHealth = actions.connectHealth
-            )
+            coachLifts(state = state, weightUnit = weightUnit, c = c)
+            coachBlock(state = state, c = c, onStartBlock = actions.startBlock, onEndBlock = actions.endBlock)
         }
+        coachRecord(state = state, c = c, now = now, onUndo = actions.undo)
         coachUnlocks(state = state, c = c)
-        if (state.advanced) coachLearned(state = state, c = c)
-        coachTracking(state = state, c = c, onSetAdvanced = actions.setAdvanced)
-    }
-}
-
-/**
- * THE FOOT — the way back out of advanced tracking.
- *
- * Turning it ON is offered by the pop-up ([CoachAdvancedPrompt]), which the reader can put off or
- * ignore; with it off the page simply ends. With it on, the account closes on one action that turns
- * the readings off again in place. Settings → Coach is the same preference's other home.
- */
-private fun LazyListScope.coachTracking(
-    state: CoachViewModel.UiState,
-    c: CoachColors,
-    onSetAdvanced: (Boolean) -> Unit
-) {
-    if (!state.advanced) return
-    item("tracking") {
-        Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(6)) {
-            Spacer(Modifier.height(30.dp))
-            // onBg, not accent: accent-as-text clears AA on two of the five accents only (§14),
-            // and the arrow already marks the line as the action.
-            CoachAction("Hide advanced tracking →", c.onBg, "Hide advanced tracking") {
-                onSetAdvanced(false)
-            }
+        if (state.advanced) {
+            coachInputs(state = state, c = c, onConnectHealth = actions.connectHealth)
+            coachLearned(state = state, c = c)
         }
     }
 }

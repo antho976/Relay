@@ -1,338 +1,197 @@
 package com.forge.app.ui.coach
 
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.forge.app.data.repo.RecoverySignal
 import com.forge.app.data.repo.TrackedLift
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.common.ForgeRowPill
+import com.forge.app.ui.common.GROUP_INNER
+import com.forge.app.ui.common.GROUP_OUTER
+import com.forge.app.ui.common.GROUP_SEAM
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.statsEntrance
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-private const val LIFTS_SHOWN = 8
-
-/** One trend width for every lift row, live or forming, so the column holds. */
-private val LIFT_SPARK_W = 72.dp
+/** Lift tiles drawn before the grid offers the rest. Three rows of two. */
+private const val LIFTS_SHOWN = 6
 
 /**
- * WHERE YOU STAND — the coach's live reading, in one place.
- *
- * This is what the old Signals lens was for, minus its two failures. The instrument panel of
- * every dormant check is gone: a check that has not fired is not a reading the user needs, and a
- * column of them was the machine showing its work rather than the coach saying anything. The
- * signal registry with its unbuilt slots is gone too — a roadmap is not a reading.
- *
- * What survives is what the coach actually reads right now: recovery load with the checks that
- * crossed their line, the lifts it is watching with their real trends, and the inputs feeding it.
- * The evidence for any specific CALL lives on that call, not here.
+ * YOUR LIFTS (Detailed) — every lift the coach watches, as a grid of tiles: the name, its trend
+ * as a sparkline, today's estimated max and which way it is moving. A stall is the coach's own call,
+ * so stalled lifts lead and their line turns red. Lifts short of two sessions collapse to one line.
  */
-internal fun LazyListScope.coachStand(
+internal fun LazyListScope.coachLifts(
     state: CoachViewModel.UiState,
     weightUnit: WeightUnit,
     c: CoachColors
 ) {
-    val watch = state.watch ?: return
-
-    item("stand") {
-        Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(1)) {
-            Spacer(Modifier.height(30.dp))
-            CoachAnchor("Signals", c)
-            Spacer(Modifier.height(18.dp))
-
-            // ── Recovery load ────────────────────────────────────────────────
-            val gate = watch.recoveryGateSessions.coerceAtLeast(1)
-            val score = watch.fatigueScore
-            // All gates met yet no score: the advisor mutes itself right after a deload.
-            val muted = score == null &&
-                watch.sessionsLogged >= gate && watch.historyDays >= watch.recoveryWindowDays
-            CoachSubhead("Recovery load", c)
-            Spacer(Modifier.height(8.dp))
-            when {
-                score != null -> {
-                    val threshold = watch.fatigueThreshold
-                    CoachFigure("$score of $threshold", recoveryVerdict(score, threshold), c)
-                    Spacer(Modifier.height(14.dp))
-                    CoachFatigueMeter(score, threshold, c)
-                    val fired = watch.fatigueChecks.filter { it.fired }
-                    if (fired.isNotEmpty()) {
-                        Spacer(Modifier.height(12.dp))
-                        // Only what crossed its line: the exceptions are the reading, and a row of
-                        // quiet checks would be a column of "fine" saying nothing.
-                        fired.forEach { check ->
-                            Row(
-                                Modifier.fillMaxWidth().padding(vertical = COACH_ROW_PAD),
-                                verticalAlignment = Alignment.Top
-                            ) {
-                                Text(
-                                    check.name,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = c.onBg,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Spacer(Modifier.width(12.dp))
-                                Text(
-                                    check.reading.uppercase(),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = c.muted
-                                )
-                            }
-                        }
-                    }
-                }
-                // A recent deload silenced the score: an honest empty track, and the caption says
-                // why rather than leaving a dead bar on the page.
-                muted -> {
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(10.dp)
-                            .clip(RoundedCornerShape(5.dp))
-                            .drawBehind { drawRect(c.outline.copy(alpha = 0.25f)) }
-                            .semantics { contentDescription = "Recovery load paused after a deload" }
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Paused after a deload. The score resumes as training rebuilds.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = c.muted
-                    )
-                }
-                // Below a gate, the reading is progress toward the gate — never "not enough data".
-                // The same figure-then-track shape as a live read, so the first real score fills in
-                // a form already on the page.
-                watch.sessionsLogged < gate -> {
-                    CoachFigure(
-                        "${watch.sessionsLogged} of $gate",
-                        "Sessions logged. The first read lands at $gate.",
-                        c
-                    )
-                    Spacer(Modifier.height(14.dp))
-                    CoachWatchBar(watch.sessionsLogged.toFloat() / gate, c.accent, c)
-                }
-                else -> {
-                    CoachFigure(
-                        "${watch.historyDays} of ${watch.recoveryWindowDays}",
-                        "Days of training on record. The first read needs a full window.",
-                        c
-                    )
-                    Spacer(Modifier.height(14.dp))
-                    CoachWatchBar(
-                        watch.historyDays.toFloat() / watch.recoveryWindowDays.coerceAtLeast(1),
-                        c.accent,
-                        c
-                    )
+    val lifts = state.watch?.trackedLifts.orEmpty()
+    if (lifts.isEmpty()) return
+    val (withTrend, forming) = lifts.partition { (state.e1rmBySlot[it.slotId]?.size ?: 0) >= 2 }
+    item("lifts") {
+        var showAll by rememberSaveable { mutableStateOf(false) }
+        CoachSection("Your lifts", meta = liftsLine(state)?.value, modifier = Modifier.statsEntrance(3)) {
+            if (withTrend.isNotEmpty()) {
+                Text(
+                    "Estimated 1RM over each lift's last sessions.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.muted,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+                Spacer(Modifier.height(10.dp))
+                val ordered = withTrend.sortedBy { if (it.stalling) 0 else 1 }
+                val shown = if (showAll) ordered else ordered.take(LIFTS_SHOWN)
+                // One column past ~130%: two tiles side by side squeeze a name to a sliver.
+                val cols = if (LocalDensity.current.fontScale > 1.3f) 1 else 2
+                LiftGrid(shown, cols, state, weightUnit, c)
+                if (ordered.size > LIFTS_SHOWN) {
+                    CoachAction(
+                        if (showAll) "Show fewer" else "All ${ordered.size} lifts →",
+                        c.onBg,
+                        if (showAll) "Show fewer lifts" else "Show all ${ordered.size} lifts"
+                    ) { showAll = !showAll }
                 }
             }
-
-            // ── Lifts on watch ───────────────────────────────────────────────
-            if (watch.trackedLifts.isNotEmpty()) {
-                Spacer(Modifier.height(28.dp))
-                CoachSubhead("Lifts on watch", c)
-                Spacer(Modifier.height(8.dp))
-                val (withTrend, forming) = watch.trackedLifts
-                    .partition { (state.e1rmBySlot[it.slotId]?.size ?: 0) >= 2 }
-                withTrend.take(LIFTS_SHOWN).forEach { lift ->
-                    val series = state.e1rmBySlot.getValue(lift.slotId)
-                    val word = liftTrendWord(lift, series)
-                    LiftTrendRow(
-                        name = lift.name,
-                        statusWord = word,
-                        // Measured on the near-black ground, error red is 3.67:1 and accent is
-                        // accent-dependent, so neither may colour text this small. The ↑ / ↓ glyph
-                        // carries the direction and the SPARKLINE goes red for a stall — a data
-                        // mark only needs 3:1, which error clears.
-                        statusColor = if (lift.stalling || word.startsWith("↑")) c.onBg else c.muted,
-                        markColor = if (lift.stalling) c.error else c.accent,
-                        valueText = "${lift.bouts} session${if (lift.bouts == 1) "" else "s"}",
-                        figure = formatWeight(series.last(), weightUnit),
-                        series = series,
-                        c = c
-                    )
-                }
-                val more = withTrend.size - LIFTS_SHOWN
-                if (more > 0) {
-                    Text("And $more more.", style = MaterialTheme.typography.bodySmall, color = c.muted)
-                }
-                // Lifts short of two sessions collapse to ONE line naming the real unlock, never a
-                // column of identical "forming" rows. The ghost spark rides along only when live
-                // sparklines sit above it to rhyme with; alone, a flat line reads as broken.
-                if (forming.isNotEmpty()) {
-                    FormingLiftsRow(forming, showGhost = withTrend.isNotEmpty(), c)
-                }
-            }
-
-        }
-    }
-}
-
-/**
- * WHAT IT READS — the inputs feeding the coach, and whether each one is connected.
- *
- * Its own region rather than a group inside SIGNALS: the block sits between the two now, so a
- * 13sp group label here would read as belonging to the block rather than to the readings.
- */
-internal fun LazyListScope.coachInputs(
-    state: CoachViewModel.UiState,
-    c: CoachColors,
-    onConnectHealth: (() -> Unit)?
-) {
-    val watch = state.watch ?: return
-    if (watch.recoverySignals.isEmpty()) return
-    item("inputs") {
-        Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(3)) {
-            Spacer(Modifier.height(30.dp))
-            CoachAnchor("What it reads", c)
-            Spacer(Modifier.height(12.dp))
-            watch.recoverySignals.forEach { sig ->
-                // Health Connect can be connected yet have nothing inside the recent window: the row
-                // then reads "none" rather than offering a Connect for something already connected,
-                // and the stale nights/readings are not charted under it.
-                val hasStaleData = !sig.active && when {
-                    sig.label == "Sleep" -> state.health.sleepSynced
-                    sig.label.contains("heart", ignoreCase = true) -> state.health.restingHrSynced
-                    else -> false
-                }
-                SignalRow(sig, c, onConnectHealth, connected = hasStaleData)
-                // Each input's own chart hangs under the input it belongs to.
-                when {
-                    sig.label == "Sleep" && sig.active && state.health.sleepHours.isNotEmpty() -> {
-                        Spacer(Modifier.height(6.dp))
-                        CoachSleepBars(state.health.sleepHours, state.health.sleepFloorHours, c)
-                        Spacer(Modifier.height(14.dp))
-                    }
-                    sig.label.contains("heart", ignoreCase = true) && sig.active &&
-                        state.health.restingHr.size >= 2 -> {
-                        Spacer(Modifier.height(6.dp))
-                        CoachHrLine(state.health.restingHr, state.health.hrBaseline, c)
-                        state.health.hrvWindowAvg?.let { hrv ->
-                            Spacer(Modifier.height(6.dp))
-                            Text(
-                                buildString {
-                                    append("HRV $hrv MS")
-                                    state.health.hrvBaseline?.let { append(" · BASELINE $it MS") }
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = c.muted
-                            )
-                        }
-                        Spacer(Modifier.height(14.dp))
-                    }
-                }
+            // Lifts short of two sessions collapse to ONE line naming the real unlock.
+            if (forming.isNotEmpty()) {
+                Spacer(Modifier.height(if (withTrend.isEmpty()) 0.dp else 6.dp))
+                Text(
+                    (if (forming.size == 1) forming.first().name else "${forming.size} lifts building history") +
+                        " · first read after two sessions",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.muted,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
             }
         }
     }
 }
 
-/** What a live recovery score means, worded against the line it is measured to. */
-private fun recoveryVerdict(score: Int, threshold: Int): String {
-    val room = threshold - score
-    return when {
-        room <= 0 -> "Past the deload line. The next brief proposes one."
-        room <= 2 -> "Building, $room from the deload line."
-        else -> "Fresh, $room from the deload line."
-    }
-}
-
-/**
- * One watched lift as a table row: its name and movement on the left, the trend in the middle, and
- * today's estimated max set as a figure flush right, so a column of lifts scans like a column of
- * numbers. The weight used to trail the status line in grey, where it was the hardest thing to find.
- */
 @Composable
-private fun LiftTrendRow(
-    name: String,
-    statusWord: String,
-    statusColor: Color,
-    markColor: Color,
-    valueText: String?,
-    series: List<Double>,
-    c: CoachColors,
-    figure: String? = null
+private fun LiftGrid(
+    lifts: List<TrackedLift>,
+    cols: Int,
+    state: CoachViewModel.UiState,
+    weightUnit: WeightUnit,
+    c: CoachColors
 ) {
-    // Past ~130% the three columns squeeze the name to a sliver, so the figure joins the sub-line
-    // instead of holding its own column. Nothing on this page truncates.
-    val stacked = LocalDensity.current.fontScale > 1.3f
-    val sub = listOfNotNull(figure?.takeIf { stacked }, valueText).joinToString(" · ").ifEmpty { null }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .semantics(mergeDescendants = true) {}
-            .padding(vertical = COACH_ROW_PAD + 2.dp),
-        verticalAlignment = Alignment.CenterVertically
+    val rows = lifts.chunked(cols)
+    Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
+        rows.forEachIndexed { r, rowLifts ->
+            Row(
+                Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+                horizontalArrangement = Arrangement.spacedBy(GROUP_SEAM)
+            ) {
+                rowLifts.forEachIndexed { i, lift ->
+                    val first = r == 0
+                    val last = r == rows.lastIndex
+                    fun corner(top: Boolean, start: Boolean): Dp {
+                        val edgeRow = if (top) first else last
+                        val edgeCol = if (start) i == 0 else i == cols - 1 || (last && i == rowLifts.lastIndex && rowLifts.size < cols)
+                        return if (edgeRow && edgeCol) GROUP_OUTER else GROUP_INNER
+                    }
+                    val shape = RoundedCornerShape(
+                        topStart = corner(top = true, start = true),
+                        topEnd = corner(top = true, start = false),
+                        bottomStart = corner(top = false, start = true),
+                        bottomEnd = corner(top = false, start = false)
+                    )
+                    LiftTile(
+                        lift,
+                        state.e1rmBySlot.getValue(lift.slotId),
+                        weightUnit,
+                        c,
+                        Modifier.weight(1f).fillMaxHeight().clip(shape).background(c.tile)
+                    )
+                }
+                repeat(cols - rowLifts.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiftTile(
+    lift: TrackedLift,
+    series: List<Double>,
+    weightUnit: WeightUnit,
+    c: CoachColors,
+    modifier: Modifier
+) {
+    val word = liftTrendWord(lift, series)
+    val figure = formatWeight(series.last(), weightUnit)
+    Column(
+        modifier
+            .semantics(mergeDescendants = true) {
+                contentDescription = "${lift.name}, estimated max $figure, $word over ${lift.bouts} sessions"
+            }
+            .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(name, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
-            // A row's sub-reading is sentence-shaped, so it takes the sans voice; mono here would
-            // be the machine voice set as prose.
-            // One text, two colours, so a long line wraps back to the margin instead of hanging
-            // its second half in a column of its own.
-            Text(
-                buildAnnotatedString {
-                    withStyle(SpanStyle(color = statusColor)) { append(statusWord) }
-                    if (sub != null) withStyle(SpanStyle(color = c.muted)) { append(" · $sub") }
-                },
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-        if (series.size >= 2) {
-            Spacer(Modifier.width(12.dp))
-            CoachSparkline(
-                series,
-                markColor,
-                c.bg,
-                modifier = Modifier
-                    .width(LIFT_SPARK_W)
-                    .semantics { contentDescription = "$name trend, $statusWord" },
-                height = 28.dp
-            )
-        }
-        if (figure != null && !stacked) {
-            Spacer(Modifier.width(14.dp))
+        // A lift's name is user content and wraps rather than clamping (§14).
+        Text(lift.name, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
+        Spacer(Modifier.weight(1f, fill = true))
+        Spacer(Modifier.height(10.dp))
+        CoachSparkline(
+            series,
+            if (lift.stalling) c.error else c.accent,
+            c.tile,
+            modifier = Modifier.fillMaxWidth(),
+            height = 30.dp
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
             Text(
                 figure,
                 style = MaterialTheme.typography.titleSmall.copy(fontFeatureSettings = "tnum"),
                 color = c.onBg,
-                textAlign = TextAlign.End,
-                modifier = Modifier.widthIn(min = 64.dp)
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            // Error red and most accents fail AA as small text, so the word stays ink or muted and
+            // the line above carries the colour.
+            Text(
+                word,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (lift.stalling || word.startsWith("↑")) c.onBg else c.muted
             )
         }
     }
 }
 
 /**
- * The lift's actual movement over its drawn window — "↑ 4%", "↓ 2%", "flat" — with the coach's own
+ * The lift's actual movement over its drawn window ("↑ 4%", "↓ 2%", "flat") with the coach's own
  * stall call as the one worded exception.
  */
 private fun liftTrendWord(lift: TrackedLift, series: List<Double>): String {
@@ -349,8 +208,8 @@ private fun liftTrendWord(lift: TrackedLift, series: List<Double>): String {
 internal enum class LiftMove { UP, FLAT, DOWN, STALLED }
 
 /**
- * One classification for both readings of a lift, the advanced row and the one-line summary, so
- * the two can never disagree about the same lift. Half a percent either way is flat.
+ * One classification for both readings of a lift, the tile and the one-line summary, so the two can
+ * never disagree about the same lift. Half a percent either way is flat.
  */
 internal fun liftMove(lift: TrackedLift, series: List<Double>): LiftMove {
     val pct = liftMovePct(series)
@@ -367,40 +226,60 @@ private fun liftMovePct(series: List<Double>): Double {
     return if (first > 0) (series.last() - first) / first * 100 else 0.0
 }
 
-/** Lifts still short of two logged sessions, collapsed to ONE row naming the concrete unlock. */
-@Composable
-private fun FormingLiftsRow(forming: List<TrackedLift>, showGhost: Boolean, c: CoachColors) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = COACH_ROW_PAD),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                if (forming.size == 1) forming.first().name
-                else "${forming.size} lifts building history",
-                // A lift's name is user content and wraps rather than clamping (§14).
-                style = MaterialTheme.typography.bodyMedium,
-                color = c.muted
-            )
-            Text(
-                "first read after two sessions",
-                style = MaterialTheme.typography.bodySmall,
-                color = c.muted
-            )
-        }
-        if (showGhost) {
-            Spacer(Modifier.width(12.dp))
-            CoachGhostSpark(c, modifier = Modifier.width(LIFT_SPARK_W), height = 28.dp)
-            // Holds the figure column open, so the ghost lines up under the live sparks above.
-            if (LocalDensity.current.fontScale <= 1.3f) Spacer(Modifier.width(78.dp))
+/**
+ * WHAT IT READS (Detailed) — the inputs feeding the coach, each a row with its count, or the
+ * Connect that would feed it. A connected input's own chart hangs inside its row.
+ */
+internal fun LazyListScope.coachInputs(
+    state: CoachViewModel.UiState,
+    c: CoachColors,
+    onConnectHealth: (() -> Unit)?
+) {
+    val watch = state.watch ?: return
+    if (watch.recoverySignals.isEmpty()) return
+    item("inputs") {
+        CoachSection("What it reads", modifier = Modifier.statsEntrance(6)) {
+            CoachRows(c, watch.recoverySignals.map { sig ->
+                @Composable {
+                    // Health Connect can be connected yet have nothing inside the recent window: the
+                    // row then reads "none" rather than offering Connect for something connected.
+                    val hasStaleData = !sig.active && when {
+                        sig.label == "Sleep" -> state.health.sleepSynced
+                        sig.label.contains("heart", ignoreCase = true) -> state.health.restingHrSynced
+                        else -> false
+                    }
+                    SignalRow(sig, c, onConnectHealth, connected = hasStaleData)
+                    when {
+                        sig.label == "Sleep" && sig.active && state.health.sleepHours.isNotEmpty() -> {
+                            Spacer(Modifier.height(8.dp))
+                            CoachSleepBars(state.health.sleepHours, state.health.sleepFloorHours, c)
+                        }
+                        sig.label.contains("heart", ignoreCase = true) && sig.active &&
+                            state.health.restingHr.size >= 2 -> {
+                            Spacer(Modifier.height(8.dp))
+                            CoachHrLine(state.health.restingHr, state.health.hrBaseline, c)
+                            state.health.hrvWindowAvg?.let { hrv ->
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    buildString {
+                                        append("HRV $hrv ms")
+                                        state.health.hrvBaseline?.let { append(" · baseline $it ms") }
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = c.muted
+                                )
+                            }
+                        }
+                    }
+                }
+            })
         }
     }
 }
 
 /**
- * One recovery input: its name and the repository's own count. An unconnected Health Connect
- * input swaps that count for the action that connects it — the whole row is the tap target and
- * the pill is drawn, never independently clickable.
+ * One recovery input: a muted glyph, its name and the repository's own count. An unconnected Health
+ * Connect input swaps that count for a drawn Connect pill, and the whole row is the tap target.
  */
 @Composable
 private fun SignalRow(
@@ -419,15 +298,9 @@ private fun SignalRow(
                     onConnectHealth?.invoke()
                 } else Modifier
             )
-            // ONE height for every input row. A pill row is taller than a text row, so mixing
-            // them left the four rows on an uneven rhythm with their readings drifting apart;
-            // this also buys the 48dp target the connectable rows need anyway.
-            .heightIn(min = 48.dp)
-            .padding(vertical = 2.dp),
+            .heightIn(min = 36.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // The one list on this page that leads with a glyph: four near-identical rows on the
-        // emptiest screen a new account sees, where the icon is how the eye finds "sleep".
         Icon(
             CoachIcons.forSignal(sig.label),
             contentDescription = null,
@@ -443,13 +316,6 @@ private fun SignalRow(
         )
         Spacer(Modifier.width(12.dp))
         if (connectable) ForgeRowPill("Connect")
-        else Text(signalReading(sig), style = MaterialTheme.typography.bodySmall, color = c.muted)
+        else Text(if (sig.active) sig.detail else "none", style = MaterialTheme.typography.bodySmall, color = c.muted)
     }
 }
-
-/**
- * The repository writes a different sentence for each input's zero ("none yet", "none flagged",
- * "not connected"), which put three ways of saying nothing in one four-row list. Zero is one word.
- */
-private fun signalReading(sig: RecoverySignal): String =
-    if (sig.active) sig.detail else "none"
