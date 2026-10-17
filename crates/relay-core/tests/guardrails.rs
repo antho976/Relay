@@ -376,6 +376,10 @@ fn roles_scope_shape_exec_and_commit_caps_resist_bypass() {
     );
     assert_eq!(error(&denied_command).code, "guardrail.command");
     assert_eq!(error(&denied_command).kind, ErrorKind::Refused);
+    // The agent works around a refusal; the person is not pinged for it, though it is filed.
+    let refusals = |unread_only: bool| ok(engine, Actor::User, "notify.list", json!({"category": "guardrail", "unread_only": unread_only}))["notifications"]
+        .as_array().unwrap().iter().filter(|card| card["title"] == "Guardrail refusal").count();
+    assert_eq!((refusals(false), refusals(true)), (1, 0));
 
     let shape = call(
         engine,

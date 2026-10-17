@@ -398,6 +398,9 @@ struct Shared {
     /// keystroke needs a database write without reading the database (D148). Only the
     /// idle→running edge does; every other keystroke is pure memory.
     idle: AtomicBool,
+    /// The person has typed since this terminal last sounded a "finished" notification (or it
+    /// never has): its next finished turn is worth a ping. Memory only, like `idle`.
+    ping_owed: AtomicBool,
     /// Set by [`Pty::silence_exit`]: the request that stops this child records the outcome
     /// itself, so the exit callback must not race it to the row.
     silent: AtomicBool,
@@ -468,6 +471,7 @@ impl Pty {
             ring: Mutex::new(ring),
             tx,
             idle: AtomicBool::new(false),
+            ping_owed: AtomicBool::new(true),
             silent: AtomicBool::new(false),
             exited: AtomicBool::new(false),
             group_gone: AtomicBool::new(false),
@@ -552,6 +556,15 @@ impl Pty {
     /// false for every keystroke after it. Exactly one deferred write per idle period.
     pub fn claim_idle_edge(&self) -> bool {
         self.shared.idle.swap(false, Ordering::SeqCst)
+    }
+    /// The person typed into the terminal: the agent's next finished turn answers them.
+    pub fn owe_ping(&self) {
+        self.shared.ping_owed.store(true, Ordering::Relaxed);
+    }
+    /// Claim the one "finished" ping a terminal sounds until the person types into it again:
+    /// true for the first finished turn after [`Pty::owe_ping`], false for the rest.
+    pub fn claim_ping(&self) -> bool {
+        self.shared.ping_owed.swap(false, Ordering::Relaxed)
     }
     /// Skip the `on_exit` callback when the child is reaped. For a caller that kills the child
     /// with the store unlocked and then writes the session's next state itself (park, close
