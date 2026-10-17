@@ -1,6 +1,8 @@
 package com.quietsoftware.relay.ui.dev
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -35,7 +37,9 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -45,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -75,6 +80,7 @@ import com.quietsoftware.relay.ui.code.DEL_TEXT
 import com.quietsoftware.relay.ui.code.DEL_WASH
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
+import com.quietsoftware.relay.ui.kit.epoch
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.IconKey
 import com.quietsoftware.relay.ui.kit.Key
@@ -153,6 +159,8 @@ fun ChatScreen(name: String, nav: Nav) {
     val asking = ready && (onScreen || askTool || (held && unread))
     val doing = remember(pieces, working, asking) { if (working && !asking) doingNow(pieces) else null }
     val mode by remember(screen) { derivedStateOf { screen.value?.let(::modeOf) } }
+    // When the turn the agent is working on began: the person's last message.
+    val since = remember(messages, sending) { epoch((sending.lastOrNull() ?: messages.lastOrNull { it.role == "user" })?.createdAt).takeIf { it > 0 } }
 
     KeepScreenOn(s.prefs.keepScreenOn)
 
@@ -188,7 +196,7 @@ fun ChatScreen(name: String, nav: Nav) {
                     else Key("Open the terminal", { nav.console(name) }, glyph = "terminal", compact = true)
                 }
                 when {
-                    pieces.isNotEmpty() || asking -> Conversation(pieces, doing, asking, screen, chat, s.online)
+                    pieces.isNotEmpty() || asking -> Conversation(pieces, doing, since, asking, screen, chat, s.online)
                     error != null && status != TerminalFeed.Status.Saved -> Empty(
                         "terminal", "Can't read the conversation",
                         said(error!!.error, "The PC's Relay is older than this app: update it to see agents as a conversation. The terminal works meanwhile."),
@@ -286,6 +294,8 @@ internal sealed interface ChatPiece {
     data class Steps(override val key: String, val calls: List<Call>) : ChatPiece
     data class Note(override val key: String, val text: String) : ChatPiece
     data class Error(override val key: String, val text: String) : ChatPiece
+    /** The end of a finished turn: a quiet Copy key for the agent's words in it. */
+    data class Copy(override val key: String, val text: String) : ChatPiece
 }
 
 private fun JsonObject.str(key: String) = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
@@ -300,11 +310,18 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
     val lastUser = messages.indexOfLast { it.role == "user" }
     val out = ArrayList<ChatPiece>()
     val steps = ArrayList<Call>()
+    // The agent's words since the person last spoke: copied together at the end of the turn.
+    val said = ArrayList<String>()
+    var turn = ""
     var lastDay: LocalDate? = null
     fun flush() {
         if (steps.size >= 3) out += ChatPiece.Steps("g:" + steps.first().key, steps.toList())
         else steps.forEach { out += ChatPiece.Tool(it.key, it) }
         steps.clear()
+    }
+    fun endTurn() {
+        if (said.isNotEmpty()) out += ChatPiece.Copy("c:$turn", said.joinToString("\n\n"))
+        said.clear()
     }
     fun day(m: ThreadMessage) {
         val d = dayOf(m.createdAt) ?: return
@@ -322,6 +339,8 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
         when (m.role) {
             "user" -> {
                 flush()
+                endTurn()
+                turn = m.id
                 out += ChatPiece.User("m:${m.id}", m.text, sending = false)
             }
             "assistant" -> ((m.body as? JsonObject)?.get("blocks") as? JsonArray).orEmpty().forEachIndexed { i, blk ->
@@ -330,6 +349,7 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
                     "text" -> o.str("text").takeIf { it.isNotBlank() }?.let {
                         flush()
                         out += ChatPiece.Reply("m:${m.id}:$i", it.trim())
+                        said += it.trim()
                     }
                     "thinking" -> o.str("text").takeIf { it.isNotBlank() }?.let {
                         flush()
@@ -364,13 +384,14 @@ internal fun chatPieces(messages: List<ThreadMessage>, sending: List<ThreadMessa
         }
     }
     flush()
+    if (!working || sending.isNotEmpty()) endTurn()
     for (m in sending) out += ChatPiece.User("m:${m.id}", m.text, sending = true)
     return out
 }
 
 /** The agent's last step is a question or a plan still waiting on the person. */
 internal fun waitsOnAsk(pieces: List<ChatPiece>): Boolean =
-    (pieces.lastOrNull { it !is ChatPiece.User } as? ChatPiece.Tool)?.call?.let { isAsk(it.name) && it.step == Step.Running } == true
+    (pieces.lastOrNull { it !is ChatPiece.User && it !is ChatPiece.Copy } as? ChatPiece.Tool)?.call?.let { isAsk(it.name) && it.step == Step.Running } == true
 
 /** An edit's size: the lines it put in and took out. */
 internal fun diffCounts(lines: List<String>): Pair<Int, Int> =
@@ -429,18 +450,43 @@ private fun transcriptText(messages: List<ThreadMessage>): String = messages.map
 // ---- Drawing it ----
 
 @Composable
-private fun Conversation(pieces: List<ChatPiece>, doing: String?, asking: Boolean, screen: State<String?>, chat: SessionChat, online: Boolean) {
+private fun Conversation(pieces: List<ChatPiece>, doing: String?, since: Long?, asking: Boolean, screen: State<String?>, chat: SessionChat, online: Boolean) {
+    val c = Relay.colors
     val state = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     // Newest at the bottom, and kept in view as it grows while the person reads the end.
     val shown = remember(pieces) { pieces.asReversed() }
     LaunchedEffect(pieces.size, doing, asking) { if (state.firstVisibleItemIndex <= 1) state.animateScrollToItem(0) }
-    LazyColumn(Modifier.fillMaxSize(), state = state, reverseLayout = true, horizontalAlignment = Alignment.CenterHorizontally) {
-        val cell = Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(horizontal = 16.dp)
-        item(key = "end") { Box(Modifier.height(12.dp)) }
-        if (asking) item(key = "ask") { AskCard(chat, screen, online, cell.padding(top = 14.dp)) }
-        if (doing != null) item(key = "doing") { WorkingRow(doing, cell.padding(top = 12.dp)) }
-        items(shown, key = { it.key }) { p -> PieceView(p, cell, online) }
-        item(key = "start") { Box(Modifier.height(8.dp)) }
+    // Scrolled up to read: a key back to the newest, counting what arrived meanwhile.
+    val away by remember { derivedStateOf { state.firstVisibleItemIndex > 2 } }
+    var seen by remember { mutableIntStateOf(0) }
+    LaunchedEffect(away) { if (away) seen = pieces.size }
+    val fresh = if (away) (pieces.size - seen).coerceAtLeast(0) else 0
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), state = state, reverseLayout = true, horizontalAlignment = Alignment.CenterHorizontally) {
+            val cell = Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(horizontal = 16.dp)
+            item(key = "end") { Box(Modifier.height(12.dp)) }
+            if (asking) item(key = "ask") { AskCard(chat, screen, online, cell.padding(top = 14.dp)) }
+            if (doing != null) item(key = "doing") { WorkingRow(doing, since, cell.padding(top = 12.dp)) }
+            items(shown, key = { it.key }, contentType = { it::class }) { p -> PieceView(p, cell, online) }
+            item(key = "start") { Box(Modifier.height(8.dp)) }
+        }
+        AnimatedVisibility(away, Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp), enter = fadeIn(), exit = fadeOut()) {
+            Row(
+                Modifier.heightIn(min = TOUCH).clip(Radii.pill).clickable(onClickLabel = "Go to the newest", role = Role.Button) { scope.launch { state.animateScrollToItem(0) } },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    Modifier.height(36.dp).shadow(10.dp, Radii.pill).clip(Radii.pill).background(c.slab).border(1.dp, c.strong, Radii.pill)
+                        .padding(horizontal = if (fresh > 0) 14.dp else 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Glyph("arrow-down", 16.dp, c.ink2)
+                    if (fresh > 0) T(if (fresh == 1) "1 new" else "$fresh new", style = Relay.type.caption, color = c.ink2, weight = FontWeight.Medium)
+                }
+            }
+        }
     }
 }
 
@@ -465,6 +511,28 @@ private fun PieceView(p: ChatPiece, cell: Modifier, online: Boolean) {
             Glyph("close", 13.dp, c.heldText, Modifier.padding(top = 4.dp))
             SelectionContainer { T(p.text, style = Relay.type.ui.copy(fontSize = 13.5.sp, lineHeight = 20.sp), color = c.heldText) }
         }
+        is ChatPiece.Copy -> Box(cell) { CopyKey(p.text) }
+    }
+}
+
+/** A finished turn's Copy key: the agent's words in it, as Markdown. */
+@Composable
+private fun CopyKey(text: String) {
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    var copied by remember { mutableStateOf(false) }
+    Box(
+        Modifier.size(TOUCH).clip(Radii.icon).clickable(onClickLabel = "Copy the reply", role = Role.Button) {
+            scope.launch {
+                clipboard.copy(text)
+                copied = true
+                delay(1400)
+                copied = false
+            }
+        },
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Glyph(if (copied) "check" else "copy", 15.dp, Relay.colors.inkDim)
     }
 }
 
@@ -487,13 +555,36 @@ private fun UserBubble(text: String, sending: Boolean, online: Boolean, modifier
     }
 }
 
+/** The working row: the lamp, the step running now, and how long the turn has run, as Claude Code counts it. */
 @Composable
-private fun WorkingRow(text: String, modifier: Modifier) {
+private fun WorkingRow(text: String, since: Long?, modifier: Modifier) {
+    val c = Relay.colors
+    val now by produceState(System.currentTimeMillis(), since) {
+        while (since != null) {
+            delay(1_000)
+            value = System.currentTimeMillis()
+        }
+    }
+    val took = since?.let { took(now - it) }
     Row(modifier.heightIn(min = 24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
         WorkingLamp()
-        T(text, Modifier.weight(1f), Relay.type.caption, Relay.colors.ink3, maxLines = 1)
+        T(text, Modifier.weight(1f, fill = false), Relay.type.caption, c.ink3, maxLines = 1)
+        if (took != null) T(took, style = Relay.type.mono.copy(fontSize = 11.sp), color = c.inkDim, maxLines = 1)
     }
 }
+
+/** "42s", "3m 12s", "1h 4m": a turn's time so far; nothing for one that cannot be this turn's. */
+internal fun took(ms: Long): String? {
+    if (ms < 0 || ms > TURN_MAX_MS) return null
+    val s = ms / 1000
+    return when {
+        s < 60 -> "${s}s"
+        s < 3600 -> "${s / 60}m ${s % 60}s"
+        else -> "${s / 3600}h ${s % 3600 / 60}m"
+    }
+}
+
+private const val TURN_MAX_MS = 12 * 3_600_000L
 
 @Composable
 private fun StepMark(step: Step, glyph: String) {
@@ -663,7 +754,9 @@ private fun StepsView(g: ChatPiece.Steps) {
             horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
             StepMark(step, "check")
-            T(stepsLine(g.calls), Modifier.weight(1f, fill = false), Relay.type.caption, if (step == Step.Failed) c.heldText else c.ink3, maxLines = 2)
+            T(stepsLine(g.calls), Modifier.weight(1f, fill = false), Relay.type.caption, c.ink3, maxLines = 2)
+            val failed = g.calls.count { it.step == Step.Failed }
+            if (failed > 0) T("· $failed failed", style = Relay.type.caption, color = c.heldText, maxLines = 1)
             Glyph(if (open) "chevron-up" else "chevron-down", 12.dp, c.inkDim)
         }
         AnimatedVisibility(open) {

@@ -131,4 +131,33 @@ class ChatTest {
         // Words in the conversation above the prompt are not the footer.
         assertEquals(null, modeOf("I turned plan mode on for you\n\nmore\nlines\nhere\n$prompt"))
     }
+
+    @Test
+    fun aFinishedTurnEndsWithACopyOfItsWordsAndOneStillRunningDoesNot() {
+        val log = listOf(
+            msg("u1", "user", """{"text":"why"}"""),
+            msg("a1", "assistant", """{"blocks":[{"type":"text","text":"Because."},{"type":"tool_use","id":"t1","name":"Read","summary":"a.rs"}]}"""),
+            answer("1"),
+            msg("a2", "assistant", """{"blocks":[{"type":"text","text":"And so."}]}"""),
+            msg("u2", "user", """{"text":"and then"}"""),
+            msg("a3", "assistant", """{"blocks":[{"type":"text","text":"Then this."}]}"""),
+        )
+        val done = chatPieces(log, emptyList(), working = false, today = today)
+        val copies = done.filterIsInstance<ChatPiece.Copy>()
+        assertEquals(listOf("Because.\n\nAnd so.", "Then this."), copies.map { it.text })
+        // The copy closes its turn, before the person's next message.
+        assertTrue(done[done.indexOf(copies[0]) + 1] is ChatPiece.User)
+        val running = chatPieces(log, emptyList(), working = true, today = today)
+        assertEquals(1, running.count { it is ChatPiece.Copy })
+        assertTrue(running.last() is ChatPiece.Reply)
+    }
+
+    @Test
+    fun aTurnsTimeReadsAsClaudeCodeCountsIt() {
+        assertEquals("42s", took(42_000))
+        assertEquals("3m 12s", took(192_000))
+        assertEquals("1h 4m", took(3_840_000))
+        assertEquals(null, took(-5))
+        assertEquals(null, took(13 * 3_600_000L))
+    }
 }
