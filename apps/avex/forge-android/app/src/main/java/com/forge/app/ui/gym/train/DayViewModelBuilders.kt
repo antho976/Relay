@@ -61,6 +61,11 @@ internal suspend fun DayViewModel.buildExerciseUi(
         val prevLE = workoutRepo.lastLoggedExerciseBefore(effectiveExerciseId, sessionId)
         prevLE to prevLE?.let { workoutRepo.setsFor(it.id) }.orEmpty()
     }
+    // When that bout was trained, which only matters inside a comeback ramp (see loadScaleFrom).
+    val prevStartedAtDeferred = async {
+        if (life.layoff?.returnedAtMs == null) null
+        else prevDeferred.await().first?.let { workoutRepo.session(it.sessionId)?.startedAt }
+    }
     // Bounded stand-ins for "every set ever logged" (which grew without limit): the per-rep
     // max-weight frontier answers PR questions identically, and the PB is a single LIMIT 1 row.
     val frontierDeferred = async {
@@ -111,6 +116,7 @@ internal suspend fun DayViewModel.buildExerciseUi(
     // Double-progression suggestion (#12/#13) — pure rules in the adaptation engine; the
     // VM only assembles inputs. inputText is unit-correct (plate count on PLATES exercises).
     val stepMode = stepCalibration.modeFor(effectiveExerciseId, effectiveUnit.code)
+    val lifeScale = life.loadScaleFrom(prevStartedAtDeferred.await())
     val suggestion = ProgressionAdvisor.suggestNextLoad(
         exerciseId = effectiveExerciseId,
         exerciseName = plan.name,
@@ -130,8 +136,8 @@ internal suspend fun DayViewModel.buildExerciseUi(
         // Doubling the step only makes sense on the DB grid; PLATES move whole plates anyway.
         fastStep = stepMode == com.forge.app.domain.coach.StepMode.FASTER && effectiveUnit == com.forge.app.program.ExerciseUnit.DUMBBELL,
         consolidate = stepMode == com.forge.app.domain.coach.StepMode.CONSOLIDATE,
-        lifeScale = life.loadScale,
-        lifeNote = life.rampNote
+        lifeScale = lifeScale,
+        lifeNote = life.rampNote.takeIf { lifeScale < 1.0 }
     )
 
     // Bodyweight movements have no weight to suggest, so they get a rep-progression cue instead (CO5).
