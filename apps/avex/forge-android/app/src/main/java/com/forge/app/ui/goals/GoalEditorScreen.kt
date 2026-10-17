@@ -28,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -201,13 +202,19 @@ fun GoalEditorScreen(
                     onPickLift = { step = EditorStep.LiftPicker },
                     onPickMetric = { step = EditorStep.CustomNew(it) }
                 )
-                EditorStep.LiftPicker -> LiftPickerStep(
-                    exclude = state.liftPickerExclude,
-                    muted = muted,
-                    onPick = { id, name -> step = EditorStep.LiftWeight(id, name, null) }
-                )
+                EditorStep.LiftPicker -> {
+                    var trained by remember { mutableStateOf<List<String>>(emptyList()) }
+                    LaunchedEffect(Unit) { trained = viewModel.recentlyTrainedIds() }
+                    LiftPickerStep(
+                        exclude = state.liftPickerExclude,
+                        muted = muted,
+                        trainedFirst = trained,
+                        onPick = { id, name -> step = EditorStep.LiftWeight(id, name, null) }
+                    )
+                }
                 is EditorStep.LiftWeight -> LiftWeightStep(
                     step = s,
+                    currentBestLb = produceState<Double?>(null, s.exerciseId) { value = viewModel.currentBestLb(s.exerciseId) }.value,
                     pinned = liftPinKey(s.exerciseId) in pinned,
                     onTogglePin = { viewModel.toggleLiftPin(s.exerciseId) },
                     onSet = { lb -> commit { viewModel.setLiftGoal(s.exerciseId, lb) } },
@@ -294,9 +301,20 @@ private fun metricHint(metric: GoalMetric, useMiles: Boolean): String = when (me
  * group of filled rows, each led by its equipment badge.
  */
 @Composable
-private fun ColumnScope.LiftPickerStep(exclude: Set<String>, muted: Color, onPick: (id: String, name: String) -> Unit) {
-    var query by remember { mutableStateOf("") }
-    val results = remember(query, exclude) { filterLibrary(query, exclude) }
+private fun ColumnScope.LiftPickerStep(
+    exclude: Set<String>,
+    muted: Color,
+    /** Exercise ids the user trains, most-trained first: they lead the list, the library follows. */
+    trainedFirst: List<String> = emptyList(),
+    onPick: (id: String, name: String) -> Unit
+) {
+    // Saveable like everything else in the editor, so a rotation keeps the search typed so far.
+    var query by rememberSaveable { mutableStateOf("") }
+    val results = remember(query, exclude, trainedFirst) {
+        val rank = trainedFirst.withIndex().associate { (i, id) -> id to i }
+        // Stable: within each part the search's own order (name matches first) stands.
+        filterLibrary(query, exclude).sortedBy { rank[it.id] ?: Int.MAX_VALUE }
+    }
     val onBg = MaterialTheme.colorScheme.onBackground
     GoalSearchRow(query, { query = it }, "Search exercises or muscles")
     Spacer(Modifier.height(16.dp))
@@ -379,6 +397,8 @@ private fun EditorActions(
 @Composable
 internal fun LiftWeightStep(
     step: EditorStep.LiftWeight,
+    /** The heaviest set logged on this lift, or null with no history. */
+    currentBestLb: Double? = null,
     pinned: Boolean,
     onTogglePin: () -> Unit,
     onSet: (Double) -> Unit,
@@ -413,10 +433,20 @@ internal fun LiftWeightStep(
             )
         }
         // Only for a goal that already exists: pinning something not yet created has nothing to pin.
-        if (step.currentTargetLb != null) {
-            ForgeRowGroup(targetRow, { HomePinRow(pinned = pinned, onToggle = onTogglePin) })
-        } else {
-            ForgeRowGroup(targetRow)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (step.currentTargetLb != null) {
+                ForgeRowGroup(targetRow, { HomePinRow(pinned = pinned, onToggle = onTogglePin) })
+            } else {
+                ForgeRowGroup(targetRow)
+            }
+            // The reading a target is set against: the field used to open empty with nothing to say
+            // where the lift is now. Absent with no history rather than "0".
+            currentBestLb?.let {
+                ForgeGroupCaption(
+                    "Best so far ${com.forge.app.domain.units.formatWeight(it, weightUnit)}",
+                    Modifier.padding(horizontal = 4.dp)
+                )
+            }
         }
         EditorActions(
             primary = "Set goal",

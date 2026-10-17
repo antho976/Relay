@@ -141,6 +141,13 @@ class GoalsViewModel @Inject constructor(
         withContext(NonCancellable) { goalRepo.setGoal(exerciseId, targetWeightLb) }
     }
 
+    /** Where the lift stands now, shown under a target being set (§4.9: the reading beside the call). */
+    suspend fun currentBestLb(exerciseId: String): Double? =
+        fetchOr(null) { goalRepo.bestLb(exerciseId) }
+
+    /** Lifts the user actually trains, most-trained first, so the picker leads with them. */
+    suspend fun recentlyTrainedIds(): List<String> = fetchOr(emptyList()) { goalRepo.recentlyTrainedIds() }
+
     fun clearLiftGoal(exerciseId: String) = viewModelScope.launch {
         // The pin goes with the goal (L-06), and that now happens inside [GoalRepository.clearGoal]
         // — there are two ways to clear a lift target and only this one used to do it.

@@ -15,7 +15,8 @@ class GoalRepository @Inject constructor(
     private val goalDao: ExerciseGoalDao,
     private val loggedSetDao: LoggedSetDao,
     private val settingsRepository: com.forge.app.data.prefs.SettingsRepository,
-    private val clock: Clock
+    private val clock: Clock,
+    private val loggedExerciseDao: com.forge.app.data.db.dao.LoggedExerciseDao
 ) {
     fun observeAll(): Flow<List<ExerciseGoal>> = goalDao.observeAll()
 
@@ -24,6 +25,14 @@ class GoalRepository @Inject constructor(
     suspend fun setGoal(exerciseId: String, targetWeightLb: Double) {
         goalDao.upsert(ExerciseGoal(exerciseId = exerciseId, targetWeightLb = targetWeightLb, createdAt = clock.nowMs()))
     }
+
+    /** The heaviest working set logged for [exerciseId], or null with no history: the goal editor's reading. */
+    suspend fun bestLb(exerciseId: String): Double? =
+        loggedSetDao.maxWeightPerExercise(listOf(exerciseId)).firstOrNull()?.weightLb?.takeIf { it > 0 }
+
+    /** Exercises trained in the last 90 days, most sessions first, for the goal lift picker's order. */
+    suspend fun recentlyTrainedIds(): List<String> =
+        loggedExerciseDao.frequencySince(clock.nowMs() - 90L * 86_400_000L).map { it.exerciseId }
 
     /** Put a cleared goal back exactly as it was, its original date included (an Undo). */
     suspend fun restore(goal: ExerciseGoal) = goalDao.upsert(goal)
