@@ -250,8 +250,15 @@ internal fun CoachSleepBars(hours: List<Float>, floorHours: Float, c: CoachColor
     val max = maxOf(hours.max(), floorHours + 1f)
     val progress = rememberCoachDrawState(hours.size)
     val floorText = String.format(java.util.Locale.US, "%.1f", floorHours)
+    val rested = hours.count { it >= floorHours }
+    val lastText = String.format(java.util.Locale.US, "%.1f", hours.last())
     Column {
-        Canvas(Modifier.fillMaxWidth().height(56.dp)) {
+        Canvas(
+            Modifier.fillMaxWidth().height(56.dp).semantics {
+                contentDescription = "Sleep over the last ${hours.size} nights: $rested at or over the " +
+                    "$floorText hour floor. Last night $lastText hours."
+            }
+        ) {
             val slot = size.width / hours.size
             val bar = minOf(6.dp.toPx(), slot * 0.5f)
             hours.forEachIndexed { i, h ->
@@ -289,7 +296,13 @@ internal fun CoachHrLine(values: List<Int>, baseline: Int?, c: CoachColors) {
     if (values.size < 2) return
     val series = remember(values) { values.map { it.toDouble() } }
     Column {
-        Box {
+        Box(
+            Modifier.semantics(mergeDescendants = true) {
+                contentDescription = "Resting heart rate over ${values.size} days, " +
+                    "from ${values.min()} to ${values.max()}, now ${values.last()} beats per minute" +
+                    (baseline?.let { ", baseline $it" } ?: "") + "."
+            }
+        ) {
             // One range for the line and the baseline, or the same y would mean different readings.
             val lo = minOf(values.min(), baseline ?: values.min()).toFloat()
             val hi = maxOf(values.max(), baseline ?: values.max()).toFloat()

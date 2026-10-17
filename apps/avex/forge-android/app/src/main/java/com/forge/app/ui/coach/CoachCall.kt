@@ -1,5 +1,6 @@
 package com.forge.app.ui.coach
 
+import com.forge.app.domain.units.formatWeight
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -192,6 +193,7 @@ private fun CallEvidence(
 
     val series = state.e1rmBySlot[d.targetKey] ?: return
     if (series.size < 2) return
+    val unit = com.forge.app.ui.theme.LocalForgeSettings.current.weightUnit
     Spacer(Modifier.height(16.dp))
     CoachChartLabel("Estimated 1RM · last ${series.size} sessions", c)
     Spacer(Modifier.height(4.dp))
@@ -204,7 +206,8 @@ private fun CallEvidence(
         height = 88.dp,
         modifier = Modifier.semantics {
             contentDescription = "${d.targetName} estimated one-rep max over the last " +
-                "${series.size} sessions"
+                "${series.size} sessions, from ${formatWeight(series.min(), unit)} to " +
+                "${formatWeight(series.max(), unit)}, latest ${formatWeight(series.last(), unit)}"
         }
     )
 }
