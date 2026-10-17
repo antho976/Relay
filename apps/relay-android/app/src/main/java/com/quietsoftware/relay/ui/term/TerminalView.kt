@@ -11,9 +11,11 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -27,12 +29,16 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
@@ -43,6 +49,8 @@ import com.quietsoftware.relay.core.term.Line
 import com.quietsoftware.relay.core.term.Style
 import com.quietsoftware.relay.core.term.TermColor
 import com.quietsoftware.relay.core.term.Terminal
+import com.quietsoftware.relay.core.term.urlAt
+import com.quietsoftware.relay.core.term.wordAt
 import com.quietsoftware.relay.data.TerminalFeed
 import com.quietsoftware.relay.ui.kit.Key
 import com.quietsoftware.relay.ui.kit.KeyKind
@@ -58,7 +66,9 @@ import kotlin.math.floor
  * An agent's terminal drawn as the PC draws it (terminal.rs): Fira Mono on the screen colour,
  * the PC's ANSI palette, 1.25 cell height. Output is followed unless the person scrolled back;
  * pinch changes the text size. [onFit] gets the columns and rows that fit, whenever they change,
- * so the screen can borrow the PTY at this phone's size.
+ * so the screen can borrow the PTY at this phone's size. With [onCopy], a long press selects the
+ * word under the finger and a drag carries the selection on, for a Copy key; with [onLink], a tap
+ * on a printed web address opens it.
  */
 @Composable
 fun TerminalView(
@@ -69,6 +79,8 @@ fun TerminalView(
     modifier: Modifier = Modifier,
     onTap: () -> Unit = {},
     interactive: Boolean = true,
+    onCopy: ((String) -> Unit)? = null,
+    onLink: ((String) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -107,6 +119,13 @@ fun TerminalView(
     val setFont by rememberUpdatedState(onFontSp)
     // The gesture outlives a zoom: it reads the row height as it is now, not as it was at the first frame.
     val rowPx by rememberUpdatedState(cellH)
+    val colPx by rememberUpdatedState(cellW)
+    val copy by rememberUpdatedState(onCopy)
+    val link by rememberUpdatedState(onLink)
+    val haptic = LocalHapticFeedback.current
+    // Cells from where a long press began to where the finger is: rows as the buffer counts them.
+    var selection by remember { mutableStateOf<Selection?>(null) }
+    var selecting by remember { mutableStateOf(false) }
 
     BoxWithConstraints(modifier) {
         val padX = with(density) { 6.dp.toPx() }
@@ -127,6 +146,18 @@ fun TerminalView(
                         // One finger scrolls the output, two zoom the text, a tap focuses the composer.
                         val slop = viewConfiguration.touchSlop
                         val flingFrom = viewConfiguration.minimumFlingVelocity
+                        val holdFor = viewConfiguration.longPressTimeoutMillis
+                        val padX = 6.dp.toPx()
+                        val padY = 4.dp.toPx()
+                        /** The cell under [at], as (row in the buffer, column). */
+                        fun cellAt(at: Offset): Pair<Int, Int> = synchronized(feed.lock) {
+                            val t = feed.terminal
+                            val total = t.scrollbackSize + t.rows
+                            val visible = floor((size.height - padY * 2) / rowPx).toInt().coerceAtLeast(1)
+                            val first = (total - visible - back.coerceAtMost(t.scrollbackSize)).coerceAtLeast(0)
+                            val row = (first + ((at.y - padY) / rowPx).toInt()).coerceIn(0, total - 1)
+                            row to ((at.x - padX) / colPx).toInt().coerceIn(0, t.cols - 1)
+                        }
                         /** Moves the view by [dy] pixels of finger travel; false at either end. */
                         fun scrollBy(dy: Float): Boolean {
                             dragCarry += dy
@@ -152,8 +183,40 @@ fun TerminalView(
                             // per frame, faster than the size shown can follow.
                             var pinchFrom = 0f
                             var pinch = 0f
+                            // A finger held still selects, when the screen copies: what ended the wait otherwise goes on below.
+                            var pending: PointerEvent? = null
+                            if (copy != null && !flung) {
+                                val ended = withTimeoutOrNull(holdFor) {
+                                    var e: PointerEvent
+                                    do {
+                                        e = awaitPointerEvent()
+                                        val f = e.changes.firstOrNull { it.id == down.id }
+                                    } while (f != null && f.pressed && e.changes.count { it.pressed } == 1 && (f.position - down.position).getDistance() <= slop)
+                                    e
+                                }
+                                if (ended == null) {
+                                    val (row, col) = cellAt(down.position)
+                                    val word = synchronized(feed.lock) { feed.terminal.wordAt(row, col) } ?: col..col
+                                    selection = Selection(row, word.first, row, word.last)
+                                    selecting = true
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    do {
+                                        val e = awaitPointerEvent()
+                                        val f = e.changes.firstOrNull { it.pressed } ?: break
+                                        if ((f.position - down.position).getDistance() > slop) {
+                                            val (r, cc) = cellAt(f.position)
+                                            selection = selection?.copy(endRow = r, endCol = cc)
+                                        }
+                                        e.changes.forEach { it.consume() }
+                                    } while (e.changes.any { it.pressed })
+                                    selecting = false
+                                    return@awaitEachGesture
+                                }
+                                pending = ended
+                            }
                             do {
-                                val event = awaitPointerEvent()
+                                val event = pending ?: awaitPointerEvent()
+                                pending = null
                                 val pressed = event.changes.count { it.pressed }
                                 if (pressed >= 2) {
                                     pinched = true
@@ -192,8 +255,16 @@ fun TerminalView(
                             } else {
                                 dragCarry = 0f
                             }
-                            // A touch that only stopped a flick is not a tap.
-                            if (!gesture) tap()
+                            // A touch that only stopped a flick is not a tap; one with a selection up puts it away.
+                            if (!gesture) {
+                                if (selection != null) {
+                                    selection = null
+                                } else {
+                                    val (row, col) = cellAt(down.position)
+                                    val url = link?.let { synchronized(feed.lock) { feed.terminal.urlAt(row, col) } }
+                                    if (url != null) link?.invoke(url) else tap()
+                                }
+                            }
                         }
                     }
                     else Modifier,
@@ -213,6 +284,20 @@ fun TerminalView(
                     val index = first + i
                     if (index >= total) break
                     drawLine(canvas, t.lineAt(index), padX, padY + i * cellH, cellW, cellH, baseline, paint, regular, bold, c.termFg.toArgb())
+                }
+                selection?.let { sel ->
+                    // The selection, in reading order, over the rows in view.
+                    val (sr, sc, er, ec) = sel.ordered()
+                    for (row in maxOf(sr, first)..minOf(er, first + visible - 1)) {
+                        val from = if (row == sr) sc else 0
+                        val to = if (row == er) ec else t.lineAt(row).length - 1
+                        if (to < from) continue
+                        drawRect(
+                            c.selection,
+                            topLeft = androidx.compose.ui.geometry.Offset(padX + from * cellW, padY + (row - first) * cellH),
+                            size = androidx.compose.ui.geometry.Size((to - from + 1) * cellW, cellH),
+                        )
+                    }
                 }
                 if (scroll > 0 && total > visible) {
                     // Where the view sits in the scrollback: a thin thumb on the right edge.
@@ -237,6 +322,21 @@ fun TerminalView(
                 }
             }
         }
+        val sel = selection
+        if (sel != null && !selecting && onCopy != null) {
+            Row(
+                Modifier.align(Alignment.TopCenter).padding(top = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Key("Copy", {
+                    val (sr, sc, er, ec) = sel.ordered()
+                    val text = synchronized(feed.lock) { feed.terminal.textBetween(sr, sc, er, ec) }
+                    selection = null
+                    if (text.isNotEmpty()) onCopy(text)
+                }, kind = KeyKind.Primary, glyph = "copy", compact = true)
+                Key("Cancel", { selection = null }, kind = KeyKind.Plain, compact = true)
+            }
+        }
         if (back > 0) {
             Box(Modifier.align(Alignment.BottomEnd).padding(10.dp)) {
                 Key("Latest", {
@@ -246,6 +346,13 @@ fun TerminalView(
             }
         }
     }
+}
+
+/** A stretch of cells from where a long press began ([startRow], [startCol]) to where the finger went. */
+private data class Selection(val startRow: Int, val startCol: Int, val endRow: Int, val endCol: Int) {
+    /** Start and end in reading order, whichever way the finger went. */
+    fun ordered(): List<Int> =
+        if (endRow < startRow || (endRow == startRow && endCol < startCol)) listOf(endRow, endCol, startRow, startCol) else listOf(startRow, startCol, endRow, endCol)
 }
 
 private const val FRAME_MS = 16L

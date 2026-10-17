@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
@@ -105,6 +106,7 @@ fun TerminalScreen(name: String, nav: Nav) {
     val life = rememberLifecycle(nav) { nav.back() }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboard.current
+    val uris = LocalUriHandler.current
     val focus = remember { FocusRequester() }
     val hold = remember { Hold() }
 
@@ -193,6 +195,13 @@ fun TerminalScreen(name: String, nav: Nav) {
                         onFit = { cols, rows -> if (fitting) phone = cols to rows },
                         modifier = if (wide) Modifier.width(with(density) { needPx.toDp() }).fillMaxHeight() else Modifier.fillMaxSize(),
                         onTap = { if (ready) if (direct) input?.raise() else focus.requestFocus() },
+                        onCopy = { picked ->
+                            scope.launch {
+                                clipboard.copy(picked)
+                                nav.shell.toast("Copied")
+                            }
+                        },
+                        onLink = { url -> runCatching { uris.openUri(url) }.onFailure { nav.shell.toast("No app here opens $url") } },
                     )
                 }
                 if (direct && ready) {
