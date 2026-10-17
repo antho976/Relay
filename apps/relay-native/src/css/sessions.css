@@ -120,6 +120,10 @@ popover.agent-settings button.agent-menu-confirm-go:hover { background: shade(@h
 .terminal-plate.starting .session-state, .terminal-plate.starting .slate-state { color: @waiting; }
 .session-slate spinner { min-width: 18px; min-height: 18px; color: @secondary; }
 
+/* A pane picked with Shift+click for a batch close: drawn over the terminal, never under it. */
+.terminal-plate.selected { outline: 2px solid alpha(@ink, 0.55); outline-offset: -2px; }
+.terminal-plate.selected .umd { background: alpha(@ink, 0.08); }
+
 /* A pane's checkout behind the freshest base: the commits a rebase would bring in. */
 .terminal-plate .umd .session-behind { color: @waiting; }
 .terminal-plate .umd .session-behind label { font-family: 'Fira Mono', monospace; font-size: 11px; }

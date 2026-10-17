@@ -726,6 +726,7 @@ impl Ui {
             true
         });
         pane.root.add_controller(drop_target);
+        self.install_pane_selection(pane, pane.name());
     }
     pub(super) fn session_actions(self: &Rc<Self>, pane: &Rc<Pane>, session: &Value) {
         // reconcile lays out only when the order changes, so a state change alone reaches the
