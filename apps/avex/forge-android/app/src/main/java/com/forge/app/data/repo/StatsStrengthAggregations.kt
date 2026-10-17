@@ -134,8 +134,9 @@ internal fun buildE1rmLifts(
                 history = points, monthlyPct = monthlyPct, stalling = stalling
             )
         }
+        // Every lift, strongest first. The screen shows six and expands in place; trimming here
+        // left curls, rows and raises with no progress view anywhere outside a live session.
         .sortedByDescending { it.currentE1rm }
-        .take(6)
 }
 
 /**

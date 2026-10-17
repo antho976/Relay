@@ -17,6 +17,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolumeCompact
@@ -137,7 +141,8 @@ internal fun ColumnScope.RecordsContent(
     drillableIds: Set<String>? = null
 ) {
     val fmt = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
-    val shown = records.take(6)
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    val shown = if (showAll) records else records.take(LIFTS_SHOWN)
     // One filled group, a member per record, 2dp seams instead of table rules (2026-09-27).
     Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
         shown.forEachIndexed { i, r ->
@@ -168,5 +173,8 @@ internal fun ColumnScope.RecordsContent(
                 )
             }
         }
+    }
+    if (records.size > LIFTS_SHOWN) {
+        StatsShowAll(label = if (showAll) "top $LIFTS_SHOWN only" else "all ${records.size} records", c = c) { showAll = !showAll }
     }
 }

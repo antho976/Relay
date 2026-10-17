@@ -29,6 +29,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.forge.app.ui.common.clickableLabeled
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
@@ -84,7 +86,12 @@ internal fun ColumnScope.E1rmComparisonList(
     // as the session screen's per-exercise bars. Each row gets a lambda over the shared reveal and
     // reads it in draw, so the glide never recomposes the list.
     val progress = rememberDrawProgressState(Unit, ForgeMotion.drawTween())
-    lifts.forEachIndexed { i, lift ->
+    // Six, then every lift on request (§12 overflow: trim + "all →" beside the trim). A record tap
+    // that targets a lift past the six opens the full list so its row can expand.
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    val focusPastTrim = focusLift != null && lifts.indexOfFirst { it.exerciseId == focusLift } >= LIFTS_SHOWN
+    val shown = if (showAll || focusPastTrim) lifts else lifts.take(LIFTS_SHOWN)
+    shown.forEachIndexed { i, lift ->
         E1rmDrillRow(
             lift = lift,
             frac = (lift.currentE1rm / maxE1).toFloat(),
@@ -96,6 +103,29 @@ internal fun ColumnScope.E1rmComparisonList(
             isFocused = lift.exerciseId == focusLift,
             focusNonce = focusNonce
         )
+    }
+    if (lifts.size > LIFTS_SHOWN && !focusPastTrim) {
+        StatsShowAll(
+            label = if (showAll) "top $LIFTS_SHOWN only" else "all ${lifts.size} lifts",
+            c = c
+        ) { showAll = !showAll }
+    }
+}
+
+/** Lifts and records shown before the "all →" expansion. */
+internal const val LIFTS_SHOWN = 6
+
+/** The mono `all N lifts →` beside a trimmed list, expanding it in place (§12 overflow). */
+@Composable
+internal fun StatsShowAll(label: String, c: StatsColors, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickableLabeled(label) { onClick() },
+        contentAlignment = Alignment.CenterEnd
+    ) {
+        Text("${label.uppercase()} →", style = MaterialTheme.typography.labelMedium, color = c.accent)
     }
 }
 
