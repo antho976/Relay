@@ -155,8 +155,8 @@ private fun CompactBodyMap(
         BodyHeatmap(
             setsByMuscle = setsBy,
             accent = accent,
-            faint = outline.copy(alpha = 0.34f),
-            silhouette = outline.copy(alpha = 0.26f),
+            faint = outline.copy(alpha = 0.35f),
+            silhouette = outline.copy(alpha = 0.25f),
             labelColor = muted,
             figureHeight = 96.dp,
             showLegend = false,
@@ -204,8 +204,8 @@ private fun MuscleMapDialog(
             BodyHeatmap(
                 setsByMuscle = setsByMuscle,
                 accent = accent,
-                faint = outline.copy(alpha = 0.34f),
-                silhouette = outline.copy(alpha = 0.26f),
+                faint = outline.copy(alpha = 0.35f),
+                silhouette = outline.copy(alpha = 0.25f),
                 labelColor = muted,
                 modifier = Modifier.fillMaxWidth()
             )
