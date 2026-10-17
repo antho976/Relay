@@ -57,6 +57,9 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.ui.common.window.Dialog
 import com.forge.app.domain.timer.RestTimerState
 import com.forge.app.ui.theme.ForgeMotion
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 
 /**
  * Floating timer circle. Tap = open controls, long-press = +30s quick-extend (#96).
@@ -225,30 +228,35 @@ fun RestTimerBubble(
             .semantics(mergeDescendants = true) { contentDescription = restA11y },
         contentAlignment = Alignment.Center
     ) {
-        if (state.isFinished) {
-            Text(
-                "✓",
-                style = MaterialTheme.typography.titleLarge,
-                color = accent,
-                fontWeight = FontWeight.Bold
-            )
-        } else {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        // A fixed 64dp instrument, so its figure clamps its own scaling (§14): at 2x "1:05" ran
+        // past the ring and "REST" was cut off at the disc's edge. At 1.3x both fit inside it.
+        val d = LocalDensity.current
+        CompositionLocalProvider(LocalDensity provides Density(d.density, d.fontScale.coerceAtMost(1.3f))) {
+            if (state.isFinished) {
                 Text(
-                    formatTime(state.secondsRemaining),
-                    // Tabular figures keep the digits from jittering as the seconds count down.
-                    style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
-                    color = if (!isPaused) onBg else onBg.copy(alpha = 0.6f),
-                    fontWeight = FontWeight.SemiBold
+                    "✓",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = accent,
+                    fontWeight = FontWeight.Bold
                 )
-                Text(
-                    if (isPaused) "PAUSED" else "REST",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted,
-                    fontSize = 8.sp,
-                    letterSpacing = 1.5.sp,
-                    fontWeight = FontWeight.Medium
-                )
+            } else {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        formatTime(state.secondsRemaining),
+                        // Tabular figures keep the digits from jittering as the seconds count down.
+                        style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+                        color = if (!isPaused) onBg else onBg.copy(alpha = 0.6f),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        if (isPaused) "PAUSED" else "REST",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted,
+                        fontSize = 8.sp,
+                        letterSpacing = 1.5.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
             }
         }
     }
