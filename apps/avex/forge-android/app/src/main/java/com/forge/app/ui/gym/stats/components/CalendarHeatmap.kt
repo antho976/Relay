@@ -1,6 +1,7 @@
 package com.forge.app.ui.gym.stats.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -92,7 +93,10 @@ internal fun CalendarHeatmap(
     faint: Color,
     accent: Color,
     modifier: Modifier = Modifier,
-    onDayTap: ((LocalDate) -> Unit)? = null
+    onDayTap: ((LocalDate) -> Unit)? = null,
+    /** Epoch days planned off (a holiday, a scheduled rest day): an outline-only cell, not a gap. */
+    restDays: Set<Long> = emptySet(),
+    restRing: Color = faint
 ) {
     val today = rememberToday()
     val startMonday = remember(today, weeks) {
@@ -164,10 +168,16 @@ internal fun CalendarHeatmap(
                             // read as a bug. Matches the contributions-grid convention.
                             val color = if (sets == 0 || date.isAfter(today)) faint
                                         else lerp(faint, accent, sets.toFloat() / maxSets)
+                            // A day planned off reads as rest, not as a miss: outline only, like Home's
+                            // week strip draws a rest day. A day trained anyway is lit as usual.
+                            val plannedOff = sets == 0 && !date.isAfter(today) && date.toEpochDay() in restDays
                             Box(
                                 cell
                                     .clip(RoundedCornerShape(4.dp))
-                                    .background(color)
+                                    .then(
+                                        if (plannedOff) Modifier.border(1.dp, restRing, RoundedCornerShape(4.dp))
+                                        else Modifier.background(color)
+                                    )
                                     .then(
                                         if (onDayTap != null && sets > 0)
                                             Modifier.bounceClick { onDayTap(date) }

@@ -323,7 +323,7 @@ private fun LazyListScope.daysLens(state: StatsUiState, c: StatsColors, onDayTap
     }
     item("days-consistency") {
         StatsCard(c, title = "Consistency", caption = "Every training day, lit by how much you did.", index = 2) {
-            AdherenceContent(state.dailyActivity, c, onDayTap)
+            AdherenceContent(state.dailyActivity, c, onDayTap, state.restEpochDays)
         }
     }
     // The prettiest chart, deliberately last — viz-only nerd candy, not a decision gate.

@@ -35,6 +35,11 @@ data class StatsUiState(
     val readinessThreshold: Int? = null,
     /** Per-day training load for the adherence calendar + Banister form curves (Trends tab). */
     val dailyActivity: List<DayLoad> = emptyList(),
+    /**
+     * Days off by plan rather than missed, as epoch days: a declared holiday or a rest day the
+     * weekday schedule planned. The consistency heatmap draws them apart from a skipped day.
+     */
+    val restEpochDays: Set<Long> = emptySet(),
     /** Count of sets at each RPE value + overall average (Trends tab). */
     val rpeDistribution: List<RpeBucket> = emptyList(),
     val avgRpe: Double? = null,
