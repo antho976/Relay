@@ -51,7 +51,8 @@ class WeeklyRecapWorker @AssistedInject constructor(
     private val trophyRepo: TrophyRepository,
     private val vacationRepo: VacationRepository,
     private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
-    private val programRepo: com.forge.app.data.repo.ProgramRepository
+    private val programRepo: com.forge.app.data.repo.ProgramRepository,
+    private val sessionDao: com.forge.app.data.db.dao.SessionDao
 ) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result {
@@ -111,21 +112,29 @@ class WeeklyRecapWorker @AssistedInject constructor(
         val streakDays = statsRepo.currentStreakDays()
 
         if (stats.workouts == 0) {
-            // ── Re-engagement (#13): a whole week with no sessions = a lapse. Nudge gently — unless
-            // the user is on holiday, where a "come back" would be guilt-trippy, not helpful.
+            // ── Re-engagement (#13): a whole week with no sessions = a lapse. Nudge, at a taper and
+            // from the user's own record (ComebackNudge), unless the user is on holiday, where a
+            // "come back" would be guilt-trippy, not helpful.
             if (!isOnVacationToday()) {
-                // A freestyle user has no plan "waiting" — keep the nudge plan-agnostic so it doesn't
-                // reference something they didn't set up.
-                val body = if (freestyle)
-                    "No pressure — log whatever you train, whenever. Even one session this week keeps your momentum going."
-                else
-                    "No pressure — your plan's right where you left it. Even one session this week keeps your momentum going."
-                ForgeNotifications.ensureChannel(ctx, REENGAGE_CHANNEL_ID, "Come-back nudges", "A gentle nudge after a week away")
-                nm.notify(REENGAGE_NOTIF_ID, ForgeNotifications.build(
-                    ctx, REENGAGE_CHANNEL_ID,
-                    "Ready when you are",
-                    body
-                ))
+                val zone = ZoneId.systemDefault()
+                val lastAt = sessionDao.finishedAts().firstOrNull()
+                val daysSinceLast = lastAt?.let {
+                    java.time.temporal.ChronoUnit.DAYS.between(
+                        java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate(), LocalDate.now(zone)
+                    ).toInt()
+                }
+                val lastDayName = if (freestyle) null else sessionDao.lastFinishedDayKey()?.let { key ->
+                    com.forge.app.program.Program.days.firstOrNull { it.key == key }?.defaultName
+                }
+                com.forge.app.domain.notify.ComebackNudge.build(
+                    daysSinceLast = daysSinceLast,
+                    lastDayName = lastDayName,
+                    cardioMinutesLastWeek = stats.cardioMinutes,
+                    freestyle = freestyle
+                )?.let { nudge ->
+                    ForgeNotifications.ensureChannel(ctx, REENGAGE_CHANNEL_ID, "Come-back nudges", "A nudge after a week away")
+                    nm.notify(REENGAGE_NOTIF_ID, ForgeNotifications.build(ctx, REENGAGE_CHANNEL_ID, nudge.title, nudge.body))
+                }
             }
             return Result.success()
         }

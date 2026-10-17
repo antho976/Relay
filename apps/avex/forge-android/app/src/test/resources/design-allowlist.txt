@@ -110,7 +110,6 @@
 53 em-dash program/ExerciseLibrary.kt em dash in string
 19 em-dash program/Program.kt em dash in string
 1 em-dash security/LocalAppLock.kt em dash in string
-2 em-dash service/WeeklyRecapWorker.kt em dash in string
 2 em-dash ui/coach/CoachUi.kt em dash in string
 1 em-dash ui/gym/train/DayDialogs.kt em dash in string
 1 em-dash ui/gym/train/DayListScreen.kt em dash in string
