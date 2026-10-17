@@ -1,5 +1,7 @@
 package com.forge.app.ui.gym.train
 
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -458,9 +460,15 @@ internal fun SessionHero(
     val outline = MaterialTheme.colorScheme.outline
     val accent = MaterialTheme.colorScheme.primary
 
-    val datePillText = remember(state.sessionStartedAt) {
-        val ms = state.sessionStartedAt ?: System.currentTimeMillis()
-        SimpleDateFormat("EEE · MMM d", Locale.getDefault()).format(Date(ms)).uppercase()
+    // The day only when the workout began on another one (resumed from last night; an older one is
+    // closed at launch): today's date said nothing mid-workout and took the room the day's name
+    // needed at large text. The weekday alone, so the pill never crowds out the name or FINISH.
+    val startedMs = state.sessionStartedAt?.takeIf { !sameLocalDay(it, System.currentTimeMillis()) }
+    val datePillText = remember(startedMs) {
+        startedMs?.let { SimpleDateFormat("EEE", Locale.getDefault()).format(Date(it)).uppercase() }
+    }
+    val datePillSpoken = remember(startedMs) {
+        startedMs?.let { "Started " + SimpleDateFormat("EEEE", Locale.getDefault()).format(Date(it)) }
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -469,21 +477,19 @@ internal fun SessionHero(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Left: back + day name. weight(1f) so it yields space to the date pill + FINISH.
-            Row(
-                modifier = Modifier.weight(1f),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                ForgeChromeIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    state.displayName.uppercase(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = onBg,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+            // Left: back, then the day name. Only the name yields space to the pill and FINISH: the
+            // back button inside the weighted part was squeezed to a sliver at large text.
+            ForgeChromeIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", onBack)
+            Spacer(Modifier.width(8.dp))
+            // The user's own day name: it wraps to a second line before it is cut (§14).
+            Text(
+                state.displayName.uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = onBg,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
             Spacer(Modifier.width(4.dp))
             // Quick session note — jot a thought mid-workout; tinted when the journal has content.
             ForgeChromeIconButton(
@@ -492,15 +498,18 @@ internal fun SessionHero(
                 onEditNote,
                 tint = if (state.sessionJournal.isNotBlank()) accent else muted
             )
-            Spacer(Modifier.width(4.dp))
             // Passive date: a filled capsule, no outline.
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1)
+            if (datePillText != null) {
+                Spacer(Modifier.width(4.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .clearAndSetSemantics { contentDescription = datePillSpoken.orEmpty() }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1)
+                }
             }
             Spacer(Modifier.width(8.dp))
             // Outlined until every exercise is done or skipped, then filled. A filled FINISH from the
@@ -552,3 +561,7 @@ internal fun SessionHero(
         }
     }
 }
+
+/** Whether two instants fall on the same calendar day in the device's zone. */
+internal fun sameLocalDay(aMs: Long, bMs: Long, zone: java.time.ZoneId = java.time.ZoneId.systemDefault()): Boolean =
+    java.time.Instant.ofEpochMilli(aMs).atZone(zone).toLocalDate() == java.time.Instant.ofEpochMilli(bMs).atZone(zone).toLocalDate()
