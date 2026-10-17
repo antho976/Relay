@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.units.fromDisplayWeight
+import com.forge.app.domain.units.normalizeDecimalInput
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.domain.warmup.WarmupEngine
@@ -93,7 +94,8 @@ fun WarmupSuggesterDialog(
     // entered in kg, lb or stones.
     val seed = workingWeightLb?.let { warmupSeedText(it, isPlates, plateLb, weightUnit) }
     var input by remember { mutableStateOf(seed ?: "") }
-    val typed = input.toDoubleOrNull()
+    // A comma-decimal keyboard types "102,5", which toDoubleOrNull reads as nothing.
+    val typed = normalizeDecimalInput(input).toDoubleOrNull()
     val workingStored = typed?.let { if (isPlates) it else fromDisplayWeight(it, weightUnit) }
 
     val ramp = remember(workingStored, unit, isCompound, targetReps, muscleAlreadyWarm, weightUnit, barLoadLb) {
@@ -211,7 +213,7 @@ fun PlateCalculatorDialog(
     var input by remember { mutableStateOf(initialWeightLb?.let { weightInputValue(it, metric) } ?: "") }
     var useHeavyBar by remember { mutableStateOf(true) }
     val bar = if (useHeavyBar) heavyBar else lightBar
-    val target = input.toDoubleOrNull()
+    val target = normalizeDecimalInput(input).toDoubleOrNull()
 
     AlertDialog(
         onDismissRequest = onDismiss,
