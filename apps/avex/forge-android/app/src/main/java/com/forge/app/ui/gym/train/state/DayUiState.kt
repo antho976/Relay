@@ -82,6 +82,12 @@ data class DayUiState(
     val swapPickerForExerciseId: String? = null,
     val summary: SessionSummary? = null,
     val showDiscardConfirm: Boolean = false,
+    /**
+     * Names of the exercises FINISH would leave unstarted, while it asks first; empty when closed.
+     * A mis-tap on the header's Finish after the first exercise used to close the whole workout
+     * for good with the rest of the day untouched.
+     */
+    val finishUntouched: List<String> = emptyList(),
     /** Non-null when opening this day found another day's workout still in progress (resume-later guard). */
     val crossDaySession: CrossDaySessionInfo? = null,
     val isFinished: Boolean = false,

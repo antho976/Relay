@@ -186,6 +186,14 @@ fun DayScreen(
         )
     }
 
+    if (state.finishUntouched.isNotEmpty()) {
+        FinishUntouchedDialog(
+            untouched = state.finishUntouched,
+            onFinish = { viewModel.onEvent(DayUiEvent.ConfirmFinishUntouched) },
+            onKeepGoing = { viewModel.onEvent(DayUiEvent.DismissFinishUntouched) }
+        )
+    }
+
     state.crossDaySession?.let { cross ->
         CrossDaySessionDialog(
             otherDayName = cross.dayName,
