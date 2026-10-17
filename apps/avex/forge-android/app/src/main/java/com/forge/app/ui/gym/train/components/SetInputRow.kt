@@ -140,7 +140,8 @@ fun SetInputRow(
     fill: SetFill? = null,
     /** The eased target to open the first set on while easing back in (see [nextSetSeedLb]). */
     rampSeedLb: Double? = null,
-    /** Easing back in after a break: last session's set is shown as "last", not as one to beat. */
+    /** The day asks for less than last session (easing back in after a break, or a lighter
+     *  target): last session's set is shown as "last", not as one to beat. */
     easingBack: Boolean = false,
     targetsMet: Boolean = false,
     advanceLabel: String = "",

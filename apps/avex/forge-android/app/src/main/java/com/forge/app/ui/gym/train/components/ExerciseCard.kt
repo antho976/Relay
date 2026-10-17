@@ -402,7 +402,10 @@ fun ExerciseCard(
                         todayLastSet = lastLogged,
                         fill = fill,
                         rampSeedLb = state.suggestedTargetLb.takeIf { easingBack },
-                        easingBack = easingBack,
+                        // A lighter day (low readiness, a reset) asks for less than last session too,
+                        // so its sets read "last", not "beat": "try 32.5 lb" over "beat 33.2 × 10"
+                        // gave two opposite instructions for the same set.
+                        easingBack = easingBack || (state.suggestedDeltaLb ?: 0.0) <= -0.5,
                         targetsMet = targetsMet,
                         advanceLabel = advanceLabel,
                         // "I'm done" path — only meaningful once you've logged something and haven't hit
