@@ -31,40 +31,52 @@ object TrainingReminder {
         dayName: String?,
         streakDays: Int,
         isScheduledRestDay: Boolean = false,
-        noFixedPlan: Boolean = false
+        noFixedPlan: Boolean = false,
+        /**
+         * Calendar days since the last finished session, null when there has never been one. A
+         * break of [com.forge.app.domain.coach.LifeEvents.LAYOFF_MIN_DAYS] or more is named in the
+         * copy, the way Home names it, so the first nudge back is not the same line as any other day.
+         */
+        daysSinceLast: Int? = null,
+        /** On a rest day, the next scheduled workout and when ("Thursday"), for the rest note. */
+        nextDayName: String? = null,
+        nextWhen: String? = null
     ): Nudge? {
         if (trainedToday) return null
+        val layoff = daysSinceLast?.takeIf { it >= com.forge.app.domain.coach.LifeEvents.LAYOFF_MIN_DAYS }
+        val gap = layoff?.let { com.forge.app.domain.coach.LifeEvents.gapPhrase(it) }
         if (dayName.isNullOrBlank()) {
             return when {
-                // A planned rest day is a feature, not an absence — affirm it instead of nagging.
+                // A planned rest day is a feature, not an absence: say what comes next instead of nagging.
                 isScheduledRestDay -> Nudge(
                     title = "Rest day",
-                    body = "No workout scheduled today — recovery is where the gains land. Sleep, eat well, come back fresh."
+                    body = if (nextDayName != null && nextWhen != null) "Nothing scheduled today. Next: $nextDayName, $nextWhen."
+                    else "Nothing scheduled today."
                 )
-                // Freestyle: no day to name, but still nudge (streak-aware), pointed at free logging.
-                noFixedPlan -> if (streakDays >= STREAK_AT_RISK_MIN)
-                    Nudge(
-                        title = "Don't break your streak",
-                        body = "🔥 $streakDays-day streak — keep the chain alive. Log whatever you train today."
-                    )
-                else
-                    Nudge(
-                        title = "Time to train",
-                        body = "Ready when you are — log whatever you're training today."
-                    )
+                // Freestyle: no day to name, but still nudge, pointed at free logging.
+                noFixedPlan -> when {
+                    gap != null -> Nudge("Time to train", "First session in $gap. Log whatever you train today.")
+                    streakDays >= STREAK_AT_RISK_MIN -> Nudge("$streakDays-day streak", "Log whatever you train today to keep it.")
+                    else -> Nudge("Time to train", "Log whatever you train today.")
+                }
                 // No program / no schedule (and not freestyle): stay quiet, as before.
                 else -> null
             }
         }
-        return if (streakDays >= STREAK_AT_RISK_MIN)
-            Nudge(
-                title = "Don't break your streak",
-                body = "🔥 $streakDays-day streak — $dayName is on today. Keep the chain alive."
+        return when {
+            gap != null -> Nudge(
+                title = "$dayName today",
+                body = "First session in $gap. Loads start lighter: this one is about showing up."
             )
-        else
-            Nudge(
+            streakDays >= STREAK_AT_RISK_MIN -> Nudge(
+                title = "$streakDays-day streak",
+                body = "$dayName is on today."
+            )
+            daysSinceLast != null && daysSinceLast >= 3 -> Nudge(
                 title = "Time to train",
-                body = "$dayName today — ready when you are."
+                body = "$dayName today. Your last session was $daysSinceLast days ago."
             )
+            else -> Nudge(title = "Time to train", body = "$dayName today.")
+        }
     }
 }

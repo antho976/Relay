@@ -25,7 +25,16 @@ class TrainingReminderTest {
             trainedToday = false, dayName = null, streakDays = 5, isScheduledRestDay = true
         )
         assertEquals("Rest day", n!!.title)
-        assertTrue(n.body.contains("recovery", ignoreCase = true))
+        assertEquals("Nothing scheduled today.", n.body)
+    }
+
+    @Test
+    fun aRestDayNamesWhatComesNext() {
+        val n = TrainingReminder.build(
+            trainedToday = false, dayName = null, streakDays = 0, isScheduledRestDay = true,
+            nextDayName = "Pull A", nextWhen = "Thursday"
+        )
+        assertEquals("Nothing scheduled today. Next: Pull A, Thursday.", n!!.body)
     }
 
     @Test
@@ -45,8 +54,7 @@ class TrainingReminderTest {
     @Test
     fun scheduledDay_withStreak_emphasizesTheStreak() {
         val n = TrainingReminder.build(trainedToday = false, dayName = "Legs", streakDays = 4)
-        assertEquals("Don't break your streak", n!!.title)
-        assertTrue(n.body.contains("4-day streak"))
+        assertEquals("4-day streak", n!!.title)
         assertTrue(n.body.contains("Legs"))
     }
 
@@ -72,8 +80,8 @@ class TrainingReminderTest {
         val n = TrainingReminder.build(
             trainedToday = false, dayName = null, streakDays = 4, noFixedPlan = true
         )
-        assertEquals("Don't break your streak", n!!.title)
-        assertTrue(n.body.contains("4-day streak"))
+        assertEquals("4-day streak", n!!.title)
+        assertTrue(n.body.contains("log whatever", ignoreCase = true))
     }
 
     @Test
@@ -81,5 +89,36 @@ class TrainingReminderTest {
         assertNull(TrainingReminder.build(
             trainedToday = true, dayName = null, streakDays = 4, noFixedPlan = true
         ))
+    }
+
+    /** The first nudge after a break names it, the way Home does, instead of reading like any day. */
+    @Test
+    fun aLongBreakIsNamedInWeeks() {
+        val n = TrainingReminder.build(trainedToday = false, dayName = "Push A", streakDays = 0, daysSinceLast = 23)
+        assertEquals("Push A today", n!!.title)
+        assertTrue(n.body, n.body.contains("First session in 3 weeks"))
+    }
+
+    @Test
+    fun aFewDaysOffAreCountedNotDramatised() {
+        val n = TrainingReminder.build(trainedToday = false, dayName = "Push A", streakDays = 0, daysSinceLast = 4)
+        assertEquals("Push A today. Your last session was 4 days ago.", n!!.body)
+    }
+
+    /** §11: no emoji, no exclamation marks, no em dashes in anything the reminder can say. */
+    @Test
+    fun noVariantBreaksTheVoiceRules() {
+        val variants = listOfNotNull(
+            TrainingReminder.build(false, "Legs", 4),
+            TrainingReminder.build(false, "Legs", 0),
+            TrainingReminder.build(false, "Legs", 0, daysSinceLast = 30),
+            TrainingReminder.build(false, null, 4, noFixedPlan = true),
+            TrainingReminder.build(false, null, 0, noFixedPlan = true, daysSinceLast = 30),
+            TrainingReminder.build(false, null, 0, isScheduledRestDay = true, nextDayName = "Pull", nextWhen = "tomorrow")
+        )
+        variants.forEach { n ->
+            val text = n.title + " " + n.body
+            assertTrue(text, '—' !in text && '!' !in text && text.none { Character.isSurrogate(it) })
+        }
     }
 }
