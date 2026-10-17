@@ -11,6 +11,8 @@
 
 pub mod design;
 pub mod envelope;
+pub mod kits;
+pub mod svgpath;
 pub mod error;
 pub mod registry;
 pub mod schema;

@@ -23,6 +23,8 @@ use std::rc::{Rc, Weak};
 
 /// Selection, hover and handles.
 pub const SELECT: &str = "#4C9DFF";
+/// Components and their copies, on the canvas and in the layers.
+pub const COMPONENT: &str = "#A178FF";
 /// Smart guides and spacing.
 pub const GUIDE: &str = "#FF3D71";
 /// What an agent just changed glows briefly in the live colour.
@@ -1024,7 +1026,14 @@ impl Board {
             layout.set_ellipsize(pango::EllipsizeMode::End);
             let (_, lh) = layout.pixel_size();
             let lit = selection.contains(id) || hover.as_deref() == Some(id.as_str());
-            let color = if lit { rgba(SELECT) } else { gdk::RGBA::new(0.62, 0.6, 0.57, 1.0) };
+            let component = n.component == Some(true) || n.instance_of.is_some();
+            let color = if component {
+                rgba(COMPONENT)
+            } else if lit {
+                rgba(SELECT)
+            } else {
+                gdk::RGBA::new(0.62, 0.6, 0.57, 1.0)
+            };
             snap.save();
             snap.translate(&graphene::Point::new(s.x as f32, (s.y - lh as f64 - 6.0) as f32));
             snap.append_layout(&layout, &color);
@@ -1920,6 +1929,11 @@ impl Board {
             }
         });
         add("add-page", |b| b.add_page());
+        add("make-component", |b| b.make_component());
+        add("create-instance", |b| b.create_instance());
+        add("go-to-component", |b| b.go_to_component());
+        add("reset-overrides", |b| b.reset_overrides());
+        add("detach-instance", |b| b.detach_instance());
     }
 
     fn refresh_actions(&self) {
@@ -2426,6 +2440,8 @@ pub fn kind_caption(kind: NodeKind) -> &'static str {
         NodeKind::Image => "Image",
         NodeKind::Polygon => "Polygon",
         NodeKind::Icon => "Icon",
+        NodeKind::Vector => "Vector",
+        NodeKind::Comment => "Comment",
     }
 }
 
@@ -2443,6 +2459,8 @@ pub fn kind_glyph(kind: NodeKind) -> &'static str {
         NodeKind::Image => "image",
         NodeKind::Polygon => "triangle",
         NodeKind::Icon => "icon",
+        NodeKind::Vector => "vector",
+        NodeKind::Comment => "comment",
     }
 }
 

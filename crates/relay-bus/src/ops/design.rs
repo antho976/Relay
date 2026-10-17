@@ -50,6 +50,8 @@ payload!(#[schemars(rename = "DesignCreateIn")] CreateIn {
     /// The terminal it belongs to. An agent's design is its own session's; the person may
     /// name any session of the project, or none.
     pub session: Option<String>,
+    /// Start from a template (`templates/<item>` from `design.kits`), placed on the first page.
+    pub template: Option<String>,
 });
 op!(Create, "design.create", CreateIn => GetOut,
     OpMeta::mutation(Scope::Project, 12, "Start a design with one empty page, only when the person asked for one; returns it and its page")
@@ -113,6 +115,17 @@ op!(Apply, "design.apply", ApplyIn => ApplyOut,
     OpMeta::mutation(Scope::Project, 12, "Add, change, move or delete a design's nodes in one all-or-none list, only when the person asked for it; returns what changed and its undo")
         .undo(Undo::Inverse).emits(&["design.changed"]));
 
+payload!(#[schemars(rename = "DesignKitsIn")] KitsIn {
+    /// Only this pack.
+    pub kit: Option<String>,
+    /// Each item's nodes in full, to read how it is built (large); the default gives each
+    /// item's name, category, slots and its root alone (its size).
+    pub with_nodes: Option<bool>,
+});
+result!(#[schemars(rename = "DesignKitsOut")] KitsOut { pub kits: Vec<crate::kits::Kit> });
+op!(Kits, "design.kits", KitsIn => KitsOut,
+    OpMeta::query(Scope::Global, 12, "Relay's asset packs and templates: buttons, fields, cards, nav bars, flowchart shapes, device frames and whole pages, to place with design.apply's insert"));
+
 payload!(#[schemars(rename = "DesignAssetAddIn")] AssetAddIn {
     pub design_id: Id,
     /// A PNG, JPEG, GIF, WebP or SVG file on this machine, copied in.
@@ -132,4 +145,4 @@ result!(#[schemars(rename = "DesignAssetAddOut")] AssetAddOut {
 op!(AssetAdd, "design.asset.add", AssetAddIn => AssetAddOut,
     OpMeta::mutation(Scope::Project, 12, "Store a picture for a design's image nodes; returns the src to give them"));
 
-entries!(List, Get, Create, Update, Duplicate, Delete, Restore, Purge, Apply, AssetAdd);
+entries!(List, Get, Create, Update, Duplicate, Delete, Restore, Purge, Apply, AssetAdd, Kits);

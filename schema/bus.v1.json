@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 326,
+  "op_count": 327,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -6315,6 +6315,24 @@
       },
       "result": {
         "$ref": "#/$defs/DesignAssetAddOut"
+      }
+    },
+    "design.kits": {
+      "summary": "Relay's asset packs and templates: buttons, fields, cards, nav bars, flowchart shapes, device frames and whole pages, to place with design.apply's insert",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "global",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignKitsIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignKitsOut"
       }
     }
   },
@@ -25040,6 +25058,226 @@
             }
           ],
           "description": "How a line runs between its ends (default `straight`)."
+        },
+        "component": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "A main component: its copies (nodes with `instance_of` it) follow every change to it."
+        },
+        "instance_of": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "On an instance's root: the component it is a copy of. Place one with `design.apply`'s\n`insert` and `item: \"#<component id>\"`."
+        },
+        "master": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "In an instance: the component node this one copies."
+        },
+        "overridden": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "In an instance: fields changed here, which the component no longer overwrites. Kept by\nthe engine as you edit; `null` resets them to the component's."
+        },
+        "shared": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "A shared style: other nodes name it in `fill_style`, `text_style` or `effect_style` and\ntake its fill, its type or its shadow and blur, following it as it changes. Its `name`\nis the style's name (`Brand / Primary`, `Heading 1`)."
+        },
+        "fill_style": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The shared style whose `fill` (or gradient) this node takes."
+        },
+        "text_style": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The shared style whose font, size, weight, line height and spacing this text takes."
+        },
+        "effect_style": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The shared style whose shadow and blur this node takes."
+        },
+        "d": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A vector's SVG path data (`M`, `L`, `H`, `V`, `C`, `S`, `Q`, `T`, `A`, `Z`, absolute or\nrelative), in the coordinates of `view`."
+        },
+        "view": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "The box `d` was drawn in, `[width, height]`; the path scales from it to `w`×`h`. Absent,\n`d` is in the node's own pixels."
+        },
+        "open": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Whether a vector's path is open (a line, not filled) rather than a closed shape."
+        },
+        "crop": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "The part of an image shown, as fractions of the picture: `[x, y, width, height]`."
+        },
+        "filters": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignFilters"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Colour adjustments over the node and everything in it."
+        },
+        "spans": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignSpan"
+          },
+          "description": "A text's words in styled runs; they paint while their words together are its `text`."
+        },
+        "list": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignListStyle"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Marks each line of a text as a list item."
+        },
+        "link": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A web address the node links to."
+        },
+        "constraints": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignConstraints"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the node keeps to its frame when the frame is resized."
+        },
+        "flip_x": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Mirrored left to right."
+        },
+        "flip_y": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Mirrored top to bottom."
+        },
+        "grids": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignGrid"
+          },
+          "description": "A frame's layout grids."
+        },
+        "goto": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Prototype: the frame presenting goes to when this node is clicked."
+        },
+        "transition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignTransition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Prototype: how it goes there (default `dissolve`)."
+        },
+        "start": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Prototype: a top-level frame presenting starts from."
+        },
+        "author": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A comment's writer: `you`, or the terminal's session name (the engine fills it in)."
+        },
+        "replies": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/DesignReply"
+          }
+        },
+        "resolved": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [
@@ -25101,6 +25339,16 @@
           "type": "string",
           "const": "icon",
           "description": "An interface icon from Relay's set (`icon`, one of [`ICONS`]), drawn in `stroke`."
+        },
+        {
+          "type": "string",
+          "const": "vector",
+          "description": "A vector shape: SVG path data (`d`) drawn in the box `view` (its size when drawn),\nscaled to `w`×`h`, filled with `fill` and outlined with `stroke`. The pen draws these."
+        },
+        {
+          "type": "string",
+          "const": "comment",
+          "description": "A review comment pinned where it sits: `text` by `author`, with `replies`, until\n`resolved`. Comments are notes about the design, never part of it: exports leave them out."
         }
       ]
     },
@@ -25317,6 +25565,293 @@
       ],
       "description": "How a connector runs between its ends."
     },
+    "DesignFilters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "brightness": {
+          "type": "number",
+          "format": "double",
+          "description": "-1 (black) to 1 (white)."
+        },
+        "contrast": {
+          "type": "number",
+          "format": "double",
+          "description": "-1 (flat grey) to 1."
+        },
+        "saturation": {
+          "type": "number",
+          "format": "double",
+          "description": "-1 (greyscale) to 1 (twice as vivid)."
+        },
+        "hue": {
+          "type": "number",
+          "format": "double",
+          "description": "Hue turned by -180 to 180 degrees."
+        },
+        "sepia": {
+          "type": "number",
+          "format": "double",
+          "description": "0 to 1: how far toward an old photo's brown."
+        },
+        "invert": {
+          "type": "number",
+          "format": "double",
+          "description": "0 to 1: how far toward the negative."
+        }
+      },
+      "description": "Colour adjustments painted over a node and everything in it, each 0 (the default) for none."
+    },
+    "DesignSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "weight": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "italic": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "underline": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "strike": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`#RRGGBB` or `#RRGGBBAA`."
+        },
+        "size": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "font": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "code": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "In a monospace face on a tint, as inline code."
+        },
+        "link": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A web address the words link to (drawn underlined in the accent)."
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "description": "A run of a text node's words with its own style: a text with `spans` paints them in turn.\nAbsent fields take the node's own."
+    },
+    "DesignListStyle": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "bullet",
+          "description": "A bullet before each line."
+        },
+        {
+          "type": "string",
+          "const": "number",
+          "description": "1., 2., 3. before each line."
+        },
+        {
+          "type": "string",
+          "const": "check",
+          "description": "A box before each line; a line starting `[x] ` is ticked."
+        }
+      ],
+      "description": "How a text's lines are marked as a list."
+    },
+    "DesignConstraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "h": {
+          "$ref": "#/$defs/DesignPin",
+          "description": "Across.",
+          "default": "start"
+        },
+        "v": {
+          "$ref": "#/$defs/DesignPin",
+          "description": "Down.",
+          "default": "start"
+        }
+      }
+    },
+    "DesignPin": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "start",
+          "description": "Keeps its distance from the left (or top) edge. The default."
+        },
+        {
+          "type": "string",
+          "const": "end",
+          "description": "Keeps its distance from the right (or bottom) edge."
+        },
+        {
+          "type": "string",
+          "const": "both",
+          "description": "Keeps both distances, stretching."
+        },
+        {
+          "type": "string",
+          "const": "center",
+          "description": "Stays centred."
+        },
+        {
+          "type": "string",
+          "const": "scale",
+          "description": "Scales with the frame."
+        }
+      ],
+      "description": "How a node keeps to its frame when the frame is resized by hand."
+    },
+    "DesignGrid": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/DesignGridKind"
+        },
+        "count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Columns or rows (default 12 columns, 4 rows)."
+        },
+        "size": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "A square grid's cell (default 8)."
+        },
+        "gutter": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "margin": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`#RRGGBBAA`; a translucent red by default."
+        },
+        "hidden": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "description": "A layout grid drawn over a frame while designing (never exported); edges snap to it."
+    },
+    "DesignGridKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "columns",
+          "description": "`count` columns, `gutter` apart, `margin` in from the sides."
+        },
+        {
+          "type": "string",
+          "const": "rows",
+          "description": "`count` rows."
+        },
+        {
+          "type": "string",
+          "const": "square",
+          "description": "Square cells of `size`."
+        }
+      ]
+    },
+    "DesignTransition": {
+      "type": "string",
+      "enum": [
+        "instant",
+        "dissolve",
+        "slide_left",
+        "slide_right",
+        "slide_up",
+        "slide_down"
+      ],
+      "description": "How presenting moves to a prototype link's frame."
+    },
+    "DesignReply": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "type": "string",
+          "description": "`you`, or the terminal's session name."
+        },
+        "text": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string",
+          "description": "RFC 3339."
+        }
+      },
+      "required": [
+        "author",
+        "text"
+      ],
+      "description": "A reply under a comment."
+    },
     "DesignCreateIn": {
       "type": "object",
       "additionalProperties": false,
@@ -25338,6 +25873,13 @@
             "null"
           ],
           "description": "The terminal it belongs to. An agent's design is its own session's; the person may\nname any session of the project, or none."
+        },
+        "template": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Start from a template (`templates/<item>` from `design.kits`), placed on the first page."
         }
       },
       "required": [
@@ -25543,6 +26085,61 @@
             "id"
           ],
           "description": "Delete a node and everything inside it. A design keeps at least one page."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "item": {
+              "type": "string",
+              "description": "`kit/item`, e.g. `relay-ui/button-primary`."
+            },
+            "parent": {
+              "type": "string",
+              "description": "The page, frame or group it goes into."
+            },
+            "x": {
+              "type": "number",
+              "format": "double",
+              "default": 0.0
+            },
+            "y": {
+              "type": "number",
+              "format": "double",
+              "default": 0.0
+            },
+            "index": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "set": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "op": {
+              "type": "string",
+              "const": "insert"
+            }
+          },
+          "required": [
+            "op",
+            "item",
+            "parent"
+          ],
+          "description": "Place a piece of an asset pack (`design.kits` lists them): its nodes, under fresh ids,\nas ordinary editable nodes. The root takes `id` (or one is assigned), its parts\n`<id>.<part>`; `set` changes parts by their local id, e.g.\n`{\"label\": {\"text\": \"Save\"}}`."
         }
       ],
       "description": "One edit of a design. `design.apply` runs a list of them in order, all or none."
@@ -25652,6 +26249,105 @@
         "w",
         "h"
       ]
+    },
+    "DesignKitsIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kit": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Only this pack."
+        },
+        "with_nodes": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Each item's nodes in full, to read how it is built (large); the default gives each\nitem's name, category, slots and its root alone (its size)."
+        }
+      }
+    },
+    "DesignKitsOut": {
+      "type": "object",
+      "properties": {
+        "kits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignKit"
+          }
+        }
+      },
+      "required": [
+        "kits"
+      ]
+    },
+    "DesignKit": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignKitItem"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description",
+        "items"
+      ],
+      "description": "One pack."
+    },
+    "DesignKitItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "slots": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Local ids of the texts and icons worth changing, with what each is: the keys an\n`insert`'s `set` takes.",
+          "default": {}
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignNode"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "category"
+      ],
+      "description": "One piece of a pack: its nodes, root first (local id `root`), with local ids the `insert`\nedit maps to fresh ones."
     }
   }
 }

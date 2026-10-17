@@ -22,7 +22,14 @@ pub fn on_shape(scene: &Scene, placed: &Placed, n: &Node, rect: &Rect, x: f64, y
             let reach = n.stroke_width.unwrap_or(2.0) / 2.0 + slop;
             pts.windows(2).any(|w| segment_distance(x, y, w[0], w[1]) <= reach)
         }
-        NodeKind::Page | NodeKind::Group => false,
+        NodeKind::Page | NodeKind::Group | NodeKind::Comment => false,
+        NodeKind::Vector => {
+            let reach = n.stroke_width.unwrap_or(1.0) / 2.0 + slop;
+            shapes::vector_lines(n, rect).iter().any(|(pts, closed)| {
+                ((*closed || n.open != Some(true)) && pts.len() > 2 && shapes::inside(pts, x, y))
+                    || pts.windows(2).any(|w| segment_distance(x, y, w[0], w[1]) <= reach)
+            })
+        }
         NodeKind::Ellipse => {
             let (rx, ry) = (rect.w / 2.0, rect.h / 2.0);
             if rx <= 0.0 || ry <= 0.0 {
@@ -67,6 +74,9 @@ fn descend(scene: &Scene, placed: &Placed, parent: &str, x: f64, y: f64, slop: f
         // A turned node is tested, children and all, in its own unturned frame.
         let turn = shapes::rotation(n);
         let (x, y) = if turn != 0.0 { shapes::rotate(x, y, rect.cx(), rect.cy(), -turn) } else { (x, y) };
+        // And a mirrored one in its unmirrored frame.
+        let x = if n.flip_x == Some(true) { 2.0 * rect.cx() - x } else { x };
+        let y = if n.flip_y == Some(true) { 2.0 * rect.cy() - y } else { y };
         let clips = n.kind == NodeKind::Frame && n.clip != Some(false);
         if n.kind.holds_children() && !(clips && !rect.contains(x, y)) {
             out.push(id.clone());
@@ -96,7 +106,7 @@ pub fn marquee(scene: &Scene, placed: &Placed, parent: &str, area: &Rect) -> Vec
     scene
         .children(parent)
         .iter()
-        .filter(|id| scene.node(id).is_some_and(|n| !n.is_hidden() && !n.is_locked()))
+        .filter(|id| scene.node(id).is_some_and(|n| !n.is_hidden() && !n.is_locked() && n.kind != NodeKind::Comment))
         .filter(|id| {
             let turn = scene.node(id).map_or(0.0, shapes::rotation);
             placed.rect(id).is_some_and(|r| area.intersects(&shapes::rotated_bounds(&r, turn)))

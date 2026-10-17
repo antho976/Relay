@@ -44,6 +44,8 @@ fn kind_name(kind: NodeKind) -> &'static str {
         NodeKind::Image => "image",
         NodeKind::Polygon => "polygon",
         NodeKind::Icon => "icon",
+        NodeKind::Vector => "vector",
+        NodeKind::Comment => "comment",
     }
 }
 
@@ -179,6 +181,18 @@ impl Scene {
         }
     }
 
+    /// An id no node has, starting `prefix` (an asset's name), unlike another client's.
+    pub fn fresh_named(&mut self, prefix: &str) -> String {
+        let prefix: String = prefix.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(24).collect();
+        loop {
+            self.counter += 1;
+            let id = format!("{prefix}-{}{}", self.seed, base36(self.counter));
+            if !self.nodes.contains_key(&id) {
+                return id;
+            }
+        }
+    }
+
     /// Run one edit as the engine does; on an error nothing changed.
     pub fn apply(&mut self, op: &NodeOp) -> Result<(), String> {
         match op {
@@ -202,7 +216,17 @@ impl Scene {
             }
             NodeOp::Update { id, set } => {
                 let node = self.nodes.get(id).ok_or_else(|| format!("update: no node {id}"))?;
-                let patched = node.patched(set).map_err(|e| format!("update {id}: {e}"))?;
+                let mut patched = node.patched(set).map_err(|e| format!("update {id}: {e}"))?;
+                // As the engine does: a copy edited by hand remembers what changed.
+                if patched.master.is_some() && !set.contains_key("overridden") {
+                    let mut own = patched.overridden.take().unwrap_or_default();
+                    for field in relay_bus::design::overriding(set) {
+                        if !own.iter().any(|f| f == field) {
+                            own.push(field.to_string());
+                        }
+                    }
+                    patched.overridden = (!own.is_empty()).then_some(own);
+                }
                 self.nodes.insert(id.clone(), patched);
             }
             NodeOp::Move { id, parent, index } => {
@@ -228,6 +252,28 @@ impl Scene {
                 if let Some(node) = self.nodes.get_mut(id) {
                     node.parent = new;
                 }
+            }
+            NodeOp::Insert { item, parent, x, y, index, id, set } => {
+                // The canvas always names the root, so its ids match the engine's.
+                let root = id.as_deref().ok_or("insert: the canvas names the root")?;
+                let nodes = match item.strip_prefix('#') {
+                    Some(component) => {
+                        let subtree: Vec<Node> = self.subtree(component).iter().filter_map(|i| self.nodes.get(i).cloned()).collect();
+                        if subtree.first().is_none_or(|n| n.component != Some(true)) {
+                            return Err(format!("insert: {component} is not a component"));
+                        }
+                        relay_bus::kits::instance(&subtree, root, parent, *x, *y, set.as_ref())?
+                    }
+                    None => {
+                        let (_, found) = relay_bus::kits::item(item).ok_or_else(|| format!("insert: no pack item {item}"))?;
+                        relay_bus::kits::expand(found, root, parent, *x, *y, set.as_ref())?
+                    }
+                };
+                let mut trial = self.clone();
+                for (i, node) in nodes.into_iter().enumerate() {
+                    trial.apply(&NodeOp::Add { node, index: if i == 0 { *index } else { None } })?;
+                }
+                *self = trial;
             }
             NodeOp::Delete { id } => {
                 let node = self.nodes.get(id).ok_or_else(|| format!("delete: no node {id}"))?;

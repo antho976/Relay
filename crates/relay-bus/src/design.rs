@@ -21,6 +21,8 @@ pub const MAX_TEXT: usize = 10_000;
 pub const MAX_POINTS: usize = 4_000;
 /// Largest coordinate or size, in either direction.
 pub const MAX_COORD: f64 = 1_000_000.0;
+/// Longest vector path data, in bytes.
+pub const MAX_PATH: usize = 100_000;
 /// Longest node id, name or design title.
 pub const MAX_ID: usize = 64;
 pub const MAX_NAME: usize = 200;
@@ -52,6 +54,12 @@ pub enum NodeKind {
     Polygon,
     /// An interface icon from Relay's set (`icon`, one of [`ICONS`]), drawn in `stroke`.
     Icon,
+    /// A vector shape: SVG path data (`d`) drawn in the box `view` (its size when drawn),
+    /// scaled to `w`×`h`, filled with `fill` and outlined with `stroke`. The pen draws these.
+    Vector,
+    /// A review comment pinned where it sits: `text` by `author`, with `replies`, until
+    /// `resolved`. Comments are notes about the design, never part of it: exports leave them out.
+    Comment,
 }
 
 impl NodeKind {
@@ -210,6 +218,179 @@ pub struct Shadow {
     pub spread: f64,
     /// `#RRGGBB` or `#RRGGBBAA`.
     pub color: String,
+}
+
+/// Colour adjustments painted over a node and everything in it, each 0 (the default) for none.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "DesignFilters")]
+pub struct Filters {
+    /// -1 (black) to 1 (white).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub brightness: f64,
+    /// -1 (flat grey) to 1.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub contrast: f64,
+    /// -1 (greyscale) to 1 (twice as vivid).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub saturation: f64,
+    /// Hue turned by -180 to 180 degrees.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub hue: f64,
+    /// 0 to 1: how far toward an old photo's brown.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sepia: f64,
+    /// 0 to 1: how far toward the negative.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub invert: f64,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+impl Filters {
+    pub fn is_none(&self) -> bool {
+        *self == Filters::default()
+    }
+}
+
+/// A run of a text node's words with its own style: a text with `spans` paints them in turn.
+/// Absent fields take the node's own.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "DesignSpan")]
+pub struct Span {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub italic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strike: Option<bool>,
+    /// `#RRGGBB` or `#RRGGBBAA`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+    /// In a monospace face on a tint, as inline code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<bool>,
+    /// A web address the words link to (drawn underlined in the accent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+}
+
+/// How a text's lines are marked as a list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignListStyle")]
+pub enum ListStyle {
+    /// A bullet before each line.
+    Bullet,
+    /// 1., 2., 3. before each line.
+    Number,
+    /// A box before each line; a line starting `[x] ` is ticked.
+    Check,
+}
+
+/// How a node keeps to its frame when the frame is resized by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignPin")]
+pub enum Pin {
+    /// Keeps its distance from the left (or top) edge. The default.
+    Start,
+    /// Keeps its distance from the right (or bottom) edge.
+    End,
+    /// Keeps both distances, stretching.
+    Both,
+    /// Stays centred.
+    Center,
+    /// Scales with the frame.
+    Scale,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "DesignConstraints")]
+pub struct Constraints {
+    /// Across.
+    #[serde(default = "pin_start")]
+    pub h: Pin,
+    /// Down.
+    #[serde(default = "pin_start")]
+    pub v: Pin,
+}
+
+fn pin_start() -> Pin {
+    Pin::Start
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignGridKind")]
+pub enum GridKind {
+    /// `count` columns, `gutter` apart, `margin` in from the sides.
+    Columns,
+    /// `count` rows.
+    Rows,
+    /// Square cells of `size`.
+    Square,
+}
+
+/// A layout grid drawn over a frame while designing (never exported); edges snap to it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "DesignGrid")]
+pub struct Grid {
+    pub kind: GridKind,
+    /// Columns or rows (default 12 columns, 4 rows).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+    /// A square grid's cell (default 8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gutter: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub margin: Option<f64>,
+    /// `#RRGGBBAA`; a translucent red by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
+}
+
+/// How presenting moves to a prototype link's frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignTransition")]
+pub enum Transition {
+    Instant,
+    Dissolve,
+    SlideLeft,
+    SlideRight,
+    SlideUp,
+    SlideDown,
+}
+
+/// A reply under a comment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "DesignReply")]
+pub struct Reply {
+    /// `user` (the person), or the terminal's session name; the engine fills it in.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub author: String,
+    pub text: String,
+    /// RFC 3339.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub at: String,
 }
 
 /// One node of a design. Every field but `kind` is optional on input; an absent style field
@@ -372,6 +553,97 @@ pub struct Node {
     /// How a line runs between its ends (default `straight`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<Route>,
+
+    /// A main component: its copies (nodes with `instance_of` it) follow every change to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<bool>,
+    /// On an instance's root: the component it is a copy of. Place one with `design.apply`'s
+    /// `insert` and `item: "#<component id>"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_of: Option<String>,
+    /// In an instance: the component node this one copies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master: Option<String>,
+    /// In an instance: fields changed here, which the component no longer overwrites. Kept by
+    /// the engine as you edit; `null` resets them to the component's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overridden: Option<Vec<String>>,
+
+    /// A shared style: other nodes name it in `fill_style`, `text_style` or `effect_style` and
+    /// take its fill, its type or its shadow and blur, following it as it changes. Its `name`
+    /// is the style's name (`Brand / Primary`, `Heading 1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared: Option<bool>,
+    /// The shared style whose `fill` (or gradient) this node takes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_style: Option<String>,
+    /// The shared style whose font, size, weight, line height and spacing this text takes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_style: Option<String>,
+    /// The shared style whose shadow and blur this node takes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_style: Option<String>,
+
+    /// A vector's SVG path data (`M`, `L`, `H`, `V`, `C`, `S`, `Q`, `T`, `A`, `Z`, absolute or
+    /// relative), in the coordinates of `view`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub d: Option<String>,
+    /// The box `d` was drawn in, `[width, height]`; the path scales from it to `w`×`h`. Absent,
+    /// `d` is in the node's own pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<[f64; 2]>,
+    /// Whether a vector's path is open (a line, not filled) rather than a closed shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<bool>,
+
+    /// The part of an image shown, as fractions of the picture: `[x, y, width, height]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<[f64; 4]>,
+    /// Colour adjustments over the node and everything in it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Filters>,
+
+    /// A text's words in styled runs; they paint while their words together are its `text`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spans: Option<Vec<Span>>,
+    /// Marks each line of a text as a list item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list: Option<ListStyle>,
+    /// A web address the node links to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+
+    /// How the node keeps to its frame when the frame is resized.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraints: Option<Constraints>,
+    /// Mirrored left to right.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_x: Option<bool>,
+    /// Mirrored top to bottom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_y: Option<bool>,
+    /// A frame's layout grids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grids: Option<Vec<Grid>>,
+
+    /// Prototype: the frame presenting goes to when this node is clicked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goto: Option<String>,
+    /// Prototype: how it goes there (default `dissolve`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<Transition>,
+    /// Prototype: a top-level frame presenting starts from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<bool>,
+
+    /// A comment's writer: `user` (the person), or the terminal's session name (the engine
+    /// fills it in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replies: Option<Vec<Reply>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<bool>,
 }
 
 /// One edit of a design. `design.apply` runs a list of them in order, all or none.
@@ -405,6 +677,26 @@ pub enum NodeOp {
     },
     /// Delete a node and everything inside it. A design keeps at least one page.
     Delete { id: String },
+    /// Place a piece of an asset pack (`design.kits` lists them): its nodes, under fresh ids,
+    /// as ordinary editable nodes. The root takes `id` (or one is assigned), its parts
+    /// `<id>.<part>`; `set` changes parts by their local id, e.g.
+    /// `{"label": {"text": "Save"}}`.
+    Insert {
+        /// `kit/item`, e.g. `relay-ui/button-primary`.
+        item: String,
+        /// The page, frame or group it goes into.
+        parent: String,
+        #[serde(default)]
+        x: f64,
+        #[serde(default)]
+        y: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        set: Option<Map<String, Value>>,
+    },
 }
 
 impl NodeOp {
@@ -413,6 +705,7 @@ impl NodeOp {
         match self {
             NodeOp::Add { node, .. } => &node.id,
             NodeOp::Update { id, .. } | NodeOp::Move { id, .. } | NodeOp::Delete { id } => id,
+            NodeOp::Insert { id, .. } => id.as_deref().unwrap_or(""),
         }
     }
 }
@@ -423,6 +716,59 @@ fn canonical_key(key: &str) -> &str {
         "width" => "w",
         "height" => "h",
         other => other,
+    }
+}
+
+/// Fields that belong to a copy itself and never follow its component.
+pub const OWN_FIELDS: &[&str] = &["id", "parent", "master", "overridden", "component", "instance_of"];
+
+/// Fields of an instance's root that stay its own besides those: where it sits.
+pub const ROOT_FIELDS: &[&str] = &["x", "y"];
+
+/// The fields `set` changes that a copy should remember as its own (not following its
+/// component any more).
+pub fn overriding(set: &Map<String, Value>) -> impl Iterator<Item = &str> {
+    set.keys().map(|k| canonical_key(k)).filter(|k| !OWN_FIELDS.contains(k) && !ROOT_FIELDS.contains(k))
+}
+
+/// The shared-style references a node may hold, and the fields each takes from its style.
+pub const STYLE_FIELDS: &[(&str, &[&str])] = &[
+    ("fill_style", &["fill", "gradient"]),
+    ("text_style", &["font", "font_size", "font_weight", "line_height", "letter_spacing", "italic"]),
+    ("effect_style", &["shadow", "blur"]),
+];
+
+/// The update that gives `node` the fields `style` lends through the reference `which`.
+pub fn styled(style: &Node, node: &Node, which: &str) -> Map<String, Value> {
+    let Some((_, fields)) = STYLE_FIELDS.iter().find(|(k, _)| *k == which) else {
+        return Map::new();
+    };
+    let (s, n) = (serde_json::to_value(style).unwrap_or(Value::Null), serde_json::to_value(node).unwrap_or(Value::Null));
+    fields
+        .iter()
+        .filter(|f| s.get(**f) != n.get(**f))
+        .map(|f| (f.to_string(), s.get(*f).cloned().unwrap_or(Value::Null)))
+        .collect()
+}
+
+impl Node {
+    /// The style a reference (`fill_style`, `text_style`, `effect_style`) names.
+    pub fn style_ref(&self, which: &str) -> Option<&str> {
+        match which {
+            "fill_style" => self.fill_style.as_deref(),
+            "text_style" => self.text_style.as_deref(),
+            "effect_style" => self.effect_style.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn clear_style_ref(&mut self, which: &str) {
+        match which {
+            "fill_style" => self.fill_style = None,
+            "text_style" => self.text_style = None,
+            "effect_style" => self.effect_style = None,
+            _ => {}
+        }
     }
 }
 
@@ -505,6 +851,32 @@ impl Node {
             from: None,
             to: None,
             route: None,
+            component: None,
+            instance_of: None,
+            master: None,
+            overridden: None,
+            shared: None,
+            fill_style: None,
+            text_style: None,
+            effect_style: None,
+            d: None,
+            view: None,
+            open: None,
+            crop: None,
+            filters: None,
+            spans: None,
+            list: None,
+            link: None,
+            constraints: None,
+            flip_x: None,
+            flip_y: None,
+            grids: None,
+            goto: None,
+            transition: None,
+            start: None,
+            author: None,
+            replies: None,
+            resolved: None,
         }
     }
 
@@ -661,9 +1033,92 @@ impl Node {
         if let Some(b) = self.blur.filter(|b| !b.is_finite() || !(0.0..=200.0).contains(b)) {
             return Err(format!("blur: {b} is outside 0 to 200"));
         }
-        for (field, end) in [("from", &self.from), ("to", &self.to)] {
+        for (field, end) in [("from", &self.from), ("to", &self.to), ("instance_of", &self.instance_of), ("master", &self.master),
+            ("fill_style", &self.fill_style), ("text_style", &self.text_style), ("effect_style", &self.effect_style), ("goto", &self.goto)] {
             if let Some(id) = end.as_deref().filter(|id| !valid_id(id)) {
                 return Err(format!("{field}: {id:?} is not a node id"));
+            }
+        }
+        if self.overridden.as_ref().is_some_and(|o| o.len() > 64 || o.iter().any(|f| f.is_empty() || f.len() > 32)) {
+            return Err("overridden: at most 64 field names".into());
+        }
+        if let Some(d) = &self.d {
+            if d.len() > MAX_PATH {
+                return Err(format!("d: at most {MAX_PATH} characters"));
+            }
+            if let Err(why) = crate::svgpath::parse(d) {
+                return Err(format!("d: {why}"));
+            }
+        }
+        if self.view.is_some_and(|v| v.iter().any(|v| !v.is_finite() || !(0.0..=MAX_COORD).contains(v))) {
+            return Err(format!("view: [width, height] from 0 to {MAX_COORD}"));
+        }
+        if self.crop.is_some_and(|[x, y, w, h]| {
+            [x, y, w, h].iter().any(|v| !v.is_finite()) || x < 0.0 || y < 0.0 || w <= 0.0 || h <= 0.0 || x + w > 1.0001 || y + h > 1.0001
+        }) {
+            return Err("crop: [x, y, width, height] as fractions of the picture, inside 0 to 1".into());
+        }
+        if let Some(f) = &self.filters {
+            let unit = [("brightness", f.brightness), ("contrast", f.contrast), ("saturation", f.saturation)];
+            if let Some((k, v)) = unit.iter().find(|(_, v)| !v.is_finite() || !(-1.0..=1.0).contains(v)) {
+                return Err(format!("filters.{k}: {v} is outside -1 to 1"));
+            }
+            if !f.hue.is_finite() || !(-180.0..=180.0).contains(&f.hue) {
+                return Err(format!("filters.hue: {} is outside -180 to 180", f.hue));
+            }
+            for (k, v) in [("sepia", f.sepia), ("invert", f.invert)] {
+                if !v.is_finite() || !(0.0..=1.0).contains(&v) {
+                    return Err(format!("filters.{k}: {v} is outside 0 to 1"));
+                }
+            }
+        }
+        if let Some(spans) = &self.spans {
+            if spans.len() > 500 {
+                return Err("spans: at most 500".into());
+            }
+            for s in spans {
+                if s.color.as_deref().is_some_and(|c| parse_color(c).is_none()) {
+                    return Err(format!("spans: color {:?} is not #RGB, #RRGGBB or #RRGGBBAA", s.color.as_deref().unwrap_or_default()));
+                }
+                if s.size.is_some_and(|v| !v.is_finite() || !(1.0..=1000.0).contains(&v)) || s.weight.is_some_and(|w| !(1..=1000).contains(&w)) {
+                    return Err("spans: size 1 to 1000, weight 1 to 1000".into());
+                }
+                if s.link.as_ref().is_some_and(|l| l.len() > 2000) || s.font.as_ref().is_some_and(|f| f.is_empty() || f.len() > MAX_NAME) {
+                    return Err("spans: a link of at most 2000 characters, a font name of 1 to 200".into());
+                }
+            }
+            if spans.iter().map(|s| s.text.chars().count()).sum::<usize>() > MAX_TEXT {
+                return Err(format!("spans: at most {MAX_TEXT} characters in all"));
+            }
+        }
+        if self.link.as_ref().is_some_and(|l| l.is_empty() || l.len() > 2000) {
+            return Err("link: a web address of at most 2000 characters".into());
+        }
+        if let Some(grids) = &self.grids {
+            if grids.len() > 8 {
+                return Err("grids: at most 8".into());
+            }
+            for g in grids {
+                if g.count.is_some_and(|c| !(1..=200).contains(&c)) {
+                    return Err("grids: count 1 to 200".into());
+                }
+                if [g.size, g.gutter, g.margin].iter().flatten().any(|v| !v.is_finite() || !(0.0..=10_000.0).contains(v)) || g.size == Some(0.0) {
+                    return Err("grids: size above 0, gutter and margin from 0, each to 10000".into());
+                }
+                if g.color.as_deref().is_some_and(|c| parse_color(c).is_none()) {
+                    return Err("grids: color is #RRGGBB or #RRGGBBAA".into());
+                }
+            }
+        }
+        if self.author.as_ref().is_some_and(|a| a.is_empty() || a.chars().count() > MAX_NAME) {
+            return Err(format!("author: 1 to {MAX_NAME} characters"));
+        }
+        if let Some(replies) = &self.replies {
+            if replies.len() > 200 {
+                return Err("replies: at most 200".into());
+            }
+            if replies.iter().any(|r| r.author.chars().count() > MAX_NAME || r.text.chars().count() > MAX_TEXT || r.at.len() > 40) {
+                return Err(format!("replies: each an author of at most {MAX_NAME} characters and a text of at most {MAX_TEXT}"));
             }
         }
         if let Some(name) = self.icon.as_deref().filter(|n| !ICONS.contains(n)) {
@@ -684,7 +1139,14 @@ impl Node {
             NodeKind::Image if self.src.as_deref().is_none_or(|s| !valid_src(s)) => {
                 return Err("an image needs the src design.asset.add returned".into())
             }
+            NodeKind::Vector if self.d.as_deref().is_none_or(|d| d.trim().is_empty()) => {
+                return Err("a vector needs d: SVG path data such as \"M0 0 L100 0 L50 80 Z\"".into())
+            }
             _ => {}
+        }
+        // A picture fills a shape or frame too (cropped to it by `fit`).
+        if let Some(src) = self.src.as_deref().filter(|s| !valid_src(s)) {
+            return Err(format!("src: {src:?} is not a name design.asset.add returned"));
         }
         Ok(())
     }
@@ -705,6 +1167,20 @@ impl Node {
 
     pub fn is_locked(&self) -> bool {
         self.locked == Some(true)
+    }
+
+    /// The words a text paints: its spans while they still spell its `text`.
+    pub fn live_spans(&self) -> Option<&[Span]> {
+        let spans = self.spans.as_deref()?;
+        let text = self.text.as_deref().unwrap_or("");
+        let mut at = 0;
+        for s in spans {
+            if !text[at..].starts_with(s.text.as_str()) {
+                return None;
+            }
+            at += s.text.len();
+        }
+        (at == text.len()).then_some(spans)
     }
 
     pub fn layout_mode(&self) -> Layout {

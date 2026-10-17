@@ -140,6 +140,15 @@ button.design-layer-key { min-height: 22px; min-width: 22px; padding: 0; border:
 .design-layer.hidden button.design-layer-eye { opacity: 1; }
 button.design-layer-key:hover { color: @ink; background: alpha(@ink, 0.08); }
 
+/* Layers | Assets. */
+stackswitcher.design-tabs button { min-height: 26px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; color: @faint; font-size: 12px; font-weight: 500; }
+stackswitcher.design-tabs button:checked { background: @track; color: @ink; }
+.design-component-mark { color: #A178FF; }
+.design-asset { padding: 4px; border-radius: 9px; }
+.design-asset:hover { background: @wash_solid; }
+.design-asset-thumb { border-radius: 7px; background: alpha(@ink, 0.04); }
+.design-asset-name { font-size: 11.5px; color: @secondary; }
+
 /* The icon picker. */
 .design-icon-picker { padding: 4px; }
 button.design-icon-cell { min-height: 34px; min-width: 34px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: @secondary; }

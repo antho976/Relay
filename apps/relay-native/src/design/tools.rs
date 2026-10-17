@@ -194,6 +194,28 @@ pub fn install(b: &Rc<Board>) {
         true
     });
     canvas.add_controller(drop);
+
+    // An asset dragged from the Assets panel lands where it is dropped.
+    let assets = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::COPY);
+    let weak = Rc::downgrade(b);
+    assets.connect_drop(move |_, value, x, y| {
+        let (Some(b), Ok(text)) = (weak.upgrade(), value.get::<String>()) else {
+            return false;
+        };
+        let Some(path) = text.strip_prefix(super::library::DRAG_PREFIX) else {
+            return false;
+        };
+        let at = b.to_page(x, y);
+        // Dropped on a frame: into it.
+        b.select(Vec::new());
+        let target = container_at(&b, at);
+        if target != *b.page.borrow() {
+            b.select(vec![target]);
+        }
+        b.insert_item(path, Some(at));
+        true
+    });
+    canvas.add_controller(assets);
 }
 
 /// A whole pointer drag from page point `from` to `to`, as the pointer would make it: for the
@@ -1374,6 +1396,25 @@ fn context_menu(b: &Rc<Board>, x: f64, y: f64) {
         section.append(Some("Frame selection"), Some("design.frame"));
         section.append(Some("Ungroup"), Some("design.ungroup"));
         section.append(Some("Lock / unlock"), Some("design.lock"));
+        let comps = gio::Menu::new();
+        let (component, copy) = {
+            let sel = b.selected();
+            let scene = b.doc.scene.borrow();
+            (
+                sel.first().and_then(|id| scene.node(id)).is_some_and(|n| n.component == Some(true)),
+                sel.first().and_then(|id| b.instance_root(id)).is_some(),
+            )
+        };
+        if component {
+            comps.append(Some("Make a copy of the component"), Some("design.create-instance"));
+        } else if copy {
+            comps.append(Some("Go to its component"), Some("design.go-to-component"));
+            comps.append(Some("Reset its own changes"), Some("design.reset-overrides"));
+            comps.append(Some("Detach from the component"), Some("design.detach-instance"));
+        } else {
+            comps.append(Some("Make a component"), Some("design.make-component"));
+        }
+        menu.append_section(None, &comps);
         section.append(Some("Hide"), Some("design.hide"));
         menu.append_section(None, &section);
         let section = gio::Menu::new();
@@ -1440,6 +1481,7 @@ fn key_pressed(
             Key::a => b.select_all(),
             Key::g if shift => b.ungroup(),
             Key::g if alt => b.group(NodeKind::Frame),
+            Key::k if alt => b.make_component(),
             Key::g => b.group(NodeKind::Group),
             Key::bracketright | Key::braceright => b.restack(true, shift),
             Key::bracketleft | Key::braceleft => b.restack(false, shift),
