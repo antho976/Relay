@@ -20,6 +20,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -191,13 +196,28 @@ internal fun ColumnScope.TonnageTrendContent(
     val lo = display.min()
     val hi = display.max()
     val unit = unitLabel(weightUnit)
+    val deloads = weeklyTonnage.mapIndexedNotNull { i, w -> i.takeIf { w.isDeload } }
+    val band = c.outline.copy(alpha = 0.15f)
     LineChart(
         values = display,
         lineColor = c.accent,
         trendColor = c.muted,
         minValue = lo,
         maxValue = hi,
-        modifier = Modifier.fillMaxWidth().height(STATS_CHART_H)
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(STATS_CHART_H)
+            // A deload week dips by design: a shaded column says so, so the dip is not read as a slide.
+            .drawBehind {
+                if (deloads.isEmpty()) return@drawBehind
+                val step = size.width / (display.size - 1)
+                deloads.forEach { i ->
+                    val left = (step * (i - 0.5f)).coerceAtLeast(0f)
+                    val right = (step * (i + 0.5f)).coerceAtMost(size.width)
+                    drawRect(band, topLeft = Offset(left, 0f), size = Size(right - left, size.height))
+                }
+            }
+            .clearAndSetSemantics { contentDescription = tonnageDescription(display, deloads.size, unit) }
     )
     Spacer(Modifier.height(6.dp))
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -205,4 +225,23 @@ internal fun ColumnScope.TonnageTrendContent(
         Text("weekly volume · last ${weeklyTonnage.size} wks", style = MaterialTheme.typography.labelSmall, color = c.muted)
         Text(tonnageLabel(hi, unit), style = MaterialTheme.typography.labelSmall, color = c.muted)
     }
+    if (deloads.isNotEmpty()) {
+        Spacer(Modifier.height(2.dp))
+        Text(
+            if (deloads.size == 1) "The shaded week was a deload." else "The shaded weeks were deloads.",
+            style = MaterialTheme.typography.labelSmall,
+            color = c.muted
+        )
+    }
+}
+
+/** What the tonnage line says, for a screen reader: the span, the range and where it ended. */
+internal fun tonnageDescription(display: List<Double>, deloadWeeks: Int, unit: String): String {
+    val last = display.last().roundToInt()
+    val parts = mutableListOf(
+        "Weekly volume over ${display.size} weeks, from ${display.min().roundToInt()} to ${display.max().roundToInt()} $unit",
+        "last week $last $unit"
+    )
+    if (deloadWeeks > 0) parts += if (deloadWeeks == 1) "1 deload week" else "$deloadWeeks deload weeks"
+    return parts.joinToString(", ") + "."
 }
