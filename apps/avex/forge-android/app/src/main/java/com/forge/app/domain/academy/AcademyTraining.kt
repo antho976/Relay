@@ -20,7 +20,7 @@ internal object AcademyTraining {
     val gettingStronger = Lesson(
         id = "training.getting_stronger",
         track = LessonTrack.TRAINING,
-        title = "How you actually get stronger",
+        title = "How you get stronger",
         summary = "Repeat the same lifts and ask for a little more each time. Reps first, then weight.",
         unlock = LessonUnlock(
             label = "Open your first program day",
@@ -40,7 +40,7 @@ internal object AcademyTraining {
             ),
             Figure(
                 "fig.repeat_vs_random",
-                "Same lifts every week make progress visible. Random sessions leave nothing to measure against."
+                "Repeated lifts make progress visible. Random sessions leave nothing to compare."
             ),
             Heading("Reps first, then weight"),
             Paragraph(
@@ -50,14 +50,14 @@ internal object AcademyTraining {
             ),
             Bullets(
                 listOf(
-                    "Week 1: 60 kg for 8, 8, 8",
-                    "Week 3: 60 kg for 10, 10, 9",
-                    "Week 4: 60 kg for 10, 10, 10, so the weight goes up",
-                    "Week 5: 62.5 kg for 8, 8, 8, and the climb starts again"
+                    "Week 1: {w:60|135} for 8, 8, 8",
+                    "Week 3: {w:60|135} for 10, 10, 9",
+                    "Week 4: {w:60|135} for 10, 10, 10, so the weight goes up",
+                    "Week 5: {w:62.5|140} for 8, 8, 8, and the climb starts again"
                 )
             ),
             Paragraph(
-                "Every jump in weight is earned by reps you already did, rather than guessed. When " +
+                "Every jump in weight is earned by reps you already did, never guessed. When " +
                     "progress slows, add a set before you add a new exercise."
             ),
             Heading("It slows down, and that is normal"),
@@ -85,7 +85,7 @@ internal object AcademyTraining {
         id = "training.effort",
         track = LessonTrack.TRAINING,
         title = "How hard a set should be",
-        summary = "Stop most sets one to three reps short of failure. Any rep range from 5 to 30 builds muscle that way.",
+        summary = "Stop most sets 1 to 3 reps short of failure. Any rep range from 5 to 30 builds muscle that way.",
         unlock = LessonUnlock(
             label = "Log a set",
             detail = "Start any session and log one working set.",
@@ -107,17 +107,17 @@ internal object AcademyTraining {
                 )
             ),
             Paragraph(
-                "The app logs this as RPE, which is the same scale counted the other way. RPE 8 means " +
-                    "two reps left. RPE 10 means none."
+                "The app logs this as RPE, the same scale counted the other way. RPE 8 means " +
+                    "2 reps left. RPE 10 means none."
             ),
             Figure(
                 "ix.rir",
-                "Drag across the drawing to see what each number of reps left in the tank looks like."
+                "Drag across the drawing to see each number of reps in reserve."
             ),
             Heading("Failure is optional"),
             Paragraph(
-                "When the total work is equal, sets stopped one to three reps short grow muscle " +
-                    "about as well as sets taken to failure. Stop five or more short and growth does " +
+                "When the total work is equal, sets stopped 1 to 3 reps short grow muscle " +
+                    "about as well as sets taken to failure. Stop 5 or more short and growth does " +
                     "fall off. The last rep is the most expensive one: it costs the most recovery and " +
                     "adds the least."
             ),
@@ -138,7 +138,7 @@ internal object AcademyTraining {
             ),
             Paragraph(
                 "Most people underestimate what they have left, and the error runs one way: sets " +
-                    "you are sure are two short are often four. Taking a set to real failure now and " +
+                    "you are sure are 2 short are often 4. Taking a set to real failure now and " +
                     "then, on a safe exercise, teaches you where the line is."
             ),
             Callout("Go to failure to learn where it is, not to live there.")
@@ -195,7 +195,7 @@ internal object AcademyTraining {
             ),
             Figure(
                 "ix.volume",
-                "Illustrative curves. Drag across them to see where a week of training lands."
+                "Illustrative curves. Drag to see where a week of training lands."
             ),
             Bullets(
                 listOf(
@@ -207,15 +207,15 @@ internal object AcademyTraining {
             ),
             Paragraph(
                 "Count only hard sets, the ones that end a few reps from failure. Warm-ups do not " +
-                    "count. A set of rows counts for your back, and half-counts for your biceps."
+                    "count. A set of rows counts fully for your back and half for your biceps."
             ),
             Figure(
                 "fig.counting_sets",
-                "Compound lifts count toward more than one muscle, but fully only toward the main one."
+                "Compound lifts count fully for the main muscle, half for the ones assisting."
             ),
             Heading("Start low, add when you stall"),
             Paragraph(
-                "If you are new, 6 to 10 hard sets per muscle a week is plenty, because everything is " +
+                "If you are starting out, 6 to 10 hard sets per muscle a week is plenty, because everything is " +
                     "new to your body. Add sets when progress stalls and you are recovering well, two at " +
                     "a time, never by doubling."
             ),
@@ -286,7 +286,7 @@ internal object AcademyTraining {
             ),
             Figure(
                 "fig.range",
-                "The deep, stretched end of a rep is where growth is best. A half rep leaves it out."
+                "Growth is best at the stretched end. A half rep skips it."
             ),
             Heading("Warm up by ramping"),
             Paragraph(
@@ -303,16 +303,16 @@ internal object AcademyTraining {
             ),
             Figure(
                 "ix.warmup",
-                "Drag to set your working weight. Every load is rounded to what you can put on the bar."
+                "Drag to set your working weight. Every load rounds to real plates."
             ),
             Paragraph(
                 "Keep warm-up reps low and far from failure. Only the first lift of the day needs " +
-                    "the full ramp. Later lifts need one or two sets at most."
+                    "the full ramp. Later lifts need 1 or 2 sets at most."
             ),
             Heading("What the coach does"),
             Paragraph(
                 "Warm-up sets lead each session. Tag a session as technique work and the coach " +
-                    "leaves it out of its progress reads, so a deliberately light day never looks " +
+                    "leaves it out when it judges progress, so a deliberately light day never looks " +
                     "like a stall."
             ),
             Callout("If your warm-up made you tired, it was training, and it will cost you.")
@@ -323,7 +323,7 @@ internal object AcademyTraining {
         id = "training.recovery",
         track = LessonTrack.TRAINING,
         title = "Rest is where you grow",
-        summary = "Training is the signal. The growth happens in the two or three days after, and mostly while you sleep.",
+        summary = "Training is the signal. The growth happens in the 2 or 3 days after, mostly while you sleep.",
         unlock = LessonUnlock(
             label = "Use a rest timer",
             detail = "It starts on its own the moment you log a set in a session.",
@@ -337,9 +337,9 @@ internal object AcademyTraining {
             ),
             Heading("Between sets"),
             Paragraph(
-                "On heavy compound lifts, rest two to three minutes. Cut it to one minute and your " +
+                "On heavy compound lifts, rest 2 to 3 minutes. Cut it to 1 minute and your " +
                     "later sets lose reps. It feels harder, but it is less training. On small " +
-                    "isolation moves, a minute to ninety seconds is plenty."
+                    "isolation moves, 60 to 90 seconds is plenty."
             ),
             Figure(
                 "fig.rest_between_sets",
@@ -371,7 +371,7 @@ internal object AcademyTraining {
                 listOf(
                     "Aim for 7 to 9 hours, at roughly the same times each day",
                     "One bad night: train, maybe a little lighter",
-                    "Several bad nights: cut a set per exercise until it improves"
+                    "Several bad nights: cut a set per exercise until your sleep recovers"
                 )
             ),
             Heading("What the coach does"),
@@ -423,7 +423,7 @@ internal object AcademyTraining {
         blocks = listOf(
             Paragraph(
                 "Soreness peaks a day or two after training, then fades over the next few days. It " +
-                    "feels dull, spreads across the whole muscle, turns up on both sides evenly, " +
+                    "feels dull, spreads across the whole muscle, turns up evenly on both sides " +
                     "and eases once you get moving."
             ),
             Paragraph(
@@ -446,7 +446,8 @@ internal object AcademyTraining {
             Paragraph(
                 "Being sore does not prove a session worked, and not being sore does not mean it " +
                     "failed. You get less sore on movements you repeat, even while you keep " +
-                    "progressing. This is called the repeated bout effect. New exercises and long stretched positions make you the most sore."
+                    "progressing. This is called the repeated bout effect. New exercises and deep " +
+                    "stretched positions make you the most sore."
             ),
             Figure(
                 "fig.repeated_bout",
@@ -457,7 +458,7 @@ internal object AcademyTraining {
                 "Flag a muscle as sore and the coach eases its work for a day or two. Flag an " +
                     "injury and it routes around the movement entirely until you clear it."
             ),
-            Callout("Soreness is information. It is not a grade.")
+            Callout("Soreness is information, not a grade.")
         )
     )
 
@@ -465,9 +466,9 @@ internal object AcademyTraining {
         id = "training.protein",
         track = LessonTrack.TRAINING,
         title = "Eating for muscle",
-        summary = "About 1.6 g of protein per kg of bodyweight a day covers almost everyone. On a diet, aim a little higher.",
+        summary = "Protein scales with bodyweight, and the daily total matters more than the timing. On a diet, aim a little higher.",
         unlock = LessonUnlock(
-            label = "When a lift holds while you're losing weight",
+            label = "When a lift holds while you are losing weight",
             detail = "The coach explains why it refuses to call that a plateau.",
             byYou = false
         ),
@@ -478,8 +479,8 @@ internal object AcademyTraining {
             ),
             Heading("How much"),
             Paragraph(
-                "The benefit rises until about 1.6 g per kg of bodyweight per day, then flattens. " +
-                    "For an 80 kg lifter that is about 130 g. Going up to 2.2 g per kg is a sensible " +
+                "The benefit rises until about {r:1.6|0.7} of bodyweight a day, then flattens. " +
+                    "At {w:80|175}, that is about 130 g. Going up to {r:2.2|1} is a sensible " +
                     "margin, and more than that is not harmful, just not useful."
             ),
             Bullets(
@@ -496,7 +497,7 @@ internal object AcademyTraining {
             Heading("On a diet"),
             Paragraph(
                 "When you eat less than you burn, protein protects muscle. Aim toward the top of " +
-                    "the range, around 2 g per kg, and keep lifting heavy."
+                    "the range, around {r:2|0.9}, and keep lifting heavy."
             ),
             Paragraph(
                 "Expect your lifts to slip a little while you lose weight. There is less fuel to " +
@@ -505,7 +506,7 @@ internal object AcademyTraining {
             ),
             Figure(
                 "fig.cut_hold",
-                "While cutting, a lift that holds flat is beating the usual slide."
+                "On a diet, a lift that holds flat is beating the usual slide."
             ),
             Heading("What the coach does"),
             Paragraph(
@@ -513,7 +514,7 @@ internal object AcademyTraining {
                     "flat lift as a stall. It still speaks up if a lift actually drops, and the " +
                     "normal rules come back when your weight levels out."
             ),
-            Callout("While you are cutting, judge a lift by what it holds, not by what it adds.")
+            Callout("While you are dieting, judge a lift by what it holds, not by what it adds.")
         ),
         sources = listOf(
             Source(
