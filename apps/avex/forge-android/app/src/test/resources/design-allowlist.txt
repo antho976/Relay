@@ -52,7 +52,6 @@
 1 alpha ui/gym/train/components/SessionSummarySheet.kt 0.26
 1 alpha ui/gym/train/components/SessionSummarySheet.kt 0.34
 1 alpha ui/gym/train/components/SetInputRow.kt 0.3
-1 alpha ui/gym/train/components/SetInputRow.kt 0.75
 1 alpha ui/gym/train/components/SetRow.kt 0.45
 1 alpha ui/gym/train/components/SetRow.kt 0.5
 1 alpha ui/gym/train/components/SetRow.kt 0.8
