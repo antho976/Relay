@@ -25,6 +25,9 @@ class GoalRepository @Inject constructor(
         goalDao.upsert(ExerciseGoal(exerciseId = exerciseId, targetWeightLb = targetWeightLb, createdAt = clock.nowMs()))
     }
 
+    /** Put a cleared goal back exactly as it was, its original date included (an Undo). */
+    suspend fun restore(goal: ExerciseGoal) = goalDao.upsert(goal)
+
     /**
      * Delete the lift target for [exerciseId], and the Home pin that pointed at it (L-06).
      *

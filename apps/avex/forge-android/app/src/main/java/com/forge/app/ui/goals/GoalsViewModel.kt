@@ -144,7 +144,17 @@ class GoalsViewModel @Inject constructor(
     fun clearLiftGoal(exerciseId: String) = viewModelScope.launch {
         // The pin goes with the goal (L-06), and that now happens inside [GoalRepository.clearGoal]
         // — there are two ways to clear a lift target and only this one used to do it.
-        withContext(NonCancellable) { goalRepo.clearGoal(exerciseId) }
+        //
+        // Undo over confirm (§12), as a custom goal's delete already offers: the target is captured
+        // first and comes back with its original date and its Home pin in the same position.
+        withContext(NonCancellable) {
+            val removed = goalRepo.get(exerciseId) ?: return@withContext
+            val pinIndex = goalRepo.clearGoal(exerciseId)
+            snackbar.showUndo("Goal cleared") {
+                goalRepo.restore(removed)
+                if (pinIndex >= 0) settingsRepo.restoreGoalPin(liftPinKey(exerciseId), pinIndex, max = HOME_PIN_SLOTS)
+            }
+        }
     }
 
     // ─── Home pins (2026-08-16) ────────────────────────────────────────────────
