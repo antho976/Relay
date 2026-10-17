@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -541,16 +542,23 @@ private fun ExerciseTile(
                 detail = cs.onSurfaceVariant.copy(alpha = 0.3f),
                 modifier = Modifier.fillMaxSize()
             )
-            Text(
-                if (favorite) "★" else "☆",
-                style = MaterialTheme.typography.titleMedium,
-                color = if (favorite) cs.primary else cs.onSurfaceVariant,
+            // A 48dp target around the drawn star (§14): titleMedium plus 4dp of padding was about
+            // 32dp, nested inside the tile's own tap, so a near miss opened the exercise instead.
+            Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                     .clip(RoundedCornerShape(50))
-                    .clickableLabeled(if (favorite) "Remove bookmark" else "Bookmark", role = Role.Checkbox, onClick = onToggleFavorite)
-                    .padding(4.dp)
-            )
+                    .clickableLabeled(if (favorite) "Remove bookmark" else "Bookmark", role = Role.Checkbox, onClick = onToggleFavorite),
+                contentAlignment = Alignment.TopEnd
+            ) {
+                Text(
+                    if (favorite) "★" else "☆",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (favorite) cs.primary else cs.onSurfaceVariant,
+                    modifier = Modifier.padding(4.dp)
+                )
+            }
         }
         Spacer(Modifier.height(6.dp))
         // Reserve two lines for every name so 1- and 2-line titles occupy identical space (§ uniform grid).
