@@ -406,10 +406,11 @@ object ProgressionAdvisor {
         val seen = HashSet<String>()
         // Reads UNKNOWN until the weigh-ins support a claim, and UNKNOWN changes nothing (A2).
         val weightPhase = WeightPhase.of(s.bodyweight)
+        val restartMs = lastReturnFromLayoffMs(s)
         for (day in s.program) {
             for (slot in day.slots) {
                 if (!seen.add(slot.exerciseId)) continue
-                val read = stallRead(slot, s, t) ?: continue
+                val read = stallRead(slot, s, t, restartMs) ?: continue
 
                 // A2: holding strength in a deficit is the expected — and good — outcome, so a flat
                 // line while cutting is not a plateau to fix. Escalating it would tell a lifter who
@@ -438,10 +439,11 @@ object ProgressionAdvisor {
         if (WeightPhase.of(s.bodyweight) != WeightPhase.CUT) return emptyList()
         val out = mutableListOf<String>()
         val seen = HashSet<String>()
+        val restartMs = lastReturnFromLayoffMs(s)
         for (day in s.program) {
             for (slot in day.slots) {
                 if (!seen.add(slot.exerciseId)) continue
-                val read = stallRead(slot, s, t) ?: continue
+                val read = stallRead(slot, s, t, restartMs) ?: continue
                 if (read.isHold(t)) out += slot.exerciseId
             }
         }
@@ -463,7 +465,13 @@ object ProgressionAdvisor {
      * [evaluate] didn't count and the Academy unlocked cut lessons for a lift the coach didn't
      * consider stalled.
      */
-    private fun stallRead(slot: ProgramSlotSnap, s: AdaptationSnapshot, t: AdaptThresholds): StallRead? {
+    private fun stallRead(
+        slot: ProgramSlotSnap,
+        s: AdaptationSnapshot,
+        t: AdaptThresholds,
+        /** [lastReturnFromLayoffMs], computed once per pass by the caller. */
+        restartMs: Long?
+    ): StallRead? {
         if (slot.unit == ExerciseUnit.BODYWEIGHT) return null
         val bouts = (s.exerciseHistory[slot.exerciseId] ?: return null)
             // A1: test / technique / first-back bouts are not ordinary training — a top
@@ -482,6 +490,13 @@ object ProgressionAdvisor {
             // the outcome watcher, which judges swaps on attendance alone, walked it to
             // autopilot. The series restarts at the boundary instead.
             .let { history -> sinceLastSwap(history) }
+            // A layoff changes what the series can SAY. Measured against the pre-break best, the
+            // ordinary detraining dip after six weeks off reads as a stall on every lift, and two
+            // to four weeks back the ladder proposes rep shifts and swaps for a problem that was
+            // never training. The series restarts at the first session back, like it does at a
+            // swap; LifeEvents only remembers the gap for about three weeks, so the boundary is
+            // read from the session dates themselves.
+            .let { history -> if (restartMs == null) history else history.filter { it.sessionStartedAt >= restartMs } }
         if (bouts.size <= t.plateauMinBouts) return null
 
         val e1rms = bouts.mapNotNull { bestWorkingE1rm(it.sets) }
@@ -647,6 +662,28 @@ object ProgressionAdvisor {
         } else {
             "${trim(targetLb)} lb"
         }
+    }
+
+    /**
+     * Start of the first session after the most recent training gap of at least
+     * [com.forge.app.domain.coach.LifeEvents.LAYOFF_MIN_DAYS] calendar days, or null when training
+     * has been continuous. Calendar days in the snapshot's zone, the same count LifeEvents uses.
+     */
+    internal fun lastReturnFromLayoffMs(s: AdaptationSnapshot): Long? {
+        val starts = s.sessions.asSequence()
+            .filter { it.finishedAt != null && !it.isUntracked }
+            .map { it.startedAt }
+            .sorted()
+            .toList()
+        for (i in starts.indices.reversed()) {
+            if (i == 0) break
+            val gap = java.time.temporal.ChronoUnit.DAYS.between(
+                java.time.Instant.ofEpochMilli(starts[i - 1]).atZone(s.zoneId).toLocalDate(),
+                java.time.Instant.ofEpochMilli(starts[i]).atZone(s.zoneId).toLocalDate()
+            )
+            if (gap >= com.forge.app.domain.coach.LifeEvents.LAYOFF_MIN_DAYS) return starts[i]
+        }
+        return null
     }
 
     /**

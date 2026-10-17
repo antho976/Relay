@@ -387,6 +387,42 @@ class ProgressionAdvisorTest {
     private fun stalledBouts(n: Int, effort: EffortRating = EffortRating.JUST_RIGHT): List<ExerciseBout> =
         listOf(bout(45.0, 8, at = 0)) + (1..n).map { i -> bout(45.0, 8, effort, at = i.toLong()) }
 
+    // ── A layoff restarts the stall series ─────────────────────────────────────
+
+    private val day = 24L * 60 * 60 * 1000
+
+    /** Six bouts climbing to 100 lb, a six-week gap, then six bouts rebuilding from 85. */
+    private fun comebackSnapshot(postGap: List<Double>): AdaptationSnapshot {
+        val pre = listOf(90.0, 92.5, 95.0, 97.5, 100.0, 100.0).mapIndexed { i, w -> w to i * 3 * day }
+        val returnAt = pre.last().second + 42 * day
+        val post = postGap.mapIndexed { i, w -> w to returnAt + i * 3 * day }
+        val all = pre + post
+        return AdaptationSnapshot(
+            nowMs = post.last().second + day,
+            program = listOf(ProgramDaySnap("upper-a", "Upper A", listOf(slot()))),
+            sessions = all.mapIndexed { i, (_, at) ->
+                com.forge.app.data.db.entities.Session(id = i + 1L, dayKey = "upper-a", startedAt = at, finishedAt = at + 3_600_000)
+            },
+            exerciseHistory = mapOf("ua1" to all.map { (w, at) -> bout(w, 8, at = at) }),
+            prefs = PrefsSnap()
+        )
+    }
+
+    @Test
+    fun aDetrainingDipAfterALayoffIsNotAPlateau() {
+        // Every post-gap bout sits under the pre-gap best of 100. Measured against it, that is a
+        // six-session stall and a rep-range shift; measured from the return, it is a rebuild.
+        val recs = ProgressionAdvisor.evaluate(comebackSnapshot(listOf(85.0, 87.5, 90.0, 92.5, 95.0, 95.0)))
+        assertTrue(recs.toString(), recs.isEmpty())
+    }
+
+    @Test
+    fun aRealStallAfterTheReturnStillSpeaks() {
+        // Flat for six sessions after coming back: that is a stall on the new series.
+        val recs = ProgressionAdvisor.evaluate(comebackSnapshot(listOf(85.0, 85.0, 85.0, 85.0, 85.0, 85.0, 85.0)))
+        assertEquals(1, recs.size)
+    }
+
     @Test
     fun plateau_coldStart_fourBoutsIsNotEnough() {
         // 4 flat bouts = a stall of 3 — below the 4-session gate. Silence.
