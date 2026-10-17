@@ -94,7 +94,7 @@ class ForgeWidget : GlanceAppWidget() {
         // would name — and the tap would open — a planned day the user explicitly opted out of.
         // Read first so freestyle skips the resolution entirely, like the reminder and the wrist tile.
         val freestyleMode = settings.freestyleMode.first()
-        val nextDayKey = if (freestyleMode) null else com.forge.app.domain.schedule.WeeklySchedule.resolveNextUp(
+        val nextUp = if (freestyleMode) null else com.forge.app.domain.schedule.WeeklySchedule.resolveNextUpWithOffset(
             mode = settings.scheduleMode.first(),
             todayIndex = today.dayOfWeek.value - 1,
             schedule = settings.weeklySchedule.first(),
@@ -110,7 +110,18 @@ class ForgeWidget : GlanceAppWidget() {
                 }, today
             )
         )
+        val nextDayKey = nextUp?.dayKey
         val nextDayPlan = nextDayKey?.let { key -> Program.days.firstOrNull { it.key == key } }
+        // When the named workout is: on a weekday-schedule rest day, or after today's session, the
+        // widget used to show "PUSH A" with nothing saying it was Thursday's.
+        val nextWhen = when (nextUp?.placement) {
+            com.forge.app.domain.schedule.WeeklySchedule.Placement.TODAY -> "TODAY"
+            com.forge.app.domain.schedule.WeeklySchedule.Placement.UPCOMING ->
+                if (nextUp.daysAhead == 1) "REST DAY · NEXT TOMORROW"
+                else "REST DAY · NEXT " + today.plusDays(nextUp.daysAhead.toLong()).dayOfWeek
+                    .getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.getDefault()).uppercase()
+            else -> null
+        }
 
         // --- Item 1: what the tap should carry ---
         // Active session → resume it; otherwise open the next-up day; otherwise just Overview.
@@ -200,6 +211,9 @@ class ForgeWidget : GlanceAppWidget() {
                             style = TextStyle(color = ColorProvider(Color(mutedArgb), Color(mutedArgb)))
                         )
                     } else if (nextDayPlan != null) {
+                        nextWhen?.let {
+                            Text(it, style = TextStyle(color = ColorProvider(Color(mutedArgb), Color(mutedArgb))))
+                        }
                         Text(
                             nextDayPlan.defaultName.uppercase(),
                             style = TextStyle(
@@ -222,9 +236,9 @@ class ForgeWidget : GlanceAppWidget() {
                         // and for a custom user who hasn't built a plan yet, so don't claim "your program
                         // is ready". Branch on the actual mode / program state.
                         val (head, sub) = when {
-                            freestyleMode -> "Tap to log a workout" to "No fixed plan — open Avex to log your session."
+                            freestyleMode -> "Tap to log a workout" to "No fixed plan. Open Avex to log your session."
                             Program.dayKeys.isEmpty() -> "Tap to build your plan" to "Set up your program in Avex to get started."
-                            else -> "Tap to start your first workout" to "Your program is ready — open Avex to begin."
+                            else -> "Tap to start your first workout" to "Your program is ready. Open Avex to begin."
                         }
                         Text(
                             head,
