@@ -109,20 +109,41 @@ internal fun slateHint(s: Session, online: Boolean): String = when {
 @Composable
 internal fun PlateStrip(s: Session, modifier: Modifier = Modifier, trailing: @Composable RowScope.() -> Unit = {}) {
     val c = Relay.colors
-    Column(modifier.fillMaxWidth().background(c.console)) {
-        Row(
-            Modifier.fillMaxWidth().heightIn(min = 26.dp).padding(start = 8.dp, end = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
-        ) {
-            LampDot(s.lamp, 6.dp)
-            T(s.shownName(), Modifier.widthIn(max = 150.dp), Relay.type.plateName, if (s.state == "blocked") c.heldText else c.ink, maxLines = 1)
-            T(plateMeta(s), Modifier.weight(1f), Relay.type.plateMeta, c.ink3, maxLines = 1)
-            if (s.branch.isNotBlank()) Branch(s, Modifier.widthIn(max = 120.dp))
-            T(s.stateLabel, style = Relay.type.plateState, color = if (s.state == "blocked") c.heldText else c.ink3, maxLines = 1)
-            trailing()
+    val held = s.state == "blocked"
+    BoxWithConstraints(modifier.fillMaxWidth().background(c.console)) {
+        // A phone's width cuts the one line short at "CLAUDE · BUILDER · …": what the agent says it
+        // does gets a line of its own, in its own words, beside the branch.
+        val narrow = maxWidth < 520.dp
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 26.dp).padding(start = 8.dp, end = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                LampDot(s.lamp, 6.dp)
+                T(s.shownName(), Modifier.widthIn(max = 150.dp), Relay.type.plateName, if (held) c.heldText else c.ink, maxLines = 1)
+                if (narrow) {
+                    T("${s.provider} · ${s.role}".uppercase(), Modifier.weight(1f), Relay.type.plateMeta, c.ink3, maxLines = 1)
+                } else {
+                    T(plateMeta(s), Modifier.weight(1f), Relay.type.plateMeta, c.ink3, maxLines = 1)
+                    if (s.branch.isNotBlank()) Branch(s, Modifier.widthIn(max = 120.dp))
+                }
+                T(s.stateLabel, style = Relay.type.plateState, color = if (held) c.heldText else c.ink3, maxLines = 1)
+                trailing()
+            }
+            val intent = s.intent?.trim().orEmpty()
+            if (narrow && (intent.isNotEmpty() || s.branch.isNotBlank())) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 21.dp, end = 10.dp, bottom = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (intent.isNotEmpty()) T(intent, Modifier.weight(1f), Relay.type.caption, c.ink2, maxLines = 1)
+                    if (s.branch.isNotBlank()) Branch(s, if (intent.isNotEmpty()) Modifier.widthIn(max = 130.dp) else Modifier.weight(1f, fill = false))
+                }
+            }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(c.edge))
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(c.edge))
     }
 }
 
