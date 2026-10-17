@@ -421,10 +421,12 @@ fun SetRow(
                         "$priorDisplay × ${prior.reps}"
                     }
                     if (ghost != null) {
+                        // Named: unlabelled under the same figure, "33.2 lb × 10" read as the row
+                        // printed twice. On the 0.65 caption floor (it was 0.45, which fails 4.5:1).
                         Text(
-                            ghost,
+                            "last $ghost",
                             style = MaterialTheme.typography.labelSmall,
-                            color = muted.copy(alpha = 0.45f),
+                            color = muted.copy(alpha = 0.65f),
                             fontSize = 9.sp
                         )
                     }
