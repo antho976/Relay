@@ -55,6 +55,14 @@ class RestTimerHapticCuesTest {
         ForgeHapticType.entries.forEach { assertNull(forgeHapticConstant(it, "off")) }
     }
 
+    /** Strong used to resolve the set log and the countdown to the same faint tick as Medium. */
+    @Test
+    fun strongIsStrongerThanMediumForTheSetLogAndTheCountdown() {
+        listOf(ForgeHapticType.SET_LOGGED, ForgeHapticType.COUNTDOWN_TICK).forEach { type ->
+            assertTrue(forgeHapticConstant(type, "strong") != forgeHapticConstant(type, "medium"))
+        }
+    }
+
     /** A tracker seeded mid-rest (rotation) or on a finished timer replays nothing already felt. */
     @Test
     fun seedingAtTheThresholdDoesNotReplayIt() {

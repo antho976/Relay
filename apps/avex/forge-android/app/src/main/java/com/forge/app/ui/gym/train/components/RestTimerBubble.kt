@@ -1,5 +1,6 @@
 package com.forge.app.ui.gym.train.components
 
+import com.forge.app.ui.common.forgeHaptic
 import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.foundation.layout.heightIn
 
@@ -47,8 +48,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
@@ -105,7 +104,8 @@ fun RestTimerBubble(
         label = "ring-urgency"
     )
     val flash = remember { Animatable(0f) }
-    val haptic = LocalHapticFeedback.current
+    val view = androidx.compose.ui.platform.LocalView.current
+    val hapticStrength = com.forge.app.ui.theme.LocalForgeSettings.current.hapticStrength
     // Track the previous tick so the 10s flash fires ONLY on the descending transition into 0:10,
     // never on first composition (a rest that simply starts at ≤10s, or a recompose while at 10).
     var prevSeconds by remember { mutableStateOf<Int?>(null) }
@@ -213,12 +213,11 @@ fun RestTimerBubble(
                 if (flash.value > 0f) drawCircle(color = onBg.copy(alpha = flash.value * 0.4f))
             }
             .combinedClickable(
-                onClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onOpenControls()
-                },
+                // Opening the controls is a plain tap (§9 keeps haptics to set, PR and timer); the
+                // hold adds time to the running timer, so it ticks, through the strength setting.
+                onClick = onOpenControls,
                 onLongClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    view.forgeHaptic(com.forge.app.ui.common.ForgeHapticType.COUNTDOWN_TICK, hapticStrength)
                     onLongClick()
                 }
             )

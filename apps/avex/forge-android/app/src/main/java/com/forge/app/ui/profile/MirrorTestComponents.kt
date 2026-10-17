@@ -38,11 +38,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import com.forge.app.ui.common.forgeLongPress
 import com.forge.app.ui.common.ForgeFieldRow
 import com.forge.app.ui.common.GROUP_OUTER
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -193,6 +193,7 @@ private fun PhotoCell(photo: ProgressPhoto, spec: GalleryGridSpec, modifier: Mod
     val inset by animateDpAsState(if (selected) 10.dp else 0.dp, label = "cell-inset")
     val corner by animateDpAsState(if (selected) 12.dp else 0.dp, label = "cell-corner")
     val haptics = LocalHapticFeedback.current
+    val hapticStrength = com.forge.app.ui.theme.LocalForgeSettings.current.hapticStrength
     val reading = remember(photo.takenAtMs, photo.title, photo.pose) { photoReading(photo) }
     val date = remember(photo.takenAtMs) { SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(photo.takenAtMs)) }
 
@@ -204,7 +205,7 @@ private fun PhotoCell(photo: ProgressPhoto, spec: GalleryGridSpec, modifier: Mod
                 onLongClickLabel = if (spec.selecting) null else "Select",
                 onLongClick = if (spec.selecting) null else {
                     {
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        haptics.forgeLongPress(hapticStrength)
                         spec.onPhotoLongClick(photo)
                     }
                 },

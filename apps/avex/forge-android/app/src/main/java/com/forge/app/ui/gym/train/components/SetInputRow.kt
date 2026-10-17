@@ -48,7 +48,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -74,6 +73,8 @@ import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.LocalForgeSettings
+import com.forge.app.ui.common.forgeHaptic
+import com.forge.app.ui.common.forgeLongPress
 
 /** "PR at 9 reps": the reps that make the typed weight a record. "1 for PR" read as a score. */
 internal fun prAtRepsLabel(reps: Int): String = if (reps == 1) "PR at 1 rep" else "PR at $reps reps"
@@ -153,6 +154,8 @@ fun SetInputRow(
 ) {
     val weightUnit = LocalForgeSettings.current.weightUnit
     val plateLb = LocalForgeSettings.current.plateWeightLb
+    val hapticStrength = LocalForgeSettings.current.hapticStrength
+    val view = androidx.compose.ui.platform.LocalView.current
     // Prefill weight + reps with what you did on THIS set last time (#8) — your previous numbers,
     // not the plan target. Plate exercises seed a plate count. First time on the exercise → empty
     // weight + the plan's target reps. Re-seeds per set (keyed on the set number + the seed value).
@@ -226,7 +229,7 @@ fun SetInputRow(
             swAnchorMs = System.currentTimeMillis()
             swRunning = true
         }
-        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        view.forgeHaptic(com.forge.app.ui.common.ForgeHapticType.COUNTDOWN_TICK, hapticStrength)
     }
     fun stepHold(delta: Int) {
         swRunning = false // a manual nudge stops the running clock so the two inputs never fight
@@ -615,7 +618,7 @@ fun SetInputRow(
                     onLongClickLabel = if (canRepeat) "Repeat last set" else null,
                     onLongClick = if (canRepeat) {
                         {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            haptic.forgeLongPress(hapticStrength)
                             onRepeatLastSet?.invoke()
                         }
                     } else null,
