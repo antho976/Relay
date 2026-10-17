@@ -61,6 +61,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+import com.forge.app.ui.common.ForgeDisclosureCaret
 
 /** A per-lift strength curve only earns its chart once it has this many plotted sets. */
 private const val MIN_POINTS_FOR_LIFT_CURVE = 6
@@ -238,10 +239,8 @@ private fun E1rmDrillRow(
                 )
                 // The caret slot is always reserved, so a one-session row's value lines up with the
                 // expandable rows' values instead of sitting a caret's width further right.
-                Box(Modifier.width(12.dp), contentAlignment = Alignment.CenterEnd) {
-                    if (expandable) {
-                        Text(if (expanded) "▾" else "▸", style = MaterialTheme.typography.labelMedium, color = c.muted)
-                    }
+                Box(Modifier.width(16.dp), contentAlignment = Alignment.CenterEnd) {
+                    if (expandable) ForgeDisclosureCaret(expanded, tint = c.muted)
                 }
             }
             // The fill is drawn rather than sized with fillMaxWidth(fraction), so the reveal is a

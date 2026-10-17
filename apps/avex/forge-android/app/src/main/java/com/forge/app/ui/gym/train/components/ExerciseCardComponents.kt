@@ -69,6 +69,7 @@ import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.gym.train.state.ExerciseUiState
+import com.forge.app.ui.common.ForgeDisclosureCaret
 
 /**
  * A YouTube search for how to perform [exerciseName] — no per-exercise link curation needed.
@@ -519,13 +520,21 @@ internal fun ExerciseCardFooter(
 
     var showRater by remember { mutableStateOf(state.difficulty != null) }
     Spacer(Modifier.height(8.dp))
-    Text(
-        if (showRater) "How did it feel?  ▲" else "How did it feel?  ▾",
-        style = MaterialTheme.typography.bodySmall,
-        color = muted,
-        fontStyle = FontStyle.Italic,
-        modifier = Modifier.clickableLabeled("Toggle the effort rating") { showRater = !showRater }
-    )
+    Row(
+        modifier = Modifier.clickableLabeled(
+            if (showRater) "Hide the effort rating" else "Rate the effort"
+        ) { showRater = !showRater },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            "How did it feel?",
+            style = MaterialTheme.typography.bodySmall,
+            color = muted,
+            fontStyle = FontStyle.Italic
+        )
+        ForgeDisclosureCaret(showRater, tint = muted)
+    }
     if (showRater) {
         Spacer(Modifier.height(8.dp))
         DifficultyRater(selected = state.difficulty, onSelect = onRate)
@@ -591,7 +600,6 @@ internal fun UpNextBubble(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text("☰", style = MaterialTheme.typography.labelMedium, color = muted.copy(alpha = 0.6f))
             Column(modifier = Modifier.weight(1f)) {
                 Text("UP NEXT", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
                 val label = buildString {
@@ -612,7 +620,7 @@ internal fun UpNextBubble(
                     )
                 }
             }
-            Text(if (expanded) "▲" else "▾", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.35f))
+            ForgeDisclosureCaret(expanded, tint = muted)
         }
 
         if (expanded) {
