@@ -316,6 +316,29 @@ fn agents_tag_their_own_terminal_and_the_person_any_of_the_project() {
     assert_eq!((untied["session"].clone(), untied["title"].as_str(), untied["rev"].as_i64()), (Value::Null, Some("Shared"), Some(2)));
 }
 
+/// `design.*` is open to every role, whatever its saved allowlist says: a list saved before
+/// designs existed (the person's own, which replaces the defaults) must not shut agents out.
+/// Purging stays the person's.
+#[test]
+fn every_role_may_design_whatever_its_saved_allowlist() {
+    let (e, _root) = project();
+    ok(&e, "guardrail.config.set", json!({"patch": {"roles": {
+        "builder": ["mailbox.*", "session.done"], "reviewer": ["mailbox.*"], "docs": ["notes.append"]}}}));
+    for role in ["builder", "reviewer", "docs"] {
+        let name = ok(&e, "session.create", json!({"project_id": 1, "provider": "claude", "role": role}))["name"].as_str().unwrap().to_string();
+        let agent = Actor::agent(&name);
+        let id = ok_as(&e, agent.clone(), "design.create", json!({"title": role}))["design"]["id"].as_i64().unwrap();
+        ok_as(&e, agent.clone(), "design.apply", json!({"design_id": id, "ops": [{"op": "add", "node": {"parent": "page-1", "kind": "rect"}}]}));
+        let listed = ok_as(&e, agent.clone(), "bus.ops", json!({}));
+        let callable = |op: &str| listed["ops"].as_array().unwrap().iter().find(|o| o["name"] == op).map(|o| o["call"].clone());
+        assert_eq!(callable("design.apply"), Some(json!("yes")), "{role}: {listed}");
+        // Something the saved list leaves out stays refused.
+        assert_eq!(code(call_as(&e, agent.clone(), "notes.create", json!({"project_id": 1, "body": "x"}))), "actor.allowlist", "{role}");
+        ok_as(&e, agent.clone(), "design.delete", json!({"design_id": id}));
+        assert_eq!(code(call_as(&e, agent, "design.purge", json!({"design_id": id}))), "actor.allowlist", "{role}");
+    }
+}
+
 #[test]
 fn a_deleted_design_is_listed_apart_restored_or_purged() {
     let (e, _root) = project();

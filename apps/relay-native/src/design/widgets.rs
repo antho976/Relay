@@ -260,10 +260,11 @@ pub fn segmented(choices: &[(&str, &str, &str)], current: Option<&str>, pick: im
     for (value, glyph, tip) in choices {
         let key = gtk::Button::new();
         key.add_css_class("quiet");
-        if glyph.len() <= 2 {
-            key.set_label(glyph);
-        } else {
+        // A glyph when the set has one by that name; otherwise the word itself.
+        if super::glyphs::known(glyph) {
             key.set_child(Some(&super::glyphs::image(glyph, 16)));
+        } else {
+            key.set_label(glyph);
         }
         key.set_tooltip_text(Some(tip));
         if current == Some(*value) {

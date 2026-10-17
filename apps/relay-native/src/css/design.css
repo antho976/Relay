@@ -42,6 +42,7 @@ menubutton.design-terminal > button { min-height: 24px; padding: 0 10px; border-
 menubutton.design-terminal.unlinked > button { color: @faint; font-weight: 500; }
 .design-status { color: @faint; font-size: 12px; margin-right: 6px; }
 .design-status.design-status-agent { color: @live; }
+button.design-agent-undo { min-height: 24px; padding: 0 10px; border-radius: 7px; font-size: 12px; }
 button.design-ask { background: @ink; border-color: @ink; color: @wall; font-weight: 600; }
 button.design-ask:hover { background: white; border-color: white; }
 
@@ -138,6 +139,12 @@ button.design-layer-key { min-height: 22px; min-width: 22px; padding: 0; border:
 .design-layer:hover button.design-layer-key, button.design-layer-key.on { opacity: 1; }
 .design-layer.hidden button.design-layer-eye { opacity: 1; }
 button.design-layer-key:hover { color: @ink; background: alpha(@ink, 0.08); }
+
+/* The icon picker. */
+.design-icon-picker { padding: 4px; }
+button.design-icon-cell { min-height: 34px; min-width: 34px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: @secondary; }
+button.design-icon-cell:hover { background: @wash_solid; color: @ink; }
+menubutton.design-dropdown-key > button { min-height: 30px; border-radius: 8px; border: 1px solid transparent; background: @glass_control; }
 
 /* Menus and popovers of the board and gallery. */
 popover.design-menu contents { padding: 6px; border: 1px solid @strong; border-radius: 12px; background: @slab_solid; }
