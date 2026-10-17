@@ -248,16 +248,14 @@ private fun CardioListContent(
             modifier = Modifier.fillMaxSize().padding(inner),
             contentPadding = PaddingValues(bottom = 56.dp)
         ) {
-            // As a tab the page names itself, like Stats and Coach.
-            if (onBack == null) {
-                item("title") {
-                    Text(
-                        "Cardio",
-                        style = MaterialTheme.typography.headlineLarge,
-                        color = onBg,
-                        modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 16.dp)
-                    )
-                }
+            // The page names itself, like Stats and Coach, under the back arrow.
+            item("title") {
+                Text(
+                    "Cardio",
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = onBg,
+                    modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 16.dp)
+                )
             }
             item("hero") {
                 Column(Modifier.statsEntrance(0)) {

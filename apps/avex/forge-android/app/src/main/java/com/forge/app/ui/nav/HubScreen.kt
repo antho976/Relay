@@ -143,7 +143,10 @@ fun HubScreen(
         ) { page ->
             // Pages are keyed off the visible tab list so they always line up with the bar.
             when (tabs.getOrElse(page) { BottomTab.HOME }) {
+                // Every tab but Home carries the top-left back arrow to Home (Antho, 2026-10-17):
+                // the bar below switches tabs, the arrow is the one-tap way back to the start.
                 BottomTab.CARDIO -> CardioScreen(
+                    onBack = { goTo(homeIndex) },
                     onOpenHistory = { pushOnce(Routes.SESSION_HISTORY) },
                     onOpenGoals = { pushOnce(Routes.GOALS) },
                     onOpenWeeks = { pushOnce(Routes.cardioWeeks()) },
@@ -152,6 +155,7 @@ fun HubScreen(
                     onConnectWatch = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
                 )
                 BottomTab.STATS -> DayListScreen(
+                    onBack = { goTo(homeIndex) },
                     onOpenDay = { dayKey -> nav.navigateToGymDay(dayKey) },
                     onOpenDayQuick = { dayKey -> nav.navigateToGymDay(dayKey, skipWarmup = true) },
                     onOpenHistory = { pushOnce(Routes.SESSION_HISTORY) },
@@ -202,15 +206,13 @@ fun HubScreen(
                     },
                     onConnectWatch = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
                 )
-                // No back arrow on a tab: the bar below is the navigation, and system Back already
-                // returns Home (the BackHandler above). The page names itself instead.
                 BottomTab.COACH -> CoachScreen(
-                    onBack = null,
+                    onBack = { goTo(homeIndex) },
                     isVisible = pagerState.settledPage == page,
                     onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
                 )
                 BottomTab.ACADEMY -> AcademyScreen(
-                    onBack = null,
+                    onBack = { goTo(homeIndex) },
                     onOpenLesson = { nav.navigate(Routes.lesson(it)) }
                 )
             }
