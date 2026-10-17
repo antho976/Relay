@@ -203,8 +203,7 @@ class DayViewModel @Inject constructor(
             // resuming the wrong day's sets under this plan.
             val active = workoutRepo.activeSession()
             if (active != null && active.dayKey != dayKey) {
-                val otherName = customizationRepo.getDayName(active.dayKey)?.customName
-                    ?: Program.days.firstOrNull { it.key == active.dayKey }?.defaultName
+                val otherName = Program.days.firstOrNull { it.key == active.dayKey }?.defaultName
                     ?: active.dayKey
                 _state.update { it.copy(isLoading = false, crossDaySession = CrossDaySessionInfo(active.dayKey, otherName)) }
                 return@launch

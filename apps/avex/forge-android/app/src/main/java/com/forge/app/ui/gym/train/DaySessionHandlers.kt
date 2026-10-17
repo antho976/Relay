@@ -419,8 +419,7 @@ internal suspend fun DayViewModel.beginSessionForThisDay() {
     // workout, so skip the warmup gate. The in-memory warmup state is lost when the screen is recreated,
     // and re-showing the gate would force re-checking boxes you cleared before logging your first set.
     val resuming = !started.created
-    val nameOverride = customizationRepo.getDayName(dayKey)
-    val resolvedName = nameOverride?.customName ?: dayPlan.defaultName
+    val resolvedName = dayPlan.defaultName
     val disabledUntilMs = settingsRepo.warmupDisabledUntilMs.firstOrNull() ?: 0L
     val warmupAutoSkipped = clock.nowMs() < disabledUntilMs
 

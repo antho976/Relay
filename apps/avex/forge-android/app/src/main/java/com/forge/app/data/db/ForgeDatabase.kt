@@ -150,7 +150,7 @@ import com.forge.app.data.db.entities.VacationPeriod
         TrainingBlock::class,
         CoachProject::class
     ],
-    version = 39,
+    version = 40,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

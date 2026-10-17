@@ -528,6 +528,28 @@ val MIGRATION_38_39 = object : Migration(38, 39) {
     }
 }
 
+/**
+ * Fold the legacy per-day name overrides into the program's own day names, once.
+ *
+ * Nothing has written `day_name_override` since the plan builder took over renaming, but Home, the
+ * day list and the workout screen still preferred it over `program_day.name`, so a day renamed in
+ * the builder kept showing its old override everywhere. Each override becomes that day's program
+ * name, which is what the user was already seeing, and the table is emptied, so the builder's
+ * renames show from here on. A blank override is dropped rather than folded.
+ */
+val MIGRATION_39_40 = object : Migration(39, 40) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            UPDATE program_day
+            SET name = (SELECT trim(o.custom_name) FROM day_name_override o WHERE o.day_key = program_day.id)
+            WHERE id IN (SELECT day_key FROM day_name_override WHERE trim(custom_name) <> '')
+            """.trimIndent()
+        )
+        db.execSQL("DELETE FROM day_name_override")
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -556,5 +578,6 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_35_36,
     MIGRATION_36_37,
     MIGRATION_37_38,
-    MIGRATION_38_39
+    MIGRATION_38_39,
+    MIGRATION_39_40
 )

@@ -362,12 +362,25 @@ class MigrationTest {
     }
 
     @Test
-    fun migrateFullChain12To39_runsEveryStepInOrder() {
+    fun migrate39To40_foldsLegacyDayNamesIntoTheProgram() {
+        helper.createDatabase(dbName, 39).use { db ->
+            db.execSQL("INSERT INTO program_day (id, position, name, word, accent_hex, archetype) VALUES ('upper-a', 0, 'Upper A', 'PUSH', '#FFFFFF', 'upper-a')")
+            db.execSQL("INSERT INTO day_name_override (day_key, custom_name) VALUES ('upper-a', 'Chest day')")
+        }
+        val db = helper.runMigrationsAndValidate(dbName, 40, true, MIGRATION_39_40)
+        db.query("SELECT name FROM program_day WHERE id = 'upper-a'").use {
+            it.moveToFirst(); assertEquals("Chest day", it.getString(0))
+        }
+        db.query("SELECT * FROM day_name_override").use { assertEquals(0, it.count) }
+    }
+
+    @Test
+    fun migrateFullChain12To40_runsEveryStepInOrder() {
         // The pairwise tests above each validate one hop. This runs the WHOLE locked chain in a
         // single pass — a real v12 install upgrading straight to today's schema — so a gap or an
         // out-of-order/incompatible step between any two versions is caught, not just each hop alone.
         helper.createDatabase(dbName, 12).close()
-        helper.runMigrationsAndValidate(dbName, 39, true, *ALL_MIGRATIONS)
+        helper.runMigrationsAndValidate(dbName, 40, true, *ALL_MIGRATIONS)
     }
 
     @Test
