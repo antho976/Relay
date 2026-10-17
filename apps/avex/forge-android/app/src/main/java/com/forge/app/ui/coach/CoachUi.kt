@@ -1,6 +1,15 @@
 package com.forge.app.ui.coach
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import com.forge.app.ui.common.ForgeGroupLabel
+import com.forge.app.ui.common.GROUP_OUTER
+import com.forge.app.ui.common.GROUP_SEAM
+import com.forge.app.ui.common.ROW_H
+import com.forge.app.ui.common.rowShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,19 +48,6 @@ internal val COACH_GUTTER = 24.dp
 
 /** The ONE vertical padding every coach data row uses, so the page reads as a single rhythm. */
 internal val COACH_ROW_PAD = 6.dp
-
-/**
- * Where the account's spine runs: in the left margin, INSIDE the gutter, so every section of the
- * page keeps the one 24dp content column and the rule reads as a ledger's rule rather than as an
- * indent applied to half the screen.
- */
-private val SPINE_X = 10.dp
-
-/** Default distance from an item's top edge down to its node's centre — sits on the first line. */
-internal val NODE_ON_TEXT = 10.dp
-
-/** Where an open call's node sits: on the tile's own first line, past its 18dp top padding. */
-internal val NODE_ON_TILE = 28.dp
 
 /**
  * "2026-W27" → "Week of Jun 29" — machine ids never render. Null when the id doesn't parse;
@@ -108,7 +104,7 @@ internal data class CoachColors(
     val outline: Color,
     val error: Color,
     val bg: Color,
-    /** The interactive tile fill — the ONE body on this page, spent on an open call. */
+    /** The grouped-surface fill every panel, tile and row group on the page sits on. */
     val tile: Color,
     /**
      * The unfilled rung of every meter, bar and rail.
@@ -129,115 +125,77 @@ internal fun rememberCoachColors(): CoachColors = CoachColors(
     outline = MaterialTheme.colorScheme.outline,
     error = MaterialTheme.colorScheme.error,
     bg = MaterialTheme.colorScheme.background,
-    tile = MaterialTheme.colorScheme.surfaceVariant,
+    tile = MaterialTheme.colorScheme.surfaceContainerHigh,
     track = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The ledger's own vocabulary: anchors, the spine, nodes and stamps.
+// The page's own vocabulary: section heads, panels, stamps and text actions.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * One anchor in the account — a mono small-caps heading with an optional right-hand reading.
- * Anchors are the account's dated breaks ("THIS WEEK", "WEEK OF AUG 10") and its named regions
- * ("WHERE YOU STAND"). The whitespace above and the anchor itself are the separator; the page
- * carries no rules that are not data.
+ * One section of the page: 28dp of air, the app's mono group label (with an optional reading on
+ * the right), 10dp, then the content. The air and the label are the separator; no rules.
  */
 @Composable
-internal fun CoachAnchor(
-    title: String,
-    c: CoachColors,
+internal fun CoachSection(
+    label: String,
     modifier: Modifier = Modifier,
-    meta: String? = null
+    meta: String? = null,
+    content: @Composable ColumnScope.() -> Unit
 ) {
-    val heading = @Composable {
-        Text(
-            title.uppercase(),
-            style = MonoSectionAnchor,
-            color = c.muted,
-            modifier = Modifier.semantics { heading() }
-        )
+    Column(modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER)) {
+        Spacer(Modifier.height(28.dp))
+        Box(Modifier.padding(horizontal = 4.dp)) { ForgeGroupLabel(label, meta) }
+        Spacer(Modifier.height(10.dp))
+        content()
     }
-    // Mono earns its voice only in UPPERCASE micro-labels; a mixed-case mono sentence is the
-    // machine voice leaking into prose, so the reading is uppercased rather than set in sans.
-    val reading = @Composable {
-        Text(meta.orEmpty().uppercase(), style = MaterialTheme.typography.labelSmall, color = c.muted)
-    }
-    // Side by side there is room for both; past ~130% there is not, and the reading was ellipsing
-    // to "next brief in…" rather than wrapping. It stacks instead — nothing on this page truncates.
-    if (LocalDensity.current.fontScale > 1.3f) {
-        Column(modifier.fillMaxWidth()) {
-            heading()
-            if (meta != null) {
-                Spacer(Modifier.height(4.dp))
-                reading()
-            }
-        }
-    } else {
-        Row(
-            modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Bottom
-        ) {
-            heading()
-            if (meta != null) {
-                Spacer(Modifier.width(12.dp))
-                reading()
-            }
-        }
+}
+
+/** A section's head on its own, for a section whose content spans several list items. */
+@Composable
+internal fun CoachSectionHead(label: String, modifier: Modifier = Modifier, meta: String? = null) {
+    Column(modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER)) {
+        Spacer(Modifier.height(28.dp))
+        Box(Modifier.padding(horizontal = 4.dp)) { ForgeGroupLabel(label, meta) }
+        Spacer(Modifier.height(10.dp))
     }
 }
 
 /**
- * What an entry's node says about the entry's life. The node carries the LIFECYCLE; the stamp
- * word beside the entry carries the outcome, so the two never say the same thing twice.
+ * A filled panel in the grouped-surface fill: the Today panel, an open call, the block. The app's
+ * grouped kit, so the Coach reads as the same app as Stats and Settings rather than a ledger apart.
  */
-internal enum class EntryNode { OPEN, APPLIED, FAILED, DECLINED, PLAIN }
-
-/**
- * The account's spine, drawn behind an item in the left margin, with this item's node on it.
- *
- * This is the one line on the page, and it is data: it is the time axis every entry hangs from.
- * That is what lets an open proposal and a five-week-old outcome be the same kind of object — they
- * differ by their node and their stamp, not by living in different sections of the screen.
- *
- * Consecutive items each draw their own segment, so a run of them reads as one unbroken rule.
- * [top] and [bottom] clip it where the account starts and ends; [node] null draws rule only, which
- * is how an anchor lets the line pass behind it.
- */
-internal fun Modifier.ledgerSpine(
+@Composable
+internal fun CoachPanel(
     c: CoachColors,
-    node: EntryNode? = null,
-    nodeY: Dp = NODE_ON_TEXT,
-    top: Boolean = true,
-    bottom: Boolean = true
-): Modifier = this.drawBehind {
-    val rule = c.outline.copy(alpha = 0.35f)
-    val cx = SPINE_X.toPx()
-    val stroke = 1.dp.toPx()
-    if (node == null) {
-        val from = if (top) 0f else size.height / 2f
-        val to = if (bottom) size.height else size.height / 2f
-        if (to > from) drawLine(rule, Offset(cx, from), Offset(cx, to), stroke)
-        return@drawBehind
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(GROUP_OUTER))
+            .background(c.tile)
+            .padding(horizontal = 18.dp, vertical = 18.dp),
+        content = content
+    )
+}
+
+/** Rows stacked as one group: 2dp seams, outer corners round, inner ones tight. */
+@Composable
+internal fun CoachRows(c: CoachColors, rows: List<@Composable () -> Unit>) {
+    Column(verticalArrangement = Arrangement.spacedBy(GROUP_SEAM)) {
+        rows.forEachIndexed { i, row ->
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(rowShape(i, rows.size))
+                    .background(c.tile)
+                    .padding(horizontal = ROW_H, vertical = 14.dp)
+            ) { row() }
+        }
     }
-    val nodeColor = when (node) {
-        EntryNode.OPEN, EntryNode.APPLIED -> c.accent
-        EntryNode.FAILED -> c.error
-        EntryNode.DECLINED, EntryNode.PLAIN -> c.outline
-    }
-    val filled = node != EntryNode.DECLINED && node != EntryNode.PLAIN
-    // An open call's node is the larger one: it is the only entry still asking for something.
-    val r = (if (node == EntryNode.OPEN) 5.dp else 3.5.dp).toPx()
-    val cy = nodeY.toPx()
-    // The rule breaks around the node, so the node reads as sitting ON the line, not over it.
-    val gap = r + 3.dp.toPx()
-    if (top && cy - gap > 0f) drawLine(rule, Offset(cx, 0f), Offset(cx, cy - gap), stroke)
-    if (bottom && size.height > cy + gap) {
-        drawLine(rule, Offset(cx, cy + gap), Offset(cx, size.height), stroke)
-    }
-    if (filled) drawCircle(nodeColor, r, Offset(cx, cy))
-    else drawCircle(nodeColor, r - stroke / 2f, Offset(cx, cy), style = Stroke(stroke * 1.5f))
 }
 
 /**

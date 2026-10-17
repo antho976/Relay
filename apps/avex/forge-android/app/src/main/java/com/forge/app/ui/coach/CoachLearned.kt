@@ -47,56 +47,62 @@ internal fun LazyListScope.coachLearned(
     if (trust.isEmpty() && biases.isEmpty() && !hasNumbers) return
 
     item("learned") {
-        Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(5)) {
-            Spacer(Modifier.height(30.dp))
-            CoachAnchor("Learned", c)
-            Spacer(Modifier.height(18.dp))
-
+        CoachSection("Learned", modifier = Modifier.statsEntrance(7)) {
             // ── Autopilot, earned per change type ────────────────────────────
             if (trust.isNotEmpty()) {
                 val on = state.watch?.autopilot == true
                 val earned = trust.count { it.earned }
                 val total = state.timeline?.trust?.size ?: trust.size
-                CoachSubhead("Autopilot", c)
-                Spacer(Modifier.height(8.dp))
-                CoachFigure(
-                    "$earned of $total earned",
-                    if (on) "On. A change applies on its own once its type has earned it."
-                    else "Off. Earned changes still wait for your tap.",
-                    c
-                )
-                Spacer(Modifier.height(10.dp))
-                // Each type carries its own distinct reading, which is what earns these a list.
-                // They used to carry a segmented bar each as well: three identical rails stacked,
-                // saying nothing the reading beside them did not already say.
-                trust.forEach { t -> TrustRow(t, c) }
+                CoachPanel(c) {
+                    CoachFigure(
+                        "$earned of $total earned",
+                        if (on) "Autopilot on. A change applies on its own once its type has earned it."
+                        else "Autopilot off. Earned changes still wait for your tap.",
+                        c
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    // Each type carries its own distinct reading, which is what earns these a list.
+                    trust.forEach { t -> TrustRow(t, c) }
+                }
             }
 
             // ── The biases it carries ────────────────────────────────────────
             if (biases.isNotEmpty()) {
-                Spacer(Modifier.height(28.dp))
-                CoachSubhead("Biases", c)
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(18.dp))
                 Text(
-                    "Carried into every regenerated plan.",
+                    "Carried into every regenerated plan",
                     style = MaterialTheme.typography.bodySmall,
-                    color = c.muted
+                    color = c.muted,
+                    modifier = Modifier.padding(horizontal = 4.dp)
                 )
-                Spacer(Modifier.height(12.dp))
-                biases.forEach { b ->
-                    Column(Modifier.padding(bottom = 10.dp)) {
+                Spacer(Modifier.height(8.dp))
+                CoachRows(c, biases.map { b ->
+                    @Composable {
                         Text(b.label, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
                         Text(b.detail, style = MaterialTheme.typography.bodySmall, color = c.muted)
                     }
-                }
+                })
             }
 
             // ── The numbers it measured about you ────────────────────────────
             if (hasNumbers) {
-                Spacer(Modifier.height(28.dp))
-                CoachSubhead("Your numbers", c)
+                Spacer(Modifier.height(18.dp))
+                Text(
+                    "Measured from your training",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.muted,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
                 Spacer(Modifier.height(8.dp))
-                ProfileReadout(state.profile, c)
+                val rows = buildList<@Composable () -> Unit> {
+                    state.profile.recoveryDays?.let { days ->
+                        add { NumberRow("Best spacing", "$days ${if (days == 1) "day" else "days"} between sessions", c) }
+                    }
+                    state.profile.volumeCaps.entries.take(3).forEach { (muscle, cap) ->
+                        add { NumberRow(muscle.displayName, "Up to $cap sets a week", c) }
+                    }
+                }
+                if (rows.isNotEmpty()) CoachRows(c, rows)
             }
         }
     }
@@ -144,29 +150,12 @@ private fun TrustRow(t: TypeTrust, c: CoachColors) {
     }
 }
 
-/**
- * What the coach has measured about this athlete, the numbers that replaced its defaults, as a
- * two-column table: what was measured on the left, the number on the right in tabular figures.
- */
-@Composable
-private fun ProfileReadout(profile: PersonalProfile.Profile, c: CoachColors) {
-    Column(Modifier.fillMaxWidth()) {
-        profile.recoveryDays?.let { days ->
-            NumberRow("Best spacing", "$days ${if (days == 1) "day" else "days"} between sessions", c)
-        }
-        profile.volumeCaps.entries.take(3).forEach { (muscle, cap) ->
-            NumberRow(muscle.displayName, "Up to $cap sets a week", c)
-        }
-    }
-}
-
 @Composable
 private fun NumberRow(label: String, value: String, c: CoachColors) {
     Row(
         Modifier
             .fillMaxWidth()
-            .semantics(mergeDescendants = true) {}
-            .padding(vertical = COACH_ROW_PAD + 2.dp),
+            .semantics(mergeDescendants = true) {},
         verticalAlignment = Alignment.Top
     ) {
         Text(label, style = MaterialTheme.typography.bodyMedium, color = c.muted, modifier = Modifier.weight(1f))

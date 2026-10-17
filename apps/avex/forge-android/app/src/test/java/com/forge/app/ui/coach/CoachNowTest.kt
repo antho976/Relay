@@ -141,23 +141,24 @@ class CoachNowTest {
     }
 
     @Test
-    fun advancedTrackingKeepsOnlyWhatSignalsDoesNotDraw() {
-        val labels = standingLines(
-            state(advanced = true).copy(
-                timeline = com.forge.app.data.repo.CoachTimeline(
-                    trust = emptyList(), milestones = emptyList(), weeks = emptyList(),
-                    record = CoachRecord(applied = 1, held = 1, anyProposed = true)
-                )
-            )
-        ).map { it.label }
-        assertEquals(listOf("Readiness today", "Changes applied"), labels)
+    fun theRecordRailMarksAWeekByItsWorstOutcome() {
+        fun d(status: String, outcome: String = "pending") = com.forge.app.data.db.entities.CoachDecision(
+            id = 0, weekId = "2025-W30", type = "volume_up", targetKey = "k", targetName = "Lift",
+            summary = "s", reason = "r", status = status, outcome = outcome
+        )
+        val applied = com.forge.app.data.repo.CoachRepository.STATUS_APPLIED
+        val skipped = com.forge.app.data.repo.CoachRepository.STATUS_SKIPPED
+        assertEquals(WeekMark.NONE, weekMark(emptyList()))
+        assertEquals(WeekMark.HELD, weekMark(listOf(d(applied, "ok"))))
+        assertEquals(WeekMark.PROVING, weekMark(listOf(d(applied, "ok"), d(applied, "pending"))))
+        assertEquals(WeekMark.MISSED, weekMark(listOf(d(applied, "ok"), d(applied, "failed"))))
+        assertEquals(WeekMark.DECLINED, weekMark(listOf(d(skipped))))
     }
 
     @Test
     fun noLineCarriesABannedCharacter() {
-        val lines = standingLines(
-            state(readiness = Recommendation.ReadinessScale(2, "slept well", Confidence.MEDIUM))
-        )
+        val st = state(readiness = Recommendation.ReadinessScale(2, "slept well", Confidence.MEDIUM))
+        val lines = listOfNotNull(readinessLine(st), recoveryLine(st), liftsLine(st))
         assertTrue(lines.isNotEmpty())
         lines.forEach { l ->
             listOf(l.label, l.value, l.sub.orEmpty()).forEach { text ->

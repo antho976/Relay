@@ -14,7 +14,7 @@ Hub = swipeable 5-tab pager + `ForgeBottomBar`: **Cardio · Stats · Home · Coa
 (Academy took Profile's slot 2026-07-27 — it had been a link buried inside Coach, and it is half
 the coach, not a footnote to it. **Profile** moved to the Home top bar and remains a pushed route
 with its own back arrow. **Settings** returned beside it on Home on 2026-08-22, replacing the extra
-hop through Profile). Top bar everywhere = `←` (sub-screens) + ≤1 action, **never the screen's own
+hop through Profile). Top bar everywhere = `←` (sub-screens, and every hub tab but Home since 2026-10-17, back to Home) + ≤1 action, **never the screen's own
 name** (no `TopAppBar` title); Home alone carries the bell + Profile + Settings;
 **one back affordance per page — the top-bar `←` alone, never a second in-page back arrow**. The
 notifications bell is **Home only** (2026-07-27): it sat in all ~20 top bars, which made an unread
@@ -168,8 +168,15 @@ typical compare, a reading no other screen has).
 
 ### Stats — `ui/gym/stats`
 
-one page: hero figures + muscle map → lens pills Strength/Volume/Effort/Days → drill rows → heatmap
-→ records → Banister.
+one page: hero figures + muscle map → lens pills Strength/Volume/Body/Days → drill rows → heatmap
+→ records → Banister. **Records** (Strength, 2026-10-17) lead with a 12-week strip of when the standing
+records were set and a "set in the last 30 days" count, then a Newest / Heaviest switch over the rows,
+a ≤14-day record flagged with an accent dot. **Effort** (closing Volume) opens on the share of rated
+sets at RPE 7 to 9, counts each bar, accents only the 7–9 band, and brackets the axis as reps left
+(Easy 4+, In range 1 to 3, All out 0). **Fitness vs fatigue** (Days) opens on the model's read in
+words (Fresh / Balanced / Building / Deep fatigue, form as a share of fitness), draws from the first
+training day with both averages bias-corrected for their cold start, scales to the data, and gives
+form its own band under the chart.
 
 ### Cardio — `ui/cardio` — **rebuilt 2026-08-23**
 
@@ -262,59 +269,45 @@ Cardio-local shared marks live in `components/CardioBars.kt`: `VerticalBarRow`/`
 `RankedBarRow` (name · thin bar · reading). Kept in the feature package rather than promoted, matching how
 `VerticalBarRow` was already shared across four cardio surfaces.
 
-### Coach — `ui/coach` — **THE LEDGER** (2026-08-20 redesign)
+### Coach — `ui/coach` — **TODAY + SECTIONS** (2026-10-17 redesign)
 
-**One running account, no lenses.** The Now/Signals/Journey pills are gone (`SETTLED.md`). The page
-is one column read in this order, and every region is a file:
+Rebuilt at Antho's call ("needs a tear down and a remake ... I want a full redesign"), replacing the
+2026-08-20 ledger (`SETTLED.md`). Direction chosen from three dealt structures: a Today panel, then
+sections, on the grouped-surface kit (`ForgeGroups`), so Coach reads as the same app as Stats and
+Settings. The direction contract lives in the surface brief under `.impeccable/surfaces/`.
 
-1. **The account** (`CoachAccount.kt`) — `THIS WEEK` with the open calls, then every week before it,
-   newest first, capped at 6 with an "and N more weeks" line. Each decision is one **entry**: a node
-   on the spine, a title (`subject · change`), a **stamp** (open / applied / skipped / undone /
-   absorbed / its outcome word), a watch bar while its 14-day window runs, and Undo when it carries
-   `undoData`. Closes on the week's three figures. A pre-baseline account gets `BaselineEntry`
-   instead of a quiet line: the serif count, the meter, and what fills it.
-2. **`WHERE YOU STAND`** (`CoachStand.kt`) — recovery load + only the checks that FIRED, lifts on
-   watch with real trends, and the inputs with their charts and Connect pills.
-3. **`BLOCK`** and **`NEXT` / `WHAT UNLOCKS`** (`CoachBlock.kt`) — the phase rail with its start
-   / end action, then the rungs still ahead with the real thing that opens each.
-4. **`WHAT IT HAS LEARNED`** (`CoachLearned.kt`) — the standing balance: autopilot trust per type,
-   the biases, your numbers.
+Chrome: `ForgeTopBar` back arrow (to Home as a hub tab), serif `Coach` title, then a
+`ForgeSlidingSegments` **Simple / Detailed** switch that writes `SettingsRepository.coachAdvanced`
+(the same preference as Settings → Coach → Advanced tracking; a view preference only, the weekly
+pass is untouched). The column, every region a file:
 
-**Advanced tracking (2026-09-11, Antho: "I hardly need or want half of what's in there").** The
-page reads ONE preference, `SettingsRepository.coachAdvanced` (Settings → Coach → Advanced
-tracking, a `ToggleRow`, default OFF). Off, the column is the account and `NEXT` alone: the calls,
-what became of them, and the one forward line. On, `SIGNALS`, `BLOCK`, `WHAT IT READS` and
-`LEARNED` draw between and after them as before. It is a VIEW preference: the weekly pass, the
-inputs it reads and auto-apply are untouched, and the switch rides its own collector in
-`CoachViewModel.refreshWhileVisible` rather than `EngineInputSignals`. The `WHERE_YOU_STAND` deep
-link opens at the top of the account while it is off. **Off, the page OFFERS the switch in a pop-up**
-(`CoachAdvancedPrompt.kt`, 2026-09-25, Antho: "should be a pop-up like the notifications ... with a
-remind me later or ignore"; it replaced a `Show advanced tracking →` foot line). It is shaped like
-the arrival receipt (an overlay under the status bar, surface fill, nothing on the page moves) but
-carries a decision: `Turn on` flips the preference in place, `Remind me later` holds it back a week,
-`Ignore` retires it for good. Both are one preference, `SettingsRepository.coachAdvancedPromptAfter`
-(epoch ms; 0 = now, `Long.MAX_VALUE` = ignored). It waits ~700ms for the entrance cascade, only
-shows on a page with an account to read, and only while the hub is on Coach. On, the account closes
-on `Hide advanced tracking →` (`coachTracking`), onBg not accent (§14). Settings → Coach stays the
-switch's other home. `coach-ledger-basic.png` pins the default, `coach-advanced-prompt.png` the
-pop-up; every other Coach golden is the advanced page.
-
-**The spine** (`Modifier.ledgerSpine`, `CoachUi.kt`) is the one line on the page and it is DATA: the
-time axis, drawn at x=10dp inside the gutter so all four regions keep the one 24dp content column.
-`EntryNode` carries the lifecycle (open = the larger accent node), the stamp carries the outcome —
-never both saying the same thing.
-
-**The one body on the page** is `CoachCallTile` (`CoachCall.kt`): an open call, and nothing else,
-gets `surfaceVariant` at radius 16. Surface here is rank made visible. Inside it, `callCopy`
-decomposes the stored imperative summary into subject + change so the CHANGE ("3 → 4 sets") can take
-the serif rung (28sp under 18 chars, else 22) instead of arriving as one more line of body text; the
-evidence draws at FULL width (88dp sparkline, or the fatigue meter + fired checks for a deload),
-because the evidence for a call belongs to that call.
+1. **TODAY** (`CoachToday.kt`) — one filled panel: readiness as the serif answer ("Targets 3%
+   lighter") with its reason, recovery load against the deload tick (`CoachFatigueMeter`), and two
+   short figures: next brief (with its landing date) and, on Simple, the lift count. Detailed adds
+   the fatigue checks that crossed their line, error-flagged. A pre-baseline account gets the
+   baseline instead: "2 of 4 sessions", the meter, when the first call lands.
+2. **THIS WEEK** (`CoachAccount.kt` `coachThisWeek`) — each open call a panel (`CoachCallTile`):
+   lift + its kind ("VOLUME", `callKind`), the change at the serif rung, the reason, the evidence at
+   full width, Apply + Skip. `Apply all N →` under two or more. Calls already decided this week sit
+   in a row group; a quiet week says so in one row; last week's three figures close it.
+3. **YOUR LIFTS** (Detailed, `CoachStand.kt` `coachLifts`) — a 2-column tile grid (1 column past
+   130%): name, sparkline (red when stalled), estimated max, trend word. Stalled lifts lead; six
+   shown, `All N lifts →` for the rest; forming lifts fold to one line.
+4. **TRAINING BLOCK** (Detailed, `CoachBlock.kt`) — one panel: week figure + purpose, the 4-phase
+   rail (unlit at zero), intent, start / end.
+5. **RECORD** (`coachRecord`) — "10 of 14 held" + its split, then a rail of up to 12 weeks, one mark
+   per week (`weekMark`: filled = held, ring = proving out, error = missed or undone, muted ring =
+   skipped, speck = no change; the worst outcome in a week wins), then the last 3 (Simple) or 6
+   (Detailed) weeks as row groups, each change stamped, its watch bar while its 14 days run, Undo
+   while it can. The rail waits for a second week; one week would only echo THIS WEEK.
+6. **NEXT UNLOCK / WHAT UNLOCKS** (`coachUnlocks`) — one rung, three while the baseline forms.
+7. **WHAT IT READS** and **LEARNED** (Detailed) — inputs as a row group with their charts and
+   Connect pills; autopilot trust in a panel, then biases and measured numbers as row groups.
 
 `humanizeMachineProse` (`CoachUi.kt`) is the ONE place em dashes and paren plurals are translated
-out of stored planner prose — the allowlist counts that file's literals, so nothing else re-rolls
-them. Deep links: `CoachEntryPoint`, with `accountItemCount` scrolling past the account (it mirrors
-`coachAccount`'s emission — change one, change the other).
+out of stored planner prose. `CoachEntryPoint` survives for the old routes; both open at the top,
+since Today is the live reading the lab link meant. Goldens: `coach-page*.png`
+(`CoachLedgerScreenshotTest`).
 
 Coach content renders ONLY here — Settings→Coach is config alone (on/off switch + mode chips + a
 feeds on/off glance whose silent HC rows tap to Wearable), never a second brief/trust/history home.

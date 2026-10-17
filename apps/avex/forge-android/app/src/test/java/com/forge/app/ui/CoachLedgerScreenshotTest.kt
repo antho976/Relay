@@ -8,7 +8,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollAction
@@ -45,10 +44,8 @@ import com.forge.app.program.MuscleGroup
 import com.forge.app.domain.coach.WeeklyReviewData
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.ui.coach.CoachActions
-import com.forge.app.ui.coach.CoachAdvancedPrompt
-import com.forge.app.ui.coach.CoachLedger
+import com.forge.app.ui.coach.CoachPage
 import com.forge.app.ui.coach.CoachViewModel
-import com.forge.app.ui.coach.accountItemCount
 import com.forge.app.ui.theme.ForgeTheme
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.RoborazziOptions
@@ -63,12 +60,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Golden screenshots of the Coach ledger (`design/MAP.md`).
- *
- * The old Coach page shipped with no golden at all, which is part of how it drifted into eight
- * sections nobody had looked at together. The account is the app's one non-recipe layout with its
- * own vocabulary — a spine, nodes, stamps, and exactly one filled tile — so it is pinned here:
- * at 100% and 200% font scale, on a brand-new account, and on AMOLED.
+ * Golden screenshots of the Coach page (`design/MAP.md`), rebuilt 2026-10-17 as a Today panel and
+ * sections on the grouped-surface kit. Pinned at 100% and 200% font scale, Simple and Detailed, on a
+ * brand-new account, and on AMOLED. Each region below the fold has its own frame.
  *
  * Record or re-record:  gradle -p forge-android :app:recordRoborazziDebug
  */
@@ -85,23 +79,23 @@ class CoachLedgerScreenshotTest {
     )
 
     /**
-     * [scrollTo] names the anchor to bring to the top of the frame, rather than an item index.
-     * Index arithmetic silently shot a frame of empty ground when it was off by one; scrolling to a
-     * named node fails the test instead, which is what a golden of a region below the fold owes.
-     * Name the LAST block of the region, not its heading: the scroll brings a node just into view,
-     * so scrolling to a heading parks it at the bottom edge with its whole section still below.
+     * [scrollTo] names the node to bring into the frame, rather than an item index: scrolling to a
+     * named node fails the test when it is missing, where index arithmetic shot empty ground. Name
+     * the LAST block of a region, since the scroll brings a node just into view at the bottom edge.
      */
     private fun shoot(
         name: String,
         amoled: Boolean = false,
         scrollTo: String? = null,
-        settleMs: Long = 0,
+        fontScale: Float = 1f,
         content: @Composable () -> Unit
     ) {
         compose.setContent {
             ForgeTheme(amoledMode = amoled) {
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                    content()
+                    CompositionLocalProvider(
+                        LocalDensity provides Density(LocalDensity.current.density, fontScale = fontScale)
+                    ) { content() }
                 }
             }
         }
@@ -109,195 +103,84 @@ class CoachLedgerScreenshotTest {
             compose.onAllNodes(hasScrollAction()).onFirst()
                 .performScrollToNode(hasText(scrollTo, substring = true))
         }
-        if (settleMs > 0) compose.mainClock.advanceTimeBy(settleMs)
         compose.onRoot().captureRoboImage("src/test/screenshots/$name.png", options)
     }
 
-    private fun ledger(state: CoachViewModel.UiState) = @Composable {
-        CoachLedger(
-            state = state,
-            weightUnit = WeightUnit.LB,
-            now = NOW,
-            actions = CoachActions(connectHealth = {})
-        )
+    private fun page(state: CoachViewModel.UiState, actions: CoachActions = CoachActions(connectHealth = {})) = @Composable {
+        CoachPage(state = state, weightUnit = WeightUnit.LB, now = NOW, actions = actions)
     }
 
+    /** The default page: the switch on Simple, the Today panel and the first open call. */
     @Test
-    fun ledger() = shoot("coach-ledger") { ledger(activeState())() }
+    fun simple() = shoot("coach-page") { page(activeState().copy(advanced = false))() }
 
-    /**
-     * The default page, advanced tracking off: the account and what is next, with no readings and
-     * no foot (the offer to turn them on is the pop-up, [advancedPrompt]). Shot at the seam where the record ends and NEXT follows,
-     * which is where the difference is. (Scrolling to "NEXT" itself would match the "next brief" meta at
-     * the top of the page, so the anchor is the first rung under it.)
-     */
+    /** Simple below the fold: the calls' foot, last week's figures and the record rail. */
     @Test
-    fun ledgerBasic() = shoot("coach-ledger-basic", scrollTo = "Twenty-five applied") {
-        ledger(activeState().copy(advanced = false))()
+    fun simpleRecord() = shoot("coach-page-record", scrollTo = "Twenty-five applied") {
+        page(activeState().copy(advanced = false))()
     }
 
-    /**
-     * WHERE YOU STAND on the default page: readiness, recovery load, the lifts and the record, each
-     * one line with its reason. Advanced tracking off, so all four draw here.
-     */
+    /** Detailed at the top: the Today panel also lists the fatigue checks that crossed their line. */
     @Test
-    fun ledgerNow() = shoot("coach-ledger-now", scrollTo = "Changes applied") {
-        ledger(activeState().copy(advanced = false))()
-    }
+    fun detailed() = shoot("coach-page-detailed") { page(activeState())() }
+
+    /** Detailed: each watched lift as a tile, the stalled one first with its line in red. */
+    @Test
+    fun detailedLifts() = shoot("coach-page-lifts", scrollTo = "first read after two sessions") { page(activeState())() }
+
+    /** Detailed: the training block panel. */
+    @Test
+    fun detailedBlock() = shoot("coach-page-block", scrollTo = "End the block") { page(activeState())() }
+
+    /** Detailed: what the coach has learned, closing the page. */
+    @Test
+    fun detailedLearned() = shoot("coach-page-learned", scrollTo = "Best spacing") { page(activeState())() }
 
     /**
      * A LazyColumn only composes what is near the viewport, so absence is proved by scrolling:
-     * `performScrollToNode` walks the whole list and fails when nothing matches, and that failure
-     * is the assertion. NEXT is scrolled to first so the pass is not an artefact of an empty page.
+     * `performScrollToNode` walks the whole list and fails when nothing matches.
      */
     @Test
-    fun theBasicLedgerDrawsNoReadings() {
-        compose.setContent { ForgeTheme { ledger(activeState().copy(advanced = false))() } }
+    fun theSimplePageDrawsNoInstruments() {
+        compose.setContent { ForgeTheme { page(activeState().copy(advanced = false))() } }
         val column = compose.onAllNodes(hasScrollAction()).onFirst()
         column.performScrollToNode(hasText("Twenty-five applied"))
-        compose.onNodeWithText("NEXT").assertIsDisplayed()
-        listOf("SIGNALS", "BLOCK", "WHAT IT READS", "LEARNED").forEach { anchor ->
+        compose.onNodeWithText("Twenty-five applied").assertIsDisplayed()
+        listOf("YOUR LIFTS", "TRAINING BLOCK", "WHAT IT READS", "LEARNED").forEach { anchor ->
             val found = runCatching { column.performScrollToNode(hasText(anchor)) }.isSuccess
-            assertFalse("$anchor is drawn with advanced tracking off", found)
+            assertFalse("$anchor is drawn on Simple", found)
         }
     }
 
-    /** §14: the whole account must survive the biggest font without clipping or lost content. */
+    /** The switch under the title writes the preference both ways. */
     @Test
-    fun ledgerAtLargeFontScale() {
+    fun theSwitchFlipsSimpleAndDetailed() {
+        val set = mutableListOf<Boolean>()
         compose.setContent {
-            ForgeTheme {
-                CompositionLocalProvider(
-                    LocalDensity provides Density(
-                        LocalDensity.current.density,
-                        fontScale = 2f
-                    )
-                ) { ledger(activeState())() }
-            }
+            ForgeTheme { page(activeState().copy(advanced = false), CoachActions(setAdvanced = { set += it }))() }
         }
-        compose.onRoot().captureRoboImage("src/test/screenshots/coach-ledger-200.png", options)
+        compose.onNodeWithText("Detailed").performClick()
+        compose.onNodeWithText("Simple").performClick()
+        assertEquals(listOf(true, false), set)
     }
 
-    /**
-     * SIGNALS at 200%: the lift rows fold their figure into the sub-line rather than squeezing the
-     * name between a trend and a number, and the recovery figure wraps instead of clipping.
-     */
+    /** §14: the page must survive the biggest font without clipping or lost content. */
     @Test
-    fun ledgerStandAtLargeFontScale() {
-        compose.setContent {
-            ForgeTheme {
-                Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                    CompositionLocalProvider(
-                        LocalDensity provides Density(LocalDensity.current.density, fontScale = 2f)
-                    ) { ledger(activeState())() }
-                }
-            }
-        }
-        compose.onAllNodes(hasScrollAction()).onFirst()
-            .performScrollToNode(hasText("stalling", substring = true))
-        compose.onRoot().captureRoboImage("src/test/screenshots/coach-ledger-stand-200.png", options)
+    fun simpleAtLargeFontScale() = shoot("coach-page-200", fontScale = 2f) { page(activeState().copy(advanced = false))() }
+
+    /** The lift tiles at 200% drop to one column rather than squeezing each name to a sliver. */
+    @Test
+    fun liftsAtLargeFontScale() = shoot("coach-page-lifts-200", fontScale = 2f, scrollTo = "stalling") {
+        page(activeState())()
     }
 
     /** The state every first-run user sees: no calls, no history, a baseline still filling. */
     @Test
-    fun ledgerOnANewAccount() = shoot("coach-ledger-baseline") { ledger(baselineState())() }
-
-    /**
-     * The account below the fold: the weeks before this one, each entry stamped with what became
-     * of it. A LazyColumn golden pins one viewport, so the regions past the first get their own.
-     */
-    @Test
-    fun ledgerRecord() = shoot("coach-ledger-record", scrollTo = "DIDN'T STICK") {
-        ledger(activeState())()
-    }
-
-    /** SIGNALS: the live reading, straight after the account. */
-    @Test
-    fun ledgerStand() = shoot("coach-ledger-stand", scrollTo = "SIGNALS") {
-        ledger(activeState())()
-    }
-
-    /** The block and what the account is climbing toward. */
-    @Test
-    fun ledgerBlock() = shoot("coach-ledger-block", scrollTo = "BLOCK") {
-        ledger(activeState())()
-    }
-
-    @Test
-    fun ledgerLearned() = shoot("coach-ledger-learned", scrollTo = "Best spacing") {
-        ledger(activeState())()
-    }
-
-    /**
-     * `accountItemCount` mirrors `coachAccount`'s item emission by hand — the deep link that used
-     * to open the Signals lens scrolls by it — so the two are pinned together here. Scrolling by
-     * that count must land on WHERE YOU STAND, the first thing after the account.
-     */
-    @Test
-    fun theDeepLinkIndexLandsOnWhereYouStand() {
-        val state = activeState()
-        compose.setContent {
-            ForgeTheme {
-                CoachLedger(
-                    state = state,
-                    weightUnit = WeightUnit.LB,
-                    now = NOW,
-                    actions = CoachActions(),
-                    listState = rememberLazyListState(
-                        initialFirstVisibleItemIndex = accountItemCount(state)
-                    )
-                )
-            }
-        }
-        compose.onNodeWithText("WHERE YOU STAND").assertIsDisplayed()
-    }
-
-    /**
-     * The default page no longer closes on a "Show advanced tracking" line: the offer moved to the
-     * pop-up. Only the way back ("Hide") stays in the column, and only while the readings are on.
-     */
-    @Test
-    fun theBasicLedgerHasNoShowFoot() {
-        compose.setContent { ForgeTheme { ledger(activeState().copy(advanced = false))() } }
-        val found = runCatching {
-            compose.onAllNodes(hasScrollAction()).onFirst()
-                .performScrollToNode(hasText("advanced tracking", substring = true))
-        }.isSuccess
-        assertFalse("the basic ledger still draws an advanced-tracking foot", found)
-    }
-
-    /** The pop-up over the account, as the reader first sees it with advanced tracking off. */
-    @Test
-    fun advancedPrompt() = shoot("coach-advanced-prompt", settleMs = 2_000) {
-        ledger(activeState().copy(advanced = false))()
-        CoachAdvancedPrompt(visible = true, onTurnOn = {}, onRemindLater = {}, onIgnore = {})
-    }
-
-    /** Each of the pop-up's three answers reaches its own action. */
-    @Test
-    fun theAdvancedPromptOffersTurnOnRemindAndIgnore() {
-        val tapped = mutableListOf<String>()
-        compose.setContent {
-            ForgeTheme {
-                CoachAdvancedPrompt(
-                    visible = true,
-                    onTurnOn = { tapped += "on" },
-                    onRemindLater = { tapped += "later" },
-                    onIgnore = { tapped += "ignore" }
-                )
-            }
-        }
-        // The offer holds back a beat so the page's entrance lands first.
-        compose.mainClock.advanceTimeBy(2_000)
-        compose.onNodeWithText("Turn on").performClick()
-        compose.onNodeWithText("Remind me later").performClick()
-        compose.onNodeWithText("Ignore").performClick()
-        assertEquals(listOf("on", "later", "ignore"), tapped)
-    }
+    fun newAccount() = shoot("coach-page-baseline") { page(baselineState())() }
 
     /** AMOLED is a shipped ground, not a variant. */
     @Test
-    fun ledgerAmoled() = shoot("coach-ledger-amoled", amoled = true) { ledger(activeState())() }
+    fun amoled() = shoot("coach-page-amoled", amoled = true) { page(activeState())() }
 }
 
 private const val NOW = 1_755_648_000_000L // 2025-08-20T00:00:00Z, fixed so goldens are stable.

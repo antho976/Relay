@@ -27,10 +27,8 @@ import com.forge.app.domain.coach.BlockPlanner
 import com.forge.app.ui.common.statsEntrance
 
 /**
- * THE BLOCK — which phase the next few weeks are in, and what they are for.
- *
- * It sits under the account and the live readings: the week's calls are what you came for, the
- * signals are what they were made from, and the block is the arc they both run inside.
+ * TRAINING BLOCK (Detailed) — which phase the next few weeks are in and what they are for, in one
+ * panel: the week as a figure, its purpose, the four phases as a rail, and the one action.
  */
 internal fun LazyListScope.coachBlock(
     state: CoachViewModel.UiState,
@@ -39,50 +37,51 @@ internal fun LazyListScope.coachBlock(
     onEndBlock: () -> Unit
 ) {
     item("block") {
-        Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(2)) {
-            Spacer(Modifier.height(30.dp))
-            CoachAnchor("Block", c)
-            Spacer(Modifier.height(18.dp))
-            // The week is the reading, so it takes the figure; what the week is FOR sits under it.
-            state.block?.let { block ->
-                CoachFigure(
-                    "Week ${block.weekIndex} of ${block.plannedWeeks}",
-                    BlockPlanner.purpose(block),
-                    c
-                )
-                Spacer(Modifier.height(16.dp))
-            }
-            // The rail is the zero shape: unlit with no block running, the same mark it uses when
-            // one is, so starting a block fills in a shape already seen.
-            PhaseRail(state.block, c)
-            Spacer(Modifier.height(14.dp))
-            state.block?.let { block ->
-                if (block.intent.isNotBlank()) {
-                    Text(
-                        block.intent,
-                        style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
-                        color = c.muted
+        CoachSection("Training block", modifier = Modifier.statsEntrance(3)) {
+            CoachPanel(c) {
+                val block = state.block
+                if (block != null) {
+                    CoachFigure("Week ${block.weekIndex} of ${block.plannedWeeks}", BlockPlanner.purpose(block), c)
+                } else {
+                    CoachFigure(
+                        "No block running",
+                        "The coach adjusts week to week. A block plans four phases around your top goal.",
+                        c
                     )
                 }
-                if (BlockPlanner.isTestWeek(block)) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Test week: take one heavy top set on your focus lift and log it honestly.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = c.onBg
-                    )
+                Spacer(Modifier.height(18.dp))
+                // The rail is the zero shape: unlit with no block running, the same mark it uses when
+                // one is, so starting a block fills in a shape already seen.
+                PhaseRail(block, c)
+                block?.let {
+                    if (it.intent.isNotBlank()) {
+                        Spacer(Modifier.height(14.dp))
+                        Text(
+                            it.intent,
+                            style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
+                            color = c.muted
+                        )
+                    }
+                    if (BlockPlanner.isTestWeek(it)) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Test week: take one heavy top set on your focus lift and log it honestly.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = c.onBg
+                        )
+                    }
                 }
-                Spacer(Modifier.height(6.dp))
-            }
-            // Inert while a start or end is in flight (M-13): the second of two quick taps used to
-            // race the first for the singleton live row. Muted for that moment, so it reads as taken.
-            CoachAction(
-                if (state.block == null) "Start a block →" else "End the block →",
-                if (state.block == null && !state.blockBusy) c.onBg else c.muted,
-                if (state.block == null) "Start a training block" else "End the training block"
-            ) {
-                if (!state.blockBusy) {
-                    if (state.block == null) onStartBlock() else onEndBlock()
+                Spacer(Modifier.height(8.dp))
+                // Inert while a start or end is in flight (M-13): the second of two quick taps used
+                // to race the first for the singleton live row. Muted for that moment.
+                CoachAction(
+                    if (block == null) "Start a block →" else "End the block →",
+                    if (!state.blockBusy) c.onBg else c.muted,
+                    if (block == null) "Start a training block" else "End the training block"
+                ) {
+                    if (!state.blockBusy) {
+                        if (block == null) onStartBlock() else onEndBlock()
+                    }
                 }
             }
         }
@@ -90,10 +89,8 @@ internal fun LazyListScope.coachBlock(
 }
 
 /**
- * WHAT UNLOCKS — the rungs still ahead, each with the real thing that opens it.
- *
- * Three of them while the coach is still building its baseline (there is no history to summarise
- * yet, so the page turns forward), one once it is calling.
+ * NEXT UNLOCK — the rungs still ahead, each with the real thing that opens it. Three while the
+ * coach is still building its baseline (the page turns forward), one once it is calling.
  */
 internal fun LazyListScope.coachUnlocks(
     state: CoachViewModel.UiState,
@@ -104,20 +101,19 @@ internal fun LazyListScope.coachUnlocks(
     val rungs = if ((state.brief?.sessionsToGo ?: 0) > 0) 3 else 1
 
     item("unlocks") {
-        Column(Modifier.fillMaxWidth().padding(horizontal = COACH_GUTTER).statsEntrance(4)) {
-            Spacer(Modifier.height(30.dp))
-            CoachAnchor(
-                if (rungs > 1) "What unlocks" else "Next",
-                c,
-                meta = "${ahead.size} TO UNLOCK"
-            )
-            ahead.take(rungs).forEach { rung ->
-                Spacer(Modifier.height(14.dp))
-                Text(rung.label, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
-                if (rung.detail.isNotBlank() && !rung.detail.equals(rung.label, true)) {
-                    Text(rung.detail, style = MaterialTheme.typography.bodySmall, color = c.muted)
+        CoachSection(
+            if (rungs > 1) "What unlocks" else "Next unlock",
+            meta = "${ahead.size} to unlock",
+            modifier = Modifier.statsEntrance(5)
+        ) {
+            CoachRows(c, ahead.take(rungs).map { rung ->
+                @Composable {
+                    Text(rung.label, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
+                    if (rung.detail.isNotBlank() && !rung.detail.equals(rung.label, true)) {
+                        Text(rung.detail, style = MaterialTheme.typography.bodySmall, color = c.muted)
+                    }
                 }
-            }
+            })
         }
     }
 }
@@ -144,7 +140,7 @@ private fun PhaseRail(block: TrainingBlock?, c: CoachColors) {
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .height(3.dp)
+                        .height(5.dp)
                         .clip(RoundedCornerShape(50))
                         .drawBehind {
                             drawRect(
