@@ -419,6 +419,7 @@ class StatsRepository @Inject constructor(
                 ?.maxOfOrNull { E1rm.epley(it.weightLb, it.reps) }
             ExerciseDetail(
                 name = name,
+                exerciseId = ex.exerciseId,
                 isPr = ex.wasPr,
                 effort = ex.difficulty,
                 hitFullTarget = ex.hitFullTarget,

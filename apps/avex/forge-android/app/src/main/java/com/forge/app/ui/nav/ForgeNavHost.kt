@@ -283,7 +283,14 @@ fun ForgeNavHost(
             route = Routes.SESSION_DETAIL,
             arguments = listOf(navArgument(Routes.ARG_SESSION_ID) { type = NavType.LongType })
         ) {
-            SessionDetailScreen(onBack = { nav.popBackStack() })
+            SessionDetailScreen(
+                onBack = { nav.popBackStack() },
+                onOpenLiftTrend = { liftId ->
+                    com.forge.app.ui.gym.stats.StatsLensRequests.pendingLift.value = liftId
+                    nav.popBackStack(Routes.OVERVIEW, false)
+                    pendingHubPage = BottomTab.STATS
+                }
+            )
         }
         composable(
             route = Routes.CARDIO_SESSION,

@@ -44,7 +44,17 @@ import com.forge.app.ui.common.statsEntrance
 @Composable
 fun SessionDetailScreen(
     onBack: () -> Unit,
+    /** Opens a lift's all-time trend on Stats; null hides the link. */
+    onOpenLiftTrend: ((String) -> Unit)? = null,
     viewModel: SessionDetailViewModel = hiltViewModel()
+) = androidx.compose.runtime.CompositionLocalProvider(LocalOpenLiftTrend provides onOpenLiftTrend) {
+    SessionDetailContent(onBack, viewModel)
+}
+
+@Composable
+private fun SessionDetailContent(
+    onBack: () -> Unit,
+    viewModel: SessionDetailViewModel
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val exportPath by viewModel.exportPath.collectAsStateWithLifecycle()

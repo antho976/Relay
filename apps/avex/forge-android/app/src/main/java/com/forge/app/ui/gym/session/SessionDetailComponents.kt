@@ -29,6 +29,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.forge.app.ui.common.clickableLabeled
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
@@ -330,6 +332,19 @@ internal fun ExerciseDetailBody(
             Text("“${ex.note}”", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
         }
         Text(exerciseSummary(ex, weightUnit), style = MaterialTheme.typography.bodySmall, color = muted)
+        // One session's sets end here; the lift's whole history is a tap away on Stats (§4.5: a
+        // drill-down answers with detail). Weighted lifts only: Strength charts e1RM.
+        val openTrend = LocalOpenLiftTrend.current
+        val liftId = ex.exerciseId
+        if (openTrend != null && liftId != null && ex.e1rmLb != null) {
+            Box(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .clickableLabeled("Open ${ex.name}'s trend on Stats") { openTrend(liftId) },
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Text("ALL-TIME TREND →", style = MaterialTheme.typography.labelMedium, color = accent)
+            }
+        }
         PerExerciseSetChart(ex, metric, style, accent, muted, outline)
         SetTable(ex.sets, onBg, muted, outline)
     }
@@ -426,3 +441,6 @@ private fun effortColor(effort: EffortRating): Color = when (effort) {
     EffortRating.HARD -> ForgeWarning
     EffortRating.BRUTAL -> ForgeError
 }
+
+/** Opens a lift's all-time trend on Stats, provided by the session detail screen; null hides the link. */
+internal val LocalOpenLiftTrend = androidx.compose.runtime.staticCompositionLocalOf<((String) -> Unit)?> { null }

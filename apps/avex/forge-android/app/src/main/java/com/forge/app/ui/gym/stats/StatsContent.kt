@@ -56,6 +56,9 @@ enum class StatsLens(val label: String) {
  */
 object StatsLensRequests {
     val pending = kotlinx.coroutines.flow.MutableStateFlow<StatsLens?>(null)
+
+    /** A lift whose Strength row another screen asks Stats to open (a session's "trend →"). */
+    val pendingLift = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
 }
 
 /**
@@ -117,6 +120,17 @@ fun StatsContent(
             restoredLens = true
             StatsLensRequests.pending.value = null
             listState.scrollToItem(0)
+        }
+    }
+    // Another screen asked for a lift: the Strength lens with that lift's row open, as a record tap does.
+    val requestedLift by StatsLensRequests.pendingLift.collectAsStateWithLifecycle()
+    LaunchedEffect(requestedLift) {
+        requestedLift?.let { id ->
+            focusLift = id; focusNonce++; lens = StatsLens.STRENGTH
+            restoredLens = true
+            StatsLensRequests.pendingLift.value = null
+            // Items above the lens content: "title" (0), "hero" (1), "lens" (2) -> "str-lifts" is 3.
+            listState.scrollToItem(3)
         }
     }
     // Health Connect has no observer, so the Body lens reads it when opened and on every resume.
