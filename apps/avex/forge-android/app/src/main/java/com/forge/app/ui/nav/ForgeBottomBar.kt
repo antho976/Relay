@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -24,6 +23,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.common.CountBadge
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 
 /**
  * The five primary hubs, in display order. They're pages of the [HubScreen] HorizontalPager, so the
@@ -67,8 +70,7 @@ fun ForgeBottomBar(
         Row(
             Modifier
                 .fillMaxWidth()
-                .navigationBarsPadding()
-                .height(58.dp),
+                .navigationBarsPadding(),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -76,9 +78,12 @@ fun ForgeBottomBar(
                 val selected = index == selectedIndex
                 val color = if (selected) accent else muted
                 Column(
+                    // A minimum, not a fixed height, so a label at large text grows the bar instead
+                    // of being cut. On the tab, not the row: fillMaxHeight under a row with only a
+                    // minimum took the whole screen.
                     modifier = Modifier
                         .weight(1f)
-                        .fillMaxHeight()
+                        .heightIn(min = 58.dp)
                         .selectable(
                             selected = selected,
                             role = Role.Tab,
@@ -98,13 +103,21 @@ fun ForgeBottomBar(
                         )
                     }
                     Spacer(Modifier.height(3.dp))
-                    Text(
-                        tab.label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = color,
-                        fontSize = 10.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
-                    )
+                    // Chrome clamps its own scaling (§14): at 2x, five tabs left "Academy" about
+                    // 90dp of text in an 82dp tab, and it was cut to "Academ". At 1.3x it fits a
+                    // 360dp phone's 72dp tab, and the bar grows to the label rather than clipping.
+                    val d = LocalDensity.current
+                    CompositionLocalProvider(
+                        LocalDensity provides Density(d.density, d.fontScale.coerceAtMost(1.3f))
+                    ) {
+                        Text(
+                            tab.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = color,
+                            fontSize = 10.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                        )
+                    }
                 }
             }
         }
