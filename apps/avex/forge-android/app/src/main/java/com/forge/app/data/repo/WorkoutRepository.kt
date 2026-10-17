@@ -171,10 +171,7 @@ class WorkoutRepository @Inject constructor(
         // poured today's sets into a workout dated weeks ago (the streak, the week's stats and the
         // coach's layoff read all take its start date), so it is closed to history first, at its
         // last logged activity, and today starts fresh.
-        sessionDao.getActiveSession()?.let { active ->
-            val sets = loggedSetDao.allForSession(active.id)
-            if (clock.nowMs() - lastActivityMs(active, sets) >= STALE_SESSION_MS) closeAbandoned(active, sets)
-        }
+        closeStaleLocked()
         sessionDao.getActiveSession()?.let { active ->
             // Don't resume a "zombie" session whose day the program no longer has — resuming it would
             // load the wrong day's plan (Program.day() falls back to the first day) and log under a stale
@@ -630,6 +627,25 @@ class WorkoutRepository @Inject constructor(
         val active = sessionDao.getActiveSession() ?: return null
         if (active.dayKey in validDayKeys) return null
         return closeAbandoned(active, loggedSetDao.allForSession(active.id))
+    }
+
+    /** What [closeStaleSession] closed: the day, when it started, and whether its work was kept. */
+    data class StaleClosure(val dayKey: String, val startedAtMs: Long, val finishedToHistory: Boolean)
+
+    /**
+     * Close an open session nobody has touched for [STALE_SESSION_MS], as a start would. Run at app
+     * start too, so the feed and the widget never offer to "resume" a workout from weeks ago, which
+     * the next start would close anyway.
+     */
+    suspend fun closeStaleSession(): StaleClosure? = startMutex.withLock { closeStaleLocked() }
+
+    /** [closeStaleSession]'s body, for callers already holding [startMutex] (it is not reentrant). */
+    private suspend fun closeStaleLocked(): StaleClosure? {
+        val active = sessionDao.getActiveSession() ?: return null
+        val sets = loggedSetDao.allForSession(active.id)
+        if (clock.nowMs() - lastActivityMs(active, sets) < STALE_SESSION_MS) return null
+        val res = closeAbandoned(active, sets) ?: return null
+        return StaleClosure(active.dayKey, active.startedAt, res.finishedToHistory)
     }
 
     /** When [active] was last worked on: its newest logged set, or its start when it has none. */

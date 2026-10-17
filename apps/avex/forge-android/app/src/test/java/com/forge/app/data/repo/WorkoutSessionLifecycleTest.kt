@@ -103,4 +103,21 @@ class WorkoutSessionLifecycleTest {
         db.sessionDao().finishIfUnfinished(open, now)
         assertEquals(false, repo.restoreSet(set))
     }
+
+    @Test fun `the startup sweep closes a stale session and says what it kept`() = runBlocking {
+        val repo = repo()
+        val startedAt = now - 10 * day
+        val old = db.sessionDao().insert(Session(dayKey = "upper-a", startedAt = startedAt))
+        val ex = repo.addExerciseToSession(old, "bench", 0)
+        now = startedAt + 60_000
+        repo.logSet(ex, "100", 100.0, 5)
+        now = startedAt + 10 * day
+        val closed = repo.closeStaleSession()!!
+        assertEquals("upper-a", closed.dayKey)
+        assertTrue(closed.finishedToHistory)
+        assertNull(db.sessionDao().getActiveSession())
+        // A fresh session is left alone.
+        db.sessionDao().insert(Session(dayKey = "upper-a", startedAt = now))
+        assertNull(repo.closeStaleSession())
+    }
 }
