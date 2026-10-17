@@ -691,7 +691,7 @@ fn gate(ctx: &mut Ctx, payload: GateIn, skip_policy: Option<&str>, probes: &Prob
             guardrail::insert_refusal_notification(ctx.tx(), project_id, &ctx.actor, &error, &ctx.now)?;
             ctx.commit_error(None);
             ctx.emit("guardrail.refused", json!({"session": payload.session, "code": error.code}));
-            ctx.emit("notify.new", json!({"category": "guardrail", "project_id": project_id}));
+            ctx.emit("notify.changed", json!({"category": "guardrail", "project_id": project_id}));
             Err(error)
         }
         Decision::Hold { policy, mut error, details } => {
@@ -935,7 +935,7 @@ fn enforce_request(
             guardrail::insert_refusal_notification(ctx.tx(), project_id, &ctx.actor, &error, &ctx.now)?;
             ctx.commit_error(None);
             ctx.emit("guardrail.refused", json!({"op": ctx.op, "code": error.code}));
-            ctx.emit("notify.new", json!({"category": "guardrail", "project_id": project_id}));
+            ctx.emit("notify.changed", json!({"category": "guardrail", "project_id": project_id}));
             Err(error)
         }
         Decision::Hold { policy, error, details } => Err(hold_op(ctx, project_id, &policy, error, &details)?),

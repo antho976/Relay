@@ -346,33 +346,60 @@ fn release_claims(ctx: &mut Ctx, session: &Session) -> Result<(), BusError> {
     Ok(())
 }
 
-// Hooks and explicit reports can describe the same result more than once.
-// Keep one unread card per result, without replaying its sound or peer broadcast.
-fn record_agent_notification(ctx: &mut Ctx, s: &Session, category: &str, title: &str, body: &str, link: &str) -> Result<bool, BusError> {
-    let existing = ctx.tx().query_row(
-        "SELECT id FROM notifications WHERE project_id=?1 AND category=?2 AND title=?3 AND link=?4 AND read=0 ORDER BY id DESC LIMIT 1",
-        params![s.project_id, category, title, link], |row| row.get::<_, i64>(0),
-    ).optional().bus()?;
-    if let Some(id) = existing {
+/// How a person hears an agent's notification.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ping {
+    /// It needs the person: a permission prompt, a blocked or partial done. Each one sounds.
+    Always,
+    /// A finished turn. A terminal sounds one until the person types into it again
+    /// ([`crate::pty::Pty::claim_ping`]); the turns an agent takes on its own after that (a
+    /// background task, a peer's mail, its next assignment) only update the card.
+    Finished,
+}
+
+// Hooks and explicit reports can describe the same result more than once, and an agent left
+// alone finishes turn after turn. Keep one card per result, and sound only what `ping` allows.
+// True when this one sounds: the caller emits `notify.new` and tells the peers.
+fn record_agent_notification(ctx: &mut Ctx, s: &Session, ping: Ping, category: &str, title: &str, body: &str, link: &str) -> Result<bool, BusError> {
+    let (latest, unread) = ctx.tx().prepare_cached(
+        "SELECT id,read=0 FROM notifications WHERE project_id=?1 AND category=?2 AND title=?3 AND link=?4 ORDER BY id DESC LIMIT 1",
+    ).bus()?.query_row(params![s.project_id, category, title, link], |row| Ok((Some(row.get::<_, i64>(0)?), row.get::<_, bool>(1)?)))
+        .optional().bus()?.unwrap_or((None, false));
+    let loud = match (ping, ctx.engine().pty(s.id)) {
+        (Ping::Always, _) => true,
+        (Ping::Finished, Some(pty)) => pty.claim_ping(),
+        // No terminal to type into, so nothing says the person came back: one ping per unread card.
+        (Ping::Finished, None) => !unread,
+    };
+    if let (false, Some(id)) = (loud, latest) {
         // The card now stands for this report, so it takes this report's time: notify.list and
         // the client's LAST REPORT order by created_at, and a stale one buried it (RA-234). The
-        // generic hook body never replaces a real summary. Still unread: only unread rows match.
+        // generic hook body never replaces a real summary. A card already read stays read.
         let keep_body = body == "Agent turn completed";
         ctx.tx().prepare_cached("UPDATE notifications SET body=CASE WHEN ?1 THEN body ELSE ?2 END,created_at=?3 WHERE id=?4").bus()?
             .execute(params![keep_body, body, ctx.now, id]).bus()?;
         ctx.emit("notify.changed", json!({"notification_id":id,"project_id":s.project_id}));
         return Ok(false);
     }
-    ctx.tx().execute(
-        "INSERT INTO notifications(project_id,category,title,body,link,read,created_at) VALUES (?1,?2,?3,?4,?5,0,?6)",
-        params![s.project_id, category, title, body, link, ctx.now],
-    ).bus()?;
-    Ok(true)
+    // A loud card replaces the unread one it repeats, so the phone, which alerts on new rows,
+    // hears it too. A quiet first card is filed already read.
+    if loud && unread {
+        ctx.tx().prepare_cached(
+            "UPDATE notifications SET read=1 WHERE project_id=?1 AND category=?2 AND title=?3 AND link=?4 AND read=0",
+        ).bus()?.execute(params![s.project_id, category, title, link]).bus()?;
+    }
+    ctx.tx().prepare_cached(
+        "INSERT INTO notifications(project_id,category,title,body,link,read,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+    ).bus()?.execute(params![s.project_id, category, title, body, link, !loud, ctx.now]).bus()?;
+    if !loud {
+        ctx.emit("notify.changed", json!({"project_id":s.project_id}));
+    }
+    Ok(loud)
 }
 
 fn notify_completion(ctx: &mut Ctx, s: &Session, summary: &str) -> Result<(), BusError> {
     let link = done_link(s);
-    if !record_agent_notification(ctx, s, "agent_done", &format!("{} finished", s.name), summary, &link)? {
+    if !record_agent_notification(ctx, s, Ping::Finished, "agent_done", &format!("{} finished", s.name), summary, &link)? {
         return Ok(());
     }
     if let Some(message) = crate::handlers::notes::send_system(
@@ -1681,7 +1708,8 @@ pub fn register(e: &mut Engine) {
             "blocked" => format!("{} is blocked", s.name),
             _ => format!("{} finished part of its work", s.name),
         };
-        let fresh_notification = record_agent_notification(ctx, s, category, &headline, summary, &link)?;
+        let ping = if status == "completed" { Ping::Finished } else { Ping::Always };
+        let fresh_notification = record_agent_notification(ctx, s, ping, category, &headline, summary, &link)?;
         if fresh_notification {
           if let Some(message) = crate::handlers::notes::send_system(
             ctx.tx(), s.project_id, "*", &format!("{headline}: {summary}"), s.task_id, &ctx.now,
@@ -1841,7 +1869,9 @@ pub fn register(e: &mut Engine) {
             "blocked" => "blocked",
             "notification" => {
                 let type_ = data.get("notification_type").or_else(|| data.get("type")).and_then(Value::as_str).unwrap_or("");
-                if matches!(type_, "permission_prompt" | "idle_prompt" | "agent_needs_input" | "blocked") { "blocked" } else { sessions::state_str(s.state) }
+                // Claude's `idle_prompt` ("waiting for your input") follows every finished turn a
+                // minute later: the turn's Stop already said so, and it needs nothing new.
+                if matches!(type_, "permission_prompt" | "elicitation_dialog" | "agent_needs_input" | "blocked") { "blocked" } else { sessions::state_str(s.state) }
             }
             _ => return Err(BusError::invalid("session.report_kind", "kind must be session_start, tool_use, stop, notification, idle, or blocked")),
         };
@@ -1899,7 +1929,7 @@ pub fn register(e: &mut Engine) {
         if blocked && state_changed {
             let body = data.get("message").and_then(Value::as_str).unwrap_or("Agent needs attention");
             let link = json!({"op":"session.get", "payload":{"session":s.name}}).to_string();
-            if record_agent_notification(ctx, s, "agent_blocked", &format!("{} needs attention", s.name), body, &link)? {
+            if record_agent_notification(ctx, s, Ping::Always, "agent_blocked", &format!("{} needs attention", s.name), body, &link)? {
             ctx.emit("notify.new", json!({"category":"agent_blocked", "project_id":s.project_id, "session":s.name}));
             if let Some(message) = crate::handlers::notes::send_system(
                 ctx.tx(), s.project_id, "*", &format!("{} is blocked: {}", s.name, body), s.task_id, &ctx.now,

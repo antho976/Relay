@@ -2886,6 +2886,9 @@ pub fn insert_hold(
     Ok(hold_id)
 }
 
+/// A refusal is the agent's to work around, not the person's to answer: it is filed in the
+/// notification centre already read, with no sound and no phone alert. Holds and exception
+/// requests are what wait on the person.
 pub fn insert_refusal_notification(
     tx: &Transaction,
     project_id: Id,
@@ -2895,7 +2898,7 @@ pub fn insert_refusal_notification(
 ) -> Result<(), BusError> {
     tx.execute(
         "INSERT INTO notifications(project_id, category, title, body, link, read, created_at)
-         VALUES (?1, 'guardrail', 'Guardrail refusal', ?2, NULL, 0, ?3)",
+         VALUES (?1, 'guardrail', 'Guardrail refusal', ?2, NULL, 1, ?3)",
         params![project_id, format!("{actor}: {} — {}", error.code, error.message), now],
     )
     .bus()?;

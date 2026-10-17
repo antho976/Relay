@@ -701,8 +701,8 @@ fn notifications(ui: &Rc<Ui>, stack: &gtk::Stack, form: &Form, data: &Value) {
     for (title, aside, events) in [
         ("Agents", "Always shown · sound when on", &[
             ("agent_blocked", "Agent needs you", "Blocked on a question or waiting for approval."),
-            ("agent_done", "Agent finished", "A task completed and the branch is ready to review."),
-            ("guardrail", "Guardrail triggered", "An agent hit a cap or tried to touch a protected path."),
+            ("agent_done", "Agent finished", "Once per terminal, and again after you type into it."),
+            ("guardrail", "Guardrail needs you", "An action held for approval, or an exception request. Refusals are filed quietly."),
         ][..]),
         ("System", "", &[
             ("provider", "Providers", "Claude or Codex limits, outages and sign-in issues."),

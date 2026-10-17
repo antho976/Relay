@@ -1163,6 +1163,65 @@ fn unassigned_done_stop_marker_is_consumed_once_and_reset_on_session_start() {
     ok(&f.engine,"session.close",json!({"session":name}));
 }
 
+/// A terminal pings once when its agent finishes, then again only when the person has typed
+/// into it since. Claude's "waiting for your input" a minute after a Stop is no new ping; a
+/// permission prompt always is.
+#[test]
+fn a_terminal_pings_once_per_finish_until_the_person_types_again() {
+    let f = fixture();
+    let provider = fake_discovery_provider(&f.root, "claude", "claude 1.0.0");
+    ok(&f.engine, "settings.set", json!({"path": "providers.claude.path", "value": provider}));
+    let created = ok(&f.engine, "session.create", json!({"project_id":1,"provider":"claude"}));
+    let name = created["name"].as_str().unwrap().to_string();
+    ok(&f.engine, "session.spawn", json!({"session":name}));
+    let mut events = f.engine.subscribe();
+    let as_agent = |kind: &str, data: Value| {
+        f.engine.dispatch(Request::new(Actor::agent(&name), "session.report", json!({"session":name,"kind":kind,"data":data})), Door::InProcess).into_result().unwrap();
+    };
+    let mut pings = || {
+        let mut heard = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if event.ev == "notify.new" { heard.push(event.payload["category"].as_str().unwrap_or("").to_string()); }
+        }
+        heard
+    };
+    let unread = || ok(&f.engine, "notify.list", json!({"unread_only":true}))["notifications"].as_array().unwrap().clone();
+    let finish = |message: &str| { as_agent("tool_use", json!({})); as_agent("stop", json!({"message":message})); };
+
+    finish("first answer");
+    assert_eq!(pings(), ["agent_done"], "the first finish pings");
+    as_agent("notification", json!({"notification_type":"idle_prompt","message":"Claude is waiting for your input"}));
+    assert_eq!(pings(), Vec::<String>::new(), "idle_prompt repeats the Stop");
+    assert_eq!(ok(&f.engine, "session.get", json!({"session":name}))["state"], "idle");
+
+    // The agent carries on alone (a background task, a peer's mail): the card follows, quietly.
+    finish("second answer");
+    finish("third answer");
+    assert_eq!(pings(), Vec::<String>::new(), "turns the person did not ask for do not ping");
+    let cards = unread();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0]["body"], "third answer");
+
+    // A permission prompt needs the person, every time.
+    as_agent("tool_use", json!({}));
+    as_agent("notification", json!({"notification_type":"permission_prompt","message":"Allow Bash?"}));
+    as_agent("tool_use", json!({}));
+    as_agent("notification", json!({"notification_type":"permission_prompt","message":"Allow Edit?"}));
+    assert_eq!(pings(), ["agent_blocked", "agent_blocked"]);
+    as_agent("tool_use", json!({}));
+    as_agent("stop", json!({"message":"after the prompts"}));
+    assert_eq!(pings(), Vec::<String>::new(), "no one typed since the last finish ping");
+
+    // The person answers in the terminal: the next finish is theirs, and pings.
+    ok(&f.engine, "session.input", json!({"session":name,"data":"go on\n"}));
+    finish("answer to the person");
+    assert_eq!(pings(), ["agent_done"]);
+    let done: Vec<Value> = unread().into_iter().filter(|card| card["category"] == "agent_done").collect();
+    assert_eq!(done.len(), 1, "the loud card replaces the one it repeats");
+    assert_eq!(done[0]["body"], "answer to the person");
+    ok(&f.engine, "session.close", json!({"session":name}));
+}
+
 #[test]
 fn phase_six_park_wake_restore_and_immutable_launch_options() {
     let f = fixture();

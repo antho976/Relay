@@ -1635,7 +1635,9 @@ struct InputRef<'a> {
 pub(crate) fn write_input(pty: &crate::pty::Pty, data: &str) -> Result<bool, BusError> {
     pty.write(data.as_bytes())
         .map_err(|e| BusError::conflict("session.io", e.to_string()))?;
-    Ok(!data.is_empty() && pty.claim_idle_edge())
+    if data.is_empty() { return Ok(false); }
+    pty.owe_ping();
+    Ok(pty.claim_idle_edge())
 }
 
 #[cfg(test)]
