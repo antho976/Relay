@@ -395,10 +395,20 @@ class CoachViewModel @Inject constructor(
     private fun todayIndex(s: AdaptationSnapshot): Int =
         Instant.ofEpochMilli(s.nowMs).atZone(s.zoneId).toLocalDate().dayOfWeek.value - 1
 
-    private fun e1rmSeries(s: AdaptationSnapshot): Map<String, List<Double>> =
-        s.exerciseHistory.mapValues { (_, bouts) ->
-            bouts.filter { !it.skipped }.mapNotNull { it.bestE1rm() }.takeLast(E1RM_BOUTS_SHOWN)
+    /**
+     * Each slot's e1RM evidence, drawn from the same bouts the stall the coach acts on is read from
+     * (ProgressionAdvisor.progressionSeries). Every non-skipped bout used to chart: a swap call's
+     * evidence showed a cliff from the barbell row to the dumbbell row it replaced, test and
+     * technique days dipped it, and "Where you stand" read the cliff as the lift slipping.
+     */
+    private fun e1rmSeries(s: AdaptationSnapshot): Map<String, List<Double>> {
+        val restart = com.forge.app.domain.adapt.ProgressionAdvisor.lastReturnFromLayoffMs(s)
+        return s.exerciseHistory.mapValues { (_, bouts) ->
+            com.forge.app.domain.adapt.ProgressionAdvisor.progressionSeries(bouts, restart)
+                .mapNotNull { it.bestE1rm() }
+                .takeLast(E1RM_BOUTS_SHOWN)
         }.filterValues { it.size >= 2 }
+    }
 
     private fun healthSeries(s: AdaptationSnapshot): HealthSeries {
         val t = AdaptThresholds()

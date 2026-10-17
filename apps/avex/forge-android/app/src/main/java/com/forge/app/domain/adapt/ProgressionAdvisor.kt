@@ -473,30 +473,7 @@ object ProgressionAdvisor {
         restartMs: Long?
     ): StallRead? {
         if (slot.unit == ExerciseUnit.BODYWEIGHT) return null
-        val bouts = (s.exerciseHistory[slot.exerciseId] ?: return null)
-            // A1: test / technique / first-back bouts are not ordinary training — a top
-            // single on a test day would anchor the weight, and a deliberately light
-            // technique day reads as a stall. Filtering here removes them from the e1RM
-            // series, the stall counter AND the prevMax anchor in one place.
-            .filter { b -> b.countsForProgression }
-            // A bout counts only if it has a set an e1RM can be read from. "Any weighted,
-            // unassisted set" also admitted weighted timed holds (imported weighted planks, loaded
-            // carries), which have no e1RM, and the series then crashed on the missing value.
-            .filter { b -> !b.skipped && b.sets.any { it.isWorkingStrengthSet() } }
-            // A swap changes what the series MEASURES. Rotating a barbell row (e1RM ~160) to
-            // a dumbbell row (e1RM ~62) left `best` pinned to the pre-swap lift, so no bout on
-            // the new exercise could ever beat it and the stall counter grew by one every
-            // session — forever. The coach then re-proposed the same rotation every week, and
-            // the outcome watcher, which judges swaps on attendance alone, walked it to
-            // autopilot. The series restarts at the boundary instead.
-            .let { history -> sinceLastSwap(history) }
-            // A layoff changes what the series can SAY. Measured against the pre-break best, the
-            // ordinary detraining dip after six weeks off reads as a stall on every lift, and two
-            // to four weeks back the ladder proposes rep shifts and swaps for a problem that was
-            // never training. The series restarts at the first session back, like it does at a
-            // swap; LifeEvents only remembers the gap for about three weeks, so the boundary is
-            // read from the session dates themselves.
-            .let { history -> if (restartMs == null) history else history.filter { it.sessionStartedAt >= restartMs } }
+        val bouts = progressionSeries(s.exerciseHistory[slot.exerciseId] ?: return null, restartMs)
         if (bouts.size <= t.plateauMinBouts) return null
 
         val e1rms = bouts.mapNotNull { bestWorkingE1rm(it.sets) }
@@ -512,6 +489,39 @@ object ProgressionAdvisor {
         if (stall < t.plateauMinBouts) return null
         return StallRead(bouts, e1rms, best, stall)
     }
+
+    /**
+     * The bouts a lift's progress is read from: ordinary training on the lift the slot holds now,
+     * since the last return from a layoff. One definition, so the stall the coach acts on and the
+     * evidence chart it shows beside the call are drawn from the same sessions.
+     *
+     * @param restartMs [lastReturnFromLayoffMs] for the snapshot, or null for no restart.
+     */
+    fun progressionSeries(history: List<ExerciseBout>, restartMs: Long?): List<ExerciseBout> =
+        history
+            // A1: test / technique / first-back bouts are not ordinary training — a top
+            // single on a test day would anchor the weight, and a deliberately light
+            // technique day reads as a stall. Filtering here removes them from the e1RM
+            // series, the stall counter AND the prevMax anchor in one place.
+            .filter { b -> b.countsForProgression }
+            // A bout counts only if it has a set an e1RM can be read from. "Any weighted,
+            // unassisted set" also admitted weighted timed holds (imported weighted planks, loaded
+            // carries), which have no e1RM, and the series then crashed on the missing value.
+            .filter { b -> !b.skipped && b.sets.any { it.isWorkingStrengthSet() } }
+            // A swap changes what the series MEASURES. Rotating a barbell row (e1RM ~160) to
+            // a dumbbell row (e1RM ~62) left `best` pinned to the pre-swap lift, so no bout on
+            // the new exercise could ever beat it and the stall counter grew by one every
+            // session — forever. The coach then re-proposed the same rotation every week, and
+            // the outcome watcher, which judges swaps on attendance alone, walked it to
+            // autopilot. The series restarts at the boundary instead.
+            .let { bouts -> sinceLastSwap(bouts) }
+            // A layoff changes what the series can SAY. Measured against the pre-break best, the
+            // ordinary detraining dip after six weeks off reads as a stall on every lift, and two
+            // to four weeks back the ladder proposes rep shifts and swaps for a problem that was
+            // never training. The series restarts at the first session back, like it does at a
+            // swap; LifeEvents only remembers the gap for about three weeks, so the boundary is
+            // read from the session dates themselves.
+            .let { bouts -> if (restartMs == null) bouts else bouts.filter { it.sessionStartedAt >= restartMs } }
 
     private fun plateauSuggestion(
         dayKey: String,
@@ -669,7 +679,7 @@ object ProgressionAdvisor {
      * [com.forge.app.domain.coach.LifeEvents.LAYOFF_MIN_DAYS] calendar days, or null when training
      * has been continuous. Calendar days in the snapshot's zone, the same count LifeEvents uses.
      */
-    internal fun lastReturnFromLayoffMs(s: AdaptationSnapshot): Long? {
+    fun lastReturnFromLayoffMs(s: AdaptationSnapshot): Long? {
         val starts = s.sessions.asSequence()
             .filter { it.finishedAt != null && !it.isUntracked }
             .map { it.startedAt }
