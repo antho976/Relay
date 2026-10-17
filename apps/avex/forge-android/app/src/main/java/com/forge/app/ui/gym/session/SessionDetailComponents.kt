@@ -94,7 +94,10 @@ internal fun SessionHeaderBlock(
         Column(Modifier.weight(1f)) {
             val zone = ZoneId.systemDefault()
             val date = Instant.ofEpochMilli(data.dateMs).atZone(zone).toLocalDate()
-            val dateStr = date.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", currentLocale()))
+            // The year when it isn't this one, as History shows it: "Monday, 14 October" was
+            // ambiguous for last year's sessions.
+            val pattern = if (date.year == java.time.LocalDate.now(zone).year) "EEEE, d MMMM" else "EEEE, d MMMM yyyy"
+            val dateStr = date.format(DateTimeFormatter.ofPattern(pattern, currentLocale()))
             val sub = buildList {
                 // Deload marker wins; otherwise the stored session-type's pill (TEST/TECHNIQUE/… once a
                 // picker writes them) — same resolution as the Overview status pill so the two can't drift.
