@@ -226,7 +226,7 @@ internal suspend fun DayViewModel.computeOrderingSuggestion() {
 internal fun DayViewModel.startSessionService(dayName: String) {
     // The notification counts up from the same active-time anchor the screen reads (prior sittings
     // + this one), not from now: resuming a session 40 minutes in would otherwise read "Just started".
-    bridge.startSession(SessionNotifState(dayName, _state.value.elapsedAnchorMs ?: clock.nowMs()))
+    bridge.startSession(SessionNotifState(dayName, _state.value.elapsedAnchorMs ?: clock.nowMs(), dayKey))
     appContext.startForegroundService(Intent(appContext, WorkoutSessionService::class.java))
 }
 

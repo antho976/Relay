@@ -22,7 +22,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -43,9 +44,12 @@ class WorkoutSessionService : Service() {
     @Inject lateinit var settingsRepo: SettingsRepository
     @Inject lateinit var wearConnection: com.forge.app.service.wear.WearConnection
     @Inject lateinit var wearPublisher: com.forge.app.service.wear.WearStatePublisher
+    @Inject lateinit var timerHolder: com.forge.app.service.wear.SessionTimerHolder
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentState: SessionNotifState? = null
+    /** The rest the session notification is showing, as of its last structural change. */
+    private var currentRest: com.forge.app.domain.timer.RestTimerState? = null
     private var initialized = false
     /** Cached per-type opt-out (N2), kept live by a collector — defaults to the pref's own default. */
     private var restTimerAlertEnabled = true
@@ -65,7 +69,7 @@ class WorkoutSessionService : Service() {
             nm.createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_SESSION,
-                    "Workout Session",
+                    "Workout session",
                     NotificationManager.IMPORTANCE_LOW
                 ).apply {
                     description = "Shown while a workout is in progress"
@@ -75,7 +79,7 @@ class WorkoutSessionService : Service() {
             nm.createNotificationChannel(
                 NotificationChannel(
                     CHANNEL_TIMER,
-                    "Rest Timer",
+                    "Rest timer",
                     NotificationManager.IMPORTANCE_HIGH
                 ).apply {
                     description = "Alerts when the rest timer finishes"
@@ -134,12 +138,19 @@ class WorkoutSessionService : Service() {
                 bridge.timerDone.collect { serviceScope.launch { handleTimerDone() } }
             }
 
-            // Refresh elapsed time in the session notification every 60 s (#48)
+            // The rest countdown on the lock screen: with the phone pocketed between sets the
+            // notification only said "23 min", once a minute, and the time left on the rest was
+            // invisible until the done buzz. The system draws the countdown (a chronometer), so the
+            // notification is re-posted only on a structural change (start, pause, resume, ±30 s,
+            // stop, done), never on the timer's 1 Hz tick: see [RestNotifKey].
             serviceScope.launch {
-                while (true) {
-                    delay(60_000)
-                    currentState?.let { updateSessionNotification(it) }
-                }
+                timerHolder.controller.state
+                    .map { rest -> RestNotifKey.of(rest, System.currentTimeMillis()) to rest }
+                    .distinctUntilChanged { a, b -> a.first.sameAs(b.first) }
+                    .collect { (_, rest) ->
+                        currentRest = rest
+                        currentState?.let { updateSessionNotification(it) }
+                    }
             }
         }
 
@@ -152,44 +163,67 @@ class WorkoutSessionService : Service() {
     }
 
     private fun sessionNotification(state: SessionNotifState): Notification {
-        val elapsedMin = ((System.currentTimeMillis() - state.startedAtMs) / 60_000).toInt()
-            .coerceAtLeast(0)
-        val text = if (elapsedMin < 1) "Just started" else "$elapsedMin min"
-        return buildSessionNotification(state.dayName, text)
+        val now = System.currentTimeMillis()
+        val rest = currentRest?.takeIf { !it.isFinished }
+        return when {
+            rest != null && !rest.isPaused -> buildSessionNotification(
+                "Rest · ${state.dayName}", "${formatRest(rest.totalSeconds)} rest", state.dayKey,
+                chronometerAtMs = now + rest.secondsRemaining * 1000L, countDown = true
+            )
+            rest != null -> buildSessionNotification(
+                "Rest paused · ${state.dayName}", "${formatRest(rest.secondsRemaining)} left", state.dayKey
+            )
+            // No rest running: the workout's own clock, counting up from its active-time anchor.
+            else -> buildSessionNotification(state.dayName, "In progress", state.dayKey, chronometerAtMs = state.startedAtMs)
+        }
     }
 
-    private fun buildSessionNotification(title: String, text: String): Notification {
-        val tapIntent = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+    private fun formatRest(seconds: Int): String = "%d:%02d".format(seconds / 60, seconds % 60)
+
+    /** Opens the workout's own day (the widget's deep link), or the app when the day is unknown. */
+    private fun openWorkoutIntent(requestCode: Int, dayKey: String?): PendingIntent = PendingIntent.getActivity(
+        this, requestCode,
+        Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+            dayKey?.let { putExtra(com.forge.app.widget.EXTRA_START_DAY_KEY, it) }
+        },
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    private fun buildSessionNotification(
+        title: String,
+        text: String,
+        dayKey: String? = null,
+        chronometerAtMs: Long? = null,
+        countDown: Boolean = false
+    ): Notification {
         return NotificationCompat.Builder(this, CHANNEL_SESSION)
             .setSmallIcon(R.drawable.ic_stat_forge)
             .setContentTitle(title)
             .setContentText(text)
-            .setContentIntent(tapIntent)
+            .setContentIntent(openWorkoutIntent(0, dayKey))
             .setOngoing(true)
             .setSilent(true)
+            .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .apply {
+                if (chronometerAtMs != null) {
+                    setWhen(chronometerAtMs)
+                    setShowWhen(true)
+                    setUsesChronometer(true)
+                    setChronometerCountDown(countDown)
+                }
+            }
             .build()
     }
 
     private fun postTimerDoneNotification() {
         vibratePhone()
-        val tapIntent = PendingIntent.getActivity(
-            this, 1,
-            Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val tapIntent = openWorkoutIntent(1, currentState?.dayKey)
         val notification = NotificationCompat.Builder(this, CHANNEL_TIMER)
             .setSmallIcon(R.drawable.ic_stat_forge)
-            .setContentTitle("Rest timer done")
-            .setContentText("Time to get back to it")
+            .setContentTitle("Rest done")
+            .setContentText(currentState?.dayName?.let { "Next set · $it" } ?: "Next set")
             .setContentIntent(tapIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -243,4 +277,25 @@ class WorkoutSessionService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+}
+
+/**
+ * What the session notification shows about the rest, reduced to the parts that change its
+ * content. A running rest is keyed on its END instant (now + remaining), which stays put while the
+ * timer ticks, so a once-a-second state only re-posts when the end actually moves (±30 s, a reset)
+ * or the rest pauses, resumes, finishes or stops.
+ */
+internal data class RestNotifKey(val active: Boolean, val paused: Boolean, val value: Long) {
+    /** Equal for notification purposes: a running end may jitter by a second at a tick boundary. */
+    fun sameAs(other: RestNotifKey): Boolean =
+        active == other.active && paused == other.paused &&
+            (if (active && !paused) kotlin.math.abs(value - other.value) <= 1_500 else value == other.value)
+
+    companion object {
+        fun of(rest: com.forge.app.domain.timer.RestTimerState?, nowMs: Long): RestNotifKey = when {
+            rest == null || rest.isFinished -> RestNotifKey(active = false, paused = false, value = 0)
+            rest.isPaused -> RestNotifKey(active = true, paused = true, value = rest.secondsRemaining.toLong())
+            else -> RestNotifKey(active = true, paused = false, value = nowMs + rest.secondsRemaining * 1000L)
+        }
+    }
 }
