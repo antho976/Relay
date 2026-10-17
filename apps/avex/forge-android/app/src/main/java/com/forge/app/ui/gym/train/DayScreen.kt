@@ -10,8 +10,10 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import com.forge.app.ui.common.ForgeSnackbar
@@ -38,6 +40,7 @@ import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -164,10 +167,14 @@ fun DayScreen(
             val timer = restTimer.value
             var lastTimer by remember { mutableStateOf(timer) }
             LaunchedEffect(timer) { if (timer != null) lastTimer = timer }
+            // The list doesn't make room for the keyboard (edge-to-edge, no IME padding), so the
+            // card's rest row can sit under it while still counting as on screen. Typing the next
+            // set is exactly when that happens, so an open keyboard always gets the bubble.
+            val imeOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
             AnimatedVisibility(
                 // Only once the card's own rest row is off screen: with both showing, the same
                 // countdown appeared twice and the bubble covered the card's action row.
-                visible = timer != null && !inlineRestOnScreen.value,
+                visible = timer != null && (!inlineRestOnScreen.value || imeOpen),
                 enter = fadeIn(ForgeMotion.enterTween(ForgeMotion.DurationFast)),
                 exit = scaleOut(ForgeMotion.exitTween(), targetScale = 0.6f) + fadeOut(ForgeMotion.exitTween())
             ) {
