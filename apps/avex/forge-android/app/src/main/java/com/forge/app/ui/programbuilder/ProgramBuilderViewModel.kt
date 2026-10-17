@@ -48,6 +48,8 @@ internal interface ProgramBuilderStore {
     suspend fun overlaysForDay(dayId: String): List<ProgramCustomization> = emptyList()
     /** Coach-applied swaps: base library id to the exercise swapped in. */
     suspend fun coachSwapTargets(): Map<String, String> = emptyMap()
+    /** The user's "every week" swaps: base library id to the swapped lift's name and id. */
+    suspend fun userSwapTargets(): Map<String, Pair<String, String?>> = emptyMap()
 }
 
 internal class RepositoryProgramBuilderStore(
@@ -78,6 +80,7 @@ internal class RepositoryProgramBuilderStore(
     override suspend fun overlaysForDay(dayId: String): List<ProgramCustomization> =
         programRepository.overlaysForDay(dayId)
     override suspend fun coachSwapTargets(): Map<String, String> = programRepository.coachSwapTargets()
+    override suspend fun userSwapTargets(): Map<String, Pair<String, String?>> = programRepository.userSwapTargets()
     override suspend fun saveSchedule(schedule: List<String>?) {
         if (schedule == null) {
             settingsRepo.setScheduleMode(WeeklySchedule.MODE_SEQUENCE)
@@ -150,6 +153,15 @@ class ProgramBuilderViewModel internal constructor(
     var deloadWeekRunning by mutableStateOf(false)
         private set
 
+    /**
+     * The user's "every week" swaps, base library id to (name, id) of the lift trained instead. The
+     * viewer draws the lift actually trained: a swap made from the workout lives in its own overlay,
+     * so "Your program" said Cable Fly while every session trained DB Fly. The editor keeps editing
+     * the base slot, which is what a save writes and what the swap is attached to.
+     */
+    var userSwaps by mutableStateOf<Map<String, Pair<String, String?>>>(emptyMap())
+        private set
+
     /** Currently "go with the flow" — saving a plan switches to follow-a-plan, so the screen confirms
      *  first (see [save], which performs the flip). */
     val freestyleMode: StateFlow<Boolean> =
@@ -190,7 +202,10 @@ class ProgramBuilderViewModel internal constructor(
     fun loadIfNeeded(blank: Boolean) {
         // Read on every entry, draft-restored or not: a blank plan carries no deload rows, while a
         // restored edit of the saved program still does.
-        if (!blank) viewModelScope.launch { deloadWeekRunning = store.deloadWeekRunning() }
+        if (!blank) viewModelScope.launch {
+            deloadWeekRunning = store.deloadWeekRunning()
+            userSwaps = store.userSwapTargets()
+        }
         if (loaded) return
         loaded = true
         if (blank) { days = emptyList(); loadComplete = true; return }

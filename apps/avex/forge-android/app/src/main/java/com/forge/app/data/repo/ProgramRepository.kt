@@ -163,6 +163,16 @@ class ProgramRepository @Inject constructor(
      * Swaps the coach applied: base library id to the exercise it swapped in. [saveCustomProgram]
      * releases these, so the builder carries them as the slot's exercise to keep them.
      */
+    /**
+     * The user's "every week" swaps: base library id to the name (and id, when known) of the lift
+     * trained in its place. A builder save keeps these, so the viewer shows them rather than baking
+     * them into the slot.
+     */
+    suspend fun userSwapTargets(): Map<String, Pair<String, String?>> =
+        exerciseCustomizationDao.all()
+            .filter { it.source != com.forge.app.data.db.entities.OverlaySource.COACH && it.swappedName.isNotBlank() }
+            .associate { it.exerciseId to (it.swappedName to it.swappedExerciseId) }
+
     suspend fun coachSwapTargets(): Map<String, String> =
         exerciseCustomizationDao.all()
             .filter { it.source == com.forge.app.data.db.entities.OverlaySource.COACH }

@@ -306,7 +306,9 @@ fun ProgramBuilderScreen(
                     OpenDay(
                         day = shown,
                         showSets = many,
-                        onEdit = if (editing) ({ viewModel.openDay(shown.uid) }) else null
+                        onEdit = if (editing) ({ viewModel.openDay(shown.uid) }) else null,
+                        // Viewing shows what is trained; editing shows the slot being edited.
+                        swaps = if (editing) emptyMap() else viewModel.userSwaps
                     )
                 }
             }
@@ -355,7 +357,13 @@ fun ProgramBuilderScreen(
  * closes on a drawn filled `Edit day` capsule so the affordance is visible rather than implied.
  */
 @Composable
-internal fun OpenDay(day: BuilderDay, showSets: Boolean, onEdit: (() -> Unit)?) {
+internal fun OpenDay(
+    day: BuilderDay,
+    showSets: Boolean,
+    onEdit: (() -> Unit)?,
+    /** Base library id to (name, id) of the lift the user swapped in "every week". */
+    swaps: Map<String, Pair<String, String?>> = emptyMap()
+) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val exercises = day.exercises
     Column(
@@ -399,17 +407,26 @@ internal fun OpenDay(day: BuilderDay, showSets: Boolean, onEdit: (() -> Unit)?) 
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val swap = swaps[ex.libId]
                     ForgeGlyphBadge(
-                        ExerciseIcons.forEquipment(ExerciseLibrary.byId(ex.libId)?.equipment.orEmpty()),
+                        ExerciseIcons.forEquipment(ExerciseLibrary.byId(swap?.second ?: ex.libId)?.equipment.orEmpty()),
                         selected = false,
                         size = 34.dp
                     )
-                    Text(
-                        ex.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            swap?.first ?: ex.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        if (swap != null) {
+                            Text(
+                                "IN PLACE OF ${ex.name.uppercase()}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = muted
+                            )
+                        }
+                    }
                     Text("${ex.sets} × ${ex.reps}", style = MaterialTheme.typography.labelMedium, color = muted)
                 }
             }
