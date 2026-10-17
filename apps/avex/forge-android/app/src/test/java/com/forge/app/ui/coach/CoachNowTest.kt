@@ -128,6 +128,13 @@ class CoachNowTest {
     }
 
     @Test
+    fun changesWithNoVerdictAreCountedSoTheLineAddsUp() {
+        val line = recordLine(CoachRecord(applied = 4, held = 1, missed = 1, notJudged = 2, anyProposed = true))!!
+        assertEquals("1 of 4 held", line.value)
+        assertEquals("1 missed · 2 not judged", line.sub)
+    }
+
+    @Test
     fun theRecordIsAbsentUntilTheCoachHasProposedAnything() {
         assertNull(recordLine(CoachRecord()))
         assertEquals("None yet", recordLine(CoachRecord(anyProposed = true))!!.value)

@@ -182,6 +182,7 @@ internal fun recordLine(record: CoachRecord): StandingLine? {
         if (record.missed > 0) add("${record.missed} missed")
         if (record.watching > 0) add("${record.watching} still proving out")
         if (record.undone > 0) add("${record.undone} undone")
+        if (record.notJudged > 0) add("${record.notJudged} not judged")
     }
     return StandingLine(
         label,

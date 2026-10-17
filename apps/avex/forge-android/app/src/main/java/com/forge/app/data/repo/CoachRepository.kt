@@ -136,7 +136,9 @@ data class CoachTimeline(
  * The coach's track record in four counts. [applied] counts everything that crossed the apply line
  * (folded and reverted included, as the milestones count it); the other four split it by verdict,
  * so they sum to at most [applied]. A "not_followed" verdict sits in none of them: skipping the
- * work is the user's call, not a miss by the coach.
+ * work is the user's call, not a miss by the coach. It is counted on its own ([notJudged]) so the
+ * line can say where the rest went: after a break, "1 of 4 held · 1 missed" left two unexplained,
+ * which read as the coach failing.
  */
 data class CoachRecord(
     val applied: Int = 0,
@@ -146,6 +148,8 @@ data class CoachRecord(
     val watching: Int = 0,
     /** Taken back with Undo before the watcher reached a verdict. */
     val undone: Int = 0,
+    /** Applied, but no verdict was possible: the work wasn't done, or a break or illness covered the window. */
+    val notJudged: Int = 0,
     /** True once the coach has proposed anything at all, applied or not. */
     val anyProposed: Boolean = false
 )
@@ -394,6 +398,7 @@ class CoachRepository @Inject constructor(
                 it.outcome == "pending" && (it.status == STATUS_APPLIED || it.status == STATUS_FOLDED)
             },
             undone = applied.count { it.status == "reverted" && it.outcome == "pending" },
+            notJudged = applied.count { it.outcome == CoachDecision.OUTCOME_NOT_FOLLOWED },
             anyProposed = all.any { it.status != STATUS_SHADOW }
         )
     }
