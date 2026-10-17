@@ -6160,7 +6160,7 @@
       }
     },
     "design.create": {
-      "summary": "Start a design with one empty page; returns it and its page",
+      "summary": "Start a design with one empty page, only when the person asked for one; returns it and its page",
       "kind": "mutation",
       "audit": "always",
       "undo": "inverse",
@@ -6180,7 +6180,7 @@
       }
     },
     "design.update": {
-      "summary": "Rename a design or tie it to another terminal",
+      "summary": "Rename a design or tie it to another terminal, when the person asked",
       "kind": "mutation",
       "audit": "always",
       "undo": "inverse",
@@ -6220,7 +6220,7 @@
       }
     },
     "design.delete": {
-      "summary": "Move a design to the project's deleted designs; design.restore brings it back",
+      "summary": "Move a design to the project's deleted designs, only when the person asked; design.restore brings it back",
       "kind": "mutation",
       "audit": "always",
       "undo": "inverse",
@@ -6280,7 +6280,7 @@
       }
     },
     "design.apply": {
-      "summary": "Add, change, move or delete a design's nodes in one all-or-none list; returns what changed and its undo",
+      "summary": "Add, change, move or delete a design's nodes in one all-or-none list, only when the person asked for it; returns what changed and its undo",
       "kind": "mutation",
       "audit": "always",
       "undo": "inverse",
@@ -24939,6 +24939,107 @@
               "type": "null"
             }
           ]
+        },
+        "rotation": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Clockwise turn in degrees about the node's centre."
+        },
+        "sides": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "description": "A polygon's corners (3 to 24, default 3), or a star's points."
+        },
+        "star": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Makes a polygon a star: its inner points at this fraction of the outer (0.05 to 0.95;\n0.4 is a classic star)."
+        },
+        "gradient": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignGradient"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A gradient painted instead of `fill`."
+        },
+        "radii": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "Corner radii top-left, top-right, bottom-right, bottom-left, instead of `radius`."
+        },
+        "dash": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "description": "The stroke's dash pattern in px: `[6, 4]` dashes, `[1, 4]` dots. Absent is solid."
+        },
+        "blur": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Blur of the whole node, in px."
+        },
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "An icon node's icon: one of the names in the `ICONS` list (home, search, settings,\nuser, bell, mail, heart, star, plus, check, x, chevron-*, arrow-*, menu, trash, edit,\ncalendar, clock, image, file, folder, shopping-cart, credit-card, globe, map-pin, phone,\nmessage, send, filter, sliders, grid, list, play, pause, refresh, lock, eye, info,\nalert, help, sun, moon, wifi, battery, terminal, code, zap, cloud, bar-chart…)."
+        },
+        "from": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A connector's start: the node it is attached to. The line then runs from that node's\nedge and follows it when it moves; `points` are only where it was last drawn."
+        },
+        "to": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A connector's end: the node it is attached to."
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignRoute"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How a line runs between its ends (default `straight`)."
         }
       },
       "required": [
@@ -24990,6 +25091,16 @@
           "type": "string",
           "const": "image",
           "description": "A picture from `design.asset.add`, named by `src`."
+        },
+        {
+          "type": "string",
+          "const": "polygon",
+          "description": "A regular polygon (`sides`: 3 a triangle, 4 a diamond, 6 a hexagon…) or, with `star`, a\nstar of `sides` points. Its first point is at the top centre."
+        },
+        {
+          "type": "string",
+          "const": "icon",
+          "description": "An interface icon from Relay's set (`icon`, one of [`ICONS`]), drawn in `stroke`."
         }
       ]
     },
@@ -25121,6 +25232,90 @@
         }
       ],
       "description": "How an image fills its box."
+    },
+    "DesignGradient": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/DesignGradientKind",
+          "default": "linear"
+        },
+        "angle": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Direction of a linear gradient in degrees, as CSS reads it: 180 (the default) runs top\nto bottom, 90 left to right."
+        },
+        "stops": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignGradientStop"
+          },
+          "description": "2 to 8 colours along it."
+        }
+      },
+      "required": [
+        "stops"
+      ],
+      "description": "A gradient fill, painted instead of `fill`."
+    },
+    "DesignGradientKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "linear"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "radial",
+          "description": "From the centre out to the box's edges."
+        }
+      ]
+    },
+    "DesignGradientStop": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "type": "number",
+          "format": "double",
+          "description": "0 at the start, 1 at the end."
+        },
+        "color": {
+          "type": "string",
+          "description": "`#RRGGBB` or `#RRGGBBAA`."
+        }
+      },
+      "required": [
+        "at",
+        "color"
+      ]
+    },
+    "DesignRoute": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "straight"
+          ]
+        },
+        {
+          "type": "string",
+          "const": "elbow",
+          "description": "Right angles: across, then down, then across (or the other way, whichever is longer)."
+        },
+        {
+          "type": "string",
+          "const": "curve",
+          "description": "A smooth curve leaving and arriving along the longer axis."
+        }
+      ],
+      "description": "How a connector runs between its ends."
     },
     "DesignCreateIn": {
       "type": "object",

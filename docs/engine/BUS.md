@@ -564,9 +564,15 @@ allow-sets, straight from SPEC §3's agent action list plus reads:
 
 | role | may call |
 |---|---|
-| `builder` | all queries · `task.link_commit` · `task.changelog.write` (own) · `task.comment` (own) · `task.update` (own; body/changelog only) · `mailbox.*` · `notes.append` · `design.*` (`design.purge` is the person's) · `overlap.flag/ack` · `integration.request` · `session.done/report/intent/claim/release` (self) · `device.claim/release` · `usage.report` · `guardrail.gate/check` |
+| `builder` | all queries · `task.link_commit` · `task.changelog.write` (own) · `task.comment` (own) · `task.update` (own; body/changelog only) · `mailbox.*` · `notes.append` · `overlap.flag/ack` · `integration.request` · `session.done/report/intent/claim/release` (self) · `device.claim/release` · `usage.report` · `guardrail.gate/check` |
 | `reviewer` | all queries · `mailbox.*` · `notes.append` · `overlap.flag` · `task.changelog.write` / `task.comment` on the reviewed task · `session.done/report/intent/claim/release` (self) · `device.claim/release` · `usage.report` · `guardrail.check` — **nothing** that writes files, commits, or moves the task |
-| `docs` | builder's set minus `task.link_commit`/`integration.request` (so `design.*` too), plus `notes.create/update` |
+| `docs` | builder's set minus `task.link_commit`/`integration.request`, plus `notes.create/update` |
+
+**Open to every role:** `design.*` (`guardrail::OPEN_TO_EVERY_ROLE`) passes layer 3 for every role
+whatever its allowlist says, so a saved list cannot shut it out. A design is the person's to ask for
+and to undo: every `design.apply` answers with its inverse, which the board's Undo replays through
+`audit.undo`; `design.purge` stays the person's by its registry actors. Agents are told to touch a
+design only when asked.
 
 No role moves a task on the board: an agent hands its task to review with `session.done`, which
 judges the branch first (§9.2), waits for the task's other builders and tells the reviewer. A
@@ -1127,7 +1133,7 @@ warning rather than failing every guardrail read.
 
 A project's design canvases: pages of frames, shapes, text, stickies, pen paths and pictures, each
 design optionally tied to one terminal (`session`). The node model, its validation and limits are
-`relay_bus::design` (`DesignNode`, `DesignNodeOp` in the schema). Geometry is px, `x`/`y` relative
+`relay_bus::design` (`DesignNode`, `DesignNodeOp` in the schema). Kinds: page, frame, group, rect, ellipse, polygon (`sides`, `star`), line (`points`, or attached `from`/`to` with a `route`), text, sticky, path, image, icon (one of `ICONS`); any node may be turned (`rotation`), shapes take `gradient`, `radii`, `dash`, `blur` and a centred `text` label. Geometry is px, `x`/`y` relative
 to the parent; siblings paint in order, the last on top.
 
 | op | attrs | payload → result |

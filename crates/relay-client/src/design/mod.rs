@@ -2,13 +2,15 @@
 //! same edits the engine does, so the canvas shows an edit before the engine answers; `layout`
 //! places every node of a page (auto layout, hugging text) given a text measurer; `hit` finds
 //! what is under the pointer; `snap` lines a moving box up with its neighbours; `edit` builds
-//! the `design.apply` edits behind duplicate, paste, group, frame, align and reparent; `geom`
-//! is rectangles and the camera.
+//! the `design.apply` edits behind duplicate, paste, group, frame, align and reparent; `shapes`
+//! is polygons, rotation and connectors; `icons` the icon set; `geom` is rectangles and the camera.
 pub mod edit;
 pub mod geom;
 pub mod hit;
+pub mod icons;
 pub mod layout;
 pub mod scene;
+pub mod shapes;
 pub mod snap;
 
 pub use geom::{Camera, Rect};

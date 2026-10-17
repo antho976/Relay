@@ -5,6 +5,10 @@ description: Draw and revise designs on Relay's design canvas with the design.* 
 
 # Relay design canvas
 
+**Act only when asked.** Every agent may call the `design.*` tools, but a design is the person's:
+start, change or delete one only when they asked for it (a task, a message, or an Ask from the
+board). They can undo any change you make from the board.
+
 A **design** belongs to a project (and usually to your terminal) and holds **pages**; a page holds
 **nodes**. You read with `design.get`, and change with `design.apply`: a list of edits run in order,
 all or none, which is also **one undo step** for the person. They watch your edits appear live in
@@ -37,6 +41,22 @@ so moving a frame moves what is in it. Children paint in order: later ones on to
 | `sticky` | a note card | `text`, `fill` (paper), `w h` |
 | `path` | a freehand stroke | `points`, `stroke`, `stroke_width` |
 | `image` | a picture | `src` from `design.asset.add`, `w h`, `fit: cover|contain|stretch`, `radius` |
+| `polygon` | triangles, diamonds, hexagons, stars, flowchart decisions | `sides` (3 triangle, 4 diamond, 6 hexagon…), `star` (inner ratio, e.g. 0.4), `fill`, `stroke`, `text` |
+| `icon` | interface icons in mockups | `icon` (home, search, settings, user, bell, mail, heart, star, plus, check, x, chevron-*, arrow-*, menu, more-horizontal, trash, edit, copy, calendar, clock, image, file, folder, shopping-cart, credit-card, globe, map-pin, phone, message, send, filter, sliders, grid, list, play, pause, refresh, lock, eye, info, alert, help, sun, moon, wifi, battery, terminal, code, zap, cloud, git-branch, bar-chart…), `stroke` (its colour), `w h` (24 is the native size) |
+
+Any node can also take `rotation` (degrees clockwise about its centre), `opacity`, `blur` (px),
+`shadow`, and a shape `gradient` instead of `fill`:
+`{"kind": "linear", "angle": 135, "stops": [{"at": 0, "color": "#4C9DFF"}, {"at": 1, "color": "#A178FF"}]}`
+(`angle` reads as CSS: 180 top to bottom; `"kind": "radial"` from the centre). Rects, frames and
+images take `radii: [tl, tr, br, bl]` for different corners; any stroke takes `dash` (`[6, 4]`
+dashed, `[0, 4]` dotted). A `rect`, `ellipse` or `polygon` with `text` shows it centred inside: a
+labelled box for a diagram.
+
+**Connectors.** A `line` with `from` and `to` (node ids) runs from one node's edge to the other's
+and follows them when they move — `points` are not needed. `route` is `straight` (default),
+`elbow` (right angles) or `curve`; `arrow_end: true` puts a head on it:
+`{"op":"add","node":{"parent":"page-1","kind":"line","from":"start","to":"decide","route":"elbow","arrow_end":true}}`.
+Build flowcharts this way: boxes and diamonds with `text`, connectors between them.
 
 Colours are `#RRGGBB` or `#RRGGBBAA` (`#00000000` is transparent). Defaults: a frame is white, a
 shape `#D9D9D9`, a sticky yellow; text is 16 px Geist 400, dark on a light ground and light on a

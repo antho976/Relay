@@ -47,10 +47,28 @@ pub fn geometry(name: &str) -> &'static str {
         "radius" => r##"<path d="M3 13V8a5 5 0 0 1 5-5h5"/>"##,
         "stroke-width" => r##"<path d="M2.5 4h11"/><path d="M2.5 8h11" stroke-width="2.5"/><path d="M2.5 12.5h11" stroke-width="3.5"/>"##,
         "opacity" => r##"<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11"/><path d="M8 5h3.5M8 8h5.5M8 11h3.5"/>"##,
+        "triangle" => r##"<path d="M8 2.5l6 10.5H2z"/>"##,
+        "diamond" => r##"<path d="M8 2l6 6-6 6-6-6z"/>"##,
+        "hexagon" => r##"<path d="M8 2l5.2 3v6L8 14l-5.2-3V5z"/>"##,
+        "star" => r##"<path d="M8 2l1.8 3.8 4.2.6-3 2.9.7 4.1L8 11.4l-3.7 2 .7-4.1-3-2.9 4.2-.6z"/>"##,
+        "icon" => r##"<circle cx="8" cy="8" r="6"/><path d="M5.5 9.5s.9 1.5 2.5 1.5 2.5-1.5 2.5-1.5M6 6.3h.01M10 6.3h.01"/>"##,
+        "connector" => r##"<rect x="1.5" y="2.5" width="5" height="4" rx="1"/><rect x="9.5" y="9.5" width="5" height="4" rx="1"/><path d="M4 6.5v5h5.5"/>"##,
+        "eraser" => r##"<path d="M6 13.5h7.5M3.3 10.3l6.5-6.6a1.4 1.4 0 0 1 2 0l1.5 1.5a1.4 1.4 0 0 1 0 2L7 13.5H5.4z"/><path d="M6.5 7l3.5 3.5"/>"##,
+        "rotate" => r##"<path d="M13 8a5 5 0 1 1-1.5-3.5"/><path d="M12 2v3h-3"/>"##,
+        "gradient" => r##"<rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M2.5 9.5l7-7M5.5 13.5l8-8M9.5 13.5l4-4"/>"##,
+        "dash-solid" => r##"<path d="M2 8h12"/>"##,
+        "dots" => r##"<path d="M2.5 8h.01M5.25 8h.01M8 8h.01M10.75 8h.01M13.5 8h.01" stroke-width="2"/>"##,
+        "dash" => r##"<path d="M2 8h2.5M6.75 8h2.5M11.5 8H14"/>"##,
+        "blur" => r##"<circle cx="8" cy="8" r="5.5" stroke-dasharray="1.5 2"/><circle cx="8" cy="8" r="2.5"/>"##,
         "line-height" => r##"<path d="M2.5 2.5h11M2.5 13.5h11"/><path d="M5.8 11.2L8 4.8l2.2 6.4M6.6 9h2.8"/>"##,
         "letter-spacing" => r##"<path d="M2.5 3v10M13.5 3v10"/><path d="M5.6 11.2L8 4.8l2.4 6.4M6.4 9h3.2"/>"##,
         _ => r##"<circle cx="8" cy="8" r="5"/>"##,
     }
+}
+
+/// Whether `name` is one of the canvas's glyphs.
+pub fn known(name: &str) -> bool {
+    !geometry(name).starts_with("<circle cx=\"8\" cy=\"8\" r=\"5\"/>")
 }
 
 /// A glyph of the canvas's set, or a shell icon by its name.

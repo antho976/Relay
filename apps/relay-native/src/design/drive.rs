@@ -33,6 +33,11 @@ fn tool(name: &str) -> Option<Tool> {
         "sticky" => Tool::Sticky,
         "pen" => Tool::Pen,
         "highlighter" => Tool::Highlighter,
+        "triangle" => Tool::Triangle,
+        "diamond" => Tool::Diamond,
+        "hexagon" => Tool::Hexagon,
+        "star" => Tool::Star,
+        "eraser" => Tool::Eraser,
         _ => return None,
     })
 }
@@ -124,6 +129,10 @@ fn next(b: Rc<Board>, steps: Vec<String>, at: usize) {
             pause = 400;
         }
         "undo" => b.undo(),
+        "undo-agent" => {
+            b.undo_agent();
+            pause = 600;
+        }
         "redo" => b.redo(),
         "zoom" => {
             if let Ok(z) = arg.parse() {
@@ -161,6 +170,26 @@ fn next(b: Rc<Board>, steps: Vec<String>, at: usize) {
             let (path, at) = arg.split_once('@').map_or((arg, None), |(p, at)| (p, point(at)));
             super::assets::place_files(&b, vec![std::path::PathBuf::from(path)], at);
             pause = 600;
+        }
+        "icon" => super::icons::choose(&b, arg, None),
+        "frame-preset" => {
+            if let Some((name, w, h)) = super::board::FRAME_PRESETS.iter().find(|p| p.0 == arg) {
+                b.place_frame(name, *w as f64, *h as f64);
+            }
+        }
+        "rotate-drag" => {
+            // `rotate-drag:degrees`: turn the one selected node by dragging just outside its
+            // top-right corner, as the pointer would.
+            let id = b.selection.borrow().first().cloned();
+            if let (Some(id), Ok(deg)) = (id, arg.parse::<f64>()) {
+                if let Some(r) = b.placed().rect(&id) {
+                    let zoom = b.cam.get().zoom;
+                    let turn = b.doc.scene.borrow().node(&id).and_then(|n| n.rotation).unwrap_or(0.0);
+                    let corner = relay_client::design::shapes::rotate(r.right() + 10.0 / zoom, r.y - 10.0 / zoom, r.cx(), r.cy(), turn);
+                    let end = relay_client::design::shapes::rotate(corner.0, corner.1, r.cx(), r.cy(), deg);
+                    super::tools::simulate(&b, corner, end, gdk::ModifierType::empty());
+                }
+            }
         }
         "wait" => pause = arg.parse().unwrap_or(200),
         "print" => {

@@ -47,6 +47,11 @@ pub enum NodeKind {
     Path,
     /// A picture from `design.asset.add`, named by `src`.
     Image,
+    /// A regular polygon (`sides`: 3 a triangle, 4 a diamond, 6 a hexagon…) or, with `star`, a
+    /// star of `sides` points. Its first point is at the top centre.
+    Polygon,
+    /// An interface icon from Relay's set (`icon`, one of [`ICONS`]), drawn in `stroke`.
+    Icon,
 }
 
 impl NodeKind {
@@ -54,6 +59,69 @@ impl NodeKind {
     pub fn holds_children(self) -> bool {
         matches!(self, NodeKind::Page | NodeKind::Frame | NodeKind::Group)
     }
+}
+
+/// The icons an `icon` node may name: outline icons on a 24-unit grid, the vocabulary of most
+/// interfaces.
+pub const ICONS: &[&str] = &[
+    "home", "search", "settings", "user", "users", "bell", "mail", "heart", "star", "plus", "minus",
+    "x", "check", "chevron-left", "chevron-right", "chevron-up", "chevron-down", "arrow-left",
+    "arrow-right", "arrow-up", "arrow-down", "menu", "more-horizontal", "more-vertical", "trash",
+    "edit", "copy", "download", "upload", "share", "link", "lock", "unlock", "eye", "eye-off",
+    "calendar", "clock", "camera", "image", "file", "folder", "shopping-cart", "credit-card",
+    "globe", "map-pin", "phone", "message", "send", "filter", "sliders", "grid", "list", "play",
+    "pause", "refresh", "log-out", "bookmark", "info", "alert", "help", "sun", "moon", "wifi",
+    "battery", "terminal", "code", "zap", "cloud", "git-branch", "bar-chart",
+];
+
+/// How a connector runs between its ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignRoute")]
+pub enum Route {
+    Straight,
+    /// Right angles: across, then down, then across (or the other way, whichever is longer).
+    Elbow,
+    /// A smooth curve leaving and arriving along the longer axis.
+    Curve,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "DesignGradientKind")]
+pub enum GradientKind {
+    Linear,
+    /// From the centre out to the box's edges.
+    Radial,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "DesignGradientStop")]
+pub struct Stop {
+    /// 0 at the start, 1 at the end.
+    pub at: f64,
+    /// `#RRGGBB` or `#RRGGBBAA`.
+    pub color: String,
+}
+
+/// A gradient fill, painted instead of `fill`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "DesignGradient")]
+pub struct Gradient {
+    #[serde(default = "linear")]
+    pub kind: GradientKind,
+    /// Direction of a linear gradient in degrees, as CSS reads it: 180 (the default) runs top
+    /// to bottom, 90 left to right.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<f64>,
+    /// 2 to 8 colours along it.
+    pub stops: Vec<Stop>,
+}
+
+fn linear() -> GradientKind {
+    GradientKind::Linear
 }
 
 /// How a node's width or height is decided.
@@ -264,6 +332,46 @@ pub struct Node {
     pub src: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fit: Option<ImageFit>,
+
+    /// Clockwise turn in degrees about the node's centre.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<f64>,
+    /// A polygon's corners (3 to 24, default 3), or a star's points.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sides: Option<u8>,
+    /// Makes a polygon a star: its inner points at this fraction of the outer (0.05 to 0.95;
+    /// 0.4 is a classic star).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub star: Option<f64>,
+    /// A gradient painted instead of `fill`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient: Option<Gradient>,
+    /// Corner radii top-left, top-right, bottom-right, bottom-left, instead of `radius`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radii: Option<[f64; 4]>,
+    /// The stroke's dash pattern in px: `[6, 4]` dashes, `[1, 4]` dots. Absent is solid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dash: Option<Vec<f64>>,
+    /// Blur of the whole node, in px.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blur: Option<f64>,
+    /// An icon node's icon: one of the names in the `ICONS` list (home, search, settings,
+    /// user, bell, mail, heart, star, plus, check, x, chevron-*, arrow-*, menu, trash, edit,
+    /// calendar, clock, image, file, folder, shopping-cart, credit-card, globe, map-pin, phone,
+    /// message, send, filter, sliders, grid, list, play, pause, refresh, lock, eye, info,
+    /// alert, help, sun, moon, wifi, battery, terminal, code, zap, cloud, bar-chart…).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// A connector's start: the node it is attached to. The line then runs from that node's
+    /// edge and follows it when it moves; `points` are only where it was last drawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// A connector's end: the node it is attached to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// How a line runs between its ends (default `straight`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<Route>,
 }
 
 /// One edit of a design. `design.apply` runs a list of them in order, all or none.
@@ -386,6 +494,17 @@ impl Node {
             arrow_end: None,
             src: None,
             fit: None,
+            rotation: None,
+            sides: None,
+            star: None,
+            gradient: None,
+            radii: None,
+            dash: None,
+            blur: None,
+            icon: None,
+            from: None,
+            to: None,
+            route: None,
         }
     }
 
@@ -506,9 +625,58 @@ impl Node {
                 return Err(format!("points: numbers within ±{MAX_COORD}"));
             }
         }
+        if let Some(r) = self.rotation.filter(|r| !r.is_finite() || r.abs() > 3600.0) {
+            return Err(format!("rotation: {r} is outside ±3600 degrees"));
+        }
+        if let Some(n) = self.sides.filter(|n| !(3..=24).contains(n)) {
+            return Err(format!("sides: {n} is outside 3 to 24"));
+        }
+        if let Some(v) = self.star.filter(|v| !v.is_finite() || !(0.05..=0.95).contains(v)) {
+            return Err(format!("star: {v} is outside 0.05 to 0.95"));
+        }
+        if let Some(g) = &self.gradient {
+            if !(2..=8).contains(&g.stops.len()) {
+                return Err("gradient: give 2 to 8 stops".into());
+            }
+            for stop in &g.stops {
+                if !stop.at.is_finite() || !(0.0..=1.0).contains(&stop.at) {
+                    return Err(format!("gradient: a stop's at ({}) is outside 0 to 1", stop.at));
+                }
+                if parse_color(&stop.color).is_none() {
+                    return Err(format!("gradient: {:?} is not #RGB, #RRGGBB or #RRGGBBAA", stop.color));
+                }
+            }
+            if g.angle.is_some_and(|a| !a.is_finite()) {
+                return Err("gradient: angle must be a number".into());
+            }
+        }
+        if self.radii.is_some_and(|r| r.iter().any(|v| !v.is_finite() || !(0.0..=MAX_COORD).contains(v))) {
+            return Err(format!("radii: four numbers from 0 to {MAX_COORD}"));
+        }
+        if let Some(dash) = &self.dash {
+            if dash.is_empty() || dash.len() > 8 || dash.iter().any(|v| !v.is_finite() || !(0.0..=1000.0).contains(v)) || dash.iter().all(|v| *v == 0.0) {
+                return Err("dash: 1 to 8 lengths from 0 to 1000, not all 0".into());
+            }
+        }
+        if let Some(b) = self.blur.filter(|b| !b.is_finite() || !(0.0..=200.0).contains(b)) {
+            return Err(format!("blur: {b} is outside 0 to 200"));
+        }
+        for (field, end) in [("from", &self.from), ("to", &self.to)] {
+            if let Some(id) = end.as_deref().filter(|id| !valid_id(id)) {
+                return Err(format!("{field}: {id:?} is not a node id"));
+            }
+        }
+        if let Some(name) = self.icon.as_deref().filter(|n| !ICONS.contains(n)) {
+            return Err(format!("icon: {name:?} is not one of Relay's icons ({})", ICONS.join(", ")));
+        }
         match self.kind {
-            NodeKind::Line if self.points.as_ref().is_none_or(|p| p.len() < 2) => {
-                return Err("a line needs at least 2 points".into())
+            NodeKind::Line
+                if self.points.as_ref().is_none_or(|p| p.len() < 2) && (self.from.is_none() || self.to.is_none()) =>
+            {
+                return Err("a line needs at least 2 points, or both from and to".into())
+            }
+            NodeKind::Icon if self.icon.is_none() => {
+                return Err(format!("an icon needs icon: one of {}", ICONS.join(", ")))
             }
             NodeKind::Path if self.points.as_ref().is_none_or(Vec::is_empty) => {
                 return Err("a path needs at least 1 point".into())
@@ -635,6 +803,40 @@ mod tests {
         assert!(img.validate().is_err());
         img.src = Some("0123456789abcdef0123.png".into());
         assert!(img.validate().is_ok());
+    }
+
+    #[test]
+    fn the_richer_fields_are_checked() {
+        let mut star = Node::new(NodeKind::Polygon);
+        star.parent = Some("p".into());
+        star.sides = Some(5);
+        star.star = Some(0.4);
+        star.rotation = Some(-12.0);
+        star.dash = Some(vec![6.0, 4.0]);
+        assert!(star.validate().is_ok());
+        star.sides = Some(2);
+        assert!(star.validate().unwrap_err().starts_with("sides"));
+        let mut icon = Node::new(NodeKind::Icon);
+        icon.parent = Some("p".into());
+        assert!(icon.validate().unwrap_err().contains("an icon needs icon"));
+        icon.icon = Some("settings".into());
+        assert!(icon.validate().is_ok());
+        icon.icon = Some("nope".into());
+        assert!(icon.validate().unwrap_err().starts_with("icon:"));
+        // A connector needs no points once both ends are attached.
+        let mut link = Node::new(NodeKind::Line);
+        link.parent = Some("p".into());
+        link.from = Some("a".into());
+        assert!(link.validate().is_err());
+        link.to = Some("b".into());
+        assert!(link.validate().is_ok());
+        let g: Node = serde_json::from_value(json!({"kind": "rect", "parent": "p",
+            "gradient": {"stops": [{"at": 0, "color": "#fff"}, {"at": 1.5, "color": "#000"}]}})).unwrap();
+        assert!(g.validate().unwrap_err().contains("outside 0 to 1"));
+        let mut dots = Node::new(NodeKind::Rect);
+        dots.parent = Some("p".into());
+        dots.dash = Some(vec![0.0, 0.0]);
+        assert!(dots.validate().is_err());
     }
 
     #[test]

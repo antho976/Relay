@@ -125,6 +125,8 @@ fn kind_str(kind: NodeKind) -> &'static str {
         NodeKind::Sticky => "sticky",
         NodeKind::Path => "path",
         NodeKind::Image => "image",
+        NodeKind::Polygon => "polygon",
+        NodeKind::Icon => "icon",
     }
 }
 
@@ -140,6 +142,8 @@ fn kind_of(text: &str) -> Result<NodeKind, BusError> {
         "sticky" => NodeKind::Sticky,
         "path" => NodeKind::Path,
         "image" => NodeKind::Image,
+        "polygon" => NodeKind::Polygon,
+        "icon" => NodeKind::Icon,
         other => return Err(BusError::internal(format!("a design node of unknown kind {other:?}"))),
     })
 }
@@ -1088,7 +1092,8 @@ mod tests {
     #[test]
     fn every_kind_reads_back_as_itself() {
         for kind in [NodeKind::Page, NodeKind::Frame, NodeKind::Group, NodeKind::Rect, NodeKind::Ellipse,
-                     NodeKind::Line, NodeKind::Text, NodeKind::Sticky, NodeKind::Path, NodeKind::Image] {
+                     NodeKind::Line, NodeKind::Text, NodeKind::Sticky, NodeKind::Path, NodeKind::Image,
+                     NodeKind::Polygon, NodeKind::Icon] {
             assert_eq!(kind_of(kind_str(kind)).unwrap(), kind);
             assert_eq!(serde_json::to_value(kind).unwrap(), kind_str(kind), "the column names a kind as its JSON does");
         }

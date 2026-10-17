@@ -155,6 +155,16 @@ impl Board {
             }),
         );
         geometry.append(&sizes);
+        if nodes.iter().all(|n| !matches!(n.kind, NodeKind::Line | NodeKind::Page)) {
+            let turn = same(nodes.iter().map(|n| bits(n.rotation.unwrap_or(0.0)))).map(f64::from_bits);
+            let weak = Rc::downgrade(&b);
+            geometry.append(&number("@rotate", turn, "Rotation, degrees clockwise (drag just outside a corner to turn)", move |v| {
+                if let Some(b) = weak.upgrade() {
+                    let v = (v + 180.0).rem_euclid(360.0) - 180.0;
+                    b.set_selected(set(&[("rotation", if v.abs() < 0.05 { Value::Null } else { json!(v) })]));
+                }
+            }));
+        }
         let sizable = nodes.iter().all(|n| {
             n.kind == NodeKind::Text || n.layout_mode() != Layout::None || n.parent.as_deref().is_some_and(|_| parent_lays_out)
         });
@@ -388,22 +398,37 @@ impl Board {
             })));
         }
 
+        // Polygon, icon, connector.
+        if single && first.kind == NodeKind::Polygon {
+            super::shape_panels::polygon(&b, &section(body, "Polygon"), &first);
+        }
+        if single && first.kind == NodeKind::Icon {
+            super::shape_panels::icon(&b, &section(body, "Icon"), &first);
+        }
+        if single && first.kind == NodeKind::Line {
+            super::shape_panels::connector(&b, &section(body, "Line"), &first);
+        }
+
         // Fill, border, corners.
-        let fills = nodes.iter().all(|n| !matches!(n.kind, NodeKind::Group | NodeKind::Line | NodeKind::Path | NodeKind::Image | NodeKind::Text));
+        let fills = nodes.iter().all(|n| !matches!(n.kind, NodeKind::Group | NodeKind::Line | NodeKind::Path | NodeKind::Image | NodeKind::Text | NodeKind::Icon));
         if fills {
             let sec = section(body, "Fill");
-            let fill = same(nodes.iter().map(super::paint::fill_of)).flatten();
-            let weak = Rc::downgrade(&b);
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            row.append(&color_key(&b, fill.as_deref(), "Fill", true, move |c| {
-                if let Some(b) = weak.upgrade() {
-                    b.set_selected(set(&[("fill", json!(c))]));
-                }
-            }));
-            row.append(&label(fill.as_deref().unwrap_or("Mixed"), "design-hex-caption"));
-            sec.append(&row);
+            if single {
+                super::shape_panels::fill(&b, &sec, &first);
+            } else {
+                let fill = same(nodes.iter().map(super::paint::fill_of)).flatten();
+                let weak = Rc::downgrade(&b);
+                let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                row.append(&color_key(&b, fill.as_deref(), "Fill", true, move |c| {
+                    if let Some(b) = weak.upgrade() {
+                        b.set_selected(set(&[("fill", json!(c)), ("gradient", Value::Null)]));
+                    }
+                }));
+                row.append(&label(fill.as_deref().unwrap_or("Mixed"), "design-hex-caption"));
+                sec.append(&row);
+            }
         }
-        if nodes.iter().all(|n| !matches!(n.kind, NodeKind::Group | NodeKind::Text)) {
+        if nodes.iter().all(|n| !matches!(n.kind, NodeKind::Group | NodeKind::Text | NodeKind::Icon)) {
             let lines = kinds(&[NodeKind::Line, NodeKind::Path]);
             let sec = section(body, if lines { "Stroke" } else { "Border" });
             let stroke = same(nodes.iter().map(|n| n.stroke.clone())).flatten();
@@ -422,6 +447,7 @@ impl Board {
                 }
             }));
             sec.append(&row);
+            sec.append(&super::shape_panels::dash(&b, &nodes));
             if kinds(&[NodeKind::Line]) {
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
                 for (field, caption) in [("arrow_start", "Start arrow"), ("arrow_end", "End arrow")] {
@@ -443,9 +469,12 @@ impl Board {
             let weak = Rc::downgrade(&b);
             sec.append(&number("@radius", same(nodes.iter().map(|n| bits(n.radius.unwrap_or(0.0)))).map(f64::from_bits), "Corner radius", move |v| {
                 if let Some(b) = weak.upgrade() {
-                    b.set_selected(set(&[("radius", if v <= 0.0 { Value::Null } else { json!(v) })]));
+                    b.set_selected(set(&[("radius", if v <= 0.0 { Value::Null } else { json!(v) }), ("radii", Value::Null)]));
                 }
             }));
+            if single {
+                super::shape_panels::corners(&b, &sec, &first);
+            }
         }
 
         // Image.
@@ -453,7 +482,7 @@ impl Board {
             let sec = section(body, "Picture");
             let weak = Rc::downgrade(&b);
             sec.append(&segmented(
-                &[("cover", "Fill", "Fill the box, cropping"), ("contain", "Fit", "Show it whole"), ("stretch", "Str", "Stretch to the box")],
+                &[("cover", "Fill", "Fill the box, cropping"), ("contain", "Fit", "Show it whole"), ("stretch", "Stretch", "Stretch to the box")],
                 Some(match first.fit.unwrap_or(ImageFit::Cover) {
                     ImageFit::Cover => "cover",
                     ImageFit::Contain => "contain",
@@ -523,6 +552,14 @@ impl Board {
             if let Some(b) = weak.upgrade() {
                 let o = (v / 100.0).clamp(0.0, 1.0);
                 b.set_selected(set(&[("opacity", if o >= 1.0 { Value::Null } else { json!(o) })]));
+            }
+        }));
+        let weak = Rc::downgrade(&b);
+        let blur = same(nodes.iter().map(|n| bits(n.blur.unwrap_or(0.0)))).map(f64::from_bits);
+        sec.append(&number("@blur", blur, "Layer blur, px", move |v| {
+            if let Some(b) = weak.upgrade() {
+                let v = v.clamp(0.0, 200.0);
+                b.set_selected(set(&[("blur", if v <= 0.0 { Value::Null } else { json!(v) })]));
             }
         }));
 
