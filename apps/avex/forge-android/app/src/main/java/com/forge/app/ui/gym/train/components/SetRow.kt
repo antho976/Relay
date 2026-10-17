@@ -468,7 +468,10 @@ fun SetRow(
             FlowRow(
                 modifier = Modifier.padding(start = SetTable.SET_COL_W, top = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                // The RPE chip's 48dp target is the line's tallest item; centring keeps each label
+                // level with its value instead of top-aligned above a chip that sits lower.
+                itemVerticalAlignment = Alignment.CenterVertically
             ) {
                 StackedCellLabel(if (isTimed) "HOLD" else "REPS", muted)
                 repsCell(Modifier)
