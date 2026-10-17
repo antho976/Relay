@@ -291,8 +291,11 @@ class ProgramBuilderViewModel internal constructor(
                 val libId = coachSwaps[s.exerciseLibId] ?: s.exerciseLibId
                 val def = ExerciseLibrary.byId(libId)
                 val order = c?.orderOverride?.takeIf { it != UNSET_ORDER } ?: (i * 10)
+                // An id the library doesn't know (a seed slot, an import, a movement since removed)
+                // reads through the app's one display-name rule, never as its raw slug.
                 order to BuilderExercise(
-                    uid(), libId, def?.name ?: libId, def?.muscle?.displayName ?: "",
+                    uid(), libId, def?.name ?: com.forge.app.program.Program.exerciseDisplayName(libId),
+                    def?.muscle?.displayName ?: com.forge.app.program.Program.exercise(libId)?.muscle?.displayName.orEmpty(),
                     c?.setsOverride?.takeIf { it > 0 } ?: s.sets,
                     c?.repRangeOverride ?: s.reps
                 )
