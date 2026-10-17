@@ -36,6 +36,12 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.gym.train.state.ExerciseUiState
+import com.forge.app.ui.common.clickableLabeled
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.Box
 
 /** Reps to PRE-FILL the field with — numeric targets only ("8-12" → 12, "15" → 15); null otherwise. */
 private val TARGET_REPS_REGEX = Regex("""^(\d+)(?:-(\d+))?$""")
@@ -188,8 +194,6 @@ fun ExerciseCard(
                     modifier = Modifier.clickable { onOpenSwapPicker() }
                 )
 
-                Spacer(Modifier.height(6.dp))
-
                 // Plan line — the whole brief for this exercise in ONE line: what to do, what you
                 // did last time, and the one number to aim for. It used to be three stacked italic
                 // lines (target / "Suggested next → 140 (keep this weight — reach 12 reps on every
@@ -198,6 +202,7 @@ fun ExerciseCard(
                 // rather than moved: the number IS the advice, and the sentence explaining it only
                 // earned its place when it had a line to itself.
                 val priorLastSet = state.priorSets.lastOrNull()
+                var fill by remember(state.effectiveExerciseId) { mutableStateOf<SetFill?>(null) }
                 // The cue is a weight on weighted lifts and reps on bodyweight ones (CO5); it keeps
                 // the accent, since it is the only part of the line asking you to change what you
                 // were about to do. The unit rides along — the field below is labelled in the
@@ -226,7 +231,27 @@ fun ExerciseCard(
                         }
                     }
                 }
-                Text(planLine, style = MaterialTheme.typography.bodySmall, color = muted)
+                // The cue is the coach's number, so the line is one tap from the field: tapping it puts
+                // the suggested weight (or reps) in. It was a number to retype by hand, and the field
+                // kept last session's, so "try 27.5" sat over a 33.2. The row is 48dp on every card,
+                // tappable or not, so a cue that lands after the card is drawn moves nothing.
+                val cueWeight = state.suggestedWeight
+                val cueReps = state.suggestedReps?.toString()
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .then(
+                            if (cue != null) Modifier.clickableLabeled(
+                                "Use the suggested ${if (cueWeight != null) "weight" else "reps"}, " +
+                                    cue.removePrefix("try ") + (state.suggestionReason?.let { ". $it" } ?: "")
+                            ) { fill = SetFill(nonce = (fill?.nonce ?: 0) + 1, weight = cueWeight, reps = cueReps.takeIf { cueWeight == null }) }
+                            else Modifier
+                        ),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Text(planLine, style = MaterialTheme.typography.bodySmall, color = muted)
+                }
 
                 // Pinned cue
                 if (state.pinnedNote.isNotBlank()) {
@@ -363,6 +388,7 @@ fun ExerciseCard(
                         priorSetForActiveRow = state.priorSets.getOrNull(state.loggedSets.size),
                         priorSetBeforeActiveRow = state.priorSets.getOrNull(state.loggedSets.size - 1),
                         todayLastSet = lastLogged,
+                        fill = fill,
                         targetsMet = targetsMet,
                         advanceLabel = advanceLabel,
                         // "I'm done" path — only meaningful once you've logged something and haven't hit

@@ -75,6 +75,10 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.LocalForgeSettings
 
+/** A value pushed into the next set's fields; [nonce] makes a repeat tap a new request. */
+@androidx.compose.runtime.Immutable
+data class SetFill(val nonce: Int, val weight: String?, val reps: String?)
+
 /**
  * The weight (lb) the next set's field opens on. Before today's first set it is last session's set
  * in the same position. After it, today's last set moved by last session's step between the same
@@ -114,6 +118,8 @@ fun SetInputRow(
     priorSetBeforeActiveRow: LoggedSet? = null,
     /** This session's most recent logged set, null before the first. */
     todayLastSet: LoggedSet? = null,
+    /** A value pushed into the fields from outside (the coach's cue on the plan line). */
+    fill: SetFill? = null,
     targetsMet: Boolean = false,
     advanceLabel: String = "",
     /** Full-width outlined button shown above LOG SET when [onFinishEarly] is set — ends the
@@ -161,6 +167,11 @@ fun SetInputRow(
     // keying on the volatile seed would wipe a half-typed entry if the prior baseline changed (#11).
     var weight by rememberSaveable(nextSetNumber, exerciseKey) { mutableStateOf(seedWeight) }
     var reps by rememberSaveable(nextSetNumber, exerciseKey) { mutableStateOf(seedReps) }
+    LaunchedEffect(fill) {
+        val f = fill ?: return@LaunchedEffect
+        f.weight?.let { weight = it }
+        f.reps?.let { reps = it }
+    }
     val repsFocus = remember { FocusRequester() }
     val haptic = LocalHapticFeedback.current
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
