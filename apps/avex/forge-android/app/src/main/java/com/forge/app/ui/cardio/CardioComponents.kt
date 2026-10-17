@@ -157,10 +157,10 @@ internal fun CardioHero(
         MeterBar(
             fraction = weekMinutes.toFloat() / target,
             caption = when {
-                hasGoal && weekMinutes >= target -> "Goal hit · $target min"
-                hasGoal -> "Goal $target min"
-                weekMinutes >= target -> "WHO 150 min · met"
-                else -> "WHO 150 min"
+                hasGoal && weekMinutes >= target -> "Goal hit · $weekMinutes of $target min"
+                hasGoal -> "$weekMinutes of $target min goal"
+                weekMinutes >= target -> "$weekMinutes of $target min · weekly guideline met"
+                else -> "$weekMinutes of $target min · WHO weekly guideline"
             },
             muted = muted, outline = outline, accent = accent,
             contentDescription = "$weekMinutes of $target minutes this week"

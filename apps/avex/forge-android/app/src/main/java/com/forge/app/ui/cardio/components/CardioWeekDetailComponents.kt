@@ -160,6 +160,19 @@ private fun HourlyStepsBars(
                 )
             }
         )
+        // Four quarter-day ticks so a bar can be read as a time of day without counting bars.
+        val use24h = LocalForgeSettings.current.timeFormat24h
+        Spacer(Modifier.height(4.dp))
+        Row(Modifier.fillMaxWidth()) {
+            listOf(0, 6, 12, 18).forEach { h ->
+                Text(
+                    com.forge.app.domain.units.formatClockHourShort(h, use24h),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
         Spacer(Modifier.height(8.dp))
         Text(
             "${"%,d".format(wearable.totalSteps)} steps · busiest ${hourRangeLabel(peakHour, LocalForgeSettings.current.timeFormat24h)}",

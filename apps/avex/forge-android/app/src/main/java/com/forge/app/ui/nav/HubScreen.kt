@@ -148,7 +148,8 @@ fun HubScreen(
                     onOpenGoals = { pushOnce(Routes.GOALS) },
                     onOpenWeeks = { pushOnce(Routes.cardioWeeks()) },
                     // Tapping the hero's Mon–Sun strip opens THIS week in full.
-                    onOpenWeek = { weekStartMs -> nav.navigate(Routes.cardioWeeks(weekStartMs)) }
+                    onOpenWeek = { weekStartMs -> nav.navigate(Routes.cardioWeeks(weekStartMs)) },
+                    onConnectWatch = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) { launchSingleTop = true } }
                 )
                 BottomTab.STATS -> DayListScreen(
                     onOpenDay = { dayKey -> nav.navigateToGymDay(dayKey) },
