@@ -178,7 +178,7 @@ class WorkoutSessionService : Service() {
         }
     }
 
-    private fun formatRest(seconds: Int): String = "%d:%02d".format(seconds / 60, seconds % 60)
+    private fun formatRest(seconds: Int): String = com.forge.app.domain.units.clockText(seconds.toLong())
 
     /** Opens the workout's own day (the widget's deep link), or the app when the day is unknown. */
     private fun openWorkoutIntent(requestCode: Int, dayKey: String?): PendingIntent = PendingIntent.getActivity(

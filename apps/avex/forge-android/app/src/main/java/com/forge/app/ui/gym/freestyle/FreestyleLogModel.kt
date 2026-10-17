@@ -191,14 +191,10 @@ internal fun sanitizeHoldText(input: String): String {
 }
 
 /** Seconds as the hold field wants them (GYMAP-51): mm:ss. */
-internal fun holdText(seconds: Int): String = "%d:%02d".format(seconds / 60, seconds % 60)
+internal fun holdText(seconds: Int): String = com.forge.app.domain.units.formatHold(seconds)
 
 /** mm:ss, or h:mm:ss past an hour: the running session clock and the rest readout. */
-internal fun formatElapsed(ms: Long): String {
-    val s = (ms / 1000).coerceAtLeast(0)
-    val h = s / 3600; val m = (s % 3600) / 60; val sec = s % 60
-    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
-}
+internal fun formatElapsed(ms: Long): String = com.forge.app.domain.units.clockText(ms / 1000)
 
 /** A library move as a fresh log row. */
 internal fun fsExerciseFor(libId: String): FsExercise? {

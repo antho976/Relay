@@ -311,11 +311,7 @@ internal fun LastSessionStrip(
  * A workout's elapsed time: "5:12", then "1:05:12" past the hour (it read "75:12"). Digits are
  * padded by hand, not with "%02d".format, which writes the device locale's digits beside ASCII ones.
  */
-internal fun workoutClock(seconds: Long): String {
-    val s = seconds.coerceAtLeast(0)
-    val two = { n: Long -> n.toString().padStart(2, '0') }
-    return if (s >= 3600) "${s / 3600}:${two(s % 3600 / 60)}:${two(s % 60)}" else "${s / 60}:${two(s % 60)}"
-}
+internal fun workoutClock(seconds: Long): String = com.forge.app.domain.units.clockText(seconds)
 
 /**
  * Two overlaid line series sharing one scale: [current] drawn bold, [previous] faint.

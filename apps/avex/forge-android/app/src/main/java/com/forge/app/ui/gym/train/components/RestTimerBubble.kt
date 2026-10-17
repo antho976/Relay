@@ -414,10 +414,7 @@ private fun TimerCapsule(label: String, a11y: String, color: androidx.compose.ui
     }
 }
 
-private fun formatTime(totalSeconds: Int): String {
-    val s = totalSeconds.coerceAtLeast(0)
-    return "%d:%02d".format(s / 60, s % 60)
-}
+private fun formatTime(totalSeconds: Int): String = com.forge.app.domain.units.clockText(totalSeconds.toLong())
 
 /** The finished bubble's breathing scale. Its own composable so the transition exists only while
  *  the rest is actually up (P-12). */
