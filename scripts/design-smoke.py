@@ -9,7 +9,9 @@ Shots (default all): gallery, board, board-select, edit (layers and typing in pl
 fixture terminal, whose fake agent edits the layer; the open board must show it), media (a picture
 through design.asset.add, copy and paste), perf (a 1,721-node design: layout, content and frame
 times), shapes (polygons, icons, gradients, dashes, rotation, connectors and labels as an agent writes
-them, then the tools that make them). Needs target/debug/relay and target/debug/relay-native, and a display: run it inside a
+them, then the tools that make them), kit (asset packs, components, styles, the vector pen,
+comments, rich text, constraints, flips, SVG and PDF export, versions and presenting), template
+(a design started from a template). Needs target/debug/relay and target/debug/relay-native, and a display: run it inside a
 headless compositor (kwin_wayland --virtual), never on someone's desktop. Captures and logs go to
 .impeccable/review/design-*."""
 import json, os, socket, statistics, struct, subprocess, sys, tempfile, time, uuid, zlib
@@ -17,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / ".impeccable/review"; OUT.mkdir(parents=True, exist_ok=True)
-SHOTS = sys.argv[1:] or ["gallery", "board", "board-select", "edit", "script", "agent", "media", "shapes", "perf"]
+SHOTS = sys.argv[1:] or ["gallery", "board", "board-select", "edit", "script", "agent", "media", "shapes", "kit", "template", "perf"]
 FAKE_AGENT = r'''#!/usr/bin/env python3
 """A fixture provider: echoes input, and answers a [Relay design] prompt by turning the
 selected layer green through design.apply, as the session's own agent."""
@@ -203,6 +205,19 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 raise AssertionError("an unknown icon must be refused")
             except RuntimeError as error:
                 assert "is not one of Relay" in str(error), error
+        if "kit" in SHOTS:
+            kit = call("design.create", {"project_id": pid, "title": "Kit"})
+            kp = kit["nodes"][0]["id"]
+            call("design.apply", {"design_id": kit["design"]["id"], "ops": [
+                node("screen", kp, "frame", name="Screen", x=0, y=0, w=400, h=700, fill="#FFFFFF",
+                     grids=[{"kind": "columns", "count": 4, "gutter": 16, "margin": 24}]),
+                text("hello", "screen", "Hello world", x=24, y=24, font_size=20),
+                node("box", "screen", "rect", x=300, y=600, w=60, h=60, fill="#FF5C5C", radius=8, constraints={"h": "end", "v": "end"}),
+                node("next", kp, "frame", name="Next", x=480, y=0, w=400, h=700, fill="#F4F2EE"),
+            ]})
+        if "template" in SHOTS:
+            tpl = call("design.create", {"project_id": pid, "title": "From a template", "template": "templates/" + call("design.kits", {"kit": "templates"})["kits"][0]["items"][0]["id"]})
+            assert tpl["design"]["nodes"] > 20, tpl["design"]
         if "perf" in SHOTS:
             big = call("design.create", {"project_id": pid, "title": "Big design"})
             bp = big["nodes"][0]["id"]
@@ -248,7 +263,8 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
         for shot in SHOTS:
             output = OUT / f"design-{shot}.png"; output.unlink(missing_ok=True)
             # The board opens the gallery's first card, the most recently changed design.
-            target = big if shot == "perf" else sh if shot == "shapes" else d1
+            target = {"perf": big if "perf" in SHOTS else None, "shapes": sh if "shapes" in SHOTS else None,
+                      "kit": kit if "kit" in SHOTS else None, "template": tpl if "template" in SHOTS else None}.get(shot) or d1
             call("design.update", {"design_id": target["design"]["id"], "title": target["design"]["title"]})
             time.sleep(0.01)
             e = dict(native_env, RELAY_NATIVE_SCREENSHOT=str(output), RELAY_NATIVE_SIZE="1440,900", RELAY_NATIVE_FIXTURE="1",
@@ -276,6 +292,18 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                     "tool:pen", "drag:850,600>950,640", "tool:eraser", "drag:900,580>900,660",
                     "icon:globe",
                     "select:i4", "wait:200", "print"])
+            if shot == "kit":
+                e["RELAY_NATIVE_SMOKE_SECONDS"] = "24"
+                e["RELAY_SMOKE_DESIGN_SCRIPT"] = ";".join([
+                    "version:Before the kit", "fit", "wait:300", "layers", "assets", "wait:800",
+                    "select:", "insert:relay-ui/button-primary@560,120", "wait:200", "component", "wait:200", "instance", "wait:300",
+                    "select:box", "style:fill_style", "wait:300", "flip:x",
+                    "tool:vector", "click:560,300", "drag:700,300>760,360", "click:620,420", "pen-end", "wait:300",
+                    "comment:120,200:Make the title bigger",
+                    "select:hello", "dbl:60,36", "edit-range:0,5", "edit-style:weight", "endedit", "wait:300",
+                    "select:screen", "drag:400,700>500,700", "wait:300",
+                    f"export:svg@{OUT / 'design-kit.svg'}", f"export:pdf@{OUT / 'design-kit.pdf'}",
+                    "select:screen", "wait:200", "print", "present", "wait:900", f"present-end:{OUT / 'design-present.png'}", "wait:300"])
             if shot == "perf":
                 e["RELAY_NATIVE_SMOKE_SECONDS"] = "20"
                 e["RELAY_DESIGN_TRACE"] = "1"
@@ -329,6 +357,31 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 assert not any(n["kind"] == "path" for n in got.values()), "the eraser left the stroke"
                 assert any(n["kind"] == "icon" and n.get("icon") == "globe" for n in got.values())
                 print("SHAPES_OK")
+            if shot == "kit":
+                logtext = (OUT / f"design-{shot}.log").read_text()
+                assert "DESIGN_SCRIPT_DONE" in logtext, logtext[-3000:]
+                got = {n["id"]: n for n in call("design.get", {"design_id": kit["design"]["id"]})["nodes"]}
+                comps = [n for n in got.values() if n.get("component")]
+                copies = [n for n in got.values() if n.get("instance_of")]
+                assert len(comps) == 1 and copies and copies[0]["instance_of"] == comps[0]["id"], (comps, copies)
+                styles = [n for n in got.values() if n.get("shared")]
+                assert styles and got["box"].get("fill_style") == styles[0]["id"], (styles, got["box"])
+                assert got["box"].get("flip_x") is True, got["box"]
+                vectors = [n for n in got.values() if n["kind"] == "vector"]
+                assert len(vectors) == 1 and " C" in vectors[0]["d"], vectors
+                comments = [n for n in got.values() if n["kind"] == "comment"]
+                assert len(comments) == 1 and comments[0]["author"] == "user", comments
+                spans = got["hello"].get("spans")
+                assert spans and spans[0]["text"] == "Hello" and spans[0].get("weight") == 700, got["hello"]
+                assert got["screen"]["w"] == 500 and got["box"]["x"] == 400, (got["screen"], got["box"])
+                assert (OUT / "design-kit.svg").read_bytes().lstrip().startswith(b"<?xml"), "the SVG export"
+                assert (OUT / "design-kit.pdf").read_bytes().startswith(b"%PDF"), "the PDF export"
+                versions = call("design.version.list", {"design_id": kit["design"]["id"]})["versions"]
+                assert any(v.get("label") == "Before the kit" for v in versions), versions
+                print("KIT_OK", len(got), "nodes")
+            if shot == "template":
+                logtext = (OUT / f"design-{shot}.log").read_text()
+                print("TEMPLATE_OK", tpl["design"]["nodes"], "nodes")
             if shot == "perf":
                 logtext = (OUT / f"design-{shot}.log").read_text()
                 assert "DESIGN_SCRIPT_DONE" in logtext, logtext[-2000:]

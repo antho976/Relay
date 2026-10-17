@@ -175,6 +175,9 @@ pub fn install(b: &Rc<Board>) {
                 b.space.set(false);
                 update_cursor(&b, None);
             }
+            if matches!(key, gdk::Key::Alt_L | gdk::Key::Alt_R) && b.extra.alt.replace(false) {
+                b.canvas.queue_draw();
+            }
         }
     });
     canvas.add_controller(keys);
@@ -411,6 +414,23 @@ fn begin(b: &Rc<Board>, x: f64, y: f64, mods: gdk::ModifierType) {
         return;
     }
     b.last_press.set((now, x, y));
+    if b.extra.pen.borrow().is_none() && !b.space.get() {
+        if let Some(id) = b.comment_at(x, y) {
+            b.open_comment(&id);
+            return;
+        }
+    }
+    if b.extra.vector_edit.borrow().is_some() && b.tool.get() == Tool::Select && !b.space.get() {
+        if let Some((id, point)) = b.point_at(x, y) {
+            let orig = b.doc.scene.borrow().node(&id).cloned();
+            if let (Some(orig), Some(rect)) = (orig, b.placed().rect(&id)) {
+                b.doc.set_hold(true);
+                *b.gesture.borrow_mut() = Gesture::VectorPoint { id, point, orig, rect, moved: false };
+                return;
+            }
+        }
+        b.stop_editing_points();
+    }
     if b.space.get() || b.tool.get() == Tool::Hand {
         *b.gesture.borrow_mut() = Gesture::Pan { cam: b.cam.get() };
         update_cursor(b, Some("grabbing"));
@@ -442,6 +462,17 @@ fn begin(b: &Rc<Board>, x: f64, y: f64, mods: gdk::ModifierType) {
             b.create_text(p, parent);
         }
         Tool::Sticky => create_sticky(b, p),
+        Tool::Vector => {
+            let parent = b.extra.pen.borrow().as_ref().map(|pen| pen.parent.clone()).unwrap_or_else(|| container_at(b, p));
+            b.pen_press(p, parent);
+        }
+        Tool::Comment => {
+            let parent = container_at(b, p);
+            b.new_comment(p, parent);
+            if !b.tool_lock.get() {
+                b.set_tool(Tool::Select);
+            }
+        }
         Tool::Pen | Tool::Highlighter => {
             let parent = container_at(b, p);
             *b.gesture.borrow_mut() = Gesture::Draw { parent, points: vec![[p.0, p.1]] };
@@ -495,6 +526,7 @@ fn begin_select(b: &Rc<Board>, x: f64, y: f64, p: (f64, f64), mods: gdk::Modifie
                 .collect();
             drop(scene);
             b.doc.set_hold(true);
+            b.pinned_begin(&orig);
             *b.gesture.borrow_mut() = Gesture::Resize { handle, bounds, orig, moved: false };
             return;
         }
@@ -690,6 +722,17 @@ fn update(b: &Rc<Board>, x: f64, y: f64, dx: f64, dy: f64, mods: gdk::ModifierTy
             drop(gesture);
             erase_at(b, p);
         }
+        Gesture::PenHandle { anchor } => {
+            let anchor = *anchor;
+            drop(gesture);
+            b.pen_drag(anchor, p, alt(mods));
+        }
+        Gesture::VectorPoint { id, point, orig, rect, moved } => {
+            *moved = true;
+            let (id, point, orig, rect) = (id.clone(), *point, orig.clone(), *rect);
+            drop(gesture);
+            b.drag_point(&id, point, &orig, &rect, p, alt(mods));
+        }
         Gesture::Draw { points, .. } => {
             let last = points.last().copied().unwrap_or([p.0, p.1]);
             if ((p.0 - last[0]).powi(2) + (p.1 - last[1]).powi(2)).sqrt() * zoom >= 1.5 {
@@ -699,6 +742,15 @@ fn update(b: &Rc<Board>, x: f64, y: f64, dx: f64, dy: f64, mods: gdk::ModifierTy
             }
         }
     }
+}
+
+/// A frame's layout grid edges as lines to snap to (boxes of no width or height).
+fn grid_lines(b: &Board, frame: Option<&Node>, r: &Rect) -> Vec<Rect> {
+    let Some(frame) = frame.filter(|f| f.grids.is_some() && !b.extra.hide_grids.get()) else {
+        return Vec::new();
+    };
+    let (xs, ys) = super::marks::grid_edges(frame, r);
+    xs.into_iter().map(|x| Rect::new(x, r.y, 0.0, r.h)).chain(ys.into_iter().map(|y| Rect::new(r.x, y, r.w, 0.0))).collect()
 }
 
 fn constrain45(a: (f64, f64), p: (f64, f64)) -> (f64, f64) {
@@ -785,6 +837,7 @@ fn move_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
         .collect();
     if let Some(pr) = parent_rect.filter(|_| scene_ref.node(&parent).is_some_and(|n| n.kind != NodeKind::Page)) {
         others.push(pr);
+        others.extend(grid_lines(b, scene_ref.node(&parent), &pr));
     }
     let (sx, sy, guides) = if alt(mods) && !dup {
         (0.0, 0.0, Vec::new())
@@ -877,7 +930,11 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
     let ids: Vec<&String> = orig.iter().map(|(id, _, _)| id).collect();
     let others: Vec<Rect> = {
         let scene = b.doc.scene.borrow();
-        scene.children(&parent).iter().filter(|c| !ids.contains(c)).filter_map(|c| placed.rect(c)).collect()
+        let mut others: Vec<Rect> = scene.children(&parent).iter().filter(|c| !ids.contains(c)).filter_map(|c| placed.rect(c)).collect();
+        if let Some(pr) = placed.rect(&parent) {
+            others.extend(grid_lines(b, scene.node(&parent), &pr));
+        }
+        others
     };
     let moving = Rect::new(x0.min(x1), y0.min(y1), (x1 - x0).abs(), (y1 - y0).abs());
     let edges = Edges {
@@ -936,6 +993,12 @@ fn resize_update(b: &Rc<Board>, p: (f64, f64), mods: gdk::ModifierType) {
                     n.points = Some(pts.iter().map(|q| [q[0] * sx, q[1] * sy]).collect());
                 }
             }
+        }
+    }
+    if let [(id, node, _)] = orig.as_slice() {
+        let size = b.doc.scene.borrow().node(id).map(|n| (n.w, n.h));
+        if let Some((w, h)) = size {
+            b.pinned_follow(node, w, h);
         }
     }
     *b.guides.borrow_mut() = guides;
@@ -1040,14 +1103,17 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
                         }
                     }
                 }
-                let ops = finals
+                let mut ops: Vec<NodeOp> = finals
                     .into_iter()
                     .filter_map(|(id, after)| {
                         let before = orig.iter().find(|(o, _, _)| *o == id)?.1.clone();
                         diff_op(&id, &before, &after)
                     })
                     .collect();
+                ops.extend(b.pinned_finish(true));
                 b.commit(ops);
+            } else {
+                b.pinned_finish(false);
             }
             b.doc.set_hold(false);
             b.invalidate();
@@ -1097,6 +1163,20 @@ fn finish(b: &Rc<Board>, _x: f64, _y: f64, mods: gdk::ModifierType) {
             b.invalidate();
         }
         Gesture::Draw { parent, points } => finish_drawing(b, parent, points),
+        Gesture::PenHandle { .. } => {}
+        Gesture::VectorPoint { id, orig, moved, .. } => {
+            if moved {
+                let after = b.doc.scene.borrow().node(&id).cloned();
+                if let Some(n) = b.doc.scene.borrow_mut().node_mut(&id) {
+                    *n = orig.clone();
+                }
+                if let Some(op) = after.and_then(|a| diff_op(&id, &orig, &a)) {
+                    b.commit(vec![op]);
+                }
+            }
+            b.doc.set_hold(false);
+            b.invalidate();
+        }
     }
     update_cursor(b, None);
 }
@@ -1274,7 +1354,7 @@ fn cancel(b: &Rc<Board>) {
                     }
                 }
             }
-            Gesture::Endpoint { id, orig, .. } | Gesture::Rotate { id, orig, .. } => {
+            Gesture::Endpoint { id, orig, .. } | Gesture::Rotate { id, orig, .. } | Gesture::VectorPoint { id, orig, .. } => {
                 if let Some(n) = scene.node_mut(id) {
                     *n = orig.clone();
                 }
@@ -1289,6 +1369,9 @@ fn cancel(b: &Rc<Board>) {
             _ => {}
         }
     }
+    if matches!(gesture, Gesture::Resize { .. }) {
+        b.pinned_finish(false);
+    }
     b.guides.borrow_mut().clear();
     b.doc.set_hold(false);
     b.invalidate();
@@ -1296,6 +1379,10 @@ fn cancel(b: &Rc<Board>) {
 }
 
 fn double_click(b: &Rc<Board>, x: f64, y: f64, p: (f64, f64)) {
+    if b.tool.get() == Tool::Vector {
+        b.finish_pen();
+        return;
+    }
     if b.tool.get() != Tool::Select {
         return;
     }
@@ -1318,6 +1405,7 @@ fn double_click(b: &Rc<Board>, x: f64, y: f64, p: (f64, f64)) {
             b.begin_edit(&deep, false);
         }
         Some(NodeKind::Image) => super::assets::replace_image(b, &deep),
+        Some(NodeKind::Vector) => b.edit_points(&deep),
         _ => {
             // Into the selected container: the next node down under the pointer.
             let selected = b.selection.borrow().clone();
@@ -1417,9 +1505,32 @@ fn context_menu(b: &Rc<Board>, x: f64, y: f64) {
         menu.append_section(None, &comps);
         section.append(Some("Hide"), Some("design.hide"));
         menu.append_section(None, &section);
+        let shape = gio::Menu::new();
+        shape.append(Some("Flip horizontal"), Some("design.flip-x"));
+        shape.append(Some("Flip vertical"), Some("design.flip-y"));
+        let one = b.selected();
+        let kind = match one.as_slice() {
+            [id] => b.doc.scene.borrow().node(id).map(|n| n.kind),
+            _ => None,
+        };
+        match kind {
+            Some(NodeKind::Vector) => shape.append(Some("Edit points"), Some("design.edit-points")),
+            Some(NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon | NodeKind::Line | NodeKind::Path) => {
+                shape.append(Some("Turn into a vector"), Some("design.to-vector"))
+            }
+            _ => {}
+        }
+        if matches!(kind, Some(NodeKind::Frame)) {
+            shape.append(Some("Copy as HTML and CSS"), Some("design.copy-code"));
+        }
+        if matches!(kind, Some(k) if k != NodeKind::Frame && k != NodeKind::Group) {
+            shape.append(Some("Make a style of this"), Some("design.make-style"));
+        }
+        menu.append_section(None, &shape);
         let section = gio::Menu::new();
         section.append(Some("Ask the agent about this…"), Some("design.ask"));
         section.append(Some("Export as PNG…"), Some("design.export"));
+        section.append(Some("Export as SVG…"), Some("design.export-svg"));
         menu.append_section(None, &section);
     } else {
         let section = gio::Menu::new();
@@ -1460,6 +1571,22 @@ fn key_pressed(
         .map(|(k, ..)| k)
         .unwrap_or(key);
     let stop = glib::Propagation::Stop;
+    if matches!(key, Key::Alt_L | Key::Alt_R) {
+        if !b.extra.alt.replace(true) {
+            b.canvas.queue_draw();
+        }
+        return glib::Propagation::Proceed;
+    }
+    // The pen's path, or a vector's points, end with Enter or Escape.
+    if matches!(key, Key::Return | Key::KP_Enter | Key::Escape) && !ctrl {
+        if b.extra.pen.borrow().is_some() {
+            b.finish_pen();
+            return stop;
+        }
+        if b.stop_editing_points() {
+            return stop;
+        }
+    }
     if key == Key::space && !ctrl {
         if !b.space.replace(true) {
             update_cursor(b, Some("grab"));
@@ -1495,7 +1622,9 @@ fn key_pressed(
             Key::l if shift => b.toggle_flag("locked"),
             Key::h if shift => b.toggle_flag("hidden"),
             Key::k if shift => super::assets::choose_images(b),
+            Key::Return | Key::KP_Enter if alt => b.present(),
             Key::Return | Key::KP_Enter => b.ask_agent(b.ask.upcast_ref()),
+            Key::e if shift => super::export::export_vector(b, super::export::Vector::Svg),
             _ => return glib::Propagation::Proceed,
         }
         return stop;
@@ -1521,6 +1650,10 @@ fn key_pressed(
             return stop;
         }
         return glib::Propagation::Proceed;
+    }
+    if shift && matches!(key.to_lower(), Key::h | Key::v) {
+        b.flip(if key.to_lower() == Key::h { "flip_x" } else { "flip_y" });
+        return stop;
     }
     if shift {
         match base {
@@ -1593,6 +1726,8 @@ fn key_pressed(
                 Key::s => Some(Tool::Sticky),
                 Key::p if shift => Some(Tool::Highlighter),
                 Key::p => Some(Tool::Pen),
+                Key::b => Some(Tool::Vector),
+                Key::c => Some(Tool::Comment),
                 _ => None,
             };
             if key.to_lower() == Key::k {

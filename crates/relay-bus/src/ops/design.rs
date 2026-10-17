@@ -7,10 +7,15 @@
 //! A design is pages of nodes (`crate::design`). Every change goes through `design.apply`, a
 //! list of node edits run in order, all or none; it answers with the nodes as stored and the
 //! edits that undo it, so the canvas's undo and `audit.undo` revert exactly what was done.
+//!
+//! `design.version.*` keeps whole copies of a design's nodes to go back to; `design.code` writes
+//! a frame out as HTML and CSS; `design.render` asks Relay's window for a picture of one, which
+//! an agent cannot otherwise see.
 use crate::design::{Node, NodeOp};
 use crate::registry::{Actors, OpMeta, Scope, Undo};
-use crate::types::{Design, Id};
+use crate::types::{Design, DesignVersion, Id};
 use crate::{op, Empty};
+use serde_json::{Map, Value};
 
 payload!(#[schemars(rename = "DesignListIn")] ListIn {
     pub project_id: Id,
@@ -83,7 +88,7 @@ op!(Restore, "design.restore", IdIn => Design,
     OpMeta::mutation(Scope::Project, 12, "Bring back a deleted design")
         .undo(Undo::Inverse).emits(&["design.changed"]));
 op!(Purge, "design.purge", IdIn => Empty,
-    OpMeta::mutation(Scope::Project, 12, "Delete a deleted design for good, with its nodes")
+    OpMeta::mutation(Scope::Project, 12, "Delete a deleted design for good, with its nodes and versions")
         .actors(Actors::UserOnly).emits(&["design.deleted"]));
 
 payload!(#[schemars(rename = "DesignApplyIn")] ApplyIn {
@@ -113,7 +118,7 @@ result!(#[schemars(rename = "DesignApplyOut")] ApplyOut {
 });
 op!(Apply, "design.apply", ApplyIn => ApplyOut,
     OpMeta::mutation(Scope::Project, 12, "Add, change, move or delete a design's nodes in one all-or-none list, only when the person asked for it; returns what changed and its undo")
-        .undo(Undo::Inverse).emits(&["design.changed"]));
+        .undo(Undo::Inverse).emits(&["design.changed", "design.version.changed"]));
 
 payload!(#[schemars(rename = "DesignKitsIn")] KitsIn {
     /// Only this pack.
@@ -145,4 +150,98 @@ result!(#[schemars(rename = "DesignAssetAddOut")] AssetAddOut {
 op!(AssetAdd, "design.asset.add", AssetAddIn => AssetAddOut,
     OpMeta::mutation(Scope::Project, 12, "Store a picture for a design's image nodes; returns the src to give them"));
 
-entries!(List, Get, Create, Update, Duplicate, Delete, Restore, Purge, Apply, AssetAdd, Kits);
+payload!(#[schemars(rename = "DesignVersionSaveIn")] VersionSaveIn {
+    pub design_id: Id,
+    /// What to call it, 1 to 200 characters; absent, it is listed by when it was saved.
+    pub label: Option<String>,
+});
+op!(VersionSave, "design.version.save", VersionSaveIn => DesignVersion,
+    OpMeta::mutation(Scope::Project, 12, "Save a named copy of a design's nodes to come back to with design.version.restore; returns it without its nodes")
+        .undo(Undo::Inverse).emits(&["design.version.changed"]));
+
+result!(#[schemars(rename = "DesignVersionListOut")] VersionListOut {
+    /// Newest first: the named ones, kept until deleted, among the newest 30 the engine kept.
+    pub versions: Vec<DesignVersion>,
+});
+op!(VersionList, "design.version.list", IdIn => VersionListOut,
+    OpMeta::query(Scope::Project, 12, "A design's saved versions, newest first: the named ones and those the engine kept before an agent's edits or a restore"));
+
+payload!(#[schemars(rename = "DesignVersionIn")] VersionIn {
+    pub design_id: Id,
+    pub version_id: Id,
+});
+result!(#[schemars(rename = "DesignVersionGetOut")] VersionGetOut {
+    pub version: DesignVersion,
+    /// Every node it holds, in `design.get`'s order.
+    pub nodes: Vec<Node>,
+});
+op!(VersionGet, "design.version.get", VersionIn => VersionGetOut,
+    OpMeta::query(Scope::Project, 12, "A saved version of a design with its nodes, to preview or compare"));
+
+result!(#[schemars(rename = "DesignVersionRestoreOut")] VersionRestoreOut {
+    pub design: Design,
+    /// The version kept of the design as it was just before, which restores it back.
+    pub saved_version_id: Id,
+});
+op!(VersionRestore, "design.version.restore", VersionIn => VersionRestoreOut,
+    OpMeta::mutation(Scope::Project, 12, "Put a design's nodes back as a saved version holds them, only when the person asked; what was there is kept first as a version of its own")
+        .undo(Undo::Inverse).emits(&["design.changed", "design.version.changed"]));
+
+op!(VersionDelete, "design.version.delete", VersionIn => Empty,
+    OpMeta::mutation(Scope::Project, 12, "Delete a saved version of a design for good; an agent deletes only those it saved")
+        .emits(&["design.version.deleted"]));
+
+payload!(#[schemars(rename = "DesignCodeIn")] CodeIn {
+    pub design_id: Id,
+    /// The frame to write out with everything inside it (any node but a page).
+    pub node_id: String,
+    /// Pictures as `data:` URLs instead of `design-assets/<src>` paths, while they come to at
+    /// most 1 MiB together; past that the rest keep their paths.
+    pub inline_assets: Option<bool>,
+});
+result!(#[schemars(rename = "DesignCodeOut")] CodeOut {
+    /// The node as nested elements, each with a class named after its layer.
+    pub html: String,
+    /// The rules for those classes.
+    pub css: String,
+    /// The pictures the HTML and CSS name by path, `design-assets/<src>` (copy them from
+    /// `design.get`'s `assets_dir`), each once.
+    pub assets: Vec<String>,
+});
+op!(Code, "design.code", CodeIn => CodeOut,
+    OpMeta::query(Scope::Project, 12, "A frame as static HTML and CSS: flexbox for auto layout, absolute positions otherwise, styled text, pictures, icons and vectors as inline SVG"));
+
+payload!(#[schemars(rename = "DesignRenderIn")] RenderIn {
+    pub design_id: Id,
+    /// The node to picture with what is inside it; default the design's first page.
+    pub node_id: Option<String>,
+    /// Pixels per design pixel, 1 to 4 (default 2).
+    pub scale: Option<f64>,
+});
+result!(#[schemars(rename = "DesignRenderOut")] RenderOut {
+    /// What the `design.rendered` answering this carries: `<design id>-<uuid>`.
+    pub request_id: String,
+    pub node_id: String,
+    /// The `bus.wait` payload that takes the answer, to pass as it is.
+    #[schemars(with = "Map<String, Value>")]
+    pub wait: Value,
+});
+op!(Render, "design.render", RenderIn => RenderOut,
+    OpMeta::query(Scope::Project, 12, "Ask Relay's window for a PNG of a design node, to see what you drew: then bus.wait {events: [\"design.rendered\"], matching: {request_id}, timeout_ms: 20000} (the answer's `wait`) and read the PNG at the event's path. Needs Relay's window open: no answer within 20 s means it is closed")
+        .emits(&["design.render_requested"]));
+
+payload!(#[schemars(rename = "DesignRenderDoneIn")] RenderDoneIn {
+    /// From `design.render_requested`: `<design id>-<uuid>`, so the answer names its design
+    /// without the engine keeping anything between the two.
+    pub request_id: String,
+    /// The PNG written: an absolute path to a file.
+    pub path: Option<String>,
+    /// Why there is no picture, instead of `path`.
+    pub error: Option<String>,
+});
+op!(RenderDone, "design.render.done", RenderDoneIn => Empty,
+    OpMeta::query(Scope::Project, 12, "The window's answer to design.render_requested: the PNG it wrote, or why not; announced as design.rendered")
+        .actors(Actors::UserOnly).emits(&["design.rendered"]));
+
+entries!(List, Get, Create, Update, Duplicate, Delete, Restore, Purge, Apply, AssetAdd, Kits,
+    VersionSave, VersionList, VersionGet, VersionRestore, VersionDelete, Code, Render, RenderDone);

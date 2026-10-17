@@ -4,7 +4,7 @@
   "title": "RELAY v4 command bus",
   "description": "Generated from crates/relay-bus by `relay schema`. Do not edit; see docs/engine/BUS.md.",
   "version": 1,
-  "op_count": 327,
+  "op_count": 335,
   "envelope": {
     "request": {
       "$ref": "#/$defs/Request"
@@ -6260,7 +6260,7 @@
       }
     },
     "design.purge": {
-      "summary": "Delete a deleted design for good, with its nodes",
+      "summary": "Delete a deleted design for good, with its nodes and versions",
       "kind": "mutation",
       "audit": "always",
       "undo": "none",
@@ -6288,7 +6288,8 @@
       "actors": "all",
       "doors": "all",
       "emits": [
-        "design.changed"
+        "design.changed",
+        "design.version.changed"
       ],
       "since": "1.0",
       "phase": 12,
@@ -6333,6 +6334,161 @@
       },
       "result": {
         "$ref": "#/$defs/DesignKitsOut"
+      }
+    },
+    "design.version.save": {
+      "summary": "Save a named copy of a design's nodes to come back to with design.version.restore; returns it without its nodes",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "inverse",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "design.version.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignVersionSaveIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignVersion"
+      }
+    },
+    "design.version.list": {
+      "summary": "A design's saved versions, newest first: the named ones and those the engine kept before an agent's edits or a restore",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignIdIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignVersionListOut"
+      }
+    },
+    "design.version.get": {
+      "summary": "A saved version of a design with its nodes, to preview or compare",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignVersionIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignVersionGetOut"
+      }
+    },
+    "design.version.restore": {
+      "summary": "Put a design's nodes back as a saved version holds them, only when the person asked; what was there is kept first as a version of its own",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "inverse",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "design.changed",
+        "design.version.changed"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignVersionIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignVersionRestoreOut"
+      }
+    },
+    "design.version.delete": {
+      "summary": "Delete a saved version of a design for good; an agent deletes only those it saved",
+      "kind": "mutation",
+      "audit": "always",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "design.version.deleted"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignVersionIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
+      }
+    },
+    "design.code": {
+      "summary": "A frame as static HTML and CSS: flexbox for auto layout, absolute positions otherwise, styled text, pictures, icons and vectors as inline SVG",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignCodeIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignCodeOut"
+      }
+    },
+    "design.render": {
+      "summary": "Ask Relay's window for a PNG of a design node, to see what you drew: then bus.wait {events: [\"design.rendered\"], matching: {request_id}, timeout_ms: 20000} (the answer's `wait`) and read the PNG at the event's path. Needs Relay's window open: no answer within 20 s means it is closed",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "all",
+      "doors": "all",
+      "emits": [
+        "design.render_requested"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignRenderIn"
+      },
+      "result": {
+        "$ref": "#/$defs/DesignRenderOut"
+      }
+    },
+    "design.render.done": {
+      "summary": "The window's answer to design.render_requested: the PNG it wrote, or why not; announced as design.rendered",
+      "kind": "query",
+      "audit": "never",
+      "undo": "none",
+      "scope": "project",
+      "actors": "user_only",
+      "doors": "all",
+      "emits": [
+        "design.rendered"
+      ],
+      "since": "1.0",
+      "phase": 12,
+      "payload": {
+        "$ref": "#/$defs/DesignRenderDoneIn"
+      },
+      "result": {
+        "$ref": "#/$defs/Empty"
       }
     }
   },
@@ -25262,7 +25418,7 @@
             "string",
             "null"
           ],
-          "description": "A comment's writer: `you`, or the terminal's session name (the engine fills it in)."
+          "description": "A comment's writer: `user` (the person), or the terminal's session name (the engine\nfills it in)."
         },
         "replies": {
           "type": [
@@ -25836,7 +25992,7 @@
       "properties": {
         "author": {
           "type": "string",
-          "description": "`you`, or the terminal's session name."
+          "description": "`user` (the person), or the terminal's session name; the engine fills it in."
         },
         "text": {
           "type": "string"
@@ -25847,7 +26003,6 @@
         }
       },
       "required": [
-        "author",
         "text"
       ],
       "description": "A reply under a comment."
@@ -26348,6 +26503,273 @@
         "category"
       ],
       "description": "One piece of a pack: its nodes, root first (local id `root`), with local ids the `insert`\nedit maps to fresh ones."
+    },
+    "DesignVersionSaveIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What to call it, 1 to 200 characters; absent, it is listed by when it was saved."
+        }
+      },
+      "required": [
+        "design_id"
+      ]
+    },
+    "DesignVersion": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "rev": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The design's `rev` when it was saved."
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What it was saved as; `None` for a version saved without a name."
+        },
+        "auto": {
+          "type": "boolean",
+          "description": "Kept by the engine (the newest 30 per design), not named by anyone."
+        },
+        "created_by": {
+          "type": "string",
+          "description": "`user` or the session that saved it."
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "nodes": {
+          "type": "integer",
+          "format": "int64",
+          "description": "How many nodes it holds."
+        }
+      },
+      "required": [
+        "id",
+        "design_id",
+        "rev",
+        "auto",
+        "created_by",
+        "created_at",
+        "nodes"
+      ],
+      "description": "A saved copy of a design's nodes (`design.version.*`): one the person or an agent named, or\none the engine kept on its own before an agent took over the design or before a restore.\n`design.version.get` has its nodes."
+    },
+    "DesignVersionListOut": {
+      "type": "object",
+      "properties": {
+        "versions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignVersion"
+          },
+          "description": "Newest first: the named ones, kept until deleted, among the newest 30 the engine kept."
+        }
+      },
+      "required": [
+        "versions"
+      ]
+    },
+    "DesignVersionIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "version_id": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "design_id",
+        "version_id"
+      ]
+    },
+    "DesignVersionGetOut": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "$ref": "#/$defs/DesignVersion"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DesignNode"
+          },
+          "description": "Every node it holds, in `design.get`'s order."
+        }
+      },
+      "required": [
+        "version",
+        "nodes"
+      ]
+    },
+    "DesignVersionRestoreOut": {
+      "type": "object",
+      "properties": {
+        "design": {
+          "$ref": "#/$defs/Design"
+        },
+        "saved_version_id": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The version kept of the design as it was just before, which restores it back."
+        }
+      },
+      "required": [
+        "design",
+        "saved_version_id"
+      ]
+    },
+    "DesignCodeIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "node_id": {
+          "type": "string",
+          "description": "The frame to write out with everything inside it (any node but a page)."
+        },
+        "inline_assets": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Pictures as `data:` URLs instead of `design-assets/<src>` paths, while they come to at\nmost 1 MiB together; past that the rest keep their paths."
+        }
+      },
+      "required": [
+        "design_id",
+        "node_id"
+      ]
+    },
+    "DesignCodeOut": {
+      "type": "object",
+      "properties": {
+        "html": {
+          "type": "string",
+          "description": "The node as nested elements, each with a class named after its layer."
+        },
+        "css": {
+          "type": "string",
+          "description": "The rules for those classes."
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The pictures the HTML and CSS name by path, `design-assets/<src>` (copy them from\n`design.get`'s `assets_dir`), each once."
+        }
+      },
+      "required": [
+        "html",
+        "css",
+        "assets"
+      ]
+    },
+    "DesignRenderIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design_id": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "node_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The node to picture with what is inside it; default the design's first page."
+        },
+        "scale": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "description": "Pixels per design pixel, 1 to 4 (default 2)."
+        }
+      },
+      "required": [
+        "design_id"
+      ]
+    },
+    "DesignRenderOut": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "What the `design.rendered` answering this carries: `<design id>-<uuid>`."
+        },
+        "node_id": {
+          "type": "string"
+        },
+        "wait": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "The `bus.wait` payload that takes the answer, to pass as it is."
+        }
+      },
+      "required": [
+        "request_id",
+        "node_id",
+        "wait"
+      ]
+    },
+    "DesignRenderDoneIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "From `design.render_requested`: `<design id>-<uuid>`, so the answer names its design\nwithout the engine keeping anything between the two."
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The PNG written: an absolute path to a file."
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why there is no picture, instead of `path`."
+        }
+      },
+      "required": [
+        "request_id"
+      ]
     }
   }
 }

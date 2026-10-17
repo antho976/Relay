@@ -98,10 +98,11 @@ pub fn run(tx: &Transaction, store_dir: &Path) -> rusqlite::Result<Purged> {
         // A task made from a purged note keeps its card: `ON DELETE SET NULL` clears its `note_id`.
         note(tx.execute("DELETE FROM notes WHERE deleted_at IS NOT NULL AND deleted_at < ?1", [&cutoff])?, "deleted note(s) past the undo window");
 
-        // Deleted designs with their nodes. Their pictures stay in `design-assets/`: a file is
-        // named by its content and may be any design's, a removal backup's or an undo's.
+        // Deleted designs with their nodes and versions. Their pictures stay in `design-assets/`: a
+        // file is named by its content and may be any design's, a removal backup's or an undo's.
         let designs = ids(tx, "SELECT id FROM designs WHERE deleted_at IS NOT NULL AND deleted_at < ?1", &cutoff)?;
         for &id in &designs {
+            tx.prepare_cached("DELETE FROM design_versions WHERE design_id=?1")?.execute([id])?;
             tx.prepare_cached("DELETE FROM design_nodes WHERE design_id=?1")?.execute([id])?;
             tx.prepare_cached("DELETE FROM designs WHERE id=?1")?.execute([id])?;
         }

@@ -6,7 +6,9 @@
 //! `select:a,b` `click:x,y` `dbl:x,y` `drag:x,y>x,y[:shift|alt]` `tool:rect` `type:words`
 //! `endedit` `nudge:dx,dy` `set:{json}` `align:left` `layout:row` `duplicate` `delete` `group`
 //! `frame` `ungroup` `copy` `paste` `undo` `redo` `ask:words` `zoom:1.5` `fit` `layers` `wait:ms`
-//! `print`
+//! `print`; and for the later tools `insert:kit/item@x,y` `pen-end` `points:id` `component`
+//! `instance` `style:fill_style` `flip:x` `comment:x,y:words` `export:svg|pdf@path` `present`
+//! `edit-range:a,b` `edit-style:weight` `assets` `version:label` `page:id`
 
 use super::board::{Board, Tool};
 use gtk::gdk;
@@ -38,6 +40,8 @@ fn tool(name: &str) -> Option<Tool> {
         "hexagon" => Tool::Hexagon,
         "star" => Tool::Star,
         "eraser" => Tool::Eraser,
+        "vector" => Tool::Vector,
+        "comment" => Tool::Comment,
         _ => return None,
     })
 }
@@ -190,6 +194,74 @@ fn next(b: Rc<Board>, steps: Vec<String>, at: usize) {
                     super::tools::simulate(&b, corner, end, gdk::ModifierType::empty());
                 }
             }
+        }
+        "insert" => {
+            let (path, at) = arg.split_once('@').map_or((arg, None), |(p, at)| (p, point(at)));
+            b.insert_item(path, at);
+        }
+        "pen-end" => b.finish_pen(),
+        "points" => b.edit_points(arg),
+        "component" => b.make_component(),
+        "instance" => b.create_instance(),
+        "style" => {
+            let which: &'static str = match arg {
+                "text_style" => "text_style",
+                "effect_style" => "effect_style",
+                _ => "fill_style",
+            };
+            b.make_style_of(which);
+        }
+        "flip" => b.flip(if arg == "y" { "flip_y" } else { "flip_x" }),
+        "comment" => {
+            // `comment:x,y:words`: pin a comment there and post it.
+            let (at, words) = arg.split_once(':').unwrap_or((arg, "A comment"));
+            if let Some(p) = point(at) {
+                let parent = b.page.borrow().clone();
+                let mut n = relay_bus::design::Node::new(relay_bus::design::NodeKind::Comment);
+                n.id = b.doc.scene.borrow_mut().fresh_id(relay_bus::design::NodeKind::Comment);
+                n.parent = Some(parent);
+                (n.x, n.y) = p;
+                n.text = Some(words.to_string());
+                b.commit(vec![relay_bus::design::NodeOp::Add { node: n, index: None }]);
+            }
+        }
+        "export" => {
+            let (kind, path) = arg.split_once('@').unwrap_or((arg, "/tmp/design.svg"));
+            let kind = if kind == "pdf" { super::export::Vector::Pdf } else { super::export::Vector::Svg };
+            match super::export::vector_bytes(&b, &b.selected(), kind).and_then(|bytes| std::fs::write(path, &bytes).map(|_| bytes.len()).map_err(|e| e.to_string())) {
+                Ok(n) => println!("DESIGN_EXPORT {path} {n}"),
+                Err(e) => println!("DESIGN_EXPORT_FAILED {e}"),
+            }
+        }
+        "present" => {
+            b.present();
+            pause = 500;
+        }
+        // `present-end[:path]`: capture the presentation (when given a path) and close it.
+        "present-end" => super::present::capture_and_close((!arg.is_empty()).then_some(arg)),
+        "edit-range" => {
+            if let (Some((a, z)), Some(edit)) = (point(arg), b.edit.borrow().as_ref()) {
+                let buffer = edit.view.buffer();
+                buffer.select_range(&buffer.iter_at_offset(a as i32), &buffer.iter_at_offset(z as i32));
+            }
+        }
+        "edit-style" => b.toggle_run(arg, None),
+        "assets" => {
+            if let Some(l) = b.layers.borrow().as_ref() {
+                l.tabs.set_visible_child_name("assets");
+            }
+        }
+        "page" => b.set_page(arg),
+        "version" => {
+            if let Some(ui) = b.ui.upgrade() {
+                let design = b.doc.id;
+                let label = arg.to_string();
+                glib::spawn_future_local(async move {
+                    let got = ui.call("design.version.save", serde_json::json!({"design_id": design, "label": label})).await;
+                    println!("DESIGN_VERSION {}", got.map(|v| v.to_string()).unwrap_or_else(|e| format!("failed {e}")));
+                });
+            }
+            pause = 300;
         }
         "wait" => pause = arg.parse().unwrap_or(200),
         "print" => {

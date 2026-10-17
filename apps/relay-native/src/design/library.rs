@@ -30,6 +30,7 @@ pub struct Library {
     pictures: RefCell<Vec<(String, gtk::Picture)>>,
     thumbs: RefCell<HashMap<String, gdk::Texture>>,
     built: Cell<bool>,
+    pending: Cell<bool>,
     me: Weak<Library>,
 }
 
@@ -56,6 +57,7 @@ impl Library {
             pictures: RefCell::default(),
             thumbs: RefCell::default(),
             built: Cell::new(false),
+            pending: Cell::new(false),
             me: me.clone(),
         });
         let weak = Rc::downgrade(&lib);
@@ -73,6 +75,22 @@ impl Library {
             }
         });
         lib
+    }
+
+    /// The design changed while the panel shows: its components and styles may have, so the
+    /// grid is built again (a component's picture drawn afresh), at most once per main-loop turn.
+    pub fn refresh_design(&self) {
+        if self.pending.replace(true) {
+            return;
+        }
+        let weak = self.me.clone();
+        glib::idle_add_local_once(move || {
+            if let Some(l) = weak.upgrade() {
+                l.pending.set(false);
+                l.thumbs.borrow_mut().retain(|k, _| !k.starts_with('#'));
+                l.build();
+            }
+        });
     }
 
     /// Rebuild the grid for the search text.
@@ -100,6 +118,10 @@ impl Library {
                 grid.insert(&self.tile(&path, &super::board::display_name(n), "Component"), -1);
             }
             self.body.append(&grid);
+        }
+        if let Some(list) = b.styles_list(&q) {
+            self.section("Styles", "This design's shared colours, type and effects: a click gives the selection the style");
+            self.body.append(&list);
         }
         for kit in kits::kits() {
             let items: Vec<_> = kit.items.iter().filter(|i| matches(&i.name, &i.category) || kit.name.to_lowercase().contains(&q)).collect();

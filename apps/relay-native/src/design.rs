@@ -6,6 +6,14 @@
 //! A design can also open in a window of its own.
 
 mod ask;
+mod comments;
+mod history;
+mod marks;
+mod pen;
+mod present;
+mod render;
+mod props;
+mod styles;
 mod assets;
 mod board;
 mod canvas;
@@ -165,13 +173,26 @@ pub fn open(ui: &Rc<Ui>, id: i64) {
 
 /// A new design in `project`, tied to `session`, opened on the board.
 pub fn create(ui: &Weak<Ui>, project: i64, session: Option<String>) {
+    create_from(ui, project, session, None);
+}
+
+/// A new design started from a template (`templates/<item>`), or blank.
+pub fn create_from(ui: &Weak<Ui>, project: i64, session: Option<String>, template: Option<(String, String)>) {
     let Some(ui) = ui.upgrade() else {
         return;
     };
     glib::spawn_future_local(async move {
         let count = view().map(|v| v.gallery_count()).unwrap_or(0);
-        let title = if count == 0 { "Untitled design".to_string() } else { format!("Untitled design {}", count + 1) };
-        match ui.call("design.create", json!({"project_id": project, "title": title, "session": session})).await {
+        let title = match &template {
+            Some((_, name)) => name.clone(),
+            None if count == 0 => "Untitled design".to_string(),
+            None => format!("Untitled design {}", count + 1),
+        };
+        let mut payload = json!({"project_id": project, "title": title, "session": session});
+        if let Some((path, _)) = &template {
+            payload["template"] = json!(path);
+        }
+        match ui.call("design.create", payload).await {
             Ok(v) => {
                 if let Some(id) = v["design"]["id"].as_i64() {
                     if ui.project.get() != project {
@@ -193,6 +214,11 @@ impl View {
     }
 }
 
+/// Every board open, in the Design view or a window of its own.
+pub(crate) fn open_boards() -> Vec<Rc<Board>> {
+    BOARDS.with(|l| l.borrow().iter().filter_map(Weak::upgrade).collect())
+}
+
 pub(crate) fn register(b: &Rc<Board>) {
     BOARDS.with(|list| {
         let mut list = list.borrow_mut();
@@ -204,6 +230,13 @@ pub(crate) fn register(b: &Rc<Board>) {
 /// `design.changed` / `design.deleted`, whatever project the main window shows: a design in a
 /// window keeps its own.
 pub fn event(ui: &Rc<Ui>, ev: &str, payload: &Value) {
+    if ev == "design.render_requested" {
+        render::requested(ui, payload);
+        return;
+    }
+    if ev == "design.rendered" {
+        return;
+    }
     let id = payload["id"].as_i64().unwrap_or(0);
     let boards: Vec<Rc<Board>> = BOARDS.with(|l| l.borrow().iter().filter_map(Weak::upgrade).collect());
     for b in boards.iter().filter(|b| b.doc.id == id) {

@@ -226,7 +226,9 @@ impl Doc {
                             if out.nodes.iter().any(|n| scene.node(&n.id).is_none()) || out.removed.iter().any(|id| scene.node(id).is_some()) {
                                 doc.stale.set(true);
                             }
-                            let synced = out.nodes.iter().any(|n| scene.node(&n.id).is_some_and(|mine| mine.master.is_some() && mine != n));
+                            // Or changed some beyond what we ran ahead with (copies, a style's
+                            // users, a comment signed): draw what it says.
+                            let synced = out.nodes.iter().any(|n| scene.node(&n.id).is_some_and(|mine| mine != n));
                             for node in out.nodes {
                                 scene.confirm(node);
                             }

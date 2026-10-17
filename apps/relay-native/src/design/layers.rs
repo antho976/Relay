@@ -279,6 +279,10 @@ impl Layers {
         if !b.layers_panel.reveals_child() {
             return;
         }
+        if self.tabs.visible_child_name().as_deref() == Some("assets") {
+            self.library.refresh_design();
+            return;
+        }
         let scene = b.doc.scene.borrow();
         let page = b.page.borrow().clone();
         // The way down to the selection opens by itself.
@@ -295,6 +299,10 @@ impl Layers {
         let mut stack: Vec<(String, u32)> = scene.children(&page).iter().map(|c| (c.clone(), 0)).collect();
         // Children are bottom to top; the stack pops the top layer first.
         while let Some((id, depth)) = stack.pop() {
+            // Comments are pins over the canvas, not layers.
+            if scene.node(&id).is_some_and(|n| n.kind == NodeKind::Comment) {
+                continue;
+            }
             let kids = scene.children(&id);
             let folder = !kids.is_empty();
             let is_open = folder && open.contains(&id);

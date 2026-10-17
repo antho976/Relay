@@ -25,8 +25,41 @@ the project's terminals draw and revise designs alongside you.
 - **Dock** (top left): pages and layers, the page menu, then Move (V), Hand (H), Frame (F) with
   its sizes (phone, tablet, laptop, desktop, slide, social post, watch: placed beside the page's
   content), shapes (R rectangle, O ellipse, Shift R triangle, diamond, hexagon, Shift S star, L line,
-  Shift L arrow), Text (T), Sticky (S), Pen (P) / Highlighter (Shift P) / Eraser (E), Icon (K: a
-  searchable set of 70 interface icons) and Place image.
+  Shift L arrow), Text (T), Sticky (S), the vector pen (B) / Pen (P) / Highlighter (Shift P) /
+  Eraser (E), Icon (K: a searchable set of 70 interface icons), Place image and Comment (C).
+- **Assets** (the second tab of the layers panel): the design's own components and shared styles,
+  then Relay's packs — Relay UI and Wireframe (buttons, fields, toggles, cards, nav bars, tabs,
+  tables, dialogs, toasts…), Flowchart & diagrams (process, decision, swimlanes, UML class, ER
+  entity, mind-map nodes…), Devices & chrome (phones, tablet, browser, desktop windows, watch,
+  keyboard, status bar) — 166 pieces with live thumbnails. Click to place, or drag onto the canvas;
+  every piece arrives as ordinary layers. **From a template** beside New design starts a design
+  from one of nine (a mobile app, a landing page, a dashboard, a flowchart, a mood board, a
+  retrospective, a journey map, a wireframe kit, a sign-in flow).
+- **Components** (Ctrl+Alt+K, or the context menu): a frame becomes a main component (purple);
+  its copies follow every change except what was changed on the copy. Go to the component, reset a
+  copy's own changes, or detach it.
+- **Shared styles**: make a colour, text or effect style from a layer (the inspector's style row,
+  or the context menu); styles live on a Styles page as swatches you edit like anything else, and
+  everything using one follows it. Setting the field by hand detaches it.
+- **Vector pen** (B): click for corners, drag for curves (Alt breaks the handles), click the first
+  point to close, Enter or Escape to leave it open. Double-click a vector to edit its points and
+  handles; any shape can be turned into a vector.
+- **Comments** (C): pin a note anywhere; the thread takes replies, resolves, and **Send to agent**
+  hands it to the design's terminal, whose agent answers in the thread.
+- **Prototype**: in the inspector, a layer's *On click, go to* a frame with a transition, and the
+  frame presenting starts from. **Present** (the play key, Ctrl+Alt+Enter) shows the page's frames
+  one at a time to click through; arrows step, F fills the screen, Esc leaves.
+- **Layout aids**: frames' layout grids (columns, rows, square) drawn and snapped to; hold Alt to
+  see the distances from the selection to what the pointer is over; constraints keep children to a
+  frame's edges, centre or scale as it is resized; Shift H / Shift V mirror.
+- **Rich text**: while typing, Ctrl B / I / U / E (code) / K (link) and Shift Ctrl X (strike) style
+  the selected words; the inspector adds bullet, numbered and check lists and a link.
+- **Pictures**: any shape can be filled with a picture (cropped by zoom and position); colour
+  adjustments (brightness, contrast, saturation, hue, sepia, invert) apply to any layer.
+- **Version history** (the title menu): named versions, automatic ones before an agent edits and
+  before a restore, a preview of each, and Restore.
+- **Export**: PNG at 1× or 2×, SVG and PDF (vectors and real text, drawn by the same painter), and
+  **Copy as HTML and CSS** for a frame.
 - **Connectors**: a line or arrow drawn from one shape to another attaches to both and follows
   them; its route is straight, elbow or curved (the toolbar key steps through them), and the
   inspector can detach its ends.
@@ -79,6 +112,11 @@ MCP tools are generated from the same registry, with each node field documented 
   `h_sizing` of `hug` or `fill`) lets an agent build a screen without measuring text.
 - `design.asset.add` stores a picture (PNG, JPEG, GIF, WebP, SVG) and returns the `src` an image
   node names.
+- `design.kits` lists the packs and templates; an `insert` edit places a piece (`kit/item`) or a
+  copy of a component (`#id`), and `design.create` takes a `template`.
+- `design.render` asks an open window for a PNG of a frame or page (`design.rendered` answers with
+  its path), so an agent can look at what it drew; `design.code` writes a frame as HTML and CSS;
+  `design.version.*` saves, lists, previews and restores versions.
 - The bundled **Design** plugin (`plugins/design/`, switched on per project from Plugins) gives
   every agent there the `design-canvas` skill — the node model, auto layout, worked examples, how
   to revise exactly what was selected, and the craft that makes a mockup look real — and standing
@@ -93,10 +131,13 @@ MCP tools are generated from the same registry, with each node field documented 
 | Part | Where |
 | --- | --- |
 | Node model, edits, validation (shared by engine and client) | `crates/relay-bus/src/design.rs` |
+| SVG path data (vectors) | `crates/relay-bus/src/svgpath.rs` |
+| Asset packs and templates, compiled in | `crates/relay-bus/src/kits.rs`, `crates/relay-bus/kits/*.json` |
 | Ops and their payloads | `crates/relay-bus/src/ops/design.rs` |
 | Storage and handlers (migration v28: `designs`, `design_nodes`) | `crates/relay-core/src/handlers/design.rs` |
 | Scene tree, auto layout, hit testing, snapping, edit builders (GTK-free, tested in CI) | `crates/relay-client/src/design/` |
 | Native view: gallery, board, canvas widget, tools, inspector, layers, text editing, Ask, export | `apps/relay-native/src/design.rs`, `apps/relay-native/src/design/` |
+| …assets, components, styles, the pen, comments, marks (grids, distances, links), presenting, history | `library.rs`, `components.rs`, `styles.rs`, `pen.rs`, `comments.rs`, `marks.rs`, `present.rs`, `history.rs` |
 | Styles | `apps/relay-native/src/css/design.css` |
 
 The canvas is one custom widget whose snapshot is GSK render nodes: the page's content is built once
@@ -116,7 +157,9 @@ the layers panel and typing in place; runs gestures and commands (nudge, a snapp
 text, drawing a rectangle, undo and redo, group and ungroup, duplicate, delete) and asserts that the
 client's scene equals the engine's; types an Ask into a fixture terminal whose fake agent edits the
 layer, and asserts the open board shows it; places a picture and pastes between frames; and times a
-1,721-node design (`RELAY_DESIGN_TRACE`). `scripts/native-smoke.py` captures the Design view among
+1,721-node design (`RELAY_DESIGN_TRACE`); and (the `kit` shot) places a pack piece, makes a
+component and a copy, a style, a flip, a vector with the pen, a comment, a bold word, resizes a
+frame whose child keeps to its constraint, exports SVG and PDF, saves a version and presents. `scripts/native-smoke.py` captures the Design view among
 its pages. The engine side is `crates/relay-core/tests/design.rs`; the scene, layout, hit testing,
 snapping and edit builders are tested in `crates/relay-client`.
 

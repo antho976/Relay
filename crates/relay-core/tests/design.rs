@@ -1,11 +1,12 @@
 //! `design.*` (BUS.md §10.18): design canvases through the bus — the node tree `design.apply`
 //! builds, its refusals and its undo, who may tag a design with which terminal, the soft-delete
-//! lifecycle, pictures, and a project removed with its designs.
+//! lifecycle, pictures, a project removed with its designs, saved versions, a frame written out
+//! as HTML and CSS, and render requests answered by the window.
 
 mod common;
 
 use common::{call, call_as, code, committed_repo, engine_with_project, err, ok, ok_as, refused};
-use relay_bus::{Actor, Event};
+use relay_bus::{Actor, Event, Request};
 use relay_core::engine::Engine;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -586,6 +587,7 @@ fn the_retention_pass_purges_designs_deleted_long_ago() {
     let (e, _root) = project();
     let (old, recent) = (sample(&e), sample(&e));
     for id in [old, recent] {
+        ok(&e, "design.version.save", json!({"design_id": id, "label": "kept"}));
         ok(&e, "design.delete", json!({"design_id": id}));
     }
     e.store.lock().execute("UPDATE designs SET deleted_at = '2000-01-01T00:00:00Z' WHERE id = ?1", [old]).unwrap();
@@ -593,6 +595,8 @@ fn the_retention_pass_purges_designs_deleted_long_ago() {
     assert!(actions.as_array().unwrap().iter().any(|a| a == "purged 1 deleted design(s) past the undo window"), "{actions}");
     assert_eq!(code(call(&e, "design.get", json!({"design_id": old}))), "design.not_found");
     assert_eq!(count(&e, &format!("SELECT COUNT(*) FROM design_nodes WHERE design_id = {old}")), 0);
+    assert_eq!(count(&e, &format!("SELECT COUNT(*) FROM design_versions WHERE design_id = {old}")), 0);
+    assert_eq!(count(&e, &format!("SELECT COUNT(*) FROM design_versions WHERE design_id = {recent}")), 1);
     assert_eq!(ok(&e, "design.restore", json!({"design_id": recent}))["nodes"], 9);
 }
 
@@ -687,10 +691,251 @@ fn a_backup_from_before_designs_still_restores() {
     ok(&e, "notes.create", json!({"project_id": 1, "title": "plan", "body": "kept"}));
     ok(&e, "project.remove", json!({"project_id": 1}));
     let backup = ok(&e, "project.removed.list", json!({}))["removed"][0]["backup_path"].as_str().unwrap().to_string();
-    rusqlite::Connection::open(&backup).unwrap().execute_batch("DROP TABLE design_nodes; DROP TABLE designs;").unwrap();
+    rusqlite::Connection::open(&backup).unwrap().execute_batch("DROP TABLE design_versions; DROP TABLE design_nodes; DROP TABLE designs;").unwrap();
     let out = ok(&e, "project.restore", json!({"backup_path": backup, "project_id": 1}));
     assert_eq!(out["notes"], 1);
     assert!(ok(&e, "design.list", json!({"project_id": 1}))["designs"].as_array().unwrap().is_empty());
+}
+
+fn versions(e: &Engine, design: i64) -> Vec<Value> {
+    ok(e, "design.version.list", json!({"design_id": design}))["versions"].as_array().unwrap().clone()
+}
+
+fn agent(e: &Engine) -> String {
+    ok(e, "session.create", json!({"project_id": 1, "provider": "claude", "role": "builder"}))["name"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn a_version_is_saved_listed_read_and_restored_and_the_restore_undone() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    let before = nodes(&e, id);
+    let first = ok(&e, "design.version.save", json!({"design_id": id, "label": "  First  "}));
+    assert_eq!((first["label"].as_str(), first["auto"].as_bool(), first["nodes"].as_i64(), first["rev"].as_i64(), first["created_by"].as_str()),
+        (Some("First"), Some(false), Some(9), Some(2), Some("user")));
+    assert!(first.get("body").is_none() && first.get("nodes_json").is_none(), "a summary has no nodes: {first}");
+    apply(&e, id, json!([{"op": "delete", "id": "card"}, {"op": "add", "node": {"parent": "page-1", "kind": "rect"}}]));
+    let after = nodes(&e, id);
+    let unnamed = ok(&e, "design.version.save", json!({"design_id": id}));
+    assert_eq!(unnamed["label"], Value::Null);
+    let listed = versions(&e, id);
+    assert_eq!(listed.iter().map(|v| v["id"].clone()).collect::<Vec<_>>(), vec![unnamed["id"].clone(), first["id"].clone()], "newest first");
+
+    let got = ok(&e, "design.version.get", json!({"design_id": id, "version_id": first["id"]}));
+    assert_eq!((got["version"].clone(), got["nodes"].clone()), (first.clone(), before.clone()));
+
+    let mut rx = e.subscribe();
+    let restored = ok(&e, "design.version.restore", json!({"design_id": id, "version_id": first["id"]}));
+    assert_eq!(nodes(&e, id), before, "the nodes are back as they were saved");
+    assert_eq!((restored["design"]["rev"].as_i64(), restored["design"]["nodes"].as_i64(), restored["design"]["pages"].as_i64()), (Some(4), Some(9), Some(2)));
+    let kept = versions(&e, id)[0].clone();
+    assert_eq!((kept["id"].clone(), kept["auto"].as_bool(), kept["label"].as_str()),
+        (restored["saved_version_id"].clone(), Some(true), Some("Before restoring \u{201c}First\u{201d}")));
+    let seen = drain(&mut rx);
+    assert!(seen.iter().any(|ev| ev.ev == "design.changed" && ev.payload["rev"] == 4 && ev.project_id == Some(1)), "{seen:?}");
+    assert!(seen.iter().any(|ev| ev.ev == "design.version.changed" && ev.payload["id"] == kept["id"]), "{seen:?}");
+    // The id counter stays past every id the design has held: a new node takes a fresh one.
+    let next = apply(&e, id, json!([{"op": "add", "node": {"parent": "page-1", "kind": "rect"}}]));
+    assert!(!ids(&before).contains(&next["ids"][0].as_str().unwrap().to_string()), "{next}");
+    apply(&e, id, next["inverse"].clone());
+
+    // audit.undo restores the version kept before the restore: the design as it was then.
+    let row = ok(&e, "audit.list", json!({"op_prefix": "design.version.restore", "limit": 1}))["rows"][0].clone();
+    assert_eq!(row["undo_op"]["payload"], json!({"design_id": id, "version_id": kept["id"]}));
+    ok(&e, "audit.undo", json!({"audit_id": row["id"]}));
+    assert_eq!(nodes(&e, id), after);
+    // Unnamed, a version is named by when it was saved.
+    let named = ok(&e, "design.version.restore", json!({"design_id": id, "version_id": unnamed["id"]}));
+    let label = versions(&e, id)[0]["label"].as_str().unwrap().to_string();
+    assert_eq!(named["saved_version_id"], versions(&e, id)[0]["id"]);
+    assert!(label.starts_with("Before restoring \u{201c}20") && !label.contains('T'), "{label}");
+
+    assert_eq!(code(call(&e, "design.version.get", json!({"design_id": id, "version_id": 999}))), "design.version_not_found");
+    let other = create(&e);
+    assert_eq!(code(call(&e, "design.version.restore", json!({"design_id": other, "version_id": first["id"]}))), "design.version_not_found",
+        "a version is restored only into its own design");
+    assert_eq!(code(call(&e, "design.version.save", json!({"design_id": id, "label": "x".repeat(201)}))), "design.version_label");
+    ok(&e, "design.version.delete", json!({"design_id": id, "version_id": first["id"]}));
+    assert_eq!(code(call(&e, "design.version.get", json!({"design_id": id, "version_id": first["id"]}))), "design.version_not_found");
+}
+
+/// An agent's first edit of a design someone else changed last keeps a version first; its next
+/// ones do not, until someone else edits in between. The engine keeps the newest 30 of its own.
+#[test]
+fn an_agent_taking_over_a_design_keeps_what_was_there() {
+    let (e, _root) = project();
+    let a = agent(&e);
+    let bot = Actor::agent(&a);
+    let id = sample(&e);
+    let before = nodes(&e, id);
+    let named = ok(&e, "design.version.save", json!({"design_id": id, "label": "Mine"}));
+    let edit = |actor: Actor, n: i64| ok_as(&e, actor, "design.apply", json!({"design_id": id, "ops": [{"op": "update", "id": "photo", "set": {"x": n}}]}));
+    edit(bot.clone(), 1);
+    let kept = versions(&e, id);
+    assert_eq!(kept.len(), 2);
+    assert_eq!((kept[0]["auto"].as_bool(), kept[0]["label"].as_str(), kept[0]["created_by"].as_str()), (Some(true), Some(format!("Before {a}'s edits").as_str()), Some(a.as_str())));
+    assert_eq!(ok(&e, "design.version.get", json!({"design_id": id, "version_id": kept[0]["id"]}))["nodes"], before, "what was there before the agent's edit");
+    edit(bot.clone(), 2);
+    assert_eq!(versions(&e, id).len(), 2, "the agent edited last: nothing new to keep");
+    edit(Actor::User, 3);
+    edit(bot.clone(), 4);
+    assert_eq!(versions(&e, id).len(), 3);
+    // The person editing after the person keeps nothing.
+    edit(Actor::User, 5);
+    edit(Actor::User, 6);
+    assert_eq!(versions(&e, id).len(), 3);
+
+    for n in 0..32 {
+        edit(Actor::User, 10 + n);
+        edit(bot.clone(), 100 + n);
+    }
+    let all = versions(&e, id);
+    assert_eq!(all.iter().filter(|v| v["auto"] == true).count(), 30, "the newest 30 the engine kept");
+    assert!(all.iter().any(|v| v["id"] == named["id"]), "a named version stays");
+
+    // An agent deletes its own named versions, never the person's or the engine's.
+    let auto = all.iter().find(|v| v["auto"] == true).unwrap();
+    assert_eq!(code(call_as(&e, bot.clone(), "design.version.delete", json!({"design_id": id, "version_id": auto["id"]}))), "actor.scope");
+    assert_eq!(code(call_as(&e, bot.clone(), "design.version.delete", json!({"design_id": id, "version_id": named["id"]}))), "actor.scope");
+    let own = ok_as(&e, bot.clone(), "design.version.save", json!({"design_id": id, "label": "Try"}));
+    assert_eq!(own["created_by"], a.as_str());
+    ok_as(&e, bot.clone(), "design.version.delete", json!({"design_id": id, "version_id": own["id"]}));
+    // Restoring is every role's, and keeps what it replaces.
+    let back = ok_as(&e, bot, "design.version.restore", json!({"design_id": id, "version_id": named["id"]}));
+    assert_eq!(back["design"]["updated_by"], a.as_str());
+    assert_eq!(nodes(&e, id), before);
+}
+
+#[test]
+fn versions_go_with_their_design_and_their_project() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    ok(&e, "design.version.save", json!({"design_id": id, "label": "one"}));
+    ok(&e, "design.version.save", json!({"design_id": id}));
+    let mut rx = e.subscribe();
+    let gone = versions(&e, id)[1]["id"].clone();
+    ok(&e, "design.version.delete", json!({"design_id": id, "version_id": gone}));
+    let deleted = drain(&mut rx).into_iter().find(|ev| ev.ev == "design.version.deleted").unwrap();
+    assert_eq!((deleted.project_id, deleted.payload), (Some(1), json!({"id": gone, "design_id": id, "project_id": 1})));
+
+    // A project removed and restored brings its versions back.
+    ok(&e, "project.remove", json!({"project_id": 1}));
+    assert_eq!(count(&e, "SELECT COUNT(*) FROM design_versions"), 0);
+    let backup = ok(&e, "project.removed.list", json!({}))["removed"][0]["backup_path"].as_str().unwrap().to_string();
+    ok(&e, "project.restore", json!({"backup_path": backup, "project_id": 1}));
+    let kept = versions(&e, id);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(ok(&e, "design.version.get", json!({"design_id": id, "version_id": kept[0]["id"]}))["nodes"].as_array().unwrap().len(), 9);
+
+    // Purged with its design.
+    ok(&e, "design.delete", json!({"design_id": id}));
+    ok(&e, "design.purge", json!({"design_id": id}));
+    assert_eq!(count(&e, "SELECT COUNT(*) FROM design_versions"), 0);
+}
+
+/// A removal backup taken before versions existed still restores the project's designs.
+#[test]
+fn a_backup_from_before_versions_still_restores_its_designs() {
+    let (e, _root) = project();
+    let id = sample(&e);
+    let before = ok(&e, "design.get", json!({"design_id": id}));
+    ok(&e, "project.remove", json!({"project_id": 1}));
+    let backup = ok(&e, "project.removed.list", json!({}))["removed"][0]["backup_path"].as_str().unwrap().to_string();
+    rusqlite::Connection::open(&backup).unwrap().execute_batch("DROP TABLE design_versions;").unwrap();
+    ok(&e, "project.restore", json!({"backup_path": backup, "project_id": 1}));
+    assert_eq!(ok(&e, "design.get", json!({"design_id": id})), before);
+    assert!(versions(&e, id).is_empty());
+}
+
+#[test]
+fn a_kit_button_is_written_out_as_html_and_css() {
+    let (e, root) = project();
+    let id = create(&e);
+    apply(&e, id, json!([{"op": "insert", "item": "relay-ui/button-primary", "parent": "page-1", "id": "cta", "x": 40, "y": 40,
+        "set": {"label": {"text": "Save <now> & go"}}}]));
+    let out = ok_as(&e, Actor::agent(agent(&e)), "design.code", json!({"design_id": id, "node_id": "cta"}));
+    let (html, css) = (out["html"].as_str().unwrap(), out["css"].as_str().unwrap());
+    assert!(html.contains("Save &lt;now&gt; &amp; go</p>"), "{html}");
+    assert!(html.starts_with("<div class=\"button-primary\" data-node=\"cta\">"), "{html}");
+    assert!(css.contains(".button-primary {") && css.contains("display: flex;") && css.contains("flex-direction: row;")
+        && css.contains("align-items: center;") && css.contains("padding: 0 16px 0 16px;") && css.contains("width: max-content;"), "{css}");
+    assert!(css.contains(".label {") && css.contains("color: #131211;") && css.contains("font-weight: 600;"), "{css}");
+    assert_eq!(out["assets"], json!([]));
+
+    // Pictures by path, or inlined.
+    let src = ok(&e, "design.asset.add", json!({"design_id": id, "bytes_b64": PNG_1X1}))["src"].as_str().unwrap().to_string();
+    apply(&e, id, json!([{"op": "add", "node": {"id": "hero", "parent": "page-1", "kind": "frame", "w": 100, "h": 100}},
+        {"op": "add", "node": {"id": "pic", "parent": "hero", "kind": "image", "src": src, "w": 10, "h": 10}}]));
+    let by_path = ok(&e, "design.code", json!({"design_id": id, "node_id": "hero"}));
+    assert_eq!(by_path["assets"], json!([src]));
+    assert!(by_path["html"].as_str().unwrap().contains(&format!("src=\"design-assets/{src}\"")));
+    assert!(root.path().join("store/design-assets").join(&src).is_file());
+    let inlined = ok(&e, "design.code", json!({"design_id": id, "node_id": "hero", "inline_assets": true}));
+    assert_eq!(inlined["assets"], json!([]));
+    assert!(inlined["html"].as_str().unwrap().contains(&format!("src=\"data:image/png;base64,{PNG_1X1}\"")), "{}", inlined["html"]);
+
+    let page = refused(call(&e, "design.code", json!({"design_id": id, "node_id": "page-1"})));
+    assert_eq!((page.code.as_str(), page.hint.is_some()), ("design.code", true));
+    assert_eq!(code(call(&e, "design.code", json!({"design_id": id, "node_id": "nope"}))), "design.node_not_found");
+}
+
+#[test]
+fn a_render_request_is_announced_and_its_answer_too() {
+    let (e, root) = project();
+    let a = agent(&e);
+    let bot = Actor::agent(&a);
+    let id = sample(&e);
+    let mut rx = e.subscribe();
+    let asked = ok_as(&e, bot.clone(), "design.render", json!({"design_id": id}));
+    let request_id = asked["request_id"].as_str().unwrap().to_string();
+    assert_eq!(asked["node_id"], "page-1", "the first page by default");
+    assert!(request_id.starts_with(&format!("{id}-")), "{request_id}");
+    assert_eq!(asked["wait"], json!({"events": ["design.rendered"], "matching": {"request_id": request_id}, "timeout_ms": 20000}));
+    let requested = drain(&mut rx).into_iter().find(|ev| ev.ev == "design.render_requested").unwrap();
+    assert_eq!((requested.project_id, requested.payload),
+        (Some(1), json!({"request_id": request_id, "project_id": 1, "design_id": id, "node_id": "page-1", "scale": 2.0})));
+    let card = ok_as(&e, bot.clone(), "design.render", json!({"design_id": id, "node_id": "card", "scale": 1}));
+    assert_ne!(card["request_id"], asked["request_id"]);
+    assert_eq!(code(call_as(&e, bot.clone(), "design.render", json!({"design_id": id, "node_id": "nope"}))), "design.node_not_found");
+    assert_eq!(code(call_as(&e, bot.clone(), "design.render", json!({"design_id": id, "scale": 8}))), "design.scale");
+
+    // The window answers, as the person.
+    let png = root.path().join("render.png");
+    std::fs::write(&png, b"png").unwrap();
+    drain(&mut rx);
+    ok(&e, "design.render.done", json!({"request_id": request_id, "path": png}));
+    let rendered = drain(&mut rx).into_iter().find(|ev| ev.ev == "design.rendered").unwrap();
+    assert_eq!((rendered.project_id, rendered.payload),
+        (Some(1), json!({"request_id": request_id, "project_id": 1, "design_id": id, "path": png, "error": null})));
+    ok(&e, "design.render.done", json!({"request_id": card["request_id"], "error": "the window is minimised"}));
+    assert_eq!(drain(&mut rx).into_iter().find(|ev| ev.ev == "design.rendered").unwrap().payload["error"], "the window is minimised");
+
+    assert_eq!(code(call_as(&e, bot, "design.render.done", json!({"request_id": request_id, "path": png}))), "actor.allowlist");
+    assert_eq!(code(call(&e, "design.render.done", json!({"request_id": request_id}))), "design.render");
+    assert_eq!(code(call(&e, "design.render.done", json!({"request_id": "nobody", "error": "x"}))), "design.render");
+    assert_eq!(code(call(&e, "design.render.done", json!({"request_id": "999-x", "error": "x"}))), "design.not_found");
+    assert_eq!(code(call(&e, "design.render.done", json!({"request_id": request_id, "path": "render.png"}))), "design.render");
+}
+
+/// The window can answer before the agent's `bus.wait` arrives: the wait still takes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_render_answered_before_the_wait_still_wakes_it() {
+    use relay_core::socket::{Client, SocketServer};
+    let (e, root) = project();
+    let a = agent(&e);
+    let token: String = e.store.lock().query_row("SELECT token FROM sessions WHERE name = ?1", [&a], |r| r.get(0)).unwrap();
+    let id = create(&e);
+    let server = SocketServer::start_in(e.clone(), root.path().join("run")).await.unwrap();
+    let mut c = Client::connect(&server.path).await.unwrap();
+    let asked = c.call(&Request::new(Actor::agent(&a), "design.render", json!({"design_id": id})).with_token(&token), |_| {}).await.unwrap();
+    let asked = asked.into_result().unwrap();
+    ok(&e, "design.render.done", json!({"request_id": asked["request_id"], "error": "nothing to draw"}));
+    let wait = Request::new(Actor::agent(&a), "bus.wait", asked["wait"].clone()).with_token(&token);
+    let wait = c.call(&wait, |_| {});
+    let woken = tokio::time::timeout(std::time::Duration::from_secs(5), wait).await
+        .expect("a wait begun after the answer returns at once").unwrap().into_result().unwrap();
+    assert_eq!(woken["timed_out"], false);
+    assert_eq!((woken["event"]["payload"]["request_id"].clone(), woken["event"]["payload"]["error"].as_str()), (asked["request_id"].clone(), Some("nothing to draw")));
 }
 
 /// Timings for one `design.apply` of 500 nodes and a `design.get` of 5,000, through the

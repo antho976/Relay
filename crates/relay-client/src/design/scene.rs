@@ -80,6 +80,11 @@ impl Scene {
         self.nodes.is_empty()
     }
 
+    /// Every node, in no order.
+    pub fn nodes(&self) -> impl Iterator<Item = &Node> {
+        self.nodes.values()
+    }
+
     pub fn node(&self, id: &str) -> Option<&Node> {
         self.nodes.get(id)
     }

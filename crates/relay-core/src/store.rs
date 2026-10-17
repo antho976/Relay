@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// The schema version this build knows. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: i64 = 28;
+pub const SCHEMA_VERSION: i64 = 29;
 
 /// Numbered migrations; index 0 brings a fresh DB to `user_version = 1`.
 pub const MIGRATIONS: &[&str] = &[
@@ -463,6 +463,20 @@ pub const MIGRATIONS: &[&str] = &[
       PRIMARY KEY (design_id, node_id)
     ) WITHOUT ROWID;
     CREATE INDEX design_nodes_parent ON design_nodes(design_id, parent_id, ord);
+    "#,
+    // v29 - a design's saved versions (`design.version.*`): its whole node list as `design.get`
+    // gives it, one JSON array per row, so a restore puts back exactly what was seen. `auto` rows
+    // are the engine's own (before an agent takes over a design, before a restore), kept to the
+    // newest 30 per design; the others stay until deleted. AUTOINCREMENT for the reason designs
+    // are: an audit undo names a version by id.
+    r#"
+    CREATE TABLE design_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      design_id INTEGER NOT NULL REFERENCES designs(id) ON DELETE CASCADE,
+      rev INTEGER NOT NULL, label TEXT, auto INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT NOT NULL, created_at TEXT NOT NULL, nodes INTEGER NOT NULL, body TEXT NOT NULL
+    );
+    CREATE INDEX design_versions_design ON design_versions(design_id, auto, id);
     "#,
 ];
 
