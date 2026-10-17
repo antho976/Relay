@@ -105,7 +105,11 @@ class TrainingReminderWorker @AssistedInject constructor(
         ) ?: return Result.success()
 
         ForgeNotifications.ensureChannel(ctx, CHANNEL_ID, CHANNEL_NAME, CHANNEL_DESC)
-        val notification = ForgeNotifications.build(ctx, CHANNEL_ID, nudge.title, nudge.body)
+        // "Push A today" opens Push A: the tap lands on the workout it names, not on Home.
+        val notification = ForgeNotifications.build(
+            ctx, CHANNEL_ID, nudge.title, nudge.body,
+            openDayKey = WeeklySchedule.trainTodayKey(next)
+        )
         (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIF_ID, notification)
         return Result.success()
     }

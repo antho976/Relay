@@ -28,7 +28,7 @@ internal object ForgeNotifications {
     }
 
     /**
-     * A notification whose tap opens the app (lands on Overview) and auto-cancels. [requestCode]
+     * A notification whose tap opens the app (Overview, or [openDayKey]'s workout) and auto-cancels. [requestCode]
      * keeps each notification's PendingIntent distinct when several are posted in one pass; it
      * defaults to the channel-id hash so callers that post one notification per channel get a
      * stable, collision-free code for free.
@@ -38,7 +38,9 @@ internal object ForgeNotifications {
         channelId: String,
         title: String,
         body: String,
-        requestCode: Int = channelId.hashCode()
+        requestCode: Int = channelId.hashCode(),
+        /** A workout day to open on tap (the widget's deep link), or null for the app's front page. */
+        openDayKey: String? = null
     ) = NotificationCompat.Builder(context, channelId)
         .setSmallIcon(R.drawable.ic_stat_forge)
         .setContentTitle(title)
@@ -47,7 +49,10 @@ internal object ForgeNotifications {
         .setContentIntent(
             PendingIntent.getActivity(
                 context, requestCode,
-                Intent(context, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_SINGLE_TOP },
+                Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    openDayKey?.let { putExtra(com.forge.app.widget.EXTRA_START_DAY_KEY, it) }
+                },
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
         )
