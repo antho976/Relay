@@ -106,7 +106,9 @@ internal fun LazyListScope.coachAccount(
             ) {
                 CoachAction(
                     "Apply all ${open.size} →",
-                    c.accent,
+                    // onBg, as CoachAction's own doc asks: accent text is 2.3 to 3.4:1 on three of
+                    // the five accents. The arrow marks the action.
+                    c.onBg,
                     "Apply all ${open.size} changes"
                 ) { onApplyAll(brief.pass.weekId) }
             }
