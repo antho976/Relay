@@ -28,9 +28,11 @@ object ComebackNudge {
     ): Nudge? {
         val days = daysSinceLast ?: return null
         if (cardioMinutesLastWeek > 0) return null
-        // The worker runs on Mondays, so a lapse is seen at d, d+7, d+14... with d in 7..13. Speak in
-        // the first, second and fourth week of it, then let it be.
-        val week = days / 7
+        // The worker runs on Mondays and only after a whole Monday-to-Sunday week without a session,
+        // so the last one is at least 8 days back: a lapse is seen at d, d+7, d+14... with d in
+        // 8..14. Speak in the first, second and fourth week of it, then let it be. (`days / 7` read a
+        // last session on a Monday as 14 days on the first Monday, week 2, and skipped week 1.)
+        val week = (days - 1) / 7
         if (week !in setOf(1, 2, 4)) return null
         val gap = LifeEvents.gapPhrase(days)
         val last = if (lastDayName != null) "Last workout: $lastDayName, $gap ago." else "Last workout $gap ago."
