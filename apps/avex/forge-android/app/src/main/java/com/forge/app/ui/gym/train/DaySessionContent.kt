@@ -511,7 +511,7 @@ internal fun SessionHero(
                         .clearAndSetSemantics { contentDescription = datePillSpoken.orEmpty() }
                         .padding(horizontal = 12.dp, vertical = 6.dp)
                 ) {
-                    Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1)
+                    Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted)
                 }
             }
             Spacer(Modifier.width(8.dp))
@@ -533,8 +533,7 @@ internal fun SessionHero(
                 Text(
                     "Finish",
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (allDone) MaterialTheme.colorScheme.onPrimary else onBg,
-                    maxLines = 1
+                    color = if (allDone) MaterialTheme.colorScheme.onPrimary else onBg
                 )
             }
         }

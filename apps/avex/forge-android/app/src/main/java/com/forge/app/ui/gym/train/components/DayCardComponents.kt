@@ -128,7 +128,6 @@ internal fun SpineStrip(accent: Color, word: String) {
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Black,
             letterSpacing = 3.sp,
-            maxLines = 1,
             // Measured unrotated at its natural width, then laid out with width and height swapped,
             // so the rotated word reads whole instead of wrapping inside the 44dp strip.
             modifier = Modifier
