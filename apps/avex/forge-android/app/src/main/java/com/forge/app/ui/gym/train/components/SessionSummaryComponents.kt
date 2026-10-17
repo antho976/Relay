@@ -177,7 +177,7 @@ internal fun HighlightRow(h: ExerciseHighlight, onBg: Color, muted: Color) {
     ) {
         Column(Modifier.weight(1f)) {
             Text(h.exerciseName, style = MaterialTheme.typography.bodySmall, color = onBg)
-            Text("${h.setsLogged} sets · ${formatVolume(h.volumeLb, weightUnit)}", style = MaterialTheme.typography.bodySmall, color = muted, fontSize = 10.sp)
+            Text("${h.setsLogged} ${if (h.setsLogged == 1) "set" else "sets"} · ${formatVolume(h.volumeLb, weightUnit)}", style = MaterialTheme.typography.bodySmall, color = muted, fontSize = 10.sp)
         }
         if (h.isPr) {
             Text("PR", color = onBg, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, letterSpacing = 0.5.sp)
