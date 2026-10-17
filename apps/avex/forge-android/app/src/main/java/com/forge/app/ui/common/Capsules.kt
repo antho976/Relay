@@ -12,6 +12,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -49,7 +50,7 @@ fun ForgePrimaryCapsule(
         modifier = modifier
             .clip(RoundedCornerShape(50))
             .background(fill.copy(alpha = if (enabled) 1f else 0.35f))
-            .bounceClick(enabled = enabled, onClick = onClick)
+            .bounceClick(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 13.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -81,7 +82,7 @@ fun ForgeOutlineCapsule(
                 (contentColor ?: MaterialTheme.colorScheme.outline).copy(alpha = 0.35f * alpha),
                 RoundedCornerShape(50)
             )
-            .bounceClick(enabled = enabled, onClick = onClick)
+            .bounceClick(enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 13.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -186,6 +187,7 @@ fun ForgeHeroAction(
                 onClickLabel = label,
                 onLongClickLabel = onLongClickLabel,
                 onLongClick = onLongClick,
+                role = Role.Button,
                 onClick = onClick
             )
             .padding(horizontal = 20.dp, vertical = 14.dp),

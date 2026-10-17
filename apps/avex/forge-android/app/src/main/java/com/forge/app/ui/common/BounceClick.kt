@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.Role
 
 /**
  * Clickable variant that scales the target down slightly while pressed. Use anywhere
@@ -25,6 +26,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 fun Modifier.bounceClick(
     pressedScale: Float = 0.97f,
     enabled: Boolean = true,
+    /** What TalkBack calls the element ("button"). Not defaulted: segments and pills set their own. */
+    role: Role? = null,
     onClick: () -> Unit
 ): Modifier = composed {
     val interactionSource = remember { MutableInteractionSource() }
@@ -49,6 +52,7 @@ fun Modifier.bounceClick(
             interactionSource = interactionSource,
             indication = if (touchExploration) ripple() else null,
             enabled = enabled,
+            role = role,
             onClick = onClick
         )
 }
@@ -65,6 +69,7 @@ fun Modifier.bounceCombinedClick(
     onClickLabel: String? = null,
     onLongClickLabel: String? = null,
     onLongClick: (() -> Unit)? = null,
+    role: Role? = null,
     onClick: () -> Unit
 ): Modifier = composed {
     val interactionSource = remember { MutableInteractionSource() }
@@ -87,6 +92,7 @@ fun Modifier.bounceCombinedClick(
             onClickLabel = onClickLabel,
             onLongClickLabel = onLongClickLabel,
             onLongClick = onLongClick,
+            role = role,
             onClick = onClick
         )
 }
