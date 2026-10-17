@@ -40,7 +40,6 @@
 1 alpha ui/gym/train/DaySessionContent.kt 0.8
 1 alpha ui/gym/train/components/DayCardComponents.kt 0.70
 1 alpha ui/gym/train/components/ExerciseCard.kt 0.3
-1 alpha ui/gym/train/components/ExerciseCard.kt 0.55
 2 alpha ui/gym/train/components/ExerciseCardComponents.kt 0.2
 1 alpha ui/gym/train/components/ExerciseCardComponents.kt 0.45
 2 alpha ui/gym/train/components/ExerciseCardComponents.kt 0.5

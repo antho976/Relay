@@ -253,13 +253,14 @@ fun ExerciseCard(
                     Text(planLine, style = MaterialTheme.typography.bodySmall, color = muted)
                 }
 
-                // Pinned cue
+                // Pinned cue: the one thing the user asked to always see, so it reads at full muted
+                // in the aside voice. It sat at 0.6 inside padded quote marks, under the 0.65 floor.
                 if (state.pinnedNote.isNotBlank()) {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "\" ${state.pinnedNote} \"",
+                        "“${state.pinnedNote.trim()}”",
                         style = MaterialTheme.typography.bodySmall,
-                        color = muted.copy(alpha = 0.6f),
+                        color = muted,
                         fontStyle = FontStyle.Italic
                     )
                 }
@@ -270,10 +271,12 @@ fun ExerciseCard(
                 val formCue = state.plan.formCue.takeUnless { state.isSwapped }
                 if (!formCue.isNullOrBlank()) {
                     Spacer(Modifier.height(4.dp))
+                    // On the 0.65 caption floor (it was 0.55, which fails 4.5:1), and without the
+                    // "ⓘ": a unicode glyph standing in for an icon (§8).
                     Text(
-                        "ⓘ $formCue",
+                        formCue,
                         style = MaterialTheme.typography.bodySmall,
-                        color = muted.copy(alpha = 0.55f),
+                        color = muted.copy(alpha = 0.65f),
                         fontStyle = FontStyle.Italic
                     )
                 }
