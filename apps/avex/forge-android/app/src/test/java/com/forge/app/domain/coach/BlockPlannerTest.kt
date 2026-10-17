@@ -81,6 +81,31 @@ class BlockPlannerTest {
     }
 
     @Test
+    fun weeksWithNoTrainingHoldTheBlock() {
+        // Trained W01, then away W02 and W03, back in W04. Only W01 was a training week, so the
+        // block moves one step, not three: coming back must not land on the test week.
+        val monW01 = java.time.LocalDate.of(2025, 12, 29)
+        val b = BlockPlanner.advance(
+            start(weeks = 5), "2026-W04", now,
+            trainedInWeek = { it == monW01 }
+        )
+        assertEquals(2, b.weekIndex)
+        assertEquals(BlockPhase.ACCUMULATE.code, b.phase)
+        assertEquals("2026-W04", b.lastAdvancedWeek)
+        // And the held weeks are not re-counted on the next pass.
+        assertEquals(b, BlockPlanner.advance(b, "2026-W04", now, trainedInWeek = { false }))
+    }
+
+    @Test
+    fun aMissedDeloadWeekStillServesTheDeload() {
+        // Rest is what a deload week asks for, so missing it does not hold the block in it forever.
+        val deloading = walk(start(weeks = 5), 4)
+        assertEquals(BlockPhase.DELOAD.code, deloading.phase)
+        val ended = BlockPlanner.advance(deloading, "2026-W06", now, trainedInWeek = { false })
+        assertFalse(ended.isActive)
+    }
+
+    @Test
     fun anEarlierWeekNeverRewindsTheBlock() {
         val b = BlockPlanner.advance(start(weeks = 5), "2026-W03", now)
         assertEquals(b, BlockPlanner.advance(b, "2026-W02", now))

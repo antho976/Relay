@@ -59,28 +59,42 @@ object BlockPlanner {
      *
      * @param fatigueScore the deload advisor's current score; a high one pulls the deload forward,
      *   which is the whole point of keeping the tripwire alive alongside the schedule.
+     * @param trainedInWeek whether the athlete finished a session in the ISO week starting on the
+     *   given Monday. A week with no training holds the block where it is: three weeks away used to
+     *   walk a block from Accumulate into Peak, so the first week back opened on "Test week: take
+     *   one heavy top set". A missed DELOAD week still counts, since rest is what it asked for.
+     *   Defaults to every week trained.
      */
     fun advance(
         block: TrainingBlock,
         weekId: String,
         nowMs: Long,
         fatigueScore: Int = 0,
-        t: AdaptThresholds = AdaptThresholds()
+        t: AdaptThresholds = AdaptThresholds(),
+        trainedInWeek: (LocalDate) -> Boolean = { true }
     ): TrainingBlock {
         if (!block.isActive) return block
         // Ordinal, not equal: a week id that is the same as — or earlier than — the last one it
         // advanced on moves nothing, so a clock change or an out-of-order pass can't rewind a block.
         val weeksElapsed = weeksBetween(block.lastAdvancedWeek, weekId)
         if (weeksElapsed <= 0) return block
+        val firstCompleted = weekStart(block.lastAdvancedWeek)
 
         // A long absence is caught up rather than lost, bounded by the block's own length: stepping
         // past the deload ends the block, so the loop always terminates inside plannedWeeks + 1.
+        // Each elapsed week is the one being COMPLETED, starting with the week last advanced into.
         var out = block
-        repeat(weeksElapsed.coerceAtMost(block.plannedWeeks + 1)) {
-            if (!out.isActive) return out
+        var stepped = 0
+        for (k in 0 until weeksElapsed) {
+            if (!out.isActive || stepped > block.plannedWeeks) return out
+            val completed = firstCompleted?.plusWeeks(k.toLong())
+            val held = completed != null && out.phase != BlockPhase.DELOAD.code && !trainedInWeek(completed)
+            if (held) continue
             out = step(out, weekId, nowMs, fatigueScore, t)
+            stepped++
         }
-        return out
+        // However many weeks were held, the block has been brought up to this week.
+        return if (out.isActive) out.copy(lastAdvancedWeek = weekId) else out
     }
 
     /** One week of block progression — the state machine's single transition. */
