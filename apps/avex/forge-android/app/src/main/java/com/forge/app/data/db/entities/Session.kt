@@ -58,11 +58,17 @@ data class Session(
  * All display surfaces (session detail, overview, history rows, the weekly-duration chart) read
  * through this so they can never disagree on a session's length.
  */
-fun Session.durationMinutes(): Int? {
-    val fin = finishedAt
+fun Session.durationMinutes(): Int? = sessionDurationMinutes(startedAt, finishedAt, activeSeconds)
+
+/**
+ * [Session.durationMinutes] for a caller holding only the three columns (a projection), so a
+ * session's length reads the same everywhere: the exercise chart's session list computed wall
+ * clock, and a workout resumed after a night away read "486 min" there.
+ */
+fun sessionDurationMinutes(startedAt: Long, finishedAt: Long?, activeSeconds: Int): Int? {
     val seconds = when {
         activeSeconds > 0 -> activeSeconds
-        fin != null -> ((fin - startedAt) / 1000L).toInt()
+        finishedAt != null -> ((finishedAt - startedAt) / 1000L).toInt()
         else -> return null
     }
     return if (seconds <= 0) 0 else (seconds / 60).coerceAtLeast(1)

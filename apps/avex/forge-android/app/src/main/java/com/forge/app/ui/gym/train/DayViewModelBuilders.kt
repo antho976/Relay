@@ -13,7 +13,6 @@ import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
 import com.forge.app.ui.gym.train.state.ExerciseUiState
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import java.util.concurrent.TimeUnit
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.weightInputValue
@@ -154,9 +153,9 @@ internal suspend fun DayViewModel.buildExerciseUi(
         .map { agg ->
             ExerciseSessionPoint(
                 sessionStartedAt = agg.sessionStartedAt,
-                durationMin = agg.sessionFinishedAt?.let { end ->
-                    TimeUnit.MILLISECONDS.toMinutes(end - agg.sessionStartedAt).toInt().coerceAtLeast(0)
-                },
+                durationMin = com.forge.app.data.db.entities.sessionDurationMinutes(
+                    agg.sessionStartedAt, agg.sessionFinishedAt, agg.activeSeconds
+                ),
                 volumeLb = agg.volumeLb,
                 topWeightLb = agg.topWeightLb
             )
