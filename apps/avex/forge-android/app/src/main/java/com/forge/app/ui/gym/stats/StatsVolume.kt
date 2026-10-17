@@ -92,12 +92,12 @@ private fun MuscleSetBarRow(r: MuscleSetRow, maxTarget: Int, c: StatsColors) {
             Box(
                 Modifier.fillMaxWidth(trackFrac).height(12.dp)
                     .clip(RoundedCornerShape(50))
-                    .background(c.outline.copy(alpha = 0.18f))
+                    .background(c.outline.copy(alpha = 0.25f))
             ) {
                 if (fillFrac > 0f) Box(
                     Modifier.fillMaxWidth(fillFrac).fillMaxHeight()
                         .clip(RoundedCornerShape(50))
-                        .background(if (onPlan) c.accent else c.accent.copy(alpha = 0.55f))
+                        .background(if (onPlan) c.accent else c.accent.copy(alpha = 0.6f))
                 )
             }
         }
@@ -152,12 +152,12 @@ private fun BalanceRow(b: BalanceRatioUi, c: StatsColors) {
         ) {
             Row(Modifier.matchParentSize()) {
                 if (fracA > 0f) Box(Modifier.weight(fracA).fillMaxHeight().background(c.accent))
-                if (fracA < 1f) Box(Modifier.weight(1f - fracA).fillMaxHeight().background(c.accent.copy(alpha = 0.3f)))
+                if (fracA < 1f) Box(Modifier.weight(1f - fracA).fillMaxHeight().background(c.accent.copy(alpha = 0.35f)))
             }
             // The 50/50 ideal — the further the color boundary sits from this tick, the more skewed.
             Box(
                 Modifier.align(Alignment.Center).width(2.dp).fillMaxHeight()
-                    .background(c.onBg.copy(alpha = 0.55f))
+                    .background(c.onBg.copy(alpha = 0.6f))
             )
         }
         Spacer(Modifier.height(6.dp))
