@@ -6,9 +6,9 @@
 use gtk::prelude::*;
 use gtk::{gdk, graphene, gsk, pango};
 use gtk4 as gtk;
-use relay_bus::design::{parse_color, ImageFit, Node, NodeKind, TextAlign};
+use relay_bus::design::{parse_color, Gradient, GradientKind, ImageFit, Node, NodeKind, TextAlign};
 use relay_client::design::layout::{self, Measure, Placed, STICKY_PAD};
-use relay_client::design::{Rect, Scene};
+use relay_client::design::{shapes, Rect, Scene};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -48,7 +48,7 @@ pub fn fill_of(n: &Node) -> Option<String> {
     n.fill.clone().or_else(|| {
         match n.kind {
             NodeKind::Frame => Some(FRAME_FILL),
-            NodeKind::Rect | NodeKind::Ellipse => Some(SHAPE_FILL),
+            NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon => Some(SHAPE_FILL),
             NodeKind::Sticky => Some(STICKY_FILL),
             NodeKind::Page => Some(CANVAS),
             _ => None,
@@ -63,8 +63,10 @@ pub fn text_color(scene: &Scene, n: &Node) -> String {
     if let Some(c) = &n.color {
         return c.clone();
     }
-    if n.kind == NodeKind::Sticky {
-        return if luminance(&fill_of(n).unwrap_or_default()) > 0.35 { DARK_TEXT } else { LIGHT_TEXT }.into();
+    if matches!(n.kind, NodeKind::Sticky | NodeKind::Rect | NodeKind::Ellipse | NodeKind::Polygon) {
+        // A label sits on the shape itself.
+        let ground = n.gradient.as_ref().and_then(|g| g.stops.first()).map(|s| s.color.clone()).or_else(|| fill_of(n)).unwrap_or_default();
+        return if luminance(&ground) > 0.35 { DARK_TEXT } else { LIGHT_TEXT }.into();
     }
     let ground = std::iter::once(n.id.as_str())
         .chain(scene.ancestors(&n.id))
@@ -137,6 +139,8 @@ pub struct Painter {
     layouts: RefCell<HashMap<String, (u64, pango::Layout)>>,
     sizes: RefCell<HashMap<u64, (f64, f64)>>,
     paths: RefCell<HashMap<String, (u64, gsk::Path)>>,
+    /// Icon geometry by name, parsed once.
+    icons: RefCell<HashMap<String, Option<gsk::Path>>>,
     pictures: RefCell<HashMap<String, Picture>>,
     pub assets_dir: RefCell<String>,
     /// Called on the main loop when a picture finishes loading.
@@ -155,6 +159,7 @@ impl Painter {
             layouts: RefCell::default(),
             sizes: RefCell::default(),
             paths: RefCell::default(),
+            icons: RefCell::default(),
             pictures: RefCell::default(),
             assets_dir: RefCell::default(),
             loaded: RefCell::default(),
@@ -312,11 +317,15 @@ impl Painter {
             return;
         };
         let clips = n.kind == NodeKind::Frame && n.clip != Some(false);
+        let turn = shapes::rotation(n);
         let reach = n.shadow.as_ref().map_or(0.0, |s| s.blur * 2.0 + s.spread.abs() + s.x.abs().max(s.y.abs()))
             + n.stroke_width.unwrap_or(2.0)
+            + n.blur.unwrap_or(0.0) * 2.0
             + 16.0;
-        let culls = !n.kind.holds_children() || clips;
-        if culls && view.is_some_and(|v| !v.intersects(&r.inflate(reach))) {
+        // A connector runs wherever its ends are, not inside its stored box.
+        let connector = n.kind == NodeKind::Line && (n.from.is_some() || n.to.is_some());
+        let culls = (!n.kind.holds_children() || clips) && !connector;
+        if culls && view.is_some_and(|v| !v.intersects(&shapes::rotated_bounds(&r, turn).inflate(reach))) {
             return;
         }
         let opacity = n.opacity.unwrap_or(1.0);
@@ -326,6 +335,17 @@ impl Painter {
         if opacity < 1.0 {
             snap.push_opacity(opacity);
         }
+        if turn != 0.0 {
+            snap.save();
+            snap.translate(&graphene::Point::new(r.cx() as f32, r.cy() as f32));
+            snap.rotate(turn as f32);
+            snap.translate(&graphene::Point::new(-r.cx() as f32, -r.cy() as f32));
+        }
+        let blur = n.blur.filter(|b| *b > 0.0);
+        if let Some(b) = blur {
+            snap.push_blur(b);
+        }
+        let editing = self.editing.borrow().as_deref() == Some(id);
         match n.kind {
             NodeKind::Page => {}
             NodeKind::Group => {
@@ -334,7 +354,7 @@ impl Painter {
                 }
             }
             NodeKind::Frame => {
-                let rr = rounded(&r, n.radius.unwrap_or(0.0));
+                let rr = outline(n, &r);
                 self.box_paint(snap, n, &rr);
                 if clips {
                     snap.push_rounded_clip(&rr);
@@ -345,67 +365,101 @@ impl Painter {
                 if clips {
                     snap.pop();
                 }
-                self.border(snap, n, &rr);
+                self.border(snap, n, &r);
             }
-            NodeKind::Rect | NodeKind::Sticky => {
-                let radius = n.radius.unwrap_or(if n.kind == NodeKind::Sticky { 6.0 } else { 0.0 });
-                let rr = rounded(&r, radius);
+            NodeKind::Rect | NodeKind::Sticky | NodeKind::Ellipse => {
+                let rr = outline(n, &r);
                 if n.kind == NodeKind::Sticky && n.shadow.is_none() {
                     snap.append_outset_shadow(&rr, &gdk::RGBA::new(0.0, 0.0, 0.0, 0.22), 0.0, 3.0, 0.0, 10.0);
                 }
                 self.box_paint(snap, n, &rr);
-                self.border(snap, n, &rr);
-                if n.kind == NodeKind::Sticky && self.editing.borrow().as_deref() != Some(id) {
-                    let inner = Rect::new(r.x + STICKY_PAD, r.y + STICKY_PAD, (r.w - 2.0 * STICKY_PAD).max(1.0), r.h);
-                    self.text(snap, scene, n, &inner, layout::wrap_width(n, &r));
+                self.border(snap, n, &r);
+                if n.kind == NodeKind::Sticky {
+                    if !editing {
+                        let inner = Rect::new(r.x + STICKY_PAD, r.y + STICKY_PAD, (r.w - 2.0 * STICKY_PAD).max(1.0), r.h);
+                        self.text(snap, scene, n, &inner, layout::wrap_width(n, &r));
+                    }
+                } else if !editing {
+                    self.shape_text(snap, scene, n, &r);
                 }
             }
-            NodeKind::Ellipse => {
-                let rr = gsk::RoundedRect::new(
-                    grect(&r),
-                    graphene::Size::new(r.w as f32 / 2.0, r.h as f32 / 2.0),
-                    graphene::Size::new(r.w as f32 / 2.0, r.h as f32 / 2.0),
-                    graphene::Size::new(r.w as f32 / 2.0, r.h as f32 / 2.0),
-                    graphene::Size::new(r.w as f32 / 2.0, r.h as f32 / 2.0),
-                );
-                self.box_paint(snap, n, &rr);
-                self.border(snap, n, &rr);
+            NodeKind::Polygon => {
+                let path = polygon_path(n, &r);
+                if let Some(g) = &n.gradient {
+                    snap.push_fill(&path, gsk::FillRule::Winding);
+                    gradient(snap, g, &r);
+                    snap.pop();
+                } else if let Some(fill) = fill_of(n).filter(|f| parse_color(f).is_some_and(|c| c[3] > 0)) {
+                    snap.append_fill(&path, gsk::FillRule::Winding, &rgba(&fill));
+                }
+                if let Some(stroke) = &n.stroke {
+                    let w = n.stroke_width.unwrap_or(1.0);
+                    if w > 0.0 {
+                        snap.append_stroke(&path, &stroke_of(n, w), &rgba(stroke));
+                    }
+                }
+                if !editing {
+                    self.shape_text(snap, scene, n, &r);
+                }
             }
+            NodeKind::Icon => self.icon(snap, scene, n, &r),
             NodeKind::Text => {
-                if self.editing.borrow().as_deref() != Some(id) {
+                if !editing {
                     if let Some(fill) = &n.fill {
                         snap.append_color(&rgba(fill), &grect(&r));
                     }
                     self.text(snap, scene, n, &r, layout::wrap_width(n, &r));
                 }
             }
-            NodeKind::Line | NodeKind::Path => self.stroke(snap, n, &r),
+            NodeKind::Line | NodeKind::Path => self.stroke(snap, scene, placed, n, &r),
             NodeKind::Image => self.image(snap, n, &r),
+        }
+        if blur.is_some() {
+            snap.pop();
+        }
+        if turn != 0.0 {
+            snap.restore();
         }
         if opacity < 1.0 {
             snap.pop();
         }
     }
 
-    /// Shadow then fill, inside the rounded outline.
+    /// Shadow then fill (a colour or a gradient), inside the rounded outline.
     fn box_paint(&self, snap: &gtk::Snapshot, n: &Node, rr: &gsk::RoundedRect) {
         if let Some(s) = &n.shadow {
             snap.append_outset_shadow(rr, &rgba(&s.color), s.x as f32, s.y as f32, s.spread as f32, s.blur as f32);
         }
-        if let Some(fill) = fill_of(n).filter(|f| parse_color(f).is_some_and(|c| c[3] > 0)) {
+        if let Some(g) = &n.gradient {
+            snap.push_rounded_clip(rr);
+            let b = rr.bounds();
+            gradient(snap, g, &Rect::new(b.x() as f64, b.y() as f64, b.width() as f64, b.height() as f64));
+            snap.pop();
+        } else if let Some(fill) = fill_of(n).filter(|f| parse_color(f).is_some_and(|c| c[3] > 0)) {
             snap.push_rounded_clip(rr);
             snap.append_color(&rgba(&fill), rr.bounds());
             snap.pop();
         }
     }
 
-    fn border(&self, snap: &gtk::Snapshot, n: &Node, rr: &gsk::RoundedRect) {
-        if let Some(stroke) = &n.stroke {
-            let w = n.stroke_width.unwrap_or(1.0) as f32;
-            if w > 0.0 {
-                let c = rgba(stroke);
-                snap.append_border(rr, &[w; 4], &[c, c, c, c]);
-            }
+    /// The outline drawn inside the edge; dashed, as a stroke along the edge inset by half its
+    /// width.
+    fn border(&self, snap: &gtk::Snapshot, n: &Node, r: &Rect) {
+        let Some(stroke) = &n.stroke else {
+            return;
+        };
+        let w = n.stroke_width.unwrap_or(1.0);
+        if w <= 0.0 {
+            return;
+        }
+        let c = rgba(stroke);
+        if n.dash.is_some() {
+            let inset = Rect::new(r.x + w / 2.0, r.y + w / 2.0, (r.w - w).max(0.0), (r.h - w).max(0.0));
+            let b = gsk::PathBuilder::new();
+            b.add_rounded_rect(&outline(n, &inset));
+            snap.append_stroke(&b.to_path(), &stroke_of(n, w), &c);
+        } else {
+            snap.append_border(&outline(n, r), &[w as f32; 4], &[c, c, c, c]);
         }
     }
 
@@ -420,26 +474,84 @@ impl Painter {
         snap.restore();
     }
 
-    fn stroke(&self, snap: &gtk::Snapshot, n: &Node, r: &Rect) {
-        let Some(path) = self.path(n, (r.x, r.y)) else {
+    /// A shape's label, centred both ways inside it.
+    fn shape_text(&self, snap: &gtk::Snapshot, scene: &Scene, n: &Node, r: &Rect) {
+        let Some(inner) = shape_text_box(self, n, r) else {
             return;
         };
-        let width = n.stroke_width.unwrap_or(2.0).max(0.5);
-        let stroke = gsk::Stroke::new(width as f32);
+        let mut centred = n.clone();
+        centred.align = Some(n.align.unwrap_or(TextAlign::Center));
+        self.text(snap, scene, &centred, &inner, Some(inner.w));
+    }
+
+    /// An icon from the set, scaled to its box and stroked in its colour.
+    fn icon(&self, snap: &gtk::Snapshot, scene: &Scene, n: &Node, r: &Rect) {
+        let name = n.icon.as_deref().unwrap_or("");
+        let path = {
+            let mut cache = self.icons.borrow_mut();
+            if !cache.contains_key(name) {
+                let parsed = relay_client::design::icons::path(name).and_then(|d| gsk::Path::parse(d).ok());
+                cache.insert(name.to_string(), parsed);
+            }
+            cache.get(name).cloned().flatten()
+        };
+        let color = rgba(&n.stroke.clone().unwrap_or_else(|| text_color(scene, n)));
+        let Some(path) = path else {
+            snap.append_color(&gdk::RGBA::new(0.55, 0.55, 0.55, 0.3), &grect(r));
+            return;
+        };
+        let s = (r.w.min(r.h) / 24.0).max(0.01);
+        snap.save();
+        snap.translate(&graphene::Point::new((r.cx() - 12.0 * s) as f32, (r.cy() - 12.0 * s) as f32));
+        snap.scale(s as f32, s as f32);
+        let stroke = gsk::Stroke::new(n.stroke_width.unwrap_or(2.0) as f32);
         stroke.set_line_cap(gsk::LineCap::Round);
         stroke.set_line_join(gsk::LineJoin::Round);
-        let color = rgba(n.stroke.as_deref().unwrap_or(STROKE));
         snap.append_stroke(&path, &stroke, &color);
-        let Some(points) = n.points.as_deref().filter(|p| p.len() >= 2) else {
+        snap.restore();
+    }
+
+    fn stroke(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, n: &Node, r: &Rect) {
+        let width = n.stroke_width.unwrap_or(2.0).max(0.5);
+        let color = rgba(n.stroke.as_deref().unwrap_or(STROKE));
+        let routed = n.kind == NodeKind::Line && (n.from.is_some() || n.to.is_some() || n.route.is_some());
+        // The two segments an arrowhead sits on: from where to the tip, at each end.
+        let (path, ends) = if routed {
+            let (pts, curved) = shapes::line_points(scene, placed, n);
+            if pts.len() < 2 {
+                return;
+            }
+            let b = gsk::PathBuilder::new();
+            b.move_to(pts[0].0 as f32, pts[0].1 as f32);
+            if curved {
+                b.cubic_to(pts[1].0 as f32, pts[1].1 as f32, pts[2].0 as f32, pts[2].1 as f32, pts[3].0 as f32, pts[3].1 as f32);
+            } else {
+                for p in &pts[1..] {
+                    b.line_to(p.0 as f32, p.1 as f32);
+                }
+            }
+            let last = pts.len() - 1;
+            (b.to_path(), Some(((pts[last - 1], pts[last]), (pts[1], pts[0]))))
+        } else {
+            let Some(path) = self.path(n, (r.x, r.y)) else {
+                return;
+            };
+            let ends = n.points.as_deref().filter(|p| p.len() >= 2).map(|p| {
+                let at = |q: &[f64; 2]| (r.x + q[0], r.y + q[1]);
+                ((at(&p[p.len() - 2]), at(&p[p.len() - 1])), (at(&p[1]), at(&p[0])))
+            });
+            (path, ends)
+        };
+        snap.append_stroke(&path, &stroke_of(n, width), &color);
+        let Some((end, start)) = ends else {
             return;
         };
-        let at = |p: &[f64; 2]| (r.x + p[0], r.y + p[1]);
         let mut heads = Vec::new();
         if n.arrow_end == Some(true) {
-            heads.push((at(&points[points.len() - 2]), at(&points[points.len() - 1])));
+            heads.push(end);
         }
         if n.arrow_start == Some(true) {
-            heads.push((at(&points[1]), at(&points[0])));
+            heads.push(start);
         }
         for (from, tip) in heads {
             let (dx, dy) = (tip.0 - from.0, tip.1 - from.1);
@@ -461,7 +573,7 @@ impl Painter {
     }
 
     fn image(&self, snap: &gtk::Snapshot, n: &Node, r: &Rect) {
-        let rr = rounded(r, n.radius.unwrap_or(0.0));
+        let rr = outline(n, r);
         if let Some(s) = &n.shadow {
             snap.append_outset_shadow(&rr, &rgba(&s.color), s.x as f32, s.y as f32, s.spread as f32, s.blur as f32);
         }
@@ -513,8 +625,85 @@ impl Painter {
             }
         }
         snap.pop();
-        self.border(snap, n, &rr);
+        self.border(snap, n, r);
     }
+}
+
+/// A node's outline: an ellipse, or its box with its corner radii (`radii`, else `radius`; a
+/// sticky's 6 by default).
+pub fn outline(n: &Node, r: &Rect) -> gsk::RoundedRect {
+    let cap = |v: f64| v.min(r.w / 2.0).min(r.h / 2.0).max(0.0) as f32;
+    if n.kind == NodeKind::Ellipse {
+        let half = graphene::Size::new(r.w as f32 / 2.0, r.h as f32 / 2.0);
+        return gsk::RoundedRect::new(grect(r), half, half, half, half);
+    }
+    match n.radii {
+        Some([tl, tr, br, bl]) => {
+            let c = |v: f64| graphene::Size::new(cap(v), cap(v));
+            gsk::RoundedRect::new(grect(r), c(tl), c(tr), c(br), c(bl))
+        }
+        None => rounded(r, n.radius.unwrap_or(if n.kind == NodeKind::Sticky { 6.0 } else { 0.0 })),
+    }
+}
+
+fn polygon_path(n: &Node, r: &Rect) -> gsk::Path {
+    let b = gsk::PathBuilder::new();
+    let pts = shapes::node_polygon(n, r);
+    if let Some((x, y)) = pts.first() {
+        b.move_to(*x as f32, *y as f32);
+        for (x, y) in &pts[1..] {
+            b.line_to(*x as f32, *y as f32);
+        }
+        b.close();
+    }
+    b.to_path()
+}
+
+/// The pen for a node's stroke: round ends and joins, and its dash pattern if it has one.
+fn stroke_of(n: &Node, width: f64) -> gsk::Stroke {
+    let stroke = gsk::Stroke::new(width as f32);
+    stroke.set_line_cap(gsk::LineCap::Round);
+    stroke.set_line_join(gsk::LineJoin::Round);
+    if let Some(dash) = &n.dash {
+        stroke.set_dash(&dash.iter().map(|v| *v as f32).collect::<Vec<_>>());
+    }
+    stroke
+}
+
+/// Paint `g` over `r` (the caller clips it to the shape).
+fn gradient(snap: &gtk::Snapshot, g: &Gradient, r: &Rect) {
+    let mut stops: Vec<gsk::ColorStop> = g.stops.iter().map(|s| gsk::ColorStop::new(s.at as f32, rgba(&s.color))).collect();
+    stops.sort_by(|a, b| a.offset().total_cmp(&b.offset()));
+    match g.kind {
+        GradientKind::Linear => {
+            // CSS reading: 0 points up, 90 right, 180 (the default) down.
+            let a = g.angle.unwrap_or(180.0).to_radians();
+            let (dx, dy) = (a.sin(), -a.cos());
+            let len = (r.w * a.sin()).abs() + (r.h * a.cos()).abs();
+            let (cx, cy) = (r.cx(), r.cy());
+            let start = graphene::Point::new((cx - dx * len / 2.0) as f32, (cy - dy * len / 2.0) as f32);
+            let end = graphene::Point::new((cx + dx * len / 2.0) as f32, (cy + dy * len / 2.0) as f32);
+            snap.append_linear_gradient(&grect(r), &start, &end, &stops);
+        }
+        GradientKind::Radial => {
+            let centre = graphene::Point::new(r.cx() as f32, r.cy() as f32);
+            snap.append_radial_gradient(&grect(r), &centre, (r.w / 2.0).max(0.5) as f32, (r.h / 2.0).max(0.5) as f32, 0.0, 1.0, &stops);
+        }
+    }
+}
+
+/// Where a shape's label sits: centred, 12 px in from its sides, as tall as its words.
+pub fn shape_text_box(p: &Painter, n: &Node, r: &Rect) -> Option<Rect> {
+    if n.text.as_deref().is_none_or(str::is_empty) && p.editing.borrow().as_deref() != Some(n.id.as_str()) {
+        return None;
+    }
+    let w = (r.w - 24.0).max(1.0);
+    let mut probe = n.clone();
+    if probe.text.as_deref().is_none_or(str::is_empty) {
+        probe.text = Some(" ".into());
+    }
+    let (_, h) = p.measure(&probe, Some(w));
+    Some(Rect::new(r.x + 12.0, r.cy() - h / 2.0, w, h))
 }
 
 pub fn rounded(r: &Rect, radius: f64) -> gsk::RoundedRect {

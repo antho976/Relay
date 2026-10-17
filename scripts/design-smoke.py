@@ -8,7 +8,8 @@ Shots (default all): gallery, board, board-select, edit (layers and typing in pl
 (gestures and commands; the client's scene must equal the engine's), agent (Ask types into the
 fixture terminal, whose fake agent edits the layer; the open board must show it), media (a picture
 through design.asset.add, copy and paste), perf (a 1,721-node design: layout, content and frame
-times). Needs target/debug/relay and target/debug/relay-native, and a display: run it inside a
+times), shapes (polygons, icons, gradients, dashes, rotation, connectors and labels as an agent writes
+them, then the tools that make them). Needs target/debug/relay and target/debug/relay-native, and a display: run it inside a
 headless compositor (kwin_wayland --virtual), never on someone's desktop. Captures and logs go to
 .impeccable/review/design-*."""
 import json, os, socket, statistics, struct, subprocess, sys, tempfile, time, uuid, zlib
@@ -16,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / ".impeccable/review"; OUT.mkdir(parents=True, exist_ok=True)
-SHOTS = sys.argv[1:] or ["gallery", "board", "board-select", "edit", "script", "agent", "media", "perf"]
+SHOTS = sys.argv[1:] or ["gallery", "board", "board-select", "edit", "script", "agent", "media", "shapes", "perf"]
 FAKE_AGENT = r'''#!/usr/bin/env python3
 """A fixture provider: echoes input, and answers a [Relay design] prompt by turning the
 selected layer green through design.apply, as the session's own agent."""
@@ -175,6 +176,33 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
         timings["settings_nodes"] = out["design"]["nodes"]
         d3 = call("design.create", {"project_id": pid, "title": "Old logo ideas"})
         call("design.delete", {"design_id": d3["design"]["id"]})
+        if "shapes" in SHOTS:
+            sh = call("design.create", {"project_id": pid, "title": "Shapes"})
+            sp = sh["nodes"][0]["id"]
+            call("design.apply", {"design_id": sh["design"]["id"], "ops": [
+                node("tri", sp, "polygon", x=0, y=0, w=160, h=140, sides=3, fill="#FFB020"),
+                node("star", sp, "polygon", x=200, y=0, w=150, h=150, sides=5, star=0.42, fill="#FFD60A", stroke="#1A1A1A", stroke_width=2),
+                node("hex", sp, "polygon", x=390, y=0, w=150, h=140, sides=6,
+                     gradient={"kind": "linear", "angle": 135, "stops": [{"at": 0, "color": "#4C9DFF"}, {"at": 1, "color": "#A178FF"}]}),
+                node("card", sp, "rect", x=0, y=220, w=220, h=120, radii=[24, 4, 24, 4], text="Start here", font_size=18, font_weight=600,
+                     gradient={"kind": "radial", "stops": [{"at": 0, "color": "#2EC469"}, {"at": 1, "color": "#0E6B35"}]}),
+                node("goal", sp, "ellipse", x=420, y=230, w=180, h=110, fill="#1F1D1B", stroke="#EDE9E2", stroke_width=2, dash=[6, 4], text="Ship it"),
+                node("link", sp, "line", **{"from": "card", "to": "goal"}, route="elbow", arrow_end=True, stroke="#EDE9E2", stroke_width=2),
+                node("tilt", sp, "rect", x=650, y=40, w=160, h=60, fill="#FF5C5C", radius=12, rotation=-12, text="Turned", font_weight=600),
+                node("soft", sp, "ellipse", x=660, y=220, w=120, h=120, fill="#A178FF", blur=8),
+                node("i1", sp, "icon", x=0, y=400, w=32, h=32, icon="settings"),
+                node("i2", sp, "icon", x=50, y=400, w=32, h=32, icon="bell", stroke="#FFB020"),
+                node("i3", sp, "icon", x=100, y=400, w=32, h=32, icon="heart", stroke="#FF5C5C"),
+                node("i4", sp, "icon", x=150, y=400, w=32, h=32, icon="search"),
+                node("i5", sp, "icon", x=200, y=400, w=32, h=32, icon="calendar", stroke="#2EC469"),
+                node("i6", sp, "icon", x=250, y=400, w=32, h=32, icon="bar-chart", stroke="#4C9DFF"),
+                node("curve", sp, "line", **{"from": "tri", "to": "tilt"}, route="curve", arrow_end=True, stroke="#8C877F", stroke_width=2, dash=[1, 5]),
+            ]})
+            try:
+                call("design.apply", {"design_id": sh["design"]["id"], "ops": [node("bad", sp, "icon", icon="no-such")]})
+                raise AssertionError("an unknown icon must be refused")
+            except RuntimeError as error:
+                assert "is not one of Relay" in str(error), error
         if "perf" in SHOTS:
             big = call("design.create", {"project_id": pid, "title": "Big design"})
             bp = big["nodes"][0]["id"]
@@ -220,7 +248,7 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
         for shot in SHOTS:
             output = OUT / f"design-{shot}.png"; output.unlink(missing_ok=True)
             # The board opens the gallery's first card, the most recently changed design.
-            target = big if shot == "perf" else d1
+            target = big if shot == "perf" else sh if shot == "shapes" else d1
             call("design.update", {"design_id": target["design"]["id"], "title": target["design"]["title"]})
             time.sleep(0.01)
             e = dict(native_env, RELAY_NATIVE_SCREENSHOT=str(output), RELAY_NATIVE_SIZE="1440,900", RELAY_NATIVE_FIXTURE="1",
@@ -237,6 +265,17 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 e["RELAY_SMOKE_DESIGN_SCRIPT"] = ";".join([
                     f"image:{hero}@1200,500", "wait:800",
                     "select:profile", "copy", "select:dark", "paste", "wait:400", "print"])
+            if shot == "shapes":
+                e["RELAY_NATIVE_SMOKE_SECONDS"] = "14"
+                e["RELAY_SMOKE_DESIGN_SCRIPT"] = ";".join([
+                    "fit", "wait:300",
+                    "tool:triangle", "drag:900,400>1000,500",
+                    "tool:arrow", "drag:80,90>520,300",
+                    "select:tilt", "rotate-drag:30",
+                    "dbl:470,285", "type: soon", "endedit",
+                    "tool:pen", "drag:850,600>950,640", "tool:eraser", "drag:900,580>900,660",
+                    "icon:globe",
+                    "select:i4", "wait:200", "print"])
             if shot == "perf":
                 e["RELAY_NATIVE_SMOKE_SECONDS"] = "20"
                 e["RELAY_DESIGN_TRACE"] = "1"
@@ -277,6 +316,19 @@ with tempfile.TemporaryDirectory(prefix="relay-design-shot-") as temporary:
                 in_dark = [n for n in got["nodes"] if n.get("parent") == "dark" and n["kind"] == "frame"]
                 assert len(in_dark) == 2, [n["id"] for n in in_dark]
                 print("MEDIA_OK", images[0]["src"])
+            if shot == "shapes":
+                logtext = (OUT / f"design-{shot}.log").read_text()
+                assert "DESIGN_SCRIPT_DONE" in logtext, logtext[-2000:]
+                got = {n["id"]: n for n in call("design.get", {"design_id": sh["design"]["id"]})["nodes"]}
+                polys = [n for n in got.values() if n["kind"] == "polygon" and n["id"] not in ("tri", "star", "hex")]
+                assert len(polys) == 1 and polys[0].get("sides") == 3, polys
+                arrows = [n for n in got.values() if n["kind"] == "line" and n["id"] not in ("link", "curve")]
+                assert len(arrows) == 1 and arrows[0].get("from") == "tri" and arrows[0].get("to") == "goal", arrows
+                assert abs(got["tilt"]["rotation"] - 18) <= 2, got["tilt"]
+                assert got["goal"]["text"] == "Ship it soon", got["goal"]
+                assert not any(n["kind"] == "path" for n in got.values()), "the eraser left the stroke"
+                assert any(n["kind"] == "icon" and n.get("icon") == "globe" for n in got.values())
+                print("SHAPES_OK")
             if shot == "perf":
                 logtext = (OUT / f"design-{shot}.log").read_text()
                 assert "DESIGN_SCRIPT_DONE" in logtext, logtext[-2000:]

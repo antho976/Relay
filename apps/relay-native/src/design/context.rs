@@ -82,7 +82,32 @@ impl Board {
             }
         }
         let all = |k: &[NodeKind]| nodes.iter().all(|n| k.contains(&n.kind));
-        if all(&[NodeKind::Text, NodeKind::Sticky]) {
+        if all(&[NodeKind::Icon]) {
+            let colour = same(nodes.iter().map(|n| n.stroke.clone())).flatten();
+            let weak = Rc::downgrade(&b);
+            bar.append(&color_key(&b, colour.as_deref(), "Icon colour", true, move |c| {
+                if let Some(b) = weak.upgrade() {
+                    b.set_selected(set(&[("stroke", json!(c))]));
+                }
+            }));
+            if let [one] = nodes.as_slice() {
+                let swap = gtk::MenuButton::new();
+                swap.add_css_class("design-context-key");
+                swap.set_child(Some(&super::icons::image(one.icon.as_deref().unwrap_or(""), 16)));
+                swap.set_tooltip_text(Some("Another icon"));
+                let pop = gtk::Popover::new();
+                pop.add_css_class("design-menu");
+                swap.set_popover(Some(&pop));
+                let weak = Rc::downgrade(&b);
+                let id = one.id.clone();
+                pop.connect_show(move |pop| {
+                    if let Some(b) = weak.upgrade() {
+                        pop.set_child(Some(&super::icons::picker(&b, pop, Some(id.clone()))));
+                    }
+                });
+                bar.append(&swap);
+            }
+        } else if all(&[NodeKind::Text, NodeKind::Sticky]) {
             self.text_controls(&b, &bar, &nodes);
         } else if all(&[NodeKind::Line, NodeKind::Path]) {
             let stroke = same(nodes.iter().map(|n| n.stroke.clone())).flatten();
@@ -100,6 +125,25 @@ impl Board {
                 }
             }));
             if all(&[NodeKind::Line]) {
+                // Straight, elbow, curve: one key that steps through them.
+                let route = same(nodes.iter().map(|n| n.route.unwrap_or(relay_bus::design::Route::Straight)))
+                    .unwrap_or(relay_bus::design::Route::Straight);
+                let (glyph, next, tip) = match route {
+                    relay_bus::design::Route::Straight => ("line", "elbow", "Straight — make it an elbow"),
+                    relay_bus::design::Route::Elbow => ("connector", "curve", "Elbow — make it a curve"),
+                    relay_bus::design::Route::Curve => ("rotate", "straight", "Curve — make it straight"),
+                };
+                let key = gtk::Button::new();
+                key.add_css_class("design-context-key");
+                key.set_child(Some(&glyphs::image(glyph, 16)));
+                key.set_tooltip_text(Some(tip));
+                let weak = Rc::downgrade(&b);
+                key.connect_clicked(move |_| {
+                    if let Some(b) = weak.upgrade() {
+                        b.set_selected(set(&[("route", if next == "straight" { Value::Null } else { json!(next) })]));
+                    }
+                });
+                bar.append(&key);
                 let on = nodes.iter().all(|n| n.arrow_end == Some(true));
                 let arrow = gtk::ToggleButton::new();
                 arrow.add_css_class("design-context-key");

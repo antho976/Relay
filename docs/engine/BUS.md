@@ -1133,7 +1133,7 @@ warning rather than failing every guardrail read.
 
 A project's design canvases: pages of frames, shapes, text, stickies, pen paths and pictures, each
 design optionally tied to one terminal (`session`). The node model, its validation and limits are
-`relay_bus::design` (`DesignNode`, `DesignNodeOp` in the schema). Geometry is px, `x`/`y` relative
+`relay_bus::design` (`DesignNode`, `DesignNodeOp` in the schema). Kinds: page, frame, group, rect, ellipse, polygon (`sides`, `star`), line (`points`, or attached `from`/`to` with a `route`), text, sticky, path, image, icon (one of `ICONS`); any node may be turned (`rotation`), shapes take `gradient`, `radii`, `dash`, `blur` and a centred `text` label. Geometry is px, `x`/`y` relative
 to the parent; siblings paint in order, the last on top.
 
 | op | attrs | payload → result |

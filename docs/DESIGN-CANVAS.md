@@ -22,9 +22,17 @@ the project's terminals draw and revise designs alongside you.
 
 ## The board
 
-- **Dock** (top left): pages and layers, the page menu, then Move (V), Hand (H), Frame (F), shapes
-  (R rectangle, O ellipse, L line, Shift L arrow), Text (T), Sticky (S), Pen (P) / Highlighter
-  (Shift P) with a colour, and Place image.
+- **Dock** (top left): pages and layers, the page menu, then Move (V), Hand (H), Frame (F) with
+  its sizes (phone, tablet, laptop, desktop, slide, social post, watch: placed beside the page's
+  content), shapes (R rectangle, O ellipse, Shift R triangle, diamond, hexagon, Shift S star, L line,
+  Shift L arrow), Text (T), Sticky (S), Pen (P) / Highlighter (Shift P) / Eraser (E), Icon (K: a
+  searchable set of 70 interface icons) and Place image.
+- **Connectors**: a line or arrow drawn from one shape to another attaches to both and follows
+  them; its route is straight, elbow or curved (the toolbar key steps through them), and the
+  inspector can detach its ends.
+- **Rotation**: drag just outside a corner of the selection to turn it (Shift: 15° steps), or type
+  the angle; a turned node resizes along its own sides.
+- **Labels**: double-click a rectangle, ellipse or polygon to type text centred inside it.
 - **Click selects what is under the pointer**, however deep: a label inside a button inside a card.
   The selection toolbar's first key (or Esc) selects the container; Enter selects inside; Tab walks
   siblings. A press inside the selection drags the selection. On an artboard's empty area a drag
@@ -33,9 +41,11 @@ the project's terminals draw and revise designs alongside you.
   ramp (Display to Code), size, colour, bold, italic, underline, strikethrough and alignment; for
   shapes, fill, border, corner radius and auto layout; for strokes, colour, weight and arrowhead; for
   several layers, align and distribute, group and frame; always **Ask** and More.
-- **Inspector** (Ctrl+.): position and size with Fixed / Hug / Fill rules, auto layout (direction,
-  gap, padding, along and across), type (any installed family, weight, size, line height, letter
-  spacing), fill, border, corners, picture fit, shadow, opacity, and PNG export at 1× or 2×. Number
+- **Inspector** (Ctrl+.): position, size and rotation with Fixed / Hug / Fill rules, auto layout
+  (direction, gap, padding, along and across), polygon corners and star, icon and its colour, line
+  route and attachments, type (any installed family, weight, size, line height, letter spacing),
+  solid or linear/radial gradient fills with their stops, border with solid/dashed/dotted styles,
+  corners (one radius or each its own), picture fit, shadow, opacity, layer blur, and PNG export. Number
   fields take arithmetic (`120+16`), step with ↑/↓ (Shift: 10) and scrub by dragging their caption.
 - **Pages and layers** (Alt+1): pages to add, rename, duplicate and delete, and the layer tree, top
   layer first, opened along the way to the selection, with hide and lock on each row.
