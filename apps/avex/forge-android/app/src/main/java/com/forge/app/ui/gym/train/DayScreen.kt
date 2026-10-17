@@ -123,6 +123,16 @@ fun DayScreen(
             }
     }
 
+    LaunchedEffect(state.deletedSet) {
+        state.deletedSet ?: return@LaunchedEffect
+        // Newest wins: a still-showing "Set logged" would otherwise queue this one behind it.
+        snackbarHostState.currentSnackbarData?.dismiss()
+        val result = snackbarHostState.showSnackbar(message = "Set deleted", actionLabel = "Undo", duration = SnackbarDuration.Short)
+        viewModel.onEvent(
+            if (result == SnackbarResult.ActionPerformed) DayUiEvent.RestoreDeletedSet else DayUiEvent.ForgetDeletedSet
+        )
+    }
+
     LaunchedEffect(state.undoableSetId) {
         val setId = state.undoableSetId ?: return@LaunchedEffect
         val result = snackbarHostState.showSnackbar(message = "Set logged", actionLabel = "Undo", duration = SnackbarDuration.Short)

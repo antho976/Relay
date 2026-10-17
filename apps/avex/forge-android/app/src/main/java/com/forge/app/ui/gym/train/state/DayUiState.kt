@@ -93,6 +93,11 @@ data class DayUiState(
     val isFinished: Boolean = false,
     /** Set ID that can be undone within the ~5s window after logging (#46). */
     val undoableSetId: Long? = null,
+    /**
+     * The set a swipe just deleted, held for its Undo. Swiping is the only way to delete a set, and
+     * a stray one mid-workout used to lose it outright; §12 asks for undo over confirm.
+     */
+    val deletedSet: LoggedSet? = null,
     /** Exercise whose goal-setter dialog is open. Null when closed (#28). */
     val goalSetterForExerciseId: String? = null,
     /** Pending weight-jump warning (#117): exerciseId + proposed weight text + reps. */

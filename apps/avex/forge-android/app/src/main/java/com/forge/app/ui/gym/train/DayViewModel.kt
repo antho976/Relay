@@ -319,7 +319,8 @@ class DayViewModel @Inject constructor(
     fun onEvent(event: DayUiEvent) {
         when (event) {
             is DayUiEvent.ToggleExpanded, is DayUiEvent.LogSet, is DayUiEvent.LogSameAsLast,
-            is DayUiEvent.DeleteSet, is DayUiEvent.EditSet, is DayUiEvent.RateExercise,
+            is DayUiEvent.DeleteSet, is DayUiEvent.RestoreDeletedSet, is DayUiEvent.ForgetDeletedSet,
+            is DayUiEvent.EditSet, is DayUiEvent.RateExercise,
             is DayUiEvent.UpdateNote, is DayUiEvent.ToggleSkipped, is DayUiEvent.OpenGoalSetter,
             is DayUiEvent.SetGoal, is DayUiEvent.ClearGoal, is DayUiEvent.DismissGoalSetter,
             is DayUiEvent.SetExerciseUnit, is DayUiEvent.SetRestTimerOverride,

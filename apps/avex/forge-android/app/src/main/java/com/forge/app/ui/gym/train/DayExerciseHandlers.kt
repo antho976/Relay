@@ -35,8 +35,19 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             cancelRestForRemovedSet(event.setId)
             workoutRepo.deleteSet(set)
             dropSuggestionOutcomeForRemovedSet(event.setId)
+            _state.update { it.copy(deletedSet = set) }
             if (exId != null) refreshExercise(exId) else refreshExercises()
         }
+        is DayUiEvent.RestoreDeletedSet -> {
+            val set = _state.value.deletedSet ?: return
+            _state.update { it.copy(deletedSet = null) }
+            viewModelScope.launch {
+                // The rest and the suggestion sample it dropped stay dropped: the set comes back as a
+                // logged set, not as the moment it was logged.
+                if (workoutRepo.restoreSet(set)) refreshExerciseForSet(set.id)
+            }
+        }
+        is DayUiEvent.ForgetDeletedSet -> _state.update { it.copy(deletedSet = null) }
         is DayUiEvent.EditSet -> viewModelScope.launch {
             if (event.reps <= 0) return@launch
             val exerciseUi = _state.value.exercises

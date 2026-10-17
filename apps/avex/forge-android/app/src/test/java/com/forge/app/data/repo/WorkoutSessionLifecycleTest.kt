@@ -21,13 +21,13 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * A workout left open before a break must not swallow the first one back. Resuming it poured
- * today's sets into a session dated weeks ago, which the streak, the week's stats and the coach's
- * layoff read all take at its start date.
+ * The open session's lifecycle at the repository: a workout left open before a break must not
+ * swallow the first one back (resuming it poured today's sets into a session dated weeks ago), and a
+ * swiped-away set can be put back while its session is still open.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
-class StaleSessionResumeTest {
+class WorkoutSessionLifecycleTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val db = inMemoryForgeDb()
     private val day = 24L * 60 * 60 * 1000
@@ -80,5 +80,27 @@ class StaleSessionResumeTest {
         val again = repo.startOrResumeSession("upper-a")
         assertEquals(open, again.session.id)
         assertEquals(false, again.created)
+    }
+
+    @Test fun `a deleted set comes back with its id while the session is open`() = runBlocking {
+        val repo = repo()
+        val open = db.sessionDao().insert(Session(dayKey = "upper-a", startedAt = now))
+        val ex = repo.addExerciseToSession(open, "bench", 0)
+        repo.logSet(ex, "100", 100.0, 5)
+        val set = db.loggedSetDao().allForSession(open).single()
+        repo.deleteSet(set)
+        assertTrue(repo.restoreSet(set))
+        assertEquals(listOf(set.id), db.loggedSetDao().allForSession(open).map { it.id })
+    }
+
+    @Test fun `a deleted set does not come back into a finished session`() = runBlocking {
+        val repo = repo()
+        val open = db.sessionDao().insert(Session(dayKey = "upper-a", startedAt = now))
+        val ex = repo.addExerciseToSession(open, "bench", 0)
+        repo.logSet(ex, "100", 100.0, 5)
+        val set = db.loggedSetDao().allForSession(open).single()
+        repo.deleteSet(set)
+        db.sessionDao().finishIfUnfinished(open, now)
+        assertEquals(false, repo.restoreSet(set))
     }
 }

@@ -874,6 +874,19 @@ class WorkoutRepository @Inject constructor(
     suspend fun deleteSet(set: LoggedSet) = loggedSetDao.delete(set)
 
     /**
+     * Put a just-deleted set back, same id and position, for the delete's Undo. Only while its
+     * session is still open: a finished session's totals were stamped without it. False when the
+     * set could not go back.
+     */
+    suspend fun restoreSet(set: LoggedSet): Boolean = database.withTransaction {
+        val exercise = loggedExerciseDao.get(set.loggedExerciseId) ?: return@withTransaction false
+        val session = sessionDao.get(exercise.sessionId) ?: return@withTransaction false
+        if (session.finishedAt != null) return@withTransaction false
+        loggedSetDao.insert(set)
+        true
+    }
+
+    /**
      * Edit a logged set, through the same clamps as [logSet] — including its weight TEXT. Only the
      * number was clamped here, so an edit typed as "1000000000" stored 2000 lb beside the absurd
      * text, and the next edit of that set re-parsed the text straight back to it. The hold clamp
