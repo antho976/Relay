@@ -83,6 +83,8 @@ fun ProgramBuilderScreen(
     blank: Boolean,
     startInView: Boolean,
     onClose: () -> Unit,
+    /** Start a workout on this day key; null hides the action (the editor, or no route for it). */
+    onStartDay: ((String) -> Unit)? = null,
     viewModel: ProgramBuilderViewModel = hiltViewModel()
 ) {
     LaunchedEffect(Unit) { viewModel.loadIfNeeded(blank) }
@@ -309,7 +311,13 @@ fun ProgramBuilderScreen(
                         showSets = many,
                         onEdit = if (editing) ({ viewModel.openDay(shown.uid) }) else null,
                         // Viewing shows what is trained; editing shows the slot being edited.
-                        swaps = if (editing) emptyMap() else viewModel.userSwaps
+                        swaps = if (editing) emptyMap() else viewModel.userSwaps,
+                        // Home only ever starts the NEXT day. This is the one place to train a
+                        // different one ("legs today, not push"), and in a weekday plan the only way
+                        // to train a day that has no weekday at all. Saved days only: an unsaved
+                        // edit has no session to start.
+                        onStart = onStartDay?.takeIf { !editing && !viewModel.dirty && shown.exercises.isNotEmpty() }
+                            ?.let { start -> { start(shown.key) } }
                     )
                 }
             }
@@ -363,7 +371,9 @@ internal fun OpenDay(
     showSets: Boolean,
     onEdit: (() -> Unit)?,
     /** Base library id to (name, id) of the lift the user swapped in "every week". */
-    swaps: Map<String, Pair<String, String?>> = emptyMap()
+    swaps: Map<String, Pair<String, String?>> = emptyMap(),
+    /** Start a workout on this day; null in the editor. */
+    onStart: (() -> Unit)? = null
 ) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val exercises = day.exercises
@@ -431,6 +441,13 @@ internal fun OpenDay(
                     Text("${ex.sets} × ${ex.reps}", style = MaterialTheme.typography.labelMedium, color = muted)
                 }
             }
+        }
+        if (onStart != null) {
+            ForgePrimaryCapsule(
+                label = "Start ${day.name}",
+                onClick = onStart,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            )
         }
         if (onEdit != null) {
             // Drawn, not separately clickable: the block above is the one tap target (§2③).

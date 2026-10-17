@@ -215,7 +215,7 @@ fun ProgramBuilderDayDetail(
                             ForgeGroupCaption(
                                 when {
                                     day.weekdays.isNotEmpty() -> "Home shows this workout on these days. A day can hold one workout."
-                                    weekdayPlan -> "No fixed day, so it isn't on your week. Start it from the day list."
+                                    weekdayPlan -> "No fixed day, so it isn't on your week. Start it from Your program."
                                     else -> "No fixed day. It comes up when it's next in line."
                                 }
                             )

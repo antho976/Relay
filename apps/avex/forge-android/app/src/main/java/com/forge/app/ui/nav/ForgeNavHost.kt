@@ -263,7 +263,10 @@ fun ForgeNavHost(
             ProgramBuilderScreen(
                 blank = entry.arguments?.getBoolean(Routes.ARG_BLANK) ?: false,
                 startInView = entry.arguments?.getBoolean(Routes.ARG_VIEW) ?: false,
-                onClose = { nav.popBackStack() }
+                onClose = { nav.popBackStack() },
+                // The viewer replaces itself with the workout, so Back from the session lands
+                // where the plan was opened from.
+                onStartDay = { dayKey -> nav.popBackStack(); nav.navigateToGymDay(dayKey) }
             )
         }
         composable(Routes.NUTRITION) {
