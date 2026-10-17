@@ -76,7 +76,6 @@ internal fun rememberToday(): LocalDate {
 
 /** How many weeks (columns) one page of the heatmap shows; [HEATMAP_WEEKS] divides evenly by this. */
 private const val WEEKS_PER_PAGE = 13
-private val RANGE_FMT = DateTimeFormatter.ofPattern("d MMM")
 
 /**
  * GitHub-contributions-style adherence grid: one cell per day (weeks as columns, Mon→Sun rows),
@@ -118,10 +117,14 @@ internal fun CalendarHeatmap(
 
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
-    val rangeLabel = remember(firstWeek, lastWeek, startMonday, today) {
+    // In the configuration's locale, built here: a top-level formatter was fixed to the JVM default
+    // locale at class load and never followed a language change.
+    val locale = com.forge.app.ui.common.currentLocale()
+    val rangeFmt = remember(locale) { DateTimeFormatter.ofPattern("d MMM", locale) }
+    val rangeLabel = remember(firstWeek, lastWeek, startMonday, today, rangeFmt) {
         val start = startMonday.plusWeeks(firstWeek.coerceAtLeast(0).toLong())
         val end = startMonday.plusWeeks(lastWeek.toLong()).plusDays(6).let { if (it.isAfter(today)) today else it }
-        "${RANGE_FMT.format(start)} – ${RANGE_FMT.format(end)}".uppercase()
+        "${rangeFmt.format(start)} – ${rangeFmt.format(end)}".uppercase()
     }
 
     Column(modifier) {
