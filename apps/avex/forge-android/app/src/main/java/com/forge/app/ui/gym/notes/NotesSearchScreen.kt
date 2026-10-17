@@ -63,8 +63,10 @@ fun NotesSearchScreen(
             Spacer(Modifier.height(16.dp))
 
             when {
-                state.query.isBlank() -> InlineEmptyHint(
-                    text = "Type to search across your exercise notes.",
+                // The first read of the recent notes draws nothing while it lands (§12).
+                state.query.isBlank() && !state.answered -> Unit
+                state.query.isBlank() && state.results.isEmpty() -> InlineEmptyHint(
+                    text = "A note you add to an exercise shows up here, newest first.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
                 )
