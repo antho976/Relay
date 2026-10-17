@@ -84,7 +84,10 @@ internal fun ColumnScope.E1rmComparisonList(
     /** Bumps on every record tap so re-tapping the same [focusLift] re-expands its row. */
     focusNonce: Int = 0,
     /** The coach's plateau read per exercise id (see [StatsUiState.plateauFlags]). */
-    plateaus: Map<String, PlateauFlagUi> = emptyMap()
+    plateaus: Map<String, PlateauFlagUi> = emptyMap(),
+    /** Lifts with an open Coach call, and the way there; null when there is no Coach tab. */
+    coachCallLiftIds: Set<String> = emptySet(),
+    onOpenCoach: (() -> Unit)? = null
 ) {
     val maxE1 = lifts.maxOf { it.currentE1rm }.coerceAtLeast(1.0)
     // The comparison bars glide in on first appearance, staggered down the list — the same motion
@@ -107,7 +110,8 @@ internal fun ColumnScope.E1rmComparisonList(
             c = c,
             isFocused = lift.exerciseId == focusLift,
             focusNonce = focusNonce,
-            plateau = plateaus[lift.exerciseId]
+            plateau = plateaus[lift.exerciseId],
+            onOpenCoachCall = onOpenCoach?.takeIf { lift.exerciseId in coachCallLiftIds }
         )
     }
     if (lifts.size > LIFTS_SHOWN && !focusPastTrim) {
@@ -151,7 +155,8 @@ private fun E1rmDrillRow(
     c: StatsColors,
     isFocused: Boolean,
     focusNonce: Int,
-    plateau: PlateauFlagUi?
+    plateau: PlateauFlagUi?,
+    onOpenCoachCall: (() -> Unit)? = null
 ) {
     val display = remember(lift.history, weightUnit) { lift.history.map { toDisplayWeight(it, weightUnit) } }
     val expandable = display.size >= 2
@@ -268,7 +273,7 @@ private fun E1rmDrillRow(
             exit = shrinkVertically() + fadeOut()
         ) {
             Box(Modifier.padding(bottom = 8.dp)) {
-                LiftDetailBody(lift, display, prsForLift, curve, weightUnit, c, plateau)
+                LiftDetailBody(lift, display, prsForLift, curve, weightUnit, c, plateau, onOpenCoachCall)
             }
         }
     }
@@ -283,7 +288,8 @@ private fun LiftDetailBody(
     curve: StrengthCurve?,
     weightUnit: WeightUnit,
     c: StatsColors,
-    plateau: PlateauFlagUi?
+    plateau: PlateauFlagUi?,
+    onOpenCoachCall: (() -> Unit)?
 ) {
     val unit = unitLabel(weightUnit)
     val lo = remember(display) { display.minOrNull() ?: 0.0 }
@@ -328,6 +334,9 @@ private fun LiftDetailBody(
                 style = MaterialTheme.typography.bodySmall,
                 color = c.muted
             )
+            // The read had nowhere to go. While the Coach tab holds the matching call (the same
+            // ladder writes both), it links there, where the call can be applied or skipped.
+            onOpenCoachCall?.let { open -> StatsShowAll(label = "see the call on Coach", c = c, onClick = open) }
         }
 
         // ── This lift's recent PRs ────────────────────────────────────────

@@ -82,6 +82,8 @@ fun StatsContent(
     onOpenHistory: () -> Unit = {},
     onOpenNotes: () -> Unit = {},
     onOpenRecap: () -> Unit = {},
+    /** Swipes to the Coach tab; null when it isn't shown (coach off, or freestyle). */
+    onOpenCoach: (() -> Unit)? = null,
     viewModel: StatsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -210,7 +212,7 @@ fun StatsContent(
 
                 when (lens) {
                     StatsLens.STRENGTH -> strengthLens(
-                        state, weightUnit, c, focusLift, focusNonce, onOpenProfile,
+                        state, weightUnit, c, focusLift, focusNonce, onOpenProfile, onOpenCoach,
                         onOpenLift = { id ->
                             focusLift = id; focusNonce++; lens = StatsLens.STRENGTH
                             // Items above the lens content: "title" (0), "hero" (1), "lens" (2) -> "str-lifts" is 3.
@@ -280,6 +282,7 @@ private fun LazyListScope.strengthLens(
     focusLift: String?,
     focusNonce: Int,
     onLogBodyweight: () -> Unit,
+    onOpenCoach: (() -> Unit)?,
     onOpenLift: (String) -> Unit
 ) {
     if (state.e1rmLifts.isEmpty()) {
@@ -292,7 +295,10 @@ private fun LazyListScope.strengthLens(
             caption = "Estimated 1RM per lift and how fast it is climbing.",
             index = 2
         ) {
-            E1rmComparisonList(state.e1rmLifts, state.recentPrs, state.strengthCurves, weightUnit, c, focusLift, focusNonce, state.plateauFlags)
+            E1rmComparisonList(
+                state.e1rmLifts, state.recentPrs, state.strengthCurves, weightUnit, c, focusLift, focusNonce,
+                state.plateauFlags, state.coachCallLiftIds, onOpenCoach
+            )
         }
     }
     // Relative strength — each lift as a multiple of bodyweight.

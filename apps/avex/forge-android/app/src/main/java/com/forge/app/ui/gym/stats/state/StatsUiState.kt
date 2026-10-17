@@ -38,6 +38,8 @@ data class StatsUiState(
      * a lift Stats calls stalled is one the coach has a next step for.
      */
     val plateauFlags: Map<String, PlateauFlagUi> = emptyMap(),
+    /** Lifts with an open call on the Coach tab: their plateau read links to it. */
+    val coachCallLiftIds: Set<String> = emptySet(),
     /** Per-day training load for the adherence calendar + Banister form curves (Trends tab). */
     val dailyActivity: List<DayLoad> = emptyList(),
     /**
