@@ -351,6 +351,20 @@ when the window hides. A change made elsewhere reloads a clean tab and raises a
 notice on a dirty one. Plan uses the same editor with its title fixed. Preserve
 project identity when a tab outlives navigation.
 
+### Design canvas
+The Design view (`design.rs`, `css/design.css`, docs/DESIGN-CANVAS.md) is a fifth view beside Agents.
+Its gallery is a page like Board: glass chips (All, each terminal with its lamp, Project only,
+Deleted), and a grid of thumbnail cards (12px radius, a glass edge that brightens on hover, the
+title in 600 and a faint meta line of terminal, age and pages); the ⋯ key appears on hover. The
+board is a canvas with its own ground (a page's fill, `#1E1D1B` by default) under a dot grid that
+keeps 16 to 32 screen pixels between dots. Everything that floats over it — the tool dock, the
+selection toolbar, the pages and layers panel, the inspector, zoom and toasts — is the opaque
+`_solid` surface menus use, 12px (keys 8px) or 14px for the panels, with one soft shadow. A lit
+tool or toggle uses `@track`, as the view switch does. Inside the canvas only, selection, hover
+and handles are blue (`#4C9DFF`), smart guides red (`#FF3D71`), and what an agent just changed
+glows in the live green for 1.6 s; frame names sit above artboards in 12px Geist 500. Ask is the
+board's one primary (ink) key.
+
 ### Native adaptations
 Mail composition remains mounted while messages refresh. Message/error text is
 selectable. Approval controls distinguish task approval from permission to

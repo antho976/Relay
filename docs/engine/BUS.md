@@ -187,7 +187,8 @@ Every op is registered with, and the schema publishes:
 with every entity it changed), `noun.deleted` (payload `{id}`),
 plus domain events (`session.state`, `session.output` on the data plane, `guardrail.held`,
 `notify.new`, `integration.result`, `provider.version`, `resource.sample`, `ui.changed` and
-`ui.toast` from the shell model of §6.5). Rule: **every
+`ui.toast` from the shell model of §6.5). `design.changed` carries the `Design` row, never its
+nodes; `design.deleted` is `{id, project_id}` (§10.18). Rule: **every
 mutation emits at least one event**, and every event's payload is reproducible by a query op.
 
 A full-entity `noun.changed` carries the row with its own `id`. A hint carries the scope it
@@ -548,7 +549,7 @@ so no door computes this for itself.
 `guardrail.config.set`, `settings.*` mutations, `app.*` mutations, `workspace.*` and
 `project.*` mutations, `provider.refresh`, `worktree.*` mutations, `git.branch.clean_merged`,
 `integration.discard`, `device.*` and `avd.*` mutations except `device.claim` / `device.release`,
-`skill.*` mutations, `notify.settings.set`. `app.resources.watch` is the one `app.*` mutation
+`skill.*` mutations, `notify.settings.set`, `design.purge`. `app.resources.watch` is the one `app.*` mutation
 every actor may call; it only turns resource sampling on and off.
 SPEC §10 says no swarm: an agent never spawns, closes, or types into a session, full stop.
 
@@ -563,9 +564,9 @@ allow-sets, straight from SPEC §3's agent action list plus reads:
 
 | role | may call |
 |---|---|
-| `builder` | all queries · `task.link_commit` · `task.changelog.write` (own) · `task.comment` (own) · `task.update` (own; body/changelog only) · `mailbox.*` · `notes.append` · `overlap.flag/ack` · `integration.request` · `session.done/report/intent/claim/release` (self) · `device.claim/release` · `usage.report` · `guardrail.gate/check` |
+| `builder` | all queries · `task.link_commit` · `task.changelog.write` (own) · `task.comment` (own) · `task.update` (own; body/changelog only) · `mailbox.*` · `notes.append` · `design.*` (`design.purge` is the person's) · `overlap.flag/ack` · `integration.request` · `session.done/report/intent/claim/release` (self) · `device.claim/release` · `usage.report` · `guardrail.gate/check` |
 | `reviewer` | all queries · `mailbox.*` · `notes.append` · `overlap.flag` · `task.changelog.write` / `task.comment` on the reviewed task · `session.done/report/intent/claim/release` (self) · `device.claim/release` · `usage.report` · `guardrail.check` — **nothing** that writes files, commits, or moves the task |
-| `docs` | builder's set minus `task.link_commit`/`integration.request`, plus `notes.create/update` |
+| `docs` | builder's set minus `task.link_commit`/`integration.request` (so `design.*` too), plus `notes.create/update` |
 
 No role moves a task on the board: an agent hands its task to review with `session.done`, which
 judges the branch first (§9.2), waits for the task's other builders and tells the reviewer. A
@@ -1122,6 +1123,38 @@ warning rather than failing every guardrail read.
 | `os.reveal` | mutation · never | `{ path }` → `{}` — file manager, via `xdg-open` on the engine's machine |
 | `os.open_url` | mutation · never | `{ url }` → `{}` — `http(s)` only, via `xdg-open` on the engine's machine |
 
+### 10.18 design
+
+A project's design canvases: pages of frames, shapes, text, stickies, pen paths and pictures, each
+design optionally tied to one terminal (`session`). The node model, its validation and limits are
+`relay_bus::design` (`DesignNode`, `DesignNodeOp` in the schema). Geometry is px, `x`/`y` relative
+to the parent; siblings paint in order, the last on top.
+
+| op | attrs | payload → result |
+|---|---|---|
+| `design.list` | query | `{ project_id, session?, include_deleted? }` → `{ designs: Design[] }` — newest change first |
+| `design.get` | query | `{ design_id, page? }` → `{ design, nodes: DesignNode[], assets_dir }` — pages in their order, then each page's nodes in pre-order, siblings bottom to top; `page` keeps one page and what is on it (`not_found` / `design.page_not_found`). A deleted design still reads |
+| `design.create` | mutation · always · inverse | `{ project_id, title? = "Untitled design", session? }` → `DesignGetOut` — one empty page, `page-1`. An agent's design is its own session's (layer 2 refuses another name); the person may name any session of the project (`invalid` / `design.session`) or none. Titles are 1–200 characters (`design.title`) |
+| `design.update` | mutation · always · inverse | `{ design_id, title?, session?: string \| null }` → `Design` — bumps `rev` |
+| `design.duplicate` | mutation · always · inverse | `{ design_id, title? = "<title> copy" }` → `Design` — every node, with its id, and the id counter |
+| `design.delete` / `design.restore` | mutation · always · inverse | `{ design_id }` → `{}` / `Design` — soft (§5.4): the retention pass purges a deleted design past `undo.grace_days`. Any change to a deleted design is `conflict` / `design.deleted` |
+| `design.purge` | mutation · always · user_only | `{ design_id }` → `{}` — a deleted one only (`conflict` / `design.not_deleted`), nodes and all; emits `design.deleted` |
+| `design.apply` | mutation · always · inverse | `{ design_id, ops: DesignNodeOp[], base_rev?, lenient? }` → `{ design, prev_rev, nodes, removed, ids, inverse }` — below |
+| `design.asset.add` | mutation · always | `{ design_id, path? \| bytes_b64? }` → `{ src, path, w, h }` — a PNG, JPEG, GIF, WebP or SVG, by its bytes (`invalid` / `design.asset` for anything else); an absolute `path` up to 20 MiB or `bytes_b64` up to 1 MiB. Stored once by content in `design-assets/` beside the store as `<32 hex of SHA-256>.<ext>`, the `src` an image node names; `w`/`h` its natural size (an SVG's `width`/`height` in px, else its `viewBox`, else 300×150). Staged: the file work runs unlocked |
+
+`design.apply` runs 1–2,000 `add` / `update` / `move` / `delete` edits in order inside the
+request's transaction, all or none, then bumps `rev`. `base_rev` that is no longer current is
+`conflict` / `design.stale` (`details.rev`). An `add` without an `id` gets `{kind}-{n}`;
+`index` is a place among the parent's children, 0 at the bottom, absent on top. A refusal names
+the edit and the field — `ops[3] update "hero": fill: "red" is not #RGB…`, `details.op` —
+as `design.node_invalid`, `design.node_not_found`, `design.node_exists`, `design.parent` (gone,
+or not a page, frame or group; a page sits in nothing), `design.cycle`, `design.last_page` or
+`design.too_large` (5,000 nodes, 1.5 MiB of node JSON). `lenient` skips an edit of a node, or
+into a parent, that is gone (its `ids` entry is `""`). `nodes` are the nodes added, changed or
+moved as stored now; `removed` every id now gone, subtrees included; `inverse` the edits that
+undo the list, in the order to apply them (a delete's re-adds the subtree in place). The audit
+row's undo is that `inverse`, applied leniently.
+
 ---
 
 ## 11. Entity shapes (results)
@@ -1224,6 +1257,11 @@ interface Workspace { id; path; name; order }
 interface Project { id; workspace_id; path; name; base_branch; build_cmd: string | null;
   run_cmd: string | null; protected_paths: string[]; critical_files: string[]; order; pinned: bool }
 interface Note { id; project_id; title: string | null; body; pinned: bool; created_at; updated_at; deleted_at }
+interface Design { id; project_id; session: string | null; title; rev /* +1 per change */; pages; nodes;
+  created_by: string; updated_by: string /* "user" or a session name */; created_at; updated_at; deleted_at }
+interface DesignNode { id; parent?: string /* none for a page */; kind: "page" | "frame" | "group" | "rect"
+  | "ellipse" | "line" | "text" | "sticky" | "path" | "image"; name?; x; y; w; h; /* optional style,
+  text, layout, points and src fields: relay_bus::design::Node */ }
 interface Message { id; project_id; from: string; to: string; text; re_task: Id | null; sent_at; acked_at: string | null }
 interface Overlap { id; project_id; sessions: [string, string] | [string]; path; symbol: string | null;
   kind: "file" | "symbol" | "claim"; acked_by: string[]; first_seen; last_seen }

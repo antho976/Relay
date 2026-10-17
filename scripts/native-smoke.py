@@ -182,6 +182,7 @@ for line in sys.stdin:
         for viewport, size, page in (("desktop", "1440,900", "agents"), ("compact", "1024,768", "agents"), ("launch-preview", "1024,768", "launch-preview"), ("palette", "1024,768", "palette"), ("layouts", "1024,768", "layouts"), ("usage", "1440,900", "usage"), ("board", "1440,900", "board"), ("board-compact", "1024,768", "board"), ("mailbox", "1024,768", "mailbox"), ("guardrails", "1024,768", "guardrails"), ("code", "1440,900", "code"), ("resources", "1440,900", "resources"), *((name,"1440,900",name) for name in ("notes","modules","settings","skills","plugins","project-skills","project-plugins","notifications","devices","launch")),
                                      *((name,"1440,900",name) for name in ("money-home","money-transactions","money-data","start")), ("money-plan","1024,768","money-plan"), ("money-entry","1024,768","money-entry"),
                                      ("agent-settings","1440,900","agent-settings"), ("agent-settings-compact","1024,768","agent-settings"),
+                                     ("design", "1440,900", "design"),
                                      *((frame,"1440,900","start") for frame in START_FRAMES)):
             if PAGES_ONLY and viewport not in PAGES_ONLY:
                 continue

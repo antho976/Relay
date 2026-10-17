@@ -4,6 +4,7 @@
 pub mod app;
 pub mod audit;
 pub mod bus;
+pub mod design;
 pub mod device;
 pub mod device_lease;
 pub mod file;
@@ -39,6 +40,7 @@ pub fn register_all(e: &mut Engine) {
     task::register(e);
     module::register(e);
     notes::register(e);
+    design::register(e);
     overlap::register(e);
     provider::register(e);
     session::register(e);

@@ -2989,6 +2989,7 @@ dependencies = [
 name = "relay-client"
 version = "4.0.0-dev"
 dependencies = [
+ "relay-bus",
  "serde_json",
 ]
 
@@ -3072,6 +3073,7 @@ dependencies = [
  "relay-bus",
  "relay-client",
  "relay-money",
+ "serde",
  "serde_json",
  "sha2",
  "sourceview5",

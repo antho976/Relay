@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 /// The schema version this build knows. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: i64 = 27;
+pub const SCHEMA_VERSION: i64 = 28;
 
 /// Numbered migrations; index 0 brings a fresh DB to `user_version = 1`.
 pub const MIGRATIONS: &[&str] = &[
@@ -437,6 +437,33 @@ pub const MIGRATIONS: &[&str] = &[
         'tool', json_extract(payload, '$.data.tool_name'), 'slim', json('true'))
       WHERE op = 'session.report' AND kind = 'ok' AND json_valid(payload) AND json_extract(payload, '$.kind') IS NOT NULL;
     "#,
+    // v28 - design canvases (`design.*`, BUS.md §10.18): a project's designs, each a tree of
+    // nodes. A node row is its parent and paint order (`ord`, ascending is bottom to top) beside
+    // the node's own JSON, so a reorder or a move rewrites two columns, not the node. `session`
+    // is a name, not an FK: names outlive the sessions that held them. Ids are AUTOINCREMENT, as
+    // tasks' are: audit undo rows and removal backups name a design by id, and a purged id
+    // recycled into a new design would be restored over or deleted by mistake. The counters
+    // (`pages`, `nodes`, `bytes` of node JSON, `next_node` for engine-assigned ids) are kept by
+    // every write, so a list and the size limits never count a design's nodes.
+    r#"
+    CREATE TABLE designs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL REFERENCES projects(id),
+      session TEXT, title TEXT NOT NULL,
+      rev INTEGER NOT NULL DEFAULT 0, pages INTEGER NOT NULL DEFAULT 0, nodes INTEGER NOT NULL DEFAULT 0,
+      bytes INTEGER NOT NULL DEFAULT 0, next_node INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL, updated_by TEXT NOT NULL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+    );
+    CREATE INDEX designs_project ON designs(project_id, deleted_at, updated_at);
+
+    CREATE TABLE design_nodes (
+      design_id INTEGER NOT NULL REFERENCES designs(id) ON DELETE CASCADE,
+      node_id TEXT NOT NULL, parent_id TEXT, kind TEXT NOT NULL, ord REAL NOT NULL, body TEXT NOT NULL,
+      PRIMARY KEY (design_id, node_id)
+    ) WITHOUT ROWID;
+    CREATE INDEX design_nodes_parent ON design_nodes(design_id, parent_id, ord);
+    "#,
 ];
 
 pub struct Store {
@@ -577,6 +604,15 @@ impl Store {
         match self.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
             Some(dir) => dir.join("skills"),
             None => std::env::temp_dir().join(format!("relay-skills-{}", std::process::id())),
+        }
+    }
+
+    /// Where `design.asset.add` keeps pictures, beside the store: one file per content hash,
+    /// named as an image node's `src`, shared by every design that shows it.
+    pub fn design_assets_dir(&self) -> PathBuf {
+        match self.path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+            Some(dir) => dir.join("design-assets"),
+            None => std::env::temp_dir().join(format!("relay-design-assets-{}", std::process::id())),
         }
     }
 

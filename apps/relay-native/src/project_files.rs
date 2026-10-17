@@ -13,6 +13,18 @@ impl Editor {
     pub fn agents_visible(&self) -> bool {
         self.content_stack.visible_child_name().as_deref() == Some("agents")
     }
+    /// Mount the Design view (`design.rs`) beside the agent wall.
+    pub fn mount_design(&self, design: &impl IsA<gtk::Widget>) {
+        self.content_stack.add_named(design, Some("design"));
+    }
+    pub fn show_design(&self) {
+        if self.content_stack.child_by_name("design").is_some() {
+            self.content_stack.set_visible_child_name("design");
+        }
+    }
+    pub fn design_visible(&self) -> bool {
+        self.content_stack.visible_child_name().as_deref() == Some("design")
+    }
     pub fn connect_view_changed(&self, callback: impl Fn() + 'static) {
         self.content_stack
             .connect_visible_child_name_notify(move |_| callback());

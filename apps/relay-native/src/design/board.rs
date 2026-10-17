@@ -1,0 +1,2201 @@
+//! One design open on the canvas: the top bar, the canvas and what floats over it (the tool
+//! dock, the selection's toolbar, the layers and the inspector, zoom), and the commands they
+//! share. Input is `tools.rs`; editing a text in place is `textedit.rs`.
+
+use super::canvas::Canvas;
+use super::doc::{Change, Doc};
+use super::glyphs;
+use super::paint::{self, fill_of, grect, rgba, Painter, CANVAS};
+use crate::app::{label, Ui};
+use gtk::prelude::*;
+use gtk::{gdk, gio, graphene, gsk, pango};
+use gtk4 as gtk;
+use relay_bus::design::{Node, NodeKind, NodeOp};
+use relay_client::design::edit;
+use relay_client::design::geom::step_zoom;
+use relay_client::design::layout::{self, Placed};
+use relay_client::design::snap::Guide;
+use relay_client::design::{Camera, Rect, Scene};
+use serde_json::{json, Map, Value};
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
+use std::rc::{Rc, Weak};
+
+/// Selection, hover and handles.
+pub const SELECT: &str = "#4C9DFF";
+/// Smart guides and spacing.
+pub const GUIDE: &str = "#FF3D71";
+/// What an agent just changed glows briefly in the live colour.
+pub const AGENT: &str = "#2EC469";
+/// Clipboard type for nodes copied between designs.
+pub const MIME: &str = "application/x-relay-design+json";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Tool {
+    Select,
+    Hand,
+    Frame,
+    Rect,
+    Ellipse,
+    Line,
+    Arrow,
+    Text,
+    Sticky,
+    Pen,
+    Highlighter,
+}
+
+impl Tool {
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Tool::Select => "pointer",
+            Tool::Hand => "hand",
+            Tool::Frame => "frame",
+            Tool::Rect => "rect",
+            Tool::Ellipse => "ellipse",
+            Tool::Line => "line",
+            Tool::Arrow => "arrow",
+            Tool::Text => "text",
+            Tool::Sticky => "sticky",
+            Tool::Pen => "pen",
+            Tool::Highlighter => "highlighter",
+        }
+    }
+
+    pub fn caption(self) -> &'static str {
+        match self {
+            Tool::Select => "Move",
+            Tool::Hand => "Hand",
+            Tool::Frame => "Frame",
+            Tool::Rect => "Rectangle",
+            Tool::Ellipse => "Ellipse",
+            Tool::Line => "Line",
+            Tool::Arrow => "Arrow",
+            Tool::Text => "Text",
+            Tool::Sticky => "Sticky note",
+            Tool::Pen => "Pen",
+            Tool::Highlighter => "Highlighter",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Tool::Select => "V",
+            Tool::Hand => "H",
+            Tool::Frame => "F",
+            Tool::Rect => "R",
+            Tool::Ellipse => "O",
+            Tool::Line => "L",
+            Tool::Arrow => "Shift L",
+            Tool::Text => "T",
+            Tool::Sticky => "S",
+            Tool::Pen => "P",
+            Tool::Highlighter => "Shift P",
+        }
+    }
+}
+
+/// A resize handle, by the edges it moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Handle {
+    pub left: bool,
+    pub right: bool,
+    pub top: bool,
+    pub bottom: bool,
+}
+
+impl Handle {
+    pub fn cursor(self) -> &'static str {
+        match (self.left, self.right, self.top, self.bottom) {
+            (true, _, true, _) | (_, true, _, true) => "nwse-resize",
+            (true, _, _, true) | (_, true, true, _) => "nesw-resize",
+            (true, _, _, _) | (_, true, _, _) => "ew-resize",
+            _ => "ns-resize",
+        }
+    }
+}
+
+pub const HANDLES: [Handle; 8] = [
+    Handle { left: true, right: false, top: true, bottom: false },
+    Handle { left: false, right: false, top: true, bottom: false },
+    Handle { left: false, right: true, top: true, bottom: false },
+    Handle { left: false, right: true, top: false, bottom: false },
+    Handle { left: false, right: true, top: false, bottom: true },
+    Handle { left: false, right: false, top: false, bottom: true },
+    Handle { left: true, right: false, top: false, bottom: true },
+    Handle { left: true, right: false, top: false, bottom: false },
+];
+
+/// A pointer gesture under way. One lives at a time, so its size does not matter.
+#[allow(clippy::large_enum_variant)]
+pub enum Gesture {
+    Idle,
+    Pan { cam: Camera },
+    Marquee { scope: String, a: (f64, f64), b: (f64, f64), base: Vec<String>, moved: bool },
+    Move {
+        ids: Vec<String>,
+        start: (f64, f64),
+        orig: Vec<(String, f64, f64)>,
+        rects: Vec<Rect>,
+        dup: bool,
+        moved: bool,
+        /// A container the nodes would land in, when it is not their parent.
+        target: Option<String>,
+        /// In an auto-layout parent: the place the node would take.
+        reorder: Option<(String, u32)>,
+        /// The node to select if the press ends as a click.
+        click: Option<String>,
+        at: (f64, f64),
+    },
+    Resize { handle: Handle, bounds: Rect, orig: Vec<(String, Node, Rect)>, moved: bool },
+    Endpoint { id: String, which: usize, orig: Node, moved: bool },
+    Create { tool: Tool, parent: String, a: (f64, f64), b: (f64, f64) },
+    Draw { parent: String, points: Vec<[f64; 2]> },
+}
+
+pub struct Board {
+    pub root: gtk::Box,
+    pub(super) ui: Weak<Ui>,
+    pub doc: Rc<Doc>,
+    pub(super) canvas: Canvas,
+    pub(super) overlay: gtk::Overlay,
+    pub(super) painter: Rc<Painter>,
+    pub(super) page: RefCell<String>,
+    pub(super) placed: RefCell<Option<Rc<Placed>>>,
+    pub(super) content: RefCell<Option<gsk::RenderNode>>,
+    pub(super) cam: Cell<Camera>,
+    pub(super) cams: RefCell<HashMap<String, Camera>>,
+    pub(super) size: Cell<(f64, f64)>,
+    fitted: Cell<bool>,
+    pub(super) selection: RefCell<Vec<String>>,
+    pub(super) hover: RefCell<Option<String>>,
+    pub(super) tool: Cell<Tool>,
+    pub(super) tool_lock: Cell<bool>,
+    pub(super) gesture: RefCell<Gesture>,
+    pub(super) guides: RefCell<Vec<Guide>>,
+    pub(super) space: Cell<bool>,
+    pub(super) pointer: Cell<(f64, f64)>,
+    /// The last primary press, for telling a double click: time in µs and where.
+    pub(super) last_press: Cell<(i64, f64, f64)>,
+    flash: RefCell<(HashSet<String>, i64)>,
+    flash_tick: RefCell<Option<gtk::TickCallbackId>>,
+    labels: RefCell<HashMap<String, pango::Layout>>,
+    pub(super) pen: RefCell<String>,
+    pub(super) clip: RefCell<Vec<Node>>,
+    pub(super) title: gtk::Label,
+    pub(super) terminal: gtk::MenuButton,
+    pub(super) terminal_label: gtk::Label,
+    pub(super) status: gtk::Label,
+    pub(super) ask: gtk::Button,
+    pub(super) zoom_label: gtk::Label,
+    pub(super) tool_keys: RefCell<Vec<(Tool, gtk::ToggleButton)>>,
+    pub(super) shape_key: gtk::ToggleButton,
+    pub(super) pen_key: gtk::ToggleButton,
+    pub(super) page_label: gtk::Label,
+    pub(super) context: RefCell<Option<gtk::Widget>>,
+    pub(super) context_at: Cell<(i32, i32)>,
+    pub(super) inspector: gtk::Box,
+    pub(super) inspector_scroll: gtk::ScrolledWindow,
+    pub(super) inspector_key: gtk::ToggleButton,
+    pub(super) layers: RefCell<Option<Rc<super::layers::Layers>>>,
+    pub(super) layers_panel: gtk::Revealer,
+    pub(super) edit: RefCell<Option<super::textedit::Edit>>,
+    toast: gtk::Revealer,
+    toast_label: gtk::Label,
+    toast_serial: Cell<u64>,
+    chrome_pending: Cell<bool>,
+    pub(super) actions: gio::SimpleActionGroup,
+    /// Back to the gallery, when the board sits in the Design view.
+    pub(super) back: RefCell<Option<Rc<dyn Fn()>>>,
+    pub(super) windowed: bool,
+    me: Weak<Board>,
+}
+
+impl Board {
+    pub fn new(ui: &Rc<Ui>, doc: Rc<Doc>, windowed: bool) -> Rc<Board> {
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.add_css_class("design-board");
+        root.set_hexpand(true);
+        root.set_vexpand(true);
+
+        // Top bar: back to the gallery, the title and its menu, the terminal, saving, Ask.
+        let top = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        top.add_css_class("design-topbar");
+        let back_key = gtk::Button::new();
+        back_key.add_css_class("quiet");
+        back_key.add_css_class("design-crumb");
+        let back_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        back_row.append(&crate::icons::image("chevron-left", 14));
+        back_row.append(&label("Designs", ""));
+        back_key.set_child(Some(&back_row));
+        back_key.set_tooltip_text(Some("All designs of this project"));
+        back_key.set_widget_name("design-back");
+        top.append(&back_key);
+        let slash = label("/", "faint");
+        top.append(&slash);
+        let title = label("", "design-title");
+        title.set_ellipsize(pango::EllipsizeMode::End);
+        title.set_max_width_chars(48);
+        let title_key = gtk::MenuButton::new();
+        title_key.add_css_class("quiet");
+        title_key.add_css_class("design-title-key");
+        let title_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        title_row.append(&title);
+        title_row.append(&crate::icons::image("chevron-down", 12));
+        title_key.set_child(Some(&title_row));
+        title_key.set_tooltip_text(Some("Rename, duplicate, export or delete this design"));
+        top.append(&title_key);
+        let terminal_label = label("", "");
+        let terminal = gtk::MenuButton::new();
+        terminal.add_css_class("design-terminal");
+        terminal.set_child(Some(&terminal_label));
+        terminal.set_valign(gtk::Align::Center);
+        top.append(&terminal);
+        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        spacer.set_hexpand(true);
+        top.append(&spacer);
+        let status = label("Saved", "design-status");
+        status.set_width_chars(22);
+        status.set_xalign(1.0);
+        status.set_ellipsize(pango::EllipsizeMode::Start);
+        top.append(&status);
+        let ask = gtk::Button::new();
+        ask.add_css_class("design-ask");
+        let ask_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        ask_row.append(&glyphs::image("spark", 14));
+        ask_row.append(&label("Ask agent", ""));
+        ask.set_child(Some(&ask_row));
+        ask.set_tooltip_text(Some("Ask the terminal's agent to change the selection or this page"));
+        ask.set_widget_name("design-ask");
+        top.append(&ask);
+        let pop_out = crate::app::icon_button("window", "Open in a new window");
+        pop_out.set_child(Some(&glyphs::image("window", 16)));
+        pop_out.set_visible(!windowed);
+        top.append(&pop_out);
+        let inspector_key = gtk::ToggleButton::new();
+        inspector_key.add_css_class("quiet");
+        inspector_key.add_css_class("icon-key");
+        inspector_key.set_child(Some(&crate::icons::image("sidebar", 16)));
+        inspector_key.set_tooltip_text(Some("Show the inspector (Ctrl+.)"));
+        inspector_key.set_active(true);
+        top.append(&inspector_key);
+        let mut key = top.first_child();
+        while let Some(widget) = key {
+            key = widget.next_sibling();
+            widget.set_valign(gtk::Align::Center);
+        }
+        root.append(&top);
+
+        let canvas = Canvas::new();
+        let overlay = gtk::Overlay::new();
+        overlay.add_css_class("design-stage");
+        overlay.set_child(Some(&canvas));
+        overlay.set_vexpand(true);
+        overlay.set_hexpand(true);
+        root.append(&overlay);
+
+        // The dock: layers, page, then the tools.
+        let dock = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        dock.add_css_class("design-dock");
+        dock.set_halign(gtk::Align::Start);
+        dock.set_valign(gtk::Align::Start);
+        dock.set_margin_start(12);
+        dock.set_margin_top(12);
+        overlay.add_overlay(&dock);
+
+        let page_label = label("Page 1", "");
+        page_label.set_max_width_chars(14);
+        page_label.set_ellipsize(pango::EllipsizeMode::End);
+
+        let inspector = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        inspector.add_css_class("design-inspector-body");
+        let inspector_scroll = gtk::ScrolledWindow::new();
+        inspector_scroll.set_child(Some(&inspector));
+        inspector_scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+        inspector_scroll.set_propagate_natural_height(true);
+        inspector_scroll.set_max_content_height(640);
+        inspector_scroll.add_css_class("design-inspector");
+        inspector_scroll.set_halign(gtk::Align::End);
+        inspector_scroll.set_valign(gtk::Align::Start);
+        inspector_scroll.set_margin_end(12);
+        inspector_scroll.set_margin_top(12);
+        inspector_scroll.set_size_request(256, -1);
+        inspector_scroll.set_visible(false);
+        overlay.add_overlay(&inspector_scroll);
+
+        let layers_panel = gtk::Revealer::new();
+        layers_panel.set_transition_type(gtk::RevealerTransitionType::SlideRight);
+        layers_panel.set_transition_duration(140);
+        layers_panel.set_halign(gtk::Align::Start);
+        layers_panel.set_valign(gtk::Align::Fill);
+        layers_panel.set_margin_start(12);
+        layers_panel.set_margin_top(62);
+        layers_panel.set_margin_bottom(12);
+        overlay.add_overlay(&layers_panel);
+
+        // Zoom, bottom right.
+        let zoom_bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        zoom_bar.add_css_class("design-zoom");
+        zoom_bar.set_halign(gtk::Align::End);
+        zoom_bar.set_valign(gtk::Align::End);
+        zoom_bar.set_margin_end(12);
+        zoom_bar.set_margin_bottom(12);
+        let zoom_out = crate::app::icon_button("minus", "Zoom out (Ctrl+-)");
+        let zoom_label = label("100%", "design-zoom-label");
+        zoom_label.set_width_chars(5);
+        zoom_label.set_xalign(0.5);
+        let zoom_menu = gtk::MenuButton::new();
+        zoom_menu.add_css_class("quiet");
+        zoom_menu.set_child(Some(&zoom_label));
+        zoom_menu.set_tooltip_text(Some("Zoom"));
+        let zoom_in = crate::app::icon_button("plus", "Zoom in (Ctrl+=)");
+        let help = crate::app::icon_button("keyboard", "Keyboard shortcuts (?)");
+        help.set_child(Some(&glyphs::image("keyboard", 16)));
+        zoom_bar.append(&zoom_out);
+        zoom_bar.append(&zoom_menu);
+        zoom_bar.append(&zoom_in);
+        zoom_bar.append(&help);
+        keep_canvas_focus(zoom_bar.upcast_ref());
+        overlay.add_overlay(&zoom_bar);
+
+        let toast = gtk::Revealer::new();
+        toast.set_transition_type(gtk::RevealerTransitionType::Crossfade);
+        toast.set_halign(gtk::Align::Center);
+        toast.set_valign(gtk::Align::End);
+        toast.set_margin_bottom(16);
+        toast.set_can_target(false);
+        let toast_label = label("", "design-toast");
+        toast.set_child(Some(&toast_label));
+        overlay.add_overlay(&toast);
+
+        let shape_key = gtk::ToggleButton::new();
+        let pen_key = gtk::ToggleButton::new();
+        let painter = Painter::new(&canvas);
+        *painter.assets_dir.borrow_mut() = doc.assets_dir.borrow().clone();
+        let first_page = doc.scene.borrow().pages().first().cloned().unwrap_or_default();
+        let actions = gio::SimpleActionGroup::new();
+        root.insert_action_group("design", Some(&actions));
+
+        let board = Rc::new_cyclic(|me| Board {
+            root,
+            ui: Rc::downgrade(ui),
+            doc,
+            canvas,
+            overlay,
+            painter,
+            page: RefCell::new(first_page),
+            placed: RefCell::default(),
+            content: RefCell::default(),
+            cam: Cell::new(Camera::default()),
+            cams: RefCell::default(),
+            size: Cell::new((0.0, 0.0)),
+            fitted: Cell::new(false),
+            selection: RefCell::default(),
+            hover: RefCell::default(),
+            tool: Cell::new(Tool::Select),
+            tool_lock: Cell::new(false),
+            gesture: RefCell::new(Gesture::Idle),
+            guides: RefCell::default(),
+            space: Cell::new(false),
+            pointer: Cell::new((0.0, 0.0)),
+            last_press: Cell::new((0, 0.0, 0.0)),
+            flash: RefCell::new((HashSet::new(), 0)),
+            flash_tick: RefCell::default(),
+            labels: RefCell::default(),
+            pen: RefCell::new(String::new()),
+            clip: RefCell::default(),
+            title,
+            terminal,
+            terminal_label,
+            status,
+            ask,
+            zoom_label,
+            tool_keys: RefCell::default(),
+            shape_key,
+            pen_key,
+            page_label,
+            context: RefCell::default(),
+            context_at: Cell::new((0, 0)),
+            inspector,
+            inspector_scroll,
+            inspector_key,
+            layers: RefCell::default(),
+            layers_panel,
+            edit: RefCell::default(),
+            toast,
+            toast_label,
+            toast_serial: Cell::new(0),
+            chrome_pending: Cell::new(false),
+            actions,
+            back: RefCell::default(),
+            windowed,
+            me: me.clone(),
+        });
+
+        let weak = Rc::downgrade(&board);
+        board.canvas.set_draw(move |snap, w, h| {
+            if let Some(b) = weak.upgrade() {
+                b.draw(snap, w, h);
+            }
+        });
+        let weak = Rc::downgrade(&board);
+        board.canvas.set_resized(move |w, h| {
+            if let Some(b) = weak.upgrade() {
+                b.resized(w as f64, h as f64);
+            }
+        });
+        let weak = Rc::downgrade(&board);
+        board.painter.on_loaded(move || {
+            if let Some(b) = weak.upgrade() {
+                b.content.borrow_mut().take();
+                b.canvas.queue_draw();
+            }
+        });
+        let weak = Rc::downgrade(&board);
+        board.doc.listen(move |change| {
+            if let Some(b) = weak.upgrade() {
+                b.changed(change);
+            }
+        });
+        // Floating widgets that follow the selection are placed by the board.
+        let weak = Rc::downgrade(&board);
+        board.overlay.connect_get_child_position(move |_, widget| {
+            let b = weak.upgrade()?;
+            b.child_position(widget)
+        });
+
+        board.build_dock(&dock);
+        board.build_zoom_menu(&zoom_menu);
+        board.install_actions();
+        board.build_title_menu(&title_key);
+        let layers = super::layers::Layers::new(&board);
+        board.layers_panel.set_child(Some(&layers.root));
+        *board.layers.borrow_mut() = Some(layers);
+        super::tools::install(&board);
+
+        let weak = Rc::downgrade(&board);
+        back_key.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.end_edit(true);
+                if let Some(back) = b.back.borrow().clone() {
+                    back();
+                }
+            }
+        });
+        back_key.set_visible(!windowed);
+        slash.set_visible(!windowed);
+        let weak = Rc::downgrade(&board);
+        pop_out.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                if let Some(ui) = b.ui.upgrade() {
+                    b.end_edit(true);
+                    super::window::open(&ui, b.doc.design.borrow().project_id, b.doc.id);
+                    if let Some(back) = b.back.borrow().clone() {
+                        back();
+                    }
+                }
+            }
+        });
+        let weak = Rc::downgrade(&board);
+        board.ask.connect_clicked(move |key| {
+            if let Some(b) = weak.upgrade() {
+                b.ask_agent(key.upcast_ref());
+            }
+        });
+        let weak = Rc::downgrade(&board);
+        board.inspector_key.connect_toggled(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.refresh_chrome();
+            }
+        });
+        let weak = Rc::downgrade(&board);
+        zoom_out.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.step_zoom(-1);
+            }
+        });
+        let weak = Rc::downgrade(&board);
+        zoom_in.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                b.step_zoom(1);
+            }
+        });
+        let weak = Rc::downgrade(&board);
+        help.connect_clicked(move |key| {
+            if let Some(b) = weak.upgrade() {
+                b.shortcuts(key.upcast_ref());
+            }
+        });
+        board.design_changed();
+        board.refresh_terminal_menu();
+        board
+    }
+
+    pub(super) fn me(&self) -> Rc<Board> {
+        self.me.upgrade().expect("board alive while called")
+    }
+
+    // ------------------------------------------------------------------ geometry
+
+    pub(super) fn to_page(&self, sx: f64, sy: f64) -> (f64, f64) {
+        self.cam.get().to_page(sx, sy)
+    }
+
+    pub(super) fn placed(&self) -> Rc<Placed> {
+        if let Some(p) = self.placed.borrow().as_ref() {
+            return p.clone();
+        }
+        let scene = self.doc.scene.borrow();
+        let started = trace().then(std::time::Instant::now);
+        let placed = Rc::new(layout::place(&scene, &self.page.borrow(), &*self.painter));
+        if let Some(t) = started {
+            println!("DESIGN_TRACE layout {:.3} ms {} nodes", t.elapsed().as_secs_f64() * 1e3, placed.rects.len());
+        }
+        *self.placed.borrow_mut() = Some(placed.clone());
+        placed
+    }
+
+    /// The scene or the layout changed: lay out again and redraw, and refresh the chrome
+    /// once this turn of the main loop is done.
+    pub(super) fn invalidate(&self) {
+        self.placed.borrow_mut().take();
+        self.content.borrow_mut().take();
+        self.canvas.queue_draw();
+        self.schedule_chrome();
+    }
+
+    pub(super) fn schedule_chrome(&self) {
+        if self.chrome_pending.replace(true) {
+            return;
+        }
+        let weak = self.me.clone();
+        glib::idle_add_local_once(move || {
+            if let Some(b) = weak.upgrade() {
+                b.chrome_pending.set(false);
+                b.refresh_chrome();
+            }
+        });
+    }
+
+    /// The page's content, cached as one render node until something changes.
+    fn content_node(&self, scene: &Scene, placed: &Placed) -> Option<gsk::RenderNode> {
+        if let Some(node) = self.content.borrow().as_ref() {
+            return Some(node.clone());
+        }
+        let started = trace().then(std::time::Instant::now);
+        let snap = gtk::Snapshot::new();
+        self.painter.paint_page(&snap, scene, placed, &self.page.borrow(), None);
+        let node = snap.to_node();
+        if let Some(t) = started {
+            println!("DESIGN_TRACE content {:.3} ms", t.elapsed().as_secs_f64() * 1e3);
+        }
+        self.content.borrow_mut().clone_from(&node);
+        node
+    }
+
+    pub(super) fn page_bounds(&self) -> Option<Rect> {
+        let placed = self.placed();
+        let scene = self.doc.scene.borrow();
+        let page = self.page.borrow();
+        Rect::bounds(scene.children(&page).iter().filter_map(|id| placed.rects.get(id)))
+    }
+
+    pub(super) fn selection_bounds(&self) -> Option<Rect> {
+        let placed = self.placed();
+        Rect::bounds(self.selection.borrow().iter().filter_map(|id| placed.rects.get(id)))
+    }
+
+    // ------------------------------------------------------------------ camera
+
+    pub(super) fn set_cam(&self, cam: Camera) {
+        self.cam.set(cam);
+        self.zoom_label.set_text(&format!("{}%", (cam.zoom * 100.0).round()));
+        self.style_edit();
+        self.canvas.queue_draw();
+        self.overlay.queue_allocate();
+    }
+
+    pub(super) fn zoom_to(&self, zoom: f64) {
+        let (w, h) = self.size.get();
+        let mut cam = self.cam.get();
+        cam.zoom_at(w / 2.0, h / 2.0, zoom);
+        self.set_cam(cam);
+    }
+
+    pub(super) fn step_zoom(&self, dir: i32) {
+        self.zoom_to(step_zoom(self.cam.get().zoom, dir));
+    }
+
+    /// Fit `r` in the canvas, never past 100% unless `closer`.
+    pub(super) fn fit(&self, r: Option<Rect>, closer: bool) {
+        if self.size.get().0 <= 0.0 {
+            self.fitted.set(false);
+            return;
+        }
+        self.set_cam(self.fit_cam(r, closer));
+    }
+
+    fn fit_cam(&self, r: Option<Rect>, closer: bool) -> Camera {
+        let (w, h) = self.size.get();
+        // The dock sits over the top left: fit below it, and keep the frame names in view.
+        let top = 76.0;
+        match r {
+            Some(r) => {
+                let mut cam = Camera::fit(&r, w, (h - top).max(1.0), 56.0, if closer { 4.0 } else { 1.0 });
+                cam.y -= top / cam.zoom;
+                cam
+            }
+            None => Camera { x: -w / 2.0, y: -h / 2.0, zoom: 1.0 },
+        }
+    }
+
+    // ------------------------------------------------------------------ pages
+
+    pub(super) fn set_page(&self, page: &str) {
+        if *self.page.borrow() == page {
+            return;
+        }
+        self.end_edit(true);
+        let old = self.page.replace(page.to_string());
+        self.cams.borrow_mut().insert(old, self.cam.get());
+        self.selection.borrow_mut().clear();
+        self.invalidate();
+        match self.cams.borrow().get(page).copied() {
+            Some(cam) => self.set_cam(cam),
+            None => {
+                let bounds = self.page_bounds();
+                self.fit(bounds, false);
+            }
+        }
+        self.selection_changed();
+    }
+
+    pub(super) fn page_name(&self, id: &str) -> String {
+        let scene = self.doc.scene.borrow();
+        let index = scene.pages().iter().position(|p| p == id).unwrap_or(0) + 1;
+        scene.node(id).and_then(|n| n.name.clone()).unwrap_or_else(|| format!("Page {index}"))
+    }
+
+    // ------------------------------------------------------------------ selection
+
+    pub(super) fn select(&self, ids: Vec<String>) {
+        if *self.selection.borrow() == ids {
+            return;
+        }
+        *self.selection.borrow_mut() = ids;
+        self.selection_changed();
+    }
+
+    pub(super) fn selection_changed(&self) {
+        self.canvas.queue_draw();
+        self.rebuild_context();
+        self.rebuild_inspector();
+        if let Some(layers) = self.layers.borrow().as_ref() {
+            layers.selection_changed();
+        }
+        self.overlay.queue_allocate();
+    }
+
+    /// The selection's ids that still exist, in paint order.
+    pub(super) fn selected(&self) -> Vec<String> {
+        let scene = self.doc.scene.borrow();
+        edit::outermost(&scene, &self.selection.borrow())
+    }
+
+    // ------------------------------------------------------------------ edits
+
+    /// Send `ops` as one undoable step.
+    pub(super) fn commit(&self, ops: Vec<NodeOp>) -> bool {
+        self.doc.commit(ops)
+    }
+
+    /// Set the same fields on every selected node.
+    pub(super) fn set_selected(&self, set: Map<String, Value>) {
+        let mut ids = self.selected();
+        // A text being typed for the first time is not on the engine yet: style it in place,
+        // and the style goes out with it.
+        let fresh = self.edit.borrow().as_ref().filter(|e| e.created).map(|e| e.id.clone());
+        if let Some(fresh) = fresh.filter(|f| ids.contains(f)) {
+            let patched = self.doc.scene.borrow().node(&fresh).and_then(|n| n.patched(&set).ok());
+            if let (Some(p), Some(n)) = (patched, self.doc.scene.borrow_mut().node_mut(&fresh)) {
+                *n = p;
+            }
+            ids.retain(|id| *id != fresh);
+            self.invalidate();
+        }
+        let ops: Vec<NodeOp> = ids.into_iter().map(|id| NodeOp::Update { id, set: set.clone() }).collect();
+        self.commit(ops);
+        if let Some(e) = self.edit.borrow().as_ref() {
+            e.zoom.set(0.0);
+        }
+        self.style_edit();
+    }
+
+    fn changed(&self, change: &Change) {
+        match change {
+            Change::Scene => {
+                self.prune_selection();
+                self.invalidate();
+            }
+            Change::Reloaded { changed, by } => {
+                *self.painter.assets_dir.borrow_mut() = self.doc.assets_dir.borrow().clone();
+                self.painter.retain(&self.doc.scene.borrow());
+                self.prune_selection();
+                self.invalidate();
+                if by != "user" && !changed.is_empty() {
+                    self.status.set_text(&format!("{by} edited it just now"));
+                    self.status.add_css_class("design-status-agent");
+                    self.start_flash(changed.clone());
+                }
+                if !self.doc.scene.borrow().node(&self.page.borrow()).is_some() {
+                    let first = self.doc.scene.borrow().pages().first().cloned().unwrap_or_default();
+                    self.set_page(&first);
+                }
+                if let Some(layers) = self.layers.borrow().as_ref() {
+                    layers.pages_changed();
+                }
+            }
+            Change::Design => self.design_changed(),
+            Change::Saving(on) => {
+                self.status.remove_css_class("design-status-agent");
+                self.status.set_text(if *on { "Saving…" } else { "Saved" });
+                self.refresh_actions();
+            }
+            Change::Error(e) => self.toast(e),
+        }
+    }
+
+    fn prune_selection(&self) {
+        let scene = self.doc.scene.borrow();
+        let page = self.page.borrow().clone();
+        let keep: Vec<String> = self
+            .selection
+            .borrow()
+            .iter()
+            .filter(|id| scene.node(id).is_some() && scene.page_of(id) == Some(page.as_str()))
+            .cloned()
+            .collect();
+        drop(scene);
+        if keep != *self.selection.borrow() {
+            *self.selection.borrow_mut() = keep;
+            self.selection_changed();
+        }
+    }
+
+    fn design_changed(&self) {
+        let design = self.doc.design.borrow().clone();
+        self.title.set_text(&design.title);
+        if let Some(window) = self.root.root().and_downcast::<gtk::Window>().filter(|_| self.windowed) {
+            window.set_title(Some(&format!("{} — Relay Design", design.title)));
+        }
+        match &design.session {
+            Some(s) => {
+                self.terminal_label.set_text(s);
+                self.terminal.remove_css_class("unlinked");
+                self.terminal.set_tooltip_text(Some(&format!("This design belongs to {s}'s terminal")));
+            }
+            None => {
+                self.terminal_label.set_text("No terminal");
+                self.terminal.add_css_class("unlinked");
+                self.terminal.set_tooltip_text(Some("Tie this design to a terminal so its agent can be asked about it"));
+            }
+        }
+        let asking = match &design.session {
+            Some(s) => format!("Ask {s}"),
+            None => "Ask agent".into(),
+        };
+        if let Some(caption) = self.ask.child().and_then(|c| c.last_child()).and_downcast::<gtk::Label>() {
+            caption.set_text(&asking);
+        }
+        if let Some(layers) = self.layers.borrow().as_ref() {
+            layers.pages_changed();
+        }
+    }
+
+    pub fn toast(&self, text: &str) {
+        self.toast_label.set_text(text);
+        self.toast.set_reveal_child(true);
+        let serial = self.toast_serial.get() + 1;
+        self.toast_serial.set(serial);
+        let weak = self.me.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(2600 + text.len() as u64 * 30), move || {
+            if let Some(b) = weak.upgrade().filter(|b| b.toast_serial.get() == serial) {
+                b.toast.set_reveal_child(false);
+            }
+        });
+    }
+
+    fn start_flash(&self, ids: HashSet<String>) {
+        let now = self.canvas.frame_clock().map(|c| c.frame_time()).unwrap_or_else(glib::monotonic_time);
+        *self.flash.borrow_mut() = (ids, now);
+        if self.flash_tick.borrow().is_some() {
+            return;
+        }
+        let weak = self.me.clone();
+        let id = self.canvas.add_tick_callback(move |_, clock| {
+            let Some(b) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            b.canvas.queue_draw();
+            if clock.frame_time() - b.flash.borrow().1 > FLASH_US {
+                b.flash.borrow_mut().0.clear();
+                b.flash_tick.borrow_mut().take();
+                return glib::ControlFlow::Break;
+            }
+            glib::ControlFlow::Continue
+        });
+        *self.flash_tick.borrow_mut() = Some(id);
+    }
+
+    // ------------------------------------------------------------------ drawing
+
+    /// The canvas was allocated: the first time, fit the page in it; widgets that follow its
+    /// size change after this layout pass, not during it.
+    fn resized(&self, w: f64, h: f64) {
+        self.size.set((w, h));
+        if !self.fitted.get() && w > 0.0 {
+            self.fitted.set(true);
+            let bounds = self.page_bounds();
+            self.cam.set(self.fit_cam(bounds, false));
+        }
+        let weak = self.me.clone();
+        glib::idle_add_local_once(move || {
+            if let Some(b) = weak.upgrade() {
+                let cam = b.cam.get();
+                b.zoom_label.set_text(&format!("{}%", (cam.zoom * 100.0).round()));
+                let max_inspector = (b.size.get().1 - 76.0).max(120.0) as i32;
+                if b.inspector_scroll.max_content_height() != max_inspector {
+                    b.inspector_scroll.set_max_content_height(max_inspector);
+                }
+            }
+        });
+    }
+
+    fn draw(&self, snap: &gtk::Snapshot, w: f64, h: f64) {
+        let started = trace().then(std::time::Instant::now);
+        self.draw_inner(snap, w, h);
+        if let Some(t) = started {
+            println!("DESIGN_TRACE draw {:.3} ms", t.elapsed().as_secs_f64() * 1e3);
+        }
+    }
+
+    fn draw_inner(&self, snap: &gtk::Snapshot, w: f64, h: f64) {
+        let placed = self.placed();
+        let scene = self.doc.scene.borrow();
+        let page = self.page.borrow().clone();
+        let cam = self.cam.get();
+        let canvas_fill = scene.node(&page).and_then(fill_of).unwrap_or_else(|| CANVAS.into());
+        snap.append_color(&rgba(&canvas_fill), &graphene::Rect::new(0.0, 0.0, w as f32, h as f32));
+        self.grid(snap, w, h, &canvas_fill);
+        if let Some(node) = self.content_node(&scene, &placed) {
+            snap.save();
+            snap.scale(cam.zoom as f32, cam.zoom as f32);
+            snap.translate(&graphene::Point::new(-cam.x as f32, -cam.y as f32));
+            snap.append_node(&node);
+            snap.restore();
+        }
+        self.frame_labels(snap, &scene, &placed, &page);
+        self.overlays(snap, &scene, &placed);
+    }
+
+    /// A dot every 8, 16, 32… page pixels, whichever falls 16 to 32 screen pixels apart.
+    fn grid(&self, snap: &gtk::Snapshot, w: f64, h: f64, ground: &str) {
+        let cam = self.cam.get();
+        let mut step = 8.0;
+        while step * cam.zoom < 16.0 {
+            step *= 2.0;
+        }
+        let s = step * cam.zoom;
+        if s > 400.0 {
+            return;
+        }
+        let (ox, oy) = cam.to_screen(0.0, 0.0);
+        let (ox, oy) = (ox.rem_euclid(s), oy.rem_euclid(s));
+        let dot = if paint::luminance(ground) > 0.35 { gdk::RGBA::new(0.0, 0.0, 0.0, 0.14) } else { gdk::RGBA::new(1.0, 1.0, 1.0, 0.11) };
+        let bounds = graphene::Rect::new(0.0, 0.0, w as f32, h as f32);
+        // The tile starts half a dot before a grid point, so its dot is whole inside it.
+        let tile = graphene::Rect::new((ox - s - 0.75) as f32, (oy - s - 0.75) as f32, s as f32, s as f32);
+        snap.push_repeat(&bounds, Some(&tile));
+        snap.append_color(&dot, &graphene::Rect::new(tile.x(), tile.y(), 1.5, 1.5));
+        snap.pop();
+    }
+
+    fn screen(&self, r: &Rect) -> Rect {
+        self.cam.get().rect_to_screen(r)
+    }
+
+    fn outline(&self, snap: &gtk::Snapshot, r: &Rect, color: &str, width: f32) {
+        let c = rgba(color);
+        let rr = gsk::RoundedRect::from_rect(grect(r), 0.0);
+        snap.append_border(&rr, &[width; 4], &[c, c, c, c]);
+    }
+
+    fn label_layout(&self, key: &str, text: &str, size: f64, weight: pango::Weight, mono: bool) -> pango::Layout {
+        let mut labels = self.labels.borrow_mut();
+        if let Some(l) = labels.get(key) {
+            if l.text() == text {
+                return l.clone();
+            }
+        }
+        let l = self.canvas.create_pango_layout(Some(text));
+        let mut d = pango::FontDescription::new();
+        d.set_family(if mono { "Geist Mono" } else { "Geist" });
+        d.set_absolute_size(size * pango::SCALE as f64);
+        d.set_weight(weight);
+        l.set_font_description(Some(&d));
+        if labels.len() > 400 {
+            labels.clear();
+        }
+        labels.insert(key.to_string(), l.clone());
+        l
+    }
+
+    /// The names above the page's frames, as artboards carry them.
+    fn frame_labels(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, page: &str) {
+        let selection = self.selection.borrow();
+        let hover = self.hover.borrow();
+        for id in scene.children(page) {
+            let Some(n) = scene.node(id).filter(|n| n.kind == NodeKind::Frame && !n.is_hidden()) else {
+                continue;
+            };
+            let Some(r) = placed.rect(id) else {
+                continue;
+            };
+            let s = self.screen(&r);
+            if s.w < 28.0 || s.bottom() < 0.0 || s.y > self.size.get().1 + 20.0 {
+                continue;
+            }
+            let name = n.name.clone().unwrap_or_else(|| "Frame".into());
+            let layout = self.label_layout(&format!("frame:{id}"), &name, 12.0, pango::Weight::Medium, false);
+            layout.set_width((s.w * pango::SCALE as f64) as i32);
+            layout.set_ellipsize(pango::EllipsizeMode::End);
+            let (_, lh) = layout.pixel_size();
+            let lit = selection.contains(id) || hover.as_deref() == Some(id.as_str());
+            let color = if lit { rgba(SELECT) } else { gdk::RGBA::new(0.62, 0.6, 0.57, 1.0) };
+            snap.save();
+            snap.translate(&graphene::Point::new(s.x as f32, (s.y - lh as f64 - 6.0) as f32));
+            snap.append_layout(&layout, &color);
+            snap.restore();
+        }
+    }
+
+    /// The label above a top-level frame, as a hit box in screen pixels.
+    pub(super) fn frame_label_at(&self, sx: f64, sy: f64) -> Option<String> {
+        let placed = self.placed();
+        let scene = self.doc.scene.borrow();
+        let page = self.page.borrow();
+        for id in scene.children(&page).iter().rev() {
+            let Some(n) = scene.node(id).filter(|n| n.kind == NodeKind::Frame && !n.is_hidden()) else {
+                continue;
+            };
+            let Some(r) = placed.rect(id) else {
+                continue;
+            };
+            let s = self.screen(&r);
+            if s.w < 28.0 {
+                continue;
+            }
+            let name = n.name.clone().unwrap_or_else(|| "Frame".into());
+            let layout = self.label_layout(&format!("frame:{id}"), &name, 12.0, pango::Weight::Medium, false);
+            let (lw, lh) = layout.pixel_size();
+            let hit = Rect::new(s.x, s.y - lh as f64 - 8.0, (lw as f64).min(s.w) + 4.0, lh as f64 + 6.0);
+            if hit.contains(sx, sy) {
+                return Some(id.clone());
+            }
+        }
+        None
+    }
+
+    fn overlays(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed) {
+        let editing = self.edit.borrow().as_ref().map(|e| e.id.clone());
+        // What an agent just changed.
+        let (flash, since) = self.flash.borrow().clone();
+        if !flash.is_empty() {
+            let now = self.canvas.frame_clock().map(|c| c.frame_time()).unwrap_or_else(glib::monotonic_time);
+            let t = ((now - since) as f64 / FLASH_US as f64).clamp(0.0, 1.0);
+            let alpha = (1.0 - t).powf(1.6);
+            let mut c = rgba(AGENT);
+            c.set_alpha(alpha as f32);
+            for id in &flash {
+                if let Some(r) = placed.rect(id) {
+                    let s = self.screen(&r).inflate(2.0);
+                    let rr = gsk::RoundedRect::from_rect(grect(&s), 3.0);
+                    snap.append_border(&rr, &[2.0; 4], &[c, c, c, c]);
+                }
+            }
+        }
+        // Hover.
+        if let Some(id) = self.hover.borrow().as_ref() {
+            if !self.selection.borrow().contains(id) && matches!(*self.gesture.borrow(), Gesture::Idle) {
+                if let Some(r) = placed.rect(id) {
+                    self.outline(snap, &self.screen(&r), SELECT, 1.5);
+                }
+            }
+        }
+        let gesture = self.gesture.borrow();
+        // Where a dragged node would land.
+        if let Gesture::Move { target: Some(t), moved: true, .. } = &*gesture {
+            if let Some(r) = placed.rect(t) {
+                self.outline(snap, &self.screen(&r), SELECT, 2.0);
+            }
+        }
+        if let Gesture::Move { reorder: Some((parent, index)), moved: true, ids, .. } = &*gesture {
+            self.insertion(snap, scene, placed, parent, *index as usize, ids);
+        }
+        // The selection: each node, then the box with its handles and size.
+        let selection = self.selection.borrow();
+        let resizing = matches!(*gesture, Gesture::Resize { .. } | Gesture::Endpoint { .. });
+        if !selection.is_empty() && editing.is_none() {
+            for id in selection.iter() {
+                if let Some(r) = placed.rect(id) {
+                    self.outline(snap, &self.screen(&r), SELECT, 1.0);
+                }
+            }
+            if let Some(b) = Rect::bounds(selection.iter().filter_map(|id| placed.rects.get(id))) {
+                let s = self.screen(&b);
+                if selection.len() > 1 {
+                    self.outline(snap, &s, SELECT, 1.0);
+                }
+                let line = selection.len() == 1
+                    && scene.node(&selection[0]).is_some_and(|n| n.kind == NodeKind::Line);
+                if line {
+                    for p in self.endpoints(&selection[0]) {
+                        self.handle(snap, p.0, p.1, true);
+                    }
+                } else if !matches!(*gesture, Gesture::Move { moved: true, .. }) && s.w > 2.0 && s.h > 2.0 {
+                    for h in HANDLES {
+                        let (x, y) = handle_point(&s, h);
+                        if (h.left || h.right) && (h.top || h.bottom) || s.w.min(s.h) > 24.0 {
+                            self.handle(snap, x, y, false);
+                        }
+                    }
+                }
+                if resizing || matches!(*gesture, Gesture::Idle) || matches!(*gesture, Gesture::Move { .. }) {
+                    self.size_pill(snap, &s, &b);
+                }
+            }
+        }
+        // Guides.
+        for g in self.guides.borrow().iter() {
+            let c = rgba(GUIDE);
+            let cam = self.cam.get();
+            if g.vertical {
+                let (x, y0) = cam.to_screen(g.at, g.from);
+                let (_, y1) = cam.to_screen(g.at, g.to);
+                snap.append_color(&c, &graphene::Rect::new(x.round() as f32 - 0.5, y0 as f32, 1.0, (y1 - y0) as f32));
+            } else {
+                let (x0, y) = cam.to_screen(g.from, g.at);
+                let (x1, _) = cam.to_screen(g.to, g.at);
+                snap.append_color(&c, &graphene::Rect::new(x0 as f32, y.round() as f32 - 0.5, (x1 - x0) as f32, 1.0));
+            }
+        }
+        match &*gesture {
+            Gesture::Marquee { a, b, moved: true, .. } => {
+                let r = self.screen(&Rect::spanning(*a, *b));
+                let mut fill = rgba(SELECT);
+                fill.set_alpha(0.08);
+                snap.append_color(&fill, &grect(&r));
+                self.outline(snap, &r, SELECT, 1.0);
+            }
+            Gesture::Create { tool, a, b, .. } => {
+                let cam = self.cam.get();
+                match tool {
+                    Tool::Line | Tool::Arrow => {
+                        let (x0, y0) = cam.to_screen(a.0, a.1);
+                        let (x1, y1) = cam.to_screen(b.0, b.1);
+                        let pb = gsk::PathBuilder::new();
+                        pb.move_to(x0 as f32, y0 as f32);
+                        pb.line_to(x1 as f32, y1 as f32);
+                        snap.append_stroke(&pb.to_path(), &gsk::Stroke::new(1.5), &rgba(SELECT));
+                    }
+                    _ => {
+                        let r = self.screen(&Rect::spanning(*a, *b));
+                        if *tool == Tool::Ellipse {
+                            let half = graphene::Size::new(r.w as f32 / 2.0, r.h as f32 / 2.0);
+                            let rr = gsk::RoundedRect::new(grect(&r), half, half, half, half);
+                            let c = rgba(SELECT);
+                            snap.append_border(&rr, &[1.0; 4], &[c, c, c, c]);
+                        } else {
+                            self.outline(snap, &r, SELECT, 1.0);
+                        }
+                        self.size_pill(snap, &r, &Rect::spanning(*a, *b));
+                    }
+                }
+            }
+            Gesture::Draw { points, .. } if points.len() > 1 => {
+                let cam = self.cam.get();
+                let pb = gsk::PathBuilder::new();
+                let (x0, y0) = cam.to_screen(points[0][0], points[0][1]);
+                pb.move_to(x0 as f32, y0 as f32);
+                for p in &points[1..] {
+                    let (x, y) = cam.to_screen(p[0], p[1]);
+                    pb.line_to(x as f32, y as f32);
+                }
+                let highlighter = self.tool.get() == Tool::Highlighter;
+                let width = if highlighter { 16.0 } else { 3.0 } * cam.zoom;
+                let stroke = gsk::Stroke::new(width as f32);
+                stroke.set_line_cap(gsk::LineCap::Round);
+                stroke.set_line_join(gsk::LineJoin::Round);
+                snap.append_stroke(&pb.to_path(), &stroke, &rgba(&self.pen_color(highlighter)));
+            }
+            _ => {}
+        }
+    }
+
+    fn insertion(&self, snap: &gtk::Snapshot, scene: &Scene, placed: &Placed, parent: &str, index: usize, moving: &[String]) {
+        let Some(p) = scene.node(parent) else {
+            return;
+        };
+        let row = p.layout_mode() == relay_bus::design::Layout::Row;
+        let kids: Vec<Rect> = scene
+            .children(parent)
+            .iter()
+            .filter(|c| !moving.contains(c))
+            .filter_map(|c| placed.rect(c))
+            .collect();
+        let Some(pr) = placed.rect(parent) else {
+            return;
+        };
+        let at = if kids.is_empty() {
+            if row { pr.x + 8.0 } else { pr.y + 8.0 }
+        } else if index >= kids.len() {
+            let last = kids.last().copied().unwrap_or_default();
+            if row { last.right() + 2.0 } else { last.bottom() + 2.0 }
+        } else {
+            let k = kids[index];
+            if row { k.x - 2.0 } else { k.y - 2.0 }
+        };
+        let r = if row {
+            Rect::new(at - 1.0, pr.y + 4.0, 2.0 / self.cam.get().zoom, pr.h - 8.0)
+        } else {
+            Rect::new(pr.x + 4.0, at - 1.0, pr.w - 8.0, 2.0 / self.cam.get().zoom)
+        };
+        let s = self.screen(&r);
+        snap.append_color(&rgba(SELECT), &grect(&Rect::new(s.x, s.y, s.w.max(2.0), s.h.max(2.0))));
+    }
+
+    fn handle(&self, snap: &gtk::Snapshot, x: f64, y: f64, round: bool) {
+        let r = Rect::new(x - 4.0, y - 4.0, 8.0, 8.0);
+        let rr = gsk::RoundedRect::from_rect(grect(&r), if round { 4.0 } else { 1.5 });
+        snap.push_rounded_clip(&rr);
+        snap.append_color(&gdk::RGBA::WHITE, &grect(&r));
+        snap.pop();
+        let c = rgba(SELECT);
+        snap.append_border(&rr, &[1.2; 4], &[c, c, c, c]);
+    }
+
+    /// "W × H" under the selection.
+    fn size_pill(&self, snap: &gtk::Snapshot, s: &Rect, page: &Rect) {
+        let text = format!("{} × {}", fmt(page.w), fmt(page.h));
+        let layout = self.label_layout("size", &text, 11.0, pango::Weight::Medium, true);
+        let (lw, lh) = layout.pixel_size();
+        let pill = Rect::new(s.cx() - lw as f64 / 2.0 - 6.0, s.bottom() + 8.0, lw as f64 + 12.0, lh as f64 + 4.0);
+        let rr = gsk::RoundedRect::from_rect(grect(&pill), 4.0);
+        snap.push_rounded_clip(&rr);
+        snap.append_color(&rgba(SELECT), &grect(&pill));
+        snap.pop();
+        snap.save();
+        snap.translate(&graphene::Point::new((pill.x + 6.0) as f32, (pill.y + 2.0) as f32));
+        snap.append_layout(&layout, &gdk::RGBA::WHITE);
+        snap.restore();
+    }
+
+    /// A line's ends, on screen.
+    pub(super) fn endpoints(&self, id: &str) -> Vec<(f64, f64)> {
+        let placed = self.placed();
+        let scene = self.doc.scene.borrow();
+        let (Some(n), Some(r)) = (scene.node(id), placed.rect(id)) else {
+            return Vec::new();
+        };
+        let cam = self.cam.get();
+        n.points
+            .as_deref()
+            .map(|pts| {
+                [pts.first(), pts.last()]
+                    .into_iter()
+                    .flatten()
+                    .map(|p| cam.to_screen(r.x + p[0], r.y + p[1]))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub(super) fn pen_color(&self, highlighter: bool) -> String {
+        if highlighter {
+            return "#FFD60A66".into();
+        }
+        let chosen = self.pen.borrow().clone();
+        if !chosen.is_empty() {
+            return chosen;
+        }
+        let scene = self.doc.scene.borrow();
+        let ground = scene.node(&self.page.borrow()).and_then(fill_of).unwrap_or_else(|| CANVAS.into());
+        if paint::luminance(&ground) > 0.35 { "#1A1A1A".into() } else { "#EDE9E2".into() }
+    }
+
+    // ------------------------------------------------------------------ chrome
+
+    pub(super) fn refresh_chrome(&self) {
+        self.refresh_actions();
+        // The toolbar shows the selection's values: rebuild it, unless one of its popovers is
+        // open (a colour being picked) or the text is being typed.
+        let picking = self.context.borrow().as_ref().is_some_and(|bar| {
+            let mut child = bar.first_child();
+            while let Some(c) = child {
+                child = c.next_sibling();
+                if c.downcast_ref::<gtk::MenuButton>().and_then(|m| m.popover()).is_some_and(|p| p.is_visible()) {
+                    return true;
+                }
+            }
+            false
+        });
+        if !picking && self.edit.borrow().is_none() && matches!(*self.gesture.borrow(), Gesture::Idle) {
+            self.rebuild_context();
+        }
+        self.refresh_inspector_values();
+        if let Some(layers) = self.layers.borrow().as_ref() {
+            layers.refresh();
+        }
+        self.page_label.set_text(&self.page_name(&self.page.borrow()));
+        self.overlay.queue_allocate();
+    }
+
+    pub(super) fn set_tool(&self, tool: Tool) {
+        self.tool.set(tool);
+        for (t, key) in self.tool_keys.borrow().iter() {
+            key.set_active(*t == tool);
+        }
+        let shapes = matches!(tool, Tool::Rect | Tool::Ellipse | Tool::Line | Tool::Arrow);
+        self.shape_key.set_active(shapes);
+        self.pen_key.set_active(matches!(tool, Tool::Pen | Tool::Highlighter));
+        if shapes {
+            self.shape_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
+            self.shape_key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
+        }
+        if matches!(tool, Tool::Pen | Tool::Highlighter) {
+            self.pen_key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
+            self.pen_key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
+        }
+        if tool != Tool::Select {
+            self.end_edit(true);
+        }
+        super::tools::update_cursor(self, None);
+    }
+
+    fn build_dock(self: &Rc<Self>, dock: &gtk::Box) {
+        let layers_key = gtk::ToggleButton::new();
+        layers_key.add_css_class("design-tool");
+        layers_key.set_child(Some(&glyphs::image("layers", 16)));
+        layers_key.set_tooltip_text(Some("Pages and layers (Alt+1)"));
+        layers_key.set_widget_name("design-layers-key");
+        dock.append(&layers_key);
+        let weak = Rc::downgrade(self);
+        layers_key.connect_toggled(move |key| {
+            if let Some(b) = weak.upgrade() {
+                b.layers_panel.set_reveal_child(key.is_active());
+                if let Some(l) = b.layers.borrow().as_ref() {
+                    l.refresh();
+                }
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.layers_panel.connect_reveal_child_notify(move |r| {
+            if let Some(b) = weak.upgrade() {
+                b.layers_panel.set_can_target(r.reveals_child());
+            }
+        });
+        self.layers_panel.set_can_target(false);
+        let page_key = gtk::MenuButton::new();
+        page_key.add_css_class("design-page-key");
+        let page_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        page_row.append(&self.page_label);
+        page_row.append(&crate::icons::image("chevron-down", 12));
+        page_key.set_child(Some(&page_row));
+        page_key.set_tooltip_text(Some("Pages"));
+        let pages_popover = gtk::Popover::new();
+        pages_popover.add_css_class("design-menu");
+        page_key.set_popover(Some(&pages_popover));
+        let weak = Rc::downgrade(self);
+        pages_popover.connect_show(move |pop| {
+            if let Some(b) = weak.upgrade() {
+                pop.set_child(Some(&super::layers::pages_menu(&b, pop)));
+            }
+        });
+        dock.append(&page_key);
+        let sep = gtk::Separator::new(gtk::Orientation::Vertical);
+        sep.add_css_class("design-dock-sep");
+        dock.append(&sep);
+        let mut keys = Vec::new();
+        for tool in [Tool::Select, Tool::Hand, Tool::Frame] {
+            let key = self.tool_key(tool);
+            dock.append(&key);
+            keys.push((tool, key));
+        }
+        // Shapes share a key; its menu picks which.
+        self.shape_key.add_css_class("design-tool");
+        self.shape_key.set_child(Some(&glyphs::image("rect", 16)));
+        self.shape_key.set_tooltip_text(Some("Rectangle (R)"));
+        let weak = Rc::downgrade(self);
+        self.shape_key.connect_clicked(move |key| {
+            if let Some(b) = weak.upgrade() {
+                let current = b.tool.get();
+                let tool = if matches!(current, Tool::Rect | Tool::Ellipse | Tool::Line | Tool::Arrow) {
+                    current
+                } else {
+                    b.last_shape()
+                };
+                b.set_tool(tool);
+                key.set_active(true);
+            }
+        });
+        dock.append(&self.shape_key);
+        dock.append(&self.tool_menu(&[Tool::Rect, Tool::Ellipse, Tool::Line, Tool::Arrow]));
+        for tool in [Tool::Text, Tool::Sticky] {
+            let key = self.tool_key(tool);
+            dock.append(&key);
+            keys.push((tool, key));
+        }
+        self.pen_key.add_css_class("design-tool");
+        self.pen_key.set_child(Some(&glyphs::image("pen", 16)));
+        self.pen_key.set_tooltip_text(Some("Pen (P)"));
+        let weak = Rc::downgrade(self);
+        self.pen_key.connect_clicked(move |key| {
+            if let Some(b) = weak.upgrade() {
+                let tool = if b.tool.get() == Tool::Highlighter { Tool::Highlighter } else { Tool::Pen };
+                b.set_tool(tool);
+                key.set_active(true);
+            }
+        });
+        dock.append(&self.pen_key);
+        dock.append(&self.tool_menu(&[Tool::Pen, Tool::Highlighter]));
+        let image_key = gtk::Button::new();
+        image_key.add_css_class("design-tool");
+        image_key.set_child(Some(&glyphs::image("image", 16)));
+        image_key.set_tooltip_text(Some("Place an image (Shift+Ctrl+K)"));
+        let weak = Rc::downgrade(self);
+        image_key.connect_clicked(move |_| {
+            if let Some(b) = weak.upgrade() {
+                super::assets::choose_images(&b);
+            }
+        });
+        dock.append(&image_key);
+        *self.tool_keys.borrow_mut() = keys;
+        self.set_tool(Tool::Select);
+        keep_canvas_focus(dock.upcast_ref());
+    }
+
+    fn last_shape(&self) -> Tool {
+        self.shape_key
+            .tooltip_text()
+            .map(|t| t.to_string())
+            .and_then(|t| [Tool::Rect, Tool::Ellipse, Tool::Line, Tool::Arrow].into_iter().find(|tool| t.starts_with(tool.caption())))
+            .unwrap_or(Tool::Rect)
+    }
+
+    fn tool_key(self: &Rc<Self>, tool: Tool) -> gtk::ToggleButton {
+        let key = gtk::ToggleButton::new();
+        key.add_css_class("design-tool");
+        key.set_child(Some(&glyphs::image(tool.glyph(), 16)));
+        key.set_tooltip_text(Some(&format!("{} ({})", tool.caption(), tool.key())));
+        key.set_widget_name(&format!("design-tool-{}", tool.glyph()));
+        key.update_property(&[gtk::accessible::Property::Label(tool.caption())]);
+        let weak = Rc::downgrade(self);
+        key.connect_clicked(move |key| {
+            if let Some(b) = weak.upgrade() {
+                b.set_tool(tool);
+                key.set_active(true);
+            }
+        });
+        key
+    }
+
+    /// A narrow chevron key whose menu lists `tools`.
+    fn tool_menu(self: &Rc<Self>, tools: &[Tool]) -> gtk::MenuButton {
+        let menu = gtk::MenuButton::new();
+        menu.add_css_class("design-tool-more");
+        menu.set_child(Some(&crate::icons::image("chevron-down", 10)));
+        menu.set_tooltip_text(Some("More tools"));
+        let pop = gtk::Popover::new();
+        pop.add_css_class("design-menu");
+        let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        for tool in tools {
+            let row = gtk::Button::new();
+            row.add_css_class("design-menu-row");
+            let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+            content.append(&glyphs::image(tool.glyph(), 16));
+            let name = label(tool.caption(), "");
+            name.set_hexpand(true);
+            content.append(&name);
+            content.append(&label(tool.key(), "design-keycap"));
+            row.set_child(Some(&content));
+            let weak = Rc::downgrade(self);
+            let tool = *tool;
+            let p = pop.downgrade();
+            row.connect_clicked(move |_| {
+                if let Some(p) = p.upgrade() {
+                    p.popdown();
+                }
+                if let Some(b) = weak.upgrade() {
+                    b.set_tool(tool);
+                }
+            });
+            list.append(&row);
+        }
+        if tools.contains(&Tool::Pen) {
+            list.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+            let swatches = gtk::FlowBox::new();
+            swatches.set_max_children_per_line(6);
+            swatches.set_selection_mode(gtk::SelectionMode::None);
+            for color in ["", "#1A1A1A", "#EDE9E2", "#FF5C5C", "#FFB020", "#2EC469", "#4C9DFF", "#A178FF", "#FF6FB5"] {
+                let swatch = swatch_button(if color.is_empty() { None } else { Some(color) }, if color.is_empty() { "Automatic" } else { color });
+                let weak = Rc::downgrade(self);
+                let p = pop.downgrade();
+                swatch.connect_clicked(move |_| {
+                    if let Some(b) = weak.upgrade() {
+                        *b.pen.borrow_mut() = color.to_string();
+                        b.set_tool(Tool::Pen);
+                    }
+                    if let Some(p) = p.upgrade() {
+                        p.popdown();
+                    }
+                });
+                swatches.insert(&swatch, -1);
+            }
+            list.append(&swatches);
+        }
+        pop.set_child(Some(&list));
+        menu.set_popover(Some(&pop));
+        menu
+    }
+
+    fn build_zoom_menu(self: &Rc<Self>, key: &gtk::MenuButton) {
+        let menu = gio::Menu::new();
+        let section = gio::Menu::new();
+        section.append(Some("Zoom in"), Some("design.zoom-in"));
+        section.append(Some("Zoom out"), Some("design.zoom-out"));
+        menu.append_section(None, &section);
+        let section = gio::Menu::new();
+        section.append(Some("Zoom to fit"), Some("design.zoom-fit"));
+        section.append(Some("Zoom to selection"), Some("design.zoom-selection"));
+        section.append(Some("Zoom to 50%"), Some("design.zoom-50"));
+        section.append(Some("Zoom to 100%"), Some("design.zoom-100"));
+        section.append(Some("Zoom to 200%"), Some("design.zoom-200"));
+        menu.append_section(None, &section);
+        key.set_menu_model(Some(&menu));
+    }
+
+    fn build_title_menu(self: &Rc<Self>, key: &gtk::MenuButton) {
+        let menu = gio::Menu::new();
+        let section = gio::Menu::new();
+        section.append(Some("Rename…"), Some("design.rename"));
+        section.append(Some("Duplicate design"), Some("design.duplicate-design"));
+        if !self.windowed {
+            section.append(Some("Open in a new window"), Some("design.pop-out"));
+        }
+        menu.append_section(None, &section);
+        let section = gio::Menu::new();
+        section.append(Some("Export page as PNG…"), Some("design.export-page"));
+        section.append(Some("Export selection as PNG…"), Some("design.export"));
+        menu.append_section(None, &section);
+        let section = gio::Menu::new();
+        section.append(Some("Delete design"), Some("design.delete-design"));
+        menu.append_section(None, &section);
+        key.set_menu_model(Some(&menu));
+    }
+
+    /// The terminal key's menu: the project's sessions to tie the design to, or none.
+    pub(super) fn refresh_terminal_menu(self: &Rc<Self>) {
+        let pop = gtk::Popover::new();
+        pop.add_css_class("design-menu");
+        self.terminal.set_popover(Some(&pop));
+        let weak = Rc::downgrade(self);
+        pop.connect_show(move |pop| {
+            let Some(b) = weak.upgrade() else {
+                return;
+            };
+            let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            list.append(&label("Belongs to", "design-menu-heading"));
+            pop.set_child(Some(&list));
+            let Some(ui) = b.ui.upgrade() else {
+                return;
+            };
+            let project = b.doc.design.borrow().project_id;
+            let p = pop.downgrade();
+            let weak = Rc::downgrade(&b);
+            glib::spawn_future_local(async move {
+                let sessions = ui.call("session.list", json!({"project_id": project})).await;
+                let (Some(b), Some(pop)) = (weak.upgrade(), p.upgrade()) else {
+                    return;
+                };
+                let current = b.doc.session();
+                let rows = sessions.map(|v| crate::app::rows(&v, "sessions")).unwrap_or_default();
+                let mut names: Vec<(String, String)> = rows
+                    .iter()
+                    .map(|s| (crate::app::text(s, "name").to_string(), crate::app::text(s, "state").to_string()))
+                    .collect();
+                if let Some(c) = &current {
+                    if !names.iter().any(|(n, _)| n == c) {
+                        names.insert(0, (c.clone(), "closed".into()));
+                    }
+                }
+                for (name, state) in names {
+                    let row = gtk::Button::new();
+                    row.add_css_class("design-menu-row");
+                    let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                    let lamp = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                    lamp.add_css_class("design-lamp");
+                    lamp.add_css_class(&state);
+                    lamp.set_valign(gtk::Align::Center);
+                    content.append(&lamp);
+                    let caption = label(&name, "");
+                    caption.set_hexpand(true);
+                    content.append(&caption);
+                    if current.as_deref() == Some(name.as_str()) {
+                        content.append(&crate::icons::image("check", 14));
+                    }
+                    row.set_child(Some(&content));
+                    let weak = Rc::downgrade(&b);
+                    let pp = pop.downgrade();
+                    row.connect_clicked(move |_| {
+                        if let Some(p) = pp.upgrade() {
+                            p.popdown();
+                        }
+                        if let Some(b) = weak.upgrade() {
+                            b.link_session(Some(name.clone()));
+                        }
+                    });
+                    list.append(&row);
+                }
+                let none = gtk::Button::with_label("The project only");
+                none.add_css_class("design-menu-row");
+                let weak = Rc::downgrade(&b);
+                let pp = pop.downgrade();
+                none.connect_clicked(move |_| {
+                    if let Some(p) = pp.upgrade() {
+                        p.popdown();
+                    }
+                    if let Some(b) = weak.upgrade() {
+                        b.link_session(None);
+                    }
+                });
+                list.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+                list.append(&none);
+            });
+        });
+    }
+
+    pub(super) fn link_session(&self, session: Option<String>) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let id = self.doc.id;
+        let doc = self.doc.clone();
+        let weak = self.me.clone();
+        glib::spawn_future_local(async move {
+            match ui.call("design.update", json!({"design_id": id, "session": session})).await {
+                Ok(v) => {
+                    if let Ok(row) = serde_json::from_value(v) {
+                        *doc.design.borrow_mut() = row;
+                    }
+                    if let Some(b) = weak.upgrade() {
+                        b.design_changed();
+                    }
+                    super::gallery_changed(&ui);
+                }
+                Err(e) => {
+                    if let Some(b) = weak.upgrade() {
+                        b.toast(&e.to_string());
+                    }
+                }
+            }
+        });
+    }
+
+    /// The keyboard reference, grouped as people look for it.
+    fn shortcuts(&self, anchor: &gtk::Widget) {
+        let pop = gtk::Popover::new();
+        pop.add_css_class("design-menu");
+        pop.set_parent(anchor);
+        let grid = gtk::Grid::new();
+        grid.set_column_spacing(24);
+        grid.set_row_spacing(4);
+        grid.add_css_class("design-shortcuts");
+        let groups: [(&str, &[(&str, &str)]); 4] = [
+            ("Tools", &[("V", "Move"), ("H or Space", "Hand"), ("F", "Frame"), ("R / O", "Rectangle / ellipse"), ("L / Shift L", "Line / arrow"), ("T", "Text"), ("S", "Sticky note"), ("P / Shift P", "Pen / highlighter")]),
+            ("Selection", &[("Click", "Select what is under the pointer"), ("Esc", "Select the parent"), ("Enter", "Edit text, or select inside"), ("Shift click", "Add or remove"), ("Ctrl A", "Select all"), ("Alt drag", "Duplicate while moving")]),
+            ("Edit", &[("Ctrl Z / Ctrl Shift Z", "Undo / redo"), ("Ctrl D", "Duplicate"), ("Ctrl G / Ctrl Shift G", "Group / ungroup"), ("Ctrl Alt G", "Frame selection"), ("Ctrl ] / Ctrl [", "Forward / backward"), ("Arrows", "Nudge 1 px (Shift: 10)")]),
+            ("View", &[("Ctrl scroll / pinch", "Zoom at the pointer"), ("Shift 1", "Zoom to fit"), ("Shift 2", "Zoom to selection"), ("Shift 0", "Zoom to 100%"), ("Alt 1", "Pages and layers"), ("Ctrl .", "Inspector")]),
+        ];
+        for (col, (heading, rows)) in groups.iter().enumerate() {
+            let x = (col % 2) as i32 * 2;
+            let y0 = (col / 2) as i32 * 9;
+            let h = label(heading, "design-menu-heading");
+            grid.attach(&h, x, y0, 2, 1);
+            for (i, (keys, what)) in rows.iter().enumerate() {
+                grid.attach(&label(keys, "design-keycap"), x, y0 + 1 + i as i32, 1, 1);
+                grid.attach(&label(what, "dim"), x + 1, y0 + 1 + i as i32, 1, 1);
+            }
+        }
+        pop.set_child(Some(&grid));
+        pop.connect_closed(|p| p.unparent());
+        pop.popup();
+    }
+
+    // ------------------------------------------------------------------ floating widgets
+
+    fn child_position(&self, widget: &gtk::Widget) -> Option<gdk::Rectangle> {
+        if let Some(edit) = self.edit.borrow().as_ref() {
+            if edit.view.upcast_ref::<gtk::Widget>() == widget {
+                let Some(r) = self.edit_rect() else {
+                    return Some(gdk::Rectangle::new(-10_000, -10_000, 10, 10));
+                };
+                let r = self.screen(&r);
+                return Some(gdk::Rectangle::new(r.x.floor() as i32, r.y.floor() as i32, r.w.ceil().max(4.0) as i32 + 2, r.h.ceil().max(4.0) as i32));
+            }
+        }
+        let context = self.context.borrow().clone()?;
+        if &context != widget {
+            return None;
+        }
+        let (_, nat) = context.preferred_size();
+        let (w, h) = (nat.width(), nat.height());
+        // Out of sight while a gesture runs or nothing is selected; an overlay child given no
+        // place would cover the whole canvas.
+        let away = gdk::Rectangle::new(-10_000, -10_000, w, h);
+        if self.selection.borrow().is_empty() || !matches!(*self.gesture.borrow(), Gesture::Idle) {
+            return Some(away);
+        }
+        let Some(b) = self.selection_bounds() else {
+            return Some(away);
+        };
+        let s = self.screen(&b);
+        let (cw, ch) = self.size.get();
+        let mut x = (s.cx() - w as f64 / 2.0).round();
+        x = x.clamp(8.0, (cw - w as f64 - 8.0).max(8.0));
+        let above = s.y - h as f64 - 12.0;
+        let mut y = if above > 56.0 { above } else { s.bottom() + 36.0 };
+        y = y.clamp(56.0, (ch - h as f64 - 56.0).max(56.0));
+        self.context_at.set((x as i32, y as i32));
+        Some(gdk::Rectangle::new(x as i32, y as i32, w, h))
+    }
+
+    // ------------------------------------------------------------------ actions
+
+    fn install_actions(self: &Rc<Self>) {
+        let add = |name: &str, f: fn(&Board)| {
+            let action = gio::SimpleAction::new(name, None);
+            let weak = Rc::downgrade(self);
+            action.connect_activate(move |_, _| {
+                if let Some(b) = weak.upgrade() {
+                    f(&b);
+                }
+            });
+            self.actions.add_action(&action);
+        };
+        add("undo", |b| b.undo());
+        add("redo", |b| b.redo());
+        add("cut", |b| {
+            b.copy();
+            b.delete_selection();
+        });
+        add("copy", |b| b.copy());
+        add("paste", |b| b.paste());
+        add("duplicate", |b| b.duplicate());
+        add("delete", |b| b.delete_selection());
+        add("group", |b| b.group(NodeKind::Group));
+        add("frame", |b| b.group(NodeKind::Frame));
+        add("ungroup", |b| b.ungroup());
+        add("forward", |b| b.restack(true, false));
+        add("front", |b| b.restack(true, true));
+        add("backward", |b| b.restack(false, false));
+        add("back", |b| b.restack(false, true));
+        add("lock", |b| b.toggle_flag("locked"));
+        add("hide", |b| b.toggle_flag("hidden"));
+        add("select-all", |b| b.select_all());
+        add("zoom-in", |b| b.step_zoom(1));
+        add("zoom-out", |b| b.step_zoom(-1));
+        add("zoom-fit", |b| {
+            let r = b.page_bounds();
+            b.fit(r, false);
+        });
+        add("zoom-selection", |b| {
+            let r = b.selection_bounds().or_else(|| b.page_bounds());
+            b.fit(r, true);
+        });
+        add("zoom-50", |b| b.zoom_to(0.5));
+        add("zoom-100", |b| b.zoom_to(1.0));
+        add("zoom-200", |b| b.zoom_to(2.0));
+        add("export", |b| super::export::export_selection(b, false));
+        add("export-page", |b| super::export::export_selection(b, true));
+        add("ask", |b| b.ask_agent(b.ask.upcast_ref()));
+        add("rename", |b| b.rename_design());
+        add("duplicate-design", super::duplicate_design);
+        add("delete-design", super::delete_design);
+        add("pop-out", |b| {
+            if let Some(ui) = b.ui.upgrade() {
+                super::window::open(&ui, b.doc.design.borrow().project_id, b.doc.id);
+                if let Some(back) = b.back.borrow().clone() {
+                    back();
+                }
+            }
+        });
+        add("add-page", |b| b.add_page());
+    }
+
+    fn refresh_actions(&self) {
+        let has = !self.selection.borrow().is_empty();
+        for (name, on) in [
+            ("undo", self.doc.can_undo()),
+            ("redo", self.doc.can_redo()),
+            ("cut", has),
+            ("copy", has),
+            ("duplicate", has),
+            ("delete", has),
+            ("group", has),
+            ("frame", has),
+            ("forward", has),
+            ("front", has),
+            ("backward", has),
+            ("back", has),
+            ("lock", has),
+            ("hide", has),
+            ("export", has),
+        ] {
+            if let Some(a) = self.actions.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+                a.set_enabled(on);
+            }
+        }
+    }
+
+    pub(super) fn undo(&self) {
+        self.end_edit(true);
+        self.doc.undo();
+    }
+
+    pub(super) fn redo(&self) {
+        self.end_edit(true);
+        self.doc.redo();
+    }
+
+    pub(super) fn delete_selection(&self) {
+        let ids = self.selected();
+        let scene = self.doc.scene.borrow();
+        let ops: Vec<NodeOp> = ids
+            .into_iter()
+            .filter(|id| scene.node(id).is_some_and(|n| n.kind != NodeKind::Page))
+            .map(|id| NodeOp::Delete { id })
+            .collect();
+        drop(scene);
+        if self.commit(ops) {
+            self.select(Vec::new());
+        }
+    }
+
+    pub(super) fn duplicate(&self) {
+        let ids = self.selected();
+        let (ops, roots) = edit::duplicate(&mut self.doc.scene.borrow_mut(), &ids, 16.0);
+        if self.commit(ops) {
+            self.select(roots);
+        }
+    }
+
+    pub(super) fn copy(&self) {
+        let nodes = edit::gather(&self.doc.scene.borrow(), &self.selection.borrow());
+        if nodes.is_empty() {
+            return;
+        }
+        let texts: Vec<String> = nodes.iter().filter_map(|n| n.text.clone()).collect();
+        let bytes = serde_json::to_vec(&json!({"relay_design": 1, "nodes": nodes})).unwrap_or_default();
+        *self.clip.borrow_mut() = nodes;
+        CLIP.with(|c| *c.borrow_mut() = self.clip.borrow().clone());
+        let providers = [
+            gdk::ContentProvider::for_bytes(MIME, &glib::Bytes::from_owned(bytes)),
+            gdk::ContentProvider::for_value(&texts.join("\n").to_value()),
+        ];
+        let union = gdk::ContentProvider::new_union(&providers);
+        if let Err(e) = self.canvas.clipboard().set_content(Some(&union)) {
+            self.toast(&e.to_string());
+        }
+        let count = self.selected().len();
+        self.toast(&format!("Copied {count} {}", if count == 1 { "layer" } else { "layers" }));
+    }
+
+    pub(super) fn paste(&self) {
+        let clipboard = self.canvas.clipboard();
+        let formats = clipboard.formats();
+        let weak = self.me.clone();
+        if formats.contain_mime_type(MIME) && clipboard.is_local() {
+            let nodes = CLIP.with(|c| c.borrow().clone());
+            self.paste_nodes(nodes);
+            return;
+        }
+        if formats.contain_mime_type(MIME) {
+            glib::spawn_future_local(async move {
+                let Ok((stream, _)) = clipboard.read_future(&[MIME], glib::Priority::DEFAULT).await else {
+                    return;
+                };
+                let mut bytes = Vec::new();
+                loop {
+                    match stream.read_bytes_future(65_536, glib::Priority::DEFAULT).await {
+                        Ok(chunk) if !chunk.is_empty() => bytes.extend_from_slice(&chunk),
+                        _ => break,
+                    }
+                }
+                let nodes = serde_json::from_slice::<Value>(&bytes)
+                    .ok()
+                    .and_then(|v| serde_json::from_value::<Vec<Node>>(v["nodes"].clone()).ok())
+                    .unwrap_or_default();
+                if let Some(b) = weak.upgrade() {
+                    b.paste_nodes(nodes);
+                }
+            });
+            return;
+        }
+        if formats.contains_type(gdk::Texture::static_type()) {
+            glib::spawn_future_local(async move {
+                if let Ok(Some(texture)) = clipboard.read_texture_future().await {
+                    if let Some(b) = weak.upgrade() {
+                        super::assets::place_texture(&b, texture, None);
+                    }
+                }
+            });
+            return;
+        }
+        glib::spawn_future_local(async move {
+            if let Ok(Some(text)) = clipboard.read_text_future().await {
+                if let Some(b) = weak.upgrade() {
+                    b.paste_text(text.trim_end());
+                }
+            }
+        });
+    }
+
+    /// Where pasted or dropped things go: into the one selected frame or group, beside the
+    /// selection, or onto the page.
+    pub(super) fn paste_target(&self) -> String {
+        let scene = self.doc.scene.borrow();
+        let selection = self.selection.borrow();
+        if let [one] = selection.as_slice() {
+            if let Some(n) = scene.node(one) {
+                if matches!(n.kind, NodeKind::Frame | NodeKind::Group) {
+                    return one.clone();
+                }
+                if let Some(p) = n.parent.clone() {
+                    return p;
+                }
+            }
+        }
+        self.page.borrow().clone()
+    }
+
+    fn paste_nodes(&self, nodes: Vec<Node>) {
+        if nodes.is_empty() {
+            return;
+        }
+        let target = self.paste_target();
+        let placed = self.placed();
+        let roots: Vec<&Node> = nodes.iter().filter(|n| n.parent.as_deref().is_none_or(|p| !nodes.iter().any(|o| o.id == p))).collect();
+        let Some(min_x) = roots.iter().map(|n| n.x).reduce(f64::min) else {
+            return;
+        };
+        let min_y = roots.iter().map(|n| n.y).fold(f64::INFINITY, f64::min);
+        let same = roots.iter().all(|n| n.parent.as_deref() == Some(target.as_str()))
+            && roots.iter().all(|n| self.doc.scene.borrow().node(&n.id).is_some());
+        let (dx, dy) = if same {
+            (16.0, 16.0)
+        } else if target == *self.page.borrow() {
+            // Centre of the view.
+            let (w, h) = self.size.get();
+            let max_x = roots.iter().map(|n| n.x + n.w).fold(f64::NEG_INFINITY, f64::max);
+            let max_y = roots.iter().map(|n| n.y + n.h).fold(f64::NEG_INFINITY, f64::max);
+            let (cx, cy) = self.to_page(w / 2.0, h / 2.0);
+            (cx - (min_x + max_x) / 2.0, cy - (min_y + max_y) / 2.0)
+        } else {
+            let fits = placed.rect(&target).is_some_and(|r| min_x >= 0.0 && min_y >= 0.0 && min_x < r.w && min_y < r.h);
+            if fits { (0.0, 0.0) } else { (16.0 - min_x, 16.0 - min_y) }
+        };
+        let (ops, new_roots) = edit::clone_into(&mut self.doc.scene.borrow_mut(), &nodes, &target, None, dx, dy);
+        if self.commit(ops) {
+            self.select(new_roots);
+        }
+    }
+
+    fn paste_text(&self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let target = self.paste_target();
+        let (w, h) = self.size.get();
+        let (cx, cy) = self.to_page(w / 2.0, h / 2.0);
+        let origin = self.placed().rect(&target).unwrap_or_default();
+        let mut n = Node::new(NodeKind::Text);
+        n.id = self.doc.scene.borrow_mut().fresh_id(NodeKind::Text);
+        n.parent = Some(target);
+        n.text = Some(text.chars().take(relay_bus::design::MAX_TEXT).collect());
+        n.x = (cx - origin.x).round();
+        n.y = (cy - origin.y).round();
+        if text.chars().count() > 60 {
+            n.w = 360.0;
+            n.w_sizing = Some(relay_bus::design::Sizing::Fixed);
+        }
+        let id = n.id.clone();
+        if self.commit(vec![NodeOp::Add { node: n, index: None }]) {
+            self.select(vec![id]);
+        }
+    }
+
+    pub(super) fn group(&self, kind: NodeKind) {
+        let ids = self.selected();
+        if ids.is_empty() {
+            return;
+        }
+        let placed = self.placed();
+        let made = edit::group(&mut self.doc.scene.borrow_mut(), &placed, &ids, kind);
+        match made {
+            Some((ops, id)) => {
+                if self.commit(ops) {
+                    self.select(vec![id]);
+                }
+            }
+            None => self.toast("Only layers in the same parent can be grouped"),
+        }
+    }
+
+    pub(super) fn ungroup(&self) {
+        let ids = self.selected();
+        let placed = self.placed();
+        let mut ops = Vec::new();
+        let mut kids = Vec::new();
+        {
+            let scene = self.doc.scene.borrow();
+            for id in &ids {
+                if let Some((mut more, mut k)) = edit::ungroup(&scene, &placed, id) {
+                    ops.append(&mut more);
+                    kids.append(&mut k);
+                }
+            }
+        }
+        if !ops.is_empty() && self.commit(ops) {
+            self.select(kids);
+        }
+    }
+
+    pub(super) fn restack(&self, up: bool, all: bool) {
+        let ops = edit::restack(&self.doc.scene.borrow(), &self.selection.borrow(), up, all);
+        self.commit(ops);
+    }
+
+    pub(super) fn toggle_flag(&self, flag: &str) {
+        let ids = self.selected();
+        let scene = self.doc.scene.borrow();
+        let on = ids.iter().any(|id| {
+            scene.node(id).is_some_and(|n| if flag == "locked" { !n.is_locked() } else { !n.is_hidden() })
+        });
+        drop(scene);
+        let mut set = Map::new();
+        set.insert(flag.into(), if on { json!(true) } else { Value::Null });
+        self.set_selected(set);
+        if on && flag == "hidden" {
+            self.select(Vec::new());
+        }
+    }
+
+    pub(super) fn select_all(&self) {
+        let scene = self.doc.scene.borrow();
+        let scope = self
+            .selection
+            .borrow()
+            .first()
+            .and_then(|id| scene.parent(id))
+            .map(str::to_string)
+            .unwrap_or_else(|| self.page.borrow().clone());
+        let ids: Vec<String> = scene
+            .children(&scope)
+            .iter()
+            .filter(|id| scene.node(id).is_some_and(|n| !n.is_hidden() && !n.is_locked()))
+            .cloned()
+            .collect();
+        drop(scene);
+        self.select(ids);
+    }
+
+    pub(super) fn add_page(&self) {
+        let mut scene = self.doc.scene.borrow_mut();
+        let id = scene.fresh_id(NodeKind::Page);
+        let mut page = Node::new(NodeKind::Page);
+        page.id = id.clone();
+        page.name = Some(format!("Page {}", scene.pages().len() + 1));
+        drop(scene);
+        if self.commit(vec![NodeOp::Add { node: page, index: None }]) {
+            self.set_page(&id);
+        }
+    }
+
+    fn rename_design(&self) {
+        let pop = gtk::Popover::new();
+        pop.add_css_class("design-menu");
+        pop.set_parent(&self.title);
+        let entry = gtk::Entry::new();
+        entry.set_text(&self.doc.title());
+        entry.set_width_chars(32);
+        pop.set_child(Some(&entry));
+        let weak = self.me.clone();
+        let p = pop.downgrade();
+        entry.connect_activate(move |entry| {
+            let title = entry.text().trim().to_string();
+            if let Some(p) = p.upgrade() {
+                p.popdown();
+            }
+            let Some(b) = weak.upgrade() else {
+                return;
+            };
+            if title.is_empty() || title == b.doc.title() {
+                return;
+            }
+            let Some(ui) = b.ui.upgrade() else {
+                return;
+            };
+            let id = b.doc.id;
+            glib::spawn_future_local(async move {
+                match ui.call("design.update", json!({"design_id": id, "title": title})).await {
+                    Ok(v) => {
+                        if let Ok(row) = serde_json::from_value(v) {
+                            *b.doc.design.borrow_mut() = row;
+                        }
+                        b.design_changed();
+                        super::gallery_changed(&ui);
+                    }
+                    Err(e) => b.toast(&e.to_string()),
+                }
+            });
+        });
+        pop.connect_closed(|p| p.unparent());
+        pop.popup();
+        entry.grab_focus();
+    }
+}
+
+thread_local! {
+    /// The nodes last copied in this process, for a paste whose clipboard is our own.
+    static CLIP: RefCell<Vec<Node>> = const { RefCell::new(Vec::new()) };
+}
+
+/// `RELAY_DESIGN_TRACE` set: print how long layout, content rebuilds and draws take.
+fn trace() -> bool {
+    thread_local! {
+        static ON: bool = std::env::var_os("RELAY_DESIGN_TRACE").is_some();
+    }
+    ON.with(|on| *on)
+}
+
+/// How long an agent's change glows, in microseconds.
+const FLASH_US: i64 = 1_600_000;
+
+/// Keys over the canvas take no keyboard focus when clicked, so the canvas keeps its shortcuts
+/// (V, Delete, Ctrl+Z…) right after one is used, as in other design tools.
+pub fn keep_canvas_focus(root: &gtk::Widget) {
+    let mut stack = vec![root.clone()];
+    while let Some(w) = stack.pop() {
+        if w.is::<gtk::Button>() || w.is::<gtk::MenuButton>() {
+            w.set_focus_on_click(false);
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            stack.push(c);
+        }
+    }
+}
+
+pub fn handle_point(s: &Rect, h: Handle) -> (f64, f64) {
+    let x = if h.left { s.x } else if h.right { s.right() } else { s.cx() };
+    let y = if h.top { s.y } else if h.bottom { s.bottom() } else { s.cy() };
+    (x, y)
+}
+
+/// A size as the pill shows it: whole pixels, or one decimal under 10.
+pub fn fmt(v: f64) -> String {
+    if (v - v.round()).abs() < 0.05 || v.abs() >= 10.0 {
+        format!("{}", v.round())
+    } else {
+        format!("{v:.1}")
+    }
+}
+
+/// A round colour key; `None` shows the automatic (checkered) swatch.
+pub fn swatch_button(color: Option<&str>, tooltip: &str) -> gtk::Button {
+    let swatch = gtk::Button::new();
+    swatch.add_css_class("design-swatch");
+    swatch.set_tooltip_text(Some(tooltip));
+    let dot = gtk::DrawingArea::new();
+    dot.set_content_width(16);
+    dot.set_content_height(16);
+    // A transparent colour shows as none: a slashed, empty swatch.
+    let color = color.filter(|c| relay_bus::design::parse_color(c).is_some_and(|c| c[3] > 0)).map(str::to_string);
+    dot.set_draw_func(move |_, cr, w, h| {
+        let r = (w.min(h) as f64) / 2.0;
+        cr.arc(w as f64 / 2.0, h as f64 / 2.0, r - 0.5, 0.0, std::f64::consts::TAU);
+        match &color {
+            Some(c) => {
+                let c = rgba(c);
+                cr.set_source_rgba(c.red() as f64, c.green() as f64, c.blue() as f64, c.alpha() as f64);
+                let _ = cr.fill_preserve();
+            }
+            None => {
+                cr.set_source_rgba(0.5, 0.5, 0.5, 0.35);
+                let _ = cr.fill_preserve();
+                cr.set_source_rgba(0.9, 0.3, 0.3, 0.9);
+                cr.move_to(w as f64 * 0.2, h as f64 * 0.8);
+                cr.line_to(w as f64 * 0.8, h as f64 * 0.2);
+            }
+        }
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.25);
+        cr.set_line_width(1.0);
+        let _ = cr.stroke();
+    });
+    swatch.set_child(Some(&dot));
+    swatch
+}
+
+#[allow(dead_code)]
+pub fn kind_caption(kind: NodeKind) -> &'static str {
+    match kind {
+        NodeKind::Page => "Page",
+        NodeKind::Frame => "Frame",
+        NodeKind::Group => "Group",
+        NodeKind::Rect => "Rectangle",
+        NodeKind::Ellipse => "Ellipse",
+        NodeKind::Line => "Line",
+        NodeKind::Text => "Text",
+        NodeKind::Sticky => "Sticky",
+        NodeKind::Path => "Drawing",
+        NodeKind::Image => "Image",
+    }
+}
+
+pub fn kind_glyph(kind: NodeKind) -> &'static str {
+    match kind {
+        NodeKind::Page => "page",
+        NodeKind::Frame => "frame",
+        NodeKind::Group => "group",
+        NodeKind::Rect => "rect",
+        NodeKind::Ellipse => "ellipse",
+        NodeKind::Line => "line",
+        NodeKind::Text => "text",
+        NodeKind::Sticky => "sticky",
+        NodeKind::Path => "pen",
+        NodeKind::Image => "image",
+    }
+}
+
+/// A node's name as the layers and the breadcrumb show it.
+pub fn display_name(n: &Node) -> String {
+    if let Some(name) = n.name.as_deref().filter(|s| !s.is_empty()) {
+        return name.to_string();
+    }
+    if let Some(text) = n.text.as_deref().filter(|t| !t.trim().is_empty()) {
+        let line: String = text.lines().next().unwrap_or("").chars().take(40).collect();
+        return line;
+    }
+    kind_caption(n.kind).to_string()
+}

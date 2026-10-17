@@ -64,7 +64,11 @@ and answers the `gym.*` ops. See [docs/GYM.md](docs/GYM.md).
 Open a repository from the sidebar, then add solo agents or a group of
 one or two builders sharing a reviewer. Code can edit the primary checkout or
 an agent worktree. Board, Notes, Skills, Settings, usage and Android device tools
-use the same bus as the CLI. [Parity coverage](docs/PARITY.md) records the current
+use the same bus as the CLI. **Design**, beside Agents, is each project's design canvases: an
+infinite canvas of frames, text, shapes, stickies, pen strokes and pictures where everything can be
+clicked, edited and moved, which the project's agents draw on too through the `design.*` ops; a
+design belongs to a terminal, and Ask hands a selection to its agent
+([docs/DESIGN-CANVAS.md](docs/DESIGN-CANVAS.md)). [Parity coverage](docs/PARITY.md) records the current
 implementation and validation boundaries. The device mirror decodes in process with
 FFmpeg's libavcodec, opened when a mirror starts (`libavcodec.so` of the major version Relay was
 built against; without it everything else still runs and the mirror says what is missing), and

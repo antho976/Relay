@@ -1,0 +1,171 @@
+/* Design (design.rs): the gallery is a page like Board — glass on @page_fill. The board's
+   chrome floats over the canvas, so the dock, the selection toolbar, the panels, zoom and the
+   toasts are the opaque _solid surfaces menus use. Selection blue and guide red live inside
+   the canvas only (board.rs); the chrome keeps Relay's off-white keys and state colours. */
+
+/* ---- Gallery ---- */
+.design-gallery-page { padding: 22px 28px 40px; }
+.design-gallery-head { margin-bottom: 14px; }
+.design-gallery-title { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; color: @ink; }
+.design-gallery-count { margin-top: 4px; color: @faint; font-family: 'Geist Mono'; font-size: 12px; }
+.design-chips { margin-bottom: 18px; }
+button.design-chip { min-height: 28px; padding: 0 11px; border-radius: 999px; border: 1px solid @glass_line; background: @glass_control; color: @secondary; font-weight: 500; }
+button.design-chip:hover { background: @glass_hover; border-color: @glass_line_hover; color: @ink; }
+button.design-chip.selected { background: @glass_selected; border-color: @glass_line_hover; color: @ink; }
+.design-chip-count { color: @faint; font-family: 'Geist Mono'; font-size: 11.5px; }
+button.design-chip.selected .design-chip-count { color: @secondary; }
+.design-grid > flowboxchild { padding: 0; background: transparent; }
+.design-card { padding: 0; }
+.design-thumb { border-radius: 12px; border: 1px solid @glass_edge; background: @glass_card; transition: border-color 140ms ease-out, box-shadow 140ms ease-out; }
+.design-card:hover .design-thumb { border-color: @glass_line_hover; box-shadow: 0 10px 28px alpha(black, 0.28); }
+.design-card-title { margin-top: 2px; font-size: 13.5px; font-weight: 600; color: @ink; }
+.design-card-meta { color: @faint; font-size: 12px; }
+.design-card-terminal { color: @secondary; font-weight: 500; }
+.design-card-when { color: @faint; }
+menubutton.design-card-more > button { min-height: 28px; min-width: 28px; padding: 0; border-radius: 8px; border: 1px solid @strong; background: @slab_solid; opacity: 0; transition: opacity 120ms ease-out; }
+.design-card:hover menubutton.design-card-more > button, menubutton.design-card-more > button:checked, menubutton.design-card-more > button:focus-visible { opacity: 1; }
+.design-card.deleted .design-thumb { opacity: 0.55; }
+.design-card.deleted button { min-height: 26px; font-size: 12px; }
+button.destructive-quiet { background: transparent; border-color: transparent; color: @held_text; }
+button.destructive-quiet:hover { background: alpha(@held, 0.12); }
+.design-empty { margin-top: 56px; }
+.design-empty .title { font-size: 16px; font-weight: 600; }
+
+/* ---- Board: top bar ---- */
+.design-topbar { min-height: 44px; padding: 0 10px 0 6px; border-bottom: 1px solid @glass_edge; }
+button.design-crumb { color: @secondary; font-weight: 500; }
+button.design-crumb:hover { color: @ink; }
+.design-title { font-size: 13.5px; font-weight: 600; color: @ink; }
+menubutton.design-title-key > button { border-color: transparent; background: transparent; }
+menubutton.design-title-key > button:hover { background: @glass_hover; }
+menubutton.design-terminal > button { min-height: 24px; padding: 0 10px; border-radius: 999px; border: 1px solid @glass_line; background: @glass_control; color: @ink; font-size: 12px; font-weight: 600; }
+menubutton.design-terminal.unlinked > button { color: @faint; font-weight: 500; }
+.design-status { color: @faint; font-size: 12px; margin-right: 6px; }
+.design-status.design-status-agent { color: @live; }
+button.design-ask { background: @ink; border-color: @ink; color: @wall; font-weight: 600; }
+button.design-ask:hover { background: white; border-color: white; }
+
+/* ---- Board: what floats over the canvas ---- */
+#design-canvas:focus-visible { outline: none; }
+/* The page stack clears every scrolled window (theme.css); the inspector's is a floating card. */
+.design-dock, .design-context, .design-zoom, scrolledwindow.design-inspector, .page-stack scrolledwindow.design-inspector, .design-layers, .design-toast {
+  background: @slab_solid; border: 1px solid @strong; box-shadow: 0 10px 28px alpha(black, 0.38), 0 1px 3px alpha(black, 0.3);
+}
+.design-dock { padding: 4px; border-radius: 12px; }
+button.design-tool, menubutton.design-page-key > button { min-height: 32px; min-width: 32px; padding: 0 6px; border-radius: 8px; border: 0; background: transparent; color: @secondary; }
+button.design-tool:hover, menubutton.design-page-key > button:hover { background: @wash_solid; color: @ink; }
+button.design-tool:checked { background: @track; color: @ink; }
+menubutton.design-tool-more > button { min-height: 32px; min-width: 14px; padding: 0 1px; margin-left: -2px; border: 0; border-radius: 6px; background: transparent; color: @faint; }
+menubutton.design-tool-more > button:hover { background: @wash_solid; color: @ink; }
+menubutton.design-page-key > button { padding: 0 8px 0 10px; font-weight: 500; color: @ink; }
+.design-dock-sep { margin: 6px 4px; background: @strong; min-width: 1px; }
+
+.design-context { padding: 4px; border-radius: 12px; }
+button.design-context-key, menubutton.design-context-key > button, togglebutton.design-context-key { min-height: 30px; min-width: 30px; padding: 0 7px; border: 0; border-radius: 8px; background: transparent; color: @secondary; }
+button.design-context-key:hover, menubutton.design-context-key > button:hover { background: @wash_solid; color: @ink; }
+button.design-context-key:checked { background: @track; color: @ink; }
+button.design-context-ask { color: @ink; font-weight: 600; }
+.design-context-sep { margin: 6px 3px; background: @strong; min-width: 1px; }
+.design-crumb-label { font-size: 12px; }
+.design-style-glyph { font-family: 'Sora'; font-weight: 600; color: @faint; }
+menubutton.design-style-key > button { padding: 0 8px 0 9px; color: @ink; font-weight: 500; }
+button.design-emphasis-font_weight label { font-weight: 700; }
+button.design-emphasis-italic label { font-style: italic; }
+button.design-emphasis-underline label { text-decoration-line: underline; }
+button.design-emphasis-strike label { text-decoration-line: line-through; }
+button.design-emphasis-font_weight, button.design-emphasis-italic, button.design-emphasis-underline, button.design-emphasis-strike { font-family: 'Geist'; font-size: 13px; min-width: 28px; }
+
+.design-zoom { padding: 3px; border-radius: 10px; }
+.design-zoom button, .design-zoom menubutton > button { min-height: 28px; min-width: 28px; padding: 0 6px; border: 0; border-radius: 7px; background: transparent; color: @secondary; }
+.design-zoom button:hover, .design-zoom menubutton > button:hover { background: @wash_solid; color: @ink; }
+.design-zoom-label { font-family: 'Geist Mono'; font-size: 11.5px; color: @ink; }
+
+.design-toast { padding: 9px 14px; border-radius: 10px; color: @ink; font-size: 12.5px; }
+button.design-toast-undo { min-height: 24px; padding: 0 10px; border-radius: 7px; background: @wash_solid; font-weight: 600; }
+
+/* Numbers, colours, choices. */
+.design-number { min-height: 30px; border-radius: 8px; border: 1px solid transparent; background: @glass_control; }
+.design-number:focus-within { border-color: @line_focus; }
+.design-number-caption { min-width: 22px; margin-left: 7px; color: @faint; font-family: 'Geist Mono'; font-size: 11px; }
+.design-number entry { min-height: 28px; min-width: 0; padding: 0 6px 0 4px; border: 0; background: transparent; box-shadow: none; font-family: 'Geist Mono'; font-size: 12px; }
+.design-context .design-number { min-width: 64px; margin: 0 2px; }
+menubutton.design-color-key > button { min-height: 30px; min-width: 30px; padding: 0; border: 0; border-radius: 8px; background: transparent; }
+menubutton.design-color-key > button:hover { background: @wash_solid; }
+button.design-swatch { min-height: 24px; min-width: 24px; padding: 0; border: 0; border-radius: 999px; background: transparent; }
+button.design-swatch:hover { background: @wash_solid; }
+button.design-swatch.chosen { box-shadow: 0 0 0 2px @ink; }
+.design-colors { padding: 4px; min-width: 248px; }
+entry.design-hex { font-family: 'Geist Mono'; font-size: 12px; }
+entry.design-hex.error { border-color: @held; }
+.design-segmented { padding: 2px; border-radius: 9px; background: @glass_well; border: 1px solid @glass_edge; }
+.design-segmented button { min-height: 26px; min-width: 32px; padding: 0 6px; border: 0; border-radius: 7px; background: transparent; color: @faint; font-size: 12px; }
+.design-segmented button:hover { color: @ink; }
+.design-segmented button.selected { background: @track; color: @ink; }
+dropdown.design-dropdown > button { min-height: 28px; border-radius: 8px; border: 1px solid transparent; background: @glass_control; font-size: 12.5px; }
+
+/* The inspector. */
+.page-stack scrolledwindow.design-inspector, scrolledwindow.design-inspector { border-radius: 14px; }
+.design-inspector-body { padding: 4px 0 8px; }
+.design-inspector-head { padding: 10px 10px 10px 14px; border-bottom: 1px solid @edge; }
+entry.design-name { min-height: 28px; border-color: transparent; background: transparent; font-weight: 600; padding: 0 6px; }
+entry.design-name:hover { background: @glass_control; }
+.design-inspector-title { font-weight: 600; }
+.design-section { padding: 12px 14px; border-bottom: 1px solid @line_subtle; }
+.design-section:last-child { border-bottom: 0; }
+.design-section-title { color: @secondary; font-size: 12px; font-weight: 600; }
+.design-note { color: @faint; font-size: 12px; }
+.design-row-caption { color: @faint; font-size: 12px; }
+.design-hex-caption { color: @secondary; font-family: 'Geist Mono'; font-size: 12px; }
+button.design-export-key { min-height: 28px; border-radius: 8px; font-size: 12px; }
+.design-inspector checkbutton { font-size: 12.5px; color: @secondary; }
+
+/* Pages and layers. */
+.design-layers { border-radius: 14px; padding: 4px 0; }
+.design-layers-head { padding: 6px 8px 4px 14px; }
+label.design-layers-head { padding: 10px 14px 4px; }
+.design-pages { padding: 0 6px 6px; }
+.design-page-row { min-height: 30px; padding: 0 8px; border-radius: 8px; color: @secondary; }
+.design-page-row:hover { background: @wash_solid; color: @ink; }
+.design-page-row.selected { background: @glass_selected; color: @ink; }
+.design-layer-list { background: transparent; padding: 0 6px 6px; }
+.design-layer-list > row { padding: 0; border-radius: 7px; background: transparent; }
+.design-layer { min-height: 28px; padding: 0 6px 0 4px; border-radius: 7px; color: @secondary; font-size: 12.5px; }
+.design-layer:hover { background: @wash_solid; color: @ink; }
+.design-layer.selected { background: @glass_selected; color: @ink; }
+.design-layer.hidden { color: @ink_dim; }
+button.design-disclose { min-height: 20px; min-width: 16px; padding: 0; border: 0; background: transparent; color: @faint; }
+button.design-layer-key { min-height: 22px; min-width: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: @faint; opacity: 0; }
+.design-layer:hover button.design-layer-key, button.design-layer-key.on { opacity: 1; }
+.design-layer.hidden button.design-layer-eye { opacity: 1; }
+button.design-layer-key:hover { color: @ink; background: alpha(@ink, 0.08); }
+
+/* Menus and popovers of the board and gallery. */
+popover.design-menu contents { padding: 6px; border: 1px solid @strong; border-radius: 12px; background: @slab_solid; }
+button.design-menu-row { min-height: 30px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: @ink; font-weight: 400; }
+button.design-menu-row label { font-weight: 400; }
+button.design-menu-row:hover { background: @wash_solid; }
+button.design-menu-row.destructive, button.design-menu-row.destructive label { color: @held_text; }
+.design-menu-heading { padding: 6px 10px 4px; color: @faint; font-size: 11.5px; font-weight: 600; }
+.design-keycap, .design-keycap-dark { padding: 1px 6px; border-radius: 5px; border: 1px solid @line_emphasis; font-family: 'Geist Mono'; font-size: 11px; color: @faint; }
+.design-keycap-dark { border-color: alpha(@wall, 0.25); color: alpha(@wall, 0.7); }
+.design-shortcuts { padding: 8px 10px; }
+.design-shortcuts .design-keycap { margin-right: 4px; }
+.design-pages-menu .design-page-row { min-height: 30px; }
+
+/* Ask. */
+.design-ask-title { font-weight: 600; font-size: 14px; }
+.design-ask-field { border-radius: 10px; border: 1px solid @strong; background: @raised; }
+textview.design-ask-text, textview.design-ask-text text { background: transparent; padding: 8px; }
+
+/* Typing on the canvas: the text view is invisible but for the words and the caret. */
+textview.design-text-edit, textview.design-text-edit text { background: transparent; padding: 0; margin: 0; border: 0; box-shadow: none; caret-color: #4C9DFF; }
+textview.design-text-edit text selection { background: alpha(#4C9DFF, 0.32); }
+
+/* Terminal lamps on chips, cards and menus: the session's state, as the wall shows it. */
+.design-lamp { min-width: 7px; min-height: 7px; border-radius: 50%; border: 1px solid @faint; }
+.design-lamp.running, .design-lamp.idle { background: @live; border-color: @live; }
+.design-lamp.created, .design-lamp.spawning, .design-lamp.restorable { background: @waiting; border-color: @waiting; }
+.design-lamp.blocked { background: @held; border-color: @held; }
+.design-lamp.parked, .design-lamp.exited, .design-lamp.closed { background: transparent; border-color: @ink_dim; }
+
+window.design-window { padding: 0; margin: 0; border: 0; box-shadow: none; background: @wall_solid; }
