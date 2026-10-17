@@ -38,6 +38,26 @@ length anchor stopped being a mono question.
 
 ---
 
+## 2026-10-17 — The Settings root becomes an index in the app's list voice
+
+Antho: the Settings root "doesn't fit with what we have"; the category pages are fine. The pages had
+already moved onto the app's chrome and anchors that day, but the root was still a phone's settings
+app: seven groups of icon tiles, sans subtitles and chevrons, with nothing like it anywhere else.
+Of three directions (index list, tile grid, hybrid) Antho picked the index list.
+
+**Changed, the root only** (`SettingsMainList.kt`): three groups (Training, App & devices, Data)
+instead of seven. Each row is the page's name over its live value in the mono reading voice History's
+dates and Coach's readings use, with no glyph tile and no chevron, since the filled slab is already
+the tap. Every row carries a reading, not a description (cardio count, the next holiday, space used).
+Factory reset stands alone with no reading, since the confirm dialog has to explain it in a sentence.
+What's new and About close the page as two tonal buttons, and the version moved to a mono line under
+the title (`SettingsLazyScaffold(subtitle)`). Search hits take the same row with the breadcrumb as
+their reading.
+
+**Not changed.** The category pages, every setting, the search index and its ranking.
+
+---
+
 ## 2026-09-26 — Settings leaves the editorial language for a native settings kit
 
 Antho, reviewing Settings end to end: it read as dated and not professional ("the reset and data
