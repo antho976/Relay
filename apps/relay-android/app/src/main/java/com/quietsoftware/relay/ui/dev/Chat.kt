@@ -5,10 +5,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,7 +24,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -47,10 +50,14 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -68,7 +75,6 @@ import com.quietsoftware.relay.ui.code.DEL_TEXT
 import com.quietsoftware.relay.ui.code.DEL_WASH
 import com.quietsoftware.relay.ui.kit.Dot
 import com.quietsoftware.relay.ui.kit.Empty
-import com.quietsoftware.relay.ui.kit.Field
 import com.quietsoftware.relay.ui.kit.Glyph
 import com.quietsoftware.relay.ui.kit.IconKey
 import com.quietsoftware.relay.ui.kit.Key
@@ -146,6 +152,7 @@ fun ChatScreen(name: String, nav: Nav) {
     val unread by remember(screen) { derivedStateOf { screen.value == null } }
     val asking = ready && (onScreen || askTool || (held && unread))
     val doing = remember(pieces, working, asking) { if (working && !asking) doingNow(pieces) else null }
+    val mode by remember(screen) { derivedStateOf { screen.value?.let(::modeOf) } }
 
     KeepScreenOn(s.prefs.keepScreenOn)
 
@@ -197,7 +204,7 @@ fun ChatScreen(name: String, nav: Nav) {
                 }
             }
             if (peek && ready) ScreenPanel(screen) { peek = false }
-            QuickKeys(chat, ready)
+            if (s.prefs.chatKeys) QuickKeys(chat, ready)
             ChatComposer(
                 text,
                 { text = it },
@@ -211,7 +218,13 @@ fun ChatScreen(name: String, nav: Nav) {
                 },
                 focus,
                 ::send,
-            )
+            ) {
+                Chip(mode ?: "Mode", "Shift Tab: the agent's next mode", ready, glyph = "shield") { chat.key(Keys.SHIFT_TAB) }
+                Chip("Esc", "Escape", ready) { chat.key(Keys.ESC) }
+                Chip("Keys", if (s.prefs.chatKeys) "Hide the extra keys" else "Show the extra keys", true, trailing = if (s.prefs.chatKeys) "chevron-down" else "chevron-up") {
+                    nav.shell.update { it.copy(chatKeys = !it.chatKeys) }
+                }
+            }
         }
     }
 
@@ -802,10 +815,8 @@ private const val ARROW_DOWN = "\u001b[B"
 private const val ARROW_RIGHT = "\u001b[C"
 private const val ARROW_LEFT = "\u001b[D"
 
-/** The keys an agent CLI still asks for in a conversation: stop, the mode switch, a menu's arrows and ticks. */
+/** The keys an agent CLI still asks for in a conversation besides Esc and the mode switch, which the message box holds: a menu's arrows and ticks. */
 private val CHAT_KEYS = listOf(
-    ChatKey("Esc", "Escape", Keys.ESC),
-    ChatKey("⇧Tab", "Shift Tab: switch mode", Keys.SHIFT_TAB),
     ChatKey("↑", "Up", ARROW_UP),
     ChatKey("↓", "Down", ARROW_DOWN),
     ChatKey("←", "Left: the question before", ARROW_LEFT),
@@ -837,36 +848,114 @@ private fun QuickKeys(chat: SessionChat, enabled: Boolean) {
     }
 }
 
-/** The message box: up to six lines; the round key sends, or with nothing typed stops a working agent. */
+/**
+ * The message box, as a thread's (threads.css `.threads-composer`): raised, an edge that lights
+ * when focused, up to six lines, and under them the agent's own keys as chips and the round key,
+ * which sends, or with nothing typed stops a working agent or gives a waiting one its Enter.
+ */
 @Composable
-private fun ChatComposer(text: String, onText: (String) -> Unit, enabled: Boolean, working: Boolean, placeholder: String, focus: FocusRequester, onSend: () -> Unit) {
+private fun ChatComposer(
+    text: String,
+    onText: (String) -> Unit,
+    enabled: Boolean,
+    working: Boolean,
+    placeholder: String,
+    focus: FocusRequester,
+    onSend: () -> Unit,
+    chips: @Composable RowScope.() -> Unit,
+) {
     val c = Relay.colors
-    Row(
-        Modifier.fillMaxWidth().background(c.wall).navigationBarsPadding().padding(start = 10.dp, end = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Field(
-            text,
-            onText,
-            Modifier.weight(1f).alpha(if (enabled) 1f else .6f).focusRequester(focus).focusProperties { canFocus = enabled },
-            placeholder = placeholder,
-            singleLine = false,
-            maxLines = 6,
-            style = Relay.type.body,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-        )
-        val stop = working && text.isBlank()
-        Box(
-            Modifier.size(44.dp).alpha(if (enabled) 1f else .4f).clip(CircleShape).background(c.ink)
-                .clickable(enabled = enabled, onClickLabel = if (stop) "Stop" else if (text.isBlank()) "Enter" else "Send", role = Role.Button, onClick = onSend),
-            contentAlignment = Alignment.Center,
+    val source = remember { MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
+    val haptic = LocalHapticFeedback.current
+    Column(Modifier.fillMaxWidth().background(c.wall).navigationBarsPadding().padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 8.dp)) {
+        Column(
+            Modifier.fillMaxWidth().clip(Radii.card).background(c.raised)
+                .border(1.dp, if (focused) c.lineFocus else c.strong, Radii.card)
+                .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 4.dp),
         ) {
-            when {
-                stop -> Glyph("stop", 16.dp, c.wall)
-                text.isBlank() -> ReturnGlyph(18.dp, c.wall)
-                else -> Glyph("arrow-up", 18.dp, c.wall)
+            BasicTextField(
+                value = text,
+                onValueChange = onText,
+                modifier = Modifier.fillMaxWidth().padding(end = 8.dp).heightIn(min = 24.dp).alpha(if (enabled) 1f else .6f)
+                    .focusRequester(focus).focusProperties { canFocus = enabled },
+                textStyle = Relay.type.body.copy(color = c.ink),
+                cursorBrush = SolidColor(c.ink),
+                minLines = 1,
+                maxLines = 6,
+                interactionSource = source,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                decorationBox = { inner ->
+                    Box {
+                        if (text.isEmpty()) T(placeholder, style = Relay.type.body, color = c.ink3, maxLines = 1)
+                        inner()
+                    }
+                },
+            )
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), content = chips)
+                val stop = working && text.isBlank()
+                Box(
+                    Modifier.size(TOUCH).clip(Radii.key)
+                        .clickable(enabled = enabled, onClickLabel = if (stop) "Stop" else if (text.isBlank()) "Enter" else "Send", role = Role.Button) {
+                            if (text.isNotBlank()) haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                            onSend()
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.size(34.dp).clip(Radii.key).background(if (enabled) c.ink else c.track), contentAlignment = Alignment.Center) {
+                        val tint = if (enabled) c.wall else c.ink3
+                        when {
+                            stop -> Glyph("stop", 15.dp, tint)
+                            text.isBlank() -> ReturnGlyph(17.dp, tint)
+                            else -> Glyph("arrow-up", 16.dp, tint)
+                        }
+                    }
+                }
             }
         }
     }
 }
+
+/** A key of the agent's under the message box, drawn as a thread's chips are: a pill in a full-size target. */
+@Composable
+private fun Chip(label: String, spoken: String, enabled: Boolean, glyph: String? = null, trailing: String? = null, onClick: () -> Unit) {
+    val c = Relay.colors
+    val haptic = LocalHapticFeedback.current
+    Box(
+        Modifier.heightIn(min = TOUCH).clickable(enabled = enabled, onClickLabel = spoken, role = Role.Button) {
+            haptic.performHapticFeedback(HapticFeedbackType.KeyboardTap)
+            onClick()
+        },
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier.alpha(if (enabled) 1f else .45f).heightIn(min = 30.dp).clip(Radii.pill).background(c.slab).border(1.dp, c.strong, Radii.pill)
+                .padding(start = if (glyph != null) 8.dp else 10.dp, end = if (trailing != null) 8.dp else 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            glyph?.let { Glyph(it, 13.dp, c.ink3) }
+            T(label, style = Relay.type.caption, color = c.ink2, maxLines = 1, weight = FontWeight.Medium)
+            trailing?.let { Glyph(it, 11.dp, c.ink3) }
+        }
+    }
+}
+
+/**
+ * Claude Code's permission mode, as its footer says it ("⏵⏵ accept edits on (shift+tab to
+ * cycle)"); null when the footer names none, which for Claude Code is its default.
+ */
+internal fun modeOf(screen: String): String? {
+    val foot = screen.lines().filter { it.isNotBlank() }.takeLast(MODE_TAIL).joinToString("\n").lowercase()
+    return when {
+        "plan mode on" in foot -> "Plan"
+        "bypass permissions on" in foot -> "Bypass"
+        "auto mode on" in foot -> "Auto"
+        "accept edits on" in foot -> "Accept edits"
+        "shift+tab to cycle" in foot || "? for shortcuts" in foot -> "Default"
+        else -> null
+    }
+}
+
+private const val MODE_TAIL = 4

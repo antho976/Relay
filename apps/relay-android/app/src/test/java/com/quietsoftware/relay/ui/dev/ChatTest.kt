@@ -121,4 +121,14 @@ class ChatTest {
         assertTrue(options.isEmpty())
         assertEquals(listOf("working…", "Overwrite the file? (y/n)"), question)
     }
+
+    @Test
+    fun theModeIsReadOffClaudeCodesFooterOnly() {
+        val prompt = "╭────────╮\n│ >      │\n╰────────╯\n"
+        assertEquals("Accept edits", modeOf("⏺ Done.\n\n$prompt  ⏵⏵ accept edits on (shift+tab to cycle)\n"))
+        assertEquals("Plan", modeOf("$prompt  ⏸ plan mode on (shift+tab to cycle)"))
+        assertEquals("Default", modeOf("$prompt  ? for shortcuts"))
+        // Words in the conversation above the prompt are not the footer.
+        assertEquals(null, modeOf("I turned plan mode on for you\n\nmore\nlines\nhere\n$prompt"))
+    }
 }

@@ -121,6 +121,25 @@ class ScreensTest {
                 kotlinx.serialization.json.buildJsonObject { put("text", kotlinx.serialization.json.JsonPrimitive(text)) }.toString(),
                 System.currentTimeMillis(),
             )
+            // What the phone saved of brisk-otter's conversation: a turn with reasoning, steps, an edit and a reply.
+            val transcript = """{"found":true,"cursor":9,"reset":false,"messages":[
+                {"id":"1","role":"user","body":{"text":"The board drops a card dragged onto the Done column. Fix it?"},"created_at":"2026-10-09T20:58:00Z"},
+                {"id":"2","role":"assistant","body":{"blocks":[{"type":"thinking","text":"The drop handler reads the column from the card, not the target."},{"type":"tool_use","id":"t1","name":"Grep","summary":"onDrop"}]},"created_at":"2026-10-09T20:58:04Z"},
+                {"id":"3","role":"tool","body":{"tool_use_id":"t1","is_error":false,"text":"ui/tasks/Board.kt:212"},"created_at":"2026-10-09T20:58:05Z"},
+                {"id":"4","role":"assistant","body":{"blocks":[{"type":"tool_use","id":"t2","name":"Read","summary":"ui/tasks/Board.kt"},{"type":"tool_use","id":"t3","name":"Bash","summary":"./gradlew :app:testDebugUnitTest --tests '*Board*'"}]},"created_at":"2026-10-09T20:58:09Z"},
+                {"id":"5","role":"tool","body":{"tool_use_id":"t2","is_error":false,"text":"331 lines"},"created_at":"2026-10-09T20:58:10Z"},
+                {"id":"6","role":"tool","body":{"tool_use_id":"t3","is_error":true,"text":"BoardTest > dropOnDone FAILED"},"created_at":"2026-10-09T20:58:40Z"},
+                {"id":"7","role":"assistant","body":{"blocks":[{"type":"text","text":"Found it: `onDrop` moved the card to the column it **came from**. The fix reads the target column instead."},{"type":"tool_use","id":"t4","name":"Edit","summary":"ui/tasks/Board.kt","detail":"@@ -212 +212 @@\n-    move(card, card.column)\n+    move(card, target.column)"}]},"created_at":"2026-10-09T20:59:00Z"},
+                {"id":"8","role":"tool","body":{"tool_use_id":"t4","is_error":false,"text":"ok"},"created_at":"2026-10-09T20:59:01Z"},
+                {"id":"9","role":"assistant","body":{"blocks":[{"type":"text","text":"Fixed. Dropping on **Done** now lands there:\n\n```kotlin\nmove(card, target.column)\n```\n\nThe board tests pass."}]},"created_at":"2026-10-09T20:59:30Z"}
+            ]}"""
+            relay.hub.store.putQuery(
+                com.quietsoftware.relay.core.sync.QueryKey.of("session.transcript", kotlinx.serialization.json.buildJsonObject {
+                    put("session", kotlinx.serialization.json.JsonPrimitive("brisk-otter")); put("limit", kotlinx.serialization.json.JsonPrimitive(300))
+                }),
+                transcript,
+                System.currentTimeMillis(),
+            )
         }
         shell = ShellModel(relay, settings)
     }
@@ -156,6 +175,7 @@ class ScreensTest {
     @Test fun settings() = shoot("settings", "settings")
     @Test fun outbox() = shoot("outbox", "outbox")
     @Test fun terminal() = shoot("terminal", "terminal/brisk-otter")
+    @Test fun chat() = shoot("chat", "chat/brisk-otter")
     @Test fun session() = shoot("session", "session/brisk-otter")
     @Test fun launch() = shoot("launch", "launch?project=1")
     @Test fun tally() = shoot("tally", "tally")
