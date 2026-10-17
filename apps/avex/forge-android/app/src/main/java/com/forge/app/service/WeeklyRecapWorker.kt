@@ -167,8 +167,14 @@ class WeeklyRecapWorker @AssistedInject constructor(
                     }
                 }
                 runCatching { statsRepo.findOnThisDayMemory() }.getOrNull()?.let { mem ->
-                    val ago = if (mem.monthsAgo % 12 == 0) "${mem.monthsAgo / 12}yr" else "${mem.monthsAgo}mo"
-                    append(" · On this day ($ago ago): ${mem.dayName}")
+                    // Words, not "On this day (1yr ago)" shorthand.
+                    val ago = when {
+                        mem.monthsAgo % 12 == 0 && mem.monthsAgo == 12 -> "A year ago"
+                        mem.monthsAgo % 12 == 0 -> "${mem.monthsAgo / 12} years ago"
+                        mem.monthsAgo == 1 -> "A month ago"
+                        else -> "${mem.monthsAgo} months ago"
+                    }
+                    append(" · $ago this week: ${mem.dayName}")
                 }
             }
             // DESIGN §11: no exclamation marks in a rendered string.
