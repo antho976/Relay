@@ -236,6 +236,10 @@ class CoachRepository @Inject constructor(
         //    the following Monday however much the history changed in between. The week id of the
         //    last off-pass is recorded below so the two cases can be told apart.
         // 2. The pass ERRORED. An error is not a result; it should be retried, not cached for a week.
+        // 3. The pass was the pre-baseline hold and the tally it quoted is out of date. It is the one
+        //    hold whose reason is a live count ("0 of 4 sessions logged"), so caching it left a lifter
+        //    who logged their fourth session on Wednesday reading "0 of 4" under four sessions until
+        //    Monday, with the first calls held back as long. Only a learning hold pays for the count.
         //
         // Regenerating deletes the week's decisions, so it never happens to a week the user has
         // already acted on. The off-pass marker used to stay set all week (nothing cleared it), so
@@ -245,7 +249,10 @@ class CoachRepository @Inject constructor(
         val offPassWeekId = settings.coachOffPassWeekId.first()
         coachDao.pass(weekId)?.let { existing ->
             val recordedWhileOff = existing.status == STATUS_SHADOW || offPassWeekId == weekId
-            val regenerate = ((recordedWhileOff && !coachOff) || existing.status == STATUS_ERROR) &&
+            val staleBaseline = existing.status == STATUS_HOLD &&
+                AutoCoachPlanner.learningHoldCount(existing.holdReason)
+                    ?.let { it != database.sessionDao().trackedFinishedCount() } == true
+            val regenerate = ((recordedWhileOff && !coachOff) || existing.status == STATUS_ERROR || staleBaseline) &&
                 coachDao.decisionsFor(weekId).all { it.status == STATUS_SHADOW || it.status == STATUS_PROPOSED }
             if (!regenerate) {
                 if (!coachOff && offPassWeekId == weekId) runCatching { settings.setCoachOffPassWeekId("") }

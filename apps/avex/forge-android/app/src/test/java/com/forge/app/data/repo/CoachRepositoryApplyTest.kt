@@ -7,6 +7,7 @@ import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.entities.CoachDecision
 import com.forge.app.data.db.entities.CoachPass
 import com.forge.app.data.db.entities.OverlaySource
+import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.inMemoryForgeDb
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
@@ -408,6 +409,27 @@ class CoachRepositoryApplyTest {
 
         assertEquals(1, db.coachDao().decisionsFor(week).count { it.status == CoachRepository.STATUS_APPLIED })
         assertEquals("", settings.coachOffPassWeekId.first())
+    }
+
+    /** The pre-baseline hold quotes a live tally, so a session logged mid-week re-runs it rather
+     *  than leaving "0 of 4" up until Monday. A pass whose tally still holds is left alone. */
+    @Test
+    fun learningHoldRerunsWhenItsSessionCountGoesStale() = runTest {
+        settings.setCoachEnabled(true)
+        val first = repo.ensureWeeklyPass()
+        assertEquals(0, com.forge.app.domain.coach.AutoCoachPlanner.learningHoldCount(first.holdReason))
+
+        // The same tally: the cached pass stands.
+        assertEquals(first.ranAt, repo.ensureWeeklyPass().ranAt)
+
+        db.sessionDao().insert(Session(dayKey = DAY, startedAt = NOW - 3_600_000, finishedAt = NOW - 60_000))
+        // An untracked session doesn't count toward the baseline, so it changes nothing either.
+        db.sessionDao().insert(Session(dayKey = DAY, startedAt = NOW - 7_200_000, finishedAt = NOW - 5_000_000, isUntracked = true))
+        nowMs = NOW + 1_000
+
+        val rerun = repo.ensureWeeklyPass()
+        assertEquals(first.weekId, rerun.weekId)
+        assertEquals(1, com.forge.app.domain.coach.AutoCoachPlanner.learningHoldCount(rerun.holdReason))
     }
 
     private companion object {
