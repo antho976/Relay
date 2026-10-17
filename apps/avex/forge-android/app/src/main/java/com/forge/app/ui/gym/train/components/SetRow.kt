@@ -184,7 +184,7 @@ fun SetRow(
     val deltaColor = when {
         deltaPositive -> ForgeLastGreen
         deltaNegative -> muted.copy(alpha = 0.7f)
-        else -> muted.copy(alpha = 0.5f)
+        else -> muted.copy(alpha = 0.65f)
     }
 
     if (isEditing) {
@@ -398,7 +398,7 @@ fun SetRow(
                     Text(
                         "(${formatWeight(plateLbField, weightUnit)})",
                         style = MaterialTheme.typography.labelSmall,
-                        color = muted.copy(alpha = 0.8f),
+                        color = muted.copy(alpha = 0.7f),
                         fontSize = 11.sp
                     )
                 } else {
@@ -491,7 +491,7 @@ private fun SwipeDeleteBackground(active: Boolean) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(if (active) MaterialTheme.colorScheme.error.copy(alpha = 0.85f) else Color.Transparent)
+            .background(if (active) MaterialTheme.colorScheme.error else Color.Transparent)
     )
 }
 

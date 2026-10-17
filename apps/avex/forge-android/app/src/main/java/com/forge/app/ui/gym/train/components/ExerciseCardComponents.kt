@@ -179,14 +179,14 @@ internal fun CollapsedRow(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(TrainIcons.Video, contentDescription = "Watch a demo",
-                    tint = muted.copy(alpha = 0.55f), modifier = Modifier.size(18.dp))
+                    tint = muted.copy(alpha = 0.65f), modifier = Modifier.size(18.dp))
             }
             Box(
                 modifier = Modifier.size(48.dp).clickableLabeled("Swap ${state.effectiveName}") { onOpenSwapPicker() },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(TrainIcons.Swap, contentDescription = "Swap",
-                    tint = muted.copy(alpha = 0.55f), modifier = Modifier.size(18.dp))
+                    tint = muted.copy(alpha = 0.65f), modifier = Modifier.size(18.dp))
             }
         }
     }
@@ -290,9 +290,9 @@ internal fun LastSessionStrip(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(elapsedStr, style = MaterialTheme.typography.labelMedium, color = onBg)
-            Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
+            Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f))
             Text("$animatedVolume $unit", style = MaterialTheme.typography.labelMedium, color = onBg)
-            Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
+            Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f))
             Text("$currentSets of $targetSets sets", style = MaterialTheme.typography.labelMedium, color = muted)
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
@@ -303,7 +303,7 @@ internal fun LastSessionStrip(
                     current = currentVolumes,
                     previous = priorVolumes,
                     currentColor = MaterialTheme.colorScheme.primary,
-                    previousColor = muted.copy(alpha = 0.75f),
+                    previousColor = muted.copy(alpha = 0.65f),
                     modifier = Modifier.width(60.dp).height(16.dp)
                 )
             }
@@ -416,10 +416,10 @@ internal fun RestBetweenSets(seconds: Int) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        HorizontalDivider(modifier = Modifier.weight(1f), color = readyColor.copy(alpha = 0.2f))
+        HorizontalDivider(modifier = Modifier.weight(1f), color = readyColor.copy(alpha = 0.25f))
         Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(readyColor))
-        Text("rested $label", style = MaterialTheme.typography.labelSmall, color = readyColor.copy(alpha = 0.8f), fontSize = 9.sp)
-        HorizontalDivider(modifier = Modifier.weight(1f), color = readyColor.copy(alpha = 0.2f))
+        Text("rested $label", style = MaterialTheme.typography.labelSmall, color = readyColor, fontSize = 9.sp)
+        HorizontalDivider(modifier = Modifier.weight(1f), color = readyColor.copy(alpha = 0.25f))
     }
 }
 
@@ -455,7 +455,7 @@ internal fun InlineRestTimer(timer: RestTimerState, onTap: () -> Unit, onSkip: (
             ) {}
             Text(if (isReady) "READY" else "REST", style = MaterialTheme.typography.labelSmall, color = timeColor, fontSize = 9.sp, letterSpacing = 1.sp)
             Text(timer.secondsRemaining.toTimerLabel(), style = MaterialTheme.typography.labelLarge, color = timeColor)
-            Text("/ ${timer.totalSeconds.toTimerLabel()}", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.45f), fontSize = 9.sp)
+            Text("/ ${timer.totalSeconds.toTimerLabel()}", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f), fontSize = 9.sp)
         }
         HorizontalDivider(modifier = Modifier.weight(1f), color = muted.copy(alpha = 0.25f))
         // One-tap end-rest — the common "I'm ready, move on" action without opening a dialog.
