@@ -176,10 +176,10 @@ fun SetRow(
                 val pd = wDiff / plateLb
                 (if (pd >= 0) "+" else "") + formatPlateCount(pd) + " pl"
             } else (if (wDiff >= 0) "+" else "") + formatWeightDelta(wDiff, weightUnit)
-        rDiff != 0 -> (if (rDiff > 0) "+" else "") + "$rDiff rep"
+        rDiff != 0 -> (if (rDiff > 0) "+" else "") + "$rDiff rep${if (kotlin.math.abs(rDiff) == 1) "" else "s"}"
         // Matched exactly — show a deliberate zero rather than nothing (#6).
         wDiff != null -> if (isPlates) "+0 pl" else "+0 ${unitLabel(weightUnit)}"
-        else -> "+0 rep"
+        else -> "+0 reps"
     }
     val deltaColor = when {
         deltaPositive -> ForgeLastGreen

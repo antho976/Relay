@@ -110,7 +110,7 @@ internal fun GoalSetterDialog(
     val weightLb = com.forge.app.domain.units.parseToLb(weightText, weightUnit)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Goal weight — $exerciseName") },
+        title = { Text("Goal for $exerciseName") },
         text = {
             OutlinedTextField(
                 value = weightText,

@@ -14,7 +14,7 @@ import kotlinx.coroutines.launch
  * front or a set lands (say, from the wrist) while the sheet is open and the write is refused.
  * Single literal on purpose: the design doctrine freezes this file's em-dash count.
  */
-internal const val SWAP_AFTER_SETS_MESSAGE = "Can't swap after logging sets — delete this exercise's sets first."
+internal const val SWAP_AFTER_SETS_MESSAGE = "Can't swap after logging sets. Delete this exercise's sets first."
 
 /**
  * What the day screen does with a [SessionSwapResult] — pure, unit-tested in DaySessionSwapReactionTest.
@@ -190,7 +190,7 @@ private fun DayViewModel.neverAskDislikePrompt() {
     viewModelScope.launch {
         settingsRepo.setSwapDislikePromptEnabled(false)
         _state.update { it.copy(dislikeSwapPrompt = null) }
-        _messages.trySend("Turned off — re-enable in Settings → Exercise preferences.")
+        _messages.trySend("Turned off. Turn it back on in Settings → Exercise preferences.")
     }
 }
 

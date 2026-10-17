@@ -537,7 +537,7 @@ internal fun SessionHero(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    if (winning) "⚡ BEATING LAST SESSION" else "VS LAST SESSION",
+                    if (winning) "BEATING LAST SESSION" else "VS LAST SESSION",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (winning) ForgeLastGreen else muted,
                     fontSize = 9.sp

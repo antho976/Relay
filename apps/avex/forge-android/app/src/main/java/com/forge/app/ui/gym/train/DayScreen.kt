@@ -274,7 +274,7 @@ fun DayScreen(
     state.pendingWeightJumpWarning?.let { warning ->
         AlertDialog(
             onDismissRequest = { viewModel.onEvent(DayUiEvent.DismissWeightJump) },
-            title = { Text("Big jump — are you sure?") },
+            title = { Text("Big jump") },
             text = { Text("${warning.lastLabel} → ${warning.newLabel} is a ${warning.percent}% increase. Log it anyway?") },
             confirmButton = { Button(onClick = { viewModel.onEvent(DayUiEvent.ConfirmWeightJump) }) { Text("Log it") } },
             dismissButton = { TextButton(onClick = { viewModel.onEvent(DayUiEvent.DismissWeightJump) }) { Text("Go back") } }

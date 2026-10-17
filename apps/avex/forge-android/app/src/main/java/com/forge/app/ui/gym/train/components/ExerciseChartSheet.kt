@@ -139,7 +139,7 @@ fun ExerciseChartSheet(
 
             if (history.isEmpty()) {
                 Text(
-                    "No past sessions yet — finish a workout and it'll show up here.",
+                    "No past sessions yet. Finish a workout and it shows up here.",
                     style = MaterialTheme.typography.bodySmall,
                     color = muted,
                     fontStyle = FontStyle.Italic

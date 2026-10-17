@@ -98,7 +98,7 @@ internal suspend fun DayViewModel.buildExerciseUi(
         return if (isPlates || lb == null) set.weightText else formatWeight(lb, weightUnit)
     }
     val preview = prevFirstSet?.let { "Last: ${displayWeight(it)} × ${it.reps}" }
-        ?: "First time — set your baseline"
+        ?: "First time, set your baseline"
 
     val priorFrontier = frontierDeferred.await()
     val (prSetIds, wasPr) = computePrFlags(priorFrontier, hasHistoryDeferred.await(), sets)

@@ -314,7 +314,7 @@ private fun DayColorPickerDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Accent color — $dayName") },
+        title = { Text("$dayName color") },
         text = {
             androidx.compose.foundation.layout.FlowRow(
                 modifier = androidx.compose.ui.Modifier.selectableGroup(),
